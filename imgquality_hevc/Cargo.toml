@@ -1,0 +1,57 @@
+[package]
+name = "imgquality-hevc"
+version = "0.1.0"
+edition = "2021"
+authors = ["nyamiiko"]
+description = "High-performance image quality analyzer - HEVC version for animated images"
+license = "MIT"
+
+[dependencies]
+# CLI framework
+clap = { version = "4.5", features = ["derive", "cargo"] }
+
+# Image processing - added avif-native for AVIF support via system dav1d
+image = { version = "0.25", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
+
+# Quality metrics
+imageproc = "0.25"
+
+# JSON serialization for API mode
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Parallel processing
+rayon = "1.10"
+
+# Progress bars
+indicatif = { version = "0.17", features = ["rayon"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Command execution
+which = "6.0"
+
+# File system utilities
+walkdir = "2.5"
+filetime = "0.2"
+libc = "0.2"
+xattr = "1.3"
+
+# HEIC/HEIF support via system libheif
+libheif-rs = "1.0"
+
+# Lazy static for anti-duplicate mechanism
+lazy_static = "1.5"
+
+# Shared utilities (progress bar, safety checks, batch processing)
+shared_utils = { path = "../shared_utils" }
+
+# CPU detection for performance optimization
+num_cpus = "1.16"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
