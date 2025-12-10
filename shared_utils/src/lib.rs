@@ -26,6 +26,7 @@ pub mod video;
 pub mod date_analysis;
 pub mod quality_matcher;
 pub mod image_quality_detector;
+pub mod video_quality_detector;
 
 pub use progress::*;
 pub use safety::*;
@@ -58,4 +59,14 @@ pub use image_quality_detector::{
     ImageQualityAnalysis, ImageContentType, RoutingDecision,
     // Main analysis function
     analyze_image_quality,
+};
+
+pub use video_quality_detector::{
+    // Core types
+    VideoQualityAnalysis, VideoCodecType, ChromaSubsampling, 
+    VideoContentType, CompressionLevel, VideoRoutingDecision,
+    // Main analysis function
+    analyze_video_quality,
+    // Integration helper
+    to_quality_analysis as video_to_quality_analysis,
 };
