@@ -342,29 +342,138 @@ pub fn post_conversion_actions(
     Ok(())
 }
 
+// ============================================================
+// 🔬 PRECISION VALIDATION TESTS ("裁判" Tests)
+// ============================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
     
+    // ============================================================
+    // Size Reduction Calculation Tests (裁判机制)
+    // ============================================================
+    
+    #[test]
+    fn test_calculate_size_reduction_50_percent() {
+        // 1000 -> 500 = 50% reduction
+        let reduction = calculate_size_reduction(1000, 500);
+        assert!((reduction - 50.0).abs() < 0.01,
+            "1000->500 should be 50% reduction, got {}", reduction);
+    }
+    
+    #[test]
+    fn test_calculate_size_reduction_75_percent() {
+        // 1000 -> 250 = 75% reduction
+        let reduction = calculate_size_reduction(1000, 250);
+        assert!((reduction - 75.0).abs() < 0.01,
+            "1000->250 should be 75% reduction, got {}", reduction);
+    }
+    
+    #[test]
+    fn test_calculate_size_reduction_no_change() {
+        // Same size = 0% reduction
+        let reduction = calculate_size_reduction(1000, 1000);
+        assert!((reduction - 0.0).abs() < 0.01,
+            "Same size should be 0% reduction, got {}", reduction);
+    }
+    
+    #[test]
+    fn test_calculate_size_reduction_increase() {
+        // 500 -> 1000 = -100% (doubled)
+        let reduction = calculate_size_reduction(500, 1000);
+        assert!((reduction - (-100.0)).abs() < 0.01,
+            "500->1000 should be -100% (increase), got {}", reduction);
+    }
+    
+    #[test]
+    fn test_calculate_size_reduction_small_increase() {
+        // 1000 -> 1100 = -10% increase
+        let reduction = calculate_size_reduction(1000, 1100);
+        assert!((reduction - (-10.0)).abs() < 0.01,
+            "1000->1100 should be -10% (increase), got {}", reduction);
+    }
+    
+    // ============================================================
+    // 🔬 Strict Precision Tests (裁判机制)
+    // ============================================================
+    
+    /// Strict test: Size reduction formula must be mathematically correct
+    #[test]
+    fn test_strict_size_reduction_formula() {
+        // Formula: (1 - output/input) * 100
+        let test_cases = [
+            (1000u64, 500u64, 50.0f64),
+            (1000, 250, 75.0),
+            (1000, 100, 90.0),
+            (1000, 900, 10.0),
+            (1000, 1000, 0.0),
+            (1000, 2000, -100.0),
+            (1000, 1500, -50.0),
+        ];
+        
+        for (input, output, expected) in test_cases {
+            let result = calculate_size_reduction(input, output);
+            let expected_calc = (1.0 - (output as f64 / input as f64)) * 100.0;
+            
+            assert!((result - expected).abs() < 0.001,
+                "STRICT: {}->{}  expected {}, got {}", input, output, expected, result);
+            assert!((result - expected_calc).abs() < 0.0001,
+                "STRICT: Formula mismatch for {}->{}", input, output);
+        }
+    }
+    
+    /// Strict test: Large file sizes (GB range)
+    #[test]
+    fn test_strict_large_file_sizes() {
+        // 10GB -> 5GB = 50% reduction
+        let reduction = calculate_size_reduction(10_000_000_000, 5_000_000_000);
+        assert!((reduction - 50.0).abs() < 0.001,
+            "STRICT: 10GB->5GB should be exactly 50%, got {}", reduction);
+        
+        // 100GB -> 25GB = 75% reduction
+        let reduction = calculate_size_reduction(100_000_000_000, 25_000_000_000);
+        assert!((reduction - 75.0).abs() < 0.001,
+            "STRICT: 100GB->25GB should be exactly 75%, got {}", reduction);
+    }
+    
+    /// Strict test: Small file sizes (bytes range)
+    #[test]
+    fn test_strict_small_file_sizes() {
+        // 100 bytes -> 50 bytes = 50% reduction
+        let reduction = calculate_size_reduction(100, 50);
+        assert!((reduction - 50.0).abs() < 0.001,
+            "STRICT: 100->50 bytes should be exactly 50%, got {}", reduction);
+    }
+    
+    // ============================================================
+    // Format Size Change Message Tests (裁判机制)
+    // ============================================================
+    
     #[test]
     fn test_format_size_change_reduction() {
         let msg = format_size_change(1000, 500);
-        assert!(msg.contains("reduced"));
-        assert!(msg.contains("50.0%"));
+        assert!(msg.contains("reduced"), "Should say 'reduced' for smaller output");
+        assert!(msg.contains("50.0%"), "Should show 50.0% for half size");
     }
     
     #[test]
     fn test_format_size_change_increase() {
         let msg = format_size_change(500, 1000);
-        assert!(msg.contains("increased"));
-        assert!(msg.contains("100.0%"));
+        assert!(msg.contains("increased"), "Should say 'increased' for larger output");
+        assert!(msg.contains("100.0%"), "Should show 100.0% for doubled size");
     }
     
     #[test]
-    fn test_calculate_size_reduction() {
-        assert!((calculate_size_reduction(1000, 500) - 50.0).abs() < 0.1);
-        assert!((calculate_size_reduction(500, 1000) - (-100.0)).abs() < 0.1);
+    fn test_format_size_change_no_change() {
+        let msg = format_size_change(1000, 1000);
+        assert!(msg.contains("reduced"), "Same size shows as 0% reduced");
+        assert!(msg.contains("0.0%"), "Should show 0.0% for same size");
     }
+    
+    // ============================================================
+    // Output Path Tests (裁判机制)
+    // ============================================================
     
     #[test]
     fn test_determine_output_path() {
@@ -379,5 +488,101 @@ mod tests {
         let output_dir = Some(PathBuf::from("/output"));
         let output = determine_output_path(input, "avif", &output_dir).unwrap();
         assert_eq!(output, Path::new("/output/image.avif"));
+    }
+    
+    #[test]
+    fn test_determine_output_path_various_extensions() {
+        let input = Path::new("/path/to/video.mp4");
+        
+        let webm = determine_output_path(input, "webm", &None).unwrap();
+        assert_eq!(webm, Path::new("/path/to/video.webm"));
+        
+        let mkv = determine_output_path(input, "mkv", &None).unwrap();
+        assert_eq!(mkv, Path::new("/path/to/video.mkv"));
+    }
+    
+    // ============================================================
+    // ConversionResult Tests (裁判机制)
+    // ============================================================
+    
+    #[test]
+    fn test_conversion_result_success() {
+        let input = Path::new("/test/input.png");
+        let output = Path::new("/test/output.avif");
+        
+        let result = ConversionResult::success(input, output, 1000, 500, "AVIF", None);
+        
+        assert!(result.success);
+        assert!(!result.skipped);
+        assert_eq!(result.input_size, 1000);
+        assert_eq!(result.output_size, Some(500));
+        assert!((result.size_reduction.unwrap() - 50.0).abs() < 0.1);
+        assert!(result.message.contains("reduced"));
+    }
+    
+    #[test]
+    fn test_conversion_result_size_increase() {
+        let input = Path::new("/test/input.png");
+        
+        let result = ConversionResult::skipped_size_increase(input, 500, 1000);
+        
+        assert!(result.success);
+        assert!(result.skipped);
+        assert_eq!(result.skip_reason, Some("size_increase".to_string()));
+        assert!(result.message.contains("larger"));
+    }
+    
+    // ============================================================
+    // ConvertOptions Tests (裁判机制)
+    // ============================================================
+    
+    #[test]
+    fn test_convert_options_default() {
+        let opts = ConvertOptions::default();
+        
+        assert!(!opts.force);
+        assert!(opts.output_dir.is_none());
+        assert!(!opts.delete_original);
+        assert!(!opts.in_place);
+        assert!(!opts.should_delete_original());
+    }
+    
+    #[test]
+    fn test_convert_options_delete_original() {
+        let mut opts = ConvertOptions::default();
+        opts.delete_original = true;
+        
+        assert!(opts.should_delete_original());
+    }
+    
+    #[test]
+    fn test_convert_options_in_place() {
+        let mut opts = ConvertOptions::default();
+        opts.in_place = true;
+        
+        assert!(opts.should_delete_original());
+    }
+    
+    // ============================================================
+    // Consistency Tests (裁判机制)
+    // ============================================================
+    
+    #[test]
+    fn test_consistency_size_reduction() {
+        // Same input should always produce same output
+        for _ in 0..10 {
+            let result1 = calculate_size_reduction(1000, 500);
+            let result2 = calculate_size_reduction(1000, 500);
+            assert!((result1 - result2).abs() < 0.0000001,
+                "Size reduction calculation must be deterministic");
+        }
+    }
+    
+    #[test]
+    fn test_consistency_format_message() {
+        // Same input should always produce same message
+        let msg1 = format_size_change(1000, 500);
+        let msg2 = format_size_change(1000, 500);
+        assert_eq!(msg1, msg2, "Format message must be deterministic");
     }
 }
