@@ -495,7 +495,8 @@ fn auto_convert_single_file(
             println!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
-        // Animated lossless → HEVC MP4 (only if >=3 seconds)
+        // Animated lossless → HEVC MP4 CRF 0 (visually lossless, only if >=3 seconds)
+        // 🔥 无损源保持高质量：默认 CRF 0，用户可选 --lossless 数学无损
         (_, true, true) => {
             // Check duration - only convert animations >=3 seconds
             // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
@@ -513,17 +514,18 @@ fn auto_convert_single_file(
             }
             
             if lossless {
+                // 用户显式要求数学无损
                 println!("🔄 Animated lossless→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mkv_lossless(input, &options)?
-            } else if match_quality {
-                println!("🔄 Animated lossless→HEVC MP4 (MATCH QUALITY, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mp4_matched(input, &options, &analysis)?
             } else {
-                println!("🔄 Animated lossless→HEVC MP4 ({:.1}s): {}", duration, input.display());
+                // 🔥 无损源默认使用 CRF 0（视觉无损），不使用 match_quality
+                // match_quality 仅用于有损源
+                println!("🔄 Animated lossless→HEVC MP4 (CRF 0, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mp4(input, &options)?
             }
         }
-        // Animated lossy → skip (unless lossless mode AND >=3 seconds)
+        // Animated lossy → HEVC MP4 with match_quality (only if >=3 seconds)
+        // 🔥 有损源使用 match_quality 以获得更好的空间效率
         (_, false, true) => {
             // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
             let duration = match analysis.duration_secs {
@@ -534,18 +536,19 @@ fn auto_convert_single_file(
                     return Ok(());
                 }
             };
-            if lossless && duration >= 3.0 {
-                println!("🔄 Animated lossy→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mkv_lossless(input, &options)?
-            } else if match_quality && duration >= 3.0 {
-                println!("🔄 Animated lossy→HEVC MP4 (MATCH QUALITY, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mp4_matched(input, &options, &analysis)?
-            } else if duration < 3.0 {
+            if duration < 3.0 {
                 println!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
                 return Ok(());
+            }
+            
+            if lossless {
+                // 用户显式要求数学无损
+                println!("🔄 Animated lossy→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
+                convert_to_hevc_mkv_lossless(input, &options)?
             } else {
-                println!("⏭️ Skipping animated lossy: {}", input.display());
-                return Ok(());
+                // 🔥 有损源默认使用 match_quality
+                println!("🔄 Animated lossy→HEVC MP4 (MATCH QUALITY, {:.1}s): {}", duration, input.display());
+                convert_to_hevc_mp4_matched(input, &options, &analysis)?
             }
         }
         // Legacy Static lossy (non-JPEG, non-Modern) → JXL

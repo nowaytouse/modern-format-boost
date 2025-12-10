@@ -309,7 +309,15 @@ pub fn calculate_jxl_distance(analysis: &QualityAnalysis) -> Result<MatchedQuali
 /// This is the core algorithm that normalizes bpp across different:
 /// - Source codecs (efficiency varies)
 /// - Resolutions (higher res needs more bits)
-/// - Content complexity (B-frames, alpha, color depth)
+/// - Content complexity (B-frames, alpha, color depth, frame rate)
+/// - Aspect ratio (ultra-wide needs different handling)
+/// 
+/// ## Enhanced Precision Features (v2.0)
+/// 
+/// 1. **Frame rate factor**: Higher fps = more temporal redundancy = better compression
+/// 2. **Aspect ratio factor**: Ultra-wide content has different compression characteristics
+/// 3. **Duration factor**: Longer content benefits more from temporal compression
+/// 4. **Palette detection**: 8-bit indexed color (GIF) needs special handling
 /// 
 /// # Arguments
 /// * `analysis` - Quality analysis of input
@@ -335,13 +343,22 @@ fn calculate_effective_bpp(
         // For video/animation, need duration
         if let Some(duration) = analysis.duration_secs {
             if duration > 0.0 {
-                let fps = analysis.fps.unwrap_or(30.0);
+                // 🔥 Enhanced: Use actual fps if available, estimate from common values otherwise
+                let fps = analysis.fps.unwrap_or_else(|| {
+                    // Estimate fps based on source codec
+                    let codec = parse_source_codec(&analysis.source_codec);
+                    match codec {
+                        SourceCodec::Gif => 10.0,      // GIF typically 10fps
+                        SourceCodec::Apng => 15.0,    // APNG typically 15fps
+                        SourceCodec::WebpAnimated => 20.0, // WebP animated typically 20fps
+                        _ => 24.0,                     // Default to 24fps for video
+                    }
+                });
                 let total_frames = (duration * fps) as u64;
                 let bits_per_frame = (analysis.file_size * 8) as f64 / total_frames.max(1) as f64;
                 bits_per_frame / pixels as f64
             } else {
                 // 🔥 Quality Manifesto: Unknown duration, use conservative estimate
-                // Assume 1 second duration for conservative bpp calculation
                 eprintln!("   ⚠️  Duration unknown or zero, using conservative estimate");
                 (analysis.file_size * 8) as f64 / pixels as f64
             }
@@ -360,27 +377,81 @@ fn calculate_effective_bpp(
     // B-frames bonus (B-frames improve compression efficiency)
     let bframe_factor = if analysis.has_b_frames { 1.1 } else { 1.0 };
     
-    // Resolution factor (higher res is harder to compress efficiently)
-    let resolution_factor = if pixels > 8_000_000 {
-        0.85  // 4K+ needs more bits
-    } else if pixels > 2_000_000 {
-        0.9   // 1080p
-    } else if pixels > 500_000 {
-        0.95  // 720p
-    } else {
-        1.0   // SD
+    // 🔥 Enhanced: More granular resolution factor with continuous scaling
+    let resolution_factor = {
+        let megapixels = pixels as f64 / 1_000_000.0;
+        if megapixels > 8.0 {
+            0.80 + 0.05 * (8.0 / megapixels).min(1.0)  // 4K+ (8MP+): 0.80-0.85
+        } else if megapixels > 2.0 {
+            0.85 + 0.05 * ((8.0 - megapixels) / 6.0)   // 1080p-4K: 0.85-0.90
+        } else if megapixels > 0.5 {
+            0.90 + 0.05 * ((2.0 - megapixels) / 1.5)   // 720p-1080p: 0.90-0.95
+        } else {
+            0.95 + 0.05 * ((0.5 - megapixels) / 0.5).min(1.0)  // SD: 0.95-1.0
+        }
     };
     
     // Alpha channel factor (alpha adds complexity)
     let alpha_factor = if analysis.has_alpha { 0.9 } else { 1.0 };
     
-    // Color depth factor
+    // Color depth factor with palette detection
     let color_depth_factor = match analysis.bit_depth {
-        8 => 1.0,
+        1..=8 => {
+            // 🔥 Enhanced: 8-bit or less often means indexed color (GIF/PNG palette)
+            // These have inherently limited quality ceiling
+            if source_codec == SourceCodec::Gif {
+                1.3  // GIF 256 colors - don't need high quality target
+            } else {
+                1.0
+            }
+        }
         10 => 1.25,
         12 => 1.5,
         16 => 2.0,
         _ => 1.0,
+    };
+    
+    // 🔥 Enhanced: Frame rate factor for video/animation
+    // Higher fps = more temporal redundancy = better compression potential
+    let fps_factor = if let Some(fps) = analysis.fps {
+        if fps >= 60.0 {
+            1.15  // 60fps+ has lots of temporal redundancy
+        } else if fps >= 30.0 {
+            1.1   // 30fps standard
+        } else if fps >= 24.0 {
+            1.05  // 24fps cinematic
+        } else if fps >= 15.0 {
+            1.0   // 15fps animation
+        } else {
+            0.95  // Low fps (10fps GIF) - less temporal redundancy
+        }
+    } else {
+        1.0
+    };
+    
+    // 🔥 Enhanced: Duration factor for video/animation
+    // Longer content benefits more from temporal compression
+    let duration_factor = if let Some(duration) = analysis.duration_secs {
+        if duration >= 60.0 {
+            1.1   // 1min+ - good temporal compression
+        } else if duration >= 10.0 {
+            1.05  // 10s+ - moderate benefit
+        } else if duration >= 3.0 {
+            1.0   // 3-10s - baseline
+        } else {
+            0.95  // <3s - limited temporal benefit
+        }
+    } else {
+        1.0
+    };
+    
+    // 🔥 Enhanced: Aspect ratio factor
+    // Ultra-wide content may have different compression characteristics
+    let aspect_ratio = analysis.width as f64 / analysis.height as f64;
+    let aspect_factor = if aspect_ratio > 2.5 || aspect_ratio < 0.4 {
+        0.95  // Ultra-wide or ultra-tall - slightly harder to compress
+    } else {
+        1.0
     };
     
     // Target encoder adjustment
@@ -397,6 +468,9 @@ fn calculate_effective_bpp(
         * bframe_factor 
         * resolution_factor 
         * alpha_factor 
+        * fps_factor
+        * duration_factor
+        * aspect_factor
         / color_depth_factor
         / target_adjustment;
     

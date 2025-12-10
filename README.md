@@ -56,8 +56,8 @@ High-quality media format upgrade toolkit with complete metadata preservation. C
 **Animations (≥3 seconds only):**
 | Input | Output | Notes |
 |-------|--------|-------|
-| GIF/APNG/WebP (lossless) | HEVC/AV1 MP4 | Significant size reduction |
-| GIF/APNG/WebP (lossy) | SKIP | Unless `--lossless` or `--match-quality` |
+| GIF/APNG/WebP (lossless) | HEVC/AV1 MP4 (CRF 0) | Visually lossless, significant size reduction |
+| GIF/APNG/WebP (lossy) | HEVC/AV1 MP4 (match-quality) | Auto-calculated CRF for space efficiency |
 
 **Videos:**
 | Input Codec | Output | Notes |
@@ -71,7 +71,8 @@ High-quality media format upgrade toolkit with complete metadata preservation. C
 - **Default** - Lossless transcode for JPEG, mathematical lossless for PNG/BMP
 - **`--match-quality`** - Auto-calculate optimal CRF based on input quality analysis
   - **Video tools**: Enabled by default (use `--match-quality=false` to disable)
-  - **Image tools**: Disabled by default (use `--match-quality` to enable)
+  - **Image tools (static)**: Disabled by default (use `--match-quality` to enable)
+  - **⚠️ ONLY for lossy sources** - Lossless sources use CRF 0 (visually lossless) instead
 - **`--lossless`** - Mathematical lossless HEVC/AV1 (very slow, large files)
 
 ### Complete Metadata Preservation
@@ -235,8 +236,8 @@ modern_format_boost/
 **动图（仅 ≥3 秒）：**
 | 输入 | 输出 | 说明 |
 |------|------|------|
-| GIF/APNG/WebP（无损） | HEVC/AV1 MP4 | 显著减小体积 |
-| GIF/APNG/WebP（有损） | 跳过 | 除非使用 `--lossless` 或 `--match-quality` |
+| GIF/APNG/WebP（无损） | HEVC/AV1 MP4 (CRF 0) | 视觉无损，显著减小体积 |
+| GIF/APNG/WebP（有损） | HEVC/AV1 MP4 (match-quality) | 自动计算 CRF，空间效率更高 |
 
 **视频：**
 | 输入编码 | 输出 | 说明 |
@@ -250,7 +251,8 @@ modern_format_boost/
 - **默认** - JPEG 无损转码，PNG/BMP 数学无损
 - **`--match-quality`** - 根据输入质量分析自动计算最佳 CRF
   - **视频工具**：默认开启（使用 `--match-quality=false` 关闭）
-  - **图像工具**：默认关闭（使用 `--match-quality` 开启）
+  - **图像工具（静态）**：默认关闭（使用 `--match-quality` 开启）
+  - **⚠️ 仅用于有损源** - 无损源使用 CRF 0（视觉无损）
 - **`--lossless`** - 数学无损 HEVC/AV1（非常慢，文件大）
 
 ### 完整元数据保留
