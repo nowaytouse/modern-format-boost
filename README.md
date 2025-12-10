@@ -70,6 +70,8 @@ High-quality media format upgrade toolkit with complete metadata preservation. C
 
 - **Default** - Lossless transcode for JPEG, mathematical lossless for PNG/BMP
 - **`--match-quality`** - Auto-calculate optimal CRF based on input quality analysis
+  - **Video tools**: Enabled by default (use `--match-quality=false` to disable)
+  - **Image tools**: Disabled by default (use `--match-quality` to enable)
 - **`--lossless`** - Mathematical lossless HEVC/AV1 (very slow, large files)
 
 ### Complete Metadata Preservation
@@ -126,11 +128,14 @@ cargo build --release
 ### Video Conversion
 
 ```bash
-# Auto-convert videos (H.264→HEVC)
+# Auto-convert videos (H.264→HEVC, quality matching enabled by default)
 ./target/release/vidquality-hevc auto /path/to/videos
 
-# With quality matching
-./target/release/vidquality-hevc auto /path/to/videos --match-quality --delete-original
+# With original deletion
+./target/release/vidquality-hevc auto /path/to/videos --delete-original
+
+# Disable quality matching (use fixed CRF)
+./target/release/vidquality-hevc auto /path/to/videos --match-quality=false
 ```
 
 ### Analysis & Verification
@@ -244,6 +249,8 @@ modern_format_boost/
 
 - **默认** - JPEG 无损转码，PNG/BMP 数学无损
 - **`--match-quality`** - 根据输入质量分析自动计算最佳 CRF
+  - **视频工具**：默认开启（使用 `--match-quality=false` 关闭）
+  - **图像工具**：默认关闭（使用 `--match-quality` 开启）
 - **`--lossless`** - 数学无损 HEVC/AV1（非常慢，文件大）
 
 ### 完整元数据保留
@@ -300,11 +307,14 @@ cargo build --release
 ### 视频转换
 
 ```bash
-# 自动转换视频（H.264→HEVC）
+# 自动转换视频（H.264→HEVC，默认开启质量匹配）
 ./target/release/vidquality-hevc auto /path/to/videos
 
-# 带质量匹配
-./target/release/vidquality-hevc auto /path/to/videos --match-quality --delete-original
+# 删除原文件
+./target/release/vidquality-hevc auto /path/to/videos --delete-original
+
+# 关闭质量匹配（使用固定 CRF）
+./target/release/vidquality-hevc auto /path/to/videos --match-quality=false
 ```
 
 ### 分析与验证
