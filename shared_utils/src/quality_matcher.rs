@@ -2614,4 +2614,434 @@ mod tests {
             "Size mode should have CRF >= Quality mode: Size={}, Quality={}", 
             size.crf, quality.crf);
     }
+    
+    // ============================================================
+    // 🔬 STRICT PRECISION TESTS - Tighter Ranges
+    // ============================================================
+    // These tests use TIGHTER CRF ranges to ensure high precision.
+    // If these fail, the formula needs recalibration.
+    // ============================================================
+    
+    /// Strict test: 1080p @ 5Mbps H.264 → AV1
+    /// Expected CRF: 23-27 (±2 tolerance)
+    #[test]
+    fn test_strict_1080p_5mbps() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 120.0)
+            .video_bitrate(5_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Strict range: 23-27
+        assert!(result.crf >= 23 && result.crf <= 27,
+            "STRICT: 1080p 5Mbps expected CRF 23-27, got {}", result.crf);
+    }
+    
+    /// Strict test: 720p @ 2Mbps H.264 → AV1
+    /// Expected CRF: 25-29 (±2 tolerance)
+    #[test]
+    fn test_strict_720p_2mbps() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1280, 720, 30.0, 60.0)
+            .video_bitrate(2_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Strict range: 25-29
+        assert!(result.crf >= 25 && result.crf <= 29,
+            "STRICT: 720p 2Mbps expected CRF 25-29, got {}", result.crf);
+    }
+    
+    /// Strict test: 4K @ 15Mbps H.264 → AV1
+    /// Expected CRF: 24-28 (±2 tolerance)
+    #[test]
+    fn test_strict_4k_15mbps() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .video_bitrate(15_000_000)
+            .gop(60, 3)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Strict range: 24-28
+        assert!(result.crf >= 24 && result.crf <= 28,
+            "STRICT: 4K 15Mbps expected CRF 24-28, got {}", result.crf);
+    }
+    
+    // ============================================================
+    // 🔬 EDGE CASE TESTS - Boundary Conditions
+    // ============================================================
+    
+    /// Edge case: Extremely low bitrate (500kbps 1080p)
+    /// Should cap CRF at reasonable maximum
+    #[test]
+    fn test_edge_extremely_low_bitrate() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(500_000)  // 0.5 Mbps - very low
+            .gop(60, 0)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Should be capped, not go to extreme values
+        assert!(result.crf >= 30 && result.crf <= 40,
+            "EDGE: Extremely low bitrate should cap CRF 30-40, got {}", result.crf);
+    }
+    
+    /// Edge case: Extremely high bitrate (100Mbps 1080p)
+    /// Should floor CRF at reasonable minimum
+    #[test]
+    fn test_edge_extremely_high_bitrate() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("prores", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(100_000_000)  // 100 Mbps - very high
+            .gop(1, 0)  // All-intra
+            .pix_fmt("yuv422p10le")
+            .bit_depth(10)
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Should have a floor, not go too low
+        assert!(result.crf >= 15 && result.crf <= 22,
+            "EDGE: Extremely high bitrate should floor CRF 15-22, got {}", result.crf);
+    }
+    
+    /// Edge case: Very small resolution (320x240)
+    /// 500kbps at 320x240 is actually HIGH quality (high bpp)
+    #[test]
+    fn test_edge_small_resolution() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 320, 240, 15.0, 30.0)
+            .video_bitrate(500_000)  // 500kbps at 320x240 = high bpp
+            .gop(30, 1)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Small resolution with high relative bitrate = low CRF (high quality)
+        // 500kbps / (320*240*15) = 0.43 bpp - very high!
+        assert!(result.crf >= 15 && result.crf <= 25,
+            "EDGE: Small resolution high-bpp should produce CRF 15-25, got {}", result.crf);
+    }
+    
+    /// Edge case: Very large resolution (8K)
+    /// 50Mbps at 8K is actually LOW quality (low bpp)
+    #[test]
+    fn test_edge_8k_resolution() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 7680, 4320, 30.0, 60.0)
+            .video_bitrate(50_000_000)  // 50 Mbps for 8K = low bpp
+            .gop(60, 3)
+            .pix_fmt("yuv420p10le")
+            .bit_depth(10)
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // 8K with relatively low bitrate = higher CRF
+        // 50Mbps / (7680*4320*30) = 0.05 bpp - quite low for 8K
+        assert!(result.crf >= 28 && result.crf <= 38,
+            "EDGE: 8K low-bpp should produce CRF 28-38, got {}", result.crf);
+    }
+    
+    /// Edge case: High frame rate (120fps)
+    #[test]
+    fn test_edge_high_framerate() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 120.0, 60.0)
+            .video_bitrate(15_000_000)
+            .gop(120, 3)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // High framerate should still produce valid CRF
+        assert!(result.crf >= 18 && result.crf <= 28,
+            "EDGE: 120fps should produce CRF 18-28, got {}", result.crf);
+    }
+    
+    /// Edge case: Very short GOP (GOP=2)
+    #[test]
+    fn test_edge_short_gop() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(10_000_000)
+            .gop(2, 0)  // Very short GOP
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Short GOP factor should be < 1.0
+        assert!(result.analysis_details.gop_factor < 0.9,
+            "EDGE: Short GOP factor should be < 0.9, got {}", result.analysis_details.gop_factor);
+    }
+    
+    /// Edge case: Maximum B-frames (8)
+    #[test]
+    fn test_edge_max_bframes() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(250, 8)  // Max B-frames
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Max B-frames should have high GOP factor
+        assert!(result.analysis_details.gop_factor > 1.3,
+            "EDGE: Max B-frames GOP factor should be > 1.3, got {}", result.analysis_details.gop_factor);
+    }
+    
+    /// Edge case: 10-bit HDR content
+    #[test]
+    fn test_edge_10bit_hdr() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 3840, 2160, 30.0, 60.0)
+            .video_bitrate(20_000_000)
+            .gop(60, 3)
+            .pix_fmt("yuv420p10le")
+            .color("bt2020nc", true)
+            .bit_depth(10)
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // HDR factor should be > 1.0
+        assert!(result.analysis_details.hdr_factor > 1.1,
+            "EDGE: HDR factor should be > 1.1, got {}", result.analysis_details.hdr_factor);
+        
+        // CRF should be reasonable for HDR
+        assert!(result.crf >= 20 && result.crf <= 28,
+            "EDGE: 10-bit HDR should produce CRF 20-28, got {}", result.crf);
+    }
+    
+    /// Edge case: RGB pixel format
+    #[test]
+    fn test_edge_rgb_format() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(15_000_000)
+            .gop(60, 2)
+            .pix_fmt("rgb24")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // RGB chroma factor should be > 1.0
+        assert!(result.analysis_details.chroma_factor > 1.1,
+            "EDGE: RGB chroma factor should be > 1.1, got {}", result.analysis_details.chroma_factor);
+    }
+    
+    /// Edge case: Vertical video (9:16)
+    #[test]
+    fn test_edge_vertical_video() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1080, 1920, 30.0, 60.0)  // 9:16 vertical
+            .video_bitrate(5_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Vertical video should still produce valid CRF
+        assert!(result.crf >= 20 && result.crf <= 30,
+            "EDGE: Vertical video should produce CRF 20-30, got {}", result.crf);
+    }
+    
+    /// Edge case: Ultra-wide cinema (2.39:1)
+    #[test]
+    fn test_edge_ultrawide_cinema() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 2560, 1080, 24.0, 120.0)  // 2.37:1
+            .video_bitrate(8_000_000)
+            .gop(48, 2)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Ultra-wide should have aspect penalty (factor > 1.0)
+        // Note: 2.37:1 is just under 2.5:1 threshold
+        assert!(result.crf >= 20 && result.crf <= 28,
+            "EDGE: Ultra-wide cinema should produce CRF 20-28, got {}", result.crf);
+    }
+    
+    /// Edge case: Lossless source (FFV1)
+    #[test]
+    fn test_edge_lossless_source() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("ffv1", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(200_000_000)  // Very high for lossless
+            .gop(1, 0)
+            .pix_fmt("yuv444p10le")
+            .bit_depth(10)
+            .build();
+        
+        let result = calculate_av1_crf(&analysis).unwrap();
+        
+        // Lossless source should produce low CRF (high quality target)
+        assert!(result.crf >= 15 && result.crf <= 25,
+            "EDGE: Lossless source should produce CRF 15-25, got {}", result.crf);
+    }
+    
+    // ============================================================
+    // 🔬 FACTOR ISOLATION TESTS - Verify Each Factor Works
+    // ============================================================
+    
+    /// Verify GOP factor isolation
+    #[test]
+    fn test_factor_gop_isolation() {
+        // Same content, different GOP
+        let short_gop = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(10, 1)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let long_gop = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(250, 3)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let short_result = calculate_av1_crf(&short_gop).unwrap();
+        let long_result = calculate_av1_crf(&long_gop).unwrap();
+        
+        // Long GOP should have higher GOP factor
+        assert!(long_result.analysis_details.gop_factor > short_result.analysis_details.gop_factor,
+            "Long GOP factor ({}) should be > short GOP factor ({})",
+            long_result.analysis_details.gop_factor, short_result.analysis_details.gop_factor);
+    }
+    
+    /// Verify chroma factor isolation
+    #[test]
+    fn test_factor_chroma_isolation() {
+        let yuv420 = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let yuv444 = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv444p")
+            .build();
+        
+        let yuv420_result = calculate_av1_crf(&yuv420).unwrap();
+        let yuv444_result = calculate_av1_crf(&yuv444).unwrap();
+        
+        // YUV444 should have higher chroma factor
+        assert!(yuv444_result.analysis_details.chroma_factor > yuv420_result.analysis_details.chroma_factor,
+            "YUV444 chroma factor ({}) should be > YUV420 ({})",
+            yuv444_result.analysis_details.chroma_factor, yuv420_result.analysis_details.chroma_factor);
+    }
+    
+    /// Verify HDR factor isolation
+    #[test]
+    fn test_factor_hdr_isolation() {
+        let sdr = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .color("bt709", false)
+            .build();
+        
+        let hdr = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .color("bt2020nc", true)
+            .build();
+        
+        let sdr_result = calculate_av1_crf(&sdr).unwrap();
+        let hdr_result = calculate_av1_crf(&hdr).unwrap();
+        
+        // HDR should have higher HDR factor
+        assert!(hdr_result.analysis_details.hdr_factor > sdr_result.analysis_details.hdr_factor,
+            "HDR factor ({}) should be > SDR ({})",
+            hdr_result.analysis_details.hdr_factor, sdr_result.analysis_details.hdr_factor);
+    }
+    
+    /// Verify content type adjustment isolation
+    #[test]
+    fn test_factor_content_type_isolation() {
+        let live_action = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .content_type(ContentType::LiveAction)
+            .build();
+        
+        let animation = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .content_type(ContentType::Animation)
+            .build();
+        
+        let live_result = calculate_av1_crf(&live_action).unwrap();
+        let anim_result = calculate_av1_crf(&animation).unwrap();
+        
+        // Animation should have higher content type adjustment
+        assert!(anim_result.analysis_details.content_type_adjustment > live_result.analysis_details.content_type_adjustment,
+            "Animation adjustment ({}) should be > LiveAction ({})",
+            anim_result.analysis_details.content_type_adjustment, live_result.analysis_details.content_type_adjustment);
+        
+        // Animation CRF should be higher (content type adjustment is added)
+        assert!(anim_result.crf > live_result.crf,
+            "Animation CRF ({}) should be > LiveAction ({})",
+            anim_result.crf, live_result.crf);
+    }
+    
+    /// Verify bias isolation
+    #[test]
+    fn test_factor_bias_isolation() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .video_bitrate(8_000_000)
+            .gop(60, 2)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let conservative = calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Conservative).unwrap();
+        let balanced = calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Balanced).unwrap();
+        let aggressive = calculate_av1_crf_with_options(&analysis, MatchMode::Quality, QualityBias::Aggressive).unwrap();
+        
+        // Conservative < Balanced < Aggressive
+        assert!(conservative.crf < balanced.crf,
+            "Conservative CRF ({}) should be < Balanced ({})", conservative.crf, balanced.crf);
+        assert!(balanced.crf < aggressive.crf,
+            "Balanced CRF ({}) should be < Aggressive ({})", balanced.crf, aggressive.crf);
+        
+        // Exact difference should be 2
+        assert_eq!(balanced.crf - conservative.crf, 2,
+            "Conservative should be exactly 2 less than Balanced");
+        assert_eq!(aggressive.crf - balanced.crf, 2,
+            "Aggressive should be exactly 2 more than Balanced");
+    }
 }
