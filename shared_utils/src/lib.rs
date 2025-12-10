@@ -25,6 +25,7 @@ pub mod conversion;
 pub mod video;
 pub mod date_analysis;
 pub mod quality_matcher;
+pub mod image_quality_detector;
 
 pub use progress::*;
 pub use safety::*;
@@ -50,4 +51,11 @@ pub use quality_matcher::{
     // Utilities
     log_quality_analysis, from_video_detection, from_image_analysis,
     should_skip_video_codec, should_skip_image_format, parse_source_codec,
+};
+
+pub use image_quality_detector::{
+    // Core types
+    ImageQualityAnalysis, ImageContentType, RoutingDecision,
+    // Main analysis function
+    analyze_image_quality,
 };
