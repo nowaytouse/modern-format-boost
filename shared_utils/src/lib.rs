@@ -39,6 +39,8 @@ pub use video::*;
 pub use date_analysis::{analyze_directory, DateAnalysisConfig, DateAnalysisResult, FileDateInfo, DateSource, print_analysis};
 pub use quality_matcher::{
     EncoderType, SourceCodec, QualityAnalysis, MatchedQuality, AnalysisDetails,
+    SkipDecision,
     calculate_av1_crf, calculate_hevc_crf, calculate_jxl_distance,
     log_quality_analysis, from_video_detection, from_image_analysis,
+    should_skip_video_codec, should_skip_image_format, parse_source_codec,
 };
