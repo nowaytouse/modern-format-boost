@@ -807,6 +807,111 @@ pub fn from_video_detection(
     }
 }
 
+/// Skip decision result
+#[derive(Debug, Clone)]
+pub struct SkipDecision {
+    /// Whether to skip conversion
+    pub should_skip: bool,
+    /// Reason for skipping (if applicable)
+    pub reason: String,
+    /// Detected codec
+    pub codec: SourceCodec,
+}
+
+/// Determine if a video codec should be skipped to avoid generational loss
+/// 
+/// This is the unified skip logic for all video conversion tools.
+/// Skips modern codecs: H.265/HEVC, AV1, VP9, VVC/H.266, AV2
+/// 
+/// # Arguments
+/// * `codec_str` - Codec string from ffprobe or detection
+/// 
+/// # Returns
+/// * `SkipDecision` - Whether to skip and why
+pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
+    let codec = parse_source_codec(codec_str);
+    
+    // Modern video codecs that should be skipped
+    let should_skip = matches!(
+        codec,
+        SourceCodec::H265 |      // HEVC
+        SourceCodec::Av1 |       // AV1
+        SourceCodec::Vp9 |       // VP9
+        SourceCodec::Vvc |       // VVC/H.266 (cutting-edge)
+        SourceCodec::Av2         // AV2 (cutting-edge)
+    );
+    
+    let reason = if should_skip {
+        let codec_name = match codec {
+            SourceCodec::H265 => "H.265/HEVC",
+            SourceCodec::Av1 => "AV1",
+            SourceCodec::Vp9 => "VP9",
+            SourceCodec::Vvc => "H.266/VVC (cutting-edge)",
+            SourceCodec::Av2 => "AV2 (cutting-edge)",
+            _ => "modern codec",
+        };
+        format!("Source is {} - skipping to avoid generational loss", codec_name)
+    } else {
+        String::new()
+    };
+    
+    SkipDecision {
+        should_skip,
+        reason,
+        codec,
+    }
+}
+
+/// Determine if an image format should be skipped to avoid generational loss
+/// 
+/// This is the unified skip logic for all image conversion tools.
+/// Skips modern lossy formats: lossy WebP, lossy AVIF, lossy HEIC
+/// Does NOT skip: lossless versions (they can be converted to JXL)
+/// 
+/// # Arguments
+/// * `format_str` - Format string from image analysis
+/// * `is_lossless` - Whether the source is lossless
+/// 
+/// # Returns
+/// * `SkipDecision` - Whether to skip and why
+pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
+    let codec = parse_source_codec(format_str);
+    
+    // Modern lossy image formats that should be skipped
+    // Lossless versions can be converted to JXL for better compression
+    let is_modern_lossy = !is_lossless && matches!(
+        codec,
+        SourceCodec::WebpStatic |
+        SourceCodec::Avif |
+        SourceCodec::Heic |
+        SourceCodec::JpegXl  // Don't re-encode JXL
+    );
+    
+    // Always skip JXL (already optimal)
+    let is_jxl = matches!(codec, SourceCodec::JpegXl);
+    
+    let should_skip = is_modern_lossy || is_jxl;
+    
+    let reason = if should_skip {
+        let codec_name = match codec {
+            SourceCodec::WebpStatic => "lossy WebP",
+            SourceCodec::Avif => "lossy AVIF",
+            SourceCodec::Heic => "lossy HEIC/HEIF",
+            SourceCodec::JpegXl => "JPEG XL (already optimal)",
+            _ => "modern lossy format",
+        };
+        format!("Source is {} - skipping to avoid generational loss", codec_name)
+    } else {
+        String::new()
+    };
+    
+    SkipDecision {
+        should_skip,
+        reason,
+        codec,
+    }
+}
+
 /// Create QualityAnalysis from animation/image analysis
 /// 
 /// This is a convenience function for image tools
@@ -1027,5 +1132,46 @@ mod tests {
         };
         let result = calculate_av1_crf(&minimal).unwrap();
         assert!(result.analysis_details.confidence < 0.7);
+    }
+    
+    #[test]
+    fn test_should_skip_video_codec() {
+        // Modern codecs should be skipped
+        assert!(should_skip_video_codec("hevc").should_skip);
+        assert!(should_skip_video_codec("h265").should_skip);
+        assert!(should_skip_video_codec("av1").should_skip);
+        assert!(should_skip_video_codec("vp9").should_skip);
+        
+        // Cutting-edge codecs should be skipped
+        assert!(should_skip_video_codec("vvc").should_skip);
+        assert!(should_skip_video_codec("h266").should_skip);
+        assert!(should_skip_video_codec("av2").should_skip);
+        
+        // Legacy codecs should NOT be skipped
+        assert!(!should_skip_video_codec("h264").should_skip);
+        assert!(!should_skip_video_codec("mpeg4").should_skip);
+        assert!(!should_skip_video_codec("prores").should_skip);
+        assert!(!should_skip_video_codec("ffv1").should_skip);
+    }
+    
+    #[test]
+    fn test_should_skip_image_format() {
+        // Modern lossy formats should be skipped
+        assert!(should_skip_image_format("webp", false).should_skip);
+        assert!(should_skip_image_format("avif", false).should_skip);
+        assert!(should_skip_image_format("heic", false).should_skip);
+        
+        // JXL should always be skipped (already optimal)
+        assert!(should_skip_image_format("jxl", true).should_skip);
+        assert!(should_skip_image_format("jxl", false).should_skip);
+        
+        // Modern lossless formats should NOT be skipped (can convert to JXL)
+        assert!(!should_skip_image_format("webp", true).should_skip);
+        assert!(!should_skip_image_format("avif", true).should_skip);
+        
+        // Legacy formats should NOT be skipped
+        assert!(!should_skip_image_format("jpeg", false).should_skip);
+        assert!(!should_skip_image_format("png", true).should_skip);
+        assert!(!should_skip_image_format("gif", true).should_skip);
     }
 }

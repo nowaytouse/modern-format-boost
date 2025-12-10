@@ -106,34 +106,28 @@ pub struct ConversionOutput {
 
 /// Determine conversion strategy based on detection result (for auto mode)
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
-    let codec_name = result.codec.as_str();
+    // 🔥 使用统一的跳过检测逻辑 (shared_utils::should_skip_video_codec)
+    // 支持: H.265/HEVC, AV1, VP9, VVC/H.266, AV2
+    let skip_decision = shared_utils::should_skip_video_codec(result.codec.as_str());
     
-    // Check for Modern Codecs -> SKIP (H.265/HEVC, AV1, VP9, VVC)
-    match result.codec {
-        crate::detection_api::DetectedCodec::H265 |
-        crate::detection_api::DetectedCodec::AV1 |
-        crate::detection_api::DetectedCodec::AV2 |
-        crate::detection_api::DetectedCodec::VVC |
-        crate::detection_api::DetectedCodec::VP9 => {
-             return ConversionStrategy {
-                target: TargetVideoFormat::Skip,
-                reason: format!("Source is modern codec ({}) - skipping to avoid generational loss", codec_name),
-                command: String::new(),
-                preserve_audio: false,
-                crf: 0,
-                lossless: false,
-            };
-        }
-        _ => {}
+    if skip_decision.should_skip {
+        return ConversionStrategy {
+            target: TargetVideoFormat::Skip,
+            reason: skip_decision.reason,
+            command: String::new(),
+            preserve_audio: false,
+            crf: 0,
+            lossless: false,
+        };
     }
     
-    // Also check for modern codecs in Unknown string
+    // 🔥 Also check Unknown codec string for modern formats
     if let crate::detection_api::DetectedCodec::Unknown(ref s) = result.codec {
-        let s = s.to_lowercase();
-        if s.contains("hevc") || s.contains("h265") || s.contains("av1") || s.contains("vp9") || s.contains("vvc") || s.contains("h266") {
-             return ConversionStrategy {
+        let unknown_skip = shared_utils::should_skip_video_codec(s);
+        if unknown_skip.should_skip {
+            return ConversionStrategy {
                 target: TargetVideoFormat::Skip,
-                reason: format!("Source is modern codec ({}) - skipping", s),
+                reason: unknown_skip.reason,
                 command: String::new(),
                 preserve_audio: false,
                 crf: 0,
