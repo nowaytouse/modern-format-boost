@@ -38,9 +38,16 @@ pub use conversion::*;
 pub use video::*;
 pub use date_analysis::{analyze_directory, DateAnalysisConfig, DateAnalysisResult, FileDateInfo, DateSource, print_analysis};
 pub use quality_matcher::{
+    // Core types
     EncoderType, SourceCodec, QualityAnalysis, MatchedQuality, AnalysisDetails,
     SkipDecision,
+    // v3.0 Enhanced types
+    MatchMode, QualityBias, ContentType, VideoAnalysisBuilder,
+    // CRF/distance calculation
     calculate_av1_crf, calculate_hevc_crf, calculate_jxl_distance,
+    // v3.0 with options
+    calculate_av1_crf_with_options, calculate_hevc_crf_with_options, calculate_jxl_distance_with_options,
+    // Utilities
     log_quality_analysis, from_video_detection, from_image_analysis,
     should_skip_video_codec, should_skip_image_format, parse_source_codec,
 };

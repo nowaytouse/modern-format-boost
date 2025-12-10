@@ -75,6 +75,31 @@ High-quality media format upgrade toolkit with complete metadata preservation. C
   - **⚠️ ONLY for lossy sources** - Lossless sources use CRF 0 (visually lossless) instead
 - **`--lossless`** - Mathematical lossless HEVC/AV1 (very slow, large files)
 
+### 🔥 Quality Matching v3.0 - Data-Driven Precision
+
+The quality matching algorithm has been significantly improved with:
+
+| Factor | Impact | Description |
+|--------|--------|-------------|
+| **Video-only bitrate** | 🔴 High | Uses video stream bitrate (excludes audio 10-30% overhead) |
+| **GOP structure** | 🔴 High | GOP size + B-frame pyramid (up to 50% efficiency difference) |
+| **Chroma subsampling** | 🔴 High | YUV420 vs YUV444 (1.5x data difference) |
+| **HDR detection** | 🔴 High | BT.2020 content needs 20-30% more bitrate |
+| **Content type** | 🔴 High | Animation +4 CRF, Film grain -3 CRF |
+| **Aspect ratio** | 🟡 Medium | Ultra-wide (>2.5:1) penalty |
+| **SI/TI complexity** | 🟡 Medium | Spatial/Temporal Information metrics |
+| **Film grain** | 🟡 Medium | High grain content needs more bits |
+
+**Quality Bias Options:**
+- `Conservative` - CRF -2 (prefer quality)
+- `Balanced` - Default
+- `Aggressive` - CRF +2 (prefer size)
+
+**Match Modes:**
+- `Quality` - Match source quality (default)
+- `Size` - Optimize for smaller files
+- `Speed` - Optimize for encoding speed
+
 ### Complete Metadata Preservation
 
 - **EXIF/IPTC/XMP** - All image metadata via exiftool
@@ -257,6 +282,31 @@ modern_format_boost/
   - **图像工具（静态）**：默认关闭（使用 `--match-quality` 开启）
   - **⚠️ 仅用于有损源** - 无损源使用 CRF 0（视觉无损）
 - **`--lossless`** - 数学无损 HEVC/AV1（非常慢，文件大）
+
+### 🔥 质量匹配 v3.0 - 数据驱动的精确度
+
+质量匹配算法已大幅改进：
+
+| 因子 | 优先级 | 说明 |
+|------|--------|------|
+| **视频专用码率** | 🔴 高 | 使用视频流码率（排除音频 10-30% 开销） |
+| **GOP 结构** | 🔴 高 | GOP 大小 + B 帧金字塔（效率差异可达 50%） |
+| **色度采样** | 🔴 高 | YUV420 vs YUV444（数据量差异 1.5 倍） |
+| **HDR 检测** | 🔴 高 | BT.2020 内容需要 20-30% 更多码率 |
+| **内容类型** | 🔴 高 | 动画 +4 CRF，胶片颗粒 -3 CRF |
+| **宽高比** | 🟡 中 | 超宽（>2.5:1）惩罚 |
+| **SI/TI 复杂度** | 🟡 中 | 空间/时间信息指标 |
+| **胶片颗粒** | 🟡 中 | 高颗粒内容需要更多码率 |
+
+**质量偏好选项：**
+- `Conservative` - CRF -2（偏好质量）
+- `Balanced` - 默认
+- `Aggressive` - CRF +2（偏好体积）
+
+**匹配模式：**
+- `Quality` - 匹配源质量（默认）
+- `Size` - 优化文件大小
+- `Speed` - 优化编码速度
 
 ### 完整元数据保留
 
