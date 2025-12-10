@@ -51,7 +51,8 @@ enum Commands {
         #[arg(long)]
         lossless: bool,
         /// Match input video quality level (auto-calculate CRF based on input bitrate)
-        #[arg(long)]
+        /// Enabled by default for video processing
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         match_quality: bool,
     },
 
