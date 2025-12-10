@@ -247,12 +247,21 @@ pub struct AnalysisDetails {
 pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     let (effective_bpp, details) = calculate_effective_bpp(analysis, EncoderType::Av1)?;
     
+    // 🔥 Quality Manifesto: NO silent fallback! If bpp is invalid, FAIL LOUDLY
+    if effective_bpp <= 0.0 {
+        return Err(format!(
+            "❌ Cannot calculate AV1 CRF: effective_bpp is {} (must be > 0)\n\
+             💡 Possible causes:\n\
+             - File size is 0 or unknown\n\
+             - Duration/fps detection failed\n\
+             - Invalid dimensions",
+            effective_bpp
+        ));
+    }
+    
     // Convert bpp to CRF using logarithmic formula for AV1
-    let crf_float = if effective_bpp > 0.0 {
-        50.0 - 8.0 * (effective_bpp * 100.0).log2()
-    } else {
-        28.0
-    };
+    // Formula: CRF = 50 - 8 * log2(effective_bpp * 100)
+    let crf_float = 50.0 - 8.0 * (effective_bpp * 100.0).log2();
     
     // Clamp to reasonable range [18, 35] for AV1
     let crf = (crf_float.round() as i32).clamp(18, 35) as u8;
@@ -281,12 +290,21 @@ pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, S
 pub fn calculate_hevc_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     let (effective_bpp, details) = calculate_effective_bpp(analysis, EncoderType::Hevc)?;
     
+    // 🔥 Quality Manifesto: NO silent fallback! If bpp is invalid, FAIL LOUDLY
+    if effective_bpp <= 0.0 {
+        return Err(format!(
+            "❌ Cannot calculate HEVC CRF: effective_bpp is {} (must be > 0)\n\
+             💡 Possible causes:\n\
+             - File size is 0 or unknown\n\
+             - Duration/fps detection failed\n\
+             - Invalid dimensions",
+            effective_bpp
+        ));
+    }
+    
     // Convert bpp to CRF using logarithmic formula for HEVC
-    let crf_float = if effective_bpp > 0.0 {
-        51.0 - 10.0 * (effective_bpp * 1000.0).log2()
-    } else {
-        23.0
-    };
+    // Formula: CRF = 51 - 10 * log2(effective_bpp * 1000)
+    let crf_float = 51.0 - 10.0 * (effective_bpp * 1000.0).log2();
     
     // Clamp to reasonable range [0, 32] for HEVC (allows visually lossless)
     let crf = (crf_float.round() as i32).clamp(0, 32) as u8;
@@ -344,17 +362,25 @@ pub fn calculate_jxl_distance(analysis: &QualityAnalysis) -> Result<MatchedQuali
     // For non-JPEG, estimate quality from bpp
     let (effective_bpp, details) = calculate_effective_bpp(analysis, EncoderType::Jxl)?;
     
-    // Estimate quality from effective bpp
+    // 🔥 Quality Manifesto: NO silent fallback! If bpp is invalid, FAIL LOUDLY
+    if effective_bpp <= 0.0 {
+        return Err(format!(
+            "❌ Cannot calculate JXL distance: effective_bpp is {} (must be > 0)\n\
+             💡 Possible causes:\n\
+             - File size is 0 or unknown\n\
+             - Invalid dimensions\n\
+             💡 For JPEG sources, ensure JPEG quality analysis is available",
+            effective_bpp
+        ));
+    }
+    
+    // Estimate quality from effective bpp using logarithmic formula
     // bpp=2.0 → Q95 → d=0.5
     // bpp=1.0 → Q90 → d=1.0
     // bpp=0.5 → Q85 → d=1.5
     // bpp=0.3 → Q80 → d=2.0
     // bpp=0.1 → Q70 → d=3.0
-    let estimated_quality = if effective_bpp > 0.0 {
-        70.0 + 15.0 * (effective_bpp * 5.0).log2()
-    } else {
-        75.0
-    };
+    let estimated_quality = 70.0 + 15.0 * (effective_bpp * 5.0).log2();
     
     let clamped_quality = estimated_quality.clamp(50.0, 100.0);
     let distance = ((100.0 - clamped_quality) / 10.0) as f32;
@@ -771,9 +797,13 @@ pub fn log_quality_analysis(analysis: &QualityAnalysis, result: &MatchedQuality,
 
 /// Create QualityAnalysis from video detection result
 /// 
-/// This is a convenience function for video tools
+/// This is a convenience function for video tools.
+/// 
+/// # 🔥 Quality Manifesto
+/// - Returns Result to allow proper error handling
+/// - Fails loudly if critical data is missing
 pub fn from_video_detection(
-    _file_path: &str,
+    file_path: &str,
     codec: &str,
     width: u32,
     height: u32,
@@ -786,10 +816,20 @@ pub fn from_video_detection(
 ) -> QualityAnalysis {
     let pixels_per_frame = (width as f64) * (height as f64);
     let pixels_per_second = pixels_per_frame * fps;
-    let bpp = if pixels_per_second > 0.0 {
+    
+    // 🔥 Quality Manifesto: Log warning if bpp cannot be calculated
+    // But don't fail here - let the CRF calculation fail with detailed error
+    let bpp = if pixels_per_second > 0.0 && bitrate > 0 {
         (bitrate as f64) / pixels_per_second
     } else {
-        0.0
+        // Log warning but continue - the CRF calculation will fail with detailed error
+        if pixels_per_second <= 0.0 {
+            eprintln!("   ⚠️  Warning: pixels_per_second is {} for {}", pixels_per_second, file_path);
+        }
+        if bitrate == 0 {
+            eprintln!("   ⚠️  Warning: bitrate is 0 for {}", file_path);
+        }
+        0.0  // Will cause CRF calculation to fail with detailed error
     };
     
     QualityAnalysis {
