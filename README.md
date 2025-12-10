@@ -88,7 +88,10 @@ High-quality media format upgrade toolkit with complete metadata preservation. C
 - **Smart rollback** - Skips if output is larger than input
 - **Dangerous directory detection** - Prevents accidental conversion in system directories
 - **Duration threshold** - Animations <3 seconds are skipped
-- **Format validation** - Skips already-modern lossy formats to avoid generation loss
+- **Format validation** - Skips modern/cutting-edge formats to avoid generation loss:
+  - Video: H.265/HEVC, AV1, VP9, VVC/H.266, AV2
+  - Image: lossy WebP, lossy AVIF, lossy HEIC, JXL
+- **🔥 No silent fallback** - Quality analysis fails loudly with detailed error messages
 
 ### Performance
 
@@ -268,7 +271,10 @@ modern_format_boost/
 - **智能回退** - 输出大于输入时跳过
 - **危险目录检测** - 防止在系统目录中意外转换
 - **时长阈值** - <3 秒的动图被跳过
-- **格式验证** - 跳过已是现代有损格式以避免代际损失
+- **格式验证** - 跳过现代/前沿格式以避免代际损失：
+  - 视频：H.265/HEVC、AV1、VP9、VVC/H.266、AV2
+  - 图像：有损 WebP、有损 AVIF、有损 HEIC、JXL
+- **🔥 无静默回退** - 质量分析失败时响亮报错，提供详细错误信息
 
 ### 性能
 
