@@ -43,18 +43,26 @@ pub enum SourceCodec {
     H264,
     /// H.265/HEVC - ~30% more efficient than H.264
     H265,
+    /// H.266/VVC - ~50% more efficient than HEVC (cutting-edge 2024+)
+    Vvc,
     /// VP9 - similar to HEVC
     Vp9,
     /// AV1 - ~50% more efficient than H.264
     Av1,
+    /// AV2 - next-gen AV1 successor (~30% better than AV1, experimental 2025+)
+    Av2,
     /// ProRes - high bitrate intermediate codec
     ProRes,
-    /// DNxHD - high bitrate intermediate codec
+    /// DNxHD/DNxHR - high bitrate intermediate codec
     DnxHD,
     /// MJPEG - very inefficient
     Mjpeg,
-    /// FFV1 - lossless
+    /// FFV1 - lossless archival codec
     Ffv1,
+    /// UT Video - lossless intermediate codec
+    UtVideo,
+    /// HuffYUV - lossless codec
+    HuffYuv,
     /// GIF - very inefficient (256 colors, LZW)
     Gif,
     /// APNG - moderately efficient
@@ -63,10 +71,16 @@ pub enum SourceCodec {
     WebpAnimated,
     /// JPEG - lossy image
     Jpeg,
+    /// JPEG XL - next-gen image format
+    JpegXl,
     /// PNG - lossless image
     Png,
     /// WebP static - efficient
     WebpStatic,
+    /// AVIF - AV1-based image format
+    Avif,
+    /// HEIC/HEIF - HEVC-based image format
+    Heic,
     /// Unknown codec
     #[default]
     Unknown,
@@ -74,30 +88,73 @@ pub enum SourceCodec {
 
 impl SourceCodec {
     /// Get codec efficiency factor relative to H.264 baseline
-    /// Higher value = less efficient (needs more bits for same quality)
+    /// 
+    /// Lower value = more efficient (needs fewer bits for same quality)
+    /// Based on industry benchmarks and codec specifications:
+    /// - H.264: 1.0 (baseline)
+    /// - HEVC: ~30-40% better → 0.65
+    /// - AV1: ~50% better than H.264 → 0.5
+    /// - VVC: ~50% better than HEVC → 0.35
+    /// - AV2: ~30% better than AV1 (projected) → 0.35
     pub fn efficiency_factor(&self) -> f64 {
         match self {
-            SourceCodec::H264 => 1.0,       // Baseline
-            SourceCodec::H265 => 0.7,       // ~30% more efficient
-            SourceCodec::Vp9 => 0.75,       // Similar to HEVC
-            SourceCodec::Av1 => 0.5,        // ~50% more efficient
-            SourceCodec::ProRes => 1.5,     // High bitrate codec
-            SourceCodec::DnxHD => 1.5,      // High bitrate codec
-            SourceCodec::Mjpeg => 2.0,      // Very inefficient
-            SourceCodec::Ffv1 => 1.0,       // Lossless, not comparable
-            SourceCodec::Gif => 2.5,        // Very inefficient (256 colors)
-            SourceCodec::Apng => 1.5,       // Moderately efficient
-            SourceCodec::WebpAnimated => 1.0, // Efficient
+            // === Video Codecs (by generation) ===
+            SourceCodec::H264 => 1.0,       // Baseline (2003)
+            SourceCodec::H265 => 0.65,      // ~35% more efficient (2013)
+            SourceCodec::Vp9 => 0.70,       // Similar to HEVC (2013)
+            SourceCodec::Av1 => 0.50,       // ~50% more efficient than H.264 (2018)
+            SourceCodec::Vvc => 0.35,       // ~50% more efficient than HEVC (2020)
+            SourceCodec::Av2 => 0.35,       // ~30% more efficient than AV1 (2025+, projected)
+            
+            // === Intermediate/Professional Codecs ===
+            SourceCodec::ProRes => 1.8,     // High bitrate intermediate (quality-focused)
+            SourceCodec::DnxHD => 1.8,      // High bitrate intermediate
+            SourceCodec::Mjpeg => 2.5,      // Very inefficient (intra-only)
+            
+            // === Lossless Video Codecs ===
+            SourceCodec::Ffv1 => 1.0,       // Lossless archival
+            SourceCodec::UtVideo => 1.0,    // Lossless intermediate
+            SourceCodec::HuffYuv => 1.0,    // Lossless
+            
+            // === Animation Formats ===
+            SourceCodec::Gif => 3.0,        // Very inefficient (256 colors, no inter-frame)
+            SourceCodec::Apng => 1.8,       // Moderately efficient (PNG-based)
+            SourceCodec::WebpAnimated => 0.9, // Efficient (VP8-based)
+            
+            // === Image Formats ===
             SourceCodec::Jpeg => 1.0,       // Baseline for images
-            SourceCodec::Png => 1.5,        // Less efficient for photos
-            SourceCodec::WebpStatic => 0.8, // Efficient
+            SourceCodec::JpegXl => 0.6,     // ~40% better than JPEG
+            SourceCodec::Png => 1.5,        // Less efficient for photos (lossless)
+            SourceCodec::WebpStatic => 0.75, // ~25% better than JPEG
+            SourceCodec::Avif => 0.55,      // AV1-based, very efficient
+            SourceCodec::Heic => 0.65,      // HEVC-based
+            
             SourceCodec::Unknown => 1.0,
         }
     }
     
     /// Check if this is a lossless codec
     pub fn is_lossless(&self) -> bool {
-        matches!(self, SourceCodec::Ffv1 | SourceCodec::Png | SourceCodec::Apng)
+        matches!(
+            self,
+            SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv |
+            SourceCodec::Png | SourceCodec::Apng
+        )
+    }
+    
+    /// Check if this is a modern/cutting-edge codec (should skip re-encoding)
+    pub fn is_modern(&self) -> bool {
+        matches!(
+            self,
+            SourceCodec::H265 | SourceCodec::Av1 | SourceCodec::Vp9 |
+            SourceCodec::Vvc | SourceCodec::Av2 |
+            SourceCodec::JpegXl | SourceCodec::Avif | SourceCodec::Heic
+        )
+    }
+    
+    /// Check if this is a cutting-edge codec (VVC, AV2 - 2024+)
+    pub fn is_cutting_edge(&self) -> bool {
+        matches!(self, SourceCodec::Vvc | SourceCodec::Av2)
     }
 }
 
@@ -168,6 +225,10 @@ pub struct AnalysisDetails {
     pub bframe_factor: f64,
     pub alpha_factor: f64,
     pub color_depth_factor: f64,
+    pub fps_factor: f64,
+    pub duration_factor: f64,
+    pub aspect_factor: f64,
+    pub confidence: f64,  // 0.0-1.0, how confident we are in the analysis
 }
 
 /// Calculate matched CRF for AV1 encoder (SVT-AV1)
@@ -272,6 +333,10 @@ pub fn calculate_jxl_distance(analysis: &QualityAnalysis) -> Result<MatchedQuali
                 bframe_factor: 1.0,
                 alpha_factor: 1.0,
                 color_depth_factor: 1.0,
+                fps_factor: 1.0,
+                duration_factor: 1.0,
+                aspect_factor: 1.0,
+                confidence: 0.9, // High confidence when quality is directly provided
             },
         });
     }
@@ -462,6 +527,27 @@ fn calculate_effective_bpp(
         EncoderType::Jxl => 0.8,   // JXL is efficient for images
     };
     
+    // 🔥 Enhanced: Content complexity factor based on entropy estimation
+    // High entropy content (noise, fine detail) needs more bits
+    // This is estimated from bpp relative to resolution
+    let complexity_factor = {
+        let expected_bpp_for_res = if pixels > 8_000_000 { 0.15 } // 4K+
+            else if pixels > 2_000_000 { 0.20 } // 1080p
+            else if pixels > 500_000 { 0.30 } // 720p
+            else { 0.50 }; // SD
+        
+        let ratio = raw_bpp / expected_bpp_for_res;
+        if ratio > 2.0 {
+            1.15  // High complexity content
+        } else if ratio > 1.0 {
+            1.0 + 0.15 * ((ratio - 1.0) / 1.0)  // Linear interpolation
+        } else if ratio > 0.5 {
+            1.0   // Normal complexity
+        } else {
+            0.95  // Low complexity (simple content)
+        }
+    };
+    
     // Effective bpp after all adjustments
     let effective_bpp = raw_bpp 
         * codec_factor 
@@ -471,8 +557,12 @@ fn calculate_effective_bpp(
         * fps_factor
         * duration_factor
         * aspect_factor
+        * complexity_factor
         / color_depth_factor
         / target_adjustment;
+    
+    // 🔥 Calculate confidence score based on data completeness
+    let confidence = calculate_confidence(analysis);
     
     let details = AnalysisDetails {
         raw_bpp,
@@ -481,48 +571,158 @@ fn calculate_effective_bpp(
         bframe_factor,
         alpha_factor,
         color_depth_factor,
+        fps_factor,
+        duration_factor,
+        aspect_factor,
+        confidence,
     };
     
     Ok((effective_bpp, details))
 }
 
+/// Calculate confidence score based on data completeness
+/// 
+/// Returns a value between 0.0 and 1.0 indicating how confident
+/// we are in the quality analysis based on available data.
+fn calculate_confidence(analysis: &QualityAnalysis) -> f64 {
+    let mut score: f64 = 0.0;
+    let mut max_score: f64 = 0.0;
+    
+    // Essential fields (high weight)
+    max_score += 30.0;
+    if analysis.width > 0 && analysis.height > 0 {
+        score += 30.0;
+    }
+    
+    max_score += 25.0;
+    if analysis.file_size > 0 {
+        score += 25.0;
+    }
+    
+    max_score += 15.0;
+    if analysis.bpp > 0.0 {
+        score += 15.0;
+    }
+    
+    // Codec identification
+    max_score += 10.0;
+    let codec = parse_source_codec(&analysis.source_codec);
+    if codec != SourceCodec::Unknown {
+        score += 10.0;
+    }
+    
+    // Optional but helpful fields
+    max_score += 5.0;
+    if analysis.duration_secs.is_some() {
+        score += 5.0;
+    }
+    
+    max_score += 5.0;
+    if analysis.fps.is_some() {
+        score += 5.0;
+    }
+    
+    max_score += 5.0;
+    if analysis.estimated_quality.is_some() {
+        score += 5.0;
+    }
+    
+    max_score += 5.0;
+    if analysis.bit_depth > 0 {
+        score += 5.0;
+    }
+    
+    (score / max_score).clamp(0.0, 1.0)
+}
+
 /// Parse source codec string to SourceCodec enum
-fn parse_source_codec(codec_str: &str) -> SourceCodec {
+/// 
+/// Supports comprehensive codec detection including cutting-edge formats:
+/// - VVC/H.266 (2020+)
+/// - AV2 (2025+, experimental)
+/// - JPEG XL, AVIF, HEIC
+pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     let codec_lower = codec_str.to_lowercase();
     
-    if codec_lower.contains("h264") || codec_lower.contains("avc") || codec_lower.contains("x264") {
-        SourceCodec::H264
-    } else if codec_lower.contains("h265") || codec_lower.contains("hevc") || codec_lower.contains("x265") {
-        SourceCodec::H265
-    } else if codec_lower.contains("vp9") {
-        SourceCodec::Vp9
-    } else if codec_lower.contains("av1") || codec_lower.contains("svt") || codec_lower.contains("aom") {
-        SourceCodec::Av1
-    } else if codec_lower.contains("prores") {
-        SourceCodec::ProRes
-    } else if codec_lower.contains("dnxh") {
-        SourceCodec::DnxHD
-    } else if codec_lower.contains("mjpeg") || codec_lower.contains("motion jpeg") {
-        SourceCodec::Mjpeg
-    } else if codec_lower.contains("ffv1") {
-        SourceCodec::Ffv1
-    } else if codec_lower.contains("gif") {
-        SourceCodec::Gif
-    } else if codec_lower.contains("apng") {
-        SourceCodec::Apng
-    } else if codec_lower.contains("webp") {
-        if codec_lower.contains("anim") {
-            SourceCodec::WebpAnimated
-        } else {
-            SourceCodec::WebpStatic
-        }
-    } else if codec_lower.contains("jpeg") || codec_lower.contains("jpg") {
-        SourceCodec::Jpeg
-    } else if codec_lower.contains("png") {
-        SourceCodec::Png
-    } else {
-        SourceCodec::Unknown
+    // === Cutting-edge codecs (check first for priority) ===
+    if codec_lower.contains("vvc") || codec_lower.contains("h266") || codec_lower.contains("h.266") {
+        return SourceCodec::Vvc;
     }
+    if codec_lower.contains("av2") || codec_lower.contains("avm") {
+        return SourceCodec::Av2;
+    }
+    
+    // === Modern video codecs ===
+    if codec_lower.contains("av1") || codec_lower.contains("svt") || codec_lower.contains("aom") || codec_lower.contains("libaom") {
+        return SourceCodec::Av1;
+    }
+    if codec_lower.contains("h265") || codec_lower.contains("hevc") || codec_lower.contains("x265") || codec_lower.contains("h.265") {
+        return SourceCodec::H265;
+    }
+    if codec_lower.contains("vp9") {
+        return SourceCodec::Vp9;
+    }
+    if codec_lower.contains("h264") || codec_lower.contains("avc") || codec_lower.contains("x264") || codec_lower.contains("h.264") {
+        return SourceCodec::H264;
+    }
+    
+    // === Professional/Intermediate codecs ===
+    if codec_lower.contains("prores") {
+        return SourceCodec::ProRes;
+    }
+    if codec_lower.contains("dnxh") || codec_lower.contains("dnxhr") {
+        return SourceCodec::DnxHD;
+    }
+    if codec_lower.contains("mjpeg") || codec_lower.contains("motion jpeg") {
+        return SourceCodec::Mjpeg;
+    }
+    
+    // === Lossless video codecs ===
+    if codec_lower.contains("ffv1") {
+        return SourceCodec::Ffv1;
+    }
+    if codec_lower.contains("utvideo") || codec_lower.contains("ut video") {
+        return SourceCodec::UtVideo;
+    }
+    if codec_lower.contains("huffyuv") || codec_lower.contains("ffvhuff") {
+        return SourceCodec::HuffYuv;
+    }
+    
+    // === Animation formats ===
+    if codec_lower.contains("gif") {
+        return SourceCodec::Gif;
+    }
+    if codec_lower.contains("apng") {
+        return SourceCodec::Apng;
+    }
+    
+    // === Modern image formats (check before legacy) ===
+    if codec_lower.contains("jxl") || codec_lower.contains("jpeg xl") || codec_lower.contains("jpegxl") {
+        return SourceCodec::JpegXl;
+    }
+    if codec_lower.contains("avif") {
+        return SourceCodec::Avif;
+    }
+    if codec_lower.contains("heic") || codec_lower.contains("heif") {
+        return SourceCodec::Heic;
+    }
+    if codec_lower.contains("webp") {
+        if codec_lower.contains("anim") {
+            return SourceCodec::WebpAnimated;
+        } else {
+            return SourceCodec::WebpStatic;
+        }
+    }
+    
+    // === Legacy image formats ===
+    if codec_lower.contains("jpeg") || codec_lower.contains("jpg") {
+        return SourceCodec::Jpeg;
+    }
+    if codec_lower.contains("png") {
+        return SourceCodec::Png;
+    }
+    
+    SourceCodec::Unknown
 }
 
 /// Log quality analysis details (for debugging)
@@ -533,13 +733,30 @@ pub fn log_quality_analysis(analysis: &QualityAnalysis, result: &MatchedQuality,
         EncoderType::Jxl => "JXL",
     };
     
+    let d = &result.analysis_details;
+    let codec = parse_source_codec(&analysis.source_codec);
+    
     eprintln!("   📊 Quality Analysis ({}):", encoder_name);
-    eprintln!("      Raw bpp: {:.4}", result.analysis_details.raw_bpp);
-    eprintln!("      Codec: {} (factor: {:.2})", analysis.source_codec, result.analysis_details.codec_factor);
-    eprintln!("      Resolution: {}x{} (factor: {:.2})", analysis.width, analysis.height, result.analysis_details.resolution_factor);
-    eprintln!("      B-frames: {} (factor: {:.2})", analysis.has_b_frames, result.analysis_details.bframe_factor);
-    eprintln!("      Alpha: {} (factor: {:.2})", analysis.has_alpha, result.analysis_details.alpha_factor);
-    eprintln!("      Color depth: {}-bit (factor: {:.2})", analysis.bit_depth, result.analysis_details.color_depth_factor);
+    eprintln!("      Confidence: {:.0}%", d.confidence * 100.0);
+    eprintln!("      Raw bpp: {:.4}", d.raw_bpp);
+    eprintln!("      Codec: {} ({:?}, factor: {:.2})", analysis.source_codec, codec, d.codec_factor);
+    if codec.is_modern() {
+        eprintln!("      ⚠️  Modern codec detected - consider skipping re-encode");
+    }
+    if codec.is_cutting_edge() {
+        eprintln!("      🚀 Cutting-edge codec (VVC/AV2) - skip recommended");
+    }
+    eprintln!("      Resolution: {}x{} (factor: {:.2})", analysis.width, analysis.height, d.resolution_factor);
+    eprintln!("      B-frames: {} (factor: {:.2})", analysis.has_b_frames, d.bframe_factor);
+    eprintln!("      Alpha: {} (factor: {:.2})", analysis.has_alpha, d.alpha_factor);
+    eprintln!("      Color depth: {}-bit (factor: {:.2})", analysis.bit_depth, d.color_depth_factor);
+    if let Some(fps) = analysis.fps {
+        eprintln!("      FPS: {:.2} (factor: {:.2})", fps, d.fps_factor);
+    }
+    if let Some(duration) = analysis.duration_secs {
+        eprintln!("      Duration: {:.1}s (factor: {:.2})", duration, d.duration_factor);
+    }
+    eprintln!("      Aspect ratio factor: {:.2}", d.aspect_factor);
     eprintln!("      Effective bpp: {:.4}", result.effective_bpp);
     
     match encoder {
@@ -657,6 +874,7 @@ mod tests {
         
         let result = calculate_av1_crf(&analysis).unwrap();
         assert!(result.crf >= 18 && result.crf <= 35);
+        assert!(result.analysis_details.confidence > 0.8); // High confidence with complete data
     }
     
     #[test]
@@ -701,11 +919,63 @@ mod tests {
     
     #[test]
     fn test_parse_source_codec() {
+        // Legacy codecs
         assert_eq!(parse_source_codec("h264"), SourceCodec::H264);
         assert_eq!(parse_source_codec("H.265/HEVC"), SourceCodec::H265);
         assert_eq!(parse_source_codec("AV1"), SourceCodec::Av1);
         assert_eq!(parse_source_codec("GIF"), SourceCodec::Gif);
+        
+        // Cutting-edge codecs
+        assert_eq!(parse_source_codec("VVC"), SourceCodec::Vvc);
+        assert_eq!(parse_source_codec("H.266"), SourceCodec::Vvc);
+        assert_eq!(parse_source_codec("h266"), SourceCodec::Vvc);
+        assert_eq!(parse_source_codec("AV2"), SourceCodec::Av2);
+        assert_eq!(parse_source_codec("avm"), SourceCodec::Av2);
+        
+        // Modern image formats
+        assert_eq!(parse_source_codec("JPEG XL"), SourceCodec::JpegXl);
+        assert_eq!(parse_source_codec("jxl"), SourceCodec::JpegXl);
+        assert_eq!(parse_source_codec("AVIF"), SourceCodec::Avif);
+        assert_eq!(parse_source_codec("HEIC"), SourceCodec::Heic);
+        
+        // Lossless codecs
+        assert_eq!(parse_source_codec("FFV1"), SourceCodec::Ffv1);
+        assert_eq!(parse_source_codec("UTVideo"), SourceCodec::UtVideo);
+        assert_eq!(parse_source_codec("HuffYUV"), SourceCodec::HuffYuv);
+        
         assert_eq!(parse_source_codec("unknown_codec"), SourceCodec::Unknown);
+    }
+    
+    #[test]
+    fn test_codec_properties() {
+        // Modern codec detection
+        assert!(SourceCodec::H265.is_modern());
+        assert!(SourceCodec::Av1.is_modern());
+        assert!(SourceCodec::Vvc.is_modern());
+        assert!(SourceCodec::Av2.is_modern());
+        assert!(!SourceCodec::H264.is_modern());
+        
+        // Cutting-edge detection
+        assert!(SourceCodec::Vvc.is_cutting_edge());
+        assert!(SourceCodec::Av2.is_cutting_edge());
+        assert!(!SourceCodec::Av1.is_cutting_edge());
+        
+        // Lossless detection
+        assert!(SourceCodec::Ffv1.is_lossless());
+        assert!(SourceCodec::Png.is_lossless());
+        assert!(!SourceCodec::H264.is_lossless());
+    }
+    
+    #[test]
+    fn test_codec_efficiency_ordering() {
+        // Verify efficiency ordering: newer codecs should be more efficient
+        assert!(SourceCodec::Av1.efficiency_factor() < SourceCodec::H265.efficiency_factor());
+        assert!(SourceCodec::H265.efficiency_factor() < SourceCodec::H264.efficiency_factor());
+        assert!(SourceCodec::Vvc.efficiency_factor() < SourceCodec::Av1.efficiency_factor());
+        assert!(SourceCodec::Av2.efficiency_factor() <= SourceCodec::Vvc.efficiency_factor());
+        
+        // GIF should be very inefficient
+        assert!(SourceCodec::Gif.efficiency_factor() > 2.0);
     }
     
     #[test]
@@ -720,5 +990,42 @@ mod tests {
         
         let result = calculate_av1_crf(&analysis);
         assert!(result.is_err());
+    }
+    
+    #[test]
+    fn test_confidence_calculation() {
+        // Complete data should have high confidence
+        let complete = QualityAnalysis {
+            bpp: 0.3,
+            source_codec: "h264".to_string(),
+            width: 1920,
+            height: 1080,
+            has_b_frames: true,
+            bit_depth: 8,
+            has_alpha: false,
+            duration_secs: Some(60.0),
+            fps: Some(30.0),
+            file_size: 100_000_000,
+            estimated_quality: Some(85),
+        };
+        let result = calculate_av1_crf(&complete).unwrap();
+        assert!(result.analysis_details.confidence > 0.9);
+        
+        // Minimal data should have lower confidence
+        let minimal = QualityAnalysis {
+            bpp: 0.0,
+            source_codec: "unknown".to_string(),
+            width: 1920,
+            height: 1080,
+            has_b_frames: false,
+            bit_depth: 0,
+            has_alpha: false,
+            duration_secs: None,
+            fps: None,
+            file_size: 100_000_000,
+            estimated_quality: None,
+        };
+        let result = calculate_av1_crf(&minimal).unwrap();
+        assert!(result.analysis_details.confidence < 0.7);
     }
 }
