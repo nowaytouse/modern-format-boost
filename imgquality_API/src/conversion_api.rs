@@ -218,14 +218,18 @@ pub fn execute_conversion(
         100.0 * (1.0 - s as f32 / detection.file_size as f32)
     });
     
-    // Preserve timestamps if requested
-    if config.preserve_timestamps {
-        preserve_timestamps(input_path, &output_path)?;
-    }
+    // 🔥 顺序很重要！先 metadata，后 timestamps
+    // exiftool -overwrite_original 会修改文件，从而更新时间戳
+    // 因此必须在 metadata 之后设置 timestamps
     
-    // Preserve metadata if requested
+    // Preserve metadata if requested (exiftool will modify file timestamps!)
     if config.preserve_metadata {
         preserve_metadata(input_path, &output_path)?;
+    }
+    
+    // Preserve timestamps if requested (must be AFTER metadata!)
+    if config.preserve_timestamps {
+        preserve_timestamps(input_path, &output_path)?;
     }
     
     // Delete original if requested
