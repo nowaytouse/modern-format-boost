@@ -162,7 +162,7 @@ fn test_ssim_calculation_accuracy() {
     
     // 验证 SSIM 在合理范围内
     if let Some(s) = ssim {
-        assert!(s >= 0.0 && s <= 1.0, "SSIM should be in [0, 1], got {}", s);
+        assert!((0.0..=1.0).contains(&s), "SSIM should be in [0, 1], got {}", s);
         assert!(s >= 0.90, "High quality encoding should have SSIM >= 0.90, got {}", s);
     }
 }
@@ -225,7 +225,7 @@ fn test_crf_range_validation() {
     let min_crf = 10u8;
     let max_crf = 28u8;
     
-    assert!(min_crf >= 0);
+    // min_crf >= 0 is always true for u8, so we just verify the range makes sense
     assert!(max_crf <= 51);
     assert!(min_crf < max_crf);
 }

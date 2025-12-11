@@ -307,13 +307,13 @@ fn print_analysis_human(result: &vidquality::VideoDetectionResult) {
     println!("📦 Format: {}", result.format);
     println!("🎬 Codec: {} ({})", result.codec.as_str(), result.codec_long);
     println!("🔍 Compression: {}", result.compression.as_str());
-    println!("");
+    println!();
     println!("📐 Resolution: {}x{}", result.width, result.height);
     println!("🎞️  Frames: {} @ {:.2} fps", result.frame_count, result.fps);
     println!("⏱️  Duration: {:.2}s", result.duration_secs);
     println!("🎨 Bit Depth: {}-bit", result.bit_depth);
     println!("🌈 Pixel Format: {}", result.pix_fmt);
-    println!("");
+    println!();
     println!("💾 File Size: {} bytes", result.file_size);
     println!("📊 Bitrate: {} bps", result.bitrate);
     println!("🎵 Audio: {}", if result.has_audio { 
@@ -321,7 +321,7 @@ fn print_analysis_human(result: &vidquality::VideoDetectionResult) {
     } else { 
         "no" 
     });
-    println!("");
+    println!();
     println!("⭐ Quality Score: {}/100", result.quality_score);
     println!("📦 Archival Candidate: {}", if result.archival_candidate { "✅ Yes" } else { "❌ No" });
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

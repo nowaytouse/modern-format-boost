@@ -384,7 +384,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
     match shared_utils::calculate_av1_crf(&analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&analysis, &result, shared_utils::EncoderType::Av1);
-            result.crf
+            result.crf.round() as u8
         }
         Err(e) => {
             // 🔥 Quality Manifesto: 失败时响亮报错，使用保守值
