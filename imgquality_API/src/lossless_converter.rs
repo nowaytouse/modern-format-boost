@@ -637,11 +637,6 @@ pub fn convert_to_av1_mp4_matched(
 }
 
 /// Calculate CRF to match input animation quality (Enhanced Algorithm)
-/// 
-/// This function uses a more precise algorithm that considers:
-/// 1. Bytes per pixel per second (bpps) - primary quality indicator
-/// 2. Source format efficiency - GIF vs WebP vs APNG
-/// 3. Color depth and palette size
 /// Calculate CRF to match input animation quality for AV1 (Enhanced Algorithm)
 /// 
 /// Uses the unified quality_matcher module from shared_utils for consistent
@@ -650,7 +645,7 @@ pub fn convert_to_av1_mp4_matched(
 /// AV1 CRF range is 0-63, with 23 being default "good quality"
 /// Clamped to range [18, 35] for practical use
 /// 
-/// 🔥 v3.4: Returns f32 for sub-integer precision (0.5 step)
+/// v3.4: Returns f32 for sub-integer precision (0.5 step)
 fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
     // 🔥 使用统一的 quality_matcher 模块
     // Note: ImageAnalysis doesn't have fps field, will be estimated from duration
@@ -687,11 +682,6 @@ fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_siz
 /// 
 /// JXL distance: 0.0 = lossless, 1.0 = Q90, 2.0 = Q80, etc.
 /// Formula: distance ≈ (100 - estimated_quality) / 10
-/// 
-/// For images without JPEG quality info, we estimate based on:
-/// - Compression ratio
-/// - File size per pixel
-/// - Format efficiency
 /// Calculate JXL distance to match input image quality (for lossy static images)
 /// 
 /// Uses the unified quality_matcher module from shared_utils for consistent
