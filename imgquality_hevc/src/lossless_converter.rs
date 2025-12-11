@@ -615,10 +615,30 @@ pub fn convert_to_hevc_mp4_matched(
         });
     }
     
-    // 🔥 质量验证失败警告（但仍然保留输出）
+    // 🔥 v3.8: 质量验证失败时，保护原文件！
     if !explore_result.quality_passed {
-        eprintln!("   ⚠️  Quality validation failed (SSIM: {:.4}), but output is smaller", 
+        eprintln!("   ⚠️  Quality validation FAILED: SSIM {:.4} < 0.95", 
             explore_result.ssim.unwrap_or(0.0));
+        eprintln!("   🛡️  Original file PROTECTED (quality too low to replace)");
+        
+        // 删除低质量的输出文件
+        if output.exists() {
+            let _ = fs::remove_file(&output);
+            eprintln!("   🗑️  Low-quality output deleted");
+        }
+        
+        // 返回跳过状态，不删除原文件
+        return Ok(ConversionResult {
+            success: false,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: format!("Skipped: SSIM {:.4} below threshold 0.95", explore_result.ssim.unwrap_or(0.0)),
+            skipped: true,
+            skip_reason: Some("quality_failed".to_string()),
+        });
     }
     
     // Copy metadata and timestamps

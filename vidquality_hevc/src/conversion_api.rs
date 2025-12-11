@@ -315,8 +315,37 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     info!("{}", log_line);
                 }
                 
+                // 🔥 v3.8: 质量验证失败时，保护原文件！
                 if !explore_result.quality_passed && (config.match_quality || config.explore_smaller) {
-                    warn!("   ⚠️  Quality: SSIM {:.4}", explore_result.ssim.unwrap_or(0.0));
+                    warn!("   ⚠️  Quality validation FAILED: SSIM {:.4} < 0.95", explore_result.ssim.unwrap_or(0.0));
+                    warn!("   🛡️  Original file PROTECTED (quality too low to replace)");
+                    
+                    // 删除低质量的输出文件
+                    if output_path.exists() {
+                        let _ = std::fs::remove_file(&output_path);
+                        info!("   🗑️  Low-quality output deleted");
+                    }
+                    
+                    // 返回跳过状态，不删除原文件
+                    return Ok(ConversionOutput {
+                        input_path: input.display().to_string(),
+                        output_path: input.display().to_string(), // 保持原路径
+                        strategy: ConversionStrategy {
+                            target: TargetVideoFormat::Skip,
+                            reason: format!("Quality validation failed: SSIM {:.4} < 0.95", explore_result.ssim.unwrap_or(0.0)),
+                            command: String::new(),
+                            preserve_audio: detection.has_audio,
+                            crf: explore_result.optimal_crf,
+                            lossless: false,
+                        },
+                        input_size: detection.file_size,
+                        output_size: detection.file_size, // 保持原大小
+                        size_ratio: 1.0,
+                        success: false, // 标记为失败
+                        message: format!("Skipped: SSIM {:.4} below threshold 0.95", explore_result.ssim.unwrap_or(0.0)),
+                        final_crf: explore_result.optimal_crf,
+                        exploration_attempts: explore_result.iterations as u8,
+                    });
                 }
                 
                 (explore_result.output_size, explore_result.optimal_crf, explore_result.iterations as u8)
