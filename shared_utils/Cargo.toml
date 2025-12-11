@@ -6,8 +6,12 @@ description = "Shared utilities for modern_format_boost tools"
 authors = ["Pixly Team"]
 
 [dependencies]
+# Error handling
+anyhow = "1.0"
 # Progress bar
 indicatif = "0.17"
+# CPU detection
+num_cpus = "1.16"
 # Terminal colors
 console = "0.15"
 # Time formatting

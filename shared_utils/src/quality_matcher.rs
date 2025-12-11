@@ -779,6 +779,7 @@ pub fn calculate_jxl_distance_with_options(
 /// 
 /// # Returns
 /// * `Result<(f64, AnalysisDetails), String>` - Effective bpp and details, or error
+#[allow(dead_code)] // Reserved for future use
 fn calculate_effective_bpp(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,
@@ -1341,6 +1342,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
 }
 
 /// Legacy confidence calculation (for compatibility)
+#[allow(dead_code)] // Reserved for future use
 fn calculate_confidence(analysis: &QualityAnalysis) -> f64 {
     calculate_confidence_v3(analysis)
 }
