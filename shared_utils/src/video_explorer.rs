@@ -52,7 +52,8 @@ pub enum ExploreMode {
 #[derive(Debug, Clone)]
 pub struct ExploreResult {
     /// 最优 CRF 值
-    pub optimal_crf: u8,
+    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
+    pub optimal_crf: f32,
     /// 输出文件大小
     pub output_size: u64,
     /// 相对于输入的大小变化百分比（负数表示减小）
@@ -107,11 +108,12 @@ pub struct ExploreConfig {
     /// 探索模式
     pub mode: ExploreMode,
     /// 起始 CRF（AI 预测值）
-    pub initial_crf: u8,
+    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
+    pub initial_crf: f32,
     /// 最小 CRF（最高质量）
-    pub min_crf: u8,
+    pub min_crf: f32,
     /// 最大 CRF（最低可接受质量）
-    pub max_crf: u8,
+    pub max_crf: f32,
     /// 目标比率：输出大小 <= 输入大小 * target_ratio
     pub target_ratio: f64,
     /// 质量验证阈值
@@ -124,9 +126,9 @@ impl Default for ExploreConfig {
     fn default() -> Self {
         Self {
             mode: ExploreMode::PreciseQualityMatch, // 默认：精确质量匹配
-            initial_crf: 18,
-            min_crf: 10,
-            max_crf: 28,
+            initial_crf: 18.0,
+            min_crf: 10.0,
+            max_crf: 28.0,
             target_ratio: 1.0,
             quality_thresholds: QualityThresholds::default(),
             max_iterations: 8,
@@ -136,7 +138,7 @@ impl Default for ExploreConfig {
 
 impl ExploreConfig {
     /// 创建仅探索大小的配置（--explore 单独使用）
-    pub fn size_only(initial_crf: u8, max_crf: u8) -> Self {
+    pub fn size_only(initial_crf: f32, max_crf: f32) -> Self {
         Self {
             mode: ExploreMode::SizeOnly,
             initial_crf,
@@ -151,7 +153,7 @@ impl ExploreConfig {
     }
     
     /// 创建仅匹配质量的配置（--match-quality 单独使用）
-    pub fn quality_match(predicted_crf: u8) -> Self {
+    pub fn quality_match(predicted_crf: f32) -> Self {
         Self {
             mode: ExploreMode::QualityMatch,
             initial_crf: predicted_crf,
@@ -166,7 +168,7 @@ impl ExploreConfig {
     }
     
     /// 创建精确质量匹配的配置（--explore + --match-quality 组合）
-    pub fn precise_quality_match(initial_crf: u8, max_crf: u8, min_ssim: f64) -> Self {
+    pub fn precise_quality_match(initial_crf: f32, max_crf: f32, min_ssim: f64) -> Self {
         Self {
             mode: ExploreMode::PreciseQualityMatch,
             initial_crf,
@@ -302,7 +304,7 @@ impl VideoExplorer {
         log.push(format!("   CRF range: [{}, {}]", 
             self.config.initial_crf, self.config.max_crf));
         
-        // 二分搜索：找到满足 size < input 的最高 CRF
+        // 🔥 v3.4: 二分搜索使用 0.5 步长
         let mut low = self.config.initial_crf;
         let mut high = self.config.max_crf;
         let mut best_crf = self.config.max_crf;
@@ -311,21 +313,22 @@ impl VideoExplorer {
         
         while low <= high && iterations < self.config.max_iterations {
             iterations += 1;
-            let mid = (low + high) / 2;
+            // 🔥 v3.4: 使用 0.5 步长的二分搜索
+            let mid = ((low + high) / 2.0 * 2.0).round() / 2.0; // 四舍五入到 0.5
             
             let result = self.encode(mid)?;
-            log.push(format!("   CRF {}: {} bytes ({:+.1}%)", 
+            log.push(format!("   CRF {:.1}: {} bytes ({:+.1}%)", 
                 mid, result, self.calc_change_pct(result)));
             
             if result < target_size {
                 // 找到更小的文件，尝试更高 CRF（更小文件）
                 best_crf = mid;
                 best_size = result;
-                low = mid + 1;
+                low = mid + 0.5; // 🔥 v3.4: 0.5 步长
                 log.push("      ✅ Size OK, trying higher CRF".to_string());
             } else {
                 // 文件太大，需要更低 CRF（更高质量但更大）
-                high = mid - 1;
+                high = mid - 0.5; // 🔥 v3.4: 0.5 步长
                 log.push("      📈 Size too large, trying lower CRF".to_string());
             }
         }
@@ -468,7 +471,7 @@ impl VideoExplorer {
             });
         }
         
-        // Step 2: 二分搜索找到满足质量阈值的最高 CRF
+        // 🔥 v3.4: 二分搜索使用 0.5 步长
         let mut low = self.config.initial_crf;
         let mut high = self.config.max_crf;
         let mut best_crf = self.config.initial_crf;
@@ -478,11 +481,12 @@ impl VideoExplorer {
         
         while low <= high && iterations < self.config.max_iterations {
             iterations += 1;
-            let mid = (low + high) / 2;
+            // 🔥 v3.4: 使用 0.5 步长的二分搜索
+            let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
             
-            // 跳过已测试的 CRF
-            if mid == self.config.initial_crf {
-                low = mid + 1;
+            // 跳过已测试的 CRF (使用 epsilon 比较浮点数)
+            if (mid - self.config.initial_crf).abs() < 0.1 {
+                low = mid + 0.5;
                 continue;
             }
             
@@ -490,7 +494,7 @@ impl VideoExplorer {
             let quality = self.validate_quality()?;
             
             let quality_str = self.format_quality_metrics(&quality);
-            log.push(format!("   CRF {}: {} bytes ({:+.1}%), {}", 
+            log.push(format!("   CRF {:.1}: {} bytes ({:+.1}%), {}", 
                 mid, result, self.calc_change_pct(result), quality_str));
             
             if self.check_quality_passed(quality.0, quality.1, quality.2) {
@@ -500,27 +504,28 @@ impl VideoExplorer {
                     best_size = result;
                     best_quality = quality;
                 }
-                low = mid + 1;
+                low = mid + 0.5; // 🔥 v3.4: 0.5 步长
                 log.push("      ✅ Quality passed, trying higher CRF".to_string());
             } else {
                 // 质量不足，需要更低 CRF（更高质量）
-                high = mid - 1;
+                high = mid - 0.5; // 🔥 v3.4: 0.5 步长
                 log.push("      ⚠️ Quality failed, trying lower CRF".to_string());
             }
         }
         
         // Step 3: 最终编码（如果最优 CRF 不是最后编码的）
-        if best_crf != self.config.max_crf && best_crf != self.config.initial_crf {
+        // 🔥 v3.4: 使用 epsilon 比较浮点数
+        if (best_crf - self.config.max_crf).abs() > 0.1 && (best_crf - self.config.initial_crf).abs() > 0.1 {
             best_size = self.encode(best_crf)?;
             best_quality = self.validate_quality()?;
-            log.push(format!("   🔄 Re-encoded with optimal CRF {}", best_crf));
+            log.push(format!("   🔄 Re-encoded with optimal CRF {:.1}", best_crf));
         }
         
         let size_change_pct = self.calc_change_pct(best_size);
         let quality_passed = self.check_quality_passed(best_quality.0, best_quality.1, best_quality.2);
         
         let quality_str = self.format_quality_metrics(&best_quality);
-        log.push(format!("   📊 Final: CRF {}, {} bytes ({:+.1}%), {}, Passed: {}", 
+        log.push(format!("   📊 Final: CRF {:.1}, {} bytes ({:+.1}%), {}, Passed: {}", 
             best_crf, best_size, size_change_pct, quality_str,
             if quality_passed { "✅" } else { "❌" }));
         
@@ -557,13 +562,14 @@ impl VideoExplorer {
     }
     
     /// 编码视频
-    fn encode(&self, crf: u8) -> Result<u64> {
+    /// 🔥 v3.4: crf 参数改为 f32，支持小数点精度 (如 23.5)
+    fn encode(&self, crf: f32) -> Result<u64> {
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .arg("-threads").arg(self.max_threads.to_string())
             .arg("-i").arg(&self.input_path)
             .arg("-c:v").arg(self.encoder.ffmpeg_name())
-            .arg("-crf").arg(crf.to_string())
+            .arg("-crf").arg(format!("{:.1}", crf)) // 🔥 支持小数点 CRF
             .arg("-preset").arg("medium");
         
         for arg in self.encoder.extra_args(self.max_threads) {
@@ -837,13 +843,14 @@ impl VideoExplorer {
 /// 仅探索更小的文件大小（--explore 单独使用）
 /// 
 /// 不验证质量，仅保证输出比输入小
+/// 🔥 v3.4: CRF 参数改为 f32，支持小数点精度
 pub fn explore_size_only(
     input: &Path,
     output: &Path,
     encoder: VideoEncoder,
     vf_args: Vec<String>,
-    initial_crf: u8,
-    max_crf: u8,
+    initial_crf: f32,
+    max_crf: f32,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
     VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
@@ -852,12 +859,13 @@ pub fn explore_size_only(
 /// 仅匹配输入质量（--match-quality 单独使用）
 /// 
 /// 使用 AI 预测的 CRF，单次编码，验证 SSIM
+/// 🔥 v3.4: CRF 参数改为 f32，支持小数点精度
 pub fn explore_quality_match(
     input: &Path,
     output: &Path,
     encoder: VideoEncoder,
     vf_args: Vec<String>,
-    predicted_crf: u8,
+    predicted_crf: f32,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
     VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
@@ -866,13 +874,14 @@ pub fn explore_quality_match(
 /// 精确质量匹配探索（--explore + --match-quality 组合）
 /// 
 /// 二分搜索 + SSIM 裁判验证，找到最优质量-大小平衡
+/// 🔥 v3.4: CRF 参数改为 f32，支持小数点精度
 pub fn explore_precise_quality_match(
     input: &Path,
     output: &Path,
     encoder: VideoEncoder,
     vf_args: Vec<String>,
-    initial_crf: u8,
-    max_crf: u8,
+    initial_crf: f32,
+    max_crf: f32,
     min_ssim: f64,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
@@ -886,8 +895,8 @@ pub fn quick_explore(
     output: &Path,
     encoder: VideoEncoder,
     vf_args: Vec<String>,
-    initial_crf: u8,
-    max_crf: u8,
+    initial_crf: f32,
+    max_crf: f32,
 ) -> Result<ExploreResult> {
     explore_size_only(input, output, encoder, vf_args, initial_crf, max_crf)
 }
@@ -899,8 +908,8 @@ pub fn full_explore(
     output: &Path,
     encoder: VideoEncoder,
     vf_args: Vec<String>,
-    initial_crf: u8,
-    max_crf: u8,
+    initial_crf: f32,
+    max_crf: f32,
     min_ssim: f64,
 ) -> Result<ExploreResult> {
     explore_precise_quality_match(input, output, encoder, vf_args, initial_crf, max_crf, min_ssim)
@@ -911,9 +920,9 @@ pub fn explore_hevc(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
-    initial_crf: u8,
+    initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_precise_quality_match(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28, 0.95)
+    explore_precise_quality_match(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28.0, 0.95)
 }
 
 /// HEVC 仅探索大小（--explore 单独使用）
@@ -921,9 +930,9 @@ pub fn explore_hevc_size_only(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
-    initial_crf: u8,
+    initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_size_only(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28)
+    explore_size_only(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28.0)
 }
 
 /// HEVC 仅匹配质量（--match-quality 单独使用）
@@ -931,7 +940,7 @@ pub fn explore_hevc_quality_match(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
-    predicted_crf: u8,
+    predicted_crf: f32,
 ) -> Result<ExploreResult> {
     explore_quality_match(input, output, VideoEncoder::Hevc, vf_args, predicted_crf)
 }
@@ -941,9 +950,9 @@ pub fn explore_av1(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
-    initial_crf: u8,
+    initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_precise_quality_match(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35, 0.95)
+    explore_precise_quality_match(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35.0, 0.95)
 }
 
 /// AV1 仅探索大小（--explore 单独使用）
@@ -951,9 +960,9 @@ pub fn explore_av1_size_only(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
-    initial_crf: u8,
+    initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_size_only(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35)
+    explore_size_only(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35.0)
 }
 
 /// AV1 仅匹配质量（--match-quality 单独使用）
@@ -961,7 +970,7 @@ pub fn explore_av1_quality_match(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
-    predicted_crf: u8,
+    predicted_crf: f32,
 ) -> Result<ExploreResult> {
     explore_quality_match(input, output, VideoEncoder::Av1, vf_args, predicted_crf)
 }
