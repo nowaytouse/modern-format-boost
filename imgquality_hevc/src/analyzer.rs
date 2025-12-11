@@ -724,7 +724,7 @@ mod tests {
     fn test_entropy_calculation() {
         // A uniform image should have low entropy
         // A random image should have high entropy
-        assert!(true);
+        // TODO: Implement actual entropy calculation tests
     }
     
     #[test]
