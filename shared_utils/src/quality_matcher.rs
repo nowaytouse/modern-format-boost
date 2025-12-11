@@ -371,7 +371,9 @@ impl Default for QualityAnalysis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchedQuality {
     /// Calculated CRF value (for video encoders)
-    pub crf: u8,
+    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (e.g., 23.5)
+    /// FFmpeg supports float CRF: `ffmpeg -crf 23.5`
+    pub crf: f32,
     /// Calculated distance value (for JXL)
     pub distance: f32,
     /// Effective bits per pixel after adjustments
@@ -545,9 +547,11 @@ pub fn calculate_av1_crf_with_options(
         QualityBias::Aggressive => crf_with_content + 2.0,
     };
     
-    // Clamp to reasonable range [15, 40] for AV1
-    // Extended range to allow content-type adjustments
-    let crf = (crf_with_bias.round() as i32).clamp(15, 40) as u8;
+    // 🔥 v3.4: Use f32 for sub-integer precision (0.5 step)
+    // Clamp to reasonable range [15.0, 40.0] for AV1
+    // Round to 0.5 step: 23.3 → 23.5, 23.7 → 23.5
+    let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
+    let crf = (crf_rounded as f32).clamp(15.0, 40.0);
     
     Ok(MatchedQuality {
         crf,
@@ -633,8 +637,11 @@ pub fn calculate_hevc_crf_with_options(
         QualityBias::Aggressive => crf_with_content + 2.0,
     };
     
-    // Clamp to reasonable range [0, 35] for HEVC
-    let crf = (crf_with_bias.round() as i32).clamp(0, 35) as u8;
+    // 🔥 v3.4: Use f32 for sub-integer precision (0.5 step)
+    // Clamp to reasonable range [0.0, 35.0] for HEVC
+    // Round to 0.5 step: 23.3 → 23.5, 23.7 → 23.5
+    let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
+    let crf = (crf_rounded as f32).clamp(0.0, 35.0);
     
     Ok(MatchedQuality {
         crf,
@@ -685,7 +692,7 @@ pub fn calculate_jxl_distance_with_options(
         let clamped = biased_distance.clamp(0.0, 5.0);
         
         return Ok(MatchedQuality {
-            crf: 0,
+            crf: 0.0, // JXL uses distance, not CRF
             distance: clamped,
             effective_bpp: analysis.bpp,
             analysis_details: AnalysisDetails {
@@ -741,7 +748,7 @@ pub fn calculate_jxl_distance_with_options(
     let clamped_distance = distance_with_bias.clamp(0.0, 5.0);
     
     Ok(MatchedQuality {
-        crf: 0,
+        crf: 0.0, // JXL uses distance, not CRF
         distance: clamped_distance,
         effective_bpp,
         analysis_details: details,
