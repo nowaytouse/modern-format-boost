@@ -121,6 +121,6 @@ mod tests {
     #[test]
     fn test_format_utilities() {
         // These would require actual test files
-        assert!(true);
+        // TODO: Implement actual format utility tests
     }
 }
