@@ -520,8 +520,13 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
 
 /// Convert animated to HEVC MP4 with quality-matched CRF
 /// 
-/// This function calculates an appropriate CRF based on the input file's
-/// characteristics to match the input quality level.
+/// 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
+/// 
+/// 探索模式由 options.explore 和 options.match_quality 决定：
+/// - explore=true, match_quality=true: 精确质量匹配（二分搜索 + SSIM 验证）
+/// - explore=true, match_quality=false: 仅探索更小大小
+/// - explore=false, match_quality=true: 单次编码 + SSIM 验证
+/// - explore=false, match_quality=false: 默认使用质量匹配
 pub fn convert_to_hevc_mp4_matched(
     input: &Path, 
     options: &ConvertOptions,
@@ -560,77 +565,95 @@ pub fn convert_to_hevc_mp4_matched(
     }
     
     // Calculate matched CRF based on input characteristics (HEVC CRF range: 0-32)
-    let crf = calculate_matched_crf_for_animation_hevc(analysis, input_size);
-    eprintln!("   🎯 Matched HEVC CRF: {} (based on input quality analysis)", crf);
+    let initial_crf = calculate_matched_crf_for_animation_hevc(analysis, input_size);
     
     // 🔥 健壮性：获取输入尺寸并生成视频滤镜链
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, analysis.has_alpha);
     
-    // HEVC with calculated CRF
-    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-    let x265_params = format!("log-level=error:pools={}", max_threads);
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")  // Overwrite
-        .arg("-threads").arg(max_threads.to_string())  // 限制线程数
-        .arg("-i").arg(input)
-        .arg("-c:v").arg("libx265")
-        .arg("-crf").arg(crf.to_string())
-        .arg("-preset").arg("medium")
-        .arg("-tag:v").arg("hvc1")  // Apple 兼容性
-        .arg("-x265-params").arg(&x265_params);
+    // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
+    let explore_mode = options.explore_mode();
+    let mode_name = match explore_mode {
+        shared_utils::ExploreMode::PreciseQualityMatch => "🔬 Precise Quality-Match",
+        shared_utils::ExploreMode::SizeOnly => "🔍 Size-Only Exploration",
+        shared_utils::ExploreMode::QualityMatch => "🎯 Quality-Match",
+    };
+    eprintln!("   {} Mode: CRF {} (based on input analysis)", mode_name, initial_crf);
     
-    // 添加视频滤镜（尺寸修正 + 像素格式）
-    for arg in &vf_args {
-        cmd.arg(arg);
+    let explore_result = match explore_mode {
+        shared_utils::ExploreMode::PreciseQualityMatch => {
+            shared_utils::explore_hevc(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::ExploreMode::SizeOnly => {
+            shared_utils::explore_hevc_size_only(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::ExploreMode::QualityMatch => {
+            shared_utils::explore_hevc_quality_match(input, &output, vf_args, initial_crf)
+        }
+    }.map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+    
+    // 打印探索日志
+    for log in &explore_result.log {
+        eprintln!("{}", log);
     }
     
-    cmd.arg(&output);
-    let result = cmd.output();
-    
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-            
-            // Copy metadata and timestamps
-            copy_metadata(input, &output);
-            
-            mark_as_processed(input);
-            
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
-            }
-            
-            // 🔥 修复：正确显示 size reduction/increase 消息
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!("Quality-matched HEVC (CRF {}): size reduced {:.1}%", crf, reduction_pct)
-            } else {
-                format!("Quality-matched HEVC (CRF {}): size increased {:.1}%", crf, -reduction_pct)
-            };
-            
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
-        }
-        Ok(output_cmd) => {
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            Err(ImgQualityError::ConversionError(format!("ffmpeg failed: {}", stderr)))
-        }
-        Err(e) => {
-            Err(ImgQualityError::ToolNotFound(format!("ffmpeg not found: {}", e)))
-        }
+    // 🔥 如果最终输出仍然比输入大，跳过转换
+    if explore_result.output_size > input_size {
+        let _ = fs::remove_file(&output);
+        eprintln!("   ⏭️  Skipping: HEVC output larger than input even at CRF {} ({} > {} bytes)", 
+            explore_result.optimal_crf, explore_result.output_size, input_size);
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: format!("Skipped: HEVC output larger than GIF input (low resolution {}x{})", width, height),
+            skipped: true,
+            skip_reason: Some("size_increase".to_string()),
+        });
     }
+    
+    // 🔥 质量验证失败警告（但仍然保留输出）
+    if !explore_result.quality_passed {
+        eprintln!("   ⚠️  Quality validation failed (SSIM: {:.4}), but output is smaller", 
+            explore_result.ssim.unwrap_or(0.0));
+    }
+    
+    // Copy metadata and timestamps
+    copy_metadata(input, &output);
+    mark_as_processed(input);
+    
+    if options.should_delete_original() {
+        fs::remove_file(input)?;
+    }
+    
+    let reduction_pct = -explore_result.size_change_pct; // 转换为正数表示减少
+    let explored_msg = if explore_result.optimal_crf != initial_crf {
+        format!(" (explored from CRF {})", initial_crf)
+    } else {
+        String::new()
+    };
+    
+    let ssim_msg = explore_result.ssim
+        .map(|s| format!(", SSIM: {:.4}", s))
+        .unwrap_or_default();
+    
+    let message = format!("HEVC (CRF {}{}, {} iter{}): -{:.1}%", 
+        explore_result.optimal_crf, explored_msg, explore_result.iterations, ssim_msg, reduction_pct);
+    
+    Ok(ConversionResult {
+        success: true,
+        input_path: input.display().to_string(),
+        output_path: Some(output.display().to_string()),
+        input_size,
+        output_size: Some(explore_result.output_size),
+        size_reduction: Some(reduction_pct),
+        message,
+        skipped: false,
+        skip_reason: None,
+    })
 }
 
 /// Calculate CRF to match input animation quality for HEVC (Enhanced Algorithm)

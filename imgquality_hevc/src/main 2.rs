@@ -39,6 +39,11 @@ enum Commands {
     },
 
     /// Auto-convert based on format detection (JPEG→JXL, PNG→JXL, Animated→HEVC MP4)
+    /// 
+    /// 🔥 动态图片/视频转换默认使用智能质量匹配：
+    /// - 二分搜索找到最优 CRF
+    /// - SSIM 裁判验证确保质量 (≥0.95)
+    /// - 输出大于输入时自动跳过
     Auto {
         /// Input file or directory
         #[arg(value_name = "INPUT")]
@@ -67,12 +72,9 @@ enum Commands {
         in_place: bool,
 
         /// Use mathematical lossless AVIF/HEVC (⚠️ VERY SLOW, huge files)
+        /// Disables smart quality matching for video
         #[arg(long)]
         lossless: bool,
-
-        /// Match input quality level for animated→video conversion (auto-calculate CRF)
-        #[arg(long)]
-        match_quality: bool,
     },
 
     /// Verify conversion quality
@@ -146,24 +148,26 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             in_place,
             lossless,
-            match_quality,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
             
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-            }
-            if match_quality {
-                eprintln!("🎯 Match quality mode: ENABLED (auto-calculate CRF for video)");
+                eprintln!("   Smart quality matching: DISABLED");
+            } else {
+                eprintln!("🎯 Smart quality matching: ENABLED (default)");
+                eprintln!("   - Binary search for optimal CRF");
+                eprintln!("   - SSIM validation (≥0.95)");
+                eprintln!("   - Auto-skip if output larger than input");
             }
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
             if input.is_file() {
-                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless)?;
             } else if input.is_dir() {
-                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless)?;
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -438,6 +442,11 @@ fn print_recommendation_human(rec: &imgquality_hevc::UpgradeRecommendation) {
 }
 
 /// Smart auto-convert a single file based on format detection
+/// 
+/// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）：
+/// - 二分搜索找到最优 CRF
+/// - SSIM 裁判验证确保质量 (≥0.95)
+/// - 输出大于输入时自动跳过
 fn auto_convert_single_file(
     input: &PathBuf,
     output_dir: Option<&PathBuf>,
@@ -445,12 +454,11 @@ fn auto_convert_single_file(
     delete_original: bool,
     in_place: bool,
     lossless: bool,
-    match_quality: bool,
 ) -> anyhow::Result<()> {
     use imgquality_hevc::lossless_converter::{
         convert_to_jxl, convert_jpeg_to_jxl,
-        convert_to_hevc_mp4, convert_to_hevc_mkv_lossless,
-        convert_to_hevc_mp4_matched, convert_to_jxl_matched,
+        convert_to_hevc_mkv_lossless,
+        convert_to_hevc_mp4_matched,
         ConvertOptions,
     };
     
@@ -478,26 +486,23 @@ fn auto_convert_single_file(
             return Ok(());
         }
 
-        // JPEG → JXL
+        // JPEG → JXL (always lossless transcode, match_quality does NOT apply to static images)
         ("JPEG", _, false) => {
-            if match_quality {
-                // Match quality mode: use lossy JXL with matched distance for better compression
-                println!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
-                convert_to_jxl_matched(input, &options, &analysis)?
-            } else {
-                // Default: lossless transcode (preserves DCT coefficients, no quality loss)
-                println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
-                convert_jpeg_to_jxl(input, &options)?
-            }
+            // 🔥 JPEG 始终使用无损转码（保留 DCT 系数，零质量损失）
+            // match_quality 仅用于动图转视频，不影响静态图片
+            println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
+            convert_jpeg_to_jxl(input, &options)?
         }
         // Legacy Static lossless (PNG, TIFF, BMP etc) → JXL
         (_, true, false) => {
             println!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
-        // Animated lossless → HEVC MP4 CRF 0 (visually lossless, only if >=3 seconds)
-        // 🔥 无损源保持高质量：默认 CRF 0，用户可选 --lossless 数学无损
-        (_, true, true) => {
+        // Animated → HEVC MP4 (only if >=3 seconds)
+        // 🔥 默认使用智能质量匹配：二分搜索 + SSIM 裁判验证
+        // - 无损动画源（GIF/APNG）：使用质量匹配以获得更好的压缩率
+        // - 有损动画源（WebP animated）：使用质量匹配以保持质量
+        (_, _, true) => {
             // Check duration - only convert animations >=3 seconds
             // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
             let duration = match analysis.duration_secs {
@@ -515,44 +520,17 @@ fn auto_convert_single_file(
             
             if lossless {
                 // 用户显式要求数学无损
-                println!("🔄 Animated lossless→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
+                println!("🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mkv_lossless(input, &options)?
             } else {
-                // 🔥 无损源默认使用 CRF 0（视觉无损），不使用 match_quality
-                // match_quality 仅用于有损源
-                println!("🔄 Animated lossless→HEVC MP4 (CRF 0, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mp4(input, &options)?
-            }
-        }
-        // Animated lossy → HEVC MP4 with match_quality (only if >=3 seconds)
-        // 🔥 有损源使用 match_quality 以获得更好的空间效率
-        (_, false, true) => {
-            // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
-            let duration = match analysis.duration_secs {
-                Some(d) if d > 0.0 => d,
-                _ => {
-                    eprintln!("⚠️  无法获取动画时长，跳过转换: {}", input.display());
-                    eprintln!("   💡 可能原因: ffprobe 未安装或文件格式不支持时长检测");
-                    return Ok(());
-                }
-            };
-            if duration < 3.0 {
-                println!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
-                return Ok(());
-            }
-            
-            if lossless {
-                // 用户显式要求数学无损
-                println!("🔄 Animated lossy→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mkv_lossless(input, &options)?
-            } else {
-                // 🔥 有损源默认使用 match_quality
-                println!("🔄 Animated lossy→HEVC MP4 (MATCH QUALITY, {:.1}s): {}", duration, input.display());
+                // 🔥 默认：智能质量匹配（二分搜索 + SSIM 验证）
+                println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mp4_matched(input, &options, &analysis)?
             }
         }
         // Legacy Static lossy (non-JPEG, non-Modern) → JXL
         // This handles cases like BMP (if not detected as lossless somehow) or other obscure formats
+        // 🔥 match_quality 仅用于动图转视频，不影响静态图片
         (format, false, false) => {
              // Redundant safecheck for WebP/AVIF/HEIC just in case pattern matching missed
             if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
@@ -560,13 +538,10 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if match_quality {
-                println!("🔄 Legacy Lossy→JXL (MATCH QUALITY): {}", input.display());
-                convert_to_jxl_matched(input, &options, &analysis)?
-            } else {
-                println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
-                convert_to_jxl(input, &options, 0.1)?
-            }
+            // 🔥 静态有损图片使用高质量转换（distance 0.1 ≈ Q100）
+            // match_quality 仅用于动图转视频
+            println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
+            convert_to_jxl(input, &options, 0.1)?
         }
     };
     
@@ -581,6 +556,8 @@ fn auto_convert_single_file(
 }
 
 /// Smart auto-convert a directory with parallel processing and progress bar
+/// 
+/// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）
 fn auto_convert_directory(
     input: &PathBuf,
     output_dir: Option<&PathBuf>,
@@ -589,7 +566,6 @@ fn auto_convert_directory(
     delete_original: bool,
     in_place: bool,
     lossless: bool,
-    match_quality: bool,
 ) -> anyhow::Result<()> {
     // 🔥 Safety check: prevent accidental damage to system directories
     if delete_original || in_place {
