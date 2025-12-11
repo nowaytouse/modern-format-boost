@@ -5,6 +5,8 @@
 //! 
 //! Algorithm accuracy target: ±1 quality factor for standard tables
 
+#![allow(clippy::needless_range_loop, clippy::manual_range_contains)]
+
 use serde::{Deserialize, Serialize};
 
 /// JPEG quality analysis results
@@ -339,7 +341,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         pos += 1;
         
         // Check for markers that don't have length
-        if marker == MARKER_SOI || marker == MARKER_EOI || (marker >= 0xD0 && marker <= 0xD7) {
+        if marker == MARKER_SOI || marker == MARKER_EOI || (0xD0..=0xD7).contains(&marker) {
             continue;
         }
         
@@ -462,13 +464,13 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     
     // Check if using standard tables
     let is_standard_table = luma_estimate.is_exact_match 
-        && chroma_estimate.as_ref().map_or(true, |c| c.is_exact_match);
+        && chroma_estimate.as_ref().is_none_or(|c| c.is_exact_match);
     
     // Detect encoder using SSE-based fingerprinting
     let encoder_hint = detect_encoder(
         &tables, 
         luma_estimate.is_exact_match, 
-        chroma_estimate.as_ref().map_or(true, |c| c.is_exact_match),
+        chroma_estimate.as_ref().is_none_or(|c| c.is_exact_match),
         luma_estimate.sse,
         chroma_estimate.as_ref().map(|c| c.sse),
     );

@@ -4,7 +4,7 @@ use crate::{ImgQualityError, Result};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 
 /// JXL upgrade indicator - simple and clear
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +69,7 @@ pub struct ImageAnalysis {
 }
 
 /// Analyze an image file and return quality parameters
-pub fn analyze_image(path: &PathBuf) -> Result<ImageAnalysis> {
+pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     // Check if file exists
     if !path.exists() {
         return Err(ImgQualityError::ImageReadError(format!(
@@ -114,10 +114,7 @@ pub fn analyze_image(path: &PathBuf) -> Result<ImageAnalysis> {
 
     // JPEG specific analysis
     let jpeg_analysis = if format == ImageFormat::Jpeg {
-        match analyze_jpeg_file(path) {
-            Ok(analysis) => Some(analysis),
-            Err(_) => None,
-        }
+        analyze_jpeg_file(path).ok()
     } else {
         None
     };
@@ -176,7 +173,7 @@ pub fn analyze_image(path: &PathBuf) -> Result<ImageAnalysis> {
 }
 
 /// Analyze HEIC/HEIF image using libheif
-fn analyze_heic_image(path: &PathBuf, file_size: u64) -> Result<ImageAnalysis> {
+fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Try to analyze deeply, but fallback if it fails (e.g. MemoryAllocationError)
     // This allows the main loop to still see it as "HEIC" and skip it
     let (width, height, has_alpha, color_depth, is_lossless, codec, features) = match analyze_heic_file(path) {
@@ -230,7 +227,7 @@ fn generate_jxl_indicator(
     format: &ImageFormat,
     is_lossless: bool,
     jpeg_analysis: &Option<JpegQualityAnalysis>,
-    path: &PathBuf,
+    path: &Path,
 ) -> JxlIndicator {
     let file_path = path.display().to_string();
     let output_path = path.with_extension("jxl").display().to_string();
@@ -403,7 +400,7 @@ fn estimate_ssim_from_quality(quality: u8) -> f64 {
 // ============================================================================
 
 /// Detect image format from file
-fn detect_format(path: &PathBuf) -> Result<ImageFormat> {
+fn detect_format(path: &Path) -> Result<ImageFormat> {
     let format = image::ImageReader::open(path)
         .map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?
         .format();
@@ -467,7 +464,7 @@ fn detect_color_space(img: &DynamicImage) -> String {
 }
 
 /// Check if format supports animation and if this file is animated
-fn is_animated_format(path: &PathBuf, format: &ImageFormat) -> Result<bool> {
+fn is_animated_format(path: &Path, format: &ImageFormat) -> Result<bool> {
     match format {
         ImageFormat::Gif => Ok(check_gif_animation(path)?),
         ImageFormat::WebP => Ok(check_webp_animation(path)?),
@@ -475,20 +472,20 @@ fn is_animated_format(path: &PathBuf, format: &ImageFormat) -> Result<bool> {
     }
 }
 
-fn check_gif_animation(path: &PathBuf) -> Result<bool> {
+fn check_gif_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     let descriptor_count = bytes.windows(1).filter(|w| w[0] == 0x2C).count();
     Ok(descriptor_count > 1)
 }
 
-fn check_webp_animation(path: &PathBuf) -> Result<bool> {
+fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     let anim_marker = b"ANIM";
     Ok(bytes.windows(4).any(|w| w == anim_marker))
 }
 
 /// Get animation duration in seconds using ffprobe
-fn get_animation_duration(path: &PathBuf) -> Option<f32> {
+fn get_animation_duration(path: &Path) -> Option<f32> {
     use std::process::Command;
     
     let output = Command::new("ffprobe")
@@ -524,9 +521,21 @@ fn get_animation_duration(path: &PathBuf) -> Option<f32> {
 }
 
 /// Detect if compression is lossless
-fn detect_lossless(format: &ImageFormat, path: &PathBuf) -> Result<bool> {
+/// 
+/// 🔥 v3.7: PNG now uses advanced quantization detection
+/// PNG can be "lossy" if it was quantized by tools like pngquant
+fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
     match format {
-        ImageFormat::Png => Ok(true),
+        ImageFormat::Png => {
+            // 🔥 Use the new PNG quantization detection system
+            use crate::detection_api::{detect_compression, detect_format_from_bytes, CompressionType};
+            
+            // First verify it's actually a PNG (not just by extension)
+            let detected_format = detect_format_from_bytes(path)?;
+            let compression = detect_compression(&detected_format, path)?;
+            
+            Ok(compression == CompressionType::Lossless)
+        }
         ImageFormat::Gif => Ok(true),
         ImageFormat::Tiff => Ok(true),
         ImageFormat::Jpeg => Ok(false),
@@ -536,7 +545,7 @@ fn detect_lossless(format: &ImageFormat, path: &PathBuf) -> Result<bool> {
     }
 }
 
-fn check_webp_lossless(path: &PathBuf) -> Result<bool> {
+fn check_webp_lossless(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     let vp8l_marker = b"VP8L";
     Ok(bytes.windows(4).any(|w| w == vp8l_marker))
@@ -544,7 +553,7 @@ fn check_webp_lossless(path: &PathBuf) -> Result<bool> {
 
 /// Check if AVIF is lossless
 /// AVIF uses AV1 codec which can be configured for lossless
-fn check_avif_lossless(path: &PathBuf) -> Result<bool> {
+fn check_avif_lossless(path: &Path) -> Result<bool> {
     // AVIF lossless detection is complex - for now, assume lossy
     // True lossless AVIF is rare in practice
     // Could be improved by parsing AVIF headers for quantizer settings
@@ -557,7 +566,7 @@ fn check_avif_lossless(path: &PathBuf) -> Result<bool> {
 }
 
 /// Check if file is JXL by magic bytes or extension
-fn is_jxl_file(path: &PathBuf) -> bool {
+fn is_jxl_file(path: &Path) -> bool {
     // Check extension first
     if let Some(ext) = path.extension() {
         if ext.to_str().unwrap_or("").to_lowercase() == "jxl" {
@@ -583,7 +592,7 @@ fn is_jxl_file(path: &PathBuf) -> bool {
 /// 🔥 修复：djxl 不支持 --info 参数，使用 jxlinfo 代替
 /// jxlinfo 输出格式示例：
 ///   JPEG XL image, 1920x1080, (no alpha), 8-bit sRGB color
-fn analyze_jxl_image(path: &PathBuf, file_size: u64) -> Result<ImageAnalysis> {
+fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     use std::process::Command;
     
     // 🔥 使用 jxlinfo 获取 JXL 文件信息（比 djxl 更可靠）
@@ -693,7 +702,7 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
 }
 
 /// Extract metadata
-fn extract_metadata(path: &PathBuf) -> Result<HashMap<String, String>> {
+fn extract_metadata(path: &Path) -> Result<HashMap<String, String>> {
     let mut metadata = HashMap::new();
     
     if let Some(filename) = path.file_name() {
@@ -712,19 +721,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_entropy_calculation() {
-        // A uniform image should have low entropy
-        // A random image should have high entropy
-        assert!(true);
-    }
-    
-    #[test]
     fn test_psnr_estimation() {
-        assert!(estimate_psnr_from_quality(95) > estimate_psnr_from_quality(50));
+        let psnr_high = estimate_psnr_from_quality(95);
+        let psnr_mid = estimate_psnr_from_quality(75);
+        let psnr_low = estimate_psnr_from_quality(50);
+        
+        assert!(psnr_high > psnr_mid);
+        assert!(psnr_mid > psnr_low);
+        assert!(psnr_high >= 40.0);
+        assert!(psnr_low >= 25.0);
     }
     
     #[test]
     fn test_ssim_estimation() {
-        assert!(estimate_ssim_from_quality(95) > estimate_ssim_from_quality(50));
+        let ssim_high = estimate_ssim_from_quality(95);
+        let ssim_mid = estimate_ssim_from_quality(75);
+        let ssim_low = estimate_ssim_from_quality(50);
+        
+        assert!(ssim_high > ssim_mid);
+        assert!(ssim_mid > ssim_low);
+        assert!(ssim_high >= 0.95);
+        assert!(ssim_low >= 0.80);
+    }
+    
+    #[test]
+    fn test_quality_boundaries() {
+        let psnr_max = estimate_psnr_from_quality(100);
+        let psnr_min = estimate_psnr_from_quality(1);
+        
+        assert!(psnr_max > psnr_min);
+        assert!(psnr_max.is_finite());
+        assert!(psnr_min.is_finite());
     }
 }

@@ -17,8 +17,8 @@
 /// # Returns
 /// * `(corrected_width, corrected_height, needs_correction)` - 修正后的尺寸和是否需要修正
 pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
-    let corrected_width = if width % 2 != 0 { width - 1 } else { width };
-    let corrected_height = if height % 2 != 0 { height - 1 } else { height };
+    let corrected_width = if !width.is_multiple_of(2) { width - 1 } else { width };
+    let corrected_height = if !height.is_multiple_of(2) { height - 1 } else { height };
     let needs_correction = corrected_width != width || corrected_height != height;
     
     (corrected_width, corrected_height, needs_correction)
@@ -84,7 +84,7 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
 
 /// 检查视频尺寸是否兼容 YUV420 色度子采样
 pub fn is_yuv420_compatible(width: u32, height: u32) -> bool {
-    width % 2 == 0 && height % 2 == 0
+    width.is_multiple_of(2) && height.is_multiple_of(2)
 }
 
 /// 获取 FFmpeg 尺寸修正参数

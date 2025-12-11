@@ -114,9 +114,7 @@ pub fn analyze_gif_quality(img: &DynamicImage) -> QualityParams {
         if entropy > 6.0 { 85 } else { 75 }
     } else if width >= 720 || height >= 480 {
         if entropy > 5.0 { 70 } else { 60 }
-    } else {
-        if entropy > 4.0 { 55 } else { 45 }
-    };
+    } else if entropy > 4.0 { 55 } else { 45 };
     
     QualityParams {
         estimated_quality: Some(quality_score),

@@ -39,6 +39,11 @@ enum Commands {
     },
 
     /// Auto-convert based on format detection (JPEG→JXL, PNG→JXL, Animated→HEVC MP4)
+    /// 
+    /// 🔥 动态图片/视频转换默认使用智能质量匹配：
+    /// - 二分搜索找到最优 CRF
+    /// - SSIM 裁判验证确保质量 (≥0.95)
+    /// - 输出大于输入时自动跳过
     Auto {
         /// Input file or directory
         #[arg(value_name = "INPUT")]
@@ -67,10 +72,21 @@ enum Commands {
         in_place: bool,
 
         /// Use mathematical lossless AVIF/HEVC (⚠️ VERY SLOW, huge files)
+        /// Disables smart quality matching for video
         #[arg(long)]
         lossless: bool,
 
-        /// Match input quality level for animated→video conversion (auto-calculate CRF)
+        /// Explore smaller file sizes for animated→video conversion ONLY.
+        /// Alone: Binary search for smaller output (no quality validation).
+        /// With --match-quality: Precise quality match (binary search + SSIM validation).
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion).
+        #[arg(long)]
+        explore: bool,
+
+        /// Match input quality level for animated→video conversion ONLY.
+        /// Alone: Single encode with AI-predicted CRF + SSIM validation.
+        /// With --explore: Precise quality match (binary search + SSIM validation).
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion).
         #[arg(long)]
         match_quality: bool,
     },
@@ -146,6 +162,7 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             in_place,
             lossless,
+            explore,
             match_quality,
         } => {
             // in_place implies delete_original
@@ -153,17 +170,50 @@ fn main() -> anyhow::Result<()> {
             
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-            }
-            if match_quality {
-                eprintln!("🎯 Match quality mode: ENABLED (auto-calculate CRF for video)");
+                eprintln!("   Smart quality matching: DISABLED");
+            } else {
+                // 显示探索模式信息
+                match (explore, match_quality) {
+                    (true, true) => {
+                        eprintln!("🔬 Precise Quality-Match: ENABLED (for animated→video)");
+                        eprintln!("   - Binary search + SSIM validation");
+                        eprintln!("   - Auto-skip if output larger than input");
+                    }
+                    (true, false) => {
+                        eprintln!("🔍 Size-Only Exploration: ENABLED (for animated→video)");
+                        eprintln!("   - Binary search for smaller output");
+                        eprintln!("   - No quality validation");
+                    }
+                    (false, true) => {
+                        eprintln!("🎯 Quality-Match: ENABLED (for animated→video)");
+                        eprintln!("   - AI-predicted CRF + SSIM validation");
+                        eprintln!("   - Auto-skip if output larger than input");
+                    }
+                    (false, false) => {
+                        eprintln!("🎯 Default Quality-Match: ENABLED (for animated→video)");
+                        eprintln!("   - AI-predicted CRF + SSIM validation");
+                        eprintln!("   - Auto-skip if output larger than input");
+                    }
+                }
+                eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
+            let config = AutoConvertConfig {
+                output_dir: output.clone(),
+                force,
+                delete_original: should_delete,
+                in_place,
+                lossless,
+                explore,
+                match_quality,
+            };
+            
             if input.is_file() {
-                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
-                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_directory(&input, &config, recursive)?;
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -179,7 +229,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn analyze_single_file(
-    path: &PathBuf,
+    path: &Path,
     output_format: OutputFormat,
     recommend: bool,
 ) -> anyhow::Result<()> {
@@ -232,7 +282,7 @@ fn analyze_directory(
         let path = entry.path();
         if let Some(ext) = path.extension() {
             if image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
-                match analyze_image(&path.to_path_buf()) {
+                match analyze_image(path) {
                     Ok(analysis) => {
                         count += 1;
                         if output_format == OutputFormat::Json {
@@ -263,7 +313,7 @@ fn analyze_directory(
         println!("{}", json!({
             "total": count,
             "results": results
-        }).to_string());
+        }));
     } else {
         println!("\n{}", "=".repeat(80));
         println!("✅ Analysis complete: {} files processed", count);
@@ -437,30 +487,43 @@ fn print_recommendation_human(rec: &imgquality_hevc::UpgradeRecommendation) {
     }
 }
 
-/// Smart auto-convert a single file based on format detection
-fn auto_convert_single_file(
-    input: &PathBuf,
-    output_dir: Option<&PathBuf>,
+/// Auto-convert configuration
+struct AutoConvertConfig {
+    output_dir: Option<PathBuf>,
     force: bool,
     delete_original: bool,
     in_place: bool,
     lossless: bool,
+    explore: bool,
     match_quality: bool,
+}
+
+/// Smart auto-convert a single file based on format detection
+/// 
+/// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）：
+/// - 二分搜索找到最优 CRF
+/// - SSIM 裁判验证确保质量 (≥0.95)
+/// - 输出大于输入时自动跳过
+fn auto_convert_single_file(
+    input: &Path,
+    config: &AutoConvertConfig,
 ) -> anyhow::Result<()> {
     use imgquality_hevc::lossless_converter::{
         convert_to_jxl, convert_jpeg_to_jxl,
-        convert_to_hevc_mp4, convert_to_hevc_mkv_lossless,
-        convert_to_hevc_mp4_matched, convert_to_jxl_matched,
+        convert_to_hevc_mkv_lossless,
+        convert_to_hevc_mp4_matched,
         ConvertOptions,
     };
     
     let analysis = analyze_image(input)?;
     
     let options = ConvertOptions {
-        force,
-        output_dir: output_dir.cloned(),
-        delete_original,
-        in_place,
+        force: config.force,
+        output_dir: config.output_dir.clone(),
+        delete_original: config.delete_original,
+        in_place: config.in_place,
+        explore: config.explore,
+        match_quality: config.match_quality,
     };
     
     // Smart conversion based on format and lossless status
@@ -478,25 +541,23 @@ fn auto_convert_single_file(
             return Ok(());
         }
 
-        // JPEG → JXL
+        // JPEG → JXL (always lossless transcode, match_quality does NOT apply to static images)
         ("JPEG", _, false) => {
-            if match_quality {
-                // Match quality mode: use lossy JXL with matched distance for better compression
-                println!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
-                convert_to_jxl_matched(input, &options, &analysis)?
-            } else {
-                // Default: lossless transcode (preserves DCT coefficients, no quality loss)
-                println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
-                convert_jpeg_to_jxl(input, &options)?
-            }
+            // 🔥 JPEG 始终使用无损转码（保留 DCT 系数，零质量损失）
+            // match_quality 仅用于动图转视频，不影响静态图片
+            println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
+            convert_jpeg_to_jxl(input, &options)?
         }
         // Legacy Static lossless (PNG, TIFF, BMP etc) → JXL
         (_, true, false) => {
             println!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
-        // Animated lossless → HEVC MP4 (only if >=3 seconds)
-        (_, true, true) => {
+        // Animated → HEVC MP4 (only if >=3 seconds)
+        // 🔥 默认使用智能质量匹配：二分搜索 + SSIM 裁判验证
+        // - 无损动画源（GIF/APNG）：使用质量匹配以获得更好的压缩率
+        // - 有损动画源（WebP animated）：使用质量匹配以保持质量
+        (_, _, true) => {
             // Check duration - only convert animations >=3 seconds
             // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
             let duration = match analysis.duration_secs {
@@ -512,44 +573,19 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if lossless {
-                println!("🔄 Animated lossless→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
+            if config.lossless {
+                // 用户显式要求数学无损
+                println!("🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mkv_lossless(input, &options)?
-            } else if match_quality {
-                println!("🔄 Animated lossless→HEVC MP4 (MATCH QUALITY, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mp4_matched(input, &options, &analysis)?
             } else {
-                println!("🔄 Animated lossless→HEVC MP4 ({:.1}s): {}", duration, input.display());
-                convert_to_hevc_mp4(input, &options)?
-            }
-        }
-        // Animated lossy → skip (unless lossless mode AND >=3 seconds)
-        (_, false, true) => {
-            // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
-            let duration = match analysis.duration_secs {
-                Some(d) if d > 0.0 => d,
-                _ => {
-                    eprintln!("⚠️  无法获取动画时长，跳过转换: {}", input.display());
-                    eprintln!("   💡 可能原因: ffprobe 未安装或文件格式不支持时长检测");
-                    return Ok(());
-                }
-            };
-            if lossless && duration >= 3.0 {
-                println!("🔄 Animated lossy→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
-                convert_to_hevc_mkv_lossless(input, &options)?
-            } else if match_quality && duration >= 3.0 {
-                println!("🔄 Animated lossy→HEVC MP4 (MATCH QUALITY, {:.1}s): {}", duration, input.display());
+                // 🔥 默认：智能质量匹配（二分搜索 + SSIM 验证）
+                println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mp4_matched(input, &options, &analysis)?
-            } else if duration < 3.0 {
-                println!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
-                return Ok(());
-            } else {
-                println!("⏭️ Skipping animated lossy: {}", input.display());
-                return Ok(());
             }
         }
         // Legacy Static lossy (non-JPEG, non-Modern) → JXL
         // This handles cases like BMP (if not detected as lossless somehow) or other obscure formats
+        // 🔥 match_quality 仅用于动图转视频，不影响静态图片
         (format, false, false) => {
              // Redundant safecheck for WebP/AVIF/HEIC just in case pattern matching missed
             if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
@@ -557,13 +593,10 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if match_quality {
-                println!("🔄 Legacy Lossy→JXL (MATCH QUALITY): {}", input.display());
-                convert_to_jxl_matched(input, &options, &analysis)?
-            } else {
-                println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
-                convert_to_jxl(input, &options, 0.1)?
-            }
+            // 🔥 静态有损图片使用高质量转换（distance 0.1 ≈ Q100）
+            // match_quality 仅用于动图转视频
+            println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
+            convert_to_jxl(input, &options, 0.1)?
         }
     };
     
@@ -578,18 +611,15 @@ fn auto_convert_single_file(
 }
 
 /// Smart auto-convert a directory with parallel processing and progress bar
+/// 
+/// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）
 fn auto_convert_directory(
-    input: &PathBuf,
-    output_dir: Option<&PathBuf>,
-    force: bool,
+    input: &Path,
+    config: &AutoConvertConfig,
     recursive: bool,
-    delete_original: bool,
-    in_place: bool,
-    lossless: bool,
-    match_quality: bool,
 ) -> anyhow::Result<()> {
     // 🔥 Safety check: prevent accidental damage to system directories
-    if delete_original || in_place {
+    if config.delete_original || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{}", e);
             std::process::exit(1);
@@ -627,7 +657,7 @@ fn auto_convert_directory(
     }
     
     println!("📂 Found {} files to process", total);
-    if lossless {
+    if config.lossless {
         println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
     }
 
@@ -663,12 +693,12 @@ fn auto_convert_directory(
             // 获取输入文件大小
             let input_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             
-            match auto_convert_single_file(path, output_dir, force, delete_original, in_place, lossless, match_quality) {
+            match auto_convert_single_file(path, config) {
                 Ok(_) => { 
                     // 🔥 修复：检查是否真的生成了输出文件
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                     let parent_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    let out_dir = output_dir.unwrap_or(&parent_dir);
+                    let out_dir = config.output_dir.as_ref().unwrap_or(&parent_dir);
                     
                     // 检查可能的输出文件
                     let possible_outputs = [

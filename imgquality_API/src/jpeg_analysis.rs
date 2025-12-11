@@ -339,7 +339,7 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
         pos += 1;
         
         // Check for markers that don't have length
-        if marker == MARKER_SOI || marker == MARKER_EOI || (marker >= 0xD0 && marker <= 0xD7) {
+        if marker == MARKER_SOI || marker == MARKER_EOI || (0xD0..=0xD7).contains(&marker) {
             continue;
         }
         
@@ -370,9 +370,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     if seg_pos + 64 > data.len() {
                         break;
                     }
-                    for i in 0..64 {
-                        let row = ZIGZAG_ORDER[i] / 8;
-                        let col = ZIGZAG_ORDER[i] % 8;
+                    for &zigzag_idx in &ZIGZAG_ORDER {
+                        let row = zigzag_idx / 8;
+                        let col = zigzag_idx % 8;
                         table[row][col] = data[seg_pos] as u16;
                         seg_pos += 1;
                     }
@@ -381,9 +381,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     if seg_pos + 128 > data.len() {
                         break;
                     }
-                    for i in 0..64 {
-                        let row = ZIGZAG_ORDER[i] / 8;
-                        let col = ZIGZAG_ORDER[i] % 8;
+                    for &zigzag_idx in &ZIGZAG_ORDER {
+                        let row = zigzag_idx / 8;
+                        let col = zigzag_idx % 8;
                         table[row][col] = ((data[seg_pos] as u16) << 8) | (data[seg_pos + 1] as u16);
                         seg_pos += 2;
                     }
@@ -462,13 +462,13 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     
     // Check if using standard tables
     let is_standard_table = luma_estimate.is_exact_match 
-        && chroma_estimate.as_ref().map_or(true, |c| c.is_exact_match);
+        && chroma_estimate.as_ref().is_none_or(|c| c.is_exact_match);
     
     // Detect encoder using SSE-based fingerprinting
     let encoder_hint = detect_encoder(
         &tables, 
         luma_estimate.is_exact_match, 
-        chroma_estimate.as_ref().map_or(true, |c| c.is_exact_match),
+        chroma_estimate.as_ref().is_none_or(|c| c.is_exact_match),
         luma_estimate.sse,
         chroma_estimate.as_ref().map(|c| c.sse),
     );

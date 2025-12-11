@@ -5,6 +5,8 @@
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
 //! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
 
+#![allow(clippy::needless_range_loop)]
+
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
