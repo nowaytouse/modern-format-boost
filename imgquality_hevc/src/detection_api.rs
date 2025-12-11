@@ -173,7 +173,7 @@ pub struct DetectionResult {
 pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
     let mut file = File::open(path)?;
     let mut header = [0u8; 32];
-    file.read(&mut header)?;
+    file.read_exact(&mut header)?;
     
     // Check magic bytes
     if header.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
@@ -1073,7 +1073,7 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
     // Use existing JPEG analysis
     use crate::jpeg_analysis::analyze_jpeg_quality;
     let analysis = analyze_jpeg_quality(&data)
-        .map_err(|e| ImgQualityError::AnalysisError(e))?;
+        .map_err(ImgQualityError::AnalysisError)?;
     Ok(analysis.estimated_quality as u8)
 }
 
