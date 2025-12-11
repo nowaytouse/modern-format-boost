@@ -571,16 +571,21 @@ impl VideoExplorer {
     
     /// 计算 SSIM（增强版：更严格的解析和验证）
     /// 
-    /// 🔥 精确度改进 v3.1：
+    /// 🔥 精确度改进 v3.2：
+    /// - 使用 scale 滤镜处理分辨率差异（HEVC 要求偶数分辨率）
     /// - 更严格的解析逻辑
     /// - 验证 SSIM 值在有效范围内
     /// - 失败时响亮报错
     fn calculate_ssim(&self) -> Result<Option<f64>> {
-        // 使用简单的 ssim 滤镜，ffmpeg 会自动处理分辨率差异
+        // 🔥 v3.2: 使用 scale 滤镜将输入缩放到输出分辨率
+        // HEVC 编码器会将奇数分辨率调整为偶数，导致 SSIM 计算失败
+        // 滤镜链：[0:v]scale=iw:ih:flags=bicubic[ref];[ref][1:v]ssim
+        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim=stats_file=-";
+        
         let output = Command::new("ffmpeg")
             .arg("-i").arg(&self.input_path)
             .arg("-i").arg(&self.output_path)
-            .arg("-lavfi").arg("ssim=stats_file=-")
+            .arg("-lavfi").arg(filter)
             .arg("-f").arg("null")
             .arg("-")
             .output();
@@ -620,14 +625,18 @@ impl VideoExplorer {
     
     /// 计算 PSNR（增强版：更严格的解析和验证）
     /// 
-    /// 🔥 精确度改进 v3.1：
+    /// 🔥 精确度改进 v3.2：
+    /// - 使用 scale 滤镜处理分辨率差异
     /// - 更严格的解析逻辑
     /// - 支持 inf 值（无损情况）
     fn calculate_psnr(&self) -> Result<Option<f64>> {
+        // 🔥 v3.2: 使用 scale 滤镜将输入缩放到输出分辨率
+        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr=stats_file=-";
+        
         let output = Command::new("ffmpeg")
             .arg("-i").arg(&self.input_path)
             .arg("-i").arg(&self.output_path)
-            .arg("-lavfi").arg("psnr=stats_file=-")
+            .arg("-lavfi").arg(filter)
             .arg("-f").arg("null")
             .arg("-")
             .output();
