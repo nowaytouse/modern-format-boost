@@ -300,17 +300,18 @@ fn test_explore_result_fields() {
     
     // 模拟一个探索结果
     let result = shared_utils::ExploreResult {
-        optimal_crf: 22,
+        optimal_crf: 22.0,
         output_size: 186000,
         size_change_pct: -11.0,
         ssim: Some(0.97),
         psnr: None,
+        vmaf: None,
         iterations: 5,
         quality_passed: true,
         log: vec!["Test log".to_string()],
     };
     
-    assert_eq!(result.optimal_crf, 22);
+    assert!((result.optimal_crf - 22.0).abs() < 0.01);
     assert!(result.size_change_pct < 0.0); // 负数表示减小
     assert!(result.quality_passed);
     assert_eq!(result.iterations, 5);
@@ -322,8 +323,10 @@ fn test_quality_thresholds_customization() {
     let thresholds = shared_utils::QualityThresholds {
         min_ssim: 0.98,      // 更严格
         min_psnr: 40.0,      // 更严格
+        min_vmaf: 90.0,      // VMAF 阈值
         validate_ssim: true,
         validate_psnr: true, // 同时验证两者
+        validate_vmaf: false, // 不验证 VMAF
     };
     
     assert_eq!(thresholds.min_ssim, 0.98);
@@ -358,7 +361,7 @@ fn test_full_exploration_workflow() {
     ];
     
     // 使用 shared_utils 统一探索器
-    match shared_utils::explore_hevc(&test_gif, &test_mp4, vf_args, 18) {
+    match shared_utils::explore_hevc(&test_gif, &test_mp4, vf_args, 18.0) {
         Ok(result) => {
             eprintln!("Exploration result:");
             eprintln!("  Optimal CRF: {}", result.optimal_crf);
@@ -373,7 +376,7 @@ fn test_full_exploration_workflow() {
             }
             
             // 验证结果
-            assert!(result.optimal_crf >= 10 && result.optimal_crf <= 28);
+            assert!(result.optimal_crf >= 10.0 && result.optimal_crf <= 28.0);
             assert!(result.iterations <= 8);
             
             if result.output_size <= input_size {

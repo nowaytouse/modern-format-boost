@@ -649,7 +649,9 @@ pub fn convert_to_av1_mp4_matched(
 /// 
 /// AV1 CRF range is 0-63, with 23 being default "good quality"
 /// Clamped to range [18, 35] for practical use
-fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> u8 {
+/// 
+/// 🔥 v3.4: Returns f32 for sub-integer precision (0.5 step)
+fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
     // 🔥 使用统一的 quality_matcher 模块
     // Note: ImageAnalysis doesn't have fps field, will be estimated from duration
     let quality_analysis = shared_utils::from_image_analysis(
@@ -667,13 +669,13 @@ fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_siz
     match shared_utils::calculate_av1_crf(&quality_analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&quality_analysis, &result, shared_utils::EncoderType::Av1);
-            result.crf
+            result.crf // 🔥 v3.4: Already f32 from quality_matcher
         }
         Err(e) => {
             // 🔥 Quality Manifesto: 失败时响亮报错，使用保守值
             eprintln!("   ⚠️  Quality analysis failed: {}", e);
-            eprintln!("   ⚠️  Using conservative CRF 23 (high quality)");
-            23
+            eprintln!("   ⚠️  Using conservative CRF 23.0 (high quality)");
+            23.0
         }
     }
 }

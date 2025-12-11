@@ -218,10 +218,27 @@ fn count_webp_frames(data: &[u8]) -> u32 {
 }
 
 /// Detect compression type (lossless vs lossy)
+/// 
+/// 🔥 v3.6: Enhanced PNG lossy detection
+/// PNG can be "lossy" in these cases:
+/// 1. Quantized PNG (pngquant/pngnq): 24-bit → 8-bit indexed palette
+/// 2. Lossy optimization (TinyPNG): reduces colors with dithering
+/// 3. Low bit depth: 8-bit instead of 16-bit for photos
+/// 
+/// Detection strategy:
+/// - PNG with indexed color (color type 3) AND ≤256 colors → potentially lossy
+/// - PNG with alpha + indexed → likely quantized (lossy)
+/// - PNG 16-bit → lossless
+/// - PNG 8-bit truecolor → lossless (standard)
 pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<CompressionType> {
     match format {
-        // Always lossless formats
-        DetectedFormat::PNG | DetectedFormat::BMP | DetectedFormat::TIFF => {
+        // PNG: Check for quantization (lossy optimization)
+        DetectedFormat::PNG => {
+            detect_png_compression(path)
+        }
+        
+        // BMP/TIFF: Always lossless
+        DetectedFormat::BMP | DetectedFormat::TIFF => {
             Ok(CompressionType::Lossless)
         }
         
@@ -255,6 +272,85 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
         
         _ => Ok(CompressionType::Lossy),
     }
+}
+
+/// Detect PNG compression type (lossless vs quantized/lossy)
+/// 
+/// PNG IHDR chunk structure (after 8-byte signature + 4-byte length + 4-byte "IHDR"):
+/// - Bytes 0-3: Width
+/// - Bytes 4-7: Height
+/// - Byte 8: Bit depth (1, 2, 4, 8, 16)
+/// - Byte 9: Color type (0=grayscale, 2=truecolor, 3=indexed, 4=grayscale+alpha, 6=truecolor+alpha)
+/// 
+/// Lossy indicators:
+/// - Color type 3 (indexed) with original being truecolor → quantized
+/// - 8-bit indexed with alpha → likely pngquant output
+fn detect_png_compression(path: &Path) -> Result<CompressionType> {
+    let data = std::fs::read(path)?;
+    
+    // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+    if data.len() < 33 || !data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Ok(CompressionType::Lossless); // Not a valid PNG, assume lossless
+    }
+    
+    // IHDR chunk starts at byte 8 (after signature)
+    // Format: 4-byte length + 4-byte type ("IHDR") + data
+    let ihdr_start = 8;
+    if data.len() < ihdr_start + 8 + 13 {
+        return Ok(CompressionType::Lossless);
+    }
+    
+    // Check chunk type is IHDR
+    if &data[ihdr_start + 4..ihdr_start + 8] != b"IHDR" {
+        return Ok(CompressionType::Lossless);
+    }
+    
+    let bit_depth = data[ihdr_start + 8 + 8];  // Byte 8 of IHDR data
+    let color_type = data[ihdr_start + 8 + 9]; // Byte 9 of IHDR data
+    
+    // Color type 3 = indexed (palette-based)
+    // This is the primary indicator of quantized PNG
+    if color_type == 3 {
+        // Check if there's a tRNS chunk (transparency in indexed PNG)
+        // Indexed PNG with transparency is almost always quantized from RGBA
+        let has_trns = data.windows(4).any(|w| w == b"tRNS");
+        
+        if has_trns {
+            // Indexed + transparency = very likely pngquant output (lossy)
+            return Ok(CompressionType::Lossy);
+        }
+        
+        // Count palette entries (PLTE chunk)
+        // If palette has many colors (>128) and image is large, likely quantized
+        if let Some(plte_pos) = data.windows(4).position(|w| w == b"PLTE") {
+            let plte_len_pos = plte_pos - 4;
+            if plte_len_pos >= 8 && data.len() > plte_len_pos + 4 {
+                let plte_len = u32::from_be_bytes([
+                    data[plte_len_pos], data[plte_len_pos + 1],
+                    data[plte_len_pos + 2], data[plte_len_pos + 3]
+                ]) as usize;
+                let palette_colors = plte_len / 3;
+                
+                // Large palette (>200 colors) in indexed PNG suggests quantization
+                // Small palettes are often intentional (icons, pixel art)
+                if palette_colors > 200 {
+                    return Ok(CompressionType::Lossy);
+                }
+            }
+        }
+        
+        // Small indexed PNG without transparency → likely intentional (lossless)
+        return Ok(CompressionType::Lossless);
+    }
+    
+    // 16-bit PNG is always lossless (high quality source)
+    if bit_depth == 16 {
+        return Ok(CompressionType::Lossless);
+    }
+    
+    // 8-bit truecolor (type 2) or truecolor+alpha (type 6) → lossless
+    // These are standard PNG formats
+    Ok(CompressionType::Lossless)
 }
 
 /// Calculate image entropy (complexity measure)
