@@ -48,11 +48,21 @@
 | WebP/AVIF/HEIC | Yes | **SKIP** | Avoid generation loss |
 | JXL | - | **SKIP** | Already modern format |
 
-**v3.6 PNG Lossy Detection**: Detects quantized PNGs (pngquant, TinyPNG) via IHDR chunk analysis:
-- Color type 3 (indexed) + tRNS chunk → Lossy (pngquant output)
-- Color type 3 + palette >200 colors → Lossy (quantized)
-- 16-bit PNG → Lossless (high quality source)
-- 8-bit truecolor → Lossless (standard)
+**v3.7 PNG Quantization Detection (Referee System)**: Multi-factor weighted analysis to detect quantized PNGs:
+
+| Factor | Weight | Detection Method |
+|--------|--------|------------------|
+| Structural | 55% | IHDR color type, tRNS chunk, palette size vs image dimensions |
+| Metadata | 10% | Tool signatures (pngquant, TinyPNG, ImageOptim) |
+| Statistical | 25% | Dithering patterns, color distribution, gradient banding |
+| Heuristic | 10% | Compression efficiency anomalies |
+
+**Decision Thresholds:**
+- Score ≥ 0.70 → Definitely quantized (Lossy)
+- Score ≥ 0.50 → Likely quantized (Lossy)
+- Score < 0.50 → Lossless (conservative)
+
+**Key Insight**: Large images (>100K pixels) with indexed color (type 3) are almost always quantized, as natural photos have thousands of unique colors.
 
 #### Animations (GIF/APNG/Animated WebP)
 
@@ -138,6 +148,27 @@ Forces mathematical lossless encoding (CRF 0):
 - CRF precision: 0.5 step (e.g., 23.5) instead of integer
 - Confidence score: ~92% (up from ~75%)
 - Full field support via VideoAnalysisBuilder
+
+**CRF Calculation Formula (HEVC):**
+```
+CRF = 46 - 5 × log₂(effective_bpp × 100) + content_adjustment + bias
+```
+
+**Why similar CRF values for similar content:**
+- Same source format (e.g., all GIFs) → similar codec efficiency factor
+- Similar resolution → similar pixel count
+- Similar duration → similar frame count
+- **No caching**: Each file is analyzed independently
+- **No hardcoding**: All values derived from actual content analysis
+
+**Example CRF mapping (HEVC):**
+| Effective BPP | Calculated CRF | Quality Level |
+|---------------|----------------|---------------|
+| 0.1 | ~26 | Standard |
+| 0.2 | ~23 | Good |
+| 0.3 | ~21 | High |
+| 0.5 | ~19 | Very High |
+| 1.0 | ~16 | Near-lossless |
 
 ---
 
@@ -297,11 +328,21 @@ modern_format_boost/
 | WebP/AVIF/HEIC | 是 | **跳过** | 避免代际损失 |
 | JXL | - | **跳过** | 已是现代格式 |
 
-**v3.6 PNG 有损检测**：通过 IHDR 块分析检测量化 PNG（pngquant、TinyPNG）：
-- 颜色类型 3（索引）+ tRNS 块 → 有损（pngquant 输出）
-- 颜色类型 3 + 调色板 >200 色 → 有损（量化）
-- 16 位 PNG → 无损（高质量源）
-- 8 位真彩色 → 无损（标准）
+**v3.7 PNG 量化检测（裁判系统）**：多因子加权分析检测量化 PNG：
+
+| 因子 | 权重 | 检测方法 |
+|------|------|----------|
+| 结构分析 | 55% | IHDR 颜色类型、tRNS 块、调色板大小 vs 图像尺寸 |
+| 元数据分析 | 10% | 工具签名（pngquant、TinyPNG、ImageOptim） |
+| 统计分析 | 25% | 抖动模式、颜色分布、渐变条带 |
+| 启发式分析 | 10% | 压缩效率异常 |
+
+**决策阈值：**
+- 分数 ≥ 0.70 → 确定量化（有损）
+- 分数 ≥ 0.50 → 可能量化（有损）
+- 分数 < 0.50 → 无损（保守）
+
+**关键洞察**：大图像（>10万像素）使用索引色（类型3）几乎都是量化的，因为自然照片有数千种独特颜色。
 
 #### 动图 (GIF/APNG/动态 WebP)
 
@@ -387,6 +428,27 @@ modern_format_boost/
 - CRF 精度：0.5 步长（如 23.5）而非整数
 - 置信度：~92%（从 ~75% 提升）
 - 通过 VideoAnalysisBuilder 完整字段支持
+
+**CRF 计算公式（HEVC）：**
+```
+CRF = 46 - 5 × log₂(有效BPP × 100) + 内容调整 + 偏好
+```
+
+**为什么相似内容的 CRF 值相似：**
+- 相同源格式（如全是 GIF）→ 相似的编码效率因子
+- 相似分辨率 → 相似的像素数
+- 相似时长 → 相似的帧数
+- **无缓存**：每个文件独立分析
+- **无硬编码**：所有值均来自实际内容分析
+
+**CRF 映射示例（HEVC）：**
+| 有效 BPP | 计算 CRF | 质量级别 |
+|----------|----------|----------|
+| 0.1 | ~26 | 标准 |
+| 0.2 | ~23 | 良好 |
+| 0.3 | ~21 | 高 |
+| 0.5 | ~19 | 非常高 |
+| 1.0 | ~16 | 接近无损 |
 
 ---
 
