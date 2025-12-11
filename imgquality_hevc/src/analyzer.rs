@@ -524,9 +524,21 @@ fn get_animation_duration(path: &PathBuf) -> Option<f32> {
 }
 
 /// Detect if compression is lossless
+/// 
+/// 🔥 v3.7: PNG now uses advanced quantization detection
+/// PNG can be "lossy" if it was quantized by tools like pngquant
 fn detect_lossless(format: &ImageFormat, path: &PathBuf) -> Result<bool> {
     match format {
-        ImageFormat::Png => Ok(true),
+        ImageFormat::Png => {
+            // 🔥 Use the new PNG quantization detection system
+            use crate::detection_api::{detect_compression, detect_format_from_bytes, CompressionType};
+            
+            // First verify it's actually a PNG (not just by extension)
+            let detected_format = detect_format_from_bytes(path)?;
+            let compression = detect_compression(&detected_format, path)?;
+            
+            Ok(compression == CompressionType::Lossless)
+        }
         ImageFormat::Gif => Ok(true),
         ImageFormat::Tiff => Ok(true),
         ImageFormat::Jpeg => Ok(false),
