@@ -76,6 +76,7 @@ pub struct ImageQualityAnalysis {
 
 /// Content type classification based on actual detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ImageContentType {
     /// Natural photograph - high complexity, continuous tones
     Photo,
@@ -90,14 +91,10 @@ pub enum ImageContentType {
     /// Graphic/diagram - geometric shapes, limited palette
     Graphic,
     /// Unknown/mixed content
+    #[default]
     Unknown,
 }
 
-impl Default for ImageContentType {
-    fn default() -> Self {
-        ImageContentType::Unknown
-    }
-}
 
 
 impl ImageContentType {

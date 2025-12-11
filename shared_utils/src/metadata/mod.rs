@@ -95,7 +95,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             }
         }
         
-        return Ok(());
+        Ok(())
     }
 
     // Non-macOS path (Linux/Windows)

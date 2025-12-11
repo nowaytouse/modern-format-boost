@@ -58,10 +58,8 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     let reader = BufReader::new(file);
     let mut processed = PROCESSED_FILES.lock().unwrap();
     
-    for line in reader.lines() {
-        if let Ok(path) = line {
-            processed.insert(path);
-        }
+    for path in reader.lines().flatten() {
+        processed.insert(path);
     }
     
     Ok(())
@@ -196,6 +194,7 @@ impl ConversionResult {
 
 /// Common conversion options
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ConvertOptions {
     /// Force conversion even if already processed
     pub force: bool,
@@ -217,18 +216,6 @@ pub struct ConvertOptions {
     pub match_quality: bool,
 }
 
-impl Default for ConvertOptions {
-    fn default() -> Self {
-        Self {
-            force: false,
-            output_dir: None,
-            delete_original: false,
-            in_place: false,
-            explore: false,
-            match_quality: false,
-        }
-    }
-}
 
 impl ConvertOptions {
     /// Check if original should be deleted (either via delete_original or in_place)
@@ -273,7 +260,7 @@ pub fn determine_output_path(input: &Path, extension: &str, output_dir: &Option<
         output.clone()
     };
     
-    if input_canonical == output_canonical || input == &output {
+    if input_canonical == output_canonical || input == output {
         return Err(format!(
             "❌ 输入和输出路径相同: {}\n\
              💡 建议:\n\
