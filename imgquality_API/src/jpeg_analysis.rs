@@ -370,9 +370,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     if seg_pos + 64 > data.len() {
                         break;
                     }
-                    for i in 0..64 {
-                        let row = ZIGZAG_ORDER[i] / 8;
-                        let col = ZIGZAG_ORDER[i] % 8;
+                    for &zigzag_idx in &ZIGZAG_ORDER {
+                        let row = zigzag_idx / 8;
+                        let col = zigzag_idx % 8;
                         table[row][col] = data[seg_pos] as u16;
                         seg_pos += 1;
                     }
@@ -381,9 +381,9 @@ pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, St
                     if seg_pos + 128 > data.len() {
                         break;
                     }
-                    for i in 0..64 {
-                        let row = ZIGZAG_ORDER[i] / 8;
-                        let col = ZIGZAG_ORDER[i] % 8;
+                    for &zigzag_idx in &ZIGZAG_ORDER {
+                        let row = zigzag_idx / 8;
+                        let col = zigzag_idx % 8;
                         table[row][col] = ((data[seg_pos] as u16) << 8) | (data[seg_pos + 1] as u16);
                         seg_pos += 2;
                     }
