@@ -4,7 +4,7 @@ use crate::{ImgQualityError, Result};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// JXL upgrade indicator - simple and clear
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,10 +114,7 @@ pub fn analyze_image(path: &PathBuf) -> Result<ImageAnalysis> {
 
     // JPEG specific analysis
     let jpeg_analysis = if format == ImageFormat::Jpeg {
-        match analyze_jpeg_file(path) {
-            Ok(analysis) => Some(analysis),
-            Err(_) => None,
-        }
+        analyze_jpeg_file(path).ok()
     } else {
         None
     };
@@ -176,7 +173,7 @@ pub fn analyze_image(path: &PathBuf) -> Result<ImageAnalysis> {
 }
 
 /// Analyze HEIC/HEIF image using libheif
-fn analyze_heic_image(path: &PathBuf, file_size: u64) -> Result<ImageAnalysis> {
+fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Try to analyze deeply, but fallback if it fails (e.g. MemoryAllocationError)
     // This allows the main loop to still see it as "HEIC" and skip it
     let (width, height, has_alpha, color_depth, is_lossless, codec, features) = match analyze_heic_file(path) {
@@ -488,7 +485,7 @@ fn check_webp_animation(path: &PathBuf) -> Result<bool> {
 }
 
 /// Get animation duration in seconds using ffprobe
-fn get_animation_duration(path: &PathBuf) -> Option<f32> {
+fn get_animation_duration(path: &Path) -> Option<f32> {
     use std::process::Command;
     
     let output = Command::new("ffprobe")
@@ -705,7 +702,7 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
 }
 
 /// Extract metadata
-fn extract_metadata(path: &PathBuf) -> Result<HashMap<String, String>> {
+fn extract_metadata(path: &Path) -> Result<HashMap<String, String>> {
     let mut metadata = HashMap::new();
     
     if let Some(filename) = path.file_name() {
