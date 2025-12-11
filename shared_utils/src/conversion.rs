@@ -207,6 +207,14 @@ pub struct ConvertOptions {
     /// When true, the original file is deleted after successful conversion
     /// This is equivalent to delete_original but with clearer semantics
     pub in_place: bool,
+    /// 探索模式：寻找更小的文件大小
+    /// - 单独使用：仅探索更小大小，提示裁判验证准确度
+    /// - 与 match_quality 组合：精确质量匹配（二分搜索 + SSIM 验证）
+    pub explore: bool,
+    /// 质量匹配模式：匹配输入质量
+    /// - 单独使用：使用算法预测的 CRF + SSIM 验证
+    /// - 与 explore 组合：精确质量匹配（二分搜索 + SSIM 验证）
+    pub match_quality: bool,
 }
 
 impl Default for ConvertOptions {
@@ -216,6 +224,8 @@ impl Default for ConvertOptions {
             output_dir: None,
             delete_original: false,
             in_place: false,
+            explore: false,
+            match_quality: false,
         }
     }
 }
@@ -224,6 +234,16 @@ impl ConvertOptions {
     /// Check if original should be deleted (either via delete_original or in_place)
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
+    }
+    
+    /// 获取探索模式
+    pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
+        match (self.explore, self.match_quality) {
+            (true, true) => crate::video_explorer::ExploreMode::PreciseQualityMatch,
+            (true, false) => crate::video_explorer::ExploreMode::SizeOnly,
+            (false, true) => crate::video_explorer::ExploreMode::QualityMatch,
+            (false, false) => crate::video_explorer::ExploreMode::QualityMatch, // 默认使用质量匹配
+        }
     }
 }
 

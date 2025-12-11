@@ -282,17 +282,41 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 info!("   🚀 Using HEVC Lossless Mode (forced)");
                 let size = execute_hevc_lossless(&detection, &output_path)?;
                 (size, 0, 0)
-            } else if config.explore_smaller {
-                explore_smaller_size(&detection, &output_path)?
-            } else if config.match_quality {
-                // Calculate CRF to match input quality
-                let matched_crf = calculate_matched_crf(&detection);
-                info!("   🎯 Match Quality Mode: using CRF {} to match input quality", matched_crf);
-                let size = execute_hevc_conversion(&detection, &output_path, matched_crf)?;
-                (size, matched_crf, 0)
             } else {
-                let size = execute_hevc_conversion(&detection, &output_path, strategy.crf)?;
-                (size, strategy.crf, 0)
+                // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
+                let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+                let input_path = Path::new(&detection.file_path);
+                
+                let explore_result = if config.explore_smaller && config.match_quality {
+                    // 模式 3: --explore + --match-quality 组合（精确质量匹配）
+                    let initial_crf = calculate_matched_crf(&detection);
+                    info!("   🔬 Precise Quality-Match: CRF {} + SSIM validation", initial_crf);
+                    shared_utils::explore_hevc(input_path, &output_path, vf_args, initial_crf)
+                } else if config.explore_smaller {
+                    // 模式 1: --explore 单独使用（仅探索更小大小）
+                    info!("   🔍 Size-Only Exploration: finding smaller output");
+                    shared_utils::explore_hevc_size_only(input_path, &output_path, vf_args, strategy.crf)
+                } else if config.match_quality {
+                    // 模式 2: --match-quality 单独使用（单次编码 + SSIM 验证）
+                    let matched_crf = calculate_matched_crf(&detection);
+                    info!("   🎯 Quality-Match: CRF {} + SSIM validation", matched_crf);
+                    shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, matched_crf)
+                } else {
+                    // 默认模式：使用策略 CRF，单次编码
+                    info!("   📦 Default: CRF {}", strategy.crf);
+                    shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, strategy.crf)
+                }.map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+                
+                // 打印探索日志
+                for log_line in &explore_result.log {
+                    info!("{}", log_line);
+                }
+                
+                if !explore_result.quality_passed && (config.match_quality || config.explore_smaller) {
+                    warn!("   ⚠️  Quality: SSIM {:.4}", explore_result.ssim.unwrap_or(0.0));
+                }
+                
+                (explore_result.output_size, explore_result.optimal_crf, explore_result.iterations as u8)
             }
         }
         TargetVideoFormat::Skip => unreachable!(),
@@ -377,40 +401,11 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
     }
 }
 
-/// Explore smaller size by trying higher CRF values
-fn explore_smaller_size(
-    detection: &VideoDetectionResult,
-    output_path: &Path,
-) -> Result<(u64, u8, u8)> {
-    let input_size = detection.file_size;
-    let mut current_crf: u8 = 18;
-    let mut attempts: u8 = 0;
-    const MAX_CRF: u8 = 28;
-    const CRF_STEP: u8 = 2;
-    
-    info!("   🔍 Exploring smaller size (input: {} bytes)", input_size);
-    
-    loop {
-        let output_size = execute_hevc_conversion(detection, output_path, current_crf)?;
-        attempts += 1;
-        
-        info!("   📊 CRF {}: {} bytes ({:.1}%)", 
-            current_crf, output_size, (output_size as f64 / input_size as f64) * 100.0);
-        
-        if output_size < input_size {
-            info!("   ✅ Found smaller output at CRF {}", current_crf);
-            return Ok((output_size, current_crf, attempts));
-        }
-        
-        current_crf += CRF_STEP;
-        
-        if current_crf > MAX_CRF {
-            warn!("   ⚠️  Reached CRF limit, using CRF {}", MAX_CRF);
-            let output_size = execute_hevc_conversion(detection, output_path, MAX_CRF)?;
-            return Ok((output_size, MAX_CRF, attempts));
-        }
-    }
-}
+// 🔥 旧的 explore_smaller_size 函数已被 shared_utils::video_explorer 替代
+// 新的探索器支持三种模式：
+// 1. SizeOnly (--explore): 仅探索更小的文件大小
+// 2. QualityMatch (--match-quality): 使用 AI 预测 CRF + SSIM 验证
+// 3. PreciseQualityMatch (--explore + --match-quality): 二分搜索 + SSIM 裁判验证
 
 /// Execute HEVC conversion with specified CRF (using libx265)
 fn execute_hevc_conversion(detection: &VideoDetectionResult, output: &Path, crf: u8) -> Result<u64> {

@@ -27,6 +27,7 @@ pub mod date_analysis;
 pub mod quality_matcher;
 pub mod image_quality_detector;
 pub mod video_quality_detector;
+pub mod video_explorer;
 
 pub use progress::*;
 pub use safety::*;
@@ -70,3 +71,24 @@ pub use video_quality_detector::{
     // Integration helper
     to_quality_analysis as video_to_quality_analysis,
 };
+
+pub use video_explorer::{
+    // Core types
+    ExploreResult, ExploreConfig, QualityThresholds, VideoEncoder, VideoExplorer,
+    // Explore mode enum
+    ExploreMode,
+    // New API: mode-specific functions
+    explore_size_only, explore_quality_match, explore_precise_quality_match,
+    // HEVC convenience functions
+    explore_hevc, explore_hevc_size_only, explore_hevc_quality_match,
+    // AV1 convenience functions
+    explore_av1, explore_av1_size_only, explore_av1_quality_match,
+    // Precision module (精确度规范)
+    precision,
+};
+
+// Legacy API re-exports (deprecated but still available)
+#[allow(deprecated)]
+pub use video_explorer::quick_explore;
+#[allow(deprecated)]
+pub use video_explorer::full_explore;

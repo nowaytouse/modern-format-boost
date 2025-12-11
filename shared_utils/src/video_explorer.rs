@@ -1,0 +1,1207 @@
+//! Video CRF Explorer Module - 统一的视频质量探索器
+//!
+//! 🔥 三种探索模式：
+//! 1. `--explore` 单独使用：寻找更小的文件大小（不验证质量，仅保证 size < input）
+//! 2. `--match-quality` 单独使用：使用算法预测的 CRF，单次编码 + SSIM 验证
+//! 3. `--explore --match-quality` 组合：二分搜索 + SSIM 裁判验证，找到最精确的质量匹配
+//!
+//! ⚠️ 仅支持动态图片→视频和视频→视频转换！
+//! ⚠️ 静态图片使用无损转换，不支持探索模式！
+//!
+//! ## 模块化设计
+//! 
+//! 所有探索逻辑集中在此模块，其他模块（imgquality_hevc, vidquality_hevc）
+//! 只需调用此模块的便捷函数，避免重复实现。
+
+use std::path::Path;
+use std::process::Command;
+use std::fs;
+use anyhow::{Result, Context, bail};
+
+// ═══════════════════════════════════════════════════════════════
+// 探索模式枚举
+// ═══════════════════════════════════════════════════════════════
+
+/// 探索模式 - 决定探索器的行为
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExploreMode {
+    /// 仅探索更小的文件大小（--explore 单独使用）
+    /// - 二分搜索找到 size < input 的最高 CRF（最小文件）
+    /// - 不验证 SSIM/PSNR 质量
+    /// - 输出：裁判验证准确度提示（仅供参考）
+    SizeOnly,
+    
+    /// 仅匹配输入质量（--match-quality 单独使用）
+    /// - 使用算法预测的 CRF 值（基于 bpp、分辨率等特征）
+    /// - 单次编码 + SSIM 验证
+    /// - 目标：快速匹配质量
+    QualityMatch,
+    
+    /// 精确质量匹配（--explore + --match-quality 组合）
+    /// - 二分搜索 + SSIM 裁判验证
+    /// - 找到满足 SSIM >= min_ssim 的最高 CRF（最小文件）
+    /// - 目标：最精确的质量-大小平衡
+    PreciseQualityMatch,
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 数据结构
+// ═══════════════════════════════════════════════════════════════
+
+/// 探索结果
+#[derive(Debug, Clone)]
+pub struct ExploreResult {
+    /// 最优 CRF 值
+    pub optimal_crf: u8,
+    /// 输出文件大小
+    pub output_size: u64,
+    /// 相对于输入的大小变化百分比（负数表示减小）
+    pub size_change_pct: f64,
+    /// SSIM 分数
+    pub ssim: Option<f64>,
+    /// PSNR 分数
+    pub psnr: Option<f64>,
+    /// 探索迭代次数
+    pub iterations: u32,
+    /// 是否通过质量验证
+    pub quality_passed: bool,
+    /// 探索日志
+    pub log: Vec<String>,
+}
+
+/// 质量验证阈值
+#[derive(Debug, Clone)]
+pub struct QualityThresholds {
+    /// 最小 SSIM（0.0-1.0，推荐 >= 0.95）
+    pub min_ssim: f64,
+    /// 最小 PSNR（dB，推荐 >= 35）
+    pub min_psnr: f64,
+    /// 是否启用 SSIM 验证
+    pub validate_ssim: bool,
+    /// 是否启用 PSNR 验证
+    pub validate_psnr: bool,
+}
+
+impl Default for QualityThresholds {
+    fn default() -> Self {
+        Self {
+            min_ssim: 0.95,
+            min_psnr: 35.0,
+            validate_ssim: true,
+            validate_psnr: false,
+        }
+    }
+}
+
+/// 探索配置
+#[derive(Debug, Clone)]
+pub struct ExploreConfig {
+    /// 探索模式
+    pub mode: ExploreMode,
+    /// 起始 CRF（AI 预测值）
+    pub initial_crf: u8,
+    /// 最小 CRF（最高质量）
+    pub min_crf: u8,
+    /// 最大 CRF（最低可接受质量）
+    pub max_crf: u8,
+    /// 目标比率：输出大小 <= 输入大小 * target_ratio
+    pub target_ratio: f64,
+    /// 质量验证阈值
+    pub quality_thresholds: QualityThresholds,
+    /// 最大迭代次数
+    pub max_iterations: u32,
+}
+
+impl Default for ExploreConfig {
+    fn default() -> Self {
+        Self {
+            mode: ExploreMode::PreciseQualityMatch, // 默认：精确质量匹配
+            initial_crf: 18,
+            min_crf: 10,
+            max_crf: 28,
+            target_ratio: 1.0,
+            quality_thresholds: QualityThresholds::default(),
+            max_iterations: 8,
+        }
+    }
+}
+
+impl ExploreConfig {
+    /// 创建仅探索大小的配置（--explore 单独使用）
+    pub fn size_only(initial_crf: u8, max_crf: u8) -> Self {
+        Self {
+            mode: ExploreMode::SizeOnly,
+            initial_crf,
+            max_crf,
+            quality_thresholds: QualityThresholds {
+                validate_ssim: false,
+                validate_psnr: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+    
+    /// 创建仅匹配质量的配置（--match-quality 单独使用）
+    pub fn quality_match(predicted_crf: u8) -> Self {
+        Self {
+            mode: ExploreMode::QualityMatch,
+            initial_crf: predicted_crf,
+            max_iterations: 1, // 单次编码
+            quality_thresholds: QualityThresholds {
+                validate_ssim: true, // 验证但不探索
+                validate_psnr: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+    
+    /// 创建精确质量匹配的配置（--explore + --match-quality 组合）
+    pub fn precise_quality_match(initial_crf: u8, max_crf: u8, min_ssim: f64) -> Self {
+        Self {
+            mode: ExploreMode::PreciseQualityMatch,
+            initial_crf,
+            max_crf,
+            quality_thresholds: QualityThresholds {
+                min_ssim,
+                validate_ssim: true,
+                validate_psnr: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+}
+
+/// 视频编码器类型
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VideoEncoder {
+    /// HEVC/H.265 (libx265)
+    Hevc,
+    /// AV1 (libsvtav1)
+    Av1,
+    /// H.264 (libx264)
+    H264,
+}
+
+impl VideoEncoder {
+    /// 获取 ffmpeg 编码器名称
+    pub fn ffmpeg_name(&self) -> &'static str {
+        match self {
+            VideoEncoder::Hevc => "libx265",
+            VideoEncoder::Av1 => "libsvtav1",
+            VideoEncoder::H264 => "libx264",
+        }
+    }
+    
+    /// 获取输出容器格式
+    pub fn container(&self) -> &'static str {
+        match self {
+            VideoEncoder::Hevc => "mp4",
+            VideoEncoder::Av1 => "mp4",
+            VideoEncoder::H264 => "mp4",
+        }
+    }
+    
+    /// 获取额外的编码器参数
+    pub fn extra_args(&self, max_threads: usize) -> Vec<String> {
+        match self {
+            VideoEncoder::Hevc => vec![
+                "-tag:v".to_string(), "hvc1".to_string(),
+                "-x265-params".to_string(), 
+                format!("log-level=error:pools={}", max_threads),
+            ],
+            VideoEncoder::Av1 => vec![
+                "-svtav1-params".to_string(),
+                format!("tune=0:film-grain=0"),
+            ],
+            VideoEncoder::H264 => vec![
+                "-profile:v".to_string(), "high".to_string(),
+            ],
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 核心探索器
+// ═══════════════════════════════════════════════════════════════
+
+/// 视频 CRF 探索器 - 使用二分搜索 + SSIM 裁判验证
+pub struct VideoExplorer {
+    config: ExploreConfig,
+    encoder: VideoEncoder,
+    input_path: std::path::PathBuf,
+    output_path: std::path::PathBuf,
+    input_size: u64,
+    vf_args: Vec<String>,
+    max_threads: usize,
+}
+
+impl VideoExplorer {
+    /// 创建新的探索器
+    /// 
+    /// # Arguments
+    /// * `input` - 输入文件路径（动态图片或视频）
+    /// * `output` - 输出文件路径
+    /// * `encoder` - 视频编码器
+    /// * `vf_args` - 视频滤镜参数
+    /// * `config` - 探索配置
+    pub fn new(
+        input: &Path,
+        output: &Path,
+        encoder: VideoEncoder,
+        vf_args: Vec<String>,
+        config: ExploreConfig,
+    ) -> Result<Self> {
+        let input_size = fs::metadata(input)
+            .context("Failed to read input file metadata")?
+            .len();
+        
+        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+        
+        Ok(Self {
+            config,
+            encoder,
+            input_path: input.to_path_buf(),
+            output_path: output.to_path_buf(),
+            input_size,
+            vf_args,
+            max_threads,
+        })
+    }
+    
+    /// 执行探索（根据模式选择不同策略）
+    pub fn explore(&self) -> Result<ExploreResult> {
+        match self.config.mode {
+            ExploreMode::SizeOnly => self.explore_size_only(),
+            ExploreMode::QualityMatch => self.explore_quality_match(),
+            ExploreMode::PreciseQualityMatch => self.explore_precise_quality_match(),
+        }
+    }
+    
+    /// 模式 1: 仅探索更小的文件大小（--explore 单独使用）
+    /// 
+    /// 策略：二分搜索找到 size < input 的最高 CRF（最小文件）
+    /// 不强制验证 SSIM，但会计算并提示裁判验证准确度
+    fn explore_size_only(&self) -> Result<ExploreResult> {
+        let mut log = Vec::new();
+        let target_size = self.input_size; // 必须比输入小
+        
+        log.push(format!("🔍 Size-Only Exploration ({:?})", self.encoder));
+        log.push(format!("   Input: {} bytes, Target: < {} bytes", 
+            self.input_size, target_size));
+        log.push(format!("   CRF range: [{}, {}]", 
+            self.config.initial_crf, self.config.max_crf));
+        
+        // 二分搜索：找到满足 size < input 的最高 CRF
+        let mut low = self.config.initial_crf;
+        let mut high = self.config.max_crf;
+        let mut best_crf = self.config.max_crf;
+        let mut best_size = u64::MAX;
+        let mut iterations = 0u32;
+        
+        while low <= high && iterations < self.config.max_iterations {
+            iterations += 1;
+            let mid = (low + high) / 2;
+            
+            let result = self.encode(mid)?;
+            log.push(format!("   CRF {}: {} bytes ({:+.1}%)", 
+                mid, result, self.calc_change_pct(result)));
+            
+            if result < target_size {
+                // 找到更小的文件，尝试更高 CRF（更小文件）
+                best_crf = mid;
+                best_size = result;
+                low = mid + 1;
+                log.push("      ✅ Size OK, trying higher CRF".to_string());
+            } else {
+                // 文件太大，需要更低 CRF（更高质量但更大）
+                high = mid - 1;
+                log.push("      📈 Size too large, trying lower CRF".to_string());
+            }
+        }
+        
+        // 如果没找到更小的，使用最高 CRF
+        if best_size == u64::MAX {
+            best_crf = self.config.max_crf;
+            best_size = self.encode(best_crf)?;
+            log.push(format!("   ⚠️ No smaller size found, using max CRF {}", best_crf));
+        } else {
+            // 重新编码最优 CRF
+            best_size = self.encode(best_crf)?;
+        }
+        
+        // 🔥 裁判验证准确度提示（仅供参考，不影响结果）
+        let ssim = self.calculate_ssim().ok().flatten();
+        let size_change_pct = self.calc_change_pct(best_size);
+        
+        if let Some(s) = ssim {
+            let quality_hint = if s >= 0.98 {
+                "🟢 Excellent"
+            } else if s >= 0.95 {
+                "🟡 Good"
+            } else if s >= 0.90 {
+                "🟠 Acceptable"
+            } else {
+                "🔴 Low"
+            };
+            log.push(format!("   📊 Final: CRF {}, {} bytes ({:+.1}%), SSIM: {:.4} ({})", 
+                best_crf, best_size, size_change_pct, s, quality_hint));
+        } else {
+            log.push(format!("   📊 Final: CRF {}, {} bytes ({:+.1}%)", 
+                best_crf, best_size, size_change_pct));
+        }
+        
+        Ok(ExploreResult {
+            optimal_crf: best_crf,
+            output_size: best_size,
+            size_change_pct,
+            ssim, // 提供 SSIM 供参考
+            psnr: None,
+            iterations,
+            quality_passed: best_size < target_size, // 只要更小就算通过
+            log,
+        })
+    }
+    
+    /// 模式 2: 仅匹配输入质量（--match-quality 单独使用）
+    /// 
+    /// 策略：使用 AI 预测的 CRF 值，单次编码
+    /// 验证 SSIM 但不探索，快速完成
+    fn explore_quality_match(&self) -> Result<ExploreResult> {
+        let mut log = Vec::new();
+        
+        log.push(format!("🎯 Quality-Match Mode ({:?})", self.encoder));
+        log.push(format!("   Input: {} bytes", self.input_size));
+        log.push(format!("   Predicted CRF: {}", self.config.initial_crf));
+        
+        // 单次编码
+        let output_size = self.encode(self.config.initial_crf)?;
+        let quality = self.validate_quality()?;
+        
+        log.push(format!("   CRF {}: {} bytes ({:+.1}%), SSIM: {:.4}", 
+            self.config.initial_crf, output_size, 
+            self.calc_change_pct(output_size),
+            quality.0.unwrap_or(0.0)));
+        
+        let quality_passed = self.check_quality_passed(quality.0, quality.1);
+        if quality_passed {
+            log.push("   ✅ Quality validation passed".to_string());
+        } else {
+            log.push(format!("   ⚠️ Quality below threshold (min SSIM: {:.4})", 
+                self.config.quality_thresholds.min_ssim));
+        }
+        
+        Ok(ExploreResult {
+            optimal_crf: self.config.initial_crf,
+            output_size,
+            size_change_pct: self.calc_change_pct(output_size),
+            ssim: quality.0,
+            psnr: quality.1,
+            iterations: 1,
+            quality_passed,
+            log,
+        })
+    }
+    
+    /// 模式 3: 精确质量匹配（--explore + --match-quality 组合）
+    /// 
+    /// 策略：二分搜索 + SSIM 裁判验证
+    /// 找到满足 SSIM >= min_ssim 的最高 CRF（最小文件）
+    fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
+        let mut log = Vec::new();
+        let target_size = (self.input_size as f64 * self.config.target_ratio) as u64;
+        
+        log.push(format!("🔬 Precise Quality-Match Exploration ({:?})", self.encoder));
+        log.push(format!("   Input: {} bytes, Target: <= {} bytes", 
+            self.input_size, target_size));
+        log.push(format!("   CRF range: [{}, {}], Initial: {}", 
+            self.config.min_crf, self.config.max_crf, self.config.initial_crf));
+        log.push(format!("   Min SSIM: {:.4}", self.config.quality_thresholds.min_ssim));
+        
+        // Step 1: 尝试初始 CRF
+        let initial_result = self.encode(self.config.initial_crf)?;
+        let initial_quality = self.validate_quality()?;
+        log.push(format!("   CRF {}: {} bytes ({:+.1}%), SSIM: {:.4}", 
+            self.config.initial_crf, initial_result,
+            self.calc_change_pct(initial_result),
+            initial_quality.0.unwrap_or(0.0)));
+        
+        // 如果初始 CRF 满足所有条件，直接返回
+        if initial_result <= target_size && self.check_quality_passed(initial_quality.0, initial_quality.1) {
+            log.push(format!("   ✅ Initial CRF {} meets all criteria", self.config.initial_crf));
+            
+            return Ok(ExploreResult {
+                optimal_crf: self.config.initial_crf,
+                output_size: initial_result,
+                size_change_pct: self.calc_change_pct(initial_result),
+                ssim: initial_quality.0,
+                psnr: initial_quality.1,
+                iterations: 1,
+                quality_passed: true,
+                log,
+            });
+        }
+        
+        // Step 2: 二分搜索找到满足 SSIM 的最高 CRF
+        let mut low = self.config.initial_crf;
+        let mut high = self.config.max_crf;
+        let mut best_crf = self.config.initial_crf;
+        let mut best_size = initial_result;
+        let mut best_quality = initial_quality;
+        let mut iterations = 1u32;
+        
+        while low <= high && iterations < self.config.max_iterations {
+            iterations += 1;
+            let mid = (low + high) / 2;
+            
+            // 跳过已测试的 CRF
+            if mid == self.config.initial_crf {
+                low = mid + 1;
+                continue;
+            }
+            
+            let result = self.encode(mid)?;
+            let quality = self.validate_quality()?;
+            
+            log.push(format!("   CRF {}: {} bytes ({:+.1}%), SSIM: {:.4}", 
+                mid, result, self.calc_change_pct(result),
+                quality.0.unwrap_or(0.0)));
+            
+            if self.check_quality_passed(quality.0, quality.1) {
+                // 质量通过，尝试更高 CRF（更小文件）
+                if result < best_size || (result == best_size && mid > best_crf) {
+                    best_crf = mid;
+                    best_size = result;
+                    best_quality = quality;
+                }
+                low = mid + 1;
+                log.push("      ✅ Quality passed, trying higher CRF".to_string());
+            } else {
+                // 质量不足，需要更低 CRF（更高质量）
+                high = mid - 1;
+                log.push("      ⚠️ Quality failed, trying lower CRF".to_string());
+            }
+        }
+        
+        // Step 3: 最终编码（如果最优 CRF 不是最后编码的）
+        if best_crf != self.config.max_crf && best_crf != self.config.initial_crf {
+            best_size = self.encode(best_crf)?;
+            best_quality = self.validate_quality()?;
+            log.push(format!("   🔄 Re-encoded with optimal CRF {}", best_crf));
+        }
+        
+        let size_change_pct = self.calc_change_pct(best_size);
+        let quality_passed = self.check_quality_passed(best_quality.0, best_quality.1);
+        
+        log.push(format!("   📊 Final: CRF {}, {} bytes ({:+.1}%), SSIM: {:.4}, Passed: {}", 
+            best_crf, best_size, size_change_pct, 
+            best_quality.0.unwrap_or(0.0),
+            if quality_passed { "✅" } else { "❌" }));
+        
+        Ok(ExploreResult {
+            optimal_crf: best_crf,
+            output_size: best_size,
+            size_change_pct,
+            ssim: best_quality.0,
+            psnr: best_quality.1,
+            iterations,
+            quality_passed,
+            log,
+        })
+    }
+    
+    /// 编码视频
+    fn encode(&self, crf: u8) -> Result<u64> {
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y")
+            .arg("-threads").arg(self.max_threads.to_string())
+            .arg("-i").arg(&self.input_path)
+            .arg("-c:v").arg(self.encoder.ffmpeg_name())
+            .arg("-crf").arg(crf.to_string())
+            .arg("-preset").arg("medium");
+        
+        for arg in self.encoder.extra_args(self.max_threads) {
+            cmd.arg(arg);
+        }
+        
+        for arg in &self.vf_args {
+            cmd.arg(arg);
+        }
+        
+        cmd.arg(&self.output_path);
+        
+        let output = cmd.output()
+            .context("Failed to execute ffmpeg")?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("ffmpeg encoding failed: {}", stderr);
+        }
+        
+        let size = fs::metadata(&self.output_path)
+            .context("Failed to read output file")?
+            .len();
+        
+        Ok(size)
+    }
+    
+    /// 计算大小变化百分比
+    fn calc_change_pct(&self, output_size: u64) -> f64 {
+        (output_size as f64 / self.input_size as f64 - 1.0) * 100.0
+    }
+    
+    /// 验证输出质量
+    fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>)> {
+        let ssim = if self.config.quality_thresholds.validate_ssim {
+            self.calculate_ssim()?
+        } else {
+            None
+        };
+        
+        let psnr = if self.config.quality_thresholds.validate_psnr {
+            self.calculate_psnr()?
+        } else {
+            None
+        };
+        
+        Ok((ssim, psnr))
+    }
+    
+    /// 计算 SSIM
+    fn calculate_ssim(&self) -> Result<Option<f64>> {
+        let output = Command::new("ffmpeg")
+            .arg("-i").arg(&self.input_path)
+            .arg("-i").arg(&self.output_path)
+            .arg("-lavfi").arg("ssim=stats_file=-")
+            .arg("-f").arg("null")
+            .arg("-")
+            .output();
+        
+        match output {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                for line in stderr.lines() {
+                    if line.contains("All:") {
+                        if let Some(pos) = line.find("All:") {
+                            let value_str = &line[pos + 4..];
+                            let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
+                                .unwrap_or(value_str.len());
+                            if let Ok(ssim) = value_str[..end].trim().parse::<f64>() {
+                                return Ok(Some(ssim));
+                            }
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            Err(_) => Ok(None),
+        }
+    }
+    
+    /// 计算 PSNR
+    fn calculate_psnr(&self) -> Result<Option<f64>> {
+        let output = Command::new("ffmpeg")
+            .arg("-i").arg(&self.input_path)
+            .arg("-i").arg(&self.output_path)
+            .arg("-lavfi").arg("psnr=stats_file=-")
+            .arg("-f").arg("null")
+            .arg("-")
+            .output();
+        
+        match output {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                for line in stderr.lines() {
+                    if line.contains("average:") {
+                        if let Some(pos) = line.find("average:") {
+                            let value_str = &line[pos + 8..];
+                            let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
+                                .unwrap_or(value_str.len());
+                            if let Ok(psnr) = value_str[..end].trim().parse::<f64>() {
+                                return Ok(Some(psnr));
+                            }
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            Err(_) => Ok(None),
+        }
+    }
+    
+    /// 检查质量是否通过
+    fn check_quality_passed(&self, ssim: Option<f64>, psnr: Option<f64>) -> bool {
+        let t = &self.config.quality_thresholds;
+        
+        if t.validate_ssim {
+            match ssim {
+                Some(s) if s >= t.min_ssim => {}
+                _ => return false,
+            }
+        }
+        
+        if t.validate_psnr {
+            match psnr {
+                Some(p) if p >= t.min_psnr => {}
+                _ => return false,
+            }
+        }
+        
+        true
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 便捷函数
+// ═══════════════════════════════════════════════════════════════
+
+/// 仅探索更小的文件大小（--explore 单独使用）
+/// 
+/// 不验证质量，仅保证输出比输入小
+pub fn explore_size_only(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+    max_crf: u8,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::size_only(initial_crf, max_crf);
+    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+}
+
+/// 仅匹配输入质量（--match-quality 单独使用）
+/// 
+/// 使用 AI 预测的 CRF，单次编码，验证 SSIM
+pub fn explore_quality_match(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    predicted_crf: u8,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::quality_match(predicted_crf);
+    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+}
+
+/// 精确质量匹配探索（--explore + --match-quality 组合）
+/// 
+/// 二分搜索 + SSIM 裁判验证，找到最优质量-大小平衡
+pub fn explore_precise_quality_match(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+    max_crf: u8,
+    min_ssim: f64,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
+    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+}
+
+/// 快速探索（仅基于大小，不验证质量）- 兼容旧 API
+#[deprecated(since = "2.0.0", note = "Use explore_size_only instead")]
+pub fn quick_explore(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+    max_crf: u8,
+) -> Result<ExploreResult> {
+    explore_size_only(input, output, encoder, vf_args, initial_crf, max_crf)
+}
+
+/// 完整探索（包含 SSIM 质量验证）- 兼容旧 API
+#[deprecated(since = "2.0.0", note = "Use explore_precise_quality_match instead")]
+pub fn full_explore(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+    max_crf: u8,
+    min_ssim: f64,
+) -> Result<ExploreResult> {
+    explore_precise_quality_match(input, output, encoder, vf_args, initial_crf, max_crf, min_ssim)
+}
+
+/// HEVC 探索（最常用）- 默认使用精确质量匹配
+pub fn explore_hevc(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+) -> Result<ExploreResult> {
+    explore_precise_quality_match(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28, 0.95)
+}
+
+/// HEVC 仅探索大小（--explore 单独使用）
+pub fn explore_hevc_size_only(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+) -> Result<ExploreResult> {
+    explore_size_only(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28)
+}
+
+/// HEVC 仅匹配质量（--match-quality 单独使用）
+pub fn explore_hevc_quality_match(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    predicted_crf: u8,
+) -> Result<ExploreResult> {
+    explore_quality_match(input, output, VideoEncoder::Hevc, vf_args, predicted_crf)
+}
+
+/// AV1 探索 - 默认使用精确质量匹配
+pub fn explore_av1(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+) -> Result<ExploreResult> {
+    explore_precise_quality_match(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35, 0.95)
+}
+
+/// AV1 仅探索大小（--explore 单独使用）
+pub fn explore_av1_size_only(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: u8,
+) -> Result<ExploreResult> {
+    explore_size_only(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35)
+}
+
+/// AV1 仅匹配质量（--match-quality 单独使用）
+pub fn explore_av1_quality_match(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    predicted_crf: u8,
+) -> Result<ExploreResult> {
+    explore_quality_match(input, output, VideoEncoder::Av1, vf_args, predicted_crf)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 精确度规范
+// ═══════════════════════════════════════════════════════════════
+
+/// 精确度规范 - 定义探索器的精度保证
+/// 
+/// ## CRF 精度
+/// - 二分搜索精度：±1 CRF（在 max_iterations=8 时保证）
+/// - 范围 [10, 28] 需要 log2(18) ≈ 4.17 次迭代
+/// - 范围 [10, 35] 需要 log2(25) ≈ 4.64 次迭代
+/// - 8 次迭代可覆盖 2^8 = 256 的范围，远超实际需求
+/// 
+/// ## SSIM 精度
+/// - ffmpeg ssim 滤镜精度：4 位小数（0.0001）
+/// - 阈值判断精度：>= min_ssim（严格不小于）
+/// 
+/// ## 质量等级对照表
+/// | SSIM 范围 | 质量等级 | 视觉描述 |
+/// |-----------|----------|----------|
+/// | >= 0.98   | Excellent | 几乎无法区分 |
+/// | >= 0.95   | Good      | 视觉无损 |
+/// | >= 0.90   | Acceptable | 轻微差异 |
+/// | >= 0.85   | Fair      | 可见差异 |
+/// | < 0.85    | Poor      | 明显质量损失 |
+pub mod precision {
+    /// CRF 搜索精度：±1
+    pub const CRF_PRECISION: u8 = 1;
+    
+    /// SSIM 显示精度：4 位小数
+    pub const SSIM_DISPLAY_PRECISION: u32 = 4;
+    
+    /// SSIM 比较精度：0.0001
+    pub const SSIM_COMPARE_EPSILON: f64 = 0.0001;
+    
+    /// 默认最小 SSIM（视觉无损）
+    pub const DEFAULT_MIN_SSIM: f64 = 0.95;
+    
+    /// 高质量最小 SSIM
+    pub const HIGH_QUALITY_MIN_SSIM: f64 = 0.98;
+    
+    /// 可接受最小 SSIM
+    pub const ACCEPTABLE_MIN_SSIM: f64 = 0.90;
+    
+    /// 计算二分搜索所需的最大迭代次数
+    /// 
+    /// 公式：ceil(log2(range)) + 1
+    pub fn required_iterations(min_crf: u8, max_crf: u8) -> u32 {
+        let range = (max_crf - min_crf) as f64;
+        (range.log2().ceil() as u32) + 1
+    }
+    
+    /// 验证 SSIM 是否满足阈值（考虑浮点精度）
+    pub fn ssim_meets_threshold(ssim: f64, threshold: f64) -> bool {
+        ssim >= threshold - SSIM_COMPARE_EPSILON
+    }
+    
+    /// 获取 SSIM 质量等级描述
+    pub fn ssim_quality_grade(ssim: f64) -> &'static str {
+        if ssim >= 0.98 {
+            "Excellent (几乎无法区分)"
+        } else if ssim >= 0.95 {
+            "Good (视觉无损)"
+        } else if ssim >= 0.90 {
+            "Acceptable (轻微差异)"
+        } else if ssim >= 0.85 {
+            "Fair (可见差异)"
+        } else {
+            "Poor (明显质量损失)"
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 测试
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::precision::*;
+    
+    // ═══════════════════════════════════════════════════════════
+    // 基础配置测试
+    // ═══════════════════════════════════════════════════════════
+    
+    #[test]
+    fn test_quality_thresholds_default() {
+        let t = QualityThresholds::default();
+        assert_eq!(t.min_ssim, 0.95);
+        assert_eq!(t.min_psnr, 35.0);
+        assert!(t.validate_ssim);
+        assert!(!t.validate_psnr);
+    }
+    
+    #[test]
+    fn test_explore_config_default() {
+        let c = ExploreConfig::default();
+        assert_eq!(c.mode, ExploreMode::PreciseQualityMatch);
+        assert_eq!(c.initial_crf, 18);
+        assert_eq!(c.min_crf, 10);
+        assert_eq!(c.max_crf, 28);
+        assert_eq!(c.target_ratio, 1.0);
+        assert_eq!(c.max_iterations, 8);
+    }
+    
+    #[test]
+    fn test_explore_config_size_only() {
+        let c = ExploreConfig::size_only(20, 30);
+        assert_eq!(c.mode, ExploreMode::SizeOnly);
+        assert_eq!(c.initial_crf, 20);
+        assert_eq!(c.max_crf, 30);
+        assert!(!c.quality_thresholds.validate_ssim);
+        assert!(!c.quality_thresholds.validate_psnr);
+    }
+    
+    #[test]
+    fn test_explore_config_quality_match() {
+        let c = ExploreConfig::quality_match(22);
+        assert_eq!(c.mode, ExploreMode::QualityMatch);
+        assert_eq!(c.initial_crf, 22);
+        assert_eq!(c.max_iterations, 1); // 单次编码
+        assert!(c.quality_thresholds.validate_ssim);
+    }
+    
+    #[test]
+    fn test_explore_config_precise_quality_match() {
+        let c = ExploreConfig::precise_quality_match(18, 28, 0.97);
+        assert_eq!(c.mode, ExploreMode::PreciseQualityMatch);
+        assert_eq!(c.initial_crf, 18);
+        assert_eq!(c.max_crf, 28);
+        assert_eq!(c.quality_thresholds.min_ssim, 0.97);
+        assert!(c.quality_thresholds.validate_ssim);
+    }
+    
+    #[test]
+    fn test_video_encoder_names() {
+        assert_eq!(VideoEncoder::Hevc.ffmpeg_name(), "libx265");
+        assert_eq!(VideoEncoder::Av1.ffmpeg_name(), "libsvtav1");
+        assert_eq!(VideoEncoder::H264.ffmpeg_name(), "libx264");
+    }
+    
+    #[test]
+    fn test_video_encoder_containers() {
+        assert_eq!(VideoEncoder::Hevc.container(), "mp4");
+        assert_eq!(VideoEncoder::Av1.container(), "mp4");
+        assert_eq!(VideoEncoder::H264.container(), "mp4");
+    }
+    
+    #[test]
+    fn test_explore_mode_enum() {
+        assert_ne!(ExploreMode::SizeOnly, ExploreMode::QualityMatch);
+        assert_ne!(ExploreMode::QualityMatch, ExploreMode::PreciseQualityMatch);
+        assert_ne!(ExploreMode::SizeOnly, ExploreMode::PreciseQualityMatch);
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // 精确度证明测试 - 裁判验证
+    // ═══════════════════════════════════════════════════════════
+    
+    #[test]
+    fn test_precision_crf_search_range_hevc() {
+        // HEVC CRF 范围 [10, 28]，需要 log2(18) ≈ 4.17 次迭代
+        let iterations = required_iterations(10, 28);
+        assert!(iterations <= 8, "HEVC range [10,28] should need <= 8 iterations, got {}", iterations);
+        assert_eq!(iterations, 6); // ceil(log2(18)) + 1 = 5 + 1 = 6
+    }
+    
+    #[test]
+    fn test_precision_crf_search_range_av1() {
+        // AV1 CRF 范围 [10, 35]，需要 log2(25) ≈ 4.64 次迭代
+        let iterations = required_iterations(10, 35);
+        assert!(iterations <= 8, "AV1 range [10,35] should need <= 8 iterations, got {}", iterations);
+        assert_eq!(iterations, 6); // ceil(log2(25)) + 1 = 5 + 1 = 6
+    }
+    
+    #[test]
+    fn test_precision_crf_search_range_wide() {
+        // 极端范围 [0, 51]，需要 log2(51) ≈ 5.67 次迭代
+        let iterations = required_iterations(0, 51);
+        assert!(iterations <= 8, "Wide range [0,51] should need <= 8 iterations, got {}", iterations);
+        assert_eq!(iterations, 7); // ceil(log2(51)) + 1 = 6 + 1 = 7
+    }
+    
+    #[test]
+    fn test_precision_ssim_threshold_exact() {
+        // 精确阈值测试
+        assert!(ssim_meets_threshold(0.95, 0.95));
+        assert!(ssim_meets_threshold(0.9501, 0.95));
+        assert!(ssim_meets_threshold(0.9499, 0.95)); // 在 epsilon 范围内
+        assert!(!ssim_meets_threshold(0.9498, 0.95)); // 超出 epsilon
+    }
+    
+    #[test]
+    fn test_precision_ssim_threshold_edge_cases() {
+        // 边界情况
+        assert!(ssim_meets_threshold(1.0, 1.0));
+        assert!(ssim_meets_threshold(0.0, 0.0));
+        assert!(!ssim_meets_threshold(0.94, 0.95));
+        assert!(ssim_meets_threshold(0.96, 0.95));
+    }
+    
+    #[test]
+    fn test_precision_ssim_quality_grades() {
+        assert_eq!(ssim_quality_grade(0.99), "Excellent (几乎无法区分)");
+        assert_eq!(ssim_quality_grade(0.98), "Excellent (几乎无法区分)");
+        assert_eq!(ssim_quality_grade(0.97), "Good (视觉无损)");
+        assert_eq!(ssim_quality_grade(0.95), "Good (视觉无损)");
+        assert_eq!(ssim_quality_grade(0.92), "Acceptable (轻微差异)");
+        assert_eq!(ssim_quality_grade(0.90), "Acceptable (轻微差异)");
+        assert_eq!(ssim_quality_grade(0.87), "Fair (可见差异)");
+        assert_eq!(ssim_quality_grade(0.85), "Fair (可见差异)");
+        assert_eq!(ssim_quality_grade(0.80), "Poor (明显质量损失)");
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // 三种模式裁判验证测试
+    // ═══════════════════════════════════════════════════════════
+    
+    #[test]
+    fn test_judge_mode_size_only_config() {
+        // SizeOnly 模式：不验证 SSIM，只保证 size < input
+        let c = ExploreConfig::size_only(18, 28);
+        
+        // 裁判验证：不应启用 SSIM 验证
+        assert!(!c.quality_thresholds.validate_ssim, 
+            "SizeOnly mode should NOT validate SSIM");
+        assert!(!c.quality_thresholds.validate_psnr,
+            "SizeOnly mode should NOT validate PSNR");
+        
+        // 裁判验证：应使用完整迭代次数
+        assert_eq!(c.max_iterations, 8,
+            "SizeOnly mode should use full iterations for best size");
+    }
+    
+    #[test]
+    fn test_judge_mode_quality_match_config() {
+        // QualityMatch 模式：单次编码 + SSIM 验证
+        let c = ExploreConfig::quality_match(20);
+        
+        // 裁判验证：应启用 SSIM 验证
+        assert!(c.quality_thresholds.validate_ssim,
+            "QualityMatch mode MUST validate SSIM");
+        
+        // 裁判验证：应只有 1 次迭代
+        assert_eq!(c.max_iterations, 1,
+            "QualityMatch mode should have exactly 1 iteration");
+        
+        // 裁判验证：应使用预测的 CRF
+        assert_eq!(c.initial_crf, 20,
+            "QualityMatch mode should use predicted CRF");
+    }
+    
+    #[test]
+    fn test_judge_mode_precise_quality_match_config() {
+        // PreciseQualityMatch 模式：二分搜索 + SSIM 裁判验证
+        let c = ExploreConfig::precise_quality_match(18, 28, 0.97);
+        
+        // 裁判验证：应启用 SSIM 验证
+        assert!(c.quality_thresholds.validate_ssim,
+            "PreciseQualityMatch mode MUST validate SSIM");
+        
+        // 裁判验证：应使用自定义 SSIM 阈值
+        assert_eq!(c.quality_thresholds.min_ssim, 0.97,
+            "PreciseQualityMatch mode should use custom min_ssim");
+        
+        // 裁判验证：应使用完整迭代次数
+        assert_eq!(c.max_iterations, 8,
+            "PreciseQualityMatch mode should use full iterations");
+        
+        // 裁判验证：CRF 范围应正确
+        assert_eq!(c.initial_crf, 18);
+        assert_eq!(c.max_crf, 28);
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // 二分搜索精度数学证明
+    // ═══════════════════════════════════════════════════════════
+    
+    #[test]
+    fn test_binary_search_precision_proof() {
+        // 数学证明：二分搜索在 n 次迭代后，搜索范围缩小到 range / 2^n
+        // 
+        // 对于 HEVC [10, 28]，range = 18
+        // - 1 次迭代后：18 / 2 = 9
+        // - 2 次迭代后：9 / 2 = 4.5
+        // - 3 次迭代后：4.5 / 2 = 2.25
+        // - 4 次迭代后：2.25 / 2 = 1.125
+        // - 5 次迭代后：1.125 / 2 = 0.5625 < 1
+        // 
+        // 因此 5 次迭代可保证 ±1 CRF 精度
+        
+        let range = 28 - 10;
+        let mut remaining = range as f64;
+        let mut iterations = 0;
+        
+        while remaining > CRF_PRECISION as f64 {
+            remaining /= 2.0;
+            iterations += 1;
+        }
+        
+        assert!(iterations <= 8, 
+            "Binary search should achieve ±1 CRF precision within 8 iterations");
+        assert_eq!(iterations, 5,
+            "HEVC range [10,28] should need exactly 5 iterations for ±1 precision");
+    }
+    
+    #[test]
+    fn test_binary_search_worst_case() {
+        // 最坏情况：范围 [0, 51]（完整 CRF 范围）
+        let range = 51 - 0;
+        let mut remaining = range as f64;
+        let mut iterations = 0;
+        
+        while remaining > CRF_PRECISION as f64 {
+            remaining /= 2.0;
+            iterations += 1;
+        }
+        
+        assert!(iterations <= 8,
+            "Even worst case [0,51] should achieve ±1 precision within 8 iterations");
+        assert_eq!(iterations, 6,
+            "Range [0,51] should need exactly 6 iterations for ±1 precision");
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // 质量验证逻辑测试
+    // ═══════════════════════════════════════════════════════════
+    
+    #[test]
+    fn test_quality_check_ssim_only() {
+        let thresholds = QualityThresholds {
+            min_ssim: 0.95,
+            min_psnr: 35.0,
+            validate_ssim: true,
+            validate_psnr: false,
+        };
+        
+        // 模拟 check_quality_passed 逻辑
+        let check = |ssim: Option<f64>, psnr: Option<f64>| -> bool {
+            if thresholds.validate_ssim {
+                match ssim {
+                    Some(s) if s >= thresholds.min_ssim => {}
+                    _ => return false,
+                }
+            }
+            if thresholds.validate_psnr {
+                match psnr {
+                    Some(p) if p >= thresholds.min_psnr => {}
+                    _ => return false,
+                }
+            }
+            true
+        };
+        
+        // SSIM 通过
+        assert!(check(Some(0.96), None));
+        assert!(check(Some(0.95), None));
+        assert!(check(Some(0.99), Some(30.0))); // PSNR 不验证
+        
+        // SSIM 失败
+        assert!(!check(Some(0.94), None));
+        assert!(!check(None, Some(40.0))); // 无 SSIM
+    }
+    
+    #[test]
+    fn test_quality_check_both_metrics() {
+        let thresholds = QualityThresholds {
+            min_ssim: 0.95,
+            min_psnr: 35.0,
+            validate_ssim: true,
+            validate_psnr: true,
+        };
+        
+        let check = |ssim: Option<f64>, psnr: Option<f64>| -> bool {
+            if thresholds.validate_ssim {
+                match ssim {
+                    Some(s) if s >= thresholds.min_ssim => {}
+                    _ => return false,
+                }
+            }
+            if thresholds.validate_psnr {
+                match psnr {
+                    Some(p) if p >= thresholds.min_psnr => {}
+                    _ => return false,
+                }
+            }
+            true
+        };
+        
+        // 两者都通过
+        assert!(check(Some(0.96), Some(36.0)));
+        
+        // SSIM 通过，PSNR 失败
+        assert!(!check(Some(0.96), Some(34.0)));
+        
+        // SSIM 失败，PSNR 通过
+        assert!(!check(Some(0.94), Some(36.0)));
+        
+        // 两者都失败
+        assert!(!check(Some(0.94), Some(34.0)));
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // 常量验证
+    // ═══════════════════════════════════════════════════════════
+    
+    #[test]
+    fn test_precision_constants() {
+        assert_eq!(CRF_PRECISION, 1);
+        assert_eq!(SSIM_DISPLAY_PRECISION, 4);
+        assert!((SSIM_COMPARE_EPSILON - 0.0001).abs() < 1e-10);
+        assert!((DEFAULT_MIN_SSIM - 0.95).abs() < 1e-10);
+        assert!((HIGH_QUALITY_MIN_SSIM - 0.98).abs() < 1e-10);
+        assert!((ACCEPTABLE_MIN_SSIM - 0.90).abs() < 1e-10);
+    }
+}
