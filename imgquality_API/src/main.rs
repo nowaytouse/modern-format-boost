@@ -9,6 +9,17 @@ use std::time::Instant;
 use walkdir::WalkDir;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
 
+/// Configuration for auto-convert operations
+struct AutoConvertConfig<'a> {
+    output_dir: Option<&'a Path>,
+    force: bool,
+    recursive: bool,
+    delete_original: bool,
+    in_place: bool,
+    lossless: bool,
+    match_quality: bool,
+}
+
 #[derive(Parser)]
 #[command(name = "imgquality")]
 #[command(version, about = "Image quality analyzer and format upgrade tool", long_about = None)]
@@ -160,10 +171,19 @@ fn main() -> anyhow::Result<()> {
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
+            let config = AutoConvertConfig {
+                output_dir: output.as_deref(),
+                force,
+                recursive,
+                delete_original: should_delete,
+                in_place,
+                lossless,
+                match_quality,
+            };
             if input.is_file() {
-                auto_convert_single_file(&input, output.as_deref(), force, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
-                auto_convert_directory(&input, output.as_deref(), force, recursive, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_directory(&input, &config)?;
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -440,12 +460,7 @@ fn print_recommendation_human(rec: &imgquality::UpgradeRecommendation) {
 /// Smart auto-convert a single file based on format detection
 fn auto_convert_single_file(
     input: &Path,
-    output_dir: Option<&Path>,
-    force: bool,
-    delete_original: bool,
-    in_place: bool,
-    lossless: bool,
-    match_quality: bool,
+    config: &AutoConvertConfig,
 ) -> anyhow::Result<()> {
     use imgquality::lossless_converter::{
         convert_to_jxl, convert_jpeg_to_jxl,
@@ -457,12 +472,12 @@ fn auto_convert_single_file(
     let analysis = analyze_image(input)?;
     
     let options = ConvertOptions {
-        force,
-        output_dir: output_dir.map(|p| p.to_path_buf()),
-        delete_original,
-        in_place,
+        force: config.force,
+        output_dir: config.output_dir.map(|p| p.to_path_buf()),
+        delete_original: config.delete_original,
+        in_place: config.in_place,
         explore: false,  // imgquality_API 不支持 explore 模式（仅用于视频）
-        match_quality,   // 用于 JPEG→JXL 质量匹配
+        match_quality: config.match_quality,   // 用于 JPEG→JXL 质量匹配
     };
     
     // Smart conversion based on format and lossless status
@@ -482,7 +497,7 @@ fn auto_convert_single_file(
 
         // JPEG → JXL
         ("JPEG", _, false) => {
-            if match_quality {
+            if config.match_quality {
                 // Match quality mode: use lossy JXL with matched distance for better compression
                 println!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
                 convert_to_jxl_matched(input, &options, &analysis)?
@@ -515,7 +530,7 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if lossless {
+            if config.lossless {
                 // 用户显式要求数学无损
                 println!("🔄 Animated lossless→AV1 MP4 (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_av1_mp4_lossless(input, &options)?
@@ -543,7 +558,7 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if lossless {
+            if config.lossless {
                 // 用户显式要求数学无损
                 println!("🔄 Animated lossy→AV1 MP4 (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_av1_mp4_lossless(input, &options)?
@@ -562,7 +577,7 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if match_quality {
+            if config.match_quality {
                 println!("🔄 Legacy Lossy→JXL (MATCH QUALITY): {}", input.display());
                 convert_to_jxl_matched(input, &options, &analysis)?
             } else {
@@ -585,16 +600,10 @@ fn auto_convert_single_file(
 /// Smart auto-convert a directory with parallel processing and progress bar
 fn auto_convert_directory(
     input: &Path,
-    output_dir: Option<&Path>,
-    force: bool,
-    recursive: bool,
-    delete_original: bool,
-    in_place: bool,
-    lossless: bool,
-    match_quality: bool,
+    config: &AutoConvertConfig,
 ) -> anyhow::Result<()> {
     // 🔥 Safety check: prevent accidental damage to system directories
-    if delete_original || in_place {
+    if config.delete_original || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{}", e);
             std::process::exit(1);
@@ -604,7 +613,7 @@ fn auto_convert_directory(
     let start_time = Instant::now();
     let image_extensions = ["png", "jpg", "jpeg", "webp", "gif", "tiff", "tif", "heic", "avif"];
     
-    let walker = if recursive {
+    let walker = if config.recursive {
         WalkDir::new(input).follow_links(true)
     } else {
         WalkDir::new(input).max_depth(1)
@@ -632,7 +641,7 @@ fn auto_convert_directory(
     }
     
     println!("📂 Found {} files to process", total);
-    if lossless {
+    if config.lossless {
         println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
     }
 
@@ -668,12 +677,12 @@ fn auto_convert_directory(
             // 获取输入文件大小
             let input_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             
-            match auto_convert_single_file(path, output_dir, force, delete_original, in_place, lossless, match_quality) {
+            match auto_convert_single_file(path, config) {
                 Ok(_) => { 
                     // 🔥 修复：检查是否真的生成了输出文件
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                     let parent_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    let out_dir = output_dir.unwrap_or(&parent_dir);
+                    let out_dir = config.output_dir.unwrap_or(&parent_dir);
                     
                     // 检查可能的输出文件
                     let possible_outputs = [
