@@ -290,7 +290,7 @@ fn main() -> anyhow::Result<()> {
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("📁 File: {}", input.display());
             println!("🎬 Codec: {} ({})", detection.codec.as_str(), detection.compression.as_str());
-            println!("");
+            println!();
             println!("💡 Target: {}", strategy.target.as_str());
             println!("📝 Reason: {}", strategy.reason);
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");

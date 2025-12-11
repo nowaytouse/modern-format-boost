@@ -1073,7 +1073,7 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
     // Use existing JPEG analysis
     use crate::jpeg_analysis::analyze_jpeg_quality;
     let analysis = analyze_jpeg_quality(&data)
-        .map_err(|e| ImgQualityError::AnalysisError(e))?;
+        .map_err(ImgQualityError::AnalysisError)?;
     Ok(analysis.estimated_quality as u8)
 }
 

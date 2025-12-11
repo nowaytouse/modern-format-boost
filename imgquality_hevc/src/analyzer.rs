@@ -721,19 +721,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_entropy_calculation() {
-        // A uniform image should have low entropy
-        // A random image should have high entropy
-        // TODO: Implement actual entropy calculation tests
-    }
-    
-    #[test]
     fn test_psnr_estimation() {
-        assert!(estimate_psnr_from_quality(95) > estimate_psnr_from_quality(50));
+        // Higher quality should yield higher PSNR
+        let psnr_high = estimate_psnr_from_quality(95);
+        let psnr_mid = estimate_psnr_from_quality(75);
+        let psnr_low = estimate_psnr_from_quality(50);
+        
+        assert!(psnr_high > psnr_mid);
+        assert!(psnr_mid > psnr_low);
+        assert!(psnr_high >= 40.0); // Quality 95 should be excellent
+        assert!(psnr_low >= 25.0);  // Quality 50 should still be acceptable
     }
     
     #[test]
     fn test_ssim_estimation() {
-        assert!(estimate_ssim_from_quality(95) > estimate_ssim_from_quality(50));
+        // Higher quality should yield higher SSIM
+        let ssim_high = estimate_ssim_from_quality(95);
+        let ssim_mid = estimate_ssim_from_quality(75);
+        let ssim_low = estimate_ssim_from_quality(50);
+        
+        assert!(ssim_high > ssim_mid);
+        assert!(ssim_mid > ssim_low);
+        assert!(ssim_high >= 0.95); // Quality 95 should be near-perfect
+        assert!(ssim_low >= 0.80);  // Quality 50 should still be decent
+    }
+    
+    #[test]
+    fn test_quality_boundaries() {
+        // Test edge cases
+        let psnr_max = estimate_psnr_from_quality(100);
+        let psnr_min = estimate_psnr_from_quality(1);
+        
+        assert!(psnr_max > psnr_min);
+        assert!(psnr_max.is_finite());
+        assert!(psnr_min.is_finite());
     }
 }
