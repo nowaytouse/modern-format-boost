@@ -1,0 +1,43 @@
+#!/bin/bash
+# Modern Format Boost - macOS App Wrapper
+# 
+# 这个脚本是 macOS 应用包的入口点
+# 支持拖拽文件夹到应用图标上，或双击应用选择文件夹
+
+# 获取应用包路径
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJECT_ROOT="$(dirname "$APP_DIR")"
+PROCESSOR_SCRIPT="$PROJECT_ROOT/scripts/drag_and_drop_processor.sh"
+
+# 检查处理脚本是否存在
+if [[ ! -f "$PROCESSOR_SCRIPT" ]]; then
+    osascript -e 'display alert "错误" message "找不到处理脚本，请确保完整安装了 Modern Format Boost。" as critical'
+    exit 1
+fi
+
+# 如果有参数（拖拽模式），直接传递给处理脚本
+if [[ $# -gt 0 ]]; then
+    # 在新终端窗口中运行，这样用户可以看到进度
+    osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$1'; echo '按任意键关闭...'; read -n 1"
+end tell
+EOF
+else
+    # 双击模式：显示文件夹选择对话框
+    SELECTED_DIR=$(osascript -e 'POSIX path of (choose folder with prompt "选择要处理的文件夹：")')
+    
+    if [[ -n "$SELECTED_DIR" ]]; then
+        # 去除末尾的斜杠
+        SELECTED_DIR="${SELECTED_DIR%/}"
+        
+        # 在新终端窗口中运行
+        osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
+end tell
+EOF
+    fi
+fi

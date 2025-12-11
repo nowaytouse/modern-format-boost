@@ -196,6 +196,35 @@ CRF = 46 - 5 × log₂(effective_bpp × 100) + content_adjustment + bias
 
 ### Usage Examples
 
+#### 🖱️ Drag & Drop (Easiest) ✅ TESTED
+
+**macOS:**
+1. Double-click `Modern Format Boost.app` → Select folder in dialog
+2. Or drag folder to `Modern Format Boost.app` icon
+3. Automatically opens Terminal with progress display
+
+**Windows:**
+1. Double-click `scripts/drag_and_drop_processor.bat` → Input folder path
+2. Or drag folder to `drag_and_drop_processor.bat`
+
+**Cross-platform:**
+```bash
+# Run the shell script directly
+./scripts/drag_and_drop_processor.sh /path/to/folder
+
+# Or interactive mode
+./scripts/drag_and_drop_processor.sh
+```
+
+**Features:**
+- 🛡️ Safety checks (blocks system directories)
+- 📊 File counting and progress display  
+- ⚠️ User confirmation before processing
+- 🔧 Auto-builds tools if missing
+- 📈 Success rate and size reduction reports
+
+#### 🔧 Command Line
+
 ```bash
 # Build all tools
 cd modern_format_boost
@@ -210,8 +239,8 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
 # Video conversion (quality matching enabled by default)
 ./vidquality_hevc/target/release/vidquality-hevc auto /path/to/videos -r --explore
 
-# In-place conversion (delete originals)
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --in-place
+# In-place conversion (delete originals) - Same as drag & drop
+./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --in-place --match-quality --explore
 ```
 
 ---
@@ -476,6 +505,24 @@ CRF = 46 - 5 × log₂(有效BPP × 100) + 内容调整 + 偏好
 
 ### 使用示例
 
+#### 🖱️ 拖拽使用（最简单）
+
+**macOS:**
+1. 双击 `Modern Format Boost.app` → 选择文件夹
+2. 或将文件夹拖拽到 `Modern Format Boost.app` 图标上
+
+**Windows:**
+1. 双击 `scripts/drag_and_drop_processor.bat` → 输入文件夹路径
+2. 或将文件夹拖拽到 `drag_and_drop_processor.bat` 上
+
+**跨平台:**
+```bash
+# 运行shell脚本
+./scripts/drag_and_drop_processor.sh /path/to/folder
+```
+
+#### 🔧 命令行
+
 ```bash
 # 编译所有工具
 cd modern_format_boost
@@ -490,8 +537,8 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
 # 视频转换（默认开启质量匹配）
 ./vidquality_hevc/target/release/vidquality-hevc auto /path/to/videos -r --explore
 
-# 原地转换（删除原文件）
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --in-place
+# 原地转换（删除原文件）- 与拖拽模式相同
+./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --in-place --match-quality --explore
 ```
 
 ---
