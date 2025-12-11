@@ -191,6 +191,10 @@ CRF = 46 - 5 × log₂(effective_bpp × 100) + content_adjustment + bias
 - **Duration threshold**: Animations < 3s skipped
 - **Format validation**: Skips modern formats to avoid generation loss
 - **No silent fallback**: Fails loudly with detailed errors
+- **🛡️ v3.8 Quality Protection**: When SSIM validation fails (< 0.95), original file is PROTECTED:
+  - Low-quality output is deleted
+  - Original file is kept intact
+  - Clear error message explains why
 
 ---
 
@@ -500,6 +504,10 @@ CRF = 46 - 5 × log₂(有效BPP × 100) + 内容调整 + 偏好
 - **时长阈值**：< 3 秒的动图跳过
 - **格式验证**：跳过现代格式以避免代际损失
 - **无静默回退**：失败时响亮报错，提供详细信息
+- **🛡️ v3.8 质量保护**：当 SSIM 验证失败（< 0.95）时，原文件受保护：
+  - 删除低质量输出
+  - 保留原文件完整
+  - 清晰的错误信息说明原因
 
 ---
 
