@@ -36,7 +36,7 @@ show_welcome() {
     echo "=================================================="
     echo "📁 处理模式：原地转换（删除原文件）"
     echo "🔧 图像参数：--in-place --recursive --match-quality --explore"
-    echo "🎬 视频参数：--in-place --recursive --match-quality --explore"
+    echo "🎬 视频参数：--in-place --recursive --match-quality true --explore"
     echo "=================================================="
     echo ""
 }
@@ -145,7 +145,7 @@ process_videos() {
         "$VIDQUALITY_HEVC" auto "$TARGET_DIR" \
             --in-place \
             --recursive \
-            --match-quality \
+            --match-quality true \
             --explore
         
         echo "✅ 视频处理完成"
