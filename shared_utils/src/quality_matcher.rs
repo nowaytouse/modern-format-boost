@@ -299,6 +299,7 @@ pub struct QualityAnalysis {
 /// - Screen recording: Sharp text, flat colors → can use higher CRF (+4 to +6)
 /// - Gaming: Mixed, often high motion → baseline or slightly lower CRF
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum ContentType {
     /// Live action film/video (baseline)
     LiveAction,
@@ -311,14 +312,10 @@ pub enum ContentType {
     /// High grain film (needs more bitrate) - CRF -2 to -4
     FilmGrain,
     /// Unknown/mixed content (baseline)
+    #[default]
     Unknown,
 }
 
-impl Default for ContentType {
-    fn default() -> Self {
-        ContentType::Unknown
-    }
-}
 
 impl ContentType {
     /// Get CRF adjustment for this content type
@@ -1325,7 +1322,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs) {
         if fps > 0.0 && duration > 0.0 {
             // Reasonable fps range check
-            if fps >= 1.0 && fps <= 240.0 {
+            if (1.0..=240.0).contains(&fps) {
                 score += 2.0;
                 max_score += 2.0;
             }
@@ -1338,7 +1335,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
         if pixels > 0 && video_bitrate > 0 {
             let bpp_estimate = video_bitrate as f64 / (pixels as f64 * analysis.fps.unwrap_or(24.0));
             // Reasonable BPP range: 0.01 to 5.0
-            if bpp_estimate >= 0.01 && bpp_estimate <= 5.0 {
+            if (0.01..=5.0).contains(&bpp_estimate) {
                 score += 2.0;
                 max_score += 2.0;
             }

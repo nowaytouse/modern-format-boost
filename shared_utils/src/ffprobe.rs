@@ -96,7 +96,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     })?;
     
     let output = Command::new("ffprobe")
-        .args(&[
+        .args([
             "-v", "error",  // 🔥 改为 error 级别以获取错误信息
             "-print_format", "json",
             "-show_format",
@@ -154,7 +154,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     // Get frame count
     let frame_count = video_stream["nb_frames"].as_str()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or_else(|| (duration * frame_rate) as u64);
+        .unwrap_or((duration * frame_rate) as u64);
     
     let pix_fmt = video_stream["pix_fmt"].as_str().unwrap_or("unknown").to_string();
     let color_space = video_stream["color_space"].as_str().map(|s| s.to_string());

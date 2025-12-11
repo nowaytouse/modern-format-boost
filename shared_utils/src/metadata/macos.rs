@@ -60,7 +60,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
     }
     let c_path = CString::new(path.as_os_str().as_bytes())?;
     let mut attr_list = Attrlist { bitmapcount: ATTR_BIT_MAP_COUNT, reserved: 0, commonattr: attr, volattr: 0, dirattr: 0, fileattr: 0, forkattr: 0 };
-    let duration = time.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let duration = time.duration_since(std::time::SystemTime::UNIX_EPOCH).map_err(|e| io::Error::other(e))?;
     let mut buf = Timespec { tv_sec: duration.as_secs() as i64, tv_nsec: duration.subsec_nanos() as i64 };
     let ret = unsafe { setattrlist(c_path.as_ptr(), &mut attr_list, &mut buf as *mut _ as *mut std::ffi::c_void, std::mem::size_of::<Timespec>(), 0) };
     if ret != 0 { return Err(io::Error::last_os_error()); }

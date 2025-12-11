@@ -1050,7 +1050,7 @@ pub mod precision {
     /// 
     /// 🔥 v3.1: SSIM 必须在 [0, 1] 范围内
     pub fn is_valid_ssim(ssim: f64) -> bool {
-        ssim >= 0.0 && ssim <= 1.0
+        (0.0..=1.0).contains(&ssim)
     }
     
     /// 验证 PSNR 值是否有效
@@ -1128,7 +1128,7 @@ pub mod precision {
     /// 
     /// 🔥 v3.3: VMAF 在 [0, 100] 范围内
     pub fn is_valid_vmaf(vmaf: f64) -> bool {
-        vmaf >= 0.0 && vmaf <= 100.0
+        (0.0..=100.0).contains(&vmaf)
     }
     
     /// 获取 VMAF 质量等级描述

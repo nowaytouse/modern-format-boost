@@ -104,7 +104,7 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Don't fail on minor warnings
         if !stderr.contains("Warning") {
-            return Err(io::Error::new(io::ErrorKind::Other, format!("ExifTool failed: {}", stderr)));
+            return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
         }
     }
     

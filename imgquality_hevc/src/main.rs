@@ -200,10 +200,20 @@ fn main() -> anyhow::Result<()> {
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
+            let config = AutoConvertConfig {
+                output_dir: output.clone(),
+                force,
+                delete_original: should_delete,
+                in_place,
+                lossless,
+                explore,
+                match_quality,
+            };
+            
             if input.is_file() {
-                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless, explore, match_quality)?;
+                auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
-                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless, explore, match_quality)?;
+                auto_convert_directory(&input, &config, recursive)?;
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -219,7 +229,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn analyze_single_file(
-    path: &PathBuf,
+    path: &Path,
     output_format: OutputFormat,
     recommend: bool,
 ) -> anyhow::Result<()> {
@@ -272,7 +282,7 @@ fn analyze_directory(
         let path = entry.path();
         if let Some(ext) = path.extension() {
             if image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
-                match analyze_image(&path.to_path_buf()) {
+                match analyze_image(path) {
                     Ok(analysis) => {
                         count += 1;
                         if output_format == OutputFormat::Json {
@@ -303,7 +313,7 @@ fn analyze_directory(
         println!("{}", json!({
             "total": count,
             "results": results
-        }).to_string());
+        }));
     } else {
         println!("\n{}", "=".repeat(80));
         println!("✅ Analysis complete: {} files processed", count);
@@ -477,6 +487,17 @@ fn print_recommendation_human(rec: &imgquality_hevc::UpgradeRecommendation) {
     }
 }
 
+/// Auto-convert configuration
+struct AutoConvertConfig {
+    output_dir: Option<PathBuf>,
+    force: bool,
+    delete_original: bool,
+    in_place: bool,
+    lossless: bool,
+    explore: bool,
+    match_quality: bool,
+}
+
 /// Smart auto-convert a single file based on format detection
 /// 
 /// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）：
@@ -484,14 +505,8 @@ fn print_recommendation_human(rec: &imgquality_hevc::UpgradeRecommendation) {
 /// - SSIM 裁判验证确保质量 (≥0.95)
 /// - 输出大于输入时自动跳过
 fn auto_convert_single_file(
-    input: &PathBuf,
-    output_dir: Option<&PathBuf>,
-    force: bool,
-    delete_original: bool,
-    in_place: bool,
-    lossless: bool,
-    explore: bool,
-    match_quality: bool,
+    input: &Path,
+    config: &AutoConvertConfig,
 ) -> anyhow::Result<()> {
     use imgquality_hevc::lossless_converter::{
         convert_to_jxl, convert_jpeg_to_jxl,
@@ -503,12 +518,12 @@ fn auto_convert_single_file(
     let analysis = analyze_image(input)?;
     
     let options = ConvertOptions {
-        force,
-        output_dir: output_dir.cloned(),
-        delete_original,
-        in_place,
-        explore,
-        match_quality,
+        force: config.force,
+        output_dir: config.output_dir.clone(),
+        delete_original: config.delete_original,
+        in_place: config.in_place,
+        explore: config.explore,
+        match_quality: config.match_quality,
     };
     
     // Smart conversion based on format and lossless status
@@ -558,7 +573,7 @@ fn auto_convert_single_file(
                 return Ok(());
             }
             
-            if lossless {
+            if config.lossless {
                 // 用户显式要求数学无损
                 println!("🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mkv_lossless(input, &options)?
@@ -599,18 +614,12 @@ fn auto_convert_single_file(
 /// 
 /// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）
 fn auto_convert_directory(
-    input: &PathBuf,
-    output_dir: Option<&PathBuf>,
-    force: bool,
+    input: &Path,
+    config: &AutoConvertConfig,
     recursive: bool,
-    delete_original: bool,
-    in_place: bool,
-    lossless: bool,
-    explore: bool,
-    match_quality: bool,
 ) -> anyhow::Result<()> {
     // 🔥 Safety check: prevent accidental damage to system directories
-    if delete_original || in_place {
+    if config.delete_original || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{}", e);
             std::process::exit(1);
@@ -648,7 +657,7 @@ fn auto_convert_directory(
     }
     
     println!("📂 Found {} files to process", total);
-    if lossless {
+    if config.lossless {
         println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
     }
 
@@ -684,12 +693,12 @@ fn auto_convert_directory(
             // 获取输入文件大小
             let input_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             
-            match auto_convert_single_file(path, output_dir, force, delete_original, in_place, lossless, explore, match_quality) {
+            match auto_convert_single_file(path, config) {
                 Ok(_) => { 
                     // 🔥 修复：检查是否真的生成了输出文件
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                     let parent_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    let out_dir = output_dir.unwrap_or(&parent_dir);
+                    let out_dir = config.output_dir.as_ref().unwrap_or(&parent_dir);
                     
                     // 检查可能的输出文件
                     let possible_outputs = [

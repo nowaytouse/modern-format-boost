@@ -287,7 +287,7 @@ fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<(
     let output_str = path_to_str(output)?;
     
     let status = Command::new("avifenc")
-        .args(&[input_str, output_str, "-q", &q])
+        .args([input_str, output_str, "-q", &q])
         .output()?;
     
     if !status.status.success() {
@@ -342,11 +342,11 @@ fn convert_to_hevc_mp4(input: &Path, output: &Path, fps: Option<f32>, width: u32
 /// 构建偶数分辨率滤镜
 /// HEVC/AV1 编码器要求宽高为偶数，否则会报错
 fn build_even_dimension_filter(width: u32, height: u32) -> String {
-    let need_pad = width % 2 != 0 || height % 2 != 0;
+    let need_pad = !width.is_multiple_of(2) || !height.is_multiple_of(2);
     if need_pad {
         // pad 到偶数分辨率，使用黑色填充
-        let new_width = if width % 2 != 0 { width + 1 } else { width };
-        let new_height = if height % 2 != 0 { height + 1 } else { height };
+        let new_width = if !width.is_multiple_of(2) { width + 1 } else { width };
+        let new_height = if !height.is_multiple_of(2) { height + 1 } else { height };
         format!("pad={}:{}:0:0:black", new_width, new_height)
     } else {
         String::new()
@@ -359,7 +359,7 @@ fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     let dest_str = path_to_str(dest)?;
     
     let status = Command::new("touch")
-        .args(&["-r", source_str, dest_str])
+        .args(["-r", source_str, dest_str])
         .output()?;
     
     if !status.status.success() {
@@ -381,7 +381,7 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
     let dest_str = path_to_str(dest)?;
     
     let status = Command::new("exiftool")
-        .args(&["-overwrite_original", "-TagsFromFile", source_str, "-All:All", dest_str])
+        .args(["-overwrite_original", "-TagsFromFile", source_str, "-All:All", dest_str])
         .output()?;
     
     if !status.status.success() {
