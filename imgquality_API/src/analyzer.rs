@@ -114,10 +114,7 @@ pub fn analyze_image(path: &PathBuf) -> Result<ImageAnalysis> {
 
     // JPEG specific analysis
     let jpeg_analysis = if format == ImageFormat::Jpeg {
-        match analyze_jpeg_file(path) {
-            Ok(analysis) => Some(analysis),
-            Err(_) => None,
-        }
+        analyze_jpeg_file(path).ok()
     } else {
         None
     };
@@ -724,19 +721,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_entropy_calculation() {
-        // A uniform image should have low entropy
-        // A random image should have high entropy
-        assert!(true);
-    }
-    
-    #[test]
     fn test_psnr_estimation() {
-        assert!(estimate_psnr_from_quality(95) > estimate_psnr_from_quality(50));
+        let psnr_high = estimate_psnr_from_quality(95);
+        let psnr_mid = estimate_psnr_from_quality(75);
+        let psnr_low = estimate_psnr_from_quality(50);
+        
+        assert!(psnr_high > psnr_mid);
+        assert!(psnr_mid > psnr_low);
+        assert!(psnr_high >= 40.0);
+        assert!(psnr_low >= 25.0);
     }
     
     #[test]
     fn test_ssim_estimation() {
-        assert!(estimate_ssim_from_quality(95) > estimate_ssim_from_quality(50));
+        let ssim_high = estimate_ssim_from_quality(95);
+        let ssim_mid = estimate_ssim_from_quality(75);
+        let ssim_low = estimate_ssim_from_quality(50);
+        
+        assert!(ssim_high > ssim_mid);
+        assert!(ssim_mid > ssim_low);
+        assert!(ssim_high >= 0.95);
+        assert!(ssim_low >= 0.80);
+    }
+    
+    #[test]
+    fn test_quality_boundaries() {
+        let psnr_max = estimate_psnr_from_quality(100);
+        let psnr_min = estimate_psnr_from_quality(1);
+        
+        assert!(psnr_max > psnr_min);
+        assert!(psnr_max.is_finite());
+        assert!(psnr_min.is_finite());
     }
 }
