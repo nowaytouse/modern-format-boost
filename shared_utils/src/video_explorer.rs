@@ -61,6 +61,8 @@ pub struct ExploreResult {
     pub ssim: Option<f64>,
     /// PSNR 分数
     pub psnr: Option<f64>,
+    /// VMAF 分数 (0-100, Netflix 感知质量指标)
+    pub vmaf: Option<f64>,
     /// 探索迭代次数
     pub iterations: u32,
     /// 是否通过质量验证
@@ -76,10 +78,14 @@ pub struct QualityThresholds {
     pub min_ssim: f64,
     /// 最小 PSNR（dB，推荐 >= 35）
     pub min_psnr: f64,
+    /// 最小 VMAF（0-100，推荐 >= 85）
+    pub min_vmaf: f64,
     /// 是否启用 SSIM 验证
     pub validate_ssim: bool,
     /// 是否启用 PSNR 验证
     pub validate_psnr: bool,
+    /// 是否启用 VMAF 验证（较慢但更准确）
+    pub validate_vmaf: bool,
 }
 
 impl Default for QualityThresholds {
@@ -87,8 +93,10 @@ impl Default for QualityThresholds {
         Self {
             min_ssim: 0.95,
             min_psnr: 35.0,
+            min_vmaf: 85.0,
             validate_ssim: true,
             validate_psnr: false,
+            validate_vmaf: false, // 默认关闭，因为较慢
         }
     }
 }
@@ -359,6 +367,7 @@ impl VideoExplorer {
             size_change_pct,
             ssim, // 提供 SSIM 供参考
             psnr: None,
+            vmaf: None, // SizeOnly 模式不计算 VMAF
             iterations,
             quality_passed: best_size < target_size, // 只要更小就算通过
             log,
@@ -380,12 +389,17 @@ impl VideoExplorer {
         let output_size = self.encode(self.config.initial_crf)?;
         let quality = self.validate_quality()?;
         
-        log.push(format!("   CRF {}: {} bytes ({:+.1}%), SSIM: {:.4}", 
+        // 🔥 v3.3: 显示所有启用的质量指标
+        let mut quality_str = format!("SSIM: {:.4}", quality.0.unwrap_or(0.0));
+        if let Some(vmaf) = quality.2 {
+            quality_str.push_str(&format!(", VMAF: {:.2}", vmaf));
+        }
+        log.push(format!("   CRF {}: {} bytes ({:+.1}%), {}", 
             self.config.initial_crf, output_size, 
             self.calc_change_pct(output_size),
-            quality.0.unwrap_or(0.0)));
+            quality_str));
         
-        let quality_passed = self.check_quality_passed(quality.0, quality.1);
+        let quality_passed = self.check_quality_passed(quality.0, quality.1, quality.2);
         if quality_passed {
             log.push("   ✅ Quality validation passed".to_string());
         } else {
@@ -399,6 +413,7 @@ impl VideoExplorer {
             size_change_pct: self.calc_change_pct(output_size),
             ssim: quality.0,
             psnr: quality.1,
+            vmaf: quality.2,
             iterations: 1,
             quality_passed,
             log,
@@ -409,6 +424,8 @@ impl VideoExplorer {
     /// 
     /// 策略：二分搜索 + SSIM 裁判验证
     /// 找到满足 SSIM >= min_ssim 的最高 CRF（最小文件）
+    /// 
+    /// 🔥 v3.3: 支持 VMAF 验证
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let target_size = (self.input_size as f64 * self.config.target_ratio) as u64;
@@ -419,17 +436,23 @@ impl VideoExplorer {
         log.push(format!("   CRF range: [{}, {}], Initial: {}", 
             self.config.min_crf, self.config.max_crf, self.config.initial_crf));
         log.push(format!("   Min SSIM: {:.4}", self.config.quality_thresholds.min_ssim));
+        if self.config.quality_thresholds.validate_vmaf {
+            log.push(format!("   Min VMAF: {:.1}", self.config.quality_thresholds.min_vmaf));
+        }
         
         // Step 1: 尝试初始 CRF
         let initial_result = self.encode(self.config.initial_crf)?;
         let initial_quality = self.validate_quality()?;
-        log.push(format!("   CRF {}: {} bytes ({:+.1}%), SSIM: {:.4}", 
+        
+        // 🔥 v3.3: 显示所有启用的质量指标
+        let quality_str = self.format_quality_metrics(&initial_quality);
+        log.push(format!("   CRF {}: {} bytes ({:+.1}%), {}", 
             self.config.initial_crf, initial_result,
             self.calc_change_pct(initial_result),
-            initial_quality.0.unwrap_or(0.0)));
+            quality_str));
         
         // 如果初始 CRF 满足所有条件，直接返回
-        if initial_result <= target_size && self.check_quality_passed(initial_quality.0, initial_quality.1) {
+        if initial_result <= target_size && self.check_quality_passed(initial_quality.0, initial_quality.1, initial_quality.2) {
             log.push(format!("   ✅ Initial CRF {} meets all criteria", self.config.initial_crf));
             
             return Ok(ExploreResult {
@@ -438,13 +461,14 @@ impl VideoExplorer {
                 size_change_pct: self.calc_change_pct(initial_result),
                 ssim: initial_quality.0,
                 psnr: initial_quality.1,
+                vmaf: initial_quality.2,
                 iterations: 1,
                 quality_passed: true,
                 log,
             });
         }
         
-        // Step 2: 二分搜索找到满足 SSIM 的最高 CRF
+        // Step 2: 二分搜索找到满足质量阈值的最高 CRF
         let mut low = self.config.initial_crf;
         let mut high = self.config.max_crf;
         let mut best_crf = self.config.initial_crf;
@@ -465,11 +489,11 @@ impl VideoExplorer {
             let result = self.encode(mid)?;
             let quality = self.validate_quality()?;
             
-            log.push(format!("   CRF {}: {} bytes ({:+.1}%), SSIM: {:.4}", 
-                mid, result, self.calc_change_pct(result),
-                quality.0.unwrap_or(0.0)));
+            let quality_str = self.format_quality_metrics(&quality);
+            log.push(format!("   CRF {}: {} bytes ({:+.1}%), {}", 
+                mid, result, self.calc_change_pct(result), quality_str));
             
-            if self.check_quality_passed(quality.0, quality.1) {
+            if self.check_quality_passed(quality.0, quality.1, quality.2) {
                 // 质量通过，尝试更高 CRF（更小文件）
                 if result < best_size || (result == best_size && mid > best_crf) {
                     best_crf = mid;
@@ -493,11 +517,11 @@ impl VideoExplorer {
         }
         
         let size_change_pct = self.calc_change_pct(best_size);
-        let quality_passed = self.check_quality_passed(best_quality.0, best_quality.1);
+        let quality_passed = self.check_quality_passed(best_quality.0, best_quality.1, best_quality.2);
         
-        log.push(format!("   📊 Final: CRF {}, {} bytes ({:+.1}%), SSIM: {:.4}, Passed: {}", 
-            best_crf, best_size, size_change_pct, 
-            best_quality.0.unwrap_or(0.0),
+        let quality_str = self.format_quality_metrics(&best_quality);
+        log.push(format!("   📊 Final: CRF {}, {} bytes ({:+.1}%), {}, Passed: {}", 
+            best_crf, best_size, size_change_pct, quality_str,
             if quality_passed { "✅" } else { "❌" }));
         
         Ok(ExploreResult {
@@ -506,10 +530,30 @@ impl VideoExplorer {
             size_change_pct,
             ssim: best_quality.0,
             psnr: best_quality.1,
+            vmaf: best_quality.2,
             iterations,
             quality_passed,
             log,
         })
+    }
+    
+    /// 格式化质量指标字符串
+    fn format_quality_metrics(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> String {
+        let mut parts = Vec::new();
+        if let Some(ssim) = quality.0 {
+            parts.push(format!("SSIM: {:.4}", ssim));
+        }
+        if let Some(psnr) = quality.1 {
+            parts.push(format!("PSNR: {:.2}dB", psnr));
+        }
+        if let Some(vmaf) = quality.2 {
+            parts.push(format!("VMAF: {:.2}", vmaf));
+        }
+        if parts.is_empty() {
+            "N/A".to_string()
+        } else {
+            parts.join(", ")
+        }
     }
     
     /// 编码视频
@@ -553,7 +597,9 @@ impl VideoExplorer {
     }
     
     /// 验证输出质量
-    fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>)> {
+    /// 
+    /// 🔥 v3.3: 支持 SSIM/PSNR/VMAF 三重验证
+    fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
         let ssim = if self.config.quality_thresholds.validate_ssim {
             self.calculate_ssim()?
         } else {
@@ -566,7 +612,13 @@ impl VideoExplorer {
             None
         };
         
-        Ok((ssim, psnr))
+        let vmaf = if self.config.quality_thresholds.validate_vmaf {
+            self.calculate_vmaf()?
+        } else {
+            None
+        };
+        
+        Ok((ssim, psnr, vmaf))
     }
     
     /// 计算 SSIM（增强版：更严格的解析和验证）
@@ -674,13 +726,56 @@ impl VideoExplorer {
         }
     }
     
-    /// 检查质量是否通过（增强版：更严格的裁判验证）
+    /// 计算 VMAF（Netflix 感知质量指标）
     /// 
-    /// 🔥 精确度改进 v3.1：
+    /// 🔥 精确度改进 v3.3：
+    /// - VMAF 与人眼感知相关性更高 (Pearson 0.93 vs SSIM 0.85)
+    /// - 对运动、模糊、压缩伪影更敏感
+    /// - 计算较慢（约 100ms/帧），建议作为可选验证
+    fn calculate_vmaf(&self) -> Result<Option<f64>> {
+        // 🔥 v3.3: 使用 scale 滤镜处理分辨率差异
+        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]libvmaf";
+        
+        let output = Command::new("ffmpeg")
+            .arg("-i").arg(&self.input_path)
+            .arg("-i").arg(&self.output_path)
+            .arg("-lavfi").arg(filter)
+            .arg("-f").arg("null")
+            .arg("-")
+            .output();
+        
+        match output {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                
+                // 解析 VMAF score: XX.XXXXXX
+                for line in stderr.lines() {
+                    if let Some(pos) = line.find("VMAF score:") {
+                        let value_str = &line[pos + 11..];
+                        let value_str = value_str.trim();
+                        if let Ok(vmaf) = value_str.parse::<f64>() {
+                            if precision::is_valid_vmaf(vmaf) {
+                                return Ok(Some(vmaf));
+                            }
+                        }
+                    }
+                }
+                
+                Ok(None)
+            }
+            Err(e) => {
+                bail!("Failed to execute ffmpeg for VMAF calculation: {}", e)
+            }
+        }
+    }
+    
+    /// 检查质量是否通过（增强版：支持 SSIM/PSNR/VMAF 三重验证）
+    /// 
+    /// 🔥 精确度改进 v3.3：
     /// - 使用 epsilon 比较避免浮点精度问题
-    /// - 当 SSIM 验证启用但值为 None 时，视为失败
-    /// - 添加详细的失败原因日志
-    fn check_quality_passed(&self, ssim: Option<f64>, psnr: Option<f64>) -> bool {
+    /// - 当验证启用但值为 None 时，视为失败
+    /// - 支持 VMAF 验证
+    fn check_quality_passed(&self, ssim: Option<f64>, psnr: Option<f64>, vmaf: Option<f64>) -> bool {
         let t = &self.config.quality_thresholds;
         
         if t.validate_ssim {
@@ -711,6 +806,21 @@ impl VideoExplorer {
                 }
                 None => {
                     // 🔥 裁判验证：PSNR 验证启用但无法计算时，视为失败
+                    return false;
+                }
+            }
+        }
+        
+        // 🔥 v3.3: VMAF 验证
+        if t.validate_vmaf {
+            match vmaf {
+                Some(v) => {
+                    if v < t.min_vmaf {
+                        return false;
+                    }
+                }
+                None => {
+                    // VMAF 验证启用但无法计算时，视为失败
                     return false;
                 }
             }
@@ -990,6 +1100,50 @@ pub mod precision {
         } else {
             format!("{:.2} dB", psnr)
         }
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // VMAF 相关常量和函数 (v3.3)
+    // ═══════════════════════════════════════════════════════════
+    
+    /// 默认最小 VMAF（流媒体质量）
+    pub const DEFAULT_MIN_VMAF: f64 = 85.0;
+    
+    /// 高质量最小 VMAF（存档质量）
+    pub const HIGH_QUALITY_MIN_VMAF: f64 = 93.0;
+    
+    /// 可接受最小 VMAF（移动端）
+    pub const ACCEPTABLE_MIN_VMAF: f64 = 75.0;
+    
+    /// 验证 VMAF 值是否有效
+    /// 
+    /// 🔥 v3.3: VMAF 在 [0, 100] 范围内
+    pub fn is_valid_vmaf(vmaf: f64) -> bool {
+        vmaf >= 0.0 && vmaf <= 100.0
+    }
+    
+    /// 获取 VMAF 质量等级描述
+    /// 
+    /// 🔥 v3.3: Netflix 感知质量指标
+    pub fn vmaf_quality_grade(vmaf: f64) -> &'static str {
+        if vmaf >= 93.0 {
+            "Excellent (几乎无法区分)"
+        } else if vmaf >= 85.0 {
+            "Good (流媒体质量)"
+        } else if vmaf >= 75.0 {
+            "Acceptable (移动端质量)"
+        } else if vmaf >= 60.0 {
+            "Fair (可见差异)"
+        } else {
+            "Poor (明显质量损失)"
+        }
+    }
+    
+    /// 格式化 VMAF 值用于显示
+    /// 
+    /// 🔥 v3.3: 统一使用 2 位小数
+    pub fn format_vmaf(vmaf: f64) -> String {
+        format!("{:.2}", vmaf)
     }
 }
 
