@@ -4,6 +4,8 @@ REM 拖拽式一键处理脚本 (Windows版)
 REM 
 REM 使用方法：将文件夹拖拽到此脚本上，或双击后输入文件夹路径
 REM Usage: Drag folder to this script, or double-click and input folder path
+REM
+REM 🔥 v3.9: 新增 XMP 元数据合并功能
 
 setlocal enabledelayedexpansion
 chcp 65001 >nul
@@ -17,9 +19,10 @@ set "IMGQUALITY_HEVC=%PROJECT_ROOT%\imgquality_hevc\target\release\imgquality-he
 set "VIDQUALITY_HEVC=%PROJECT_ROOT%\vidquality_hevc\target\release\vidquality-hevc.exe"
 
 REM 显示欢迎信息
-echo 🚀 Modern Format Boost - 一键处理器 (Windows)
+echo 🚀 Modern Format Boost - 一键处理器 v3.9 (Windows)
 echo ==================================================
 echo 📁 处理模式：原地转换（删除原文件）
+echo 📋 XMP合并：自动检测并合并 sidecar 元数据
 echo 🔧 图像参数：--in-place --recursive --match-quality --explore
 echo 🎬 视频参数：--in-place --recursive --match-quality true --explore
 echo ==================================================
@@ -89,6 +92,12 @@ if /i not "%CONFIRM%"=="y" (
 REM 统计文件数量
 echo 📊 正在统计文件...
 
+REM 计算 XMP 文件数量
+set XMP_COUNT=0
+for /r "%TARGET_DIR%" %%f in (*.xmp) do (
+    set /a XMP_COUNT+=1
+)
+
 REM 计算图像文件数量
 set IMG_COUNT=0
 for /r "%TARGET_DIR%" %%f in (*.jpg *.jpeg *.png *.gif *.bmp *.tiff *.webp *.heic) do (
@@ -103,6 +112,7 @@ for /r "%TARGET_DIR%" %%f in (*.mp4 *.mov *.avi *.mkv *.webm *.m4v *.flv) do (
 
 set /a TOTAL_COUNT=IMG_COUNT+VID_COUNT
 
+echo    📋 XMP文件:  %XMP_COUNT%
 echo    🖼️  图像文件: %IMG_COUNT%
 echo    🎬 视频文件: %VID_COUNT%
 echo    📁 总计: %TOTAL_COUNT%
@@ -111,6 +121,37 @@ if %TOTAL_COUNT%==0 (
     echo ❌ 未找到支持的媒体文件
     pause
     exit /b 1
+)
+
+REM 🔥 XMP 元数据合并
+set XMP_SUCCESS=0
+if %XMP_COUNT% gtr 0 (
+    echo.
+    echo 📋 开始合并 XMP 元数据...
+    echo ==================================================
+    
+    REM 检查 exiftool 是否可用
+    where exiftool >nul 2>&1
+    if errorlevel 1 (
+        echo ⚠️  ExifTool 未安装，跳过 XMP 合并
+        echo    安装方法: https://exiftool.org/
+    ) else (
+        for /r "%TARGET_DIR%" %%x in (*.xmp) do (
+            set "XMP_FILE=%%x"
+            set "BASE_NAME=%%~dpnx"
+            set "BASE_NAME=!BASE_NAME:~0,-4!"
+            
+            if exist "!BASE_NAME!" (
+                echo    🔄 合并: %%~nxx
+                exiftool -P -overwrite_original -tagsfromfile "%%x" -all:all "!BASE_NAME!" >nul 2>&1
+                if not errorlevel 1 (
+                    del "%%x"
+                    set /a XMP_SUCCESS+=1
+                )
+            )
+        )
+        echo 📋 XMP 合并完成: ✅ %XMP_SUCCESS% 成功
+    )
 )
 
 REM 处理图像文件
@@ -152,6 +193,7 @@ echo.
 echo 🎉 处理完成！
 echo ==================================================
 echo 📁 处理目录: %TARGET_DIR%
+if %XMP_COUNT% gtr 0 echo 📋 XMP合并:  ✅ %XMP_SUCCESS% 成功
 echo 🖼️  图像文件: %IMG_COUNT%
 echo 🎬 视频文件: %VID_COUNT%
 echo ==================================================
