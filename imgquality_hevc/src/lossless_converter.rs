@@ -1013,7 +1013,7 @@ fn copy_metadata(src: &Path, dst: &Path) {
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
 fn get_output_path(input: &Path, extension: &str, output_dir: &Option<std::path::PathBuf>) -> Result<std::path::PathBuf> {
     shared_utils::conversion::determine_output_path(input, extension, output_dir)
-        .map_err(|e| ImgQualityError::ConversionError(e))
+        .map_err(ImgQualityError::ConversionError)
 }
 
 /// 获取输入文件的尺寸（宽度和高度）

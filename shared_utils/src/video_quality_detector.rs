@@ -483,7 +483,9 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
     
     // CRF estimation based on adjusted BPP
     // Higher BPP = lower CRF (better quality)
-    let crf = if adjusted_bpp > 1.0 {
+    
+    
+    if adjusted_bpp > 1.0 {
         18
     } else if adjusted_bpp > 0.5 {
         22
@@ -495,9 +497,7 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         32
     } else {
         35
-    };
-    
-    crf
+    }
 }
 
 
