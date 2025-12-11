@@ -461,6 +461,8 @@ fn auto_convert_single_file(
         output_dir: output_dir.cloned(),
         delete_original,
         in_place,
+        explore: false,  // imgquality_API 不支持 explore 模式（仅用于视频）
+        match_quality,   // 用于 JPEG→JXL 质量匹配
     };
     
     // Smart conversion based on format and lossless status
