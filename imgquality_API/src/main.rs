@@ -161,9 +161,9 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
             if input.is_file() {
-                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_single_file(&input, output.as_deref(), force, should_delete, in_place, lossless, match_quality)?;
             } else if input.is_dir() {
-                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless, match_quality)?;
+                auto_convert_directory(&input, output.as_deref(), force, recursive, should_delete, in_place, lossless, match_quality)?;
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -179,7 +179,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn analyze_single_file(
-    path: &PathBuf,
+    path: &Path,
     output_format: OutputFormat,
     recommend: bool,
 ) -> anyhow::Result<()> {
@@ -232,7 +232,7 @@ fn analyze_directory(
         let path = entry.path();
         if let Some(ext) = path.extension() {
             if image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
-                match analyze_image(&path.to_path_buf()) {
+                match analyze_image(path) {
                     Ok(analysis) => {
                         count += 1;
                         if output_format == OutputFormat::Json {
@@ -439,8 +439,8 @@ fn print_recommendation_human(rec: &imgquality::UpgradeRecommendation) {
 
 /// Smart auto-convert a single file based on format detection
 fn auto_convert_single_file(
-    input: &PathBuf,
-    output_dir: Option<&PathBuf>,
+    input: &Path,
+    output_dir: Option<&Path>,
     force: bool,
     delete_original: bool,
     in_place: bool,
@@ -458,7 +458,7 @@ fn auto_convert_single_file(
     
     let options = ConvertOptions {
         force,
-        output_dir: output_dir.cloned(),
+        output_dir: output_dir.map(|p| p.to_path_buf()),
         delete_original,
         in_place,
         explore: false,  // imgquality_API 不支持 explore 模式（仅用于视频）
@@ -584,8 +584,8 @@ fn auto_convert_single_file(
 
 /// Smart auto-convert a directory with parallel processing and progress bar
 fn auto_convert_directory(
-    input: &PathBuf,
-    output_dir: Option<&PathBuf>,
+    input: &Path,
+    output_dir: Option<&Path>,
     force: bool,
     recursive: bool,
     delete_original: bool,
