@@ -41,11 +41,18 @@
 | Input Format | Lossy? | Output | Strategy |
 |--------------|--------|--------|----------|
 | JPEG | N/A | JXL | **Lossless transcode** - preserves DCT coefficients, 100% reversible |
-| PNG | No | JXL (d=0) | **Mathematical lossless** - bit-perfect |
+| PNG (standard) | No | JXL (d=0) | **Mathematical lossless** - bit-perfect |
+| PNG (quantized) | Yes | JXL (d=0.1) | **Quality 100** - detected via IHDR analysis |
 | BMP/TIFF | No | JXL (d=0) | **Mathematical lossless** |
 | WebP/AVIF/HEIC | No | JXL (d=0) | **Mathematical lossless** |
 | WebP/AVIF/HEIC | Yes | **SKIP** | Avoid generation loss |
 | JXL | - | **SKIP** | Already modern format |
+
+**v3.6 PNG Lossy Detection**: Detects quantized PNGs (pngquant, TinyPNG) via IHDR chunk analysis:
+- Color type 3 (indexed) + tRNS chunk → Lossy (pngquant output)
+- Color type 3 + palette >200 colors → Lossy (quantized)
+- 16-bit PNG → Lossless (high quality source)
+- 8-bit truecolor → Lossless (standard)
 
 #### Animations (GIF/APNG/Animated WebP)
 
@@ -283,11 +290,18 @@ modern_format_boost/
 | 输入格式 | 有损？ | 输出 | 策略 |
 |----------|--------|------|------|
 | JPEG | N/A | JXL | **无损转码** - 保留 DCT 系数，100% 可逆 |
-| PNG | 否 | JXL (d=0) | **数学无损** - 比特级精确 |
+| PNG（标准） | 否 | JXL (d=0) | **数学无损** - 比特级精确 |
+| PNG（量化） | 是 | JXL (d=0.1) | **质量 100** - 通过 IHDR 分析检测 |
 | BMP/TIFF | 否 | JXL (d=0) | **数学无损** |
 | WebP/AVIF/HEIC | 否 | JXL (d=0) | **数学无损** |
 | WebP/AVIF/HEIC | 是 | **跳过** | 避免代际损失 |
 | JXL | - | **跳过** | 已是现代格式 |
+
+**v3.6 PNG 有损检测**：通过 IHDR 块分析检测量化 PNG（pngquant、TinyPNG）：
+- 颜色类型 3（索引）+ tRNS 块 → 有损（pngquant 输出）
+- 颜色类型 3 + 调色板 >200 色 → 有损（量化）
+- 16 位 PNG → 无损（高质量源）
+- 8 位真彩色 → 无损（标准）
 
 #### 动图 (GIF/APNG/动态 WebP)
 
