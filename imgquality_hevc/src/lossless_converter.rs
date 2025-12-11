@@ -578,7 +578,7 @@ pub fn convert_to_hevc_mp4_matched(
         shared_utils::ExploreMode::SizeOnly => "🔍 Size-Only Exploration",
         shared_utils::ExploreMode::QualityMatch => "🎯 Quality-Match",
     };
-    eprintln!("   {} Mode: CRF {} (based on input analysis)", mode_name, initial_crf);
+    eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", mode_name, initial_crf);
     
     let explore_result = match explore_mode {
         shared_utils::ExploreMode::PreciseQualityMatch => {
@@ -600,7 +600,7 @@ pub fn convert_to_hevc_mp4_matched(
     // 🔥 如果最终输出仍然比输入大，跳过转换
     if explore_result.output_size > input_size {
         let _ = fs::remove_file(&output);
-        eprintln!("   ⏭️  Skipping: HEVC output larger than input even at CRF {} ({} > {} bytes)", 
+        eprintln!("   ⏭️  Skipping: HEVC output larger than input even at CRF {:.1} ({} > {} bytes)", 
             explore_result.optimal_crf, explore_result.output_size, input_size);
         return Ok(ConversionResult {
             success: true,
@@ -630,8 +630,9 @@ pub fn convert_to_hevc_mp4_matched(
     }
     
     let reduction_pct = -explore_result.size_change_pct; // 转换为正数表示减少
-    let explored_msg = if explore_result.optimal_crf != initial_crf {
-        format!(" (explored from CRF {})", initial_crf)
+    // 🔥 v3.4: Use epsilon comparison for f32 CRF values
+    let explored_msg = if (explore_result.optimal_crf - initial_crf).abs() > 0.1 {
+        format!(" (explored from CRF {:.1})", initial_crf)
     } else {
         String::new()
     };
@@ -640,7 +641,7 @@ pub fn convert_to_hevc_mp4_matched(
         .map(|s| format!(", SSIM: {:.4}", s))
         .unwrap_or_default();
     
-    let message = format!("HEVC (CRF {}{}, {} iter{}): -{:.1}%", 
+    let message = format!("HEVC (CRF {:.1}{}, {} iter{}): -{:.1}%", 
         explore_result.optimal_crf, explored_msg, explore_result.iterations, ssim_msg, reduction_pct);
     
     Ok(ConversionResult {
@@ -663,7 +664,9 @@ pub fn convert_to_hevc_mp4_matched(
 /// 
 /// HEVC CRF range is 0-51, with 23 being default "good quality"
 /// Clamped to range [0, 32] for practical use (allows visually lossless)
-fn calculate_matched_crf_for_animation_hevc(analysis: &crate::ImageAnalysis, file_size: u64) -> u8 {
+/// 
+/// 🔥 v3.4: Returns f32 for sub-integer precision (0.5 step)
+fn calculate_matched_crf_for_animation_hevc(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
     // 🔥 使用统一的 quality_matcher 模块
     // Note: ImageAnalysis doesn't have fps field, estimate from duration and frame count if available
     let quality_analysis = shared_utils::from_image_analysis(
@@ -681,13 +684,13 @@ fn calculate_matched_crf_for_animation_hevc(analysis: &crate::ImageAnalysis, fil
     match shared_utils::calculate_hevc_crf(&quality_analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&quality_analysis, &result, shared_utils::EncoderType::Hevc);
-            result.crf
+            result.crf // 🔥 v3.4: Already f32 from quality_matcher
         }
         Err(e) => {
             // 🔥 Quality Manifesto: 失败时响亮报错，使用保守值
             eprintln!("   ⚠️  Quality analysis failed: {}", e);
-            eprintln!("   ⚠️  Using conservative CRF 18 (high quality)");
-            18
+            eprintln!("   ⚠️  Using conservative CRF 18.0 (high quality)");
+            18.0
         }
     }
 }

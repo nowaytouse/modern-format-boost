@@ -243,7 +243,7 @@ fn main() -> anyhow::Result<()> {
                 info!("   Output: {} ({} bytes)", result.output_path, result.output_size);
                 info!("   Ratio:  {:.1}%", result.size_ratio * 100.0);
                 if result.exploration_attempts > 0 {
-                    info!("   🔍 Explored {} CRF values, final: CRF {}", result.exploration_attempts, result.final_crf);
+                    info!("   🔍 Explored {} CRF values, final: CRF {:.1}", result.exploration_attempts, result.final_crf);
                 }
             }
         }

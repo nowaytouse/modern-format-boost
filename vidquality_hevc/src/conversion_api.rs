@@ -48,7 +48,8 @@ pub struct ConversionStrategy {
     pub reason: String,
     pub command: String,
     pub preserve_audio: bool,
-    pub crf: u8,
+    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
+    pub crf: f32,
     pub lossless: bool,
 }
 
@@ -100,7 +101,8 @@ pub struct ConversionOutput {
     pub size_ratio: f64,
     pub success: bool,
     pub message: String,
-    pub final_crf: u8,
+    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
+    pub final_crf: f32,
     pub exploration_attempts: u8,
 }
 
@@ -116,7 +118,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             reason: skip_decision.reason,
             command: String::new(),
             preserve_audio: false,
-            crf: 0,
+            crf: 0.0,
             lossless: false,
         };
     }
@@ -130,18 +132,19 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
                 reason: unknown_skip.reason,
                 command: String::new(),
                 preserve_audio: false,
-                crf: 0,
+                crf: 0.0,
                 lossless: false,
             };
         }
     }
 
+    // 🔥 v3.4: CRF values are now f32 for sub-integer precision
     let (target, reason, crf, lossless) = match result.compression {
         CompressionType::Lossless => {
             (
                 TargetVideoFormat::HevcLosslessMkv,
                 format!("Source is {} (lossless) - converting to HEVC Lossless", result.codec.as_str()),
-                0,
+                0.0_f32,
                 true
             )
         }
@@ -149,7 +152,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             (
                 TargetVideoFormat::HevcMp4,
                 format!("Source is {} (visually lossless) - compressing with HEVC CRF 18", result.codec.as_str()),
-                18,
+                18.0_f32,
                 false
             )
         }
@@ -157,7 +160,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             (
                 TargetVideoFormat::HevcMp4,
                 format!("Source is {} ({}) - compressing with HEVC CRF 20", result.codec.as_str(), result.compression.as_str()),
-                20,
+                20.0_f32,
                 false
             )
         }
@@ -211,7 +214,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
             reason: "Simple mode: HEVC High Quality".to_string(),
             command: String::new(),
             preserve_audio: detection.has_audio,
-            crf: 18,
+            crf: 18.0,
             lossless: false,
         },
         input_size: detection.file_size,
@@ -219,7 +222,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         size_ratio,
         success: true,
         message: "Simple conversion successful (HEVC CRF 18)".to_string(),
-        final_crf: 18,
+        final_crf: 18.0,
         exploration_attempts: 0,
     })
 }
@@ -241,7 +244,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             size_ratio: 0.0,
             success: true, 
             message: "Skipped modern codec to avoid generation loss".to_string(),
-            final_crf: 0,
+            final_crf: 0.0,
             exploration_attempts: 0,
         });
     }
@@ -275,13 +278,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::HevcLosslessMkv => {
             info!("   🚀 Using HEVC Lossless Mode");
             let size = execute_hevc_lossless(&detection, &output_path)?;
-            (size, 0, 0)
+            (size, 0.0, 0) // 🔥 v3.4: CRF is now f32
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
                 info!("   🚀 Using HEVC Lossless Mode (forced)");
                 let size = execute_hevc_lossless(&detection, &output_path)?;
-                (size, 0, 0)
+                (size, 0.0, 0) // 🔥 v3.4: CRF is now f32
             } else {
                 // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -290,7 +293,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let explore_result = if config.explore_smaller && config.match_quality {
                     // 模式 3: --explore + --match-quality 组合（精确质量匹配）
                     let initial_crf = calculate_matched_crf(&detection);
-                    info!("   🔬 Precise Quality-Match: CRF {} + SSIM validation", initial_crf);
+                    info!("   🔬 Precise Quality-Match: CRF {:.1} + SSIM validation", initial_crf);
                     shared_utils::explore_hevc(input_path, &output_path, vf_args, initial_crf)
                 } else if config.explore_smaller {
                     // 模式 1: --explore 单独使用（仅探索更小大小）
@@ -299,11 +302,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 } else if config.match_quality {
                     // 模式 2: --match-quality 单独使用（单次编码 + SSIM 验证）
                     let matched_crf = calculate_matched_crf(&detection);
-                    info!("   🎯 Quality-Match: CRF {} + SSIM validation", matched_crf);
+                    info!("   🎯 Quality-Match: CRF {:.1} + SSIM validation", matched_crf);
                     shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, matched_crf)
                 } else {
                     // 默认模式：使用策略 CRF，单次编码
-                    info!("   📦 Default: CRF {}", strategy.crf);
+                    info!("   📦 Default: CRF {:.1}", strategy.crf);
                     shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, strategy.crf)
                 }.map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
                 
@@ -358,45 +361,76 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     })
 }
 
-/// Calculate CRF to match input video quality level (Enhanced Algorithm)
-/// 
-/// This function uses a more precise algorithm that considers:
-/// 1. Bits per pixel (bpp) - primary quality indicator
-/// 2. Source codec efficiency - H.264 vs others
-/// 3. Profile/B-frames - encoding complexity
-/// 4. Resolution scaling - higher res needs more bits
 /// Calculate CRF to match input video quality level (Enhanced Algorithm for HEVC)
 /// 
 /// Uses the unified quality_matcher module from shared_utils for consistent
 /// quality matching across all tools.
 /// 
+/// 🔥 v3.5: Uses VideoAnalysisBuilder for full field support:
+/// - video_bitrate (separate from total bitrate, 10-30% more accurate)
+/// - pix_fmt (chroma subsampling factor)
+/// - color_space (HDR detection)
+/// 
 /// HEVC CRF range is 0-51, with 23 being default "good quality"
 /// Clamped to range [0, 32] for practical use (allows visually lossless)
-pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
-    // 🔥 使用统一的 quality_matcher 模块
-    let analysis = shared_utils::from_video_detection(
-        &detection.file_path,
-        detection.codec.as_str(),
-        detection.width,
-        detection.height,
-        detection.bitrate,
-        detection.fps,
-        detection.duration_secs,
-        detection.has_b_frames,
-        detection.bit_depth,
-        detection.file_size,
-    );
+/// 
+/// 🔥 v3.4: Returns f32 for sub-integer precision (0.5 step)
+pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> f32 {
+    // 🔥 v3.5: 使用 VideoAnalysisBuilder 传递完整字段
+    let mut builder = shared_utils::VideoAnalysisBuilder::new()
+        .basic(
+            detection.codec.as_str(),
+            detection.width,
+            detection.height,
+            detection.fps,
+            detection.duration_secs,
+        )
+        .bit_depth(detection.bit_depth)
+        .file_size(detection.file_size);
+    
+    // 🔥 优先使用 video_bitrate（排除音频开销，精度提升 10-30%）
+    if let Some(vbr) = detection.video_bitrate {
+        builder = builder.video_bitrate(vbr);
+    } else {
+        // Fallback: 使用总比特率（包含音频）
+        builder = builder.video_bitrate(detection.bitrate);
+    }
+    
+    // 🔥 传递 pix_fmt（色度子采样因子）
+    if !detection.pix_fmt.is_empty() {
+        builder = builder.pix_fmt(&detection.pix_fmt);
+    }
+    
+    // 🔥 传递 color_space（HDR 检测）
+    let (color_space_str, is_hdr) = match &detection.color_space {
+        crate::detection_api::ColorSpace::BT709 => ("bt709", false),
+        crate::detection_api::ColorSpace::BT2020 => ("bt2020nc", true), // BT.2020 通常是 HDR
+        crate::detection_api::ColorSpace::SRGB => ("srgb", false),
+        crate::detection_api::ColorSpace::AdobeRGB => ("adobergb", false),
+        crate::detection_api::ColorSpace::Unknown(_) => ("", false),
+    };
+    if !color_space_str.is_empty() {
+        builder = builder.color(color_space_str, is_hdr);
+    }
+    
+    // 🔥 传递 B-frame 信息（使用 gop 方法）
+    if detection.has_b_frames {
+        // 假设有 B 帧时使用 GOP=60, B-frames=2
+        builder = builder.gop(60, 2);
+    }
+    
+    let analysis = builder.build();
     
     match shared_utils::calculate_hevc_crf(&analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&analysis, &result, shared_utils::EncoderType::Hevc);
-            result.crf
+            result.crf // 🔥 v3.4: Already f32 from quality_matcher
         }
         Err(e) => {
             // 🔥 Quality Manifesto: 失败时响亮报错，使用保守值
             warn!("   ⚠️  Quality analysis failed: {}", e);
-            warn!("   ⚠️  Using conservative CRF 23");
-            23
+            warn!("   ⚠️  Using conservative CRF 23.0");
+            23.0
         }
     }
 }
