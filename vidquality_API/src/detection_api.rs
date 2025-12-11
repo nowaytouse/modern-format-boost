@@ -141,7 +141,8 @@ pub enum ColorSpace {
 }
 
 impl ColorSpace {
-    pub fn from_str(s: &str) -> Self {
+    /// Parse color space from string
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "bt709" => ColorSpace::BT709,
             "bt2020" | "bt2020nc" | "bt2020ncl" => ColorSpace::BT2020,
@@ -269,7 +270,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult> {
     
     let color_space = probe.color_space
         .as_ref()
-        .map(|s| ColorSpace::from_str(s))
+        .map(|s| ColorSpace::parse(s))
         .unwrap_or(ColorSpace::Unknown("unknown".to_string()));
     
     let quality_score = calculate_quality_score(

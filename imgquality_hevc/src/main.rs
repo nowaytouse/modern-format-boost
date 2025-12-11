@@ -76,17 +76,17 @@ enum Commands {
         #[arg(long)]
         lossless: bool,
 
-        /// Explore smaller file sizes for animated→video conversion ONLY
-        /// - Alone: Binary search for smaller output (no quality validation)
-        /// - With --match-quality: Precise quality match (binary search + SSIM validation)
-        /// Does NOT affect static images (JPEG/PNG always use lossless conversion)
+        /// Explore smaller file sizes for animated→video conversion ONLY.
+        /// Alone: Binary search for smaller output (no quality validation).
+        /// With --match-quality: Precise quality match (binary search + SSIM validation).
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion).
         #[arg(long)]
         explore: bool,
 
-        /// Match input quality level for animated→video conversion ONLY
-        /// - Alone: Single encode with AI-predicted CRF + SSIM validation
-        /// - With --explore: Precise quality match (binary search + SSIM validation)
-        /// Does NOT affect static images (JPEG/PNG always use lossless conversion)
+        /// Match input quality level for animated→video conversion ONLY.
+        /// Alone: Single encode with AI-predicted CRF + SSIM validation.
+        /// With --explore: Precise quality match (binary search + SSIM validation).
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion).
         #[arg(long)]
         match_quality: bool,
     },
