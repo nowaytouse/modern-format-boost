@@ -263,7 +263,7 @@ fn analyze_directory(
         println!("{}", json!({
             "total": count,
             "results": results
-        }).to_string());
+        }));
     } else {
         println!("\n{}", "=".repeat(80));
         println!("✅ Analysis complete: {} files processed", count);

@@ -281,7 +281,7 @@ fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<(
     let q = quality.unwrap_or(85).to_string();
     
     let status = Command::new("avifenc")
-        .args(&[
+        .args([
             input.to_str().unwrap(),
             output.to_str().unwrap(),
             "-q", &q,
@@ -306,7 +306,7 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
     
     // SVT-AV1 with CRF 0 = 视觉无损最高质量
     let status = Command::new("ffmpeg")
-        .args(&[
+        .args([
             "-y",
             "-threads", &max_threads.to_string(),
             "-i", input.to_str().unwrap(),
@@ -332,7 +332,7 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
 /// Preserve file timestamps (modification time, access time)
 fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     let status = Command::new("touch")
-        .args(&["-r", source.to_str().unwrap(), dest.to_str().unwrap()])
+        .args(["-r", source.to_str().unwrap(), dest.to_str().unwrap()])
         .output()?;
     
     if !status.status.success() {
@@ -351,7 +351,7 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
     }
     
     let status = Command::new("exiftool")
-        .args(&[
+        .args([
             "-overwrite_original",
             "-TagsFromFile", source.to_str().unwrap(),
             "-All:All",
