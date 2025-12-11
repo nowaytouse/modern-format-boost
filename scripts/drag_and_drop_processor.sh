@@ -180,15 +180,21 @@ merge_xmp_files() {
         # 执行合并
         echo "   🔄 合并: $(basename "$xmp_file") → $(basename "$media_file")"
         
+        # 🔥 创建临时文件保存媒体文件的原始时间戳（在 exiftool 修改前）
+        timestamp_ref=$(mktemp)
+        touch -r "$media_file" "$timestamp_ref" 2>/dev/null || true
+        
         if exiftool -P -overwrite_original -tagsfromfile "$xmp_file" -all:all "$media_file" > /dev/null 2>&1; then
-            # 保留时间戳
-            touch -r "$xmp_file" "$media_file" 2>/dev/null || true
+            # 🔥 恢复媒体文件的原始时间戳（exiftool 会修改时间戳）
+            touch -r "$timestamp_ref" "$media_file" 2>/dev/null || true
+            rm -f "$timestamp_ref"
             
             # 删除 XMP 文件
             rm "$xmp_file"
             echo "      ✅ 成功，已删除 XMP 文件"
             ((XMP_SUCCESS++)) || true
         else
+            rm -f "$timestamp_ref"
             echo "      ❌ 合并失败"
             ((XMP_FAILED++)) || true
         fi
