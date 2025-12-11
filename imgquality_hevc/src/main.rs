@@ -75,6 +75,20 @@ enum Commands {
         /// Disables smart quality matching for video
         #[arg(long)]
         lossless: bool,
+
+        /// Explore smaller file sizes for animated→video conversion ONLY
+        /// - Alone: Binary search for smaller output (no quality validation)
+        /// - With --match-quality: Precise quality match (binary search + SSIM validation)
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion)
+        #[arg(long)]
+        explore: bool,
+
+        /// Match input quality level for animated→video conversion ONLY
+        /// - Alone: Single encode with AI-predicted CRF + SSIM validation
+        /// - With --explore: Precise quality match (binary search + SSIM validation)
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion)
+        #[arg(long)]
+        match_quality: bool,
     },
 
     /// Verify conversion quality
@@ -148,6 +162,8 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             in_place,
             lossless,
+            explore,
+            match_quality,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
@@ -156,18 +172,38 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
                 eprintln!("   Smart quality matching: DISABLED");
             } else {
-                eprintln!("🎯 Smart quality matching: ENABLED (default)");
-                eprintln!("   - Binary search for optimal CRF");
-                eprintln!("   - SSIM validation (≥0.95)");
-                eprintln!("   - Auto-skip if output larger than input");
+                // 显示探索模式信息
+                match (explore, match_quality) {
+                    (true, true) => {
+                        eprintln!("🔬 Precise Quality-Match: ENABLED (for animated→video)");
+                        eprintln!("   - Binary search + SSIM validation");
+                        eprintln!("   - Auto-skip if output larger than input");
+                    }
+                    (true, false) => {
+                        eprintln!("🔍 Size-Only Exploration: ENABLED (for animated→video)");
+                        eprintln!("   - Binary search for smaller output");
+                        eprintln!("   - No quality validation");
+                    }
+                    (false, true) => {
+                        eprintln!("🎯 Quality-Match: ENABLED (for animated→video)");
+                        eprintln!("   - AI-predicted CRF + SSIM validation");
+                        eprintln!("   - Auto-skip if output larger than input");
+                    }
+                    (false, false) => {
+                        eprintln!("🎯 Default Quality-Match: ENABLED (for animated→video)");
+                        eprintln!("   - AI-predicted CRF + SSIM validation");
+                        eprintln!("   - Auto-skip if output larger than input");
+                    }
+                }
+                eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
             if input.is_file() {
-                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless)?;
+                auto_convert_single_file(&input, output.as_ref(), force, should_delete, in_place, lossless, explore, match_quality)?;
             } else if input.is_dir() {
-                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless)?;
+                auto_convert_directory(&input, output.as_ref(), force, recursive, should_delete, in_place, lossless, explore, match_quality)?;
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -454,6 +490,8 @@ fn auto_convert_single_file(
     delete_original: bool,
     in_place: bool,
     lossless: bool,
+    explore: bool,
+    match_quality: bool,
 ) -> anyhow::Result<()> {
     use imgquality_hevc::lossless_converter::{
         convert_to_jxl, convert_jpeg_to_jxl,
@@ -469,6 +507,8 @@ fn auto_convert_single_file(
         output_dir: output_dir.cloned(),
         delete_original,
         in_place,
+        explore,
+        match_quality,
     };
     
     // Smart conversion based on format and lossless status
@@ -566,6 +606,8 @@ fn auto_convert_directory(
     delete_original: bool,
     in_place: bool,
     lossless: bool,
+    explore: bool,
+    match_quality: bool,
 ) -> anyhow::Result<()> {
     // 🔥 Safety check: prevent accidental damage to system directories
     if delete_original || in_place {
@@ -642,7 +684,7 @@ fn auto_convert_directory(
             // 获取输入文件大小
             let input_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
             
-            match auto_convert_single_file(path, output_dir, force, delete_original, in_place, lossless, match_quality) {
+            match auto_convert_single_file(path, output_dir, force, delete_original, in_place, lossless, explore, match_quality) {
                 Ok(_) => { 
                     // 🔥 修复：检查是否真的生成了输出文件
                     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
