@@ -21,7 +21,7 @@ echo 🚀 Modern Format Boost - 一键处理器 (Windows)
 echo ==================================================
 echo 📁 处理模式：原地转换（删除原文件）
 echo 🔧 图像参数：--in-place --recursive --match-quality --explore
-echo 🎬 视频参数：--in-place --recursive --match-quality --explore
+echo 🎬 视频参数：--in-place --recursive --match-quality true --explore
 echo ==================================================
 echo.
 
@@ -136,7 +136,7 @@ if %VID_COUNT% gtr 0 (
     echo 🎬 开始处理视频文件...
     echo ==================================================
     
-    "%VIDQUALITY_HEVC%" auto "%TARGET_DIR%" --in-place --recursive --match-quality --explore
+    "%VIDQUALITY_HEVC%" auto "%TARGET_DIR%" --in-place --recursive --match-quality true --explore
     
     if errorlevel 1 (
         echo ❌ 视频处理失败
