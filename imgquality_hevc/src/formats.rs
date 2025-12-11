@@ -1,4 +1,4 @@
-/// Format-specific utilities and helpers
+//! Format-specific utilities and helpers
 
 /// PNG format utilities
 pub mod png {
