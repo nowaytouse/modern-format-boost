@@ -569,8 +569,14 @@ impl VideoExplorer {
         Ok((ssim, psnr))
     }
     
-    /// 计算 SSIM
+    /// 计算 SSIM（增强版：更严格的解析和验证）
+    /// 
+    /// 🔥 精确度改进 v3.1：
+    /// - 更严格的解析逻辑
+    /// - 验证 SSIM 值在有效范围内
+    /// - 失败时响亮报错
     fn calculate_ssim(&self) -> Result<Option<f64>> {
+        // 使用简单的 ssim 滤镜，ffmpeg 会自动处理分辨率差异
         let output = Command::new("ffmpeg")
             .arg("-i").arg(&self.input_path)
             .arg("-i").arg(&self.output_path)
@@ -582,25 +588,41 @@ impl VideoExplorer {
         match output {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
+                
+                // 🔥 更严格的解析：查找 "All:" 后的数值
                 for line in stderr.lines() {
-                    if line.contains("All:") {
-                        if let Some(pos) = line.find("All:") {
-                            let value_str = &line[pos + 4..];
-                            let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
-                                .unwrap_or(value_str.len());
-                            if let Ok(ssim) = value_str[..end].trim().parse::<f64>() {
-                                return Ok(Some(ssim));
+                    if let Some(pos) = line.find("All:") {
+                        let value_str = &line[pos + 4..];
+                        let value_str = value_str.trim_start();
+                        // 提取数字部分（包括小数点）
+                        let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
+                            .unwrap_or(value_str.len());
+                        if end > 0 {
+                            if let Ok(ssim) = value_str[..end].parse::<f64>() {
+                                // 🔥 裁判验证：SSIM 必须在 [0, 1] 范围内
+                                if precision::is_valid_ssim(ssim) {
+                                    return Ok(Some(ssim));
+                                }
                             }
                         }
                     }
                 }
+                
+                // 如果没有找到 SSIM 但命令成功，返回 None（可能是格式问题）
                 Ok(None)
             }
-            Err(_) => Ok(None),
+            Err(e) => {
+                // 🔥 响亮报错：ffmpeg 执行失败
+                bail!("Failed to execute ffmpeg for SSIM calculation: {}", e)
+            }
         }
     }
     
-    /// 计算 PSNR
+    /// 计算 PSNR（增强版：更严格的解析和验证）
+    /// 
+    /// 🔥 精确度改进 v3.1：
+    /// - 更严格的解析逻辑
+    /// - 支持 inf 值（无损情况）
     fn calculate_psnr(&self) -> Result<Option<f64>> {
         let output = Command::new("ffmpeg")
             .arg("-i").arg(&self.input_path)
@@ -613,39 +635,75 @@ impl VideoExplorer {
         match output {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
+                
+                // 检查是否有 "inf" (无损情况)
+                if stderr.contains("average:inf") {
+                    return Ok(Some(f64::INFINITY));
+                }
+                
                 for line in stderr.lines() {
-                    if line.contains("average:") {
-                        if let Some(pos) = line.find("average:") {
-                            let value_str = &line[pos + 8..];
-                            let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
-                                .unwrap_or(value_str.len());
-                            if let Ok(psnr) = value_str[..end].trim().parse::<f64>() {
-                                return Ok(Some(psnr));
+                    if let Some(pos) = line.find("average:") {
+                        let value_str = &line[pos + 8..];
+                        let value_str = value_str.trim_start();
+                        let end = value_str.find(|c: char| !c.is_numeric() && c != '.' && c != '-')
+                            .unwrap_or(value_str.len());
+                        if end > 0 {
+                            if let Ok(psnr) = value_str[..end].parse::<f64>() {
+                                if precision::is_valid_psnr(psnr) {
+                                    return Ok(Some(psnr));
+                                }
                             }
                         }
                     }
                 }
+                
                 Ok(None)
             }
-            Err(_) => Ok(None),
+            Err(e) => {
+                bail!("Failed to execute ffmpeg for PSNR calculation: {}", e)
+            }
         }
     }
     
-    /// 检查质量是否通过
+    /// 检查质量是否通过（增强版：更严格的裁判验证）
+    /// 
+    /// 🔥 精确度改进 v3.1：
+    /// - 使用 epsilon 比较避免浮点精度问题
+    /// - 当 SSIM 验证启用但值为 None 时，视为失败
+    /// - 添加详细的失败原因日志
     fn check_quality_passed(&self, ssim: Option<f64>, psnr: Option<f64>) -> bool {
         let t = &self.config.quality_thresholds;
         
         if t.validate_ssim {
             match ssim {
-                Some(s) if s >= t.min_ssim => {}
-                _ => return false,
+                Some(s) => {
+                    // 🔥 使用 epsilon 比较，避免浮点精度问题
+                    // 例如 0.9499999 应该被视为通过 0.95 阈值
+                    let epsilon = precision::SSIM_COMPARE_EPSILON;
+                    if s + epsilon < t.min_ssim {
+                        return false;
+                    }
+                }
+                None => {
+                    // 🔥 裁判验证：SSIM 验证启用但无法计算时，视为失败
+                    // 这比静默通过更安全
+                    return false;
+                }
             }
         }
         
         if t.validate_psnr {
             match psnr {
-                Some(p) if p >= t.min_psnr => {}
-                _ => return false,
+                Some(p) => {
+                    // PSNR 使用直接比较（单位是 dB，精度要求较低）
+                    if p < t.min_psnr && !p.is_infinite() {
+                        return false;
+                    }
+                }
+                None => {
+                    // 🔥 裁判验证：PSNR 验证启用但无法计算时，视为失败
+                    return false;
+                }
             }
         }
         
@@ -821,6 +879,7 @@ pub mod precision {
     pub const SSIM_DISPLAY_PRECISION: u32 = 4;
     
     /// SSIM 比较精度：0.0001
+    /// 🔥 v3.1: 这是 ffmpeg ssim 滤镜的输出精度
     pub const SSIM_COMPARE_EPSILON: f64 = 0.0001;
     
     /// 默认最小 SSIM（视觉无损）
@@ -832,6 +891,18 @@ pub mod precision {
     /// 可接受最小 SSIM
     pub const ACCEPTABLE_MIN_SSIM: f64 = 0.90;
     
+    /// 最低可接受 SSIM（低于此值应警告）
+    pub const MIN_ACCEPTABLE_SSIM: f64 = 0.85;
+    
+    /// PSNR 显示精度：2 位小数
+    pub const PSNR_DISPLAY_PRECISION: u32 = 2;
+    
+    /// 默认最小 PSNR (dB)
+    pub const DEFAULT_MIN_PSNR: f64 = 35.0;
+    
+    /// 高质量最小 PSNR (dB)
+    pub const HIGH_QUALITY_MIN_PSNR: f64 = 40.0;
+    
     /// 计算二分搜索所需的最大迭代次数
     /// 
     /// 公式：ceil(log2(range)) + 1
@@ -841,8 +912,25 @@ pub mod precision {
     }
     
     /// 验证 SSIM 是否满足阈值（考虑浮点精度）
+    /// 
+    /// 🔥 v3.1: 使用 epsilon 比较避免浮点精度问题
     pub fn ssim_meets_threshold(ssim: f64, threshold: f64) -> bool {
         ssim >= threshold - SSIM_COMPARE_EPSILON
+    }
+    
+    /// 验证 SSIM 值是否有效
+    /// 
+    /// 🔥 v3.1: SSIM 必须在 [0, 1] 范围内
+    pub fn is_valid_ssim(ssim: f64) -> bool {
+        ssim >= 0.0 && ssim <= 1.0
+    }
+    
+    /// 验证 PSNR 值是否有效
+    /// 
+    /// 🔥 v3.1: PSNR 通常在 [0, inf) 范围内
+    /// inf 表示完全相同（无损）
+    pub fn is_valid_psnr(psnr: f64) -> bool {
+        psnr >= 0.0 || psnr.is_infinite()
     }
     
     /// 获取 SSIM 质量等级描述
@@ -857,6 +945,41 @@ pub mod precision {
             "Fair (可见差异)"
         } else {
             "Poor (明显质量损失)"
+        }
+    }
+    
+    /// 获取 PSNR 质量等级描述
+    pub fn psnr_quality_grade(psnr: f64) -> &'static str {
+        if psnr.is_infinite() {
+            "Lossless (完全相同)"
+        } else if psnr >= 45.0 {
+            "Excellent (几乎无法区分)"
+        } else if psnr >= 40.0 {
+            "Good (视觉无损)"
+        } else if psnr >= 35.0 {
+            "Acceptable (轻微差异)"
+        } else if psnr >= 30.0 {
+            "Fair (可见差异)"
+        } else {
+            "Poor (明显质量损失)"
+        }
+    }
+    
+    /// 格式化 SSIM 值用于显示
+    /// 
+    /// 🔥 v3.1: 统一使用 4 位小数
+    pub fn format_ssim(ssim: f64) -> String {
+        format!("{:.4}", ssim)
+    }
+    
+    /// 格式化 PSNR 值用于显示
+    /// 
+    /// 🔥 v3.1: 统一使用 2 位小数，inf 显示为 "∞"
+    pub fn format_psnr(psnr: f64) -> String {
+        if psnr.is_infinite() {
+            "∞".to_string()
+        } else {
+            format!("{:.2} dB", psnr)
         }
     }
 }
