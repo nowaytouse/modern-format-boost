@@ -456,11 +456,11 @@ impl VideoExplorer {
     /// - SSIM 目标: >= 0.9999 (接近数学无损)
     /// - 交叉验证加速收敛
     /// 
-    /// ## 四阶段搜索策略
-    /// 1. **全范围扫描**: 从 min_crf 到 max_crf，步长 1.0
-    /// 2. **区域精细化**: 在最佳点 ±2 CRF 范围，步长 0.5
-    /// 3. **超精细调整**: 在最佳点 ±0.5 CRF 范围，步长 0.1
-    /// 4. **极限逼近**: 继续向下搜索直到达到目标或平台
+    /// ## 🔥 v4.3 优化搜索策略（减少无意义迭代）
+    /// 1. **稀疏扫描**: 步长 5.0，快速定位最佳区域（~4次）
+    /// 2. **区域精细化**: 在最佳点 ±5 CRF 范围，步长 2.0（~5次）
+    /// 3. **精细调整**: 在最佳点 ±2 CRF 范围，步长 0.5（~8次）
+    /// 4. **极限逼近**: 仅在需要时，步长 0.1（有平台检测）
     /// 
     /// ## 交叉验证优化
     /// - 当 SSIM/PSNR/VMAF 三者一致时，提前确认最优点
@@ -477,8 +477,8 @@ impl VideoExplorer {
             }};
         }
         
-        // 🔥 v4.2: 详细配置输出 - 实时显示
-        log_realtime!("🔬 Precise Quality-Match v4.2 ({:?})", self.encoder);
+        // 🔥 v4.3: 详细配置输出 - 实时显示
+        log_realtime!("🔬 Precise Quality-Match v4.3 ({:?})", self.encoder);
         log_realtime!("   📁 Input: {} bytes ({:.2} KB)", 
             self.input_size, self.input_size as f64 / 1024.0);
         log_realtime!("   📐 CRF range: [{:.1}, {:.1}], Initial: {:.1}", 
@@ -559,9 +559,10 @@ impl VideoExplorer {
         };
         
         // ═══════════════════════════════════════════════════════════
-        // Phase 1: 全范围扫描 - 从 min_crf 到 max_crf，步长 1.0
+        // 🔥 v4.3 Phase 1: 稀疏扫描 - 步长 5.0，快速定位最佳区域
+        // 例如 CRF 10-28 只需测试: 10, 15, 20, 25 (~4次)
         // ═══════════════════════════════════════════════════════════
-        log_realtime!("   📍 Phase 1: Full range scan (step 1.0)");
+        log_realtime!("   📍 Phase 1: Sparse scan (step 5.0) - Quick region detection");
         
         let mut current = self.config.min_crf;
         while current <= self.config.max_crf {
@@ -581,19 +582,58 @@ impl VideoExplorer {
                 log_realtime!("      🎯 New best: CRF {:.1}, Score {:.4}, SSIM {:.4}", crf, score, ssim);
             }
             
+            // 🔥 v4.3: 提前终止 - 如果已达到目标且交叉验证一致
             if ssim >= target_ssim && self.check_cross_validation_consistency(&quality) == CrossValidationResult::AllAgree {
                 log_realtime!("      ✅ Target reached with cross-validation agreement in Phase 1");
                 break;
             }
             
-            current += 1.0;
+            current += 5.0; // 🔥 v4.3: 大步长快速扫描
         }
         
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: 区域精细化 - 在最佳点 ±2 CRF 范围，步长 0.5
+        // 🔥 v4.3 Phase 2: 区域精细化 - 在最佳点 ±5 CRF 范围，步长 2.0
+        // 例如最佳点 15，测试: 10, 12, 14, 16, 18, 20 (~5次，去重后更少)
         // ═══════════════════════════════════════════════════════════
         if best_ssim < target_ssim {
-            log_realtime!("   📍 Phase 2: Region refinement (step 0.5)");
+            log_realtime!("   📍 Phase 2: Region refinement (step 2.0, ±5 CRF)");
+            
+            let search_start = (best_crf - 5.0).max(self.config.min_crf);
+            let search_end = (best_crf + 5.0).min(self.config.max_crf);
+            
+            let mut current = search_start;
+            while current <= search_end {
+                let crf = (current * 10.0).round() / 10.0;
+                let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
+                iterations += 1;
+                
+                let ssim = quality.0.unwrap_or(0.0);
+                let score = self.calculate_composite_score(&quality);
+                
+                if score > best_score || (score == best_score && ssim > best_ssim) {
+                    best_crf = crf;
+                    best_size = size;
+                    best_quality = quality;
+                    best_ssim = ssim;
+                    best_score = score;
+                    log_realtime!("      🎯 New best: CRF {:.1}, Score {:.4}, SSIM {:.4}", crf, score, ssim);
+                }
+                
+                if ssim >= target_ssim && self.check_cross_validation_consistency(&quality) == CrossValidationResult::AllAgree {
+                    log_realtime!("      ✅ Target reached in Phase 2");
+                    break;
+                }
+                
+                current += 2.0; // 🔥 v4.3: 中等步长
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════
+        // 🔥 v4.3 Phase 3: 精细调整 - 在最佳点 ±2 CRF 范围，步长 0.5
+        // 例如最佳点 14，测试: 12, 12.5, 13, 13.5, 14, 14.5, 15, 15.5, 16 (~8次，去重后更少)
+        // ═══════════════════════════════════════════════════════════
+        if best_ssim < target_ssim {
+            log_realtime!("   📍 Phase 3: Fine tuning (step 0.5, ±2 CRF)");
             
             let search_start = (best_crf - 2.0).max(self.config.min_crf);
             let search_end = (best_crf + 2.0).min(self.config.max_crf);
@@ -615,7 +655,7 @@ impl VideoExplorer {
                 }
                 
                 if ssim >= target_ssim {
-                    log_realtime!("      ✅ Target SSIM {:.4} reached in Phase 2", target_ssim);
+                    log_realtime!("      ✅ Target SSIM {:.4} reached in Phase 3", target_ssim);
                     break;
                 }
                 
@@ -624,47 +664,22 @@ impl VideoExplorer {
         }
         
         // ═══════════════════════════════════════════════════════════
-        // Phase 3: 超精细调整 - 在最佳点 ±0.5 CRF 范围，步长 0.1
+        // 🔥 v4.3 Phase 4: 极限逼近 - 仅在需要时，步长 0.1，有平台检测
+        // 只在 SSIM 接近目标但未达到时启用
         // ═══════════════════════════════════════════════════════════
-        if best_ssim < target_ssim {
-            log_realtime!("   📍 Phase 3: Ultra-fine tuning (step 0.1)");
+        let ssim_close_to_target = best_ssim >= target_ssim - 0.001; // 0.9989+
+        if best_ssim < target_ssim && ssim_close_to_target && best_crf > self.config.min_crf {
+            log_realtime!("   📍 Phase 4: Extreme precision (step 0.1) - SSIM close to target");
             
-            let search_start = (best_crf - 0.5).max(self.config.min_crf);
+            // 只在 ±1 CRF 范围内精细搜索
+            let search_start = (best_crf - 1.0).max(self.config.min_crf);
             let search_end = (best_crf + 0.5).min(self.config.max_crf);
             
             let mut current = search_start;
-            while current <= search_end {
-                let crf = (current * 10.0).round() / 10.0;
-                let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
-                iterations += 1;
-                
-                let ssim = quality.0.unwrap_or(0.0);
-                
-                if ssim > best_ssim || (ssim == best_ssim && size < best_size) {
-                    best_crf = crf;
-                    best_size = size;
-                    best_quality = quality;
-                    best_ssim = ssim;
-                    log_realtime!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim);
-                }
-                
-                if ssim >= target_ssim {
-                    log_realtime!("      ✅ Target SSIM {:.4} reached in Phase 3", target_ssim);
-                    break;
-                }
-                
-                current += 0.1;
-            }
-        }
-        
-        // ═══════════════════════════════════════════════════════════
-        // Phase 4: 极限逼近 - 如果仍未达到目标，继续向下搜索
-        // ═══════════════════════════════════════════════════════════
-        if best_ssim < target_ssim && best_crf > self.config.min_crf {
-            log_realtime!("   📍 Phase 4: Extreme approach (searching lower CRF)");
+            let mut plateau_count = 0;
+            let mut prev_ssim = best_ssim;
             
-            let mut current = best_crf - 0.1;
-            while current >= self.config.min_crf {
+            while current <= search_end {
                 let crf = (current * 10.0).round() / 10.0;
                 let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
                 iterations += 1;
@@ -677,6 +692,7 @@ impl VideoExplorer {
                     best_quality = quality;
                     best_ssim = ssim;
                     log_realtime!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim);
+                    plateau_count = 0;
                 }
                 
                 if ssim >= target_ssim {
@@ -684,21 +700,22 @@ impl VideoExplorer {
                     break;
                 }
                 
-                // 平台检测
-                let prev_key = ((current + 0.1) * 10.0).round() as i32;
-                let prev_prev_key = ((current + 0.2) * 10.0).round() as i32;
-                if let (Some(&(_, prev_q)), Some(&(_, prev_prev_q))) = 
-                    (tested_crfs.get(&prev_key), tested_crfs.get(&prev_prev_key)) {
-                    let prev_ssim = prev_q.0.unwrap_or(0.0);
-                    let prev_prev_ssim = prev_prev_q.0.unwrap_or(0.0);
-                    if ssim <= prev_ssim && prev_ssim <= prev_prev_ssim {
-                        log_realtime!("      ⚠️ SSIM plateau detected, stopping search");
+                // 🔥 v4.3: 增强平台检测 - 连续3次无改善则停止
+                if (ssim - prev_ssim).abs() < 0.0001 {
+                    plateau_count += 1;
+                    if plateau_count >= 3 {
+                        log_realtime!("      ⚠️ SSIM plateau detected (3 consecutive), stopping search");
                         break;
                     }
+                } else {
+                    plateau_count = 0;
                 }
+                prev_ssim = ssim;
                 
-                current -= 0.1;
+                current += 0.1;
             }
+        } else if best_ssim < target_ssim && !ssim_close_to_target {
+            log_realtime!("   ⏭️ Phase 4 skipped: SSIM {:.4} not close enough to target {:.4}", best_ssim, target_ssim);
         }
         
         // ═══════════════════════════════════════════════════════════
@@ -744,7 +761,7 @@ impl VideoExplorer {
             CrossValidationResult::Divergent => "🔴 Metrics divergent",
         };
         log_realtime!("      Cross-validation: {}", consistency_str);
-        log_realtime!("   📈 Iterations: {}, Precision: ±0.1 CRF", iterations);
+        log_realtime!("   📈 Iterations: {} (v4.3 optimized), Precision: ±0.1 CRF", iterations);
         
         Ok(ExploreResult {
             optimal_crf: best_crf,
