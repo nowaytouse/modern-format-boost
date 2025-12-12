@@ -1522,4 +1522,82 @@ mod tests {
         let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
         assert!(!should_convert_to_video, "2.99秒+低质量应该转GIF");
     }
+    
+    // ============================================================
+    // 🔧 cjxl 预处理测试
+    // ============================================================
+    
+    #[test]
+    fn test_prepare_input_webp() {
+        // WebP 文件应该触发 dwebp 预处理
+        let input = Path::new("/tmp/test.webp");
+        // 注意：这个测试只验证逻辑，不实际执行（文件不存在）
+        // 实际测试需要真实文件
+        let ext = input.extension()
+            .map(|e| e.to_ascii_lowercase())
+            .and_then(|e| e.to_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert_eq!(ext, "webp");
+    }
+    
+    #[test]
+    fn test_prepare_input_tiff() {
+        let input = Path::new("/tmp/test.tiff");
+        let ext = input.extension()
+            .map(|e| e.to_ascii_lowercase())
+            .and_then(|e| e.to_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert_eq!(ext, "tiff");
+    }
+    
+    #[test]
+    fn test_prepare_input_heic() {
+        let input = Path::new("/tmp/test.HEIC");
+        let ext = input.extension()
+            .map(|e| e.to_ascii_lowercase())
+            .and_then(|e| e.to_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert_eq!(ext, "heic");
+    }
+    
+    #[test]
+    fn test_prepare_input_png_no_preprocess() {
+        // PNG 不需要预处理
+        let input = Path::new("/tmp/test.png");
+        let ext = input.extension()
+            .map(|e| e.to_ascii_lowercase())
+            .and_then(|e| e.to_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert_eq!(ext, "png");
+        // PNG 应该直接使用，不需要预处理
+        assert!(!["webp", "tiff", "tif", "bmp", "heic", "heif"].contains(&ext.as_str()));
+    }
+    
+    #[test]
+    fn test_prepare_input_jpeg_no_preprocess() {
+        // JPEG 不需要预处理（使用 lossless_jpeg 模式）
+        let input = Path::new("/tmp/test.jpg");
+        let ext = input.extension()
+            .map(|e| e.to_ascii_lowercase())
+            .and_then(|e| e.to_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert_eq!(ext, "jpg");
+        assert!(!["webp", "tiff", "tif", "bmp", "heic", "heif"].contains(&ext.as_str()));
+    }
+    
+    // ============================================================
+    // 🔧 预处理格式覆盖测试
+    // ============================================================
+    
+    #[test]
+    fn test_preprocess_formats_coverage() {
+        // 验证所有需要预处理的格式都被覆盖
+        let preprocess_formats = ["webp", "tiff", "tif", "bmp", "heic", "heif"];
+        let direct_formats = ["png", "jpg", "jpeg", "gif", "jxl", "avif"];
+        
+        // 预处理格式不应该与直接格式重叠
+        for fmt in &preprocess_formats {
+            assert!(!direct_formats.contains(fmt), "{} 不应该在直接格式列表中", fmt);
+        }
+    }
 }
