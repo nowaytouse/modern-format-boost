@@ -57,56 +57,25 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
         });
     }
     
+    // 🔥 预处理：检测 cjxl 不能直接读取的格式，先转换为中间格式
+    let (actual_input, temp_file) = prepare_input_for_cjxl(input)?;
+    
     // Execute cjxl (v0.11+ syntax)
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
     let result = Command::new("cjxl")
-        .arg(input)
+        .arg(&actual_input)
         .arg(&output)
         .arg("-d").arg(format!("{:.1}", distance))  // Distance parameter
         .arg("-e").arg("7")    // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
         .arg("-j").arg(max_threads.to_string())  // 限制线程数
         .output();
     
-    // 🔥 WebP Fallback: 如果 cjxl 直接转换失败，尝试先用 dwebp 解码
-    let result = match &result {
-        Ok(output_cmd) if !output_cmd.status.success() => {
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if stderr.contains("Getting pixel data failed") && input.extension().map(|e| e.to_ascii_lowercase()) == Some(std::ffi::OsString::from("webp")) {
-                // WebP fallback: dwebp -> PNG -> cjxl
-                let temp_png = std::env::temp_dir().join(format!("mfb_webp_{}.png", std::process::id()));
-                let dwebp_result = Command::new("dwebp")
-                    .arg(input)
-                    .arg("-o")
-                    .arg(&temp_png)
-                    .output();
-                
-                if let Ok(dwebp_out) = dwebp_result {
-                    if dwebp_out.status.success() && temp_png.exists() {
-                        // 转换 PNG -> JXL
-                        let jxl_result = Command::new("cjxl")
-                            .arg(&temp_png)
-                            .arg(&output)
-                            .arg("-d").arg(format!("{:.1}", distance))
-                            .arg("-e").arg("7")
-                            .arg("-j").arg(max_threads.to_string())
-                            .output();
-                        let _ = fs::remove_file(&temp_png);
-                        jxl_result
-                    } else {
-                        let _ = fs::remove_file(&temp_png);
-                        result
-                    }
-                } else {
-                    result
-                }
-            } else {
-                result
-            }
-        }
-        _ => result,
-    };
+    // 清理临时文件
+    if let Some(temp) = temp_file {
+        let _ = fs::remove_file(temp);
+    }
     
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -1014,6 +983,143 @@ fn copy_metadata(src: &Path, dst: &Path) {
     }
 }
 
+// ============================================================
+// 🔧 cjxl 输入预处理
+// ============================================================
+
+/// 检测并预处理 cjxl 不能直接读取的格式
+/// 
+/// cjxl 已知问题：
+/// - 某些带 ICC profile 的 WebP 文件会报 "Getting pixel data failed"
+/// - 某些 TIFF 格式不支持
+/// - 某些 BMP 格式不支持
+/// 
+/// 返回: (实际输入路径, 临时文件路径 Option)
+fn prepare_input_for_cjxl(input: &Path) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>)> {
+    let ext = input.extension()
+        .map(|e| e.to_ascii_lowercase())
+        .and_then(|e| e.to_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+    
+    match ext.as_str() {
+        // WebP: 使用 dwebp 解码（处理 ICC profile 问题）
+        "webp" => {
+            let temp_png = std::env::temp_dir().join(format!(
+                "mfb_cjxl_{}_{}.png",
+                std::process::id(),
+                input.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+            
+            let result = Command::new("dwebp")
+                .arg(input)
+                .arg("-o")
+                .arg(&temp_png)
+                .output();
+            
+            match result {
+                Ok(output) if output.status.success() && temp_png.exists() => {
+                    Ok((temp_png.clone(), Some(temp_png)))
+                }
+                _ => {
+                    // dwebp 失败，尝试直接用 cjxl
+                    let _ = fs::remove_file(&temp_png);
+                    Ok((input.to_path_buf(), None))
+                }
+            }
+        }
+        
+        // TIFF: 使用 ImageMagick 转换
+        "tiff" | "tif" => {
+            let temp_png = std::env::temp_dir().join(format!(
+                "mfb_cjxl_{}_{}.png",
+                std::process::id(),
+                input.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+            
+            let result = Command::new("magick")
+                .arg(input)
+                .arg("-depth").arg("16")  // 保留位深
+                .arg(&temp_png)
+                .output();
+            
+            match result {
+                Ok(output) if output.status.success() && temp_png.exists() => {
+                    Ok((temp_png.clone(), Some(temp_png)))
+                }
+                _ => {
+                    let _ = fs::remove_file(&temp_png);
+                    Ok((input.to_path_buf(), None))
+                }
+            }
+        }
+        
+        // BMP: 使用 ImageMagick 转换
+        "bmp" => {
+            let temp_png = std::env::temp_dir().join(format!(
+                "mfb_cjxl_{}_{}.png",
+                std::process::id(),
+                input.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+            
+            let result = Command::new("magick")
+                .arg(input)
+                .arg(&temp_png)
+                .output();
+            
+            match result {
+                Ok(output) if output.status.success() && temp_png.exists() => {
+                    Ok((temp_png.clone(), Some(temp_png)))
+                }
+                _ => {
+                    let _ = fs::remove_file(&temp_png);
+                    Ok((input.to_path_buf(), None))
+                }
+            }
+        }
+        
+        // HEIC/HEIF: 使用 ImageMagick 或 sips 转换
+        "heic" | "heif" => {
+            let temp_png = std::env::temp_dir().join(format!(
+                "mfb_cjxl_{}_{}.png",
+                std::process::id(),
+                input.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+            
+            // 优先使用 sips (macOS 原生)
+            let result = Command::new("sips")
+                .arg("-s").arg("format").arg("png")
+                .arg(input)
+                .arg("--out").arg(&temp_png)
+                .output();
+            
+            match result {
+                Ok(output) if output.status.success() && temp_png.exists() => {
+                    Ok((temp_png.clone(), Some(temp_png)))
+                }
+                _ => {
+                    // 尝试 ImageMagick
+                    let result = Command::new("magick")
+                        .arg(input)
+                        .arg(&temp_png)
+                        .output();
+                    
+                    match result {
+                        Ok(output) if output.status.success() && temp_png.exists() => {
+                            Ok((temp_png.clone(), Some(temp_png)))
+                        }
+                        _ => {
+                            let _ = fs::remove_file(&temp_png);
+                            Ok((input.to_path_buf(), None))
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 其他格式：直接使用
+        _ => Ok((input.to_path_buf(), None)),
+    }
+}
 
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
 fn get_output_path(input: &Path, extension: &str, output_dir: &Option<std::path::PathBuf>) -> Result<std::path::PathBuf> {
