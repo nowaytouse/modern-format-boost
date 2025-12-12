@@ -89,24 +89,55 @@ impl CheckpointManager {
         if self.lock_file.exists() {
             let content = fs::read_to_string(&self.lock_file)?;
             if let Ok(pid) = content.trim().parse::<u32>() {
-                // Check if process is still running (Unix only)
+                // Check if it's our own process (same PID = stale from crash)
+                if pid == std::process::id() {
+                    let _ = fs::remove_file(&self.lock_file);
+                    return Ok(None);
+                }
+                
+                // Check if process is still running AND is xmp-merge (Unix only)
                 #[cfg(unix)]
                 {
                     use std::process::Command;
-                    let status = Command::new("kill")
+                    // First check if process exists
+                    let exists = Command::new("kill")
                         .args(["-0", &pid.to_string()])
-                        .status();
-                    if status.map(|s| s.success()).unwrap_or(false) {
-                        return Ok(Some(pid));
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    
+                    if exists {
+                        // Check if it's actually xmp-merge process
+                        let output = Command::new("ps")
+                            .args(["-p", &pid.to_string(), "-o", "comm="])
+                            .output();
+                        
+                        if let Ok(out) = output {
+                            let comm = String::from_utf8_lossy(&out.stdout);
+                            // Only block if it's actually xmp-merge
+                            if comm.contains("xmp-merge") || comm.contains("xmp_merge") {
+                                return Ok(Some(pid));
+                            }
+                        }
                     }
                 }
                 #[cfg(not(unix))]
                 {
-                    // On non-Unix, assume process is running if lock exists
+                    // On non-Unix, just check file age (stale if > 1 hour)
+                    if let Ok(meta) = fs::metadata(&self.lock_file) {
+                        if let Ok(modified) = meta.modified() {
+                            if let Ok(elapsed) = modified.elapsed() {
+                                if elapsed.as_secs() > 3600 {
+                                    let _ = fs::remove_file(&self.lock_file);
+                                    return Ok(None);
+                                }
+                            }
+                        }
+                    }
                     return Ok(Some(pid));
                 }
             }
-            // Stale lock file, remove it
+            // Stale lock file (invalid content or process not xmp-merge), remove it
             let _ = fs::remove_file(&self.lock_file);
         }
         Ok(None)
