@@ -604,17 +604,24 @@ pub fn calculate_hevc_crf_with_options(
     }
     
     // === 🟢 Boundary handling ===
-    // 🔥 Calibrated formula for HEVC:
+    // 🔥 v3.7: 修正低 BPP 边界处理
+    // 
+    // Calibrated formula for HEVC:
     // Base: CRF = 46 - 5 * log2(effective_bpp * 100)
     // This maps (after all factors applied):
-    //   effective_bpp=0.1 → CRF ~26 (standard quality)
-    //   effective_bpp=0.2 → CRF ~23 (good quality)
-    //   effective_bpp=0.3 → CRF ~21 (high quality)
-    //   effective_bpp=0.5 → CRF ~19 (very high quality)
-    //   effective_bpp=1.0 → CRF ~16 (near-lossless)
-    let crf_float = if effective_bpp < 0.03 {
-        // Screen recording: cap at CRF 30
-        30.0_f64.min(46.0 - 5.0 * (effective_bpp * 100.0).max(0.001).log2())
+    //   effective_bpp=0.02 → CRF ~35 (low quality source, match it)
+    //   effective_bpp=0.05 → CRF ~30 (standard streaming)
+    //   effective_bpp=0.1  → CRF ~26 (standard quality)
+    //   effective_bpp=0.2  → CRF ~23 (good quality)
+    //   effective_bpp=0.3  → CRF ~21 (high quality)
+    //   effective_bpp=0.5  → CRF ~19 (very high quality)
+    //   effective_bpp=1.0  → CRF ~16 (near-lossless)
+    //
+    // 🔥 关键修复：低 BPP 源应该用高 CRF 匹配，而不是 cap 在 30
+    let crf_float = if effective_bpp < 0.02 {
+        // 极低 BPP（<0.02）：可能是屏幕录制或极度压缩的视频
+        // 使用公式计算，但 cap 在 35（避免质量太差）
+        35.0_f64.min(46.0 - 5.0 * (effective_bpp * 100.0).max(0.001).log2())
     } else if effective_bpp > 2.0 {
         // ProRes / intermediate: floor at CRF 15
         15.0_f64.max(46.0 - 5.0 * (effective_bpp * 100.0).log2())
