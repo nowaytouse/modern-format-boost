@@ -1262,4 +1262,119 @@ mod tests {
         let result = get_output_path(input, "jxl", &None);
         assert!(result.is_err());
     }
+    
+    // ============================================================
+    // 🍎 Apple 兼容模式测试 (裁判测试)
+    // ============================================================
+    
+    #[test]
+    fn test_is_high_quality_720p() {
+        // 720p 应该被判定为高质量
+        assert!(is_high_quality_animated(1280, 720));
+    }
+    
+    #[test]
+    fn test_is_high_quality_1080p() {
+        // 1080p 应该被判定为高质量
+        assert!(is_high_quality_animated(1920, 1080));
+    }
+    
+    #[test]
+    fn test_is_high_quality_width_only() {
+        // 宽度 >= 1280 应该被判定为高质量
+        assert!(is_high_quality_animated(1280, 480));
+    }
+    
+    #[test]
+    fn test_is_high_quality_height_only() {
+        // 高度 >= 720 应该被判定为高质量
+        assert!(is_high_quality_animated(960, 720));
+    }
+    
+    #[test]
+    fn test_is_high_quality_total_pixels() {
+        // 总像素 >= 921600 应该被判定为高质量
+        // 1024 * 900 = 921600
+        assert!(is_high_quality_animated(1024, 900));
+    }
+    
+    #[test]
+    fn test_is_not_high_quality_small() {
+        // 小尺寸应该不是高质量
+        assert!(!is_high_quality_animated(640, 480));
+    }
+    
+    #[test]
+    fn test_is_not_high_quality_480p() {
+        // 480p 应该不是高质量
+        assert!(!is_high_quality_animated(854, 480));
+    }
+    
+    #[test]
+    fn test_is_not_high_quality_typical_gif() {
+        // 典型 GIF 尺寸应该不是高质量
+        assert!(!is_high_quality_animated(400, 300));
+        assert!(!is_high_quality_animated(500, 500));
+        assert!(!is_high_quality_animated(320, 240));
+    }
+    
+    #[test]
+    fn test_apple_compat_routing_short_low_quality() {
+        // 短动画 + 低质量 → 应该转 GIF
+        let duration = 2.0; // < 3秒
+        let (width, height) = (400, 300); // 低质量
+        
+        let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
+        assert!(!should_convert_to_video, "短动画+低质量应该转GIF，不是视频");
+    }
+    
+    #[test]
+    fn test_apple_compat_routing_short_high_quality() {
+        // 短动画 + 高质量 → 应该转视频
+        let duration = 2.0; // < 3秒
+        let (width, height) = (1920, 1080); // 高质量
+        
+        let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
+        assert!(should_convert_to_video, "短动画+高质量应该转视频");
+    }
+    
+    #[test]
+    fn test_apple_compat_routing_long_low_quality() {
+        // 长动画 + 低质量 → 应该转视频
+        let duration = 5.0; // >= 3秒
+        let (width, height) = (400, 300); // 低质量
+        
+        let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
+        assert!(should_convert_to_video, "长动画应该转视频，不管质量");
+    }
+    
+    #[test]
+    fn test_apple_compat_routing_long_high_quality() {
+        // 长动画 + 高质量 → 应该转视频
+        let duration = 10.0; // >= 3秒
+        let (width, height) = (1920, 1080); // 高质量
+        
+        let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
+        assert!(should_convert_to_video, "长动画+高质量应该转视频");
+    }
+    
+    #[test]
+    fn test_apple_compat_boundary_3_seconds() {
+        // 边界测试：正好 3 秒
+        let duration = 3.0;
+        let (width, height) = (400, 300); // 低质量
+        
+        let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
+        assert!(should_convert_to_video, "正好3秒应该转视频");
+    }
+    
+    #[test]
+    fn test_apple_compat_boundary_just_under_3_seconds() {
+        // 边界测试：刚好不到 3 秒
+        let duration = 2.99;
+        let (width, height) = (400, 300); // 低质量
+        
+        let should_convert_to_video = duration >= 3.0 || is_high_quality_animated(width, height);
+        assert!(!should_convert_to_video, "2.99秒+低质量应该转GIF");
+    }
 }

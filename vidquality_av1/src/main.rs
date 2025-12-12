@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
 use std::path::PathBuf;
 use std::time::Instant;
-use vidquality::{detect_video, auto_convert, determine_strategy, ConversionConfig};
+use vidquality_av1::{detect_video, auto_convert, determine_strategy, ConversionConfig};
 
 // 🔥 使用 shared_utils 的统计报告功能（模块化）
 use shared_utils::{print_summary_report, BatchResult};
@@ -274,7 +274,7 @@ fn main() -> anyhow::Result<()> {
             info!("   (Note: Simple mode now enforces lossless conversion by default)");
             info!("");
             
-            let result = vidquality::simple_convert(&input, output.as_deref())?;
+            let result = vidquality_av1::simple_convert(&input, output.as_deref())?;
             
             info!("");
             info!("✅ Complete!");
@@ -300,7 +300,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_analysis_human(result: &vidquality::VideoDetectionResult) {
+fn print_analysis_human(result: &vidquality_av1::VideoDetectionResult) {
     println!("\n📊 Video Analysis Report");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📁 File: {}", result.file_path);

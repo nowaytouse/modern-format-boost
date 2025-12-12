@@ -6,7 +6,7 @@
 //!
 //! ## Simple Mode
 //! ```rust,ignore
-//! use vidquality::simple_convert;
+//! use vidquality_av1::simple_convert;
 //! use std::path::Path;
 //! 
 //! let input = Path::new("video.mp4");

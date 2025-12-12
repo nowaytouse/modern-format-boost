@@ -1,9 +1,9 @@
 [package]
-name = "imgquality"
+name = "imgquality-av1"
 version = "0.1.0"
 edition = "2021"
-authors = ["Your Name <your.email@example.com>"]
-description = "High-performance image quality analyzer and format upgrade tool"
+authors = ["nyamiiko"]
+description = "High-performance image quality analyzer - AV1/AVIF format converter"
 license = "MIT"
 
 [dependencies]
