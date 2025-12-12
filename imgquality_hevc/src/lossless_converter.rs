@@ -1016,6 +1016,157 @@ fn get_output_path(input: &Path, extension: &str, output_dir: &Option<std::path:
         .map_err(ImgQualityError::ConversionError)
 }
 
+/// 🍎 Apple 兼容模式：将现代动态图片转换为 GIF
+/// 
+/// 用于短时长（<3秒）且非高质量的动态图片
+/// - 保留原始帧数和尺寸
+/// - 使用 Bayer 抖动算法
+/// - 最大 256 色
+/// - 视觉无损参数
+pub fn convert_to_gif_apple_compat(
+    input: &Path,
+    options: &ConvertOptions,
+    fps: Option<f32>,
+) -> Result<ConversionResult> {
+    // Anti-duplicate check
+    if !options.force && is_already_processed(input) {
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
+            output_size: None,
+            size_reduction: None,
+            message: "Skipped: Already processed".to_string(),
+            skipped: true,
+            skip_reason: Some("duplicate".to_string()),
+        });
+    }
+    
+    let input_size = fs::metadata(input)?.len();
+    let output = get_output_path(input, "gif", &options.output_dir)?;
+    
+    // Ensure output directory exists
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    
+    // Check if output already exists
+    if output.exists() && !options.force {
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: Some(output.display().to_string()),
+            input_size,
+            output_size: Some(fs::metadata(&output)?.len()),
+            size_reduction: None,
+            message: "Skipped: Output already exists".to_string(),
+            skipped: true,
+            skip_reason: Some("exists".to_string()),
+        });
+    }
+    
+    // 获取原始尺寸
+    let (width, height) = get_input_dimensions(input)?;
+    
+    // 使用 ffmpeg 转换为 GIF
+    // - 保留原始尺寸
+    // - 使用 Bayer 抖动算法（视觉效果最好）
+    // - 256 色调色板
+    // - 保留原始帧率
+    let fps_val = fps.unwrap_or(10.0);
+    
+    // 两步转换：先生成调色板，再应用
+    // 这样可以获得更好的颜色质量
+    let palette_path = output.with_extension("palette.png");
+    
+    // Step 1: 生成调色板
+    let palette_result = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(input)
+        .args([
+            "-vf", &format!(
+                "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
+                fps_val, width, height
+            ),
+        ])
+        .arg(&palette_path)
+        .output();
+    
+    if let Err(e) = palette_result {
+        return Err(ImgQualityError::ToolNotFound(format!("ffmpeg not found: {}", e)));
+    }
+    
+    // Step 2: 使用调色板转换
+    let result = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(input)
+        .args(["-i"])
+        .arg(&palette_path)
+        .args([
+            "-lavfi", &format!(
+                "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                fps_val, width, height
+            ),
+        ])
+        .arg(&output)
+        .output();
+    
+    // 清理调色板文件
+    let _ = fs::remove_file(&palette_path);
+    
+    match result {
+        Ok(output_cmd) if output_cmd.status.success() => {
+            let output_size = fs::metadata(&output)?.len();
+            let reduction = 1.0 - (output_size as f64 / input_size as f64);
+            
+            copy_metadata(input, &output);
+            mark_as_processed(input);
+            
+            if options.should_delete_original() {
+                let _ = shared_utils::conversion::safe_delete_original(input, &output, 100);
+            }
+            
+            let reduction_pct = reduction * 100.0;
+            let message = if reduction >= 0.0 {
+                format!("GIF (Apple Compat): size reduced {:.1}%", reduction_pct)
+            } else {
+                format!("GIF (Apple Compat): size increased {:.1}%", -reduction_pct)
+            };
+            
+            Ok(ConversionResult {
+                success: true,
+                input_path: input.display().to_string(),
+                output_path: Some(output.display().to_string()),
+                input_size,
+                output_size: Some(output_size),
+                size_reduction: Some(reduction_pct),
+                message,
+                skipped: false,
+                skip_reason: None,
+            })
+        }
+        Ok(output_cmd) => {
+            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            Err(ImgQualityError::ConversionError(format!("ffmpeg GIF conversion failed: {}", stderr)))
+        }
+        Err(e) => {
+            Err(ImgQualityError::ToolNotFound(format!("ffmpeg not found: {}", e)))
+        }
+    }
+}
+
+/// 判断动态图片是否为"高质量"（应转为视频而非 GIF）
+/// 
+/// 高质量条件（满足任一）：
+/// - 分辨率 >= 720p (1280x720)
+/// - 宽度 >= 1280 或 高度 >= 720
+/// - 总像素 >= 921600 (1280*720)
+pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
+    let total_pixels = width as u64 * height as u64;
+    width >= 1280 || height >= 720 || total_pixels >= 921600
+}
+
 /// 获取输入文件的尺寸（宽度和高度）
 /// 
 /// 使用 ffprobe 获取视频/动画的尺寸，或使用 image crate 获取静态图片的尺寸

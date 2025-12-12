@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use imgquality_hevc::{analyze_image, get_recommendation};
 use imgquality_hevc::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
+use imgquality_hevc::lossless_converter::{convert_to_gif_apple_compat, is_high_quality_animated};
 use rayon::prelude::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
+
+/// 检查动态图片是否为高质量（用于决定转 HEVC 还是 GIF）
+fn convert_to_gif_apple_compat_check_quality(width: u32, height: u32) -> bool {
+    is_high_quality_animated(width, height)
+}
 
 #[derive(Parser)]
 #[command(name = "imgquality")]
@@ -569,23 +575,21 @@ fn auto_convert_single_file(
             println!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
-        // Animated → HEVC MP4 (only if >=3 seconds)
+        // Animated → HEVC MP4 or GIF (based on duration and quality)
         // 🔥 默认使用智能质量匹配：二分搜索 + SSIM 裁判验证
-        // - 无损动画源（GIF/APNG）：使用质量匹配以获得更好的压缩率
-        // - 有损动画源（WebP animated）：使用质量匹配以保持质量
-        // 🍎 Apple compat mode: animated WebP/AVIF will be converted to HEVC
+        // 🍎 Apple compat mode: 
+        //   - 长动画(>=3s) 或 高质量 → HEVC MP4
+        //   - 短动画(<3s) 且 非高质量 → GIF (Bayer 256色)
         (format, is_lossless, true) => {
             // 🍎 Check if this is a modern animated format that should be skipped
-            // In non-Apple-compat mode, skip lossy animated WebP/AVIF to avoid generation loss
-            let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF");
+            let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
             if is_modern_animated && !is_lossless && !config.apple_compat {
                 println!("⏭️ Skipping modern lossy animated format (avoid generation loss): {}", input.display());
                 println!("   💡 Use --apple-compat to convert to HEVC for Apple device compatibility");
                 return Ok(());
             }
             
-            // Check duration - only convert animations >=3 seconds
-            // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
+            // 获取时长
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
@@ -594,22 +598,43 @@ fn auto_convert_single_file(
                     return Ok(());
                 }
             };
-            if duration < 3.0 {
+            
+            // 获取尺寸判断是否高质量
+            let is_high_quality = if let Ok((w, h)) = shared_utils::probe_video(input)
+                .map(|p| (p.width, p.height))
+                .or_else(|_| image::image_dimensions(input).map_err(|_| ())) 
+            {
+                convert_to_gif_apple_compat_check_quality(w, h)
+            } else {
+                false // 无法获取尺寸时假设非高质量
+            };
+            
+            // 🍎 Apple 兼容模式下的现代动态图片处理策略
+            if config.apple_compat && is_modern_animated {
+                if duration >= 3.0 || is_high_quality {
+                    // 长动画或高质量 → HEVC MP4
+                    println!("🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s, {}): {}", 
+                        format, duration, 
+                        if is_high_quality { "高质量" } else { "长动画" },
+                        input.display());
+                    convert_to_hevc_mp4_matched(input, &options, &analysis)?
+                } else {
+                    // 短动画且非高质量 → GIF (Bayer 256色)
+                    println!("🍎 Animated {}→GIF (Apple Compat, {:.1}s, Bayer 256色): {}", 
+                        format, duration, input.display());
+                    convert_to_gif_apple_compat(input, &options, None)?
+                }
+            } else if duration < 3.0 {
+                // 非 Apple 兼容模式下，短动画跳过
                 println!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
                 return Ok(());
-            }
-            
-            if config.lossless {
+            } else if config.lossless {
                 // 用户显式要求数学无损
                 println!("🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mkv_lossless(input, &options)?
             } else {
                 // 🔥 默认：智能质量匹配（二分搜索 + SSIM 验证）
-                if config.apple_compat && is_modern_animated {
-                    println!("🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s): {}", format, duration, input.display());
-                } else {
-                    println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
-                }
+                println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mp4_matched(input, &options, &analysis)?
             }
         }
