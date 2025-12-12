@@ -69,6 +69,45 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
         .arg("-j").arg(max_threads.to_string())  // 限制线程数
         .output();
     
+    // 🔥 WebP Fallback: 如果 cjxl 直接转换失败，尝试先用 dwebp 解码
+    let result = match &result {
+        Ok(output_cmd) if !output_cmd.status.success() => {
+            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            if stderr.contains("Getting pixel data failed") && input.extension().map(|e| e.to_ascii_lowercase()) == Some(std::ffi::OsString::from("webp")) {
+                // WebP fallback: dwebp -> PNG -> cjxl
+                let temp_png = std::env::temp_dir().join(format!("mfb_webp_{}.png", std::process::id()));
+                let dwebp_result = Command::new("dwebp")
+                    .arg(input)
+                    .arg("-o")
+                    .arg(&temp_png)
+                    .output();
+                
+                if let Ok(dwebp_out) = dwebp_result {
+                    if dwebp_out.status.success() && temp_png.exists() {
+                        // 转换 PNG -> JXL
+                        let jxl_result = Command::new("cjxl")
+                            .arg(&temp_png)
+                            .arg(&output)
+                            .arg("-d").arg(format!("{:.1}", distance))
+                            .arg("-e").arg("7")
+                            .arg("-j").arg(max_threads.to_string())
+                            .output();
+                        let _ = fs::remove_file(&temp_png);
+                        jxl_result
+                    } else {
+                        let _ = fs::remove_file(&temp_png);
+                        result
+                    }
+                } else {
+                    result
+                }
+            } else {
+                result
+            }
+        }
+        _ => result,
+    };
+    
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
