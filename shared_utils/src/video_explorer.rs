@@ -468,62 +468,41 @@ impl VideoExplorer {
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         
-        // 🔥 v4.1: 详细配置输出
-        log.push(format!("🔬 Precise Quality-Match v4.1 ({:?})", self.encoder));
-        log.push(format!("   📁 Input: {} bytes ({:.2} KB)", 
-            self.input_size, self.input_size as f64 / 1024.0));
-        log.push(format!("   📐 CRF range: [{:.1}, {:.1}], Initial: {:.1}", 
-            self.config.min_crf, self.config.max_crf, self.config.initial_crf));
-        log.push("   🎯 Goal: Approach SSIM=1.0 (no time limit)".to_string());
+        // 🔥 v4.2: 实时日志输出宏 - 同时输出到 stderr 和 log
+        macro_rules! log_realtime {
+            ($($arg:tt)*) => {{
+                let msg = format!($($arg)*);
+                eprintln!("{}", msg);
+                log.push(msg);
+            }};
+        }
         
-        // 🔥 v4.1: 显示交叉验证配置
+        // 🔥 v4.2: 详细配置输出 - 实时显示
+        log_realtime!("🔬 Precise Quality-Match v4.2 ({:?})", self.encoder);
+        log_realtime!("   📁 Input: {} bytes ({:.2} KB)", 
+            self.input_size, self.input_size as f64 / 1024.0);
+        log_realtime!("   📐 CRF range: [{:.1}, {:.1}], Initial: {:.1}", 
+            self.config.min_crf, self.config.max_crf, self.config.initial_crf);
+        log_realtime!("   🎯 Goal: Approach SSIM=1.0 (no time limit)");
+        
+        // 🔥 v4.2: 显示交叉验证配置
         let cross_validation = self.config.quality_thresholds.validate_ssim 
             && self.config.quality_thresholds.validate_psnr 
             && self.config.quality_thresholds.validate_vmaf;
-        log.push(format!("   🔄 Cross-validation: {} (SSIM={}, PSNR={}, VMAF={})",
+        log_realtime!("   🔄 Cross-validation: {} (SSIM={}, PSNR={}, VMAF={})",
             if cross_validation { "ENABLED" } else { "PARTIAL" },
             if self.config.quality_thresholds.validate_ssim { "✓" } else { "✗" },
             if self.config.quality_thresholds.validate_psnr { "✓" } else { "✗" },
-            if self.config.quality_thresholds.validate_vmaf { "✓" } else { "✗" }));
-        log.push(format!("   ⚠️ Thresholds: SSIM≥{:.4}, PSNR≥{:.1}dB, VMAF≥{:.1}", 
+            if self.config.quality_thresholds.validate_vmaf { "✓" } else { "✗" });
+        log_realtime!("   ⚠️ Thresholds: SSIM≥{:.4}, PSNR≥{:.1}dB, VMAF≥{:.1}", 
             self.config.quality_thresholds.min_ssim,
             self.config.quality_thresholds.min_psnr,
-            self.config.quality_thresholds.min_vmaf));
-        log.push("   ═══════════════════════════════════════════════════".to_string());
+            self.config.quality_thresholds.min_vmaf);
+        log_realtime!("   ═══════════════════════════════════════════════════");
         
         // 记录已测试的 CRF 值，避免重复编码（精度 0.1）
         let mut tested_crfs: std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))> = 
             std::collections::HashMap::new();
-        
-        // 🔥 v4.1: 增强的测试函数，包含交叉验证分析
-        let test_crf = |crf: f32, tested: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>, log: &mut Vec<String>| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
-            let key = (crf * 10.0).round() as i32;
-            if let Some(&cached) = tested.get(&key) {
-                log.push(format!("   CRF {:.1}: [CACHED]", crf));
-                return Ok(cached);
-            }
-            let size = self.encode(crf)?;
-            let quality = self.validate_quality()?;
-            
-            // 🔥 v4.1: 详细质量指标输出
-            let ssim_str = quality.0.map(|s| format!("SSIM:{:.4}", s)).unwrap_or_else(|| "SSIM:N/A".to_string());
-            let psnr_str = quality.1.map(|p| format!("PSNR:{:.2}dB", p)).unwrap_or_else(|| "PSNR:N/A".to_string());
-            let vmaf_str = quality.2.map(|v| format!("VMAF:{:.2}", v)).unwrap_or_else(|| "VMAF:N/A".to_string());
-            
-            // 🔥 v4.1: 交叉验证一致性检查
-            let consistency = self.check_cross_validation_consistency(&quality);
-            let consistency_icon = match consistency {
-                CrossValidationResult::AllAgree => "🟢",
-                CrossValidationResult::MajorityAgree => "🟡",
-                CrossValidationResult::Divergent => "🔴",
-            };
-            
-            log.push(format!("   CRF {:.1}: {} bytes ({:+.1}%) | {} | {} | {} | {}", 
-                crf, size, self.calc_change_pct(size), ssim_str, psnr_str, vmaf_str, consistency_icon));
-            
-            tested.insert(key, (size, quality));
-            Ok((size, quality))
-        };
         
         let mut iterations = 0u32;
         let target_ssim = 0.9999_f64;
@@ -533,21 +512,65 @@ impl VideoExplorer {
         let mut best_size = 0u64;
         let mut best_quality: (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
         let mut best_ssim = 0.0_f64;
-        let mut best_score = 0.0_f64; // 🔥 v4.1: 综合评分
+        let mut best_score = 0.0_f64;
+        
+        // 🔥 v4.2: 实时测试 CRF 的辅助函数
+        let test_crf_realtime = |crf: f32, 
+                                 tested: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
+                                 log: &mut Vec<String>,
+                                 explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
+            let key = (crf * 10.0).round() as i32;
+            if let Some(&cached) = tested.get(&key) {
+                let msg = format!("   CRF {:.1}: [CACHED]", crf);
+                eprintln!("{}", msg);
+                log.push(msg);
+                return Ok(cached);
+            }
+            
+            // 🔥 v4.2: 实时显示编码开始
+            eprintln!("   🔄 Encoding CRF {:.1}...", crf);
+            
+            let size = explorer.encode(crf)?;
+            
+            // 🔥 v4.2: 实时显示质量计算开始
+            eprintln!("   📊 Calculating quality metrics...");
+            
+            let quality = explorer.validate_quality()?;
+            
+            // 🔥 v4.2: 详细质量指标输出
+            let ssim_str = quality.0.map(|s| format!("SSIM:{:.4}", s)).unwrap_or_else(|| "SSIM:N/A".to_string());
+            let psnr_str = quality.1.map(|p| format!("PSNR:{:.2}dB", p)).unwrap_or_else(|| "PSNR:N/A".to_string());
+            let vmaf_str = quality.2.map(|v| format!("VMAF:{:.2}", v)).unwrap_or_else(|| "VMAF:N/A".to_string());
+            
+            let consistency = explorer.check_cross_validation_consistency(&quality);
+            let consistency_icon = match consistency {
+                CrossValidationResult::AllAgree => "🟢",
+                CrossValidationResult::MajorityAgree => "🟡",
+                CrossValidationResult::Divergent => "🔴",
+            };
+            
+            let msg = format!("   CRF {:.1}: {} bytes ({:+.1}%) | {} | {} | {} | {}", 
+                crf, size, explorer.calc_change_pct(size), ssim_str, psnr_str, vmaf_str, consistency_icon);
+            eprintln!("{}", msg);
+            log.push(msg);
+            
+            tested.insert(key, (size, quality));
+            Ok((size, quality))
+        };
         
         // ═══════════════════════════════════════════════════════════
         // Phase 1: 全范围扫描 - 从 min_crf 到 max_crf，步长 1.0
         // ═══════════════════════════════════════════════════════════
-        log.push("   📍 Phase 1: Full range scan (step 1.0)".to_string());
+        log_realtime!("   📍 Phase 1: Full range scan (step 1.0)");
         
         let mut current = self.config.min_crf;
         while current <= self.config.max_crf {
             let crf = (current * 10.0).round() / 10.0;
-            let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+            let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
             iterations += 1;
             
             let ssim = quality.0.unwrap_or(0.0);
-            let score = self.calculate_composite_score(&quality); // 🔥 v4.1: 综合评分
+            let score = self.calculate_composite_score(&quality);
             
             if score > best_score || (score == best_score && ssim > best_ssim) {
                 best_crf = crf;
@@ -555,12 +578,11 @@ impl VideoExplorer {
                 best_quality = quality;
                 best_ssim = ssim;
                 best_score = score;
-                log.push(format!("      🎯 New best: CRF {:.1}, Score {:.4}, SSIM {:.4}", crf, score, ssim));
+                log_realtime!("      🎯 New best: CRF {:.1}, Score {:.4}, SSIM {:.4}", crf, score, ssim);
             }
             
-            // 🔥 v4.1: 交叉验证提前终止
             if ssim >= target_ssim && self.check_cross_validation_consistency(&quality) == CrossValidationResult::AllAgree {
-                log.push(format!("      ✅ Target reached with cross-validation agreement in Phase 1"));
+                log_realtime!("      ✅ Target reached with cross-validation agreement in Phase 1");
                 break;
             }
             
@@ -571,7 +593,7 @@ impl VideoExplorer {
         // Phase 2: 区域精细化 - 在最佳点 ±2 CRF 范围，步长 0.5
         // ═══════════════════════════════════════════════════════════
         if best_ssim < target_ssim {
-            log.push("   📍 Phase 2: Region refinement (step 0.5)".to_string());
+            log_realtime!("   📍 Phase 2: Region refinement (step 0.5)");
             
             let search_start = (best_crf - 2.0).max(self.config.min_crf);
             let search_end = (best_crf + 2.0).min(self.config.max_crf);
@@ -579,7 +601,7 @@ impl VideoExplorer {
             let mut current = search_start;
             while current <= search_end {
                 let crf = ((current * 2.0).round() / 2.0).clamp(self.config.min_crf, self.config.max_crf);
-                let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+                let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
                 iterations += 1;
                 
                 let ssim = quality.0.unwrap_or(0.0);
@@ -589,11 +611,11 @@ impl VideoExplorer {
                     best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
-                    log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
+                    log_realtime!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim);
                 }
                 
                 if ssim >= target_ssim {
-                    log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 2", target_ssim));
+                    log_realtime!("      ✅ Target SSIM {:.4} reached in Phase 2", target_ssim);
                     break;
                 }
                 
@@ -605,15 +627,15 @@ impl VideoExplorer {
         // Phase 3: 超精细调整 - 在最佳点 ±0.5 CRF 范围，步长 0.1
         // ═══════════════════════════════════════════════════════════
         if best_ssim < target_ssim {
-            log.push("   📍 Phase 3: Ultra-fine tuning (step 0.1)".to_string());
+            log_realtime!("   📍 Phase 3: Ultra-fine tuning (step 0.1)");
             
             let search_start = (best_crf - 0.5).max(self.config.min_crf);
             let search_end = (best_crf + 0.5).min(self.config.max_crf);
             
             let mut current = search_start;
             while current <= search_end {
-                let crf = (current * 10.0).round() / 10.0; // 0.1 精度
-                let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+                let crf = (current * 10.0).round() / 10.0;
+                let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
                 iterations += 1;
                 
                 let ssim = quality.0.unwrap_or(0.0);
@@ -623,11 +645,11 @@ impl VideoExplorer {
                     best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
-                    log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
+                    log_realtime!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim);
                 }
                 
                 if ssim >= target_ssim {
-                    log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 3", target_ssim));
+                    log_realtime!("      ✅ Target SSIM {:.4} reached in Phase 3", target_ssim);
                     break;
                 }
                 
@@ -639,12 +661,12 @@ impl VideoExplorer {
         // Phase 4: 极限逼近 - 如果仍未达到目标，继续向下搜索
         // ═══════════════════════════════════════════════════════════
         if best_ssim < target_ssim && best_crf > self.config.min_crf {
-            log.push("   📍 Phase 4: Extreme approach (searching lower CRF)".to_string());
+            log_realtime!("   📍 Phase 4: Extreme approach (searching lower CRF)");
             
             let mut current = best_crf - 0.1;
             while current >= self.config.min_crf {
                 let crf = (current * 10.0).round() / 10.0;
-                let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+                let (size, quality) = test_crf_realtime(crf, &mut tested_crfs, &mut log, self)?;
                 iterations += 1;
                 
                 let ssim = quality.0.unwrap_or(0.0);
@@ -654,16 +676,15 @@ impl VideoExplorer {
                     best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
-                    log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
+                    log_realtime!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim);
                 }
                 
-                // 达到目标或 SSIM 不再提升时停止
                 if ssim >= target_ssim {
-                    log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 4", target_ssim));
+                    log_realtime!("      ✅ Target SSIM {:.4} reached in Phase 4", target_ssim);
                     break;
                 }
                 
-                // 如果连续 3 个 CRF 都没有提升，停止搜索
+                // 平台检测
                 let prev_key = ((current + 0.1) * 10.0).round() as i32;
                 let prev_prev_key = ((current + 0.2) * 10.0).round() as i32;
                 if let (Some(&(_, prev_q)), Some(&(_, prev_prev_q))) = 
@@ -671,7 +692,7 @@ impl VideoExplorer {
                     let prev_ssim = prev_q.0.unwrap_or(0.0);
                     let prev_prev_ssim = prev_prev_q.0.unwrap_or(0.0);
                     if ssim <= prev_ssim && prev_ssim <= prev_prev_ssim {
-                        log.push("      ⚠️ SSIM plateau detected, stopping search".to_string());
+                        log_realtime!("      ⚠️ SSIM plateau detected, stopping search");
                         break;
                     }
                 }
@@ -683,12 +704,12 @@ impl VideoExplorer {
         // ═══════════════════════════════════════════════════════════
         // 最终编码 - 确保输出文件是最佳 CRF
         // ═══════════════════════════════════════════════════════════
-        log.push(format!("   📍 Final encoding: CRF {:.1}", best_crf));
+        log_realtime!("   📍 Final encoding: CRF {:.1}", best_crf);
         let final_size = self.encode(best_crf)?;
         
         let size_change_pct = self.calc_change_pct(final_size);
         
-        // 🔥 v4.1: 最终交叉验证
+        log_realtime!("   📊 Final quality validation...");
         let final_quality = self.validate_quality()?;
         let final_consistency = self.check_cross_validation_consistency(&final_quality);
         let final_score = self.calculate_composite_score(&final_quality);
@@ -702,28 +723,28 @@ impl VideoExplorer {
             else if quality_passed { "✅ Acceptable" }
             else { "❌ Below threshold" };
         
-        // 🔥 v4.1: 详细最终报告
-        log.push("   ═══════════════════════════════════════════════════".to_string());
-        log.push(format!("   📊 FINAL RESULT"));
-        log.push(format!("      CRF: {:.1}", best_crf));
-        log.push(format!("      Size: {} bytes ({:+.1}%)", final_size, size_change_pct));
-        log.push(format!("      SSIM: {:.4} {}", best_ssim, status));
+        // 🔥 v4.2: 详细最终报告 - 实时输出
+        log_realtime!("   ═══════════════════════════════════════════════════");
+        log_realtime!("   📊 FINAL RESULT");
+        log_realtime!("      CRF: {:.1}", best_crf);
+        log_realtime!("      Size: {} bytes ({:+.1}%)", final_size, size_change_pct);
+        log_realtime!("      SSIM: {:.4} {}", best_ssim, status);
         if let Some(psnr) = final_quality.1 {
             let psnr_status = if psnr >= self.config.quality_thresholds.min_psnr { "✓" } else { "✗" };
-            log.push(format!("      PSNR: {:.2} dB {}", psnr, psnr_status));
+            log_realtime!("      PSNR: {:.2} dB {}", psnr, psnr_status);
         }
         if let Some(vmaf) = final_quality.2 {
             let vmaf_status = if vmaf >= self.config.quality_thresholds.min_vmaf { "✓" } else { "✗" };
-            log.push(format!("      VMAF: {:.2} {}", vmaf, vmaf_status));
+            log_realtime!("      VMAF: {:.2} {}", vmaf, vmaf_status);
         }
-        log.push(format!("      Composite Score: {:.4}", final_score));
+        log_realtime!("      Composite Score: {:.4}", final_score);
         let consistency_str = match final_consistency {
             CrossValidationResult::AllAgree => "🟢 All metrics agree",
             CrossValidationResult::MajorityAgree => "🟡 Majority agree",
             CrossValidationResult::Divergent => "🔴 Metrics divergent",
         };
-        log.push(format!("      Cross-validation: {}", consistency_str));
-        log.push(format!("   📈 Iterations: {}, Precision: ±0.1 CRF", iterations));
+        log_realtime!("      Cross-validation: {}", consistency_str);
+        log_realtime!("   📈 Iterations: {}, Precision: ±0.1 CRF", iterations);
         
         Ok(ExploreResult {
             optimal_crf: best_crf,
