@@ -105,8 +105,8 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
             
             mark_as_processed(input);
             
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
             
             // 🔥 修复：正确显示 size reduction/increase 消息
@@ -202,8 +202,8 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             
             mark_as_processed(input);
             
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
             
             // 🔥 修复：正确显示 size reduction/increase 消息
@@ -291,8 +291,8 @@ pub fn convert_to_avif(input: &Path, quality: Option<u8>, options: &ConvertOptio
 
             mark_as_processed(input);
 
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
 
             // 🔥 修复：正确显示 size reduction/increase 消息
@@ -396,8 +396,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             
             mark_as_processed(input);
             
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
             
             // 🔥 修复：正确显示 size reduction/increase 消息
@@ -484,8 +484,8 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             
             mark_as_processed(input);
             
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
             
             // 🔥 修复：正确显示 size reduction/increase 消息
@@ -645,8 +645,8 @@ pub fn convert_to_hevc_mp4_matched(
     copy_metadata(input, &output);
     mark_as_processed(input);
     
-    if options.should_delete_original() {
-        fs::remove_file(input)?;
+    if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+        // Already handled by safe_delete_original
     }
     
     let reduction_pct = -explore_result.size_change_pct; // 转换为正数表示减少
@@ -856,8 +856,8 @@ pub fn convert_to_jxl_matched(
             
             mark_as_processed(input);
             
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
             
             // 🔥 修复：正确显示 size reduction/increase 消息
@@ -960,8 +960,8 @@ pub fn convert_to_hevc_mkv_lossless(input: &Path, options: &ConvertOptions) -> R
 
             mark_as_processed(input);
 
-            if options.should_delete_original() {
-                fs::remove_file(input)?;
+            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                // Already handled by safe_delete_original
             }
 
             // 🔥 修复：正确显示 size reduction/increase 消息

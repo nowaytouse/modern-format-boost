@@ -235,9 +235,12 @@ pub fn execute_conversion(
         preserve_timestamps(input_path, &output_path)?;
     }
     
-    // Delete original if requested
+    // 🔥 Safe delete with integrity check (断电保护)
     if config.delete_original {
-        std::fs::remove_file(input_path)?;
+        if let Err(e) = shared_utils::conversion::safe_delete_original(input_path, &output_path, 100) {
+            eprintln!("   ⚠️  Safe delete failed: {}", e);
+            // Don't propagate error - conversion succeeded
+        }
     }
     
     Ok(ConversionOutput {

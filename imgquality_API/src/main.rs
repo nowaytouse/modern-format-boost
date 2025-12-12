@@ -478,6 +478,7 @@ fn auto_convert_single_file(
         in_place: config.in_place,
         explore: false,  // imgquality_API 不支持 explore 模式（仅用于视频）
         match_quality: config.match_quality,   // 用于 JPEG→JXL 质量匹配
+        apple_compat: false,  // imgquality_API 不需要 Apple 兼容模式
     };
     
     // Smart conversion based on format and lossless status

@@ -28,6 +28,7 @@ pub mod quality_matcher;
 pub mod image_quality_detector;
 pub mod video_quality_detector;
 pub mod video_explorer;
+pub mod checkpoint;
 
 pub use progress::*;
 pub use safety::*;
@@ -92,3 +93,7 @@ pub use video_explorer::{
 pub use video_explorer::quick_explore;
 #[allow(deprecated)]
 pub use video_explorer::full_explore;
+
+pub use checkpoint::{
+    CheckpointManager, verify_output_integrity, safe_delete_original,
+};
