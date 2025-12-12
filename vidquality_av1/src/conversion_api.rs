@@ -285,10 +285,21 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     // 🔥 检测输入输出路径冲突（作为安全检查）
     check_input_output_conflict(input, &output_path)?;
     
+    // 🔥 修复：输出文件已存在时返回跳过状态而非错误
     if output_path.exists() && !config.force {
-        return Err(VidQualityError::ConversionError(
-            format!("Output exists: {}", output_path.display())
-        ));
+        info!("⏭️ Output exists, skipping: {}", output_path.display());
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: String::new(),  // 空路径表示跳过
+            strategy: strategy.clone(),
+            input_size: detection.file_size,
+            output_size: 0,  // 0 表示跳过
+            size_ratio: 1.0,
+            success: true,
+            message: format!("Skipped: output exists ({})", output_path.display()),
+            final_crf: 0,
+            exploration_attempts: 0,
+        });
     }
     
     info!("🎬 Auto Mode: {} → {}", input.display(), strategy.target.as_str());
