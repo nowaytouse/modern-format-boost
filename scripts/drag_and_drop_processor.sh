@@ -5,10 +5,10 @@
 # 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
 # Usage: Drag folder to this script, or double-click and select folder
 #
-# 🔥 v3.9: 新增 XMP 元数据合并功能
-#   - 自动检测 .xmp sidecar 文件
-#   - 在格式转换前将元数据合并到媒体文件
-#   - 合并后自动删除 .xmp 文件
+# 🔥 v4.1: 断点续传 + 原子操作保护
+#   - 进度文件记录已处理文件，中断后可续传
+#   - 锁文件防止重复运行
+#   - XMP 合并支持断点续传
 
 set -e
 
@@ -24,6 +24,12 @@ VIDQUALITY_HEVC="$PROJECT_ROOT/vidquality_hevc/target/release/vidquality-hevc"
 XMP_SUCCESS=0
 XMP_FAILED=0
 XMP_SKIPPED=0
+
+# 🔥 断点续传相关
+PROGRESS_DIR=""
+PROGRESS_FILE=""
+LOCK_FILE=""
+RESUME_MODE=false
 
 # 检查工具是否存在
 check_tools() {
@@ -42,15 +48,109 @@ check_tools() {
 
 # 显示欢迎信息
 show_welcome() {
-    echo "🚀 Modern Format Boost - 一键处理器 v4.0"
+    echo "🚀 Modern Format Boost - 一键处理器 v4.1"
     echo "=================================================="
     echo "📁 处理模式：原地转换（删除原文件）"
     echo "📋 XMP合并：自动检测并合并 sidecar 元数据"
     echo "🍎 Apple兼容：默认启用（AV1/VP9 → HEVC）"
-    echo "🔧 图像参数：--in-place --recursive --match-quality --explore --apple-compat"
-    echo "🎬 视频参数：--in-place --recursive --match-quality true --explore --apple-compat"
+    echo "🔄 断点续传：支持中断后继续处理"
     echo "=================================================="
     echo ""
+}
+
+# 🔥 初始化断点续传
+init_progress_tracking() {
+    # 使用目录路径的 hash 作为唯一标识
+    local dir_hash=$(echo "$TARGET_DIR" | md5 | cut -c1-8)
+    PROGRESS_DIR="$TARGET_DIR/.mfb_progress"
+    PROGRESS_FILE="$PROGRESS_DIR/completed_$dir_hash.txt"
+    LOCK_FILE="$PROGRESS_DIR/processing.lock"
+    
+    # 创建进度目录
+    mkdir -p "$PROGRESS_DIR"
+    
+    # 检查是否有未完成的任务
+    if [[ -f "$LOCK_FILE" ]]; then
+        local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+        if kill -0 "$lock_pid" 2>/dev/null; then
+            echo "❌ 另一个处理进程正在运行 (PID: $lock_pid)"
+            echo "   如果确认没有其他进程，请删除: $LOCK_FILE"
+            exit 1
+        else
+            echo "⚠️  检测到上次处理被中断"
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+    
+    # 检查是否有进度文件（断点续传）
+    if [[ -f "$PROGRESS_FILE" ]]; then
+        local completed_count=$(wc -l < "$PROGRESS_FILE" | tr -d ' ')
+        if [[ $completed_count -gt 0 ]]; then
+            echo ""
+            echo "🔄 检测到上次未完成的任务"
+            echo "   已完成: $completed_count 个文件"
+            echo ""
+            echo "选择操作："
+            echo "  [R] 继续上次任务（跳过已处理文件）"
+            echo "  [N] 重新开始（清除进度）"
+            echo "  [Q] 退出"
+            read -r RESUME_CHOICE
+            
+            case "$RESUME_CHOICE" in
+                [Rr])
+                    RESUME_MODE=true
+                    echo "✅ 将继续上次任务"
+                    ;;
+                [Nn])
+                    rm -f "$PROGRESS_FILE"
+                    echo "✅ 已清除进度，重新开始"
+                    ;;
+                *)
+                    echo "❌ 用户取消"
+                    exit 0
+                    ;;
+            esac
+        fi
+    fi
+    
+    # 创建锁文件
+    echo $$ > "$LOCK_FILE"
+}
+
+# 🔥 检查文件是否已处理
+is_file_completed() {
+    local file_path="$1"
+    if [[ "$RESUME_MODE" == "true" ]] && [[ -f "$PROGRESS_FILE" ]]; then
+        grep -qxF "$file_path" "$PROGRESS_FILE" 2>/dev/null
+        return $?
+    fi
+    return 1
+}
+
+# 🔥 标记文件已完成
+mark_file_completed() {
+    local file_path="$1"
+    echo "$file_path" >> "$PROGRESS_FILE"
+}
+
+# 🔥 清理进度文件（任务完成时）
+cleanup_progress() {
+    if [[ -d "$PROGRESS_DIR" ]]; then
+        rm -f "$LOCK_FILE"
+        # 任务完成后删除进度文件
+        rm -f "$PROGRESS_FILE"
+        # 如果目录为空则删除
+        rmdir "$PROGRESS_DIR" 2>/dev/null || true
+    fi
+}
+
+# 🔥 中断处理
+handle_interrupt() {
+    echo ""
+    echo "⚠️  处理被中断！"
+    echo "   进度已保存，下次运行可继续处理"
+    rm -f "$LOCK_FILE"
+    exit 130
 }
 
 # 获取目标目录
@@ -160,6 +260,12 @@ merge_xmp_files() {
     
     # 遍历所有 XMP 文件
     while IFS= read -r -d '' xmp_file; do
+        # 🔥 断点续传：检查是否已处理
+        if is_file_completed "xmp:$xmp_file"; then
+            ((XMP_SKIPPED++)) || true
+            continue
+        fi
+        
         # 获取基础文件名（去掉 .xmp 后缀）
         base_name="${xmp_file%.*}"
         
@@ -167,12 +273,24 @@ merge_xmp_files() {
         if [[ -f "$base_name" ]]; then
             media_file="$base_name"
         else
-            # 尝试查找同名但不同扩展名的文件
+            # 🔥 优化：直接检查常见扩展名，避免 find 的性能问题
             base_name_no_ext="${xmp_file%.xmp}"
-            media_file=$(find "$(dirname "$xmp_file")" -maxdepth 1 -type f -name "$(basename "$base_name_no_ext").*" ! -name "*.xmp" | head -n 1)
+            dir_path="$(dirname "$xmp_file")"
+            file_stem="$(basename "$base_name_no_ext")"
+            media_file=""
+            
+            # 遍历常见媒体扩展名，直接检查文件是否存在（最快）
+            for ext in mp4 mov mkv avi webm gif png jpg jpeg webp avif heic tiff bmp; do
+                candidate="$dir_path/$file_stem.$ext"
+                if [[ -f "$candidate" ]]; then
+                    media_file="$candidate"
+                    break
+                fi
+            done
             
             if [[ -z "$media_file" ]]; then
                 echo "   ⏭️  跳过: $(basename "$xmp_file") (无对应媒体文件)"
+                mark_file_completed "xmp:$xmp_file"
                 ((XMP_SKIPPED++)) || true
                 continue
             fi
@@ -193,6 +311,7 @@ merge_xmp_files() {
             # 删除 XMP 文件
             rm "$xmp_file"
             echo "      ✅ 成功，已删除 XMP 文件"
+            mark_file_completed "xmp:$xmp_file"
             ((XMP_SUCCESS++)) || true
         else
             rm -f "$timestamp_ref"
@@ -264,16 +383,25 @@ main() {
     show_welcome
     check_tools
     get_target_directory "$@"
+    
+    # 🔥 初始化断点续传（在 safety_check 之前，以便检测未完成任务）
+    init_progress_tracking
+    
     safety_check
     count_files
     merge_xmp_files  # 🔥 先合并 XMP 元数据
     process_images
     process_videos
+    
+    # 🔥 任务完成，清理进度文件
+    cleanup_progress
+    
     show_completion
 }
 
-# 错误处理
-trap 'echo "❌ 处理过程中发生错误，请检查日志"; read -n 1' ERR
+# 🔥 错误和中断处理
+trap 'handle_interrupt' INT TERM
+trap 'echo "❌ 处理过程中发生错误，进度已保存"; rm -f "$LOCK_FILE"; read -n 1' ERR
 
 # 运行主函数
 main "$@"
