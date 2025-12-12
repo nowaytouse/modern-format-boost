@@ -119,9 +119,9 @@ Static images (JPEG/PNG) always use lossless conversion regardless of these flag
 | None | Default | Fixed CRF from strategy | 1 |
 | `--match-quality` | Quality Match | AI-predicted CRF + SSIM validation | 1 |
 | `--explore` | Size Only | Binary search for smaller output | up to 8 |
-| `--explore --match-quality` | Precise Match | 🔥 **v4.1** Four-phase search + Triple cross-validation | unlimited |
+| `--explore --match-quality` | Precise Match | 🔥 **v4.2** Four-phase search + Triple cross-validation + Real-time logging | unlimited |
 
-#### 🔥 v4.1: Precise Quality Match - Triple Cross-Validation
+#### 🔥 v4.2: Precise Quality Match - Real-time Transparency
 
 When using `--explore --match-quality` together, the algorithm enables:
 
@@ -143,9 +143,14 @@ When using `--explore --match-quality` together, the algorithm enables:
 | VMAF | 35% | Netflix perceptual quality |
 | PSNR | 15% | Reference signal-to-noise |
 
+**🔥 v4.2 Real-time Logging:**
+- All progress output via `eprintln!()` for immediate visibility
+- No more "frozen" terminal during long encodes
+- Each encoding step shows: `🔄 Encoding CRF X.X...` → `📊 Calculating quality metrics...` → Results
+
 **Detailed Output Log:**
 ```
-🔬 Precise Quality-Match v4.1 (Hevc)
+🔬 Precise Quality-Match v4.2 (Hevc)
    📁 Input: 1234567 bytes (1205.63 KB)
    📐 CRF range: [10.0, 28.0], Initial: 20.0
    🎯 Goal: Approach SSIM=1.0 (no time limit)
@@ -493,9 +498,9 @@ modern_format_boost/
 | 无 | 默认 | 策略固定 CRF | 1 |
 | `--match-quality` | 质量匹配 | AI 预测 CRF + SSIM 验证 | 1 |
 | `--explore` | 仅大小 | 二分搜索更小输出 | 最多 8 |
-| `--explore --match-quality` | 精确匹配 | 🔥 **v4.1** 四阶段搜索 + 三重交叉验证 | 无限制 |
+| `--explore --match-quality` | 精确匹配 | 🔥 **v4.2** 四阶段搜索 + 三重交叉验证 + 实时日志 | 无限制 |
 
-#### 🔥 v4.1: 精确质量匹配 - 三重交叉验证
+#### 🔥 v4.2: 精确质量匹配 - 实时透明度
 
 当同时使用 `--explore --match-quality` 时，算法启用：
 
@@ -517,9 +522,14 @@ modern_format_boost/
 | VMAF | 35% | Netflix 感知质量 |
 | PSNR | 15% | 参考信噪比 |
 
+**🔥 v4.2 实时日志：**
+- 所有进度通过 `eprintln!()` 即时输出
+- 长时间编码不再出现"冻结"终端
+- 每个编码步骤显示：`🔄 Encoding CRF X.X...` → `📊 Calculating quality metrics...` → 结果
+
 **详细输出日志：**
 ```
-🔬 Precise Quality-Match v4.1 (Hevc)
+🔬 Precise Quality-Match v4.2 (Hevc)
    📁 Input: 1234567 bytes (1205.63 KB)
    📐 CRF range: [10.0, 28.0], Initial: 20.0
    🎯 Goal: Approach SSIM=1.0 (no time limit)
