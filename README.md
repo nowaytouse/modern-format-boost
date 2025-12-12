@@ -313,9 +313,9 @@ apt install libjxl-tools ffmpeg libimage-exiftool-perl
 ```
 modern_format_boost/
 ├── imgquality_hevc/     # Image tool (HEVC, Apple compatible)
-├── imgquality_API/      # Image tool (AV1, best compression)
+├── imgquality_av1/      # Image tool (AV1, best compression)
 ├── vidquality_hevc/     # Video tool (HEVC, Apple compatible)
-├── vidquality_API/      # Video tool (AV1, best compression)
+├── vidquality_av1/      # Video tool (AV1, best compression)
 └── shared_utils/        # Common: quality_matcher, video_explorer, metadata
 ```
 
@@ -330,7 +330,7 @@ modern_format_boost/
 | Apple Support | Native | Software decode |
 | Browser | Safari only | Chrome/Firefox/Edge |
 
-**Recommendation**: Use `*-hevc` for Apple devices, `*_API` for maximum compression.
+**Recommendation**: Use `*-hevc` for Apple devices, `*_av1` for maximum compression.
 
 ---
 
@@ -630,9 +630,9 @@ apt install libjxl-tools ffmpeg libimage-exiftool-perl
 ```
 modern_format_boost/
 ├── imgquality_hevc/     # 图像工具（HEVC，Apple 兼容）
-├── imgquality_API/      # 图像工具（AV1，最佳压缩）
+├── imgquality_av1/      # 图像工具（AV1，最佳压缩）
 ├── vidquality_hevc/     # 视频工具（HEVC，Apple 兼容）
-├── vidquality_API/      # 视频工具（AV1，最佳压缩）
+├── vidquality_av1/      # 视频工具（AV1，最佳压缩）
 └── shared_utils/        # 公共：quality_matcher, video_explorer, metadata
 ```
 
@@ -647,7 +647,7 @@ modern_format_boost/
 | Apple 支持 | 原生 | 软件解码 |
 | 浏览器 | 仅 Safari | Chrome/Firefox/Edge |
 
-**建议**：Apple 设备使用 `*-hevc`，追求最大压缩使用 `*_API`。
+**建议**：Apple 设备使用 `*-hevc`，追求最大压缩使用 `*_av1`。
 
 ---
 

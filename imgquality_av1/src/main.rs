@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use imgquality::{analyze_image, get_recommendation};
-use imgquality::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
+use imgquality_av1::{analyze_image, get_recommendation};
+use imgquality_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use rayon::prelude::*;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -370,7 +370,7 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
     }
 }
 
-fn print_analysis_human(analysis: &imgquality::ImageAnalysis) {
+fn print_analysis_human(analysis: &imgquality_av1::ImageAnalysis) {
     println!("\n📊 Image Quality Analysis Report");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📁 File: {}", analysis.file_path);
@@ -438,7 +438,7 @@ fn print_analysis_human(analysis: &imgquality::ImageAnalysis) {
     }
 }
 
-fn print_recommendation_human(rec: &imgquality::UpgradeRecommendation) {
+fn print_recommendation_human(rec: &imgquality_av1::UpgradeRecommendation) {
     println!("\n💡 JXL Format Recommendation");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
@@ -462,7 +462,7 @@ fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
 ) -> anyhow::Result<()> {
-    use imgquality::lossless_converter::{
+    use imgquality_av1::lossless_converter::{
         convert_to_jxl, convert_jpeg_to_jxl,
         convert_to_av1_mp4, convert_to_av1_mp4_lossless,
         convert_to_av1_mp4_matched, convert_to_jxl_matched,
@@ -476,9 +476,9 @@ fn auto_convert_single_file(
         output_dir: config.output_dir.map(|p| p.to_path_buf()),
         delete_original: config.delete_original,
         in_place: config.in_place,
-        explore: false,  // imgquality_API 不支持 explore 模式（仅用于视频）
+        explore: false,  // imgquality_av1 不支持 explore 模式（仅用于视频）
         match_quality: config.match_quality,   // 用于 JPEG→JXL 质量匹配
-        apple_compat: false,  // imgquality_API 不需要 Apple 兼容模式
+        apple_compat: false,  // imgquality_av1 不需要 Apple 兼容模式
     };
     
     // Smart conversion based on format and lossless status
