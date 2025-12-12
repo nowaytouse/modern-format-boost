@@ -581,6 +581,13 @@ fn auto_convert_single_file(
         //   - 长动画(>=3s) 或 高质量 → HEVC MP4
         //   - 短动画(<3s) 且 非高质量 → GIF (Bayer 256色)
         (format, is_lossless, true) => {
+            // 🔥 v3.8: GIF 已经是 Apple 兼容格式，直接跳过
+            // 重新编码 GIF 通常会导致文件变大（LZW 压缩不是确定性的）
+            if format == "GIF" {
+                println!("⏭️ Skipping GIF (already Apple compatible, re-encoding would increase size): {}", input.display());
+                return Ok(());
+            }
+            
             // 🍎 Check if this is a modern animated format that should be skipped
             let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
             if is_modern_animated && !is_lossless && !config.apple_compat {

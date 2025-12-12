@@ -1024,42 +1024,96 @@ pub fn full_explore(
     explore_precise_quality_match(input, output, encoder, vf_args, initial_crf, max_crf, min_ssim)
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v3.8: 智能阈值计算系统 - 消除硬编码
+// ═══════════════════════════════════════════════════════════════
+
+/// 智能计算探索阈值
+/// 
+/// 🔥 v3.8: 基于初始 CRF 和编码器类型动态计算阈值
+/// 
+/// ## 设计原则
+/// 1. **量身定制**：根据源质量自动调整目标阈值
+/// 2. **无硬编码**：所有阈值通过公式计算，而非固定值
+/// 3. **边缘案例友好**：极低/极高质量源都能正确处理
+/// 
+/// ## 公式
+/// - max_crf = initial_crf + headroom (headroom 随质量降低而增加)
+/// - min_ssim = base_ssim - penalty (penalty 随质量降低而增加)
+/// 
+/// ## 边界保护
+/// - HEVC: max_crf ∈ [initial_crf, 40], min_ssim ∈ [0.85, 0.98]
+/// - AV1:  max_crf ∈ [initial_crf, 50], min_ssim ∈ [0.85, 0.98]
+pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f32, f64) {
+    // 编码器特定参数
+    let (crf_scale, max_crf_cap) = match encoder {
+        VideoEncoder::Hevc => (51.0_f32, 40.0_f32),  // HEVC CRF 0-51
+        VideoEncoder::Av1 => (63.0_f32, 50.0_f32),   // AV1 CRF 0-63
+        VideoEncoder::H264 => (51.0_f32, 35.0_f32),  // H.264 CRF 0-51
+    };
+    
+    // 计算质量等级 (0.0 = 最高质量, 1.0 = 最低质量)
+    // 使用非线性映射：低 CRF 区间变化慢，高 CRF 区间变化快
+    let normalized_crf = initial_crf / crf_scale;
+    let quality_level = (normalized_crf * normalized_crf).clamp(0.0, 1.0) as f64; // 平方使低 CRF 更稳定
+    
+    // 🔥 动态 headroom：质量越低，允许的 CRF 范围越大
+    // 高质量 (CRF ~18): headroom = 8-10
+    // 中等质量 (CRF ~25): headroom = 10-12
+    // 低质量 (CRF ~35): headroom = 12-15
+    let headroom = 8.0 + quality_level as f32 * 7.0;
+    let max_crf = (initial_crf + headroom).min(max_crf_cap);
+    
+    // 🔥 动态 SSIM 阈值：质量越低，允许的 SSIM 越低
+    // 使用分段函数确保高质量源有严格阈值
+    // 高质量源 (CRF < 20): min_ssim = 0.95 (严格)
+    // 中等质量源 (CRF 20-30): min_ssim = 0.92-0.95
+    // 低质量源 (CRF > 30): min_ssim = 0.88-0.92 (宽松)
+    let min_ssim = if initial_crf < 20.0 {
+        // 高质量源：严格阈值
+        0.95
+    } else if initial_crf < 30.0 {
+        // 中等质量源：线性插值 0.95 → 0.92
+        let t = (initial_crf - 20.0) / 10.0;
+        0.95 - t as f64 * 0.03
+    } else {
+        // 低质量源：线性插值 0.92 → 0.88
+        let t = ((initial_crf - 30.0) / 20.0).min(1.0);
+        0.92 - t as f64 * 0.04
+    };
+    
+    (max_crf, min_ssim.clamp(0.85, 0.98))
+}
+
 /// HEVC 探索（最常用）- 默认使用精确质量匹配
 /// 
-/// 🔥 v3.7: 动态调整 max_crf 和 min_ssim
-/// - 高质量源 (CRF < 20): max_crf=28, min_ssim=0.95
-/// - 中等质量源 (CRF 20-28): max_crf=32, min_ssim=0.93
-/// - 低质量源 (CRF > 28): max_crf=35, min_ssim=0.90
+/// 🔥 v3.8: 使用智能阈值计算系统，消除硬编码
+/// 
+/// ## 智能阈值
+/// - 根据 initial_crf 自动计算 max_crf 和 min_ssim
+/// - 低质量源自动放宽阈值，避免文件变大
+/// - 高质量源保持严格阈值，确保质量
 pub fn explore_hevc(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    // 🔥 v3.7: 根据初始 CRF 动态调整阈值
-    // 低质量源（高 CRF）应该允许更高的 max_crf 和更低的 min_ssim
-    let (max_crf, min_ssim) = if initial_crf < 20.0 {
-        // 高质量源：严格阈值
-        (28.0_f32, 0.95_f64)
-    } else if initial_crf < 28.0 {
-        // 中等质量源：适中阈值
-        (32.0_f32, 0.93_f64)
-    } else {
-        // 低质量源：宽松阈值，允许更高 CRF
-        (35.0_f32, 0.90_f64)
-    };
-    
+    let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_precise_quality_match(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim)
 }
 
 /// HEVC 仅探索大小（--explore 单独使用）
+/// 
+/// 🔥 v3.8: 动态 max_crf
 pub fn explore_hevc_size_only(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_size_only(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28.0)
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
+    explore_size_only(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf)
 }
 
 /// HEVC 仅匹配质量（--match-quality 单独使用）
@@ -1074,39 +1128,28 @@ pub fn explore_hevc_quality_match(
 
 /// AV1 探索 - 默认使用精确质量匹配
 /// 
-/// 🔥 v3.7: 动态调整 max_crf 和 min_ssim
-/// - 高质量源 (CRF < 23): max_crf=35, min_ssim=0.95
-/// - 中等质量源 (CRF 23-32): max_crf=40, min_ssim=0.93
-/// - 低质量源 (CRF > 32): max_crf=45, min_ssim=0.90
+/// 🔥 v3.8: 使用智能阈值计算系统，消除硬编码
 pub fn explore_av1(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    // 🔥 v3.7: 根据初始 CRF 动态调整阈值
-    let (max_crf, min_ssim) = if initial_crf < 23.0 {
-        // 高质量源：严格阈值
-        (35.0_f32, 0.95_f64)
-    } else if initial_crf < 32.0 {
-        // 中等质量源：适中阈值
-        (40.0_f32, 0.93_f64)
-    } else {
-        // 低质量源：宽松阈值
-        (45.0_f32, 0.90_f64)
-    };
-    
+    let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_precise_quality_match(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf, min_ssim)
 }
 
 /// AV1 仅探索大小（--explore 单独使用）
+/// 
+/// 🔥 v3.8: 动态 max_crf
 pub fn explore_av1_size_only(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_size_only(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35.0)
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
+    explore_size_only(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf)
 }
 
 /// AV1 仅匹配质量（--match-quality 单独使用）
@@ -1916,5 +1959,105 @@ mod tests {
         assert!(config.max_iterations as u32 >= worst_total / 2,
             "max_iterations {} should handle typical worst case {}", 
             config.max_iterations, worst_total);
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v3.8: 智能阈值计算测试
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 🔥 测试：智能阈值计算 - HEVC 高质量源
+    #[test]
+    fn test_smart_thresholds_hevc_high_quality() {
+        // 高质量源 (CRF 18)
+        let (max_crf, min_ssim) = calculate_smart_thresholds(18.0, VideoEncoder::Hevc);
+        
+        // 高质量源应该有严格的 SSIM 阈值
+        assert!(min_ssim >= 0.93, "High quality source should have strict SSIM >= 0.93, got {}", min_ssim);
+        
+        // max_crf 应该有合理的 headroom
+        assert!(max_crf >= 26.0, "max_crf should be at least 26 for CRF 18, got {}", max_crf);
+        assert!(max_crf <= 30.0, "max_crf should not exceed 30 for high quality, got {}", max_crf);
+    }
+    
+    /// 🔥 测试：智能阈值计算 - HEVC 低质量源
+    #[test]
+    fn test_smart_thresholds_hevc_low_quality() {
+        // 低质量源 (CRF 35)
+        let (max_crf, min_ssim) = calculate_smart_thresholds(35.0, VideoEncoder::Hevc);
+        
+        // 低质量源应该有宽松的 SSIM 阈值
+        assert!(min_ssim <= 0.92, "Low quality source should have relaxed SSIM <= 0.92, got {}", min_ssim);
+        assert!(min_ssim >= 0.85, "SSIM should not go below 0.85, got {}", min_ssim);
+        
+        // max_crf 应该允许更高的值
+        assert!(max_crf >= 40.0, "max_crf should be at least 40 for low quality, got {}", max_crf);
+    }
+    
+    /// 🔥 测试：智能阈值计算 - AV1 编码器
+    #[test]
+    fn test_smart_thresholds_av1() {
+        // AV1 CRF 范围是 0-63，比 HEVC 更宽
+        let (max_crf_low, min_ssim_low) = calculate_smart_thresholds(40.0, VideoEncoder::Av1);
+        let (max_crf_high, min_ssim_high) = calculate_smart_thresholds(20.0, VideoEncoder::Av1);
+        
+        // 低质量源应该有更高的 max_crf
+        assert!(max_crf_low > max_crf_high, "Low quality should have higher max_crf");
+        
+        // 低质量源应该有更低的 min_ssim
+        assert!(min_ssim_low < min_ssim_high, "Low quality should have lower min_ssim");
+        
+        // AV1 max_crf 上限应该是 50
+        assert!(max_crf_low <= 50.0, "AV1 max_crf should not exceed 50, got {}", max_crf_low);
+    }
+    
+    /// 🔥 测试：边缘案例 - 极低质量源
+    #[test]
+    fn test_smart_thresholds_edge_case_very_low_quality() {
+        // 极低质量源 (CRF 45 for HEVC)
+        let (max_crf, min_ssim) = calculate_smart_thresholds(45.0, VideoEncoder::Hevc);
+        
+        // 应该触发边界保护
+        assert!(max_crf <= 40.0, "HEVC max_crf should be capped at 40, got {}", max_crf);
+        assert!(min_ssim >= 0.85, "min_ssim should not go below 0.85, got {}", min_ssim);
+    }
+    
+    /// 🔥 测试：边缘案例 - 极高质量源
+    #[test]
+    fn test_smart_thresholds_edge_case_very_high_quality() {
+        // 极高质量源 (CRF 10)
+        let (max_crf, min_ssim) = calculate_smart_thresholds(10.0, VideoEncoder::Hevc);
+        
+        // 高质量源应该有严格的阈值
+        assert!(min_ssim >= 0.94, "Very high quality should have strict SSIM >= 0.94, got {}", min_ssim);
+        
+        // max_crf 应该有足够的 headroom
+        assert!(max_crf >= 18.0, "max_crf should be at least 18 for CRF 10, got {}", max_crf);
+    }
+    
+    /// 🔥 测试：阈值连续性 - 确保没有跳跃
+    #[test]
+    fn test_smart_thresholds_continuity() {
+        // 测试阈值随 CRF 变化的连续性
+        let mut prev_max_crf = 0.0_f32;
+        let mut prev_min_ssim = 1.0_f64;
+        
+        for crf in (10..=40).step_by(2) {
+            let (max_crf, min_ssim) = calculate_smart_thresholds(crf as f32, VideoEncoder::Hevc);
+            
+            if crf > 10 {
+                // max_crf 应该单调递增（或保持不变）
+                assert!(max_crf >= prev_max_crf - 0.5, 
+                    "max_crf should be monotonically increasing: {} -> {} at CRF {}", 
+                    prev_max_crf, max_crf, crf);
+                
+                // min_ssim 应该单调递减（或保持不变）
+                assert!(min_ssim <= prev_min_ssim + 0.01, 
+                    "min_ssim should be monotonically decreasing: {} -> {} at CRF {}", 
+                    prev_min_ssim, min_ssim, crf);
+            }
+            
+            prev_max_crf = max_crf;
+            prev_min_ssim = min_ssim;
+        }
     }
 }
