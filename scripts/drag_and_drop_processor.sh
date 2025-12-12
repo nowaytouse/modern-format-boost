@@ -5,10 +5,11 @@
 # 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
 # Usage: Drag folder to this script, or double-click and select folder
 #
-# 🔥 v4.2: 新增测试模式
-#   - 测试模式：输出到临时目录，不修改原文件
-#   - 采样测试：每种类型只处理一个文件
-#   - 详细日志：记录所有操作便于调试
+# 🔥 v4.3: 增强测试模式
+#   - 随机采样：每次运行选择不同的文件组合
+#   - 多样性覆盖：每种格式最多2个文件（特殊+普通）
+#   - 文件大小采样：包含小文件和大文件边缘案例
+#   - 最多采样20个文件，覆盖更多场景
 #   - 断点续传 + 原子操作保护
 
 set -e
@@ -54,7 +55,7 @@ check_tools() {
 
 # 显示欢迎信息
 show_welcome() {
-    echo "🚀 Modern Format Boost - 一键处理器 v4.2"
+    echo "🚀 Modern Format Boost - 一键处理器 v4.3"
     echo "=================================================="
     if [[ "$TEST_MODE" == "true" ]]; then
         echo "🧪 【测试模式】安全预览，不修改原文件"
@@ -159,131 +160,185 @@ find_xmp_media() {
     return 1
 }
 
-# 🔥 采样文件（每种类型取一个代表，优先边缘案例）
+# 🔥 随机选择文件（从数组中随机选一个）
+random_pick() {
+    local -n arr=$1
+    local count=${#arr[@]}
+    if [[ $count -eq 0 ]]; then
+        return 1
+    fi
+    local idx=$((RANDOM % count))
+    echo "${arr[$idx]}"
+}
+
+# 🔥 采样文件（v4.3: 随机采样 + 多样性覆盖）
 sample_files() {
     local sample_dir="$TEST_OUTPUT_DIR/samples"
     mkdir -p "$sample_dir"
     
+    # 初始化随机种子（基于时间）
+    RANDOM=$$$(date +%s)
+    
     test_log ""
-    test_log "📊 采样文件用于测试..."
+    test_log "📊 采样文件用于测试（随机采样 v4.3）..."
     test_log "=================================================="
     
     local sample_count=0
-    local max_samples=15
+    local max_samples=20  # 增加采样数量
     
-    local xmp_special_done=false
-    local xmp_normal_done=false
-    
-    # ========== 1. 采样 XMP 文件（只采样有对应媒体的）==========
+    # ========== 1. 采样 XMP 文件（随机选择，最多3个）==========
     test_log ""
     test_log "📋 XMP 文件采样:"
     
+    local xmp_special=()
+    local xmp_normal=()
+    
     while IFS= read -r -d '' xmp_file; do
-        [[ $sample_count -ge $max_samples ]] && break
+        local media_file=$(find_xmp_media "$xmp_file")
+        [[ -z "$media_file" ]] && continue
         
         local fname=$(basename "$xmp_file")
-        local media_file=$(find_xmp_media "$xmp_file")
-        
-        # 只采样有对应媒体文件的 XMP
-        if [[ -z "$media_file" ]]; then
-            continue
-        fi
-        
-        if has_special_chars "$fname" && [[ "$xmp_special_done" == "false" ]]; then
-            cp "$xmp_file" "$sample_dir/"
-            cp "$media_file" "$sample_dir/"
-            test_log "   ✓ XMP(特殊): $fname"
-            test_log "      └─ 媒体: $(basename "$media_file")"
-            xmp_special_done=true
-            ((sample_count++))
-        elif [[ "$xmp_normal_done" == "false" ]] && ! has_special_chars "$fname"; then
-            cp "$xmp_file" "$sample_dir/"
-            cp "$media_file" "$sample_dir/"
-            test_log "   ✓ XMP(普通): $fname"
-            test_log "      └─ 媒体: $(basename "$media_file")"
-            xmp_normal_done=true
-            ((sample_count++))
+        if has_special_chars "$fname"; then
+            xmp_special+=("$xmp_file")
+        else
+            xmp_normal+=("$xmp_file")
         fi
     done < <(find "$TARGET_DIR" -type f -iname "*.xmp" -print0 2>/dev/null)
     
-    # ========== 2. 采样图像文件（优先边缘案例）==========
+    # 随机选择 XMP（特殊字符优先，最多3个）
+    local xmp_picked=0
+    for _ in 1 2; do
+        if [[ ${#xmp_special[@]} -gt 0 ]] && [[ $xmp_picked -lt 3 ]] && [[ $sample_count -lt $max_samples ]]; then
+            local pick=$(random_pick xmp_special)
+            local media=$(find_xmp_media "$pick")
+            cp "$pick" "$sample_dir/"
+            cp "$media" "$sample_dir/"
+            test_log "   ✓ XMP(特殊): $(basename "$pick")"
+            test_log "      └─ 媒体: $(basename "$media")"
+            ((sample_count++))
+            ((xmp_picked++))
+            # 从数组中移除已选择的
+            xmp_special=("${xmp_special[@]/$pick}")
+        fi
+    done
+    if [[ ${#xmp_normal[@]} -gt 0 ]] && [[ $xmp_picked -lt 3 ]] && [[ $sample_count -lt $max_samples ]]; then
+        local pick=$(random_pick xmp_normal)
+        local media=$(find_xmp_media "$pick")
+        cp "$pick" "$sample_dir/"
+        cp "$media" "$sample_dir/"
+        test_log "   ✓ XMP(普通): $(basename "$pick")"
+        test_log "      └─ 媒体: $(basename "$media")"
+        ((sample_count++))
+    fi
+    
+    # ========== 2. 采样图像文件（每种格式随机选1-2个）==========
     test_log ""
     test_log "🖼️  图像文件采样:"
     
     for ext in jpg jpeg png gif webp heic avif bmp tiff jxl; do
         [[ $sample_count -ge $max_samples ]] && break
         
-        local special_found=""
-        local normal_found=""
+        local special_files=()
+        local normal_files=()
         local check_count=0
         
-        # 查找文件（限制检查数量）
         while IFS= read -r -d '' img_file; do
             ((check_count++))
-            [[ $check_count -gt 20 ]] && break
+            [[ $check_count -gt 50 ]] && break  # 扩大搜索范围
             
             local fname=$(basename "$img_file")
-            if has_special_chars "$fname" && [[ -z "$special_found" ]]; then
-                special_found="$img_file"
-            elif [[ -z "$normal_found" ]]; then
-                normal_found="$img_file"
-            fi
-            
-            # 找到特殊字符文件就停止
-            [[ -n "$special_found" ]] && break
-        done < <(find "$TARGET_DIR" -type f -iname "*.$ext" -print0 2>/dev/null)
-        
-        local selected="${special_found:-$normal_found}"
-        if [[ -n "$selected" ]]; then
-            cp "$selected" "$sample_dir/"
-            local fname=$(basename "$selected")
-            if [[ -n "$special_found" ]]; then
-                test_log "   ✓ $ext(特殊): $fname"
+            if has_special_chars "$fname"; then
+                special_files+=("$img_file")
             else
-                test_log "   ✓ $ext: $fname"
+                normal_files+=("$img_file")
             fi
+        done < <(find "$TARGET_DIR" -type f -iname "*.$ext" -print0 2>/dev/null | sort -R 2>/dev/null || cat)
+        
+        # 随机选择（优先特殊字符）
+        local picked=0
+        if [[ ${#special_files[@]} -gt 0 ]]; then
+            local pick=$(random_pick special_files)
+            cp "$pick" "$sample_dir/"
+            test_log "   ✓ $ext(特殊): $(basename "$pick")"
+            ((sample_count++))
+            ((picked++))
+        fi
+        
+        # 如果还有配额，再选一个普通文件
+        if [[ ${#normal_files[@]} -gt 0 ]] && [[ $picked -lt 2 ]] && [[ $sample_count -lt $max_samples ]]; then
+            local pick=$(random_pick normal_files)
+            cp "$pick" "$sample_dir/"
+            test_log "   ✓ $ext: $(basename "$pick")"
             ((sample_count++))
         fi
     done
     
-    # ========== 3. 采样视频文件（优先边缘案例）==========
+    # ========== 3. 采样视频文件（每种格式随机选1-2个）==========
     test_log ""
     test_log "🎬 视频文件采样:"
     
     for ext in mp4 mov mkv webm avi m4v flv; do
         [[ $sample_count -ge $max_samples ]] && break
         
-        local special_found=""
-        local normal_found=""
+        local special_files=()
+        local normal_files=()
         local check_count=0
         
         while IFS= read -r -d '' vid_file; do
             ((check_count++))
-            [[ $check_count -gt 20 ]] && break
+            [[ $check_count -gt 50 ]] && break
             
             local fname=$(basename "$vid_file")
-            if has_special_chars "$fname" && [[ -z "$special_found" ]]; then
-                special_found="$vid_file"
-            elif [[ -z "$normal_found" ]]; then
-                normal_found="$vid_file"
-            fi
-            
-            [[ -n "$special_found" ]] && break
-        done < <(find "$TARGET_DIR" -type f -iname "*.$ext" -print0 2>/dev/null)
-        
-        # 优先选择特殊字符文件
-        local selected="${special_found:-$normal_found}"
-        if [[ -n "$selected" ]]; then
-            cp "$selected" "$sample_dir/"
-            local fname=$(basename "$selected")
-            if [[ -n "$special_found" ]]; then
-                test_log "   ✓ $ext(特殊): $fname"
+            if has_special_chars "$fname"; then
+                special_files+=("$vid_file")
             else
-                test_log "   ✓ $ext: $fname"
+                normal_files+=("$vid_file")
             fi
+        done < <(find "$TARGET_DIR" -type f -iname "*.$ext" -print0 2>/dev/null | sort -R 2>/dev/null || cat)
+        
+        local picked=0
+        if [[ ${#special_files[@]} -gt 0 ]]; then
+            local pick=$(random_pick special_files)
+            cp "$pick" "$sample_dir/"
+            test_log "   ✓ $ext(特殊): $(basename "$pick")"
+            ((sample_count++))
+            ((picked++))
+        fi
+        
+        if [[ ${#normal_files[@]} -gt 0 ]] && [[ $picked -lt 2 ]] && [[ $sample_count -lt $max_samples ]]; then
+            local pick=$(random_pick normal_files)
+            cp "$pick" "$sample_dir/"
+            test_log "   ✓ $ext: $(basename "$pick")"
             ((sample_count++))
         fi
     done
+    
+    # ========== 4. 额外采样：不同文件大小的文件 ==========
+    test_log ""
+    test_log "📏 文件大小多样性采样:"
+    
+    # 找一个小文件（<100KB）和一个大文件（>5MB）
+    local small_file=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.gif" -o -iname "*.webp" \) -size -100k 2>/dev/null | head -1)
+    local large_file=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.mp4" -o -iname "*.mov" \) -size +5M 2>/dev/null | head -1)
+    
+    if [[ -n "$small_file" ]] && [[ $sample_count -lt $max_samples ]]; then
+        local fname=$(basename "$small_file")
+        # 检查是否已采样
+        if [[ ! -f "$sample_dir/$fname" ]]; then
+            cp "$small_file" "$sample_dir/"
+            test_log "   ✓ 小文件(<100KB): $fname"
+            ((sample_count++))
+        fi
+    fi
+    
+    if [[ -n "$large_file" ]] && [[ $sample_count -lt $max_samples ]]; then
+        local fname=$(basename "$large_file")
+        if [[ ! -f "$sample_dir/$fname" ]]; then
+            cp "$large_file" "$sample_dir/"
+            test_log "   ✓ 大文件(>5MB): $fname"
+            ((sample_count++))
+        fi
+    fi
     
     test_log ""
     test_log "📊 采样完成: $sample_count 个文件"
