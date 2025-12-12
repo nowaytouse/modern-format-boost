@@ -119,7 +119,53 @@ Static images (JPEG/PNG) always use lossless conversion regardless of these flag
 | None | Default | Fixed CRF from strategy | 1 |
 | `--match-quality` | Quality Match | AI-predicted CRF + SSIM validation | 1 |
 | `--explore` | Size Only | Binary search for smaller output | up to 8 |
-| `--explore --match-quality` | Precise Match | Binary search + SSIM validation | up to 8 |
+| `--explore --match-quality` | Precise Match | 🔥 **v4.1** Four-phase search + Triple cross-validation | unlimited |
+
+#### 🔥 v4.1: Precise Quality Match - Triple Cross-Validation
+
+When using `--explore --match-quality` together, the algorithm enables:
+
+**Four-Phase Search Strategy:**
+1. **Full Range Scan** (step 1.0): Find highest SSIM region
+2. **Region Refinement** (step 0.5, ±2 CRF): Narrow down
+3. **Ultra-Fine Tuning** (step 0.1, ±0.5 CRF): Precise location
+4. **Extreme Approach**: Continue until SSIM plateau
+
+**Triple Cross-Validation (SSIM + PSNR + VMAF):**
+- 🟢 All metrics agree → High confidence, early termination
+- 🟡 Majority agree (2/3) → Good confidence
+- 🔴 Metrics divergent → Continue searching
+
+**Composite Score Calculation:**
+| Metric | Weight | Description |
+|--------|--------|-------------|
+| SSIM | 50% | Primary structural similarity |
+| VMAF | 35% | Netflix perceptual quality |
+| PSNR | 15% | Reference signal-to-noise |
+
+**Detailed Output Log:**
+```
+🔬 Precise Quality-Match v4.1 (Hevc)
+   📁 Input: 1234567 bytes (1205.63 KB)
+   📐 CRF range: [10.0, 28.0], Initial: 20.0
+   🎯 Goal: Approach SSIM=1.0 (no time limit)
+   🔄 Cross-validation: ENABLED (SSIM=✓, PSNR=✓, VMAF=✓)
+   ⚠️ Thresholds: SSIM≥0.9500, PSNR≥40.0dB, VMAF≥90.0
+   ═══════════════════════════════════════════════════
+   📍 Phase 1: Full range scan (step 1.0)
+   CRF 10.0: 2345678 bytes (+89.9%) | SSIM:0.9987 | PSNR:48.32dB | VMAF:98.45 | 🟢
+      🎯 New best: CRF 10.0, Score 0.9876, SSIM 0.9987
+   ...
+   📊 FINAL RESULT
+      CRF: 15.0
+      Size: 1100000 bytes (-10.9%)
+      SSIM: 0.9965 ✅ Excellent
+      PSNR: 45.67 dB ✓
+      VMAF: 96.78 ✓
+      Composite Score: 0.9823
+      Cross-validation: 🟢 All metrics agree
+   📈 Iterations: 23, Precision: ±0.1 CRF
+```
 
 #### `--lossless` - Mathematical Lossless
 
@@ -447,7 +493,53 @@ modern_format_boost/
 | 无 | 默认 | 策略固定 CRF | 1 |
 | `--match-quality` | 质量匹配 | AI 预测 CRF + SSIM 验证 | 1 |
 | `--explore` | 仅大小 | 二分搜索更小输出 | 最多 8 |
-| `--explore --match-quality` | 精确匹配 | 二分搜索 + SSIM 验证 | 最多 8 |
+| `--explore --match-quality` | 精确匹配 | 🔥 **v4.1** 四阶段搜索 + 三重交叉验证 | 无限制 |
+
+#### 🔥 v4.1: 精确质量匹配 - 三重交叉验证
+
+当同时使用 `--explore --match-quality` 时，算法启用：
+
+**四阶段搜索策略：**
+1. **全范围扫描** (步长 1.0)：找到 SSIM 最高区域
+2. **区域精细化** (步长 0.5, ±2 CRF)：缩小范围
+3. **超精细调整** (步长 0.1, ±0.5 CRF)：精确定位
+4. **极限逼近**：继续搜索直到 SSIM 平台
+
+**三重交叉验证 (SSIM + PSNR + VMAF)：**
+- 🟢 所有指标一致 → 高置信度，提前终止
+- 🟡 多数一致 (2/3) → 良好置信度
+- 🔴 指标分歧 → 继续搜索
+
+**综合评分计算：**
+| 指标 | 权重 | 说明 |
+|------|------|------|
+| SSIM | 50% | 主要结构相似性 |
+| VMAF | 35% | Netflix 感知质量 |
+| PSNR | 15% | 参考信噪比 |
+
+**详细输出日志：**
+```
+🔬 Precise Quality-Match v4.1 (Hevc)
+   📁 Input: 1234567 bytes (1205.63 KB)
+   📐 CRF range: [10.0, 28.0], Initial: 20.0
+   🎯 Goal: Approach SSIM=1.0 (no time limit)
+   🔄 Cross-validation: ENABLED (SSIM=✓, PSNR=✓, VMAF=✓)
+   ⚠️ Thresholds: SSIM≥0.9500, PSNR≥40.0dB, VMAF≥90.0
+   ═══════════════════════════════════════════════════
+   📍 Phase 1: Full range scan (step 1.0)
+   CRF 10.0: 2345678 bytes (+89.9%) | SSIM:0.9987 | PSNR:48.32dB | VMAF:98.45 | 🟢
+      🎯 New best: CRF 10.0, Score 0.9876, SSIM 0.9987
+   ...
+   📊 FINAL RESULT
+      CRF: 15.0
+      Size: 1100000 bytes (-10.9%)
+      SSIM: 0.9965 ✅ Excellent
+      PSNR: 45.67 dB ✓
+      VMAF: 96.78 ✓
+      Composite Score: 0.9823
+      Cross-validation: 🟢 All metrics agree
+   📈 Iterations: 23, Precision: ±0.1 CRF
+```
 
 #### `--lossless` - 数学无损
 
