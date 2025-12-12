@@ -67,6 +67,12 @@ pub struct ConversionConfig {
     pub match_quality: bool,
     /// In-place conversion: convert and delete original file
     pub in_place: bool,
+    /// 🔥 v3.5: Minimum SSIM threshold for quality validation (default: 0.95)
+    pub min_ssim: f64,
+    /// 🔥 v3.5: Enable VMAF validation (slower but more accurate)
+    pub validate_vmaf: bool,
+    /// 🔥 v3.5: Minimum VMAF threshold (default: 85.0)
+    pub min_vmaf: f64,
 }
 
 impl Default for ConversionConfig {
@@ -80,6 +86,9 @@ impl Default for ConversionConfig {
             use_lossless: false,
             match_quality: false,
             in_place: false,
+            min_ssim: 0.95,      // 🔥 v3.5: Default SSIM threshold
+            validate_vmaf: false, // 🔥 v3.5: VMAF disabled by default (slower)
+            min_vmaf: 85.0,      // 🔥 v3.5: Default VMAF threshold
         }
     }
 }
@@ -316,6 +325,17 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                  info!("   🚀 Using AV1 Mathematical Lossless Mode");
                  let size = execute_av1_lossless(&detection, &output_path)?;
                  (size, 0, 0)
+            } else if config.explore_smaller && config.match_quality {
+                // 🔥 v3.5: 精确质量匹配模式 (--explore + --match-quality)
+                // 二分搜索 + SSIM/VMAF 裁判验证，找到最优质量-大小平衡
+                info!("   🔬 Precise Quality-Match Mode: binary search + quality validation");
+                explore_precise_quality_match_av1(
+                    &detection, 
+                    &output_path, 
+                    config.min_ssim,
+                    config.validate_vmaf,
+                    config.min_vmaf,
+                )?
             } else if config.explore_smaller {
                 // Size exploration mode (only valid for lossy)
                 explore_smaller_size(&detection, &output_path)?
@@ -408,6 +428,107 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
             28
         }
     }
+}
+
+/// 🔥 v3.5: 精确质量匹配探索 (--explore + --match-quality 组合)
+/// 
+/// 策略：二分搜索 + SSIM/VMAF 裁判验证
+/// 找到满足质量阈值的最高 CRF（最小文件）
+/// 
+/// ## 裁判机制 (Referee Mechanism)
+/// 1. 使用 AI 预测的 CRF 作为起点
+/// 2. 二分搜索找到满足 SSIM >= min_ssim 的最高 CRF
+/// 3. 可选 VMAF 验证（更准确但更慢）
+/// 4. 自校准：如果初始 CRF 不满足质量，向下搜索
+/// 
+/// ## 评价标准 (Evaluation Criteria)
+/// - SSIM >= 0.95: 视觉无损 (Good)
+/// - SSIM >= 0.98: 几乎无法区分 (Excellent)
+/// - VMAF >= 85: 流媒体质量 (Good)
+/// - VMAF >= 93: 存档质量 (Excellent)
+fn explore_precise_quality_match_av1(
+    detection: &VideoDetectionResult,
+    output_path: &Path,
+    min_ssim: f64,
+    validate_vmaf: bool,
+    min_vmaf: f64,
+) -> Result<(u64, u8, u8)> {
+    use shared_utils::video_explorer::{
+        VideoExplorer, VideoEncoder, ExploreConfig, ExploreMode, QualityThresholds
+    };
+    
+    let input_path = std::path::Path::new(&detection.file_path);
+    
+    // 计算 AI 预测的 CRF
+    let initial_crf = calculate_matched_crf(detection);
+    
+    info!("   🔬 Precise Quality-Match Exploration (AV1)");
+    info!("      Input: {} bytes", detection.file_size);
+    info!("      Initial CRF: {} (AI predicted)", initial_crf);
+    info!("      Min SSIM: {:.4}", min_ssim);
+    if validate_vmaf {
+        info!("      Min VMAF: {:.1}", min_vmaf);
+    }
+    
+    // 配置探索器
+    let config = ExploreConfig {
+        mode: ExploreMode::PreciseQualityMatch,
+        initial_crf: initial_crf as f32,
+        min_crf: 15.0,  // AV1 最低 CRF
+        max_crf: 40.0,  // AV1 最高可接受 CRF
+        target_ratio: 1.0,  // 目标：输出 <= 输入
+        quality_thresholds: QualityThresholds {
+            min_ssim,
+            min_psnr: 35.0,
+            min_vmaf,
+            validate_ssim: true,
+            validate_psnr: false,
+            validate_vmaf,
+        },
+        max_iterations: 8,  // 最多 8 次迭代
+    };
+    
+    // 获取视频滤镜参数
+    let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+    
+    // 创建探索器
+    let explorer = VideoExplorer::new(
+        input_path,
+        output_path,
+        VideoEncoder::Av1,
+        vf_args,
+        config,
+    ).map_err(|e| VidQualityError::ConversionError(format!("Explorer init failed: {}", e)))?;
+    
+    // 执行探索
+    let result = explorer.explore()
+        .map_err(|e| VidQualityError::ConversionError(format!("Exploration failed: {}", e)))?;
+    
+    // 输出探索日志
+    for line in &result.log {
+        info!("{}", line);
+    }
+    
+    // 🔥 裁判验证结果
+    if result.quality_passed {
+        info!("   ✅ Quality validation PASSED");
+        if let Some(ssim) = result.ssim {
+            info!("      SSIM: {:.4} ({})", ssim, shared_utils::video_explorer::precision::ssim_quality_grade(ssim));
+        }
+        if let Some(vmaf) = result.vmaf {
+            info!("      VMAF: {:.2} ({})", vmaf, shared_utils::video_explorer::precision::vmaf_quality_grade(vmaf));
+        }
+    } else {
+        warn!("   ⚠️  Quality validation FAILED - using best available CRF");
+        if let Some(ssim) = result.ssim {
+            warn!("      SSIM: {:.4} < {:.4} threshold", ssim, min_ssim);
+        }
+    }
+    
+    info!("   📊 Final: CRF {:.1}, {} bytes ({:+.1}%)", 
+        result.optimal_crf, result.output_size, result.size_change_pct);
+    
+    Ok((result.output_size, result.optimal_crf.round() as u8, result.iterations as u8))
 }
 
 /// Explore smaller size by trying higher CRF values (conservative approach)
