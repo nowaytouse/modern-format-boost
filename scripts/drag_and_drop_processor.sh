@@ -5,12 +5,18 @@
 # 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
 # Usage: Drag folder to this script, or double-click and select folder
 #
-# 🔥 v4.1: 断点续传 + 原子操作保护
-#   - 进度文件记录已处理文件，中断后可续传
-#   - 锁文件防止重复运行
-#   - XMP 合并支持断点续传
+# 🔥 v4.2: 新增测试模式
+#   - 测试模式：输出到临时目录，不修改原文件
+#   - 采样测试：每种类型只处理一个文件
+#   - 详细日志：记录所有操作便于调试
+#   - 断点续传 + 原子操作保护
 
 set -e
+
+# 🔥 测试模式相关
+TEST_MODE=false
+TEST_OUTPUT_DIR=""
+TEST_LOG_FILE=""
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,14 +54,167 @@ check_tools() {
 
 # 显示欢迎信息
 show_welcome() {
-    echo "🚀 Modern Format Boost - 一键处理器 v4.1"
+    echo "🚀 Modern Format Boost - 一键处理器 v4.2"
     echo "=================================================="
-    echo "📁 处理模式：原地转换（删除原文件）"
+    if [[ "$TEST_MODE" == "true" ]]; then
+        echo "🧪 【测试模式】安全预览，不修改原文件"
+        echo "📁 输出目录：临时目录"
+    else
+        echo "📁 处理模式：原地转换（删除原文件）"
+    fi
     echo "📋 XMP合并：自动检测并合并 sidecar 元数据"
     echo "🍎 Apple兼容：默认启用（AV1/VP9 → HEVC）"
     echo "🔄 断点续传：支持中断后继续处理"
     echo "=================================================="
     echo ""
+}
+
+# 🔥 选择运行模式
+select_mode() {
+    echo ""
+    echo "请选择运行模式："
+    echo "  [1] 🧪 测试模式 - 安全预览，输出到临时目录（推荐首次使用）"
+    echo "  [2] 🚀 正式模式 - 原地转换，删除原文件"
+    echo "  [Q] 退出"
+    echo ""
+    read -r MODE_CHOICE
+    
+    case "$MODE_CHOICE" in
+        1)
+            TEST_MODE=true
+            echo "✅ 已选择测试模式"
+            ;;
+        2)
+            TEST_MODE=false
+            echo "✅ 已选择正式模式"
+            ;;
+        *)
+            echo "❌ 用户取消"
+            exit 0
+            ;;
+    esac
+}
+
+# 🔥 初始化测试模式
+init_test_mode() {
+    if [[ "$TEST_MODE" != "true" ]]; then
+        return
+    fi
+    
+    # 创建临时输出目录
+    TEST_OUTPUT_DIR=$(mktemp -d -t "mfb_test_XXXXXX")
+    TEST_LOG_FILE="$TEST_OUTPUT_DIR/test_log.txt"
+    
+    echo ""
+    echo "🧪 测试模式初始化"
+    echo "=================================================="
+    echo "📂 临时输出目录: $TEST_OUTPUT_DIR"
+    echo "📋 日志文件: $TEST_LOG_FILE"
+    echo ""
+    
+    # 初始化日志
+    {
+        echo "========================================"
+        echo "Modern Format Boost - 测试模式日志"
+        echo "========================================"
+        echo "时间: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo "源目录: $TARGET_DIR"
+        echo "输出目录: $TEST_OUTPUT_DIR"
+        echo "========================================"
+        echo ""
+    } > "$TEST_LOG_FILE"
+}
+
+# 🔥 测试日志记录
+test_log() {
+    local message="$1"
+    if [[ "$TEST_MODE" == "true" ]] && [[ -n "$TEST_LOG_FILE" ]]; then
+        echo "[$(date '+%H:%M:%S')] $message" >> "$TEST_LOG_FILE"
+    fi
+    echo "$message"
+}
+
+# 🔥 采样文件（每种类型取一个代表）
+sample_files() {
+    local sample_dir="$TEST_OUTPUT_DIR/samples"
+    mkdir -p "$sample_dir"
+    
+    test_log ""
+    test_log "📊 采样文件用于测试..."
+    test_log "=================================================="
+    
+    # 记录采样的文件类型
+    declare -A sampled_types
+    local sample_count=0
+    local max_samples=10  # 最多采样 10 个文件
+    
+    # 采样 XMP 文件（优先选择特殊字符文件名）
+    while IFS= read -r -d '' xmp_file; do
+        local basename=$(basename "$xmp_file")
+        # 优先选择包含特殊字符的文件名（用于测试边界情况）
+        if [[ "$basename" == *"["* ]] || [[ "$basename" == *"("* ]] || [[ "$basename" == *" "* ]]; then
+            if [[ -z "${sampled_types[xmp_special]}" ]]; then
+                cp "$xmp_file" "$sample_dir/"
+                sampled_types[xmp_special]="$xmp_file"
+                test_log "   📋 XMP(特殊字符): $basename"
+                ((sample_count++))
+                
+                # 同时复制对应的媒体文件
+                local base="${xmp_file%.xmp}"
+                local dir=$(dirname "$xmp_file")
+                local stem=$(basename "$base")
+                for ext in mp4 mov mkv gif png jpg jpeg webp; do
+                    if [[ -f "$dir/$stem.$ext" ]]; then
+                        cp "$dir/$stem.$ext" "$sample_dir/"
+                        test_log "      └─ 媒体文件: $stem.$ext"
+                        break
+                    fi
+                done
+            fi
+        elif [[ -z "${sampled_types[xmp_normal]}" ]]; then
+            cp "$xmp_file" "$sample_dir/"
+            sampled_types[xmp_normal]="$xmp_file"
+            test_log "   📋 XMP(普通): $basename"
+            ((sample_count++))
+        fi
+        
+        [[ $sample_count -ge $max_samples ]] && break
+    done < <(find "$TARGET_DIR" -type f -iname "*.xmp" -print0 2>/dev/null | head -z -n 20)
+    
+    # 采样图像文件（每种格式一个）
+    for ext in jpg jpeg png gif webp heic avif bmp tiff; do
+        if [[ $sample_count -ge $max_samples ]]; then break; fi
+        if [[ -z "${sampled_types[img_$ext]}" ]]; then
+            local found=$(find "$TARGET_DIR" -type f -iname "*.$ext" -print -quit 2>/dev/null)
+            if [[ -n "$found" ]]; then
+                cp "$found" "$sample_dir/"
+                sampled_types[img_$ext]="$found"
+                test_log "   🖼️  图像($ext): $(basename "$found")"
+                ((sample_count++))
+            fi
+        fi
+    done
+    
+    # 采样视频文件（每种格式一个）
+    for ext in mp4 mov mkv webm avi m4v; do
+        if [[ $sample_count -ge $max_samples ]]; then break; fi
+        if [[ -z "${sampled_types[vid_$ext]}" ]]; then
+            local found=$(find "$TARGET_DIR" -type f -iname "*.$ext" -print -quit 2>/dev/null)
+            if [[ -n "$found" ]]; then
+                cp "$found" "$sample_dir/"
+                sampled_types[vid_$ext]="$found"
+                test_log "   🎬 视频($ext): $(basename "$found")"
+                ((sample_count++))
+            fi
+        fi
+    done
+    
+    test_log ""
+    test_log "📊 采样完成: $sample_count 个文件"
+    test_log ""
+    
+    # 更新 TARGET_DIR 为采样目录
+    TARGET_DIR="$sample_dir"
 }
 
 # 🔥 初始化断点续传
@@ -179,28 +338,33 @@ get_target_directory() {
 
 # 安全检查
 safety_check() {
-    # 危险目录检查
-    case "$TARGET_DIR" in
-        "/" | "/System"* | "/usr"* | "/bin"* | "/sbin"* | "$HOME" | "$HOME/Desktop" | "$HOME/Documents")
-            echo "❌ 危险目录，拒绝处理: $TARGET_DIR"
-            echo "为了安全，请选择具体的子目录进行处理。"
-            exit 1
-            ;;
-    esac
-    
-    # 确认处理
-    echo ""
-    echo "⚠️  即将开始原地处理（会删除原文件）："
-    echo "   目录: $TARGET_DIR"
-    echo "   模式: 递归处理所有子目录"
-    echo "   参数: --match-quality --explore"
-    echo ""
-    echo "确认继续？(y/N): "
-    read -r CONFIRM
-    
-    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-        echo "❌ 用户取消操作"
-        exit 0
+    # 测试模式跳过危险目录检查（因为不会修改原文件）
+    if [[ "$TEST_MODE" != "true" ]]; then
+        # 危险目录检查
+        case "$TARGET_DIR" in
+            "/" | "/System"* | "/usr"* | "/bin"* | "/sbin"* | "$HOME" | "$HOME/Desktop" | "$HOME/Documents")
+                echo "❌ 危险目录，拒绝处理: $TARGET_DIR"
+                echo "为了安全，请选择具体的子目录进行处理。"
+                exit 1
+                ;;
+        esac
+        
+        # 确认处理
+        echo ""
+        echo "⚠️  即将开始原地处理（会删除原文件）："
+        echo "   目录: $TARGET_DIR"
+        echo "   模式: 递归处理所有子目录"
+        echo "   参数: --match-quality --explore"
+        echo ""
+        echo "确认继续？(y/N): "
+        read -r CONFIRM
+        
+        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+            echo "❌ 用户取消操作"
+            exit 0
+        fi
+    else
+        echo "🧪 测试模式：跳过安全确认（不会修改原文件）"
     fi
 }
 
@@ -289,7 +453,7 @@ merge_xmp_files() {
             done
             
             if [[ -z "$media_file" ]]; then
-                echo "   ⏭️  跳过: $(basename "$xmp_file") (无对应媒体文件)"
+                test_log "   ⏭️  跳过: $(basename "$xmp_file") (无对应媒体文件)"
                 mark_file_completed "xmp:$xmp_file"
                 ((XMP_SKIPPED++)) || true
                 continue
@@ -297,7 +461,7 @@ merge_xmp_files() {
         fi
         
         # 执行合并
-        echo "   🔄 合并: $(basename "$xmp_file") → $(basename "$media_file")"
+        test_log "   🔄 合并: $(basename "$xmp_file") → $(basename "$media_file")"
         
         # 🔥 创建临时文件保存媒体文件的原始时间戳（在 exiftool 修改前）
         timestamp_ref=$(mktemp)
@@ -310,12 +474,12 @@ merge_xmp_files() {
             
             # 删除 XMP 文件
             rm "$xmp_file"
-            echo "      ✅ 成功，已删除 XMP 文件"
+            test_log "      ✅ 成功，已删除 XMP 文件"
             mark_file_completed "xmp:$xmp_file"
             ((XMP_SUCCESS++)) || true
         else
             rm -f "$timestamp_ref"
-            echo "      ❌ 合并失败"
+            test_log "      ❌ 合并失败"
             ((XMP_FAILED++)) || true
         fi
         
@@ -328,36 +492,58 @@ merge_xmp_files() {
 # 处理图像文件
 process_images() {
     if [[ $IMG_COUNT -gt 0 ]]; then
-        echo ""
-        echo "🖼️  开始处理图像文件..."
-        echo "=================================================="
+        test_log ""
+        test_log "🖼️  开始处理图像文件..."
+        test_log "=================================================="
         
-        "$IMGQUALITY_HEVC" auto "$TARGET_DIR" \
-            --in-place \
-            --recursive \
-            --match-quality \
-            --explore \
-            --apple-compat
+        if [[ "$TEST_MODE" == "true" ]]; then
+            # 测试模式：记录详细输出
+            test_log "命令: imgquality-hevc auto $TARGET_DIR --in-place --recursive --match-quality --explore --apple-compat"
+            "$IMGQUALITY_HEVC" auto "$TARGET_DIR" \
+                --in-place \
+                --recursive \
+                --match-quality \
+                --explore \
+                --apple-compat 2>&1 | tee -a "$TEST_LOG_FILE"
+        else
+            "$IMGQUALITY_HEVC" auto "$TARGET_DIR" \
+                --in-place \
+                --recursive \
+                --match-quality \
+                --explore \
+                --apple-compat
+        fi
         
-        echo "✅ 图像处理完成"
+        test_log "✅ 图像处理完成"
     fi
 }
 
 # 处理视频文件
 process_videos() {
     if [[ $VID_COUNT -gt 0 ]]; then
-        echo ""
-        echo "🎬 开始处理视频文件..."
-        echo "=================================================="
+        test_log ""
+        test_log "🎬 开始处理视频文件..."
+        test_log "=================================================="
         
-        "$VIDQUALITY_HEVC" auto "$TARGET_DIR" \
-            --in-place \
-            --recursive \
-            --match-quality true \
-            --explore \
-            --apple-compat
+        if [[ "$TEST_MODE" == "true" ]]; then
+            # 测试模式：记录详细输出
+            test_log "命令: vidquality-hevc auto $TARGET_DIR --in-place --recursive --match-quality true --explore --apple-compat"
+            "$VIDQUALITY_HEVC" auto "$TARGET_DIR" \
+                --in-place \
+                --recursive \
+                --match-quality true \
+                --explore \
+                --apple-compat 2>&1 | tee -a "$TEST_LOG_FILE"
+        else
+            "$VIDQUALITY_HEVC" auto "$TARGET_DIR" \
+                --in-place \
+                --recursive \
+                --match-quality true \
+                --explore \
+                --apple-compat
+        fi
         
-        echo "✅ 视频处理完成"
+        test_log "✅ 视频处理完成"
     fi
 }
 
@@ -366,12 +552,48 @@ show_completion() {
     echo ""
     echo "🎉 处理完成！"
     echo "=================================================="
-    echo "📁 处理目录: $TARGET_DIR"
-    if [[ $XMP_COUNT -gt 0 ]]; then
-        echo "📋 XMP合并:  ✅ $XMP_SUCCESS 成功"
+    
+    if [[ "$TEST_MODE" == "true" ]]; then
+        echo "🧪 【测试模式】结果"
+        echo "📂 输出目录: $TEST_OUTPUT_DIR"
+        echo "📋 日志文件: $TEST_LOG_FILE"
+        echo ""
+        
+        # 显示输出目录内容
+        echo "📁 输出文件列表:"
+        ls -la "$TEST_OUTPUT_DIR/samples/" 2>/dev/null || echo "   (无文件)"
+        echo ""
+        
+        # 记录最终统计到日志
+        {
+            echo ""
+            echo "========================================"
+            echo "测试完成统计"
+            echo "========================================"
+            echo "XMP合并: ✅ $XMP_SUCCESS 成功, ❌ $XMP_FAILED 失败, ⏭️ $XMP_SKIPPED 跳过"
+            echo "图像文件: $IMG_COUNT"
+            echo "视频文件: $VID_COUNT"
+            echo "完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
+            echo "========================================"
+        } >> "$TEST_LOG_FILE"
+        
+        echo "💡 提示: 检查输出目录确认转换效果"
+        echo "   如果测试通过，可以使用正式模式处理"
+        echo ""
+        echo "是否打开输出目录？(y/N): "
+        read -r OPEN_DIR
+        if [[ "$OPEN_DIR" =~ ^[Yy]$ ]]; then
+            open "$TEST_OUTPUT_DIR" 2>/dev/null || echo "无法打开目录"
+        fi
+    else
+        echo "📁 处理目录: $TARGET_DIR"
+        if [[ $XMP_COUNT -gt 0 ]]; then
+            echo "📋 XMP合并:  ✅ $XMP_SUCCESS 成功"
+        fi
+        echo "🖼️  图像文件: $IMG_COUNT"
+        echo "🎬 视频文件: $VID_COUNT"
     fi
-    echo "🖼️  图像文件: $IMG_COUNT"
-    echo "🎬 视频文件: $VID_COUNT"
+    
     echo "=================================================="
     echo ""
     echo "按任意键退出..."
@@ -380,9 +602,18 @@ show_completion() {
 
 # 主函数
 main() {
+    # 🔥 首先选择运行模式
+    select_mode
+    
     show_welcome
     check_tools
     get_target_directory "$@"
+    
+    # 🔥 测试模式：初始化并采样文件
+    if [[ "$TEST_MODE" == "true" ]]; then
+        init_test_mode
+        sample_files
+    fi
     
     # 🔥 初始化断点续传（在 safety_check 之前，以便检测未完成任务）
     init_progress_tracking
@@ -393,8 +624,10 @@ main() {
     process_images
     process_videos
     
-    # 🔥 任务完成，清理进度文件
-    cleanup_progress
+    # 🔥 任务完成，清理进度文件（测试模式不清理，保留日志）
+    if [[ "$TEST_MODE" != "true" ]]; then
+        cleanup_progress
+    fi
     
     show_completion
 }
