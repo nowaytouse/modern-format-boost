@@ -73,9 +73,56 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
         .output();
     
     // 清理临时文件
-    if let Some(temp) = temp_file {
+    if let Some(ref temp) = temp_file {
         let _ = fs::remove_file(temp);
     }
+    
+    // 🔥 Fallback: 如果 cjxl 失败且报告 "Getting pixel data failed"，使用 ImageMagick 重新编码后再试
+    let result = match &result {
+        Ok(output_cmd) if !output_cmd.status.success() => {
+            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+            if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
+                eprintln!("   🔄 cjxl decode failed, trying ImageMagick re-encode...");
+                
+                // 使用 ImageMagick 重新编码为 PNG
+                let fallback_png = std::env::temp_dir().join(format!(
+                    "mfb_fallback_{}_{}.png",
+                    std::process::id(),
+                    input.file_stem().unwrap_or_default().to_string_lossy()
+                ));
+                
+                let magick_result = Command::new("magick")
+                    .arg(input)
+                    .arg("-depth").arg("16")  // 保留位深
+                    .arg(&fallback_png)
+                    .output();
+                
+                if let Ok(magick_out) = magick_result {
+                    if magick_out.status.success() && fallback_png.exists() {
+                        // 使用重新编码的 PNG 再次调用 cjxl
+                        let retry_result = Command::new("cjxl")
+                            .arg(&fallback_png)
+                            .arg(&output)
+                            .arg("-d").arg(format!("{:.1}", distance))
+                            .arg("-e").arg("7")
+                            .arg("-j").arg(max_threads.to_string())
+                            .output();
+                        
+                        let _ = fs::remove_file(&fallback_png);
+                        retry_result
+                    } else {
+                        let _ = fs::remove_file(&fallback_png);
+                        result
+                    }
+                } else {
+                    result
+                }
+            } else {
+                result
+            }
+        }
+        _ => result,
+    };
     
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
