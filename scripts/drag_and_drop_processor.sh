@@ -191,7 +191,7 @@ process_images() {
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place)
     else
-        args+=(--output-dir "$OUTPUT_DIR")
+        args+=(--output "$OUTPUT_DIR")
     fi
     
     "$IMGQUALITY_HEVC" "${args[@]}"
@@ -215,7 +215,7 @@ process_videos() {
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place)
     else
-        args+=(--output-dir "$OUTPUT_DIR")
+        args+=(--output "$OUTPUT_DIR")
     fi
     
     "$VIDQUALITY_HEVC" "${args[@]}"
