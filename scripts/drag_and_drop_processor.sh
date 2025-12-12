@@ -42,12 +42,13 @@ check_tools() {
 
 # 显示欢迎信息
 show_welcome() {
-    echo "🚀 Modern Format Boost - 一键处理器 v3.9"
+    echo "🚀 Modern Format Boost - 一键处理器 v4.0"
     echo "=================================================="
     echo "📁 处理模式：原地转换（删除原文件）"
     echo "📋 XMP合并：自动检测并合并 sidecar 元数据"
-    echo "🔧 图像参数：--in-place --recursive --match-quality --explore"
-    echo "🎬 视频参数：--in-place --recursive --match-quality true --explore"
+    echo "🍎 Apple兼容：默认启用（AV1/VP9 → HEVC）"
+    echo "🔧 图像参数：--in-place --recursive --match-quality --explore --apple-compat"
+    echo "🎬 视频参数：--in-place --recursive --match-quality true --explore --apple-compat"
     echo "=================================================="
     echo ""
 }
@@ -216,7 +217,8 @@ process_images() {
             --in-place \
             --recursive \
             --match-quality \
-            --explore
+            --explore \
+            --apple-compat
         
         echo "✅ 图像处理完成"
     fi
@@ -233,7 +235,8 @@ process_videos() {
             --in-place \
             --recursive \
             --match-quality true \
-            --explore
+            --explore \
+            --apple-compat
         
         echo "✅ 视频处理完成"
     fi

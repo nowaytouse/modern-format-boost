@@ -214,6 +214,10 @@ pub struct ConvertOptions {
     /// - 单独使用：使用算法预测的 CRF + SSIM 验证
     /// - 与 explore 组合：精确质量匹配（二分搜索 + SSIM 验证）
     pub match_quality: bool,
+    /// 🍎 Apple compatibility mode: Convert non-Apple-compatible formats to HEVC
+    /// When enabled, AV1/VP9 animated images will be converted to HEVC MP4
+    /// instead of being skipped as "modern format"
+    pub apple_compat: bool,
 }
 
 

@@ -54,6 +54,11 @@ enum Commands {
         /// Enabled by default for video processing
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         match_quality: bool,
+        /// 🍎 Apple compatibility mode: Convert non-Apple-compatible modern codecs (AV1, VP9) to HEVC
+        /// When enabled, AV1/VP9/VVC/AV2 videos will be converted to HEVC for Apple device compatibility
+        /// Only HEVC videos will be skipped (already Apple compatible)
+        #[arg(long, default_value_t = false)]
+        apple_compat: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -100,7 +105,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat } => {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -110,6 +115,7 @@ fn main() -> anyhow::Result<()> {
                 use_lossless: lossless,
                 match_quality,
                 in_place,
+                apple_compat,
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -127,6 +133,9 @@ fn main() -> anyhow::Result<()> {
             }
             if match_quality {
                 info!("   🎯 Match Quality: ENABLED");
+            }
+            if apple_compat {
+                info!("   🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)");
             }
             if recursive {
                 info!("   📂 Recursive: ENABLED");
