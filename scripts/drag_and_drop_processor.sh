@@ -26,6 +26,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # 工具路径
 IMGQUALITY_HEVC="$PROJECT_ROOT/imgquality_hevc/target/release/imgquality-hevc"
 VIDQUALITY_HEVC="$PROJECT_ROOT/vidquality_hevc/target/release/vidquality-hevc"
+XMP_MERGER="$PROJECT_ROOT/xmp_merger/target/release/xmp-merge"
 
 # XMP 合并计数器
 XMP_SUCCESS=0
@@ -50,6 +51,12 @@ check_tools() {
         echo "❌ vidquality-hevc not found. Building..."
         cd "$PROJECT_ROOT"
         cargo build --release -p vidquality-hevc
+    fi
+    
+    if [[ ! -f "$XMP_MERGER" ]]; then
+        echo "❌ xmp-merge not found. Building..."
+        cd "$PROJECT_ROOT"
+        cargo build --release -p xmp_merger
     fi
 }
 
@@ -534,14 +541,24 @@ count_files() {
     fi
 }
 
-# 🔥 XMP 元数据合并功能
+# 🔥 XMP 元数据合并功能 (使用 Rust 工具)
 merge_xmp_files() {
     if [[ $XMP_COUNT -eq 0 ]]; then
         echo "📋 未检测到 XMP 文件，跳过合并步骤"
         return
     fi
     
-    # 检查 exiftool 是否可用
+    # 检查 Rust XMP 合并工具
+    if [[ ! -f "$XMP_MERGER" ]]; then
+        echo "⚠️  XMP 合并工具未编译，尝试编译..."
+        cd "$PROJECT_ROOT"
+        if ! cargo build --release -p xmp_merger 2>/dev/null; then
+            echo "❌ 编译失败，跳过 XMP 合并"
+            return
+        fi
+    fi
+    
+    # 检查 exiftool 依赖
     if ! command -v exiftool &> /dev/null; then
         echo "⚠️  ExifTool 未安装，跳过 XMP 合并"
         echo "   安装方法: brew install exiftool"
@@ -549,80 +566,30 @@ merge_xmp_files() {
     fi
     
     echo ""
-    echo "📋 开始合并 XMP 元数据..."
+    echo "📋 开始合并 XMP 元数据 (Rust v2.0)..."
     echo "=================================================="
     echo "   检测到 $XMP_COUNT 个 XMP sidecar 文件"
+    echo "   使用 6 种匹配策略确保可靠性"
     echo ""
     
-    XMP_SUCCESS=0
-    XMP_FAILED=0
-    XMP_SKIPPED=0
+    # 🔥 使用 Rust XMP 合并工具
+    if [[ "$TEST_MODE" == "true" ]]; then
+        # 测试模式：详细输出
+        "$XMP_MERGER" --delete-xmp --verbose "$TARGET_DIR" 2>&1 | tee -a "$TEST_LOG_FILE"
+    else
+        # 正式模式：删除 XMP 文件
+        "$XMP_MERGER" --delete-xmp "$TARGET_DIR"
+    fi
     
-    # 遍历所有 XMP 文件
-    while IFS= read -r -d '' xmp_file; do
-        # 🔥 断点续传：检查是否已处理
-        if is_file_completed "xmp:$xmp_file"; then
-            ((XMP_SKIPPED++)) || true
-            continue
-        fi
-        
-        # 获取基础文件名（去掉 .xmp 后缀）
-        base_name="${xmp_file%.*}"
-        
-        # 检查对应的媒体文件是否存在
-        if [[ -f "$base_name" ]]; then
-            media_file="$base_name"
-        else
-            # 🔥 优化：直接检查常见扩展名，避免 find 的性能问题
-            base_name_no_ext="${xmp_file%.xmp}"
-            dir_path="$(dirname "$xmp_file")"
-            file_stem="$(basename "$base_name_no_ext")"
-            media_file=""
-            
-            # 遍历常见媒体扩展名，直接检查文件是否存在（最快）
-            for ext in mp4 mov mkv avi webm gif png jpg jpeg webp avif heic tiff bmp; do
-                candidate="$dir_path/$file_stem.$ext"
-                if [[ -f "$candidate" ]]; then
-                    media_file="$candidate"
-                    break
-                fi
-            done
-            
-            if [[ -z "$media_file" ]]; then
-                test_log "   ⏭️  跳过: $(basename "$xmp_file") (无对应媒体文件)"
-                mark_file_completed "xmp:$xmp_file"
-                ((XMP_SKIPPED++)) || true
-                continue
-            fi
-        fi
-        
-        # 执行合并
-        test_log "   🔄 合并: $(basename "$xmp_file") → $(basename "$media_file")"
-        
-        # 🔥 创建临时文件保存媒体文件的原始时间戳（在 exiftool 修改前）
-        timestamp_ref=$(mktemp)
-        touch -r "$media_file" "$timestamp_ref" 2>/dev/null || true
-        
-        if exiftool -P -overwrite_original -tagsfromfile "$xmp_file" -all:all "$media_file" > /dev/null 2>&1; then
-            # 🔥 恢复媒体文件的原始时间戳（exiftool 会修改时间戳）
-            touch -r "$timestamp_ref" "$media_file" 2>/dev/null || true
-            rm -f "$timestamp_ref"
-            
-            # 删除 XMP 文件
-            rm "$xmp_file"
-            test_log "      ✅ 成功，已删除 XMP 文件"
-            mark_file_completed "xmp:$xmp_file"
-            ((XMP_SUCCESS++)) || true
-        else
-            rm -f "$timestamp_ref"
-            test_log "      ❌ 合并失败"
-            ((XMP_FAILED++)) || true
-        fi
-        
-    done < <(find "$TARGET_DIR" -type f -iname "*.xmp" -print0 2>/dev/null)
+    local exit_code=$?
     
-    echo ""
-    echo "📋 XMP 合并完成: ✅ $XMP_SUCCESS 成功, ❌ $XMP_FAILED 失败, ⏭️ $XMP_SKIPPED 跳过"
+    if [[ $exit_code -eq 0 ]]; then
+        echo ""
+        echo "📋 XMP 合并完成 ✅"
+    else
+        echo ""
+        echo "📋 XMP 合并完成（部分失败）"
+    fi
 }
 
 # 处理图像文件
