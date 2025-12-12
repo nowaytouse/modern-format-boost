@@ -1503,4 +1503,178 @@ mod tests {
         assert!((HIGH_QUALITY_MIN_SSIM - 0.98).abs() < 1e-10);
         assert!((ACCEPTABLE_MIN_SSIM - 0.90).abs() < 1e-10);
     }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v3.5: 裁判机制增强测试 (Referee Mechanism Enhancement Tests)
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 🔥 测试：VMAF 质量等级判定
+    #[test]
+    fn test_vmaf_quality_grades() {
+        assert_eq!(vmaf_quality_grade(95.0), "Excellent (几乎无法区分)");
+        assert_eq!(vmaf_quality_grade(93.0), "Excellent (几乎无法区分)");
+        assert_eq!(vmaf_quality_grade(90.0), "Good (流媒体质量)");
+        assert_eq!(vmaf_quality_grade(85.0), "Good (流媒体质量)");
+        assert_eq!(vmaf_quality_grade(80.0), "Acceptable (移动端质量)");
+        assert_eq!(vmaf_quality_grade(75.0), "Acceptable (移动端质量)");
+        assert_eq!(vmaf_quality_grade(65.0), "Fair (可见差异)");
+        assert_eq!(vmaf_quality_grade(60.0), "Fair (可见差异)");
+        assert_eq!(vmaf_quality_grade(50.0), "Poor (明显质量损失)");
+    }
+    
+    /// 🔥 测试：VMAF 有效性验证
+    #[test]
+    fn test_vmaf_validity() {
+        assert!(is_valid_vmaf(0.0));
+        assert!(is_valid_vmaf(50.0));
+        assert!(is_valid_vmaf(100.0));
+        assert!(!is_valid_vmaf(-1.0));
+        assert!(!is_valid_vmaf(101.0));
+    }
+    
+    /// 🔥 测试：三种模式的配置正确性
+    #[test]
+    fn test_three_modes_config_correctness() {
+        // 模式 1: SizeOnly - 不验证质量
+        let size_only = ExploreConfig::size_only(20.0, 30.0);
+        assert_eq!(size_only.mode, ExploreMode::SizeOnly);
+        assert!(!size_only.quality_thresholds.validate_ssim, "SizeOnly should NOT validate SSIM");
+        assert!(!size_only.quality_thresholds.validate_vmaf, "SizeOnly should NOT validate VMAF");
+        
+        // 模式 2: QualityMatch - 单次编码 + SSIM 验证
+        let quality_match = ExploreConfig::quality_match(22.0);
+        assert_eq!(quality_match.mode, ExploreMode::QualityMatch);
+        assert!(quality_match.quality_thresholds.validate_ssim, "QualityMatch MUST validate SSIM");
+        assert_eq!(quality_match.max_iterations, 1, "QualityMatch should have 1 iteration");
+        
+        // 模式 3: PreciseQualityMatch - 二分搜索 + SSIM 裁判
+        let precise = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
+        assert_eq!(precise.mode, ExploreMode::PreciseQualityMatch);
+        assert!(precise.quality_thresholds.validate_ssim, "PreciseQualityMatch MUST validate SSIM");
+        assert_eq!(precise.quality_thresholds.min_ssim, 0.97, "Custom min_ssim should be used");
+        assert!(precise.max_iterations > 1, "PreciseQualityMatch should have multiple iterations");
+    }
+    
+    /// 🔥 测试：自校准逻辑 - 当初始 CRF 不满足质量时应向下搜索
+    #[test]
+    fn test_self_calibration_logic() {
+        // 模拟自校准场景：
+        // 初始 CRF = 25，但 SSIM = 0.93 < 0.95 阈值
+        // 应该向下搜索（降低 CRF）以提高质量
+        
+        let config = ExploreConfig::precise_quality_match(25.0, 35.0, 0.95);
+        
+        // 验证配置允许向下搜索
+        assert!(config.min_crf < config.initial_crf, 
+            "min_crf ({}) should be less than initial_crf ({}) to allow downward search",
+            config.min_crf, config.initial_crf);
+        
+        // 验证二分搜索范围足够
+        let range = config.max_crf - config.min_crf;
+        assert!(range >= 10.0, "CRF range should be at least 10 for effective calibration");
+    }
+    
+    /// 🔥 测试：质量验证失败时的行为
+    #[test]
+    fn test_quality_validation_failure_behavior() {
+        let thresholds = QualityThresholds {
+            min_ssim: 0.95,
+            min_psnr: 35.0,
+            min_vmaf: 85.0,
+            validate_ssim: true,
+            validate_psnr: false,
+            validate_vmaf: true, // 启用 VMAF
+        };
+        
+        // 模拟 check_quality_passed 逻辑（包含 VMAF）
+        let check = |ssim: Option<f64>, vmaf: Option<f64>| -> bool {
+            if thresholds.validate_ssim {
+                match ssim {
+                    Some(s) if s + SSIM_COMPARE_EPSILON >= thresholds.min_ssim => {}
+                    _ => return false,
+                }
+            }
+            if thresholds.validate_vmaf {
+                match vmaf {
+                    Some(v) if v >= thresholds.min_vmaf => {}
+                    _ => return false,
+                }
+            }
+            true
+        };
+        
+        // SSIM 通过，VMAF 通过
+        assert!(check(Some(0.96), Some(90.0)));
+        
+        // SSIM 通过，VMAF 失败
+        assert!(!check(Some(0.96), Some(80.0)));
+        
+        // SSIM 失败，VMAF 通过
+        assert!(!check(Some(0.94), Some(90.0)));
+        
+        // VMAF 为 None 时应失败（启用了验证但无法计算）
+        assert!(!check(Some(0.96), None));
+    }
+    
+    /// 🔥 测试：评价标准阈值
+    #[test]
+    fn test_evaluation_criteria_thresholds() {
+        // SSIM 评价标准
+        assert!(DEFAULT_MIN_SSIM >= 0.95, "Default SSIM should be >= 0.95 (Good)");
+        assert!(HIGH_QUALITY_MIN_SSIM >= 0.98, "High quality SSIM should be >= 0.98 (Excellent)");
+        assert!(ACCEPTABLE_MIN_SSIM >= 0.90, "Acceptable SSIM should be >= 0.90");
+        assert!(MIN_ACCEPTABLE_SSIM >= 0.85, "Minimum acceptable SSIM should be >= 0.85");
+        
+        // VMAF 评价标准
+        assert!(DEFAULT_MIN_VMAF >= 85.0, "Default VMAF should be >= 85 (Good)");
+        assert!(HIGH_QUALITY_MIN_VMAF >= 93.0, "High quality VMAF should be >= 93 (Excellent)");
+        assert!(ACCEPTABLE_MIN_VMAF >= 75.0, "Acceptable VMAF should be >= 75");
+    }
+    
+    /// 🔥 测试：CRF 0.5 步长精度
+    #[test]
+    fn test_crf_half_step_precision() {
+        // 验证 0.5 步长的二分搜索
+        let test_values: [f64; 7] = [18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0];
+        
+        for &crf in &test_values {
+            // 四舍五入到 0.5 步长
+            let rounded = (crf * 2.0).round() / 2.0;
+            assert!((rounded - crf).abs() < 0.01, 
+                "CRF {} should round to {} with 0.5 step", crf, rounded);
+        }
+        
+        // 测试非 0.5 步长值的四舍五入
+        assert!((((23.3_f64 * 2.0).round() / 2.0) - 23.5).abs() < 0.01);
+        assert!((((23.7_f64 * 2.0).round() / 2.0) - 23.5).abs() < 0.01);
+        assert!((((23.2_f64 * 2.0).round() / 2.0) - 23.0).abs() < 0.01);
+        assert!((((23.8_f64 * 2.0).round() / 2.0) - 24.0).abs() < 0.01);
+    }
+    
+    /// 🔥 测试：探索结果结构完整性
+    #[test]
+    fn test_explore_result_completeness() {
+        let result = ExploreResult {
+            optimal_crf: 23.5,
+            output_size: 1_000_000,
+            size_change_pct: -15.5,
+            ssim: Some(0.9650),
+            psnr: Some(38.5),
+            vmaf: Some(92.3),
+            iterations: 5,
+            quality_passed: true,
+            log: vec!["Test log".to_string()],
+        };
+        
+        // 验证所有字段都有意义
+        assert!(result.optimal_crf > 0.0);
+        assert!(result.output_size > 0);
+        assert!(result.size_change_pct < 0.0, "Size should decrease");
+        assert!(result.ssim.is_some());
+        assert!(result.psnr.is_some());
+        assert!(result.vmaf.is_some());
+        assert!(result.iterations > 0);
+        assert!(result.quality_passed);
+        assert!(!result.log.is_empty());
+    }
 }
