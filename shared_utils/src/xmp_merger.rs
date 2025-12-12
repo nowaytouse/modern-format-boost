@@ -618,18 +618,18 @@ impl XmpMerger {
         None
     }
 
-    /// Restore timestamps - prefer XMP file's timestamp, fallback to original
+    /// Restore timestamps - ALWAYS use original media file's timestamp
     fn restore_timestamps(
         &self,
         media_path: &Path,
         original: &Option<(filetime::FileTime, filetime::FileTime)>,
-        xmp: &Option<(filetime::FileTime, filetime::FileTime)>,
+        _xmp: &Option<(filetime::FileTime, filetime::FileTime)>,
     ) {
-        // Use XMP timestamp if available, otherwise use original media timestamp
-        let timestamps = xmp.as_ref().or(original.as_ref());
-        
-        if let Some((atime, mtime)) = timestamps {
-            let _ = filetime::set_file_times(media_path, *atime, *mtime);
+        // ALWAYS restore original media timestamp (not XMP timestamp)
+        if let Some((atime, mtime)) = original {
+            if let Err(e) = filetime::set_file_times(media_path, *atime, *mtime) {
+                eprintln!("⚠️ Failed to restore timestamp for {}: {}", media_path.display(), e);
+            }
         }
     }
 
