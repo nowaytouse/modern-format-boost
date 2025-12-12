@@ -27,24 +27,26 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
-/// Supported media file extensions (lowercase)
-const MEDIA_EXTENSIONS: &[&str] = &[
-    // Images - Common (including all JPEG variants)
-    "jpg", "jpeg", "jpe", "jfif", "jif", "png", "tiff", "tif", "webp", "avif", "jxl", "heic", "heif", "bmp", "gif",
-    // Images - RAW formats
-    "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw", "raw", "3fr", "ari",
-    "bay", "cap", "crw", "dcr", "dcs", "drf", "eip", "erf", "fff", "iiq", "k25", "kdc", "mdc",
-    "mef", "mos", "mrw", "nrw", "obm", "ptx", "pxn", "r3d", "rwl", "rwz", "sr2", "srf", "x3f",
-    // Images - Design/Editing formats
-    "psd", "psb", "ai", "eps", "svg", "xcf", "kra", "clip", "csp", "sai", "sai2", "mdp", "afphoto",
-    // Video
-    "mp4", "mov", "avi", "mkv", "m4v", "webm", "mts", "m2ts", "3gp", "flv", "wmv", "mpg", "mpeg",
-    "ts", "vob", "ogv", "rm", "rmvb", "asf", "divx", "f4v",
-    // Audio (some XMP may reference audio)
-    "mp3", "wav", "flac", "aac", "m4a", "ogg", "wma", "aiff", "alac",
-    // Documents (some XMP may reference documents)
-    "pdf",
+/// Excluded extensions - files that should NEVER be matched as media
+/// Everything else is fair game for XMP matching (blacklist approach)
+const EXCLUDED_EXTENSIONS: &[&str] = &[
+    // XMP itself
+    "xmp",
+    // Text/config files
+    "txt", "md", "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "log",
+    // Code files
+    "rs", "py", "js", "ts", "html", "css", "sh", "bash", "zsh", "c", "cpp", "h", "hpp", "java",
+    // Archives
+    "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+    // System files
+    "ds_store", "thumbs.db", "desktop.ini",
 ];
+
+/// Check if extension is a potential media file (not in blacklist)
+#[inline]
+fn is_potential_media(ext: &str) -> bool {
+    !EXCLUDED_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+}
 
 /// XMP file information
 #[derive(Debug, Clone)]
@@ -176,19 +178,33 @@ impl XmpMerger {
     }
 
     /// Strategy 2: Same name different extension (photo.xmp → photo.jpg)
+    /// Scans directory for any file with matching stem (blacklist approach)
     fn find_same_name_different_ext(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
         
-        for ext in MEDIA_EXTENSIONS {
-            let candidate = parent.join(format!("{}.{}", stem, ext));
-            if candidate.exists() {
-                return Some(candidate);
+        // Scan directory for files with same stem
+        for entry in std::fs::read_dir(parent).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            
+            if !path.is_file() {
+                continue;
             }
-            // Also try uppercase extension
-            let candidate_upper = parent.join(format!("{}.{}", stem, ext.to_uppercase()));
-            if candidate_upper.exists() {
-                return Some(candidate_upper);
+            
+            let file_stem = match path.file_stem() {
+                Some(s) => s.to_string_lossy(),
+                None => continue,
+            };
+            
+            let ext = match path.extension() {
+                Some(e) => e.to_string_lossy().to_lowercase(),
+                None => continue,
+            };
+            
+            // Exact stem match + not in blacklist
+            if file_stem == stem && is_potential_media(&ext) {
+                return Some(path);
             }
         }
         None
@@ -210,7 +226,7 @@ impl XmpMerger {
             let file_stem = path.file_stem()?.to_string_lossy().to_lowercase();
             let ext = path.extension()?.to_string_lossy().to_lowercase();
             
-            if file_stem == stem && MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if file_stem == stem && is_potential_media(&ext) {
                 return Some(path);
             }
         }
@@ -242,7 +258,7 @@ impl XmpMerger {
                 None => continue,
             };
             
-            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if !is_potential_media(&ext) {
                 continue;
             }
             
@@ -283,7 +299,7 @@ impl XmpMerger {
                 None => continue,
             };
             
-            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if !is_potential_media(&ext) {
                 continue;
             }
             
@@ -325,7 +341,7 @@ impl XmpMerger {
                 None => continue,
             };
             
-            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if !is_potential_media(&ext) {
                 continue;
             }
             
@@ -365,7 +381,7 @@ impl XmpMerger {
                 None => continue,
             };
             
-            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if !is_potential_media(&ext) {
                 continue;
             }
             
@@ -427,7 +443,7 @@ impl XmpMerger {
             }
             
             let ext = path.extension()?.to_string_lossy().to_lowercase();
-            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+            if !is_potential_media(&ext) {
                 continue;
             }
 
