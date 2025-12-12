@@ -1752,6 +1752,38 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     }
 }
 
+/// 🍎 Determine if a video codec should be skipped in Apple compatibility mode
+/// 
+/// Apple compatibility mode: Convert non-Apple-compatible modern codecs to HEVC
+/// - HEVC: Skip (already Apple compatible)
+/// - AV1, VP9: Convert to HEVC (not natively supported on Apple devices)
+/// - VVC, AV2: Convert to HEVC (cutting-edge, not supported anywhere yet)
+/// 
+/// # Arguments
+/// * `codec_str` - Codec string from ffprobe or detection
+/// 
+/// # Returns
+/// * `SkipDecision` - Whether to skip and why
+pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
+    let codec = parse_source_codec(codec_str);
+    
+    // In Apple compatibility mode, only skip HEVC (already Apple compatible)
+    // AV1, VP9, VVC, AV2 should be converted to HEVC for Apple compatibility
+    let should_skip = matches!(codec, SourceCodec::H265);
+    
+    let reason = if should_skip {
+        "Source is H.265/HEVC - already Apple compatible, skipping".to_string()
+    } else {
+        String::new()
+    };
+    
+    SkipDecision {
+        should_skip,
+        reason,
+        codec,
+    }
+}
+
 /// Determine if an image format should be skipped to avoid generational loss
 /// 
 /// This is the unified skip logic for all image conversion tools.
@@ -1870,7 +1902,7 @@ mod tests {
         };
         
         let result = calculate_av1_crf(&analysis).unwrap();
-        assert!(result.crf >= 15 && result.crf <= 40);  // Extended range for v3.0
+        assert!(result.crf >= 15.0 && result.crf <= 40.0);  // Extended range for v3.0
         assert!(result.analysis_details.confidence > 0.5); // Adjusted for new confidence calc
     }
     
@@ -1892,7 +1924,7 @@ mod tests {
         };
         
         let result = calculate_hevc_crf(&analysis).unwrap();
-        assert!(result.crf <= 35);  // Extended range for v3.0
+        assert!(result.crf <= 35.0);  // Extended range for v3.0
     }
     
     #[test]
@@ -2195,7 +2227,7 @@ mod tests {
         
         // 8Mbps H.264 1080p is high quality, AV1 should match with CRF 20-32
         // (widened range to account for various factors)
-        assert!(result.crf >= 18 && result.crf <= 32,
+        assert!(result.crf >= 18.0 && result.crf <= 32.0,
             "1080p H.264 8Mbps: expected CRF 18-32, got {}", result.crf);
         
         // Effective BPP should be reasonable
@@ -2221,7 +2253,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // 4K content, AV1 CRF should be in reasonable range
-        assert!(result.crf >= 22 && result.crf <= 32,
+        assert!(result.crf >= 22.0 && result.crf <= 32.0,
             "4K H.264 20Mbps: expected CRF 22-32, got {}", result.crf);
     }
     
@@ -2399,7 +2431,7 @@ mod tests {
         let result = calculate_av1_crf(&screen).unwrap();
         
         // Screen recording can use higher CRF
-        assert!(result.crf >= 25,
+        assert!(result.crf >= 25.0,
             "Screen recording should allow CRF >= 25, got {}", result.crf);
         
         // Content type adjustment should be positive
@@ -2427,7 +2459,7 @@ mod tests {
             .pix_fmt("yuv420p")
             .build();
         
-        let standard_result = calculate_av1_crf(&standard).unwrap();
+        let _standard_result = calculate_av1_crf(&standard).unwrap();
         let ultrawide_result = calculate_av1_crf(&ultrawide).unwrap();
         
         // Ultra-wide should need more bits (factor > 1.0)
@@ -2482,9 +2514,9 @@ mod tests {
         let result = calculate_av1_crf(&low_bpp).unwrap();
         
         // Should be capped at reasonable maximum
-        assert!(result.crf <= 40,
+        assert!(result.crf <= 40.0,
             "Ultra-low BPP should cap CRF at 40, got {}", result.crf);
-        assert!(result.crf >= 28,
+        assert!(result.crf >= 28.0,
             "Ultra-low BPP should have CRF >= 28, got {}", result.crf);
     }
     
@@ -2505,9 +2537,9 @@ mod tests {
         let result = calculate_av1_crf(&high_bpp).unwrap();
         
         // Should have a reasonable floor
-        assert!(result.crf >= 15,
+        assert!(result.crf >= 15.0,
             "Ultra-high BPP should floor CRF at 15, got {}", result.crf);
-        assert!(result.crf <= 25,
+        assert!(result.crf <= 25.0,
             "ProRes source should produce CRF <= 25, got {}", result.crf);
     }
     
@@ -2576,7 +2608,7 @@ mod tests {
         let result = calculate_hevc_crf(&gif).unwrap();
         
         // GIF is inefficient, HEVC can achieve same quality with higher CRF
-        assert!(result.crf >= 20 && result.crf <= 32,
+        assert!(result.crf >= 20.0 && result.crf <= 32.0,
             "GIF to HEVC should produce CRF 20-32, got {}", result.crf);
         
         // GIF codec factor should be high (inefficient)
@@ -2642,7 +2674,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Strict range: 23-27
-        assert!(result.crf >= 23 && result.crf <= 27,
+        assert!(result.crf >= 23.0 && result.crf <= 27.0,
             "STRICT: 1080p 5Mbps expected CRF 23-27, got {}", result.crf);
     }
     
@@ -2660,7 +2692,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Strict range: 25-29
-        assert!(result.crf >= 25 && result.crf <= 29,
+        assert!(result.crf >= 25.0 && result.crf <= 29.0,
             "STRICT: 720p 2Mbps expected CRF 25-29, got {}", result.crf);
     }
     
@@ -2678,7 +2710,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Strict range: 24-28
-        assert!(result.crf >= 24 && result.crf <= 28,
+        assert!(result.crf >= 24.0 && result.crf <= 28.0,
             "STRICT: 4K 15Mbps expected CRF 24-28, got {}", result.crf);
     }
     
@@ -2700,7 +2732,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Should be capped, not go to extreme values
-        assert!(result.crf >= 30 && result.crf <= 40,
+        assert!(result.crf >= 30.0 && result.crf <= 40.0,
             "EDGE: Extremely low bitrate should cap CRF 30-40, got {}", result.crf);
     }
     
@@ -2719,7 +2751,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Should have a floor, not go too low
-        assert!(result.crf >= 15 && result.crf <= 22,
+        assert!(result.crf >= 15.0 && result.crf <= 22.0,
             "EDGE: Extremely high bitrate should floor CRF 15-22, got {}", result.crf);
     }
     
@@ -2738,7 +2770,7 @@ mod tests {
         
         // Small resolution with high relative bitrate = low CRF (high quality)
         // 500kbps / (320*240*15) = 0.43 bpp - very high!
-        assert!(result.crf >= 15 && result.crf <= 25,
+        assert!(result.crf >= 15.0 && result.crf <= 25.0,
             "EDGE: Small resolution high-bpp should produce CRF 15-25, got {}", result.crf);
     }
     
@@ -2758,7 +2790,7 @@ mod tests {
         
         // 8K with relatively low bitrate = higher CRF
         // 50Mbps / (7680*4320*30) = 0.05 bpp - quite low for 8K
-        assert!(result.crf >= 28 && result.crf <= 38,
+        assert!(result.crf >= 28.0 && result.crf <= 38.0,
             "EDGE: 8K low-bpp should produce CRF 28-38, got {}", result.crf);
     }
     
@@ -2775,7 +2807,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // High framerate should still produce valid CRF
-        assert!(result.crf >= 18 && result.crf <= 28,
+        assert!(result.crf >= 18.0 && result.crf <= 28.0,
             "EDGE: 120fps should produce CRF 18-28, got {}", result.crf);
     }
     
@@ -2832,7 +2864,7 @@ mod tests {
             "EDGE: HDR factor should be > 1.1, got {}", result.analysis_details.hdr_factor);
         
         // CRF should be reasonable for HDR
-        assert!(result.crf >= 20 && result.crf <= 28,
+        assert!(result.crf >= 20.0 && result.crf <= 28.0,
             "EDGE: 10-bit HDR should produce CRF 20-28, got {}", result.crf);
     }
     
@@ -2866,7 +2898,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Vertical video should still produce valid CRF
-        assert!(result.crf >= 20 && result.crf <= 30,
+        assert!(result.crf >= 20.0 && result.crf <= 30.0,
             "EDGE: Vertical video should produce CRF 20-30, got {}", result.crf);
     }
     
@@ -2884,7 +2916,7 @@ mod tests {
         
         // Ultra-wide should have aspect penalty (factor > 1.0)
         // Note: 2.37:1 is just under 2.5:1 threshold
-        assert!(result.crf >= 20 && result.crf <= 28,
+        assert!(result.crf >= 20.0 && result.crf <= 28.0,
             "EDGE: Ultra-wide cinema should produce CRF 20-28, got {}", result.crf);
     }
     
@@ -2902,7 +2934,7 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
         
         // Lossless source should produce low CRF (high quality target)
-        assert!(result.crf >= 15 && result.crf <= 25,
+        assert!(result.crf >= 15.0 && result.crf <= 25.0,
             "EDGE: Lossless source should produce CRF 15-25, got {}", result.crf);
     }
     
@@ -3045,9 +3077,378 @@ mod tests {
             "Balanced CRF ({}) should be < Aggressive ({})", balanced.crf, aggressive.crf);
         
         // Exact difference should be 2
-        assert_eq!(balanced.crf - conservative.crf, 2,
+        assert!((balanced.crf - conservative.crf - 2.0).abs() < 0.1,
             "Conservative should be exactly 2 less than Balanced");
-        assert_eq!(aggressive.crf - balanced.crf, 2,
+        assert!((aggressive.crf - balanced.crf - 2.0).abs() < 0.1,
             "Aggressive should be exactly 2 more than Balanced");
     }
 }
+
+
+    // ============================================================
+    // 🍎 APPLE COMPATIBILITY MODE TESTS (裁判测试)
+    // ============================================================
+    // These tests validate the Apple compatibility mode skip logic.
+    // Ensures correct routing for Apple device compatibility.
+    // ============================================================
+
+    /// 🍎 Test: Apple compat mode should only skip HEVC
+    #[test]
+    fn test_apple_compat_skip_hevc_only() {
+        // HEVC should be skipped (already Apple compatible)
+        let hevc = should_skip_video_codec_apple_compat("hevc");
+        assert!(hevc.should_skip, "HEVC should be skipped in Apple compat mode");
+        assert!(hevc.reason.contains("Apple compatible"), 
+            "HEVC skip reason should mention Apple compatible");
+        
+        let h265 = should_skip_video_codec_apple_compat("h265");
+        assert!(h265.should_skip, "H.265 should be skipped in Apple compat mode");
+    }
+
+    /// 🍎 Test: Apple compat mode should NOT skip VP9
+    #[test]
+    fn test_apple_compat_convert_vp9() {
+        let vp9 = should_skip_video_codec_apple_compat("vp9");
+        assert!(!vp9.should_skip, "VP9 should NOT be skipped in Apple compat mode");
+        assert_eq!(vp9.codec, SourceCodec::Vp9);
+    }
+
+    /// 🍎 Test: Apple compat mode should NOT skip AV1
+    #[test]
+    fn test_apple_compat_convert_av1() {
+        let av1 = should_skip_video_codec_apple_compat("av1");
+        assert!(!av1.should_skip, "AV1 should NOT be skipped in Apple compat mode");
+        assert_eq!(av1.codec, SourceCodec::Av1);
+    }
+
+    /// 🍎 Test: Apple compat mode should NOT skip VVC/H.266
+    #[test]
+    fn test_apple_compat_convert_vvc() {
+        let vvc = should_skip_video_codec_apple_compat("vvc");
+        assert!(!vvc.should_skip, "VVC should NOT be skipped in Apple compat mode");
+        
+        let h266 = should_skip_video_codec_apple_compat("h266");
+        assert!(!h266.should_skip, "H.266 should NOT be skipped in Apple compat mode");
+    }
+
+    /// 🍎 Test: Apple compat mode should NOT skip AV2
+    #[test]
+    fn test_apple_compat_convert_av2() {
+        let av2 = should_skip_video_codec_apple_compat("av2");
+        assert!(!av2.should_skip, "AV2 should NOT be skipped in Apple compat mode");
+    }
+
+    /// 🍎 Test: Legacy codecs should NOT be skipped in either mode
+    #[test]
+    fn test_apple_compat_legacy_codecs() {
+        // H.264 should not be skipped in either mode
+        assert!(!should_skip_video_codec("h264").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("h264").should_skip);
+        
+        // MPEG-4 should not be skipped
+        assert!(!should_skip_video_codec("mpeg4").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("mpeg4").should_skip);
+        
+        // ProRes should not be skipped
+        assert!(!should_skip_video_codec("prores").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("prores").should_skip);
+    }
+
+    /// 🍎 Test: Compare normal vs Apple compat mode behavior
+    #[test]
+    fn test_apple_compat_vs_normal_mode() {
+        // VP9: Normal skips, Apple compat converts
+        assert!(should_skip_video_codec("vp9").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("vp9").should_skip);
+        
+        // AV1: Normal skips, Apple compat converts
+        assert!(should_skip_video_codec("av1").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("av1").should_skip);
+        
+        // HEVC: Both modes skip
+        assert!(should_skip_video_codec("hevc").should_skip);
+        assert!(should_skip_video_codec_apple_compat("hevc").should_skip);
+        
+        // H.264: Neither mode skips
+        assert!(!should_skip_video_codec("h264").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("h264").should_skip);
+    }
+
+    /// 🍎 Test: Apple compat skip decision codec detection
+    #[test]
+    fn test_apple_compat_codec_detection() {
+        // Verify codec is correctly detected
+        assert_eq!(should_skip_video_codec_apple_compat("vp9").codec, SourceCodec::Vp9);
+        assert_eq!(should_skip_video_codec_apple_compat("av1").codec, SourceCodec::Av1);
+        assert_eq!(should_skip_video_codec_apple_compat("hevc").codec, SourceCodec::H265);
+        assert_eq!(should_skip_video_codec_apple_compat("vvc").codec, SourceCodec::Vvc);
+        assert_eq!(should_skip_video_codec_apple_compat("h264").codec, SourceCodec::H264);
+    }
+
+    /// 🍎 Test: Case insensitivity for codec names
+    #[test]
+    fn test_apple_compat_case_insensitive() {
+        // All case variations should work
+        assert!(should_skip_video_codec_apple_compat("HEVC").should_skip);
+        assert!(should_skip_video_codec_apple_compat("Hevc").should_skip);
+        assert!(should_skip_video_codec_apple_compat("hevc").should_skip);
+        
+        assert!(!should_skip_video_codec_apple_compat("VP9").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("Vp9").should_skip);
+        assert!(!should_skip_video_codec_apple_compat("vp9").should_skip);
+    }
+
+    /// 🍎 Strict test: Apple compat routing precision
+    /// Verifies exact behavior for all modern codecs
+    #[test]
+    fn test_strict_apple_compat_routing() {
+        // Define expected behavior for Apple compat mode
+        let test_cases = [
+            // (codec, should_skip_normal, should_skip_apple_compat)
+            ("h264", false, false),   // Legacy: convert in both
+            ("mpeg4", false, false),  // Legacy: convert in both
+            ("prores", false, false), // Intermediate: convert in both
+            ("hevc", true, true),     // Modern Apple-compat: skip in both
+            ("h265", true, true),     // Modern Apple-compat: skip in both
+            ("vp9", true, false),     // Modern non-Apple: skip normal, convert Apple
+            ("av1", true, false),     // Modern non-Apple: skip normal, convert Apple
+            ("vvc", true, false),     // Cutting-edge: skip normal, convert Apple
+            ("h266", true, false),    // Cutting-edge: skip normal, convert Apple
+            ("av2", true, false),     // Cutting-edge: skip normal, convert Apple
+        ];
+        
+        for (codec, expected_normal, expected_apple) in test_cases {
+            let normal = should_skip_video_codec(codec);
+            let apple = should_skip_video_codec_apple_compat(codec);
+            
+            assert_eq!(normal.should_skip, expected_normal,
+                "STRICT: {} normal mode: expected skip={}, got skip={}",
+                codec, expected_normal, normal.should_skip);
+            
+            assert_eq!(apple.should_skip, expected_apple,
+                "STRICT: {} Apple compat mode: expected skip={}, got skip={}",
+                codec, expected_apple, apple.should_skip);
+        }
+    }
+
+    // ============================================================
+    // 🍎 APPLE COMPAT: QUALITY MATCHING PRECISION (裁判测试)
+    // ============================================================
+
+    /// 🍎 HEVC CRF precision for VP9 source (Apple compat scenario)
+    #[test]
+    fn test_apple_compat_hevc_crf_vp9_source() {
+        // VP9 6Mbps 1080p30 → HEVC
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("vp9", 1920, 1080, 30.0, 60.0)
+            .bit_depth(8)
+            .file_size(45_000_000)
+            .video_bitrate(6_000_000)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // VP9 is efficient, HEVC CRF should be moderate
+        assert!(result.crf >= 18.0 && result.crf <= 28.0,
+            "VP9→HEVC CRF should be 18-28, got {:.1}", result.crf);
+    }
+
+    /// 🍎 HEVC CRF precision for AV1 source (Apple compat scenario)
+    #[test]
+    fn test_apple_compat_hevc_crf_av1_source() {
+        // AV1 4Mbps 1080p30 → HEVC (AV1 is very efficient)
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("av1", 1920, 1080, 30.0, 60.0)
+            .bit_depth(8)
+            .file_size(30_000_000)
+            .video_bitrate(4_000_000)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // AV1 is most efficient, need lower CRF to match quality
+        assert!(result.crf >= 16.0 && result.crf <= 26.0,
+            "AV1→HEVC CRF should be 16-26, got {:.1}", result.crf);
+    }
+
+    /// 🍎 HEVC CRF precision for 4K HDR content
+    #[test]
+    fn test_apple_compat_hevc_crf_4k_hdr() {
+        // 4K HDR AV1 → HEVC
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("av1", 3840, 2160, 60.0, 120.0)
+            .bit_depth(10)
+            .file_size(1_800_000_000)
+            .video_bitrate(120_000_000)
+            .pix_fmt("yuv420p10le")
+            .color("bt2020nc", true)
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // HDR needs lower CRF for quality preservation
+        assert!(result.crf >= 0.0 && result.crf <= 22.0,
+            "4K HDR should get CRF <= 22, got {:.1}", result.crf);
+        // HDR factor increases effective BPP (needs more bits to preserve quality)
+        assert!(result.analysis_details.hdr_factor > 1.0,
+            "HDR factor should increase effective BPP (>1.0), got {:.2}", result.analysis_details.hdr_factor);
+    }
+
+    /// 🍎 Codec efficiency factor validation
+    #[test]
+    fn test_apple_compat_codec_efficiency() {
+        // AV1 should be more efficient than VP9
+        assert!(SourceCodec::Av1.efficiency_factor() < SourceCodec::Vp9.efficiency_factor());
+        // VP9 similar to HEVC
+        assert!((SourceCodec::Vp9.efficiency_factor() - SourceCodec::H265.efficiency_factor()).abs() < 0.1);
+        // VVC most efficient
+        assert!(SourceCodec::Vvc.efficiency_factor() < SourceCodec::Av1.efficiency_factor());
+    }
+
+    // ============================================================
+    // 🎬 H.264 SOURCE PRECISION TESTS (裁判测试)
+    // ============================================================
+
+    /// H.264 1080p 8Mbps → HEVC CRF precision
+    #[test]
+    fn test_h264_to_hevc_crf_1080p_8mbps() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 120.0)
+            .bit_depth(8)
+            .file_size(120_000_000)
+            .video_bitrate(8_000_000)
+            .pix_fmt("yuv420p")
+            .gop(60, 2)
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // H.264 baseline efficiency, HEVC more efficient → moderate CRF
+        assert!(result.crf >= 18.0 && result.crf <= 26.0,
+            "H.264 8Mbps 1080p→HEVC should get CRF 18-26, got {:.1}", result.crf);
+        // Codec factor should reflect H.264 baseline
+        assert!((result.analysis_details.codec_factor - 1.0).abs() < 0.2,
+            "H.264 codec factor should be ~1.0");
+    }
+
+    /// H.264 720p 4Mbps → HEVC CRF precision
+    #[test]
+    fn test_h264_to_hevc_crf_720p_4mbps() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1280, 720, 30.0, 60.0)
+            .bit_depth(8)
+            .file_size(30_000_000)
+            .video_bitrate(4_000_000)
+            .pix_fmt("yuv420p")
+            .gop(30, 2)
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // 720p with decent bitrate
+        assert!(result.crf >= 20.0 && result.crf <= 28.0,
+            "H.264 4Mbps 720p→HEVC should get CRF 20-28, got {:.1}", result.crf);
+    }
+
+    /// H.264 4K 20Mbps → HEVC CRF precision
+    #[test]
+    fn test_h264_to_hevc_crf_4k_20mbps() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 3840, 2160, 30.0, 180.0)
+            .bit_depth(8)
+            .file_size(450_000_000)
+            .video_bitrate(20_000_000)
+            .pix_fmt("yuv420p")
+            .gop(60, 3)
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // 4K with moderate bitrate → moderate CRF
+        assert!(result.crf >= 18.0 && result.crf <= 30.0,
+            "H.264 20Mbps 4K→HEVC should get CRF 18-30, got {:.1}", result.crf);
+    }
+
+    /// H.264 low bitrate (web video) → HEVC CRF precision
+    #[test]
+    fn test_h264_to_hevc_crf_low_bitrate() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 854, 480, 24.0, 300.0)
+            .bit_depth(8)
+            .file_size(45_000_000)
+            .video_bitrate(1_200_000)
+            .pix_fmt("yuv420p")
+            .gop(48, 1)
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // Low bitrate source → higher CRF acceptable
+        assert!(result.crf >= 24.0 && result.crf <= 32.0,
+            "H.264 1.2Mbps 480p→HEVC should get CRF 24-32, got {:.1}", result.crf);
+    }
+
+    /// H.264 high bitrate (Blu-ray quality) → HEVC CRF precision
+    #[test]
+    fn test_h264_to_hevc_crf_bluray_quality() {
+        let analysis = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 24.0, 7200.0)
+            .bit_depth(8)
+            .file_size(4_500_000_000)
+            .video_bitrate(40_000_000)
+            .pix_fmt("yuv420p")
+            .gop(24, 3)
+            .build();
+        
+        let result = calculate_hevc_crf(&analysis).unwrap();
+        // High bitrate Blu-ray → low CRF for quality preservation
+        assert!(result.crf >= 0.0 && result.crf <= 22.0,
+            "H.264 40Mbps Blu-ray→HEVC should get CRF 0-22, got {:.1}", result.crf);
+    }
+
+    /// H.264 vs AV1 efficiency comparison (same resolution/duration)
+    #[test]
+    fn test_h264_vs_av1_efficiency_comparison() {
+        // Same content, different source codecs
+        let h264 = VideoAnalysisBuilder::new()
+            .basic("h264", 1920, 1080, 30.0, 60.0)
+            .bit_depth(8)
+            .file_size(60_000_000)
+            .video_bitrate(8_000_000)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let av1 = VideoAnalysisBuilder::new()
+            .basic("av1", 1920, 1080, 30.0, 60.0)
+            .bit_depth(8)
+            .file_size(30_000_000)  // AV1 half the size for same quality
+            .video_bitrate(4_000_000)
+            .pix_fmt("yuv420p")
+            .build();
+        
+        let h264_result = calculate_hevc_crf(&h264).unwrap();
+        let av1_result = calculate_hevc_crf(&av1).unwrap();
+        
+        // H.264 has higher raw BPP but lower efficiency
+        // AV1 has lower raw BPP but higher efficiency
+        // After efficiency compensation, CRF should be similar (±3)
+        let crf_diff = (h264_result.crf - av1_result.crf).abs();
+        assert!(crf_diff <= 4.0,
+            "H.264 vs AV1 CRF diff should be <=4, got {:.1} (H.264:{:.1}, AV1:{:.1})",
+            crf_diff, h264_result.crf, av1_result.crf);
+    }
+
+    /// H.264 skip decision (should NOT skip)
+    #[test]
+    fn test_h264_should_not_skip() {
+        let decision = should_skip_video_codec("h264");
+        assert!(!decision.should_skip, "H.264 should NOT be skipped");
+        assert_eq!(decision.codec, SourceCodec::H264);
+        
+        // Also test AVC alias
+        let avc = should_skip_video_codec("avc");
+        assert!(!avc.should_skip, "AVC should NOT be skipped");
+    }
+
+    /// H.264 skip decision in Apple compat mode
+    #[test]
+    fn test_h264_apple_compat_should_not_skip() {
+        let decision = should_skip_video_codec_apple_compat("h264");
+        assert!(!decision.should_skip, "H.264 should NOT be skipped in Apple compat");
+        assert_eq!(decision.codec, SourceCodec::H264);
+    }

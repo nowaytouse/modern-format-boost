@@ -2,6 +2,28 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [0.3.0] - 2025-12-12
+
+### Added
+- 🍎 **Apple Compatibility Mode** (`--apple-compat`): New flag for HEVC tools
+  - `vidquality-hevc`: Converts AV1/VP9/VVC/AV2 videos to HEVC for Apple device compatibility
+  - `imgquality-hevc`: Converts animated WebP/AVIF to HEVC MP4 for Apple device compatibility
+  - Only HEVC videos are skipped (already Apple compatible)
+- `should_skip_video_codec_apple_compat()` function in shared_utils for unified skip logic
+- App (Modern Format Boost.app) now defaults to Apple compatibility mode
+
+### Changed
+- Drag & drop processor script updated to v4.0 with `--apple-compat` enabled by default
+- ConversionConfig and ConvertOptions now include `apple_compat` field
+- Updated README with Apple compatibility mode documentation (English & Chinese)
+
+### Technical Details
+- New function `determine_strategy_with_apple_compat()` in vidquality-hevc
+- Animated format handling in imgquality-hevc now respects apple_compat flag
+- All HEVC tools recompiled with new features
+
+---
+
 ## [0.2.0] - 2025-12-11
 
 ### Major Achievements

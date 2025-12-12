@@ -263,6 +263,7 @@ Options:
       --lossless         Mathematical lossless (slow!)
       --explore          Binary search for optimal CRF (animations only)
       --match-quality    AI-predicted CRF + SSIM validation (animations only)
+      --apple-compat     🍎 Convert non-Apple-compatible animated formats to HEVC
 ```
 
 #### vidquality-hevc auto
@@ -277,7 +278,21 @@ Options:
       --lossless         Mathematical lossless
       --explore          Binary search for optimal CRF
       --match-quality    Quality matching [default: true]
+      --apple-compat     🍎 Convert AV1/VP9/VVC/AV2 to HEVC for Apple compatibility
 ```
+
+#### 🍎 Apple Compatibility Mode (`--apple-compat`)
+
+Converts non-Apple-compatible modern codecs to HEVC for seamless playback on Apple devices:
+
+| Without `--apple-compat` | With `--apple-compat` |
+|--------------------------|----------------------|
+| VP9 → **SKIP** | VP9 → **HEVC MP4** |
+| AV1 → **SKIP** | AV1 → **HEVC MP4** |
+| VVC/H.266 → **SKIP** | VVC → **HEVC MP4** |
+| HEVC → **SKIP** | HEVC → **SKIP** |
+
+**Use case**: When you need videos to play natively on iPhone, iPad, Mac, or Apple TV without software decoding.
 
 ---
 
@@ -565,6 +580,7 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
       --lossless         数学无损（慢！）
       --explore          二分搜索最优 CRF（仅动图）
       --match-quality    AI 预测 CRF + SSIM 验证（仅动图）
+      --apple-compat     🍎 将非 Apple 兼容的动图格式转换为 HEVC
 ```
 
 #### vidquality-hevc auto
@@ -579,7 +595,21 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
       --lossless         数学无损
       --explore          二分搜索最优 CRF
       --match-quality    质量匹配 [默认: true]
+      --apple-compat     🍎 将 AV1/VP9/VVC/AV2 转换为 HEVC 以兼容 Apple 设备
 ```
+
+#### 🍎 Apple 兼容模式 (`--apple-compat`)
+
+将非 Apple 兼容的现代编码转换为 HEVC，以便在 Apple 设备上无缝播放：
+
+| 不使用 `--apple-compat` | 使用 `--apple-compat` |
+|------------------------|----------------------|
+| VP9 → **跳过** | VP9 → **HEVC MP4** |
+| AV1 → **跳过** | AV1 → **HEVC MP4** |
+| VVC/H.266 → **跳过** | VVC → **HEVC MP4** |
+| HEVC → **跳过** | HEVC → **跳过** |
+
+**使用场景**：当你需要视频在 iPhone、iPad、Mac 或 Apple TV 上原生播放而无需软件解码时。
 
 ---
 

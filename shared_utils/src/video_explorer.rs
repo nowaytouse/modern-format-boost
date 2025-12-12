@@ -1182,38 +1182,38 @@ mod tests {
     fn test_explore_config_default() {
         let c = ExploreConfig::default();
         assert_eq!(c.mode, ExploreMode::PreciseQualityMatch);
-        assert_eq!(c.initial_crf, 18);
-        assert_eq!(c.min_crf, 10);
-        assert_eq!(c.max_crf, 28);
+        assert_eq!(c.initial_crf, 18.0);
+        assert_eq!(c.min_crf, 10.0);
+        assert_eq!(c.max_crf, 28.0);
         assert_eq!(c.target_ratio, 1.0);
         assert_eq!(c.max_iterations, 8);
     }
     
     #[test]
     fn test_explore_config_size_only() {
-        let c = ExploreConfig::size_only(20, 30);
+        let c = ExploreConfig::size_only(20.0, 30.0);
         assert_eq!(c.mode, ExploreMode::SizeOnly);
-        assert_eq!(c.initial_crf, 20);
-        assert_eq!(c.max_crf, 30);
+        assert_eq!(c.initial_crf, 20.0);
+        assert_eq!(c.max_crf, 30.0);
         assert!(!c.quality_thresholds.validate_ssim);
         assert!(!c.quality_thresholds.validate_psnr);
     }
     
     #[test]
     fn test_explore_config_quality_match() {
-        let c = ExploreConfig::quality_match(22);
+        let c = ExploreConfig::quality_match(22.0);
         assert_eq!(c.mode, ExploreMode::QualityMatch);
-        assert_eq!(c.initial_crf, 22);
+        assert_eq!(c.initial_crf, 22.0);
         assert_eq!(c.max_iterations, 1); // 单次编码
         assert!(c.quality_thresholds.validate_ssim);
     }
     
     #[test]
     fn test_explore_config_precise_quality_match() {
-        let c = ExploreConfig::precise_quality_match(18, 28, 0.97);
+        let c = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
         assert_eq!(c.mode, ExploreMode::PreciseQualityMatch);
-        assert_eq!(c.initial_crf, 18);
-        assert_eq!(c.max_crf, 28);
+        assert_eq!(c.initial_crf, 18.0);
+        assert_eq!(c.max_crf, 28.0);
         assert_eq!(c.quality_thresholds.min_ssim, 0.97);
         assert!(c.quality_thresholds.validate_ssim);
     }
@@ -1305,7 +1305,7 @@ mod tests {
     #[test]
     fn test_judge_mode_size_only_config() {
         // SizeOnly 模式：不验证 SSIM，只保证 size < input
-        let c = ExploreConfig::size_only(18, 28);
+        let c = ExploreConfig::size_only(18.0, 28.0);
         
         // 裁判验证：不应启用 SSIM 验证
         assert!(!c.quality_thresholds.validate_ssim, 
@@ -1321,7 +1321,7 @@ mod tests {
     #[test]
     fn test_judge_mode_quality_match_config() {
         // QualityMatch 模式：单次编码 + SSIM 验证
-        let c = ExploreConfig::quality_match(20);
+        let c = ExploreConfig::quality_match(20.0);
         
         // 裁判验证：应启用 SSIM 验证
         assert!(c.quality_thresholds.validate_ssim,
@@ -1332,14 +1332,14 @@ mod tests {
             "QualityMatch mode should have exactly 1 iteration");
         
         // 裁判验证：应使用预测的 CRF
-        assert_eq!(c.initial_crf, 20,
+        assert_eq!(c.initial_crf, 20.0,
             "QualityMatch mode should use predicted CRF");
     }
     
     #[test]
     fn test_judge_mode_precise_quality_match_config() {
         // PreciseQualityMatch 模式：二分搜索 + SSIM 裁判验证
-        let c = ExploreConfig::precise_quality_match(18, 28, 0.97);
+        let c = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
         
         // 裁判验证：应启用 SSIM 验证
         assert!(c.quality_thresholds.validate_ssim,
@@ -1354,8 +1354,8 @@ mod tests {
             "PreciseQualityMatch mode should use full iterations");
         
         // 裁判验证：CRF 范围应正确
-        assert_eq!(c.initial_crf, 18);
-        assert_eq!(c.max_crf, 28);
+        assert_eq!(c.initial_crf, 18.0);
+        assert_eq!(c.max_crf, 28.0);
     }
     
     // ═══════════════════════════════════════════════════════════
@@ -1417,8 +1417,10 @@ mod tests {
         let thresholds = QualityThresholds {
             min_ssim: 0.95,
             min_psnr: 35.0,
+            min_vmaf: 85.0,
             validate_ssim: true,
             validate_psnr: false,
+            validate_vmaf: false,
         };
         
         // 模拟 check_quality_passed 逻辑
@@ -1453,8 +1455,10 @@ mod tests {
         let thresholds = QualityThresholds {
             min_ssim: 0.95,
             min_psnr: 35.0,
+            min_vmaf: 85.0,
             validate_ssim: true,
             validate_psnr: true,
+            validate_vmaf: false,
         };
         
         let check = |ssim: Option<f64>, psnr: Option<f64>| -> bool {
