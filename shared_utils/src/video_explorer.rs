@@ -427,34 +427,35 @@ impl VideoExplorer {
     
     /// 模式 3: 精确质量匹配（--explore + --match-quality 组合）
     /// 
-    /// 🔥 v3.6: 三阶段高精度搜索算法
+    /// 🔥 v3.9: 重新设计 - 目标是精确匹配源质量，而非追求最小文件
+    /// 
+    /// ## 核心理念
+    /// - 目标：找到**最接近源质量的 CRF**（SSIM 尽可能接近 1.0）
+    /// - 不是：找到满足最低阈值的最高 CRF（追求最小文件）
     /// 
     /// ## 精度保证
     /// - CRF 误差: ±0.5 (最终精度)
     /// - SSIM 验证精度: 0.0001 (ffmpeg 输出精度)
     /// 
-    /// ## 三阶段搜索策略
-    /// 1. **粗搜索** (步长 2.0): 快速定位质量边界区间
-    /// 2. **细搜索** (步长 0.5): 在边界区间内精确定位
-    /// 3. **边界精细化**: 验证边界点，确保最优
+    /// ## 搜索策略
+    /// 1. **初始点测试**: 使用 AI 预测的 CRF，获取基准 SSIM
+    /// 2. **自校准**: 如果 SSIM 不够高，向下搜索（降低 CRF）
+    /// 3. **精细调整**: 在最佳点附近 ±2 CRF 范围内精细搜索
+    /// 4. **选择最优**: 选择 SSIM 最高的 CRF（质量优先）
     /// 
-    /// ## 自校准机制
-    /// - 如果初始 CRF 质量不足，自动向下搜索（降低 CRF）
-    /// - 如果初始 CRF 质量过剩，自动向上搜索（提高 CRF）
+    /// ## 质量保护
+    /// - 如果最终 SSIM < min_ssim，标记为质量验证失败
+    /// - 调用方可以选择拒绝低质量输出
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
-        let target_size = (self.input_size as f64 * self.config.target_ratio) as u64;
         
-        log.push(format!("🔬 Precise Quality-Match v3.6 ({:?})", self.encoder));
-        log.push(format!("   Input: {} bytes, Target: <= {} bytes", 
-            self.input_size, target_size));
+        log.push(format!("🔬 Precise Quality-Match v3.9 ({:?})", self.encoder));
+        log.push(format!("   Input: {} bytes", self.input_size));
         log.push(format!("   CRF range: [{:.1}, {:.1}], Initial: {:.1}", 
             self.config.min_crf, self.config.max_crf, self.config.initial_crf));
-        log.push(format!("   Min SSIM: {:.4}, Precision: ±0.5 CRF", 
+        log.push(format!("   🎯 Goal: Match source quality (maximize SSIM)"));
+        log.push(format!("   ⚠️ Min acceptable SSIM: {:.4}", 
             self.config.quality_thresholds.min_ssim));
-        if self.config.quality_thresholds.validate_vmaf {
-            log.push(format!("   Min VMAF: {:.1}", self.config.quality_thresholds.min_vmaf));
-        }
         
         // 记录已测试的 CRF 值，避免重复编码
         let mut tested_crfs: std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))> = 
@@ -478,175 +479,129 @@ impl VideoExplorer {
         let mut iterations = 0u32;
         
         // ═══════════════════════════════════════════════════════════
-        // Phase 1: 初始点测试 + 方向判断
+        // Phase 1: 初始点测试
         // ═══════════════════════════════════════════════════════════
         log.push("   📍 Phase 1: Initial point test".to_string());
         
         let (initial_size, initial_quality) = test_crf(self.config.initial_crf, &mut tested_crfs, &mut log)?;
         iterations += 1;
         
-        let initial_passed = self.check_quality_passed(initial_quality.0, initial_quality.1, initial_quality.2);
+        let initial_ssim = initial_quality.0.unwrap_or(0.0);
         
-        // 如果初始 CRF 完美满足条件，尝试向上探索更高 CRF
-        if initial_passed && initial_size <= target_size {
-            log.push(format!("      ✅ Initial CRF {:.1} passed, exploring higher CRF for smaller size", 
-                self.config.initial_crf));
-        } else if !initial_passed {
-            log.push(format!("      ⚠️ Initial CRF {:.1} failed quality, will search downward", 
-                self.config.initial_crf));
-        }
-        
-        // ═══════════════════════════════════════════════════════════
-        // Phase 2: 粗搜索 (步长 2.0) - 快速定位边界区间
-        // ═══════════════════════════════════════════════════════════
-        log.push("   📍 Phase 2: Coarse search (step 2.0)".to_string());
-        
+        // 🔥 v3.9: 记录最佳质量（SSIM 最高），而非最小文件
         let mut best_crf = self.config.initial_crf;
         let mut best_size = initial_size;
         let mut best_quality = initial_quality;
-        let mut best_passed = initial_passed;
+        let mut best_ssim = initial_ssim;
         
-        // 确定搜索方向
-        let search_up = initial_passed; // 质量通过则向上搜索（更高 CRF = 更小文件）
+        // ═══════════════════════════════════════════════════════════
+        // Phase 2: 自校准 - 如果初始 SSIM 不够高，向下搜索
+        // ═══════════════════════════════════════════════════════════
+        log.push("   📍 Phase 2: Quality calibration".to_string());
         
-        let coarse_step = 2.0_f32;
-        let mut boundary_low = self.config.initial_crf;
-        let mut boundary_high = self.config.initial_crf;
+        // 目标 SSIM：尽可能接近 1.0，但至少要达到 min_ssim
+        let target_ssim = 0.98_f64; // 目标是接近无损
         
-        if search_up {
-            // 向上搜索：找到质量失败的边界
-            let mut current = self.config.initial_crf + coarse_step;
-            while current <= self.config.max_crf && iterations < self.config.max_iterations {
-                let (size, quality) = test_crf(current, &mut tested_crfs, &mut log)?;
-                iterations += 1;
-                
-                let passed = self.check_quality_passed(quality.0, quality.1, quality.2);
-                if passed {
-                    // 质量仍然通过，更新最佳值
-                    if size < best_size || !best_passed {
-                        best_crf = current;
-                        best_size = size;
-                        best_quality = quality;
-                        best_passed = true;
-                    }
-                    boundary_low = current;
-                    log.push("      ✅ Quality passed, continue up".to_string());
-                    current += coarse_step;
-                } else {
-                    // 质量失败，找到边界
-                    boundary_high = current;
-                    log.push(format!("      ⚠️ Quality failed at CRF {:.1}, boundary found", current));
-                    break;
-                }
-            }
-            if boundary_high <= boundary_low {
-                boundary_high = self.config.max_crf.min(boundary_low + coarse_step);
-            }
-        } else {
-            // 向下搜索：找到质量通过的边界
-            let mut current = self.config.initial_crf - coarse_step;
-            boundary_high = self.config.initial_crf;
+        if initial_ssim < target_ssim {
+            log.push(format!("      SSIM {:.4} < target {:.4}, searching for better quality", 
+                initial_ssim, target_ssim));
+            
+            // 向下搜索（降低 CRF = 提高质量）
+            let mut current = self.config.initial_crf - 2.0;
             while current >= self.config.min_crf && iterations < self.config.max_iterations {
-                let (size, quality) = test_crf(current, &mut tested_crfs, &mut log)?;
+                let crf = ((current * 2.0).round() / 2.0).clamp(self.config.min_crf, self.config.max_crf);
+                let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
                 iterations += 1;
                 
-                let passed = self.check_quality_passed(quality.0, quality.1, quality.2);
-                if passed {
-                    // 质量通过，找到边界
-                    best_crf = current;
+                let ssim = quality.0.unwrap_or(0.0);
+                
+                // 🔥 选择 SSIM 最高的（质量优先）
+                if ssim > best_ssim {
+                    best_crf = crf;
                     best_size = size;
                     best_quality = quality;
-                    best_passed = true;
-                    boundary_low = current;
-                    log.push(format!("      ✅ Quality passed at CRF {:.1}, boundary found", current));
-                    break;
-                } else {
-                    boundary_high = current;
-                    log.push("      ⚠️ Quality still failed, continue down".to_string());
-                    current -= coarse_step;
+                    best_ssim = ssim;
+                    log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
                 }
+                
+                // 如果已经达到目标 SSIM，停止搜索
+                if ssim >= target_ssim {
+                    log.push(format!("      ✅ Target SSIM {:.4} reached", target_ssim));
+                    break;
+                }
+                
+                current -= 2.0;
             }
-            if boundary_low >= boundary_high {
-                boundary_low = self.config.min_crf.max(boundary_high - coarse_step);
-            }
+        } else {
+            log.push(format!("      ✅ Initial SSIM {:.4} >= target {:.4}", initial_ssim, target_ssim));
         }
         
-        log.push(format!("      📊 Coarse boundary: [{:.1}, {:.1}]", boundary_low, boundary_high));
-        
         // ═══════════════════════════════════════════════════════════
-        // Phase 3: 细搜索 (步长 0.5) - 精确定位最优 CRF
+        // Phase 3: 精细调整 - 在最佳点附近搜索
         // ═══════════════════════════════════════════════════════════
-        log.push("   📍 Phase 3: Fine search (step 0.5)".to_string());
+        log.push("   📍 Phase 3: Fine-tuning around best point".to_string());
         
+        let fine_range = 2.0_f32; // 在最佳点 ±2 CRF 范围内搜索
         let fine_step = 0.5_f32;
-        let mut current = boundary_low;
         
-        while current <= boundary_high && iterations < self.config.max_iterations {
-            // 四舍五入到 0.5 步长
+        let search_start = (best_crf - fine_range).max(self.config.min_crf);
+        let search_end = (best_crf + fine_range).min(self.config.max_crf);
+        
+        let mut current = search_start;
+        while current <= search_end && iterations < self.config.max_iterations {
             let crf = ((current * 2.0).round() / 2.0).clamp(self.config.min_crf, self.config.max_crf);
             
             let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
             iterations += 1;
             
-            let passed = self.check_quality_passed(quality.0, quality.1, quality.2);
-            if passed {
-                // 更新最佳值（优先选择更高 CRF = 更小文件）
-                if !best_passed || crf > best_crf || (crf == best_crf && size < best_size) {
-                    best_crf = crf;
-                    best_size = size;
-                    best_quality = quality;
-                    best_passed = true;
-                }
-                log.push(format!("      ✅ CRF {:.1} passed", crf));
-            } else {
-                log.push(format!("      ⚠️ CRF {:.1} failed", crf));
+            let ssim = quality.0.unwrap_or(0.0);
+            
+            // 🔥 v3.9: 选择 SSIM 最高的（质量优先）
+            // 如果 SSIM 相同，选择文件更小的
+            if ssim > best_ssim || (ssim == best_ssim && size < best_size) {
+                best_crf = crf;
+                best_size = size;
+                best_quality = quality;
+                best_ssim = ssim;
+                log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
             }
             
             current += fine_step;
         }
         
         // ═══════════════════════════════════════════════════════════
-        // Phase 4: 边界精细化 - 验证最优点
+        // 最终编码 - 确保输出文件是最佳 CRF
         // ═══════════════════════════════════════════════════════════
-        if best_passed && iterations < self.config.max_iterations {
-            log.push("   📍 Phase 4: Boundary refinement".to_string());
-            
-            // 测试 best_crf + 0.5，确认是边界
-            let next_crf = (best_crf + 0.5).min(self.config.max_crf);
-            if (next_crf - best_crf).abs() > 0.1 {
-                let (size, quality) = test_crf(next_crf, &mut tested_crfs, &mut log)?;
-                iterations += 1;
-                
-                let passed = self.check_quality_passed(quality.0, quality.1, quality.2);
-                if passed && size < best_size {
-                    best_crf = next_crf;
-                    best_size = size;
-                    best_quality = quality;
-                    log.push(format!("      🔄 Refined to CRF {:.1}", best_crf));
-                }
-            }
-        }
+        // 🔥 v3.9: 重新编码最佳 CRF，因为探索过程中输出文件可能被覆盖
+        log.push(format!("   📍 Final encoding: CRF {:.1}", best_crf));
+        let final_size = self.encode(best_crf)?;
         
-        // ═══════════════════════════════════════════════════════════
-        // 最终结果
-        // ═══════════════════════════════════════════════════════════
-        let size_change_pct = self.calc_change_pct(best_size);
-        let quality_str = self.format_quality_metrics(&best_quality);
+        let size_change_pct = self.calc_change_pct(final_size);
         
-        log.push(format!("   📊 Final: CRF {:.1}, {} bytes ({:+.1}%), {}, Passed: {}", 
-            best_crf, best_size, size_change_pct, quality_str,
-            if best_passed { "✅" } else { "❌" }));
+        // 🔥 v3.9: 质量验证 - 检查最终 SSIM 是否达到最低阈值
+        let quality_passed = best_ssim >= self.config.quality_thresholds.min_ssim - precision::SSIM_COMPARE_EPSILON;
+        
+        let status = if quality_passed {
+            if best_ssim >= 0.98 { "✅ Excellent" }
+            else if best_ssim >= 0.95 { "✅ Good" }
+            else { "✅ Acceptable" }
+        } else {
+            "❌ Below threshold"
+        };
+        
+        log.push(format!("   📊 Final: CRF {:.1}, {} bytes ({:+.1}%), SSIM: {:.4} {}", 
+            best_crf, final_size, size_change_pct, best_ssim, status));
         log.push(format!("   📈 Iterations: {}, Precision: ±0.5 CRF", iterations));
         
         Ok(ExploreResult {
             optimal_crf: best_crf,
-            output_size: best_size,
+            output_size: final_size,
             size_change_pct,
             ssim: best_quality.0,
             psnr: best_quality.1,
             vmaf: best_quality.2,
             iterations,
-            quality_passed: best_passed,
+            quality_passed,
             log,
         })
     }
