@@ -29,8 +29,8 @@ use walkdir::WalkDir;
 
 /// Supported media file extensions (lowercase)
 const MEDIA_EXTENSIONS: &[&str] = &[
-    // Images - Common
-    "jpg", "jpeg", "png", "tiff", "tif", "webp", "avif", "jxl", "heic", "heif", "bmp", "gif",
+    // Images - Common (including all JPEG variants)
+    "jpg", "jpeg", "jpe", "jfif", "jif", "png", "tiff", "tif", "webp", "avif", "jxl", "heic", "heif", "bmp", "gif",
     // Images - RAW formats
     "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw", "raw", "3fr", "ari",
     "bay", "cap", "crw", "dcr", "dcs", "drf", "eip", "erf", "fff", "iiq", "k25", "kdc", "mdc",
