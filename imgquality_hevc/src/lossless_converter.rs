@@ -1257,6 +1257,10 @@ fn get_output_path(input: &Path, extension: &str, output_dir: &Option<std::path:
 /// - 使用 Bayer 抖动算法
 /// - 最大 256 色
 /// - 视觉无损参数
+/// 
+/// 🔥 v3.8: 智能化改进
+/// - 如果输入已经是 GIF，直接跳过（避免重新编码导致文件变大）
+/// - 如果输出比输入大，自动回退并保留原文件
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,
@@ -1278,6 +1282,30 @@ pub fn convert_to_gif_apple_compat(
     }
     
     let input_size = fs::metadata(input)?.len();
+    
+    // 🔥 v3.8: 如果输入已经是 GIF，直接跳过
+    // GIF 重新编码通常会导致文件变大（LZW 压缩不是确定性的）
+    let input_ext = input.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    
+    if input_ext == "gif" {
+        eprintln!("   ⏭️  Input is already GIF, skipping re-encode (would likely increase size)");
+        mark_as_processed(input);
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: Some(input.display().to_string()), // 保持原路径
+            input_size,
+            output_size: Some(input_size),
+            size_reduction: Some(0.0),
+            message: "Skipped: Already GIF (re-encoding would increase size)".to_string(),
+            skipped: true,
+            skip_reason: Some("already_gif".to_string()),
+        });
+    }
+    
     let output = get_output_path(input, "gif", &options.output_dir)?;
     
     // Ensure output directory exists
@@ -1353,6 +1381,25 @@ pub fn convert_to_gif_apple_compat(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
+            
+            // 🔥 v3.8: 智能回退 - 如果输出比输入大，删除输出并跳过
+            if output_size > input_size {
+                let _ = fs::remove_file(&output);
+                eprintln!("   ⏭️  Rollback: GIF larger than original ({} → {} bytes, +{:.1}%)", 
+                    input_size, output_size, (output_size as f64 / input_size as f64 - 1.0) * 100.0);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: true,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: format!("Skipped: GIF would be larger (+{:.1}%)", (output_size as f64 / input_size as f64 - 1.0) * 100.0),
+                    skipped: true,
+                    skip_reason: Some("size_increase".to_string()),
+                });
+            }
             
             copy_metadata(input, &output);
             mark_as_processed(input);
