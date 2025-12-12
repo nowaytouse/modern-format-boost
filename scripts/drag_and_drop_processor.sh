@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/opt/homebrew/bin/bash
 # Modern Format Boost - Drag & Drop Processor
 # 拖拽式一键处理脚本
 # 
