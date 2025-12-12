@@ -1025,13 +1025,31 @@ pub fn full_explore(
 }
 
 /// HEVC 探索（最常用）- 默认使用精确质量匹配
+/// 
+/// 🔥 v3.7: 动态调整 max_crf 和 min_ssim
+/// - 高质量源 (CRF < 20): max_crf=28, min_ssim=0.95
+/// - 中等质量源 (CRF 20-28): max_crf=32, min_ssim=0.93
+/// - 低质量源 (CRF > 28): max_crf=35, min_ssim=0.90
 pub fn explore_hevc(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_precise_quality_match(input, output, VideoEncoder::Hevc, vf_args, initial_crf, 28.0, 0.95)
+    // 🔥 v3.7: 根据初始 CRF 动态调整阈值
+    // 低质量源（高 CRF）应该允许更高的 max_crf 和更低的 min_ssim
+    let (max_crf, min_ssim) = if initial_crf < 20.0 {
+        // 高质量源：严格阈值
+        (28.0_f32, 0.95_f64)
+    } else if initial_crf < 28.0 {
+        // 中等质量源：适中阈值
+        (32.0_f32, 0.93_f64)
+    } else {
+        // 低质量源：宽松阈值，允许更高 CRF
+        (35.0_f32, 0.90_f64)
+    };
+    
+    explore_precise_quality_match(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim)
 }
 
 /// HEVC 仅探索大小（--explore 单独使用）
@@ -1055,13 +1073,30 @@ pub fn explore_hevc_quality_match(
 }
 
 /// AV1 探索 - 默认使用精确质量匹配
+/// 
+/// 🔥 v3.7: 动态调整 max_crf 和 min_ssim
+/// - 高质量源 (CRF < 23): max_crf=35, min_ssim=0.95
+/// - 中等质量源 (CRF 23-32): max_crf=40, min_ssim=0.93
+/// - 低质量源 (CRF > 32): max_crf=45, min_ssim=0.90
 pub fn explore_av1(
     input: &Path,
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_precise_quality_match(input, output, VideoEncoder::Av1, vf_args, initial_crf, 35.0, 0.95)
+    // 🔥 v3.7: 根据初始 CRF 动态调整阈值
+    let (max_crf, min_ssim) = if initial_crf < 23.0 {
+        // 高质量源：严格阈值
+        (35.0_f32, 0.95_f64)
+    } else if initial_crf < 32.0 {
+        // 中等质量源：适中阈值
+        (40.0_f32, 0.93_f64)
+    } else {
+        // 低质量源：宽松阈值
+        (45.0_f32, 0.90_f64)
+    };
+    
+    explore_precise_quality_match(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf, min_ssim)
 }
 
 /// AV1 仅探索大小（--explore 单独使用）
