@@ -29,6 +29,7 @@ pub mod image_quality_detector;
 pub mod video_quality_detector;
 pub mod video_explorer;
 pub mod checkpoint;
+pub mod xmp_merger;
 
 pub use progress::*;
 pub use safety::*;
@@ -96,4 +97,8 @@ pub use video_explorer::full_explore;
 
 pub use checkpoint::{
     CheckpointManager, verify_output_integrity, safe_delete_original,
+};
+
+pub use xmp_merger::{
+    XmpMerger, XmpMergerConfig, XmpFile, MergeResult, MergeSummary,
 };

@@ -1,0 +1,17 @@
+[package]
+name = "xmp_merger"
+version = "1.0.0"
+edition = "2021"
+description = "Reliable XMP sidecar metadata merger with multiple matching strategies"
+authors = ["Pixly Team"]
+
+[[bin]]
+name = "xmp-merge"
+path = "src/main.rs"
+
+[dependencies]
+shared_utils = { path = "../shared_utils" }
+anyhow = "1.0"
+clap = { version = "4.4", features = ["derive"] }
+console = "0.15"
+indicatif = "0.17"
