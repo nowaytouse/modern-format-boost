@@ -52,7 +52,7 @@ pub use quality_matcher::{
     calculate_av1_crf_with_options, calculate_hevc_crf_with_options, calculate_jxl_distance_with_options,
     // Utilities
     log_quality_analysis, from_video_detection, from_image_analysis,
-    should_skip_video_codec, should_skip_image_format, parse_source_codec,
+    should_skip_video_codec, should_skip_video_codec_apple_compat, should_skip_image_format, parse_source_codec,
 };
 
 pub use image_quality_detector::{

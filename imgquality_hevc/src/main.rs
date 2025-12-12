@@ -89,6 +89,12 @@ enum Commands {
         /// Does NOT affect static images (JPEG/PNG always use lossless conversion).
         #[arg(long)]
         match_quality: bool,
+
+        /// 🍎 Apple compatibility mode: Convert non-Apple-compatible animated formats to HEVC
+        /// When enabled, animated WebP (VP8/VP9) will be converted to HEVC MP4
+        /// instead of being skipped as "modern format"
+        #[arg(long, default_value_t = false)]
+        apple_compat: bool,
     },
 
     /// Verify conversion quality
@@ -164,6 +170,7 @@ fn main() -> anyhow::Result<()> {
             lossless,
             explore,
             match_quality,
+            apple_compat,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
@@ -197,6 +204,9 @@ fn main() -> anyhow::Result<()> {
                 }
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
+            if apple_compat {
+                eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
+            }
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
             }
@@ -208,6 +218,7 @@ fn main() -> anyhow::Result<()> {
                 lossless,
                 explore,
                 match_quality,
+                apple_compat,
             };
             
             if input.is_file() {
@@ -496,6 +507,8 @@ struct AutoConvertConfig {
     lossless: bool,
     explore: bool,
     match_quality: bool,
+    /// 🍎 Apple compatibility mode
+    apple_compat: bool,
 }
 
 /// Smart auto-convert a single file based on format detection
@@ -524,6 +537,7 @@ fn auto_convert_single_file(
         in_place: config.in_place,
         explore: config.explore,
         match_quality: config.match_quality,
+        apple_compat: config.apple_compat,
     };
     
     // Smart conversion based on format and lossless status
@@ -532,11 +546,13 @@ fn auto_convert_single_file(
         // Rule: Avoid generational loss. 
         // - If Lossy: SKIP (don't recompress lossy to lossy/jxl)
         // - If Lossless: CONVERT to JXL (better compression)
+        // 🍎 Apple compat mode: animated WebP (VP8/VP9) will be converted to HEVC
         ("WebP", true, false) | ("AVIF", true, false) | ("HEIC", true, false) | ("HEIF", true, false) => {
             println!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)? // Mathematical lossless
         }
-        ("WebP", false, _) | ("AVIF", false, _) | ("HEIC", false, _) | ("HEIF", false, _) => {
+        // 🍎 Apple compat mode: Skip static lossy modern formats, but animated will be handled below
+        ("WebP", false, false) | ("AVIF", false, false) | ("HEIC", false, false) | ("HEIF", false, false) => {
             println!("⏭️ Skipping modern lossy format (avoid generation loss): {}", input.display());
             return Ok(());
         }
@@ -557,7 +573,17 @@ fn auto_convert_single_file(
         // 🔥 默认使用智能质量匹配：二分搜索 + SSIM 裁判验证
         // - 无损动画源（GIF/APNG）：使用质量匹配以获得更好的压缩率
         // - 有损动画源（WebP animated）：使用质量匹配以保持质量
-        (_, _, true) => {
+        // 🍎 Apple compat mode: animated WebP/AVIF will be converted to HEVC
+        (format, is_lossless, true) => {
+            // 🍎 Check if this is a modern animated format that should be skipped
+            // In non-Apple-compat mode, skip lossy animated WebP/AVIF to avoid generation loss
+            let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF");
+            if is_modern_animated && !is_lossless && !config.apple_compat {
+                println!("⏭️ Skipping modern lossy animated format (avoid generation loss): {}", input.display());
+                println!("   💡 Use --apple-compat to convert to HEVC for Apple device compatibility");
+                return Ok(());
+            }
+            
             // Check duration - only convert animations >=3 seconds
             // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
             let duration = match analysis.duration_secs {
@@ -579,7 +605,11 @@ fn auto_convert_single_file(
                 convert_to_hevc_mkv_lossless(input, &options)?
             } else {
                 // 🔥 默认：智能质量匹配（二分搜索 + SSIM 验证）
-                println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
+                if config.apple_compat && is_modern_animated {
+                    println!("🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s): {}", format, duration, input.display());
+                } else {
+                    println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
+                }
                 convert_to_hevc_mp4_matched(input, &options, &analysis)?
             }
         }
