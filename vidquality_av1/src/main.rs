@@ -220,8 +220,17 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                         Err(e) => {
-                            info!("❌ {} failed: {}", file.display(), e);
-                            batch_result.fail(file.clone(), e.to_string());
+                            // 🔥 修复：将"Output exists"错误视为跳过而非失败
+                            let error_msg = e.to_string();
+                            if error_msg.contains("Output exists:") {
+                                info!("⏭️ {} → SKIP (output exists)", 
+                                    file.file_name().unwrap_or_default().to_string_lossy()
+                                );
+                                batch_result.skip();
+                            } else {
+                                info!("❌ {} failed: {}", file.display(), e);
+                                batch_result.fail(file.clone(), e.to_string());
+                            }
                         }
                     }
                 }
