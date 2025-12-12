@@ -327,9 +327,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     
     let size_ratio = output_size as f64 / detection.file_size as f64;
     
+    // 🔥 Safe delete with integrity check (断电保护)
     if config.should_delete_original() {
-        std::fs::remove_file(input)?;
-        info!("   🗑️  Original deleted");
+        if let Err(e) = shared_utils::conversion::safe_delete_original(input, &output_path, 1000) {
+            warn!("   ⚠️  Safe delete failed: {}", e);
+        } else {
+            info!("   🗑️  Original deleted (integrity verified)");
+        }
     }
     
     info!("   ✅ Complete: {:.1}% of original", size_ratio * 100.0);

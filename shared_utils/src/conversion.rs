@@ -48,6 +48,13 @@ pub fn clear_processed_list() {
     processed.clear();
 }
 
+// ============================================================================
+// 🔥 Atomic Operation Protection (断电保护)
+// Re-exported from checkpoint module for backward compatibility
+// ============================================================================
+
+pub use crate::checkpoint::{verify_output_integrity, safe_delete_original};
+
 /// Load processed files list from disk
 pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if !list_path.exists() {
@@ -345,9 +352,10 @@ pub fn post_conversion_actions(
     // Mark as processed
     mark_as_processed(input);
     
-    // Delete original if requested (via delete_original or in_place)
+    // 🔥 Safe delete with integrity check (断电保护)
     if options.should_delete_original() {
-        fs::remove_file(input)?;
+        // Minimum output size: at least 100 bytes for any valid media file
+        safe_delete_original(input, output, 100)?;
     }
     
     Ok(())
