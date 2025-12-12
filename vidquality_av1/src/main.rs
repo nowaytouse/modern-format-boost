@@ -132,6 +132,10 @@ fn main() -> anyhow::Result<()> {
                 use_lossless: lossless,
                 match_quality,
                 in_place,
+                // 🔥 v3.5: 裁判机制增强参数
+                min_ssim: 0.95,       // 默认 SSIM 阈值
+                validate_vmaf: false, // 默认不启用 VMAF（较慢）
+                min_vmaf: 85.0,       // 默认 VMAF 阈值
             };
             
             info!("🎬 Auto Mode Conversion (AV1)");
