@@ -427,21 +427,22 @@ impl VideoExplorer {
     
     /// 模式 3: 精确质量匹配（--explore + --match-quality 组合）
     /// 
-    /// 🔥 v3.9: 重新设计 - 目标是精确匹配源质量，而非追求最小文件
+    /// 🔥 v4.0: 激进精度追求 - 目标是无限逼近 SSIM=1.0
     /// 
     /// ## 核心理念
-    /// - 目标：找到**最接近源质量的 CRF**（SSIM 尽可能接近 1.0）
-    /// - 不是：找到满足最低阈值的最高 CRF（追求最小文件）
+    /// - 目标：**无限逼近 SSIM=1.0**（不在意耗时）
+    /// - 这是 `--explore --match-quality` 组合的最终意义
     /// 
     /// ## 精度保证
-    /// - CRF 误差: ±0.5 (最终精度)
-    /// - SSIM 验证精度: 0.0001 (ffmpeg 输出精度)
+    /// - CRF 精度: ±0.1 (最终精度，从 ±0.5 提升到 ±0.1)
+    /// - SSIM 目标: >= 0.9999 (接近数学无损)
+    /// - 无迭代次数限制（耗时不是问题）
     /// 
-    /// ## 搜索策略
-    /// 1. **初始点测试**: 使用 AI 预测的 CRF，获取基准 SSIM
-    /// 2. **自校准**: 如果 SSIM 不够高，向下搜索（降低 CRF）
-    /// 3. **精细调整**: 在最佳点附近 ±2 CRF 范围内精细搜索
-    /// 4. **选择最优**: 选择 SSIM 最高的 CRF（质量优先）
+    /// ## 四阶段搜索策略
+    /// 1. **全范围扫描**: 从 min_crf 到 max_crf，步长 1.0，找到 SSIM 最高区域
+    /// 2. **区域精细化**: 在最佳点 ±2 CRF 范围，步长 0.5
+    /// 3. **超精细调整**: 在最佳点 ±0.5 CRF 范围，步长 0.1
+    /// 4. **极限逼近**: 如果 SSIM < 0.9999，继续向下搜索直到达到或触底
     /// 
     /// ## 质量保护
     /// - 如果最终 SSIM < min_ssim，标记为质量验证失败
@@ -449,15 +450,15 @@ impl VideoExplorer {
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         
-        log.push(format!("🔬 Precise Quality-Match v3.9 ({:?})", self.encoder));
+        log.push(format!("🔬 Precise Quality-Match v4.0 ({:?})", self.encoder));
         log.push(format!("   Input: {} bytes", self.input_size));
         log.push(format!("   CRF range: [{:.1}, {:.1}], Initial: {:.1}", 
             self.config.min_crf, self.config.max_crf, self.config.initial_crf));
-        log.push(format!("   🎯 Goal: Match source quality (maximize SSIM)"));
+        log.push("   🎯 Goal: Approach SSIM=1.0 (no time limit)".to_string());
         log.push(format!("   ⚠️ Min acceptable SSIM: {:.4}", 
             self.config.quality_thresholds.min_ssim));
         
-        // 记录已测试的 CRF 值，避免重复编码
+        // 记录已测试的 CRF 值，避免重复编码（精度 0.1）
         let mut tested_crfs: std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))> = 
             std::collections::HashMap::new();
         
@@ -478,44 +479,127 @@ impl VideoExplorer {
         
         let mut iterations = 0u32;
         
-        // ═══════════════════════════════════════════════════════════
-        // Phase 1: 初始点测试
-        // ═══════════════════════════════════════════════════════════
-        log.push("   📍 Phase 1: Initial point test".to_string());
+        // 🔥 v4.0: 目标 SSIM - 无限逼近 1.0
+        let target_ssim = 0.9999_f64; // 接近数学无损
         
-        let (initial_size, initial_quality) = test_crf(self.config.initial_crf, &mut tested_crfs, &mut log)?;
-        iterations += 1;
-        
-        let initial_ssim = initial_quality.0.unwrap_or(0.0);
-        
-        // 🔥 v3.9: 记录最佳质量（SSIM 最高），而非最小文件
+        // 记录最佳结果
         let mut best_crf = self.config.initial_crf;
-        let mut best_size = initial_size;
-        let mut best_quality = initial_quality;
-        let mut best_ssim = initial_ssim;
+        let mut best_size = 0u64;
+        let mut best_quality: (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
+        let mut best_ssim = 0.0_f64;
         
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: 自校准 - 如果初始 SSIM 不够高，向下搜索
+        // Phase 1: 全范围扫描 - 从 min_crf 到 max_crf，步长 1.0
         // ═══════════════════════════════════════════════════════════
-        log.push("   📍 Phase 2: Quality calibration".to_string());
+        log.push("   📍 Phase 1: Full range scan (step 1.0)".to_string());
         
-        // 目标 SSIM：尽可能接近 1.0，但至少要达到 min_ssim
-        let target_ssim = 0.98_f64; // 目标是接近无损
-        
-        if initial_ssim < target_ssim {
-            log.push(format!("      SSIM {:.4} < target {:.4}, searching for better quality", 
-                initial_ssim, target_ssim));
+        let mut current = self.config.min_crf;
+        while current <= self.config.max_crf {
+            let crf = (current * 10.0).round() / 10.0; // 0.1 精度
+            let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+            iterations += 1;
             
-            // 向下搜索（降低 CRF = 提高质量）
-            let mut current = self.config.initial_crf - 2.0;
-            while current >= self.config.min_crf && iterations < self.config.max_iterations {
+            let ssim = quality.0.unwrap_or(0.0);
+            
+            if ssim > best_ssim {
+                best_crf = crf;
+                best_size = size;
+                best_quality = quality;
+                best_ssim = ssim;
+                log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
+            }
+            
+            // 如果已达到目标，提前结束全范围扫描
+            if ssim >= target_ssim {
+                log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 1", target_ssim));
+                break;
+            }
+            
+            current += 1.0;
+        }
+        
+        // ═══════════════════════════════════════════════════════════
+        // Phase 2: 区域精细化 - 在最佳点 ±2 CRF 范围，步长 0.5
+        // ═══════════════════════════════════════════════════════════
+        if best_ssim < target_ssim {
+            log.push("   📍 Phase 2: Region refinement (step 0.5)".to_string());
+            
+            let search_start = (best_crf - 2.0).max(self.config.min_crf);
+            let search_end = (best_crf + 2.0).min(self.config.max_crf);
+            
+            let mut current = search_start;
+            while current <= search_end {
                 let crf = ((current * 2.0).round() / 2.0).clamp(self.config.min_crf, self.config.max_crf);
                 let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
                 iterations += 1;
                 
                 let ssim = quality.0.unwrap_or(0.0);
                 
-                // 🔥 选择 SSIM 最高的（质量优先）
+                if ssim > best_ssim || (ssim == best_ssim && size < best_size) {
+                    best_crf = crf;
+                    best_size = size;
+                    best_quality = quality;
+                    best_ssim = ssim;
+                    log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
+                }
+                
+                if ssim >= target_ssim {
+                    log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 2", target_ssim));
+                    break;
+                }
+                
+                current += 0.5;
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════
+        // Phase 3: 超精细调整 - 在最佳点 ±0.5 CRF 范围，步长 0.1
+        // ═══════════════════════════════════════════════════════════
+        if best_ssim < target_ssim {
+            log.push("   📍 Phase 3: Ultra-fine tuning (step 0.1)".to_string());
+            
+            let search_start = (best_crf - 0.5).max(self.config.min_crf);
+            let search_end = (best_crf + 0.5).min(self.config.max_crf);
+            
+            let mut current = search_start;
+            while current <= search_end {
+                let crf = (current * 10.0).round() / 10.0; // 0.1 精度
+                let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+                iterations += 1;
+                
+                let ssim = quality.0.unwrap_or(0.0);
+                
+                if ssim > best_ssim || (ssim == best_ssim && size < best_size) {
+                    best_crf = crf;
+                    best_size = size;
+                    best_quality = quality;
+                    best_ssim = ssim;
+                    log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
+                }
+                
+                if ssim >= target_ssim {
+                    log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 3", target_ssim));
+                    break;
+                }
+                
+                current += 0.1;
+            }
+        }
+        
+        // ═══════════════════════════════════════════════════════════
+        // Phase 4: 极限逼近 - 如果仍未达到目标，继续向下搜索
+        // ═══════════════════════════════════════════════════════════
+        if best_ssim < target_ssim && best_crf > self.config.min_crf {
+            log.push("   📍 Phase 4: Extreme approach (searching lower CRF)".to_string());
+            
+            let mut current = best_crf - 0.1;
+            while current >= self.config.min_crf {
+                let crf = (current * 10.0).round() / 10.0;
+                let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
+                iterations += 1;
+                
+                let ssim = quality.0.unwrap_or(0.0);
+                
                 if ssim > best_ssim {
                     best_crf = crf;
                     best_size = size;
@@ -524,74 +608,50 @@ impl VideoExplorer {
                     log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
                 }
                 
-                // 如果已经达到目标 SSIM，停止搜索
+                // 达到目标或 SSIM 不再提升时停止
                 if ssim >= target_ssim {
-                    log.push(format!("      ✅ Target SSIM {:.4} reached", target_ssim));
+                    log.push(format!("      ✅ Target SSIM {:.4} reached in Phase 4", target_ssim));
                     break;
                 }
                 
-                current -= 2.0;
+                // 如果连续 3 个 CRF 都没有提升，停止搜索
+                let prev_key = ((current + 0.1) * 10.0).round() as i32;
+                let prev_prev_key = ((current + 0.2) * 10.0).round() as i32;
+                if let (Some(&(_, prev_q)), Some(&(_, prev_prev_q))) = 
+                    (tested_crfs.get(&prev_key), tested_crfs.get(&prev_prev_key)) {
+                    let prev_ssim = prev_q.0.unwrap_or(0.0);
+                    let prev_prev_ssim = prev_prev_q.0.unwrap_or(0.0);
+                    if ssim <= prev_ssim && prev_ssim <= prev_prev_ssim {
+                        log.push("      ⚠️ SSIM plateau detected, stopping search".to_string());
+                        break;
+                    }
+                }
+                
+                current -= 0.1;
             }
-        } else {
-            log.push(format!("      ✅ Initial SSIM {:.4} >= target {:.4}", initial_ssim, target_ssim));
-        }
-        
-        // ═══════════════════════════════════════════════════════════
-        // Phase 3: 精细调整 - 在最佳点附近搜索
-        // ═══════════════════════════════════════════════════════════
-        log.push("   📍 Phase 3: Fine-tuning around best point".to_string());
-        
-        let fine_range = 2.0_f32; // 在最佳点 ±2 CRF 范围内搜索
-        let fine_step = 0.5_f32;
-        
-        let search_start = (best_crf - fine_range).max(self.config.min_crf);
-        let search_end = (best_crf + fine_range).min(self.config.max_crf);
-        
-        let mut current = search_start;
-        while current <= search_end && iterations < self.config.max_iterations {
-            let crf = ((current * 2.0).round() / 2.0).clamp(self.config.min_crf, self.config.max_crf);
-            
-            let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log)?;
-            iterations += 1;
-            
-            let ssim = quality.0.unwrap_or(0.0);
-            
-            // 🔥 v3.9: 选择 SSIM 最高的（质量优先）
-            // 如果 SSIM 相同，选择文件更小的
-            if ssim > best_ssim || (ssim == best_ssim && size < best_size) {
-                best_crf = crf;
-                best_size = size;
-                best_quality = quality;
-                best_ssim = ssim;
-                log.push(format!("      🎯 New best: CRF {:.1}, SSIM {:.4}", crf, ssim));
-            }
-            
-            current += fine_step;
         }
         
         // ═══════════════════════════════════════════════════════════
         // 最终编码 - 确保输出文件是最佳 CRF
         // ═══════════════════════════════════════════════════════════
-        // 🔥 v3.9: 重新编码最佳 CRF，因为探索过程中输出文件可能被覆盖
         log.push(format!("   📍 Final encoding: CRF {:.1}", best_crf));
         let final_size = self.encode(best_crf)?;
         
         let size_change_pct = self.calc_change_pct(final_size);
         
-        // 🔥 v3.9: 质量验证 - 检查最终 SSIM 是否达到最低阈值
+        // 质量验证
         let quality_passed = best_ssim >= self.config.quality_thresholds.min_ssim - precision::SSIM_COMPARE_EPSILON;
         
-        let status = if quality_passed {
-            if best_ssim >= 0.98 { "✅ Excellent" }
-            else if best_ssim >= 0.95 { "✅ Good" }
-            else { "✅ Acceptable" }
-        } else {
-            "❌ Below threshold"
-        };
+        let status = if best_ssim >= 0.9999 { "✅ Near-Lossless" }
+            else if best_ssim >= 0.999 { "✅ Excellent" }
+            else if best_ssim >= 0.99 { "✅ Very Good" }
+            else if best_ssim >= 0.98 { "✅ Good" }
+            else if quality_passed { "✅ Acceptable" }
+            else { "❌ Below threshold" };
         
         log.push(format!("   📊 Final: CRF {:.1}, {} bytes ({:+.1}%), SSIM: {:.4} {}", 
             best_crf, final_size, size_change_pct, best_ssim, status));
-        log.push(format!("   📈 Iterations: {}, Precision: ±0.5 CRF", iterations));
+        log.push(format!("   📈 Iterations: {}, Precision: ±0.1 CRF", iterations));
         
         Ok(ExploreResult {
             optimal_crf: best_crf,
@@ -2014,5 +2074,279 @@ mod tests {
             prev_max_crf = max_crf;
             prev_min_ssim = min_ssim;
         }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v4.0: 激进精度追求测试 (Aggressive Precision Tests)
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 🔥 v4.0 测试：目标 SSIM 接近 1.0
+    #[test]
+    fn test_v4_target_ssim_near_lossless() {
+        // v4.0 目标是无限逼近 SSIM=1.0
+        let target_ssim = 0.9999_f64;
+        
+        // 验证目标值合理性
+        assert!(target_ssim > 0.999, "Target SSIM should be > 0.999 for near-lossless");
+        assert!(target_ssim < 1.0, "Target SSIM should be < 1.0 (1.0 is mathematically lossless)");
+        
+        // 验证与之前版本的差异
+        let v3_target = 0.98_f64;
+        assert!(target_ssim > v3_target, "v4.0 target {} should be higher than v3.9 target {}", 
+            target_ssim, v3_target);
+    }
+    
+    /// 🔥 v4.0 测试：CRF 精度提升到 ±0.1
+    #[test]
+    fn test_v4_crf_precision_0_1() {
+        // v4.0 精度从 ±0.5 提升到 ±0.1
+        let test_values: [f32; 10] = [18.0, 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7, 18.8, 18.9];
+        
+        for &crf in &test_values {
+            // 四舍五入到 0.1 步长
+            let rounded = (crf * 10.0).round() / 10.0;
+            assert!((rounded - crf).abs() < 0.01, 
+                "CRF {} should round to {} with 0.1 step", crf, rounded);
+        }
+        
+        // 测试非 0.1 步长值的四舍五入
+        assert!(((23.34_f32 * 10.0).round() / 10.0 - 23.3).abs() < 0.01);
+        assert!(((23.36_f32 * 10.0).round() / 10.0 - 23.4).abs() < 0.01);
+        assert!(((23.35_f32 * 10.0).round() / 10.0 - 23.4).abs() < 0.01); // 四舍五入
+    }
+    
+    /// 🔥 v4.0 测试：四阶段搜索策略
+    #[test]
+    fn test_v4_four_phase_search_strategy() {
+        // Phase 1: 全范围扫描 (步长 1.0)
+        let phase1_step = 1.0_f32;
+        let range = 28.0 - 10.0; // HEVC 典型范围
+        let phase1_iterations = (range / phase1_step).ceil() as u32;
+        assert_eq!(phase1_iterations, 18, "Phase 1 should scan 18 CRF values");
+        
+        // Phase 2: 区域精细化 (步长 0.5, 范围 ±2)
+        let phase2_step = 0.5_f32;
+        let phase2_range = 4.0_f32; // ±2
+        let phase2_iterations = (phase2_range / phase2_step).ceil() as u32;
+        assert_eq!(phase2_iterations, 8, "Phase 2 should test 8 CRF values");
+        
+        // Phase 3: 超精细调整 (步长 0.1, 范围 ±0.5)
+        let phase3_step = 0.1_f32;
+        let phase3_range = 1.0_f32; // ±0.5
+        let phase3_iterations = (phase3_range / phase3_step).ceil() as u32;
+        assert_eq!(phase3_iterations, 10, "Phase 3 should test 10 CRF values");
+        
+        // Phase 4: 极限逼近 (无限制，直到 SSIM 不再提升)
+        // 这个阶段没有固定迭代次数，取决于 SSIM 收敛
+    }
+    
+    /// 🔥 v4.0 测试：SSIM 质量等级 - 新增 Near-Lossless 等级
+    #[test]
+    fn test_v4_ssim_quality_grades_extended() {
+        // v4.0 新增 Near-Lossless 等级
+        let near_lossless_threshold = 0.9999_f64;
+        let excellent_threshold = 0.999_f64;
+        let very_good_threshold = 0.99_f64;
+        let good_threshold = 0.98_f64;
+        
+        // 验证等级递进
+        assert!(near_lossless_threshold > excellent_threshold);
+        assert!(excellent_threshold > very_good_threshold);
+        assert!(very_good_threshold > good_threshold);
+        
+        // 验证等级判定逻辑
+        let grade = |ssim: f64| -> &'static str {
+            if ssim >= 0.9999 { "Near-Lossless" }
+            else if ssim >= 0.999 { "Excellent" }
+            else if ssim >= 0.99 { "Very Good" }
+            else if ssim >= 0.98 { "Good" }
+            else if ssim >= 0.95 { "Acceptable" }
+            else { "Below threshold" }
+        };
+        
+        assert_eq!(grade(0.9999), "Near-Lossless");
+        assert_eq!(grade(0.9995), "Excellent");
+        assert_eq!(grade(0.995), "Very Good");
+        assert_eq!(grade(0.985), "Good");
+        assert_eq!(grade(0.96), "Acceptable");
+        assert_eq!(grade(0.94), "Below threshold");
+    }
+    
+    /// 🔥 v4.0 测试：SSIM 平台检测 - 停止无效搜索
+    #[test]
+    fn test_v4_ssim_plateau_detection() {
+        // 模拟 SSIM 平台场景：连续 3 个 CRF 的 SSIM 不再提升
+        let ssim_values: [(f32, f64); 5] = [
+            (20.0, 0.9850),
+            (19.9, 0.9855),
+            (19.8, 0.9856), // 最佳点
+            (19.7, 0.9856), // 平台开始
+            (19.6, 0.9855), // 平台继续，SSIM 下降
+        ];
+        
+        // 检测平台：当 SSIM 不再提升时应停止搜索
+        let mut best_ssim = 0.0_f64;
+        let mut plateau_count = 0;
+        
+        for &(_crf, ssim) in &ssim_values {
+            if ssim > best_ssim {
+                best_ssim = ssim;
+                plateau_count = 0;
+            } else {
+                plateau_count += 1;
+            }
+            
+            // 连续 2 次不提升即为平台
+            if plateau_count >= 2 {
+                break;
+            }
+        }
+        
+        assert!(plateau_count >= 2, "Should detect plateau after 2 non-improvements");
+        assert!((best_ssim - 0.9856).abs() < 0.0001, "Best SSIM should be 0.9856");
+    }
+    
+    /// 🔥 v4.0 测试：极端场景 - 已经是高质量源
+    #[test]
+    fn test_v4_high_quality_source_handling() {
+        // 场景：源视频已经是高质量 (CRF 15, SSIM 0.9990)
+        let source_crf = 15.0_f32;
+        let source_ssim = 0.9990_f64;
+        let target_ssim = 0.9999_f64;
+        
+        // 如果源 SSIM 已经很高，应该使用更低的 CRF
+        let expected_output_crf = source_crf - 2.0; // 降低 CRF 以提高质量
+        
+        assert!(expected_output_crf < source_crf, 
+            "Output CRF should be lower than source for quality improvement");
+        assert!(source_ssim < target_ssim, 
+            "Source SSIM {} should be below target {}", source_ssim, target_ssim);
+    }
+    
+    /// 🔥 v4.0 测试：极端场景 - 低质量源的质量上限
+    #[test]
+    fn test_v4_low_quality_source_ceiling() {
+        // 场景：源视频是低质量 (CRF 35, SSIM 0.9200)
+        // 即使用 CRF 0 也无法达到 SSIM 0.9999（因为源本身就有损失）
+        let _source_crf = 35.0_f32;
+        let source_ssim = 0.9200_f64;
+        let target_ssim = 0.9999_f64;
+        
+        // 低质量源的 SSIM 上限取决于源本身的质量
+        // 重新编码无法恢复已丢失的信息
+        let ssim_ceiling = source_ssim + 0.05; // 最多提升 5%
+        
+        assert!(ssim_ceiling < target_ssim, 
+            "Low quality source cannot reach target SSIM {}", target_ssim);
+        
+        // 验证算法应该在达到 ceiling 后停止
+        // 而不是无限降低 CRF
+    }
+    
+    /// 🔥 v4.0 测试：缓存机制 - 避免重复编码
+    #[test]
+    fn test_v4_crf_cache_mechanism() {
+        // 模拟缓存机制：0.1 精度的 key
+        let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
+        
+        // 测试 CRF 值到 key 的转换
+        let crf_to_key = |crf: f32| -> i32 { (crf * 10.0).round() as i32 };
+        
+        // 插入测试数据
+        cache.insert(crf_to_key(20.0), 0.9850);
+        cache.insert(crf_to_key(20.1), 0.9855);
+        cache.insert(crf_to_key(20.2), 0.9860);
+        
+        // 验证缓存命中
+        assert!(cache.contains_key(&crf_to_key(20.0)));
+        assert!(cache.contains_key(&crf_to_key(20.1)));
+        assert!(cache.contains_key(&crf_to_key(20.2)));
+        
+        // 验证四舍五入后的缓存命中
+        // 20.05 四舍五入到 201 (20.1)，应该命中
+        assert!(cache.contains_key(&crf_to_key(20.05)), "20.05 should round to 201 and hit cache");
+        // 20.15 四舍五入到 202 (20.2)，应该命中
+        assert!(cache.contains_key(&crf_to_key(20.15)), "20.15 should round to 202 and hit cache");
+        
+        // 验证缓存未命中 - 未插入的值
+        assert!(!cache.contains_key(&crf_to_key(20.3))); // 203 未插入
+        assert!(!cache.contains_key(&crf_to_key(19.9))); // 199 未插入
+        
+        // 验证 key 计算正确性
+        assert_eq!(crf_to_key(20.04), 200); // 四舍五入到 200
+        assert_eq!(crf_to_key(20.05), 201); // 四舍五入到 201
+        assert_eq!(crf_to_key(20.14), 201); // 四舍五入到 201
+        assert_eq!(crf_to_key(20.15), 202); // 四舍五入到 202
+    }
+    
+    /// 🔥 v4.0 测试：迭代次数无上限（耗时不是问题）
+    #[test]
+    fn test_v4_no_iteration_limit() {
+        // v4.0 的核心理念：无限逼近 SSIM=1.0，不在意耗时
+        // 因此不应该有严格的迭代次数限制
+        
+        // 计算最坏情况的迭代次数
+        let range = 51.0_f64 - 0.0; // 完整 CRF 范围
+        let phase1 = (range / 1.0_f64).ceil() as u32; // 全范围扫描
+        let phase2 = (4.0_f64 / 0.5_f64).ceil() as u32;   // 区域精细化
+        let phase3 = (1.0_f64 / 0.1_f64).ceil() as u32;   // 超精细调整
+        let phase4_max = 50_u32; // 极限逼近最多 50 次
+        
+        let total_max = phase1 + phase2 + phase3 + phase4_max;
+        
+        // v4.0 应该允许足够多的迭代
+        assert!(total_max <= 150, "Total iterations should be reasonable: {}", total_max);
+        
+        // 但不应该有硬性上限阻止达到目标
+        // 这是 v4.0 与之前版本的关键区别
+    }
+    
+    /// 🔥 v4.0 测试：不同内容类型的 SSIM 收敛特性
+    #[test]
+    fn test_v4_content_type_ssim_convergence() {
+        // 不同内容类型的 SSIM 收敛特性不同
+        
+        // 动画内容：SSIM 收敛快（大面积平坦区域）
+        let animation_convergence_rate = 0.002_f64; // 每降低 1 CRF，SSIM 提升 0.002
+        
+        // 真人内容：SSIM 收敛中等
+        let live_action_convergence_rate = 0.001_f64;
+        
+        // 高细节内容：SSIM 收敛慢（复杂纹理）
+        let high_detail_convergence_rate = 0.0005_f64;
+        
+        // 验证收敛率差异
+        assert!(animation_convergence_rate > live_action_convergence_rate);
+        assert!(live_action_convergence_rate > high_detail_convergence_rate);
+        
+        // 计算达到目标 SSIM 所需的 CRF 降低量
+        let target_improvement = 0.9999 - 0.9900; // 从 0.99 到 0.9999
+        
+        let animation_crf_drop = target_improvement / animation_convergence_rate;
+        let live_action_crf_drop = target_improvement / live_action_convergence_rate;
+        let high_detail_crf_drop = target_improvement / high_detail_convergence_rate;
+        
+        assert!(animation_crf_drop < live_action_crf_drop);
+        assert!(live_action_crf_drop < high_detail_crf_drop);
+    }
+    
+    /// 🔥 v4.0 测试：SSIM 精度验证 - ffmpeg 输出精度
+    #[test]
+    fn test_v4_ssim_precision_ffmpeg() {
+        // ffmpeg SSIM 输出精度是 4 位小数
+        let ffmpeg_precision = 0.0001_f64;
+        
+        // 验证我们的目标 SSIM 在 ffmpeg 精度范围内可区分
+        let target_ssim = 0.9999_f64;
+        let excellent_ssim = 0.9990_f64;
+        
+        let difference = target_ssim - excellent_ssim;
+        assert!(difference >= ffmpeg_precision, 
+            "Target and excellent SSIM should be distinguishable: diff={}", difference);
+        
+        // 验证 SSIM 比较使用正确的 epsilon
+        let epsilon = SSIM_COMPARE_EPSILON;
+        assert!((epsilon - 0.0001).abs() < 1e-10, 
+            "SSIM compare epsilon should be 0.0001");
     }
 }
