@@ -119,17 +119,17 @@ Static images (JPEG/PNG) always use lossless conversion regardless of these flag
 | None | Default | Fixed CRF from strategy | 1 |
 | `--match-quality` | Quality Match | AI-predicted CRF + SSIM validation | 1 |
 | `--explore` | Size Only | Binary search for smaller output | up to 8 |
-| `--explore --match-quality` | Precise Match | 🔥 **v4.2** Four-phase search + Triple cross-validation + Real-time logging | unlimited |
+| `--explore --match-quality` | Precise Match | 🔥 **v4.3** Optimized search + Triple cross-validation + Real-time logging | ~15-20 |
 
-#### 🔥 v4.2: Precise Quality Match - Real-time Transparency
+#### 🔥 v4.3: Precise Quality Match - Optimized Search
 
 When using `--explore --match-quality` together, the algorithm enables:
 
-**Four-Phase Search Strategy:**
-1. **Full Range Scan** (step 1.0): Find highest SSIM region
-2. **Region Refinement** (step 0.5, ±2 CRF): Narrow down
-3. **Ultra-Fine Tuning** (step 0.1, ±0.5 CRF): Precise location
-4. **Extreme Approach**: Continue until SSIM plateau
+**Optimized Four-Phase Search Strategy (v4.3):**
+1. **Sparse Scan** (step 5.0): Quick region detection (~4 iterations)
+2. **Region Refinement** (step 2.0, ±5 CRF): Narrow down (~5 iterations)
+3. **Fine Tuning** (step 0.5, ±2 CRF): Precise location (~8 iterations)
+4. **Extreme Precision** (step 0.1): Only when SSIM close to target, with plateau detection
 
 **Triple Cross-Validation (SSIM + PSNR + VMAF):**
 - 🟢 All metrics agree → High confidence, early termination
@@ -143,14 +143,14 @@ When using `--explore --match-quality` together, the algorithm enables:
 | VMAF | 35% | Netflix perceptual quality |
 | PSNR | 15% | Reference signal-to-noise |
 
-**🔥 v4.2 Real-time Logging:**
+**🔥 v4.3 Real-time Logging:**
 - All progress output via `eprintln!()` for immediate visibility
 - No more "frozen" terminal during long encodes
 - Each encoding step shows: `🔄 Encoding CRF X.X...` → `📊 Calculating quality metrics...` → Results
 
 **Detailed Output Log:**
 ```
-🔬 Precise Quality-Match v4.2 (Hevc)
+🔬 Precise Quality-Match v4.3 (Hevc)
    📁 Input: 1234567 bytes (1205.63 KB)
    📐 CRF range: [10.0, 28.0], Initial: 20.0
    🎯 Goal: Approach SSIM=1.0 (no time limit)
@@ -498,17 +498,17 @@ modern_format_boost/
 | 无 | 默认 | 策略固定 CRF | 1 |
 | `--match-quality` | 质量匹配 | AI 预测 CRF + SSIM 验证 | 1 |
 | `--explore` | 仅大小 | 二分搜索更小输出 | 最多 8 |
-| `--explore --match-quality` | 精确匹配 | 🔥 **v4.2** 四阶段搜索 + 三重交叉验证 + 实时日志 | 无限制 |
+| `--explore --match-quality` | 精确匹配 | 🔥 **v4.3** 优化搜索 + 三重交叉验证 + 实时日志 | ~15-20 |
 
-#### 🔥 v4.2: 精确质量匹配 - 实时透明度
+#### 🔥 v4.3: 精确质量匹配 - 优化搜索
 
 当同时使用 `--explore --match-quality` 时，算法启用：
 
-**四阶段搜索策略：**
-1. **全范围扫描** (步长 1.0)：找到 SSIM 最高区域
-2. **区域精细化** (步长 0.5, ±2 CRF)：缩小范围
-3. **超精细调整** (步长 0.1, ±0.5 CRF)：精确定位
-4. **极限逼近**：继续搜索直到 SSIM 平台
+**优化四阶段搜索策略 (v4.3)：**
+1. **稀疏扫描** (步长 5.0)：快速定位最佳区域（~4次迭代）
+2. **区域精细化** (步长 2.0, ±5 CRF)：缩小范围（~5次迭代）
+3. **精细调整** (步长 0.5, ±2 CRF)：精确定位（~8次迭代）
+4. **极限逼近** (步长 0.1)：仅在 SSIM 接近目标时启用，有平台检测
 
 **三重交叉验证 (SSIM + PSNR + VMAF)：**
 - 🟢 所有指标一致 → 高置信度，提前终止
@@ -522,14 +522,14 @@ modern_format_boost/
 | VMAF | 35% | Netflix 感知质量 |
 | PSNR | 15% | 参考信噪比 |
 
-**🔥 v4.2 实时日志：**
+**🔥 v4.3 实时日志：**
 - 所有进度通过 `eprintln!()` 即时输出
 - 长时间编码不再出现"冻结"终端
 - 每个编码步骤显示：`🔄 Encoding CRF X.X...` → `📊 Calculating quality metrics...` → 结果
 
 **详细输出日志：**
 ```
-🔬 Precise Quality-Match v4.2 (Hevc)
+🔬 Precise Quality-Match v4.3 (Hevc)
    📁 Input: 1234567 bytes (1205.63 KB)
    📐 CRF range: [10.0, 28.0], Initial: 20.0
    🎯 Goal: Approach SSIM=1.0 (no time limit)
