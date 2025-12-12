@@ -35,8 +35,15 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     "cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "pef", "srw", "raw", "3fr", "ari",
     "bay", "cap", "crw", "dcr", "dcs", "drf", "eip", "erf", "fff", "iiq", "k25", "kdc", "mdc",
     "mef", "mos", "mrw", "nrw", "obm", "ptx", "pxn", "r3d", "rwl", "rwz", "sr2", "srf", "x3f",
+    // Images - Design/Editing formats
+    "psd", "psb", "ai", "eps", "svg", "xcf", "kra", "clip", "csp", "sai", "sai2", "mdp", "afphoto",
     // Video
     "mp4", "mov", "avi", "mkv", "m4v", "webm", "mts", "m2ts", "3gp", "flv", "wmv", "mpg", "mpeg",
+    "ts", "vob", "ogv", "rm", "rmvb", "asf", "divx", "f4v",
+    // Audio (some XMP may reference audio)
+    "mp3", "wav", "flac", "aac", "m4a", "ogg", "wma", "aiff", "alac",
+    // Documents (some XMP may reference documents)
+    "pdf",
 ];
 
 /// XMP file information
@@ -295,6 +302,81 @@ impl XmpMerger {
         None
     }
 
+    /// Strategy 7: Partial filename match (for files with added suffixes/prefixes)
+    fn find_partial_match(&self, xmp_path: &Path) -> Option<PathBuf> {
+        let parent = xmp_path.parent()?;
+        let stem = xmp_path.file_stem()?.to_string_lossy();
+        
+        // Skip very short names to avoid false positives
+        if stem.len() < 4 {
+            return None;
+        }
+
+        for entry in std::fs::read_dir(parent).ok()? {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            
+            if !path.is_file() {
+                continue;
+            }
+            
+            let ext = match path.extension() {
+                Some(e) => e.to_string_lossy().to_lowercase(),
+                None => continue,
+            };
+            
+            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+                continue;
+            }
+            
+            let file_stem = path.file_stem()?.to_string_lossy();
+            
+            // Check if one contains the other (handles suffixes like _edited, (1), etc.)
+            if file_stem.contains(&*stem) || stem.contains(&*file_stem) {
+                // Verify it's a reasonable match (at least 70% overlap)
+                let shorter = std::cmp::min(stem.len(), file_stem.len());
+                let longer = std::cmp::max(stem.len(), file_stem.len());
+                if shorter * 100 / longer >= 70 {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
+    /// Strategy 8: Recursive search in subdirectories
+    fn find_in_subdirectories(&self, xmp_path: &Path) -> Option<PathBuf> {
+        let parent = xmp_path.parent()?;
+        let stem = xmp_path.file_stem()?.to_string_lossy();
+        
+        // Search up to 2 levels deep
+        for entry in WalkDir::new(parent)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if !path.is_file() || path == xmp_path {
+                continue;
+            }
+            
+            let ext = match path.extension() {
+                Some(e) => e.to_string_lossy().to_lowercase(),
+                None => continue,
+            };
+            
+            if ext == "xmp" || !MEDIA_EXTENSIONS.contains(&ext.as_str()) {
+                continue;
+            }
+            
+            let file_stem = path.file_stem()?.to_string_lossy();
+            if file_stem.to_lowercase() == stem.to_lowercase() {
+                return Some(path.to_path_buf());
+            }
+        }
+        None
+    }
+
     /// Strategy 3: Extract original filename from XMP metadata
     fn find_by_xmp_metadata(&self, xmp_path: &Path, xmp_info: &XmpFile) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
@@ -432,6 +514,22 @@ impl XmpMerger {
                 eprintln!("  ✅ Strategy 6 (xmp_ref_scan): {}", media.display());
             }
             return Ok((Some(media), "xmp_ref_scan".to_string()));
+        }
+
+        // Strategy 7: Partial filename match
+        if let Some(media) = self.find_partial_match(xmp_path) {
+            if self.config.verbose {
+                eprintln!("  ✅ Strategy 7 (partial_match): {}", media.display());
+            }
+            return Ok((Some(media), "partial_match".to_string()));
+        }
+
+        // Strategy 8: Search in subdirectories
+        if let Some(media) = self.find_in_subdirectories(xmp_path) {
+            if self.config.verbose {
+                eprintln!("  ✅ Strategy 8 (subdirectory): {}", media.display());
+            }
+            return Ok((Some(media), "subdirectory".to_string()));
         }
 
         if self.config.verbose {
