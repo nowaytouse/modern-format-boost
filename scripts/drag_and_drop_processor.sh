@@ -134,7 +134,17 @@ test_log() {
     echo "$message"
 }
 
-# 🔥 采样文件（每种类型取一个代表）
+# 🔥 检查文件名是否包含特殊字符（边缘案例）
+has_special_chars() {
+    local name="$1"
+    # 检查: 方括号、圆括号、空格、中文、日文、emoji、连字符组合
+    [[ "$name" == *"["* ]] || [[ "$name" == *"("* ]] || [[ "$name" == *" "* ]] || \
+    [[ "$name" == *"【"* ]] || [[ "$name" == *"（"* ]] || [[ "$name" =~ [一-龥] ]] || \
+    [[ "$name" == *"'"* ]] || [[ "$name" == *'"'* ]] || [[ "$name" == *'&'* ]] || \
+    [[ "$name" == *'$'* ]] || [[ "$name" == *'!'* ]]
+}
+
+# 🔥 采样文件（每种类型取一个代表，优先边缘案例）
 sample_files() {
     local sample_dir="$TEST_OUTPUT_DIR/samples"
     mkdir -p "$sample_dir"
@@ -143,75 +153,125 @@ sample_files() {
     test_log "📊 采样文件用于测试..."
     test_log "=================================================="
     
-    # 记录采样的文件类型
-    declare -A sampled_types
     local sample_count=0
-    local max_samples=10  # 最多采样 10 个文件
+    local max_samples=15  # 最多采样 15 个文件
     
-    # 采样 XMP 文件（优先选择特殊字符文件名）
+    # 用于跟踪已采样的类型
+    local xmp_special_done=false
+    local xmp_normal_done=false
+    
+    # ========== 1. 采样 XMP 文件 ==========
+    test_log ""
+    test_log "📋 XMP 文件采样:"
+    
     while IFS= read -r -d '' xmp_file; do
-        local basename=$(basename "$xmp_file")
-        # 优先选择包含特殊字符的文件名（用于测试边界情况）
-        if [[ "$basename" == *"["* ]] || [[ "$basename" == *"("* ]] || [[ "$basename" == *" "* ]]; then
-            if [[ -z "${sampled_types[xmp_special]}" ]]; then
-                cp "$xmp_file" "$sample_dir/"
-                sampled_types[xmp_special]="$xmp_file"
-                test_log "   📋 XMP(特殊字符): $basename"
-                ((sample_count++))
-                
-                # 同时复制对应的媒体文件
-                local base="${xmp_file%.xmp}"
-                local dir=$(dirname "$xmp_file")
-                local stem=$(basename "$base")
-                for ext in mp4 mov mkv gif png jpg jpeg webp; do
-                    if [[ -f "$dir/$stem.$ext" ]]; then
-                        cp "$dir/$stem.$ext" "$sample_dir/"
-                        test_log "      └─ 媒体文件: $stem.$ext"
-                        break
-                    fi
-                done
-            fi
-        elif [[ -z "${sampled_types[xmp_normal]}" ]]; then
+        [[ $sample_count -ge $max_samples ]] && break
+        
+        local fname=$(basename "$xmp_file")
+        
+        # 优先选择特殊字符文件名
+        if has_special_chars "$fname" && [[ "$xmp_special_done" == "false" ]]; then
             cp "$xmp_file" "$sample_dir/"
-            sampled_types[xmp_normal]="$xmp_file"
-            test_log "   📋 XMP(普通): $basename"
+            test_log "   ✓ XMP(特殊字符): $fname"
+            xmp_special_done=true
+            ((sample_count++))
+            
+            # 复制对应媒体文件
+            local dir=$(dirname "$xmp_file")
+            local stem="${fname%.xmp}"
+            for ext in mp4 mov mkv gif png jpg jpeg webp avif heic; do
+                if [[ -f "$dir/$stem.$ext" ]]; then
+                    cp "$dir/$stem.$ext" "$sample_dir/"
+                    test_log "      └─ 媒体: $stem.$ext"
+                    break
+                fi
+            done
+        elif [[ "$xmp_normal_done" == "false" ]] && ! has_special_chars "$fname"; then
+            cp "$xmp_file" "$sample_dir/"
+            test_log "   ✓ XMP(普通): $fname"
+            xmp_normal_done=true
             ((sample_count++))
         fi
-        
-        [[ $sample_count -ge $max_samples ]] && break
-    done < <(find "$TARGET_DIR" -type f -iname "*.xmp" -print0 2>/dev/null | head -z -n 20)
+    done < <(find "$TARGET_DIR" -type f -iname "*.xmp" -print0 2>/dev/null)
     
-    # 采样图像文件（每种格式一个）
-    for ext in jpg jpeg png gif webp heic avif bmp tiff; do
-        if [[ $sample_count -ge $max_samples ]]; then break; fi
-        if [[ -z "${sampled_types[img_$ext]}" ]]; then
-            local found=$(find "$TARGET_DIR" -type f -iname "*.$ext" -print -quit 2>/dev/null)
-            if [[ -n "$found" ]]; then
-                cp "$found" "$sample_dir/"
-                sampled_types[img_$ext]="$found"
-                test_log "   🖼️  图像($ext): $(basename "$found")"
-                ((sample_count++))
+    # ========== 2. 采样图像文件（优先边缘案例）==========
+    test_log ""
+    test_log "🖼️  图像文件采样:"
+    
+    for ext in jpg jpeg png gif webp heic avif bmp tiff jxl; do
+        [[ $sample_count -ge $max_samples ]] && break
+        
+        local special_found=""
+        local normal_found=""
+        
+        # 查找特殊字符文件名
+        while IFS= read -r -d '' img_file; do
+            local fname=$(basename "$img_file")
+            if has_special_chars "$fname"; then
+                special_found="$img_file"
+                break
+            elif [[ -z "$normal_found" ]]; then
+                normal_found="$img_file"
             fi
+        done < <(find "$TARGET_DIR" -type f -iname "*.$ext" -print0 2>/dev/null | head -z -n 10)
+        
+        # 优先选择特殊字符文件
+        local selected="${special_found:-$normal_found}"
+        if [[ -n "$selected" ]]; then
+            cp "$selected" "$sample_dir/"
+            local fname=$(basename "$selected")
+            if [[ -n "$special_found" ]]; then
+                test_log "   ✓ $ext(特殊): $fname"
+            else
+                test_log "   ✓ $ext: $fname"
+            fi
+            ((sample_count++))
         fi
     done
     
-    # 采样视频文件（每种格式一个）
-    for ext in mp4 mov mkv webm avi m4v; do
-        if [[ $sample_count -ge $max_samples ]]; then break; fi
-        if [[ -z "${sampled_types[vid_$ext]}" ]]; then
-            local found=$(find "$TARGET_DIR" -type f -iname "*.$ext" -print -quit 2>/dev/null)
-            if [[ -n "$found" ]]; then
-                cp "$found" "$sample_dir/"
-                sampled_types[vid_$ext]="$found"
-                test_log "   🎬 视频($ext): $(basename "$found")"
-                ((sample_count++))
+    # ========== 3. 采样视频文件（优先边缘案例）==========
+    test_log ""
+    test_log "🎬 视频文件采样:"
+    
+    for ext in mp4 mov mkv webm avi m4v flv; do
+        [[ $sample_count -ge $max_samples ]] && break
+        
+        local special_found=""
+        local normal_found=""
+        
+        # 查找特殊字符文件名
+        while IFS= read -r -d '' vid_file; do
+            local fname=$(basename "$vid_file")
+            if has_special_chars "$fname"; then
+                special_found="$vid_file"
+                break
+            elif [[ -z "$normal_found" ]]; then
+                normal_found="$vid_file"
             fi
+        done < <(find "$TARGET_DIR" -type f -iname "*.$ext" -print0 2>/dev/null | head -z -n 10)
+        
+        # 优先选择特殊字符文件
+        local selected="${special_found:-$normal_found}"
+        if [[ -n "$selected" ]]; then
+            cp "$selected" "$sample_dir/"
+            local fname=$(basename "$selected")
+            if [[ -n "$special_found" ]]; then
+                test_log "   ✓ $ext(特殊): $fname"
+            else
+                test_log "   ✓ $ext: $fname"
+            fi
+            ((sample_count++))
         fi
     done
     
     test_log ""
     test_log "📊 采样完成: $sample_count 个文件"
     test_log ""
+    
+    if [[ $sample_count -eq 0 ]]; then
+        test_log "⚠️  未找到可采样的文件！"
+        return 1
+    fi
     
     # 更新 TARGET_DIR 为采样目录
     TARGET_DIR="$sample_dir"
@@ -602,18 +662,19 @@ show_completion() {
 
 # 主函数
 main() {
-    # 🔥 首先选择运行模式
-    select_mode
-    
-    show_welcome
     check_tools
     get_target_directory "$@"
     
-    # 🔥 测试模式：初始化并采样文件
+    # 🔥 选择运行模式（在获取目录后）
+    select_mode
+    
+    # 🔥 测试模式：初始化并采样文件（必须在 select_mode 之后）
     if [[ "$TEST_MODE" == "true" ]]; then
         init_test_mode
-        sample_files
+        sample_files || exit 1
     fi
+    
+    show_welcome
     
     # 🔥 初始化断点续传（在 safety_check 之前，以便检测未完成任务）
     init_progress_tracking
