@@ -839,11 +839,10 @@ impl CrfMapping {
     /// 打印映射信息
     pub fn print_mapping_info(&self) {
         eprintln!("   📊 GPU/CPU CRF Mapping ({} - {}):", self.gpu_type, self.codec.to_uppercase());
-        eprintln!("      • GPU boundary CRF → CPU search starts from 10.0 (higher efficiency)");
-        eprintln!("      • GPU CRF 24 ≈ CPU CRF {:.1} (reference point)", 24.0 - self.offset);
-        eprintln!("      • CPU efficiency: {:.1}x better (offset: {:.1})", 1.0 + self.offset / 10.0, self.offset);
-        eprintln!("      • Uncertainty: ±{:.1} CRF (GPU sampling error)", self.uncertainty);
-        eprintln!("      • 💡 CPU will explore full range to find true boundary");
+        eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
+        eprintln!("      • CPU offset: {:.1} (GPU CRF - {:.1} = CPU CRF)", self.offset, self.offset);
+        eprintln!("      • Uncertainty: ±{:.1} CRF", self.uncertainty);
+        eprintln!("      • 💡 CPU fine-tunes within GPU-guided range");
     }
 }
 
@@ -868,7 +867,7 @@ impl Default for GpuCoarseConfig {
             initial_crf: 18.0,
             min_crf: 10.0,
             max_crf: 40.0,
-            step: 4.0,  // 粗略搜索用 4 CRF 步长
+            step: 2.0,  // 🔥 v5.3: 精细搜索用 2 CRF 步长
             max_iterations: 6,
         }
     }
@@ -971,11 +970,11 @@ pub fn gpu_coarse_search(
     let mut iterations = 0u32;
     let mut boundary_crf: Option<f32> = None;
     
-    // 🔥 v5.1.4: GPU 粗略搜索只编码前 30 秒，大幅加速长视频处理
-    // 对于短视频（<30秒），编码整个视频
-    // 对于长视频（>30秒），只编码前 30 秒来估算压缩边界
-    const GPU_SAMPLE_DURATION: f32 = 30.0;
-    log_msg!("   💡 GPU samples first {:.0}s only (fast estimation)", GPU_SAMPLE_DURATION);
+    // 🔥 v5.3: GPU 采样改为 60 秒，更精确的边界估算
+    // 对于短视频（<60秒），编码整个视频
+    // 对于长视频（>60秒），只编码前 60 秒来估算压缩边界
+    const GPU_SAMPLE_DURATION: f32 = 60.0;
+    log_msg!("   💡 GPU samples first {:.0}s (accurate estimation)", GPU_SAMPLE_DURATION);
     
     // 快速编码函数（GPU）- 只编码前 30 秒
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
@@ -1068,10 +1067,10 @@ pub fn gpu_coarse_search(
     
     // 确定边界
     let (final_boundary, found) = if let Some(b) = boundary_crf {
-        // 边界 = 最后一个能压缩的 CRF + step（因为我们是向下搜索的）
-        // 这样可以确保边界是"刚好能压缩"的点
-        let adjusted = (b + config.step).min(config.max_crf);
-        (adjusted, true)
+        // 🔥 v5.3: 边界 = 最后一个能压缩的 CRF（不再 +step）
+        // 如果所有测试的 CRF 都能压缩，返回最低测试的 CRF
+        // 这样 CPU 可以从这个点继续向下探索
+        (b, true)
     } else {
         // 没找到能压缩的点
         (config.max_crf, false)
