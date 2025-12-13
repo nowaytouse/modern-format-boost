@@ -31,6 +31,7 @@ pub mod video_explorer;
 pub mod checkpoint;
 pub mod xmp_merger;
 pub mod flag_validator;
+pub mod gpu_accel;
 
 pub use progress::*;
 pub use safety::*;
@@ -92,6 +93,11 @@ pub use video_explorer::{
     // AV1 convenience functions
     explore_av1, explore_av1_size_only, explore_av1_quality_match,
     explore_av1_compress_only, explore_av1_compress_with_quality,
+    // 🔥 v4.15: GPU 控制变体
+    explore_precise_quality_match_with_compression_gpu,
+    explore_precise_quality_match_gpu,
+    explore_compress_only_gpu, explore_compress_with_quality_gpu,
+    explore_size_only_gpu, explore_quality_match_gpu,
     // Precision module (精确度规范)
     precision,
 };
@@ -113,4 +119,9 @@ pub use xmp_merger::{
 // 🔥 v4.6: Flag 组合验证器
 pub use flag_validator::{
     FlagMode, FlagValidation, validate_flags, validate_flags_result, print_flag_help,
+};
+
+// 🔥 v4.9: GPU 加速模块
+pub use gpu_accel::{
+    GpuAccel, GpuEncoder, GpuType,
 };

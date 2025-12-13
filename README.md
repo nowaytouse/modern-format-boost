@@ -2,7 +2,14 @@
 
 🗃️ Collection-Grade Media Archive Tool - Premium Quality for Long-term Storage
 
-**📚 Documentation**: [Algorithm Deep Dive v4.6](./ALGORITHM_DEEP_DIVE_v4.6.md) | [English](#english) | [中文](#中文)
+**📚 Documentation**: [Algorithm Deep Dive v4.6](./ALGORITHM_DEEP_DIVE_v4.6.md) | [Bug Analysis v4.8](./BUG_ANALYSIS_v4.8.md) | [English](#english) | [中文](#中文)
+
+### 🔥 v4.8 Updates
+
+- **Performance**: Added encoding cache to avoid redundant encoding
+- **CLI**: Added `--cpu` flag for CPU-only encoding (maximum quality)
+- **Bug Fix**: Fixed `explore_size_only` binary search logic
+- **Precision**: CRF precision upgraded to ±0.1
 
 ---
 
@@ -341,7 +348,9 @@ Options:
       --lossless         Mathematical lossless (slow!)
       --explore          Binary search for optimal CRF (animations only)
       --match-quality    AI-predicted CRF + SSIM validation (animations only)
+      --compress         🔥 Require output < input
       --apple-compat     🍎 Convert non-Apple-compatible animated formats to HEVC
+      --cpu              🖥️ Force CPU encoding (x265) for maximum quality
 ```
 
 #### vidquality-hevc auto
@@ -358,6 +367,7 @@ Options:
       --match-quality    Quality matching [default: true]
       --compress         🔥 Require output < input (use with --explore --match-quality)
       --apple-compat     🍎 Convert AV1/VP9/VVC/AV2 to HEVC for Apple compatibility
+      --cpu              🖥️ Force CPU encoding (x265) for maximum quality
 ```
 
 #### 🍎 Apple Compatibility Mode (`--apple-compat`)
@@ -737,7 +747,9 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
       --lossless         数学无损（慢！）
       --explore          二分搜索最优 CRF（仅动图）
       --match-quality    AI 预测 CRF + SSIM 验证（仅动图）
+      --compress         🔥 要求输出 < 输入
       --apple-compat     🍎 将非 Apple 兼容的动图格式转换为 HEVC
+      --cpu              🖥️ 强制 CPU 编码 (x265) 以获得最高质量
 ```
 
 #### vidquality-hevc auto
@@ -754,6 +766,7 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
       --match-quality    质量匹配 [默认: true]
       --compress         🔥 要求输出 < 输入（配合 --explore --match-quality 使用）
       --apple-compat     🍎 将 AV1/VP9/VVC/AV2 转换为 HEVC 以兼容 Apple 设备
+      --cpu              🖥️ 强制 CPU 编码 (x265) 以获得最高质量
 ```
 
 #### 🍎 Apple 兼容模式 (`--apple-compat`)

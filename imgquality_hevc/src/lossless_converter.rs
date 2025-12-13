@@ -649,37 +649,66 @@ pub fn convert_to_hevc_mp4_matched(
     // 🔥 健壮性：获取输入尺寸并生成视频滤镜链
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, analysis.has_alpha);
-    
+
     // 🔥 v4.6: 使用模块化的 flag 验证器
     let flag_mode = options.flag_mode()
         .map_err(|e| ImgQualityError::ConversionError(e))?;
-    
+
+    // 🔥 v4.15: GPU 控制
+    let use_gpu = options.use_gpu;
+    if !use_gpu {
+        eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
+    }
+
     eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
-    
+
+    // 🔥 v4.15: 使用智能阈值计算
+    let (max_crf, min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
+        initial_crf, shared_utils::VideoEncoder::Hevc
+    );
+
     let explore_result = match flag_mode {
         shared_utils::FlagMode::PreciseQualityWithCompress => {
-            shared_utils::explore_precise_quality_match_with_compression(
+            shared_utils::explore_precise_quality_match_with_compression_gpu(
                 input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
-                initial_crf, 40.0, 0.91
+                initial_crf, 40.0, 0.91, use_gpu
             )
         }
         shared_utils::FlagMode::PreciseQuality => {
-            shared_utils::explore_hevc(input, &output, vf_args, initial_crf)
+            shared_utils::explore_precise_quality_match_gpu(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, max_crf, min_ssim, use_gpu
+            )
         }
         shared_utils::FlagMode::CompressWithQuality => {
-            shared_utils::explore_hevc_compress_with_quality(input, &output, vf_args, initial_crf)
+            shared_utils::explore_compress_with_quality_gpu(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, max_crf, use_gpu
+            )
         }
         shared_utils::FlagMode::QualityOnly => {
-            shared_utils::explore_hevc_quality_match(input, &output, vf_args, initial_crf)
+            shared_utils::explore_quality_match_gpu(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, use_gpu
+            )
         }
         shared_utils::FlagMode::ExploreOnly => {
-            shared_utils::explore_hevc_size_only(input, &output, vf_args, initial_crf)
+            shared_utils::explore_size_only_gpu(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, max_crf, use_gpu
+            )
         }
         shared_utils::FlagMode::CompressOnly => {
-            shared_utils::explore_hevc_compress_only(input, &output, vf_args, initial_crf)
+            shared_utils::explore_compress_only_gpu(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, max_crf, use_gpu
+            )
         }
         shared_utils::FlagMode::Default => {
-            shared_utils::explore_hevc_quality_match(input, &output, vf_args, initial_crf)
+            shared_utils::explore_quality_match_gpu(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, use_gpu
+            )
         }
     }.map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
     

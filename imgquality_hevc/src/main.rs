@@ -109,6 +109,11 @@ enum Commands {
         /// instead of being skipped as "modern format"
         #[arg(long, default_value_t = false)]
         apple_compat: bool,
+
+        /// 🔥 v4.15: Force CPU encoding (libx265) instead of GPU
+        /// VideoToolbox hardware encoding caps at ~0.95 SSIM. Use --cpu to achieve 0.98+ SSIM
+        #[arg(long, default_value_t = false)]
+        cpu: bool,
     },
 
     /// Verify conversion quality
@@ -186,6 +191,7 @@ fn main() -> anyhow::Result<()> {
             match_quality,
             compress,
             apple_compat,
+            cpu,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
@@ -221,8 +227,12 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 compress,
                 apple_compat,
+                use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
             };
-            
+            if cpu {
+                eprintln!("🖥️  CPU Encoding: ENABLED (libx265 for SSIM ≥0.98)");
+            }
+
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
@@ -513,6 +523,8 @@ struct AutoConvertConfig {
     compress: bool,
     /// 🍎 Apple compatibility mode
     apple_compat: bool,
+    /// 🔥 v4.15: Use GPU acceleration (default: true)
+    use_gpu: bool,
 }
 
 /// Smart auto-convert a single file based on format detection
@@ -543,6 +555,7 @@ fn auto_convert_single_file(
         match_quality: config.match_quality,
         compress: config.compress,
         apple_compat: config.apple_compat,
+        use_gpu: config.use_gpu,  // 🔥 v4.15: Pass GPU control
     };
     
     // Smart conversion based on format and lossless status
