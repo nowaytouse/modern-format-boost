@@ -105,21 +105,24 @@ impl GpuEncoder {
 
     /// 获取 CRF 参数
     ///
-    /// 🔥 v4.14: VideoToolbox 质量映射修正
+    /// 🔥 v5.5: VideoToolbox 质量映射修正
     /// - libx265 CRF: 0=无损, 51=最差 (常用范围 18-28)
-    /// - VideoToolbox -q:v: 1=最高质量, 100=最低质量 (0 不可用)
-    /// - 映射公式: q:v = max(1, crf * 1.5) 更激进映射
-    ///   - CRF 10 → q:v 15 (高质量)
-    ///   - CRF 18 → q:v 27 (常用质量)
-    ///   - CRF 28 → q:v 42 (可接受质量)
+    /// - VideoToolbox -q:v: 1=最低质量, 100=最高质量 (实测验证!)
+    ///   - q:v 1 → SSIM 0.902 (最低)
+    ///   - q:v 50 → SSIM 0.964 (平衡点)
+    ///   - q:v 70 → SSIM 0.968 (接近上限)
+    ///   - q:v 90 → SSIM 0.969 (上限，文件巨大)
+    /// - 映射公式: q:v = 100 - crf * 2 (反向映射)
+    ///   - CRF 10 → q:v 80 (高质量)
+    ///   - CRF 20 → q:v 60 (中等质量)
+    ///   - CRF 30 → q:v 40 (较低质量)
     pub fn get_crf_args(&self, crf: f32) -> Vec<String> {
         if self.supports_crf {
-            // 🔥 v4.14: VideoToolbox 更激进的质量映射
             let quality_value = if self.gpu_type == GpuType::Apple {
-                // VideoToolbox: 使用更激进的映射以获得更高 SSIM
-                // q:v 1 是最高质量 (0 会导致错误)
-                // 映射: CRF * 1.5，最小值为 1
-                (crf * 1.5).clamp(1.0, 100.0)
+                // 🔥 v5.5: VideoToolbox 反向映射 (高 q:v = 高质量)
+                // CRF 低 = 高质量 → q:v 高 = 高质量
+                // 公式: q:v = 100 - crf * 2
+                (100.0 - crf * 2.0).clamp(1.0, 100.0)
             } else {
                 crf.clamp(self.crf_range.0 as f32, self.crf_range.1 as f32)
             };
@@ -862,10 +865,17 @@ impl CrfMapping {
     /// 打印映射信息
     pub fn print_mapping_info(&self) {
         eprintln!("   📊 GPU/CPU CRF Mapping ({} - {}):", self.gpu_type, self.codec.to_uppercase());
-        eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
+        if self.gpu_type == GpuType::Apple {
+            // 🔥 v5.5: VideoToolbox 特殊说明
+            eprintln!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
+            eprintln!("      • SSIM ceiling: ~0.97 (cannot reach 0.98+)");
+            eprintln!("      • CRF 10 → q:v 80, CRF 20 → q:v 60, CRF 30 → q:v 40");
+        } else {
+            eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
+        }
         eprintln!("      • CPU offset: {:.1} (GPU CRF - {:.1} = CPU CRF)", self.offset, self.offset);
         eprintln!("      • Uncertainty: ±{:.1} CRF", self.uncertainty);
-        eprintln!("      • 💡 CPU fine-tunes within GPU-guided range");
+        eprintln!("      • 💡 CPU fine-tunes for SSIM 0.98+ (GPU max ~0.97)");
     }
 }
 
