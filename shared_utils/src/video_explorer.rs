@@ -2653,7 +2653,7 @@ pub fn explore_with_gpu_coarse_search(
     log_msg!("");
     log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
     log_msg!("   ║  📋 STRATEGY: GPU Coarse → CPU Fine                       ║");
-    log_msg!("   ║  • Phase 1: GPU finds rough boundary (FAST, ignores --cpu)║");
+    log_msg!("   ║  • Phase 1: GPU finds rough boundary (FAST)               ║");
     log_msg!("   ║  • Phase 2: CPU finds precise CRF (ACCURATE)              ║");
     log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
     
