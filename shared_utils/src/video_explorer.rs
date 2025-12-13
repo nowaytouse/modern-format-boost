@@ -1089,31 +1089,52 @@ impl VideoExplorer {
         iterations += 1;
 
         if min_size < self.input_size {
-            // min_crf 能压缩，但可能还能更低！继续向下探索 0.1 步长
+            // min_crf 能压缩，但可能还能更低！继续向下探索
             log_msg!("      ✅ Size: {:+.1}% - Compresses, exploring lower CRF...", self.calc_change_pct(min_size));
             
-            // 🔥 v5.2: 向下探索找真正的边界（0.1 步长）
+            // 🔥 v5.3: 先用 0.5 步长快速向下探索，再用 0.1 精细调整
             let mut best_crf = self.config.min_crf;
             let mut best_size = min_size;
             let absolute_min_crf = 10.0_f32; // 绝对最低 CRF
             
-            log_msg!("   📍 Stage B: Fine-tune below min_crf (0.1 step)");
-            for i in 1..=10 {
-                let test_crf = self.config.min_crf - (i as f32 * 0.1);
-                if test_crf < absolute_min_crf { break; }
-                if iterations >= 15 { break; }
-                
+            // Stage B-1: 0.5 步长快速向下探索
+            log_msg!("   📍 Stage B-1: Fast search below min_crf (0.5 step)");
+            let mut test_crf = self.config.min_crf - 0.5;
+            while test_crf >= absolute_min_crf && iterations < 20 {
                 log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
                 let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
                 iterations += 1;
                 
                 if size < self.input_size {
-                    // 还能压缩！更新最佳值
                     best_crf = test_crf;
                     best_size = size;
                     log_msg!("      ✅ {:+.1}% - New best!", self.calc_change_pct(size));
+                    test_crf -= 0.5;
                 } else {
-                    // 不能压缩了，停止
+                    log_msg!("      ❌ {:+.1}% - Too large, stop", self.calc_change_pct(size));
+                    break;
+                }
+            }
+            
+            // Stage B-2: 0.1 步长精细调整（在 best_crf 附近）
+            log_msg!("   📍 Stage B-2: Fine-tune around CRF {:.1} (0.1 step)", best_crf);
+            for offset in [-0.1_f32, -0.2, -0.3, -0.4] {
+                let fine_crf = best_crf + offset;
+                if fine_crf < absolute_min_crf { break; }
+                if iterations >= 25 { break; }
+                
+                let key = (fine_crf * 10.0).round() as i32;
+                if size_cache.contains_key(&key) { continue; }
+                
+                log_msg!("   🔄 Testing CRF {:.1}...", fine_crf);
+                let size = encode_size_only(fine_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                iterations += 1;
+                
+                if size < self.input_size {
+                    best_crf = fine_crf;
+                    best_size = size;
+                    log_msg!("      ✅ {:+.1}% - New best!", self.calc_change_pct(size));
+                } else {
                     log_msg!("      ❌ {:+.1}% - Too large, stop", self.calc_change_pct(size));
                     break;
                 }
@@ -2711,8 +2732,8 @@ pub fn explore_with_gpu_coarse_search(
             initial_crf,
             min_crf: 10.0,
             max_crf,
-            step: 4.0,
-            max_iterations: 6,
+            step: 2.0,  // 🔥 v5.3: 精细搜索用 2 CRF 步长
+            max_iterations: 10,  // 更多迭代以支持更精细的搜索
         };
         
         match gpu_coarse_search(input, &temp_output, encoder_name, input_size, &gpu_config) {
@@ -2721,14 +2742,13 @@ pub fn explore_with_gpu_coarse_search(
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
-                    // 🔥 v5.2: GPU 只缩小上限，不改变下限！
-                    // GPU 给出的是粗略边界，CPU 仍需完整探索
-                    let (center, _low, high) = get_cpu_search_range_from_gpu(&gpu_result, 10.0, max_crf);
-                    let original_min_crf = 10.0_f32; // 保持原始下限，让 CPU 完整探索
+                    // 🔥 v5.3: GPU 精细搜索（60s + step=2），直接使用 GPU 边界
+                    // GPU 边界已经足够准确，CPU 只需在边界附近精细调整
+                    let (center, low, high) = get_cpu_search_range_from_gpu(&gpu_result, 10.0, max_crf);
                     log_msg!("   ✅ GPU found boundary: CRF {:.0}", gpu_result.gpu_boundary_crf);
-                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (GPU narrowed upper bound only)", original_min_crf, high);
-                    log_msg!("   💡 CPU will explore full range from {:.1} to find true boundary", original_min_crf);
-                    (original_min_crf, high, center)
+                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (GPU-guided)", low, high);
+                    log_msg!("   💡 GPU 60s sampling + step=2 provides accurate boundary");
+                    (low, high, center)
                 } else {
                     // GPU 没找到边界，使用原始范围
                     log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
