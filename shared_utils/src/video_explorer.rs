@@ -455,16 +455,22 @@ impl VideoExplorer {
     /// 
     /// ## 智能终止条件
     /// 1. 输出 > 输入 → 立即停止，使用当前最佳
-    /// 2. SSIM 达到阈值 + 交叉验证通过 → 停止
-    /// 3. SSIM 平台检测 → 停止（继续降低 CRF 无意义）
+    /// 2. SSIM 达到阈值 → 停止
+    /// 3. 二分搜索收敛 → 停止
     /// 
     /// ## 高效搜索策略
-    /// 1. **从 AI 预测 CRF 开始**（而非从最低 CRF）
+    /// 1. **从 quality_matcher 计算的 CRF 开始**（config.initial_crf）
     /// 2. **二分搜索**找到满足阈值的最高 CRF
     /// 3. **精细调整**在最佳点 ±1 CRF 范围
     /// 
+    /// ## 什么是 initial_crf？
+    /// - 来自 `quality_matcher.rs` 的 `calculate_crf()` 函数
+    /// - 根据视频特征（BPP、分辨率、编码器效率）用公式计算
+    /// - 公式: CRF = 46 - 5 × log₂(effective_bpp × 100) + adjustments
+    /// - 不是机器学习，是基于经验的数学公式
+    /// 
     /// ## 质量阈值（可配置）
-    /// - SSIM ≥ 0.99（默认，可调整）
+    /// - SSIM ≥ 0.99（默认）
     /// - PSNR ≥ 40 dB
     /// - VMAF ≥ 90
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
@@ -483,7 +489,7 @@ impl VideoExplorer {
         log_realtime!("🔬 Smart Quality-Match v4.4 ({:?})", self.encoder);
         log_realtime!("   📁 Input: {} bytes ({:.2} MB)", 
             self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
-        log_realtime!("   📐 CRF range: [{:.1}, {:.1}], AI predicted: {:.1}", 
+        log_realtime!("   📐 CRF range: [{:.1}, {:.1}], Calculated: {:.1}", 
             self.config.min_crf, self.config.max_crf, self.config.initial_crf);
         
         // 🔥 v4.4: 实用目标 - 找最高 CRF 且满足质量阈值
@@ -550,9 +556,9 @@ impl VideoExplorer {
         };
         
         // ═══════════════════════════════════════════════════════════
-        // 🔥 v4.4 Phase 1: 从 AI 预测 CRF 开始测试
+        // 🔥 v4.4 Phase 1: 从 quality_matcher 计算的 CRF 开始测试
         // ═══════════════════════════════════════════════════════════
-        log_realtime!("   📍 Phase 1: Test AI predicted CRF {:.1}", self.config.initial_crf);
+        log_realtime!("   📍 Phase 1: Test calculated CRF {:.1}", self.config.initial_crf);
         
         let (initial_size, initial_quality) = test_crf(self.config.initial_crf, &mut tested_crfs, &mut log, self)?;
         iterations += 1;
@@ -561,14 +567,14 @@ impl VideoExplorer {
             best_valid_crf = Some(self.config.initial_crf);
             best_valid_size = initial_size;
             best_valid_quality = initial_quality;
-            log_realtime!("      ✅ AI prediction passes quality threshold!");
+            log_realtime!("      ✅ Calculated CRF passes quality threshold!");
             
             // 🔥 v4.4: 如果输出已经比输入小且质量OK，尝试更高 CRF
             if initial_size < self.input_size {
                 log_realtime!("      📉 Output smaller than input, trying higher CRF for more compression...");
             }
         } else {
-            log_realtime!("      ⚠️ AI prediction below threshold, searching lower CRF...");
+            log_realtime!("      ⚠️ Calculated CRF below threshold, searching lower CRF...");
         }
         
         // ═══════════════════════════════════════════════════════════
