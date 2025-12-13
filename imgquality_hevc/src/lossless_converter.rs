@@ -669,9 +669,9 @@ pub fn convert_to_hevc_mp4_matched(
 
     let explore_result = match flag_mode {
         shared_utils::FlagMode::PreciseQualityWithCompress => {
-            shared_utils::explore_precise_quality_match_with_compression_gpu(
-                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
-                initial_crf, 40.0, 0.91, use_gpu
+            // 🔥 v5.1: 使用 GPU 粗略搜索 + CPU 精细搜索智能化处理
+            shared_utils::explore_hevc_with_gpu_coarse(
+                input, &output, vf_args, initial_crf
             )
         }
         shared_utils::FlagMode::PreciseQuality => {

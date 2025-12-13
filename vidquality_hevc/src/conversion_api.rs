@@ -350,11 +350,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let explore_result = match flag_mode {
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
                         // 模式 6: --explore --match-quality --compress
+                        // 🔥 v5.1: 使用 GPU 粗略搜索 + CPU 精细搜索智能化处理
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_precise_quality_match_with_compression_gpu(
-                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
-                            initial_crf, 40.0, 0.91, use_gpu
+                        shared_utils::explore_hevc_with_gpu_coarse(
+                            input_path, &output_path, vf_args, initial_crf
                         )
                     }
                     shared_utils::FlagMode::PreciseQuality => {
