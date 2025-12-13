@@ -2750,10 +2750,10 @@ pub fn explore_with_gpu_coarse_search(
         
         let gpu_config = GpuCoarseConfig {
             initial_crf,
-            min_crf: 10.0,
+            min_crf: crate::gpu_accel::GPU_DEFAULT_MIN_CRF,  // 🔥 v5.7: 使用常量 (1.0 for VideoToolbox)
             max_crf,
             step: 2.0,  // 🔥 v5.3: 精细搜索用 2 CRF 步长
-            max_iterations: 10,  // 更多迭代以支持更精细的搜索
+            max_iterations: 15,  // 🔥 v5.7: 更多迭代以支持更大 CRF 范围
         };
         
         match gpu_coarse_search(input, &temp_output, encoder_name, input_size, &gpu_config) {
@@ -2762,15 +2762,16 @@ pub fn explore_with_gpu_coarse_search(
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
-                    // 🔥 v5.6: GPU 精细化搜索后，CPU 从 GPU 边界向上搜索
+                    // 🔥 v5.7: GPU 精细化搜索后，CPU 从 GPU 边界向上搜索
                     // GPU 效率低，CPU 效率高，所以 CPU 需要更高 CRF 才能压缩
                     let gpu_crf = gpu_result.gpu_boundary_crf;
                     let mapping = crate::gpu_accel::CrfMapping::hevc(gpu_result.gpu_type);
                     
                     // CPU 搜索范围：从 GPU 边界映射点开始，向上扩展
-                    let cpu_center = (gpu_crf - mapping.offset).max(10.0);
+                    // 🔥 v5.7: 允许 CPU 从更低 CRF 开始（如果 GPU 找到很低的边界）
+                    let cpu_center = (gpu_crf - mapping.offset).max(ABSOLUTE_MIN_CRF);
                     let cpu_min = cpu_center;  // 从映射点开始
-                    let cpu_max = (cpu_center + 10.0).min(max_crf);  // 向上扩展 10 CRF
+                    let cpu_max = (cpu_center + 15.0).min(max_crf);  // 🔥 v5.7: 向上扩展 15 CRF（更大范围）
                     
                     log_msg!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
                     if let Some(size) = gpu_result.gpu_best_size {
