@@ -8,6 +8,11 @@ use std::time::{Duration, Instant};
 
 /// Create a styled progress bar for batch processing with improved ETA
 /// 
+/// 🔥 v5.1: 统一进度条样式，不刷屏
+/// - 使用 \r 覆盖当前行
+/// - 固定宽度，视觉稳定
+/// - 颜色根据进度变化
+/// 
 /// # Example
 /// ```
 /// use shared_utils::create_progress_bar;
@@ -21,13 +26,29 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
     pb.set_style(
         ProgressStyle::default_bar()
-            // 使用 elapsed_precise 替代 eta，更可靠
-            .template("{prefix:.cyan.bold} [{bar:40.green/dim}] {pos}/{len} ({percent}%) | {elapsed_precise} | {msg}")
+            // 🔥 v5.1: 统一样式 - 固定宽度，不刷屏
+            .template("\r{prefix:.cyan.bold} [{bar:40.green/dim}] {pos}/{len} ({percent}%) | {elapsed_precise} | {msg}")
             .expect("Invalid progress bar template")
             .progress_chars("█▓░")
     );
     pb.set_prefix(prefix.to_string());
     pb.enable_steady_tick(Duration::from_millis(100));
+    pb
+}
+
+/// 🔥 v5.1: 创建紧凑型进度条（单行，不刷屏）
+/// 
+/// 适用于需要在同一行更新进度的场景
+pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("\r{prefix:.cyan} [{bar:30.green/dim}] {percent:>3}% ({pos}/{len}) {msg:.dim}")
+            .expect("Invalid progress bar template")
+            .progress_chars("━╸─")
+    );
+    pb.set_prefix(prefix.to_string());
+    pb.enable_steady_tick(Duration::from_millis(200));
     pb
 }
 
