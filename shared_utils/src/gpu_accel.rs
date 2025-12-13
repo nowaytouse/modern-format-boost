@@ -49,7 +49,10 @@ pub const GPU_STAGE3_MAX_ITERATIONS: u32 = 20;
 pub const GPU_MAX_ITERATIONS: u32 = 10;
 
 /// GPU 默认最小 CRF
-pub const GPU_DEFAULT_MIN_CRF: f32 = 10.0;
+/// 🔥 v5.7: VideoToolbox 需要更低 CRF (更高 q:v) 才能达到高 SSIM
+/// CRF 1 → q:v 98 → SSIM ~0.99
+/// CRF 10 → q:v 80 → SSIM ~0.85 (不够高!)
+pub const GPU_DEFAULT_MIN_CRF: f32 = 1.0;
 
 /// GPU 默认最大 CRF
 pub const GPU_DEFAULT_MAX_CRF: f32 = 40.0;
