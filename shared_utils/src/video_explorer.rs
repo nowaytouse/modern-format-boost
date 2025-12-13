@@ -2762,13 +2762,24 @@ pub fn explore_with_gpu_coarse_search(
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
-                    // 🔥 v5.3: GPU 精细搜索（60s + step=2），直接使用 GPU 边界
-                    // GPU 边界已经足够准确，CPU 只需在边界附近精细调整
-                    let (center, low, high) = get_cpu_search_range_from_gpu(&gpu_result, 10.0, max_crf);
-                    log_msg!("   ✅ GPU found boundary: CRF {:.0}", gpu_result.gpu_boundary_crf);
-                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (GPU-guided)", low, high);
-                    log_msg!("   💡 GPU 60s sampling + step=2 provides accurate boundary");
-                    (low, high, center)
+                    // 🔥 v5.4: GPU 精细化搜索后，CPU 从 GPU 边界向上搜索
+                    // GPU 效率低，CPU 效率高，所以 CPU 需要更高 CRF 才能压缩
+                    // GPU CRF 10 能压缩 → CPU 可能需要 CRF 12-15 才能压缩
+                    let gpu_crf = gpu_result.gpu_boundary_crf;
+                    let mapping = crate::gpu_accel::CrfMapping::hevc(gpu_result.gpu_type);
+                    
+                    // CPU 搜索范围：从 GPU 边界映射点开始，向上扩展
+                    let cpu_center = (gpu_crf - mapping.offset).max(10.0);
+                    let cpu_min = cpu_center;  // 从映射点开始
+                    let cpu_max = (cpu_center + 10.0).min(max_crf);  // 向上扩展 10 CRF
+                    
+                    log_msg!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
+                    if let Some(size) = gpu_result.gpu_best_size {
+                        log_msg!("   📊 GPU best size: {} bytes", size);
+                    }
+                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (GPU-guided, search upward)", cpu_min, cpu_max);
+                    log_msg!("   💡 CPU efficiency higher → needs higher CRF to compress");
+                    (cpu_min, cpu_max, cpu_center)
                 } else {
                     // GPU 没找到边界，使用原始范围
                     log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
