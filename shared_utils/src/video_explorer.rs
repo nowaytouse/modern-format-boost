@@ -1070,7 +1070,7 @@ impl VideoExplorer {
             Ok(quality)
         };
 
-        log_msg!("🔬 Quality + Compress v4.13 ({:?})", self.encoder);
+        log_msg!("🔬 CPU Fine Search v4.13 ({:?})", self.encoder);
         log_msg!("   📁 Input: {} bytes ({:.2} MB)", self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
         log_msg!("   🎯 Goal: HIGHEST SSIM with output < input");
         log_msg!("   💡 Strategy: Find lowest CRF that compresses (= highest quality)");
@@ -1079,9 +1079,9 @@ impl VideoExplorer {
         let mut iterations = 0u32;
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 1: 纯大小搜索（从 min_crf 向上搜索找压缩边界）
+        // Stage A: 纯大小搜索（从 min_crf 向上搜索找压缩边界）
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 1: Size-only search (NO SSIM calculation)");
+        log_msg!("   📍 Stage A: Size-only search (NO SSIM calculation)");
 
         // 🔥 关键修复：从 min_crf 开始测试（最高质量）
         log_msg!("   🔄 Testing min CRF {:.1} (highest quality)...", self.config.min_crf);
@@ -1089,10 +1089,45 @@ impl VideoExplorer {
         iterations += 1;
 
         if min_size < self.input_size {
-            // min_crf 就能压缩！这是最佳情况
-            log_msg!("      ✨ Size: {:+.1}% - Compresses at highest quality!", self.calc_change_pct(min_size));
-            log_msg!("   📍 Phase 2: SSIM validation");
-            let quality = validate_ssim(self.config.min_crf, &mut quality_cache, self)?;
+            // min_crf 能压缩，但可能还能更低！继续向下探索 0.1 步长
+            log_msg!("      ✅ Size: {:+.1}% - Compresses, exploring lower CRF...", self.calc_change_pct(min_size));
+            
+            // 🔥 v5.2: 向下探索找真正的边界（0.1 步长）
+            let mut best_crf = self.config.min_crf;
+            let mut best_size = min_size;
+            let absolute_min_crf = 10.0_f32; // 绝对最低 CRF
+            
+            log_msg!("   📍 Stage B: Fine-tune below min_crf (0.1 step)");
+            for i in 1..=10 {
+                let test_crf = self.config.min_crf - (i as f32 * 0.1);
+                if test_crf < absolute_min_crf { break; }
+                if iterations >= 15 { break; }
+                
+                log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
+                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                iterations += 1;
+                
+                if size < self.input_size {
+                    // 还能压缩！更新最佳值
+                    best_crf = test_crf;
+                    best_size = size;
+                    log_msg!("      ✅ {:+.1}% - New best!", self.calc_change_pct(size));
+                } else {
+                    // 不能压缩了，停止
+                    log_msg!("      ❌ {:+.1}% - Too large, stop", self.calc_change_pct(size));
+                    break;
+                }
+            }
+            
+            // 确保输出文件是 best_crf 的版本
+            let best_key = (best_crf * 10.0).round() as i32;
+            if last_encoded_key != best_key {
+                log_msg!("   🔄 Re-encoding to best CRF {:.1}...", best_crf);
+                let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_key, self)?;
+            }
+            
+            log_msg!("   📍 Stage C: SSIM validation");
+            let quality = validate_ssim(best_crf, &mut quality_cache, self)?;
             let ssim = quality.0.unwrap_or(0.0);
 
             let status = if ssim >= 0.999 { "✅ Excellent" }
@@ -1102,13 +1137,13 @@ impl VideoExplorer {
 
             log_msg!("   ═══════════════════════════════════════════════════");
             log_msg!("   📊 RESULT: CRF {:.1}, SSIM {:.6} {}, Size {:+.1}%",
-                self.config.min_crf, ssim, status, self.calc_change_pct(min_size));
-            log_msg!("   📈 Iterations: {} (best case - min CRF compresses)", iterations);
+                best_crf, ssim, status, self.calc_change_pct(best_size));
+            log_msg!("   📈 Iterations: {}", iterations);
 
             return Ok(ExploreResult {
-                optimal_crf: self.config.min_crf,
-                output_size: min_size,
-                size_change_pct: self.calc_change_pct(min_size),
+                optimal_crf: best_crf,
+                output_size: best_size,
+                size_change_pct: self.calc_change_pct(best_size),
                 ssim: quality.0,
                 psnr: quality.1,
                 vmaf: quality.2,
@@ -1176,7 +1211,7 @@ impl VideoExplorer {
         };
 
         // 🔥 二分搜索找压缩边界（最低能压缩的 CRF = 最高质量）
-        log_msg!("   📍 Phase 1: Binary search (0.5 step) with smart termination");
+        log_msg!("   📍 Stage A: Binary search (0.5 step) with smart termination");
         let mut low = self.config.min_crf;  // 不能压缩
         let mut high = self.config.max_crf; // 能压缩
         let mut boundary_crf = self.config.max_crf;
@@ -1222,9 +1257,9 @@ impl VideoExplorer {
         log_msg!("   📍 Boundary (0.5 step): CRF {:.1}", boundary_crf);
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: 0.1 精细调整（在 0.5 边界两侧搜索更精确的点）
+        // Stage B: 0.1 精细调整（在 0.5 边界两侧搜索更精确的点）
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 2: Fine-tune ±0.4 with 0.1 step");
+        log_msg!("   📍 Stage B: Fine-tune ±0.4 with 0.1 step");
 
         // 🔥 v4.12: 双向搜索 + v4.13 智能终止
         let mut best_boundary = boundary_crf;
@@ -1318,9 +1353,9 @@ impl VideoExplorer {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 3: 边界SSIM验证（只算1次）
+        // Stage C: 边界SSIM验证（只算1次）
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 3: SSIM validation at final boundary");
+        log_msg!("   📍 Stage C: SSIM validation at final boundary");
 
         // 确保输出文件是 boundary_crf 的版本
         let boundary_key = (boundary_crf * 10.0).round() as i32;
