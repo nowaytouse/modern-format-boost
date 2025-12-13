@@ -1007,26 +1007,26 @@ impl VideoExplorer {
         })
     }
     
-    /// 🔥 v4.11: 精确质量匹配 + 压缩（--explore + --match-quality + --compress 组合）
+    /// 🔥 v4.12: 精确质量匹配 + 压缩（--explore + --match-quality + --compress 组合）
     ///
     /// ## 目标
     /// 找到**最高 SSIM** 且 **输出 < 输入**
     ///
-    /// ## 🔥 v4.11 核心修复：正确理解"最高SSIM"
+    /// ## 🔥 v4.12 新增：0.1 精细调整
     ///
-    /// ### v4.10 的错误
-    /// - initial_crf 能压缩就直接返回 ❌
-    /// - 但 initial_crf 是"匹配质量"的 CRF，不是"最高质量"
-    /// - 更低的 CRF 可能也能压缩，而且 SSIM 更高！
+    /// ### v4.11 的问题
+    /// - 二分搜索只到 0.5 步进就停止
+    /// - 最终 CRF 只能是 X.0 或 X.5
     ///
-    /// ### v4.11 正确逻辑
-    /// 1. **从 min_crf 开始**（最高质量）
-    /// 2. **向上搜索**找到压缩边界
-    /// 3. 压缩边界 = 最低能压缩的 CRF = **最高质量的压缩点**
+    /// ### v4.12 三阶段搜索
+    /// 1. **Phase 1**: 二分搜索找压缩边界（0.5 步进）
+    /// 2. **Phase 2**: 在边界附近 0.1 精细调整，找更精确的边界
+    /// 3. **Phase 3**: SSIM 验证
     ///
     /// ### 效率优化
-    /// - Phase 1: 纯大小搜索（不算SSIM）
-    /// - Phase 2: 只对边界点算1次SSIM
+    /// - Phase 1: 纯大小搜索（不算SSIM），~5-7 次编码
+    /// - Phase 2: 0.1 精细调整，最多 4 次编码
+    /// - Phase 3: 只对最终边界点算1次SSIM
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
@@ -1069,7 +1069,7 @@ impl VideoExplorer {
             Ok(quality)
         };
 
-        log_msg!("🔬 Quality + Compress v4.11 ({:?})", self.encoder);
+        log_msg!("🔬 Quality + Compress v4.12 ({:?})", self.encoder);
         log_msg!("   📁 Input: {} bytes ({:.2} MB)", self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
         log_msg!("   🎯 Goal: HIGHEST SSIM with output < input");
         log_msg!("   💡 Strategy: Find lowest CRF that compresses (= highest quality)");
@@ -1173,12 +1173,54 @@ impl VideoExplorer {
             }
         }
 
-        log_msg!("   📍 Compression boundary found: CRF {:.1}", boundary_crf);
+        log_msg!("   📍 Compression boundary (0.5 step): CRF {:.1}", boundary_crf);
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: 边界SSIM验证（只算1次）
+        // Phase 2: 0.1 精细调整（在 0.5 边界附近搜索更精确的点）
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 2: SSIM validation at boundary");
+        log_msg!("   📍 Phase 2: Fine-tune with 0.1 step around boundary");
+
+        // 在边界附近测试 -0.4, -0.3, -0.2, -0.1 找到最低能压缩的 CRF
+        // 注意：只往更低 CRF 方向探索（更高质量），因为边界已经是能压缩的最低 0.5 步进点
+        let mut best_boundary = boundary_crf;
+        for offset in [-0.4_f32, -0.3, -0.2, -0.1] {
+            let test_crf = boundary_crf + offset;
+            
+            // 边界检查
+            if test_crf < self.config.min_crf { continue; }
+            if iterations >= 15 { break; }
+            
+            // 跳过已测试的值
+            let key = (test_crf * 10.0).round() as i32;
+            if size_cache.contains_key(&key) { continue; }
+
+            log_msg!("   🔄 Fine-tune: CRF {:.1}...", test_crf);
+            let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+            iterations += 1;
+
+            if size < self.input_size {
+                // 能压缩！更新边界到更低的 CRF（更高质量）
+                best_boundary = test_crf;
+                log_msg!("      ✅ {:+.1}% - New best!", self.calc_change_pct(size));
+            } else {
+                // 不能压缩，停止向更低 CRF 探索
+                log_msg!("      ❌ {:+.1}% - Too large, stop", self.calc_change_pct(size));
+                break;
+            }
+        }
+
+        if best_boundary != boundary_crf {
+            log_msg!("   📍 Refined boundary: {:.1} → {:.1} (saved {:.1} CRF)", 
+                boundary_crf, best_boundary, boundary_crf - best_boundary);
+            boundary_crf = best_boundary;
+        } else {
+            log_msg!("   📍 Boundary unchanged at CRF {:.1}", boundary_crf);
+        }
+
+        // ═══════════════════════════════════════════════════════════
+        // Phase 3: 边界SSIM验证（只算1次）
+        // ═══════════════════════════════════════════════════════════
+        log_msg!("   📍 Phase 3: SSIM validation at final boundary");
 
         // 确保输出文件是 boundary_crf 的版本
         let boundary_key = (boundary_crf * 10.0).round() as i32;
