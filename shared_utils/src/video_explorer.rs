@@ -1304,9 +1304,9 @@ impl VideoExplorer {
             }
         }
 
-        // 如果向下没找到更好的，向上探索确认边界
+        // 如果向下没找到更好的，向上探索找最低能压缩的 CRF（最高质量）
         if best_boundary == boundary_crf {
-            log_msg!("   📍 Searching higher CRF (confirm boundary)...");
+            log_msg!("   📍 Searching higher CRF (find lowest compressible)...");
             fine_tune_history.clear();
             
             for offset in [0.1_f32, 0.2, 0.3, 0.4] {
@@ -1326,19 +1326,22 @@ impl VideoExplorer {
                 fine_tune_history.push(size);
 
                 if size < self.input_size {
-                    log_msg!("      ✅ {:+.1}% - Compresses (higher CRF)", self.calc_change_pct(size));
+                    // 能压缩！这可能是更低的 CRF（更高质量）
+                    // 🔥 v5.2: 更新 best_boundary，继续探索找最低点
+                    best_boundary = test_crf;
+                    log_msg!("      ✅ {:+.1}% - New best! (lower CRF = higher quality)", self.calc_change_pct(size));
                     
-                    // 检查变化率
+                    // 检查变化率，如果变化很小可以提前终止
                     if fine_tune_history.len() >= 2 {
                         let prev = fine_tune_history[fine_tune_history.len() - 2];
                         let rate = calc_change_rate(prev, size);
                         if rate < CHANGE_RATE_THRESHOLD {
-                            log_msg!("   ⚡ Confirm early stop: Δ{:.3}%", rate * 100.0);
+                            log_msg!("   ⚡ Fine-tune early stop: Δ{:.3}%", rate * 100.0);
                             break;
                         }
                     }
                 } else {
-                    log_msg!("      ❌ {:+.1}% - Confirms boundary", self.calc_change_pct(size));
+                    log_msg!("      ❌ {:+.1}% - Too large, stop", self.calc_change_pct(size));
                     break;
                 }
             }
