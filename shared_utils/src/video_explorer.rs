@@ -2762,9 +2762,8 @@ pub fn explore_with_gpu_coarse_search(
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
-                    // 🔥 v5.4: GPU 精细化搜索后，CPU 从 GPU 边界向上搜索
+                    // 🔥 v5.6: GPU 精细化搜索后，CPU 从 GPU 边界向上搜索
                     // GPU 效率低，CPU 效率高，所以 CPU 需要更高 CRF 才能压缩
-                    // GPU CRF 10 能压缩 → CPU 可能需要 CRF 12-15 才能压缩
                     let gpu_crf = gpu_result.gpu_boundary_crf;
                     let mapping = crate::gpu_accel::CrfMapping::hevc(gpu_result.gpu_type);
                     
@@ -2777,8 +2776,14 @@ pub fn explore_with_gpu_coarse_search(
                     if let Some(size) = gpu_result.gpu_best_size {
                         log_msg!("   📊 GPU best size: {} bytes", size);
                     }
+                    if let Some(ssim) = gpu_result.gpu_best_ssim {
+                        let quality_hint = if ssim >= 0.97 { "🟢 Near GPU ceiling" } 
+                                          else if ssim >= 0.95 { "🟡 Good" } 
+                                          else { "🟠 Below expected" };
+                        log_msg!("   📊 GPU best SSIM: {:.6} {}", ssim, quality_hint);
+                        log_msg!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
+                    }
                     log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (GPU-guided, search upward)", cpu_min, cpu_max);
-                    log_msg!("   💡 CPU efficiency higher → needs higher CRF to compress");
                     (cpu_min, cpu_max, cpu_center)
                 } else {
                     // GPU 没找到边界，使用原始范围
