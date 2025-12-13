@@ -4,12 +4,21 @@
 
 **📚 Documentation**: [Algorithm Deep Dive v4.6](./ALGORITHM_DEEP_DIVE_v4.6.md) | [Bug Analysis v4.8](./BUG_ANALYSIS_v4.8.md) | [English](#english) | [中文](#中文)
 
-### 🔥 v4.13 Updates
+### 🔥 v5.3 Updates
 
-- **Smart Termination**: Sliding window variance detection + relative change rate detection for early termination
+- **GPU+CPU Smart Search**: Two-phase intelligent exploration
+  - Phase 1: GPU coarse search (60s sampling, step=2) finds rough boundary FAST
+  - Phase 2: CPU fine search (0.5 step → 0.1 step) finds precise CRF ACCURATELY
+- **Smart Short Video Handling**: Videos < 60s use full duration for GPU sampling with loud warning
+- **Improved Boundary Detection**: GPU returns actual boundary CRF (not +step), CPU explores from there
+- **Stage Naming**: Internal stages renamed to Stage A/B/C to avoid confusion with outer Phase 1/2
+
+### v4.13-v5.2 Updates
+
+- **v5.2**: Fixed Stage B upward search to update best_boundary; GPU only narrows upper bound
+- **v4.13**: Smart termination with sliding window variance + change rate detection
 - **Precision**: Three-phase search: 0.5 step binary search → ±0.4 fine-tune with 0.1 step → SSIM validation
 - **Efficiency**: Reduces encoding iterations by 30-50% on stable content
-- **Bidirectional Search**: Phase 2 searches both lower CRF (higher quality) and higher CRF (confirm boundary)
 
 ### v4.8-v4.12 Updates
 
@@ -432,12 +441,21 @@ modern_format_boost/
 <a id="中文"></a>
 ## 中文
 
-### 🔥 v4.13 更新
+### 🔥 v5.3 更新
 
-- **智能终止**：滑动窗口方差检测 + 相对变化率检测，实现提前终止
+- **GPU+CPU 智能搜索**：两阶段智能探索
+  - Phase 1: GPU 粗略搜索（60秒采样，step=2）快速找到粗略边界
+  - Phase 2: CPU 精细搜索（0.5 步进 → 0.1 步进）精确找到最优 CRF
+- **短视频智能处理**：< 60秒的视频使用完整时长进行 GPU 采样，并响亮警告
+- **改进边界检测**：GPU 返回实际边界 CRF（不再 +step），CPU 从该点继续探索
+- **阶段命名**：内部阶段重命名为 Stage A/B/C，避免与外部 Phase 1/2 混淆
+
+### v4.13-v5.2 更新
+
+- **v5.2**：修复 Stage B 向上搜索更新 best_boundary；GPU 只缩小上限
+- **v4.13**：滑动窗口方差 + 变化率检测实现智能终止
 - **精度**：三阶段搜索：0.5 步进二分搜索 → ±0.4 范围 0.1 步进精细调整 → SSIM 验证
 - **效率**：稳定内容可减少 30-50% 编码次数
-- **双向搜索**：Phase 2 同时向低 CRF（更高质量）和高 CRF（确认边界）方向搜索
 
 ### v4.8-v4.12 更新
 

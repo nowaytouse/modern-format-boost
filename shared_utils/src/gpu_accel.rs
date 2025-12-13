@@ -974,16 +974,37 @@ pub fn gpu_coarse_search(
     // 对于短视频（<60秒），编码整个视频
     // 对于长视频（>60秒），只编码前 60 秒来估算压缩边界
     const GPU_SAMPLE_DURATION: f32 = 60.0;
-    log_msg!("   💡 GPU samples first {:.0}s (accurate estimation)", GPU_SAMPLE_DURATION);
     
-    // 快速编码函数（GPU）- 只编码前 30 秒
+    // 🔥 v5.3: 获取视频时长，智能处理短视频
+    let duration: f32 = {
+        let duration_output = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg(input)
+            .output();
+        
+        duration_output
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+            .unwrap_or(GPU_SAMPLE_DURATION)
+    };
+    
+    // 实际采样时长（短视频使用完整时长）
+    let actual_sample_duration = duration.min(GPU_SAMPLE_DURATION);
+    
+    if duration < GPU_SAMPLE_DURATION {
+        log_msg!("   ⚠️ Short video ({:.1}s < {:.0}s), using full duration for GPU sampling", duration, GPU_SAMPLE_DURATION);
+    } else {
+        log_msg!("   💡 GPU samples first {:.0}s of {:.1}s (accurate estimation)", actual_sample_duration, duration);
+    }
+    
+    // 快速编码函数（GPU）- 只编码前 N 秒
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.get_extra_args();
         
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
-            .arg("-t").arg(format!("{}", GPU_SAMPLE_DURATION))  // 🔥 只编码前 30 秒
+            .arg("-t").arg(format!("{}", actual_sample_duration))  // 🔥 使用实际采样时长
             .arg("-i").arg(input)
             .arg("-c:v").arg(gpu_encoder.name);
         
@@ -1007,28 +1028,14 @@ pub fn gpu_coarse_search(
         Ok(std::fs::metadata(output)?.len())
     };
     
-    // 🔥 计算采样部分的输入大小（按比例估算）
-    // 如果视频 > 30秒，需要按比例计算采样部分的预期大小
-    let sample_input_size = {
-        // 获取视频时长
-        let duration_output = Command::new("ffprobe")
-            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
-            .arg(input)
-            .output();
-        
-        let duration: f32 = duration_output
-            .ok()
-            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-            .unwrap_or(GPU_SAMPLE_DURATION);
-        
-        if duration <= GPU_SAMPLE_DURATION {
-            // 短视频，使用完整大小
-            input_size
-        } else {
-            // 长视频，按比例计算采样部分的预期大小
-            let ratio = GPU_SAMPLE_DURATION / duration;
-            (input_size as f64 * ratio as f64) as u64
-        }
+    // 🔥 v5.3: 计算采样部分的输入大小（按比例估算）
+    let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
+        // 短视频，使用完整大小
+        input_size
+    } else {
+        // 长视频，按比例计算采样部分的预期大小
+        let ratio = actual_sample_duration / duration;
+        (input_size as f64 * ratio as f64) as u64
     };
     
     log_msg!("   📊 Sample input size: {} bytes (for comparison)", sample_input_size);
