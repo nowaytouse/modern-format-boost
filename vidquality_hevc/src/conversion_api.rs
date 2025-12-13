@@ -68,6 +68,9 @@ pub struct ConversionConfig {
     pub in_place: bool,
     /// 🍎 Apple compatibility mode: Convert non-Apple-compatible modern codecs to HEVC
     pub apple_compat: bool,
+    /// 🔥 v4.5: Require compression - output must be smaller than input
+    /// Use with --explore --match-quality for precise quality match + guaranteed compression
+    pub require_compression: bool,
 }
 
 impl Default for ConversionConfig {
@@ -82,6 +85,7 @@ impl Default for ConversionConfig {
             match_quality: false,
             in_place: false,
             apple_compat: false,
+            require_compression: false,
         }
     }
 }
@@ -325,7 +329,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
                 let input_path = Path::new(&detection.file_path);
                 
-                let explore_result = if config.explore_smaller && config.match_quality {
+                let explore_result = if config.explore_smaller && config.match_quality && config.require_compression {
+                    // 🔥 v4.5 模式 4: --explore + --match-quality + --compress（精确质量匹配 + 压缩）
+                    let initial_crf = calculate_matched_crf(&detection);
+                    info!("   🔬 Precise Quality-Match + Compression: CRF {:.1}", initial_crf);
+                    shared_utils::explore_precise_quality_match_with_compression(
+                        input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                        initial_crf, 40.0, 0.91
+                    )
+                } else if config.explore_smaller && config.match_quality {
                     // 模式 3: --explore + --match-quality 组合（精确质量匹配）
                     let initial_crf = calculate_matched_crf(&detection);
                     info!("   🔬 Precise Quality-Match: CRF {:.1} + SSIM validation", initial_crf);

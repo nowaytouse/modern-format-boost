@@ -120,6 +120,7 @@ Static images (JPEG/PNG) always use lossless conversion regardless of these flag
 | `--match-quality` | Quality Match | AI-predicted CRF + SSIM validation | 1 |
 | `--explore` | Size Only | Binary search for smaller output | up to 8 |
 | `--explore --match-quality` | Precise Match | 🔥 **v4.5** Find highest SSIM (best quality match) | ~8-12 |
+| `--explore --match-quality --compress` | Precise+Compress | 🔥 **v4.5** Highest SSIM with output < input | ~10-15 |
 
 #### 🔥 v4.5: Precise Quality Match - Efficient Search
 
@@ -127,12 +128,22 @@ When using `--explore --match-quality` together, the algorithm enables:
 
 **Goal:** Find the **HIGHEST SSIM** (closest to source quality)
 - File size is NOT a concern in this mode
-- Use `--explore` alone if you need smaller output
+- Add `--compress` flag if you need output < input
 
 **Efficient Three-Phase Search:**
 1. **Boundary Test**: Test min/max CRF to determine SSIM range (~2 iterations)
 2. **Plateau Search**: Find SSIM plateau (where lowering CRF no longer improves SSIM) (~4-6 iterations)
 3. **Fine Tuning**: ±1 CRF with step 0.5 (~2-4 iterations)
+
+#### 🔥 v4.5: `--compress` Flag - Precise Match + Compression
+
+When adding `--compress` flag:
+- **Goal**: Find **HIGHEST SSIM** with **output < input**
+- If both cannot be achieved, prioritize compression, then find highest SSIM within compressible range
+
+**Search Strategy:**
+1. **Binary search** to find compression boundary (CRF where output = input)
+2. **Search downward** within compressible range for highest SSIM
 
 **Triple Cross-Validation (SSIM + PSNR + VMAF):**
 - 🟢 All metrics agree → High confidence, early termination
@@ -332,6 +343,7 @@ Options:
       --lossless         Mathematical lossless
       --explore          Binary search for optimal CRF
       --match-quality    Quality matching [default: true]
+      --compress         🔥 Require output < input (use with --explore --match-quality)
       --apple-compat     🍎 Convert AV1/VP9/VVC/AV2 to HEVC for Apple compatibility
 ```
 
@@ -502,6 +514,7 @@ modern_format_boost/
 | `--match-quality` | 质量匹配 | AI 预测 CRF + SSIM 验证 | 1 |
 | `--explore` | 仅大小 | 二分搜索更小输出 | 最多 8 |
 | `--explore --match-quality` | 精确匹配 | 🔥 **v4.5** 找最高 SSIM（最佳质量匹配） | ~8-12 |
+| `--explore --match-quality --compress` | 精确匹配+压缩 | 🔥 **v4.5** 最高 SSIM 且输出 < 输入 | ~10-15 |
 
 #### 🔥 v4.5: 精确质量匹配 - 高效搜索
 
@@ -509,12 +522,22 @@ modern_format_boost/
 
 **目标：** 找到**最高 SSIM**（最接近源质量）
 - 此模式不关心文件大小
-- 如需更小输出，单独使用 `--explore`
+- 如需同时压缩，添加 `--compress` flag
 
 **高效三阶段搜索：**
 1. **边界测试**：测试 min/max CRF 确定 SSIM 范围（~2次迭代）
 2. **平台搜索**：找到 SSIM 平台（继续降低 CRF 不再提升 SSIM 的点）（~4-6次迭代）
 3. **精细调整**：±1 CRF，步长 0.5（~2-4次迭代）
+
+#### 🔥 v4.5: `--compress` Flag - 精确匹配 + 压缩
+
+当添加 `--compress` flag 时：
+- **目标**：找到**最高 SSIM** 且 **输出 < 输入**
+- 如果无法同时满足，优先保证压缩，然后在压缩范围内找最高 SSIM
+
+**搜索策略：**
+1. **二分搜索**找到压缩边界（输出 = 输入的 CRF）
+2. **向下搜索**在能压缩的范围内找最高 SSIM
 
 **三重交叉验证 (SSIM + PSNR + VMAF)：**
 - 🟢 所有指标一致 → 高置信度，提前终止
@@ -703,6 +726,7 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
       --lossless         数学无损
       --explore          二分搜索最优 CRF
       --match-quality    质量匹配 [默认: true]
+      --compress         🔥 要求输出 < 输入（配合 --explore --match-quality 使用）
       --apple-compat     🍎 将 AV1/VP9/VVC/AV2 转换为 HEVC 以兼容 Apple 设备
 ```
 
