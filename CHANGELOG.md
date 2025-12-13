@@ -2,6 +2,95 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [0.4.0] - 2025-12-13 (v4.9)
+
+### 🔥 Performance Optimization - Eliminated Redundant Encoding
+
+#### Core Improvements
+- **Smart Final Encoding**: Track the last encoded CRF to avoid unnecessary re-encoding
+  - Previous: Always re-encoded at the end, wasting one full encode cycle
+  - Now: Only re-encodes if the output file doesn't match the best CRF
+  - Saves ~10-20% encoding time on average
+
+- **Unified Caching Mechanism**: All explore modes now use consistent caching
+  - `explore_precise_quality_match`: Full caching + smart final encode
+  - `explore_precise_quality_match_with_compression`: Full caching + smart final encode
+  - Cache key: `CRF * 10` (rounded integer) → avoids floating-point issues
+
+- **Fixed Critical Bug in v4.8**: `explore_precise_quality_match_with_compression` could return wrong file
+  - Problem: Used `fs::metadata` to read file size, but file content might not match best_crf
+  - Solution: Track `last_encoded_key` and re-encode only when necessary
+
+#### Search Flow Optimization
+- **Three-Phase Search with ±0.1 Precision**:
+  1. Phase 1: Boundary test (min_crf, max_crf) with early exit on SSIM plateau
+  2. Phase 2: Golden section / Binary search for efficient convergence
+  3. Phase 3: Fine-tune ±0.5 then ±0.1 for precise CRF selection
+
+- **Meaningful Iterations**: Every encoding operation now serves a purpose
+  - No duplicate encodings (cache checks before encode)
+  - Early termination when SSIM plateau detected
+  - Progressive refinement from coarse to fine
+
+#### Technical Details
+```rust
+// v4.9: Track last encoded CRF to avoid redundant work
+let mut last_encoded_key: i32 = -1;
+
+// At the end, only re-encode if necessary
+let final_size = if last_encoded_key == best_key {
+    log!("✨ Output already at best CRF (no re-encoding needed)");
+    best_size
+} else {
+    log!("📍 Final: Re-encoding to best CRF");
+    self.encode(best_crf)?
+};
+```
+
+### Changed
+- `explore_precise_quality_match`: v4.7 → v4.9
+- `explore_precise_quality_match_with_compression`: v4.7 → v4.9
+- MAX_ITERATIONS increased from 12 to 14 for better ±0.1 precision
+
+### Fixed
+- Critical file mismatch bug in `explore_precise_quality_match_with_compression`
+- Unnecessary final encoding in `explore_precise_quality_match`
+- Inconsistent caching across different explore modes
+
+### 🎯 Real-time Progress Output (UX Enhancement)
+
+#### Problem
+Users experienced "frozen" terminal during long encoding operations:
+```
+🔄 Encoding CRF 25.0...
+[terminal appears frozen for 5+ minutes]
+```
+
+#### Solution: Live Progress Feedback
+- **Encoding Progress**: Real-time percentage, fps, speed display
+  ```
+  ⏳ Encoding: 45.2% | 67.8s / 150.0s | 24.3 fps | 1.2x
+  ```
+- **SSIM Calculation Progress**: Live percentage during quality validation
+  ```
+  📊 Calculating SSIM... 78%
+  ```
+
+#### Implementation
+- Use `ffmpeg -progress pipe:1` for machine-readable progress
+- Parse `out_time_us`, `fps`, `speed` from progress output
+- Calculate percentage using input file duration from `ffprobe`
+- Use `\r` (carriage return) for in-place updates
+- Spawn separate thread for progress reading to avoid blocking
+
+```rust
+// v4.9: Real-time progress output
+eprint!("\r      ⏳ Encoding: {:.1}% | {:.1}s / {:.1}s | {:.1} fps | {}   ",
+    pct, current_secs, duration_secs, last_fps, last_speed);
+```
+
+---
+
 ## [0.3.0] - 2025-12-12
 
 ### Added

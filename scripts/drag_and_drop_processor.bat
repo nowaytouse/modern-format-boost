@@ -19,12 +19,12 @@ set "IMGQUALITY_HEVC=%PROJECT_ROOT%\imgquality_hevc\target\release\imgquality-he
 set "VIDQUALITY_HEVC=%PROJECT_ROOT%\vidquality_hevc\target\release\vidquality-hevc.exe"
 
 REM 显示欢迎信息
-echo 🚀 Modern Format Boost - 一键处理器 v3.9 (Windows)
+echo 🚀 Modern Format Boost - 一键处理器 v4.8 (Windows)
 echo ==================================================
 echo 📁 处理模式：原地转换（删除原文件）
 echo 📋 XMP合并：自动检测并合并 sidecar 元数据
-echo 🔧 图像参数：--in-place --recursive --match-quality --explore
-echo 🎬 视频参数：--in-place --recursive --match-quality true --explore
+echo 🔧 图像参数：--in-place --recursive --explore --match-quality --compress --cpu
+echo 🎬 视频参数：--in-place --recursive --explore --match-quality true --compress --cpu
 echo ==================================================
 echo.
 
@@ -160,7 +160,7 @@ if %IMG_COUNT% gtr 0 (
     echo 🖼️  开始处理图像文件...
     echo ==================================================
     
-    "%IMGQUALITY_HEVC%" auto "%TARGET_DIR%" --in-place --recursive --match-quality --explore
+    "%IMGQUALITY_HEVC%" auto "%TARGET_DIR%" --in-place --recursive --explore --match-quality --compress --cpu
     
     if errorlevel 1 (
         echo ❌ 图像处理失败
@@ -177,7 +177,7 @@ if %VID_COUNT% gtr 0 (
     echo 🎬 开始处理视频文件...
     echo ==================================================
     
-    "%VIDQUALITY_HEVC%" auto "%TARGET_DIR%" --in-place --recursive --match-quality true --explore
+    "%VIDQUALITY_HEVC%" auto "%TARGET_DIR%" --in-place --recursive --explore --match-quality true --compress --cpu
     
     if errorlevel 1 (
         echo ❌ 视频处理失败

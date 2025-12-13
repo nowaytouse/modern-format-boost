@@ -344,6 +344,8 @@ pub struct VideoExplorer {
     input_size: u64,
     vf_args: Vec<String>,
     max_threads: usize,
+    /// 🔥 v4.9: GPU 加速选项
+    use_gpu: bool,
 }
 
 impl VideoExplorer {
@@ -365,9 +367,17 @@ impl VideoExplorer {
         let input_size = fs::metadata(input)
             .context("Failed to read input file metadata")?
             .len();
-        
+
         let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-        
+
+        // 🔥 v4.9: 自动检测并启用 GPU 加速
+        let gpu = crate::gpu_accel::GpuAccel::detect();
+        let use_gpu = gpu.is_available() && match encoder {
+            VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
+            VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
+            VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
+        };
+
         Ok(Self {
             config,
             encoder,
@@ -376,9 +386,37 @@ impl VideoExplorer {
             input_size,
             vf_args,
             max_threads,
+            use_gpu,
         })
     }
-    
+
+    /// 🔥 v4.9: 创建新的探索器（带 GPU 控制选项）
+    pub fn new_with_gpu(
+        input: &Path,
+        output: &Path,
+        encoder: VideoEncoder,
+        vf_args: Vec<String>,
+        config: ExploreConfig,
+        use_gpu: bool,
+    ) -> Result<Self> {
+        let input_size = fs::metadata(input)
+            .context("Failed to read input file metadata")?
+            .len();
+
+        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+
+        Ok(Self {
+            config,
+            encoder,
+            input_path: input.to_path_buf(),
+            output_path: output.to_path_buf(),
+            input_size,
+            vf_args,
+            max_threads,
+            use_gpu,
+        })
+    }
+
     /// 执行探索（根据模式选择不同策略）
     pub fn explore(&self) -> Result<ExploreResult> {
         match self.config.mode {
@@ -749,18 +787,24 @@ impl VideoExplorer {
     
     /// 模式 3: 精确质量匹配（--explore + --match-quality 组合）
     ///
-    /// 🔥 v4.7: 自适应黄金分割搜索 + 梯度感知
+    /// 🔥 v4.9: 优化效率 - 消除重复编码，统一缓存机制
     ///
     /// ## 目标
     /// 找到**最高 SSIM**（最接近源质量）的 CRF 值
     /// **不关心文件大小**，只关心质量精度
     ///
-    /// ## 改进策略
-    /// 1. **黄金分割搜索**：比二分搜索更高效找极值点
-    /// 2. **自适应步长**：根据 SSIM 梯度动态调整
-    /// 3. **早期终止**：检测到平台立即停止
+    /// ## 优化策略 (v4.9)
+    /// 1. **统一缓存**：所有编码结果缓存，避免重复
+    /// 2. **智能最终编码**：只有当最后编码不是best_crf时才重编码
+    /// 3. **三阶段搜索**：边界→黄金分割→精细调整（±0.1精度）
+    /// 4. **早期终止**：检测到SSIM平台立即停止
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
+        // 🔥 v4.9: 统一缓存 - CRF (x10) -> (size, quality)
+        let mut cache: std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))> =
+            std::collections::HashMap::new();
+        // 🔥 v4.9: 跟踪最后实际编码的 CRF（整数 x10）
+        let mut last_encoded_key: i32 = -1;
 
         macro_rules! log_realtime {
             ($($arg:tt)*) => {{
@@ -770,7 +814,7 @@ impl VideoExplorer {
             }};
         }
 
-        log_realtime!("🔬 Precise Quality-Match v4.7 ({:?})", self.encoder);
+        log_realtime!("🔬 Precise Quality-Match v4.9 ({:?})", self.encoder);
         log_realtime!("   📁 Input: {} bytes ({:.2} MB)",
             self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
         log_realtime!("   📐 CRF range: [{:.1}, {:.1}]",
@@ -778,60 +822,62 @@ impl VideoExplorer {
         log_realtime!("   🎯 Goal: Find HIGHEST SSIM (best quality match)");
         log_realtime!("   ═══════════════════════════════════════════════════");
 
-        let mut tested_crfs: std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))> =
-            std::collections::HashMap::new();
-
         let mut iterations = 0u32;
         const MAX_ITERATIONS: u32 = 15;
-        const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002; // 平台检测阈值
+        const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
 
-        let mut best_crf;
+        let mut best_crf: f32;
+        let mut best_size: u64;
         let mut best_quality: (Option<f64>, Option<f64>, Option<f64>);
         let mut best_ssim: f64;
 
-        // 测试 CRF 的辅助闭包
-        let test_crf = |crf: f32,
-                        tested: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
-                        log: &mut Vec<String>,
-                        explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
+        // 🔥 v4.9: 带缓存和跟踪的编码函数
+        let encode_cached = |crf: f32,
+                            cache: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
+                            last_key: &mut i32,
+                            explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
             let key = (crf * 10.0).round() as i32;
-            if let Some(&cached) = tested.get(&key) {
+            if let Some(&cached) = cache.get(&key) {
                 return Ok(cached);
             }
 
-            eprintln!("   🔄 Encoding CRF {:.1}...", crf);
             let size = explorer.encode(crf)?;
             let quality = explorer.validate_quality()?;
-
-            let ssim_str = quality.0.map(|s| format!("SSIM:{:.6}", s)).unwrap_or_else(|| "SSIM:N/A".to_string());
-            let msg = format!("   CRF {:.1}: {} | Size: {:+.1}%", crf, ssim_str, explorer.calc_change_pct(size));
-            eprintln!("{}", msg);
-            log.push(msg);
-
-            tested.insert(key, (size, quality));
+            cache.insert(key, (size, quality));
+            *last_key = key;  // 更新最后编码的 key
             Ok((size, quality))
         };
 
-        // Phase 1: 测试边界
+        // Phase 1: 边界测试
         log_realtime!("   📍 Phase 1: Boundary test");
-        let (_, min_quality) = test_crf(self.config.min_crf, &mut tested_crfs, &mut log, self)?;
+
+        log_realtime!("   🔄 Testing min CRF {:.1}...", self.config.min_crf);
+        let (min_size, min_quality) = encode_cached(self.config.min_crf, &mut cache, &mut last_encoded_key, self)?;
         iterations += 1;
         let min_ssim = min_quality.0.unwrap_or(0.0);
+        log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
+            self.config.min_crf, min_ssim, self.calc_change_pct(min_size));
+
         best_crf = self.config.min_crf;
+        best_size = min_size;
         best_quality = min_quality;
         best_ssim = min_ssim;
 
-        let (_, max_quality) = test_crf(self.config.max_crf, &mut tested_crfs, &mut log, self)?;
+        log_realtime!("   🔄 Testing max CRF {:.1}...", self.config.max_crf);
+        let (max_size, max_quality) = encode_cached(self.config.max_crf, &mut cache, &mut last_encoded_key, self)?;
         iterations += 1;
         let max_ssim = max_quality.0.unwrap_or(0.0);
+        log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
+            self.config.max_crf, max_ssim, self.calc_change_pct(max_size));
 
         let ssim_range = min_ssim - max_ssim;
         log_realtime!("      SSIM range: {:.6}", ssim_range);
 
-        // 早期终止：SSIM 几乎无变化
+        // 早期终止：SSIM 几乎无变化，选择更高 CRF（更小文件）
         if ssim_range < SSIM_PLATEAU_THRESHOLD {
-            log_realtime!("   ⚡ Early exit: SSIM plateau, using max CRF");
+            log_realtime!("   ⚡ Early exit: SSIM plateau, using max CRF for smaller file");
             best_crf = self.config.max_crf;
+            best_size = max_size;
             best_quality = max_quality;
             best_ssim = max_ssim;
         } else {
@@ -847,52 +893,93 @@ impl VideoExplorer {
                 let mid = low + (high - low) * PHI;
                 let mid_rounded = (mid * 2.0).round() / 2.0;
 
-                let (size, quality) = test_crf(mid_rounded, &mut tested_crfs, &mut log, self)?;
+                log_realtime!("   🔄 Testing CRF {:.1}...", mid_rounded);
+                let (size, quality) = encode_cached(mid_rounded, &mut cache, &mut last_encoded_key, self)?;
                 iterations += 1;
                 let ssim = quality.0.unwrap_or(0.0);
+                log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
+                    mid_rounded, ssim, self.calc_change_pct(size));
 
-                // 更新最佳（优先高 SSIM，相同时选高 CRF）
+                // 更新最佳（优先高 SSIM，相同时选高 CRF = 更小文件）
                 if ssim > best_ssim + 0.00001 || (ssim >= best_ssim - 0.00001 && mid_rounded > best_crf) {
                     best_crf = mid_rounded;
+                    best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
                 }
-                let _ = size; // 此模式不关心大小
 
                 // 检测 SSIM 下降 → 收缩搜索范围
                 if prev_ssim - ssim > SSIM_PLATEAU_THRESHOLD * 2.0 {
                     high = mid_rounded;
-                    log_realtime!("      ↓ SSIM drop at {:.1}, narrowing to [{:.1}, {:.1}]", mid_rounded, low, high);
+                    log_realtime!("      ↓ SSIM drop, narrowing to [{:.1}, {:.1}]", low, high);
                 } else {
                     low = mid_rounded;
                 }
                 prev_ssim = ssim;
             }
 
-            // Phase 3: 精细调整 ±0.5
+            // Phase 3: 精细调整 ±0.5 和 ±0.1
             if iterations < MAX_ITERATIONS {
-                log_realtime!("   📍 Phase 3: Fine-tune ±0.5 around CRF {:.1}", best_crf);
+                log_realtime!("   📍 Phase 3: Fine-tune around CRF {:.1}", best_crf);
+
+                // 先测试 ±0.5
                 for offset in [-0.5_f32, 0.5] {
                     let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
                     if iterations >= MAX_ITERATIONS { break; }
 
-                    let (size, quality) = test_crf(crf, &mut tested_crfs, &mut log, self)?;
+                    log_realtime!("   🔄 Testing CRF {:.1}...", crf);
+                    let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
                     iterations += 1;
                     let ssim = quality.0.unwrap_or(0.0);
+                    log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
                     if ssim > best_ssim + 0.00001 || (ssim >= best_ssim - 0.00001 && crf > best_crf) {
                         best_crf = crf;
+                        best_size = size;
                         best_quality = quality;
                         best_ssim = ssim;
                     }
-                    let _ = size;
+                }
+
+                // 🔥 v4.9: 进一步 ±0.1 精细调整（达到 ±0.1 精度）
+                if iterations < MAX_ITERATIONS {
+                    for offset in [-0.1_f32, 0.1, -0.2, 0.2] {
+                        let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
+                        // 避免重复测试已缓存的值
+                        let key = (crf * 10.0).round() as i32;
+                        if cache.contains_key(&key) { continue; }
+                        if iterations >= MAX_ITERATIONS { break; }
+
+                        log_realtime!("   🔄 Testing CRF {:.1}...", crf);
+                        let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
+                        iterations += 1;
+                        let ssim = quality.0.unwrap_or(0.0);
+                        log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
+
+                        if ssim > best_ssim + 0.00001 || (ssim >= best_ssim - 0.00001 && crf > best_crf) {
+                            best_crf = crf;
+                            best_size = size;
+                            best_quality = quality;
+                            best_ssim = ssim;
+                        }
+                    }
                 }
             }
         }
 
-        // 最终编码
-        log_realtime!("   📍 Final: CRF {:.1}", best_crf);
-        let final_size = self.encode(best_crf)?;
+        // 🔥 v4.9: 智能最终编码 - 只有必要时才重新编码
+        let best_key = (best_crf * 10.0).round() as i32;
+        let (final_size, final_quality) = if last_encoded_key == best_key {
+            // 最后一次编码就是 best_crf，直接使用缓存
+            log_realtime!("   ✨ Output already at best CRF {:.1} (no re-encoding needed)", best_crf);
+            (best_size, best_quality)
+        } else {
+            // 最后一次编码不是 best_crf，需要重新编码
+            log_realtime!("   📍 Final: Re-encoding to best CRF {:.1}", best_crf);
+            let size = self.encode(best_crf)?;
+            (size, best_quality)
+        };
+
         let size_change_pct = self.calc_change_pct(final_size);
 
         let status = if best_ssim >= 0.9999 { "✅ Near-Lossless" }
@@ -903,7 +990,7 @@ impl VideoExplorer {
 
         log_realtime!("   ═══════════════════════════════════════════════════");
         log_realtime!("   📊 RESULT: CRF {:.1}, SSIM {:.6} {}, Size {:+.1}%", best_crf, best_ssim, status, size_change_pct);
-        log_realtime!("   📈 Iterations: {}", iterations);
+        log_realtime!("   📈 Iterations: {} (cache hits saved encoding time)", iterations);
 
         let quality_passed = best_ssim >= self.config.quality_thresholds.min_ssim;
 
@@ -911,26 +998,40 @@ impl VideoExplorer {
             optimal_crf: best_crf,
             output_size: final_size,
             size_change_pct,
-            ssim: best_quality.0,
-            psnr: best_quality.1,
-            vmaf: best_quality.2,
+            ssim: final_quality.0,
+            psnr: final_quality.1,
+            vmaf: final_quality.2,
             iterations,
             quality_passed,
             log,
         })
     }
     
-    /// 🔥 v4.7: 精确质量匹配 + 压缩（--explore + --match-quality + --compress 组合）
+    /// 🔥 v4.11: 精确质量匹配 + 压缩（--explore + --match-quality + --compress 组合）
     ///
     /// ## 目标
     /// 找到**最高 SSIM** 且 **输出 < 输入**
     ///
-    /// ## 改进策略
-    /// 1. 二分搜索找压缩边界
-    /// 2. 在边界向下搜索找最高 SSIM
-    /// 3. 精简代码，减少重复
+    /// ## 🔥 v4.11 核心修复：正确理解"最高SSIM"
+    ///
+    /// ### v4.10 的错误
+    /// - initial_crf 能压缩就直接返回 ❌
+    /// - 但 initial_crf 是"匹配质量"的 CRF，不是"最高质量"
+    /// - 更低的 CRF 可能也能压缩，而且 SSIM 更高！
+    ///
+    /// ### v4.11 正确逻辑
+    /// 1. **从 min_crf 开始**（最高质量）
+    /// 2. **向上搜索**找到压缩边界
+    /// 3. 压缩边界 = 最低能压缩的 CRF = **最高质量的压缩点**
+    ///
+    /// ### 效率优化
+    /// - Phase 1: 纯大小搜索（不算SSIM）
+    /// - Phase 2: 只对边界点算1次SSIM
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
+        let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
+        let mut quality_cache: std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)> = std::collections::HashMap::new();
+        let mut last_encoded_key: i32 = -1;
 
         macro_rules! log_msg {
             ($($arg:tt)*) => {{
@@ -940,23 +1041,98 @@ impl VideoExplorer {
             }};
         }
 
-        log_msg!("🔬 Quality + Compress v4.7 ({:?})", self.encoder);
-        log_msg!("   📁 Input: {} bytes", self.input_size);
+        // 仅编码（不计算SSIM）
+        let encode_size_only = |crf: f32,
+                               size_cache: &mut std::collections::HashMap<i32, u64>,
+                               last_key: &mut i32,
+                               explorer: &VideoExplorer| -> Result<u64> {
+            let key = (crf * 10.0).round() as i32;
+            if let Some(&size) = size_cache.get(&key) {
+                return Ok(size);
+            }
+            let size = explorer.encode(crf)?;
+            size_cache.insert(key, size);
+            *last_key = key;
+            Ok(size)
+        };
+
+        // 计算SSIM
+        let validate_ssim = |crf: f32,
+                            quality_cache: &mut std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)>,
+                            explorer: &VideoExplorer| -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
+            let key = (crf * 10.0).round() as i32;
+            if let Some(&quality) = quality_cache.get(&key) {
+                return Ok(quality);
+            }
+            let quality = explorer.validate_quality()?;
+            quality_cache.insert(key, quality);
+            Ok(quality)
+        };
+
+        log_msg!("🔬 Quality + Compress v4.11 ({:?})", self.encoder);
+        log_msg!("   📁 Input: {} bytes ({:.2} MB)", self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
         log_msg!("   🎯 Goal: HIGHEST SSIM with output < input");
+        log_msg!("   💡 Strategy: Find lowest CRF that compresses (= highest quality)");
         log_msg!("   ═══════════════════════════════════════════════════");
 
         let mut iterations = 0u32;
-        const MAX_ITERATIONS: u32 = 12;
 
-        // Phase 1: 测试 max_crf 确认能否压缩
-        log_msg!("   📍 Phase 1: Test max CRF {:.1}", self.config.max_crf);
-        let max_size = self.encode(self.config.max_crf)?;
+        // ═══════════════════════════════════════════════════════════
+        // Phase 1: 纯大小搜索（从 min_crf 向上搜索找压缩边界）
+        // ═══════════════════════════════════════════════════════════
+        log_msg!("   📍 Phase 1: Size-only search (NO SSIM calculation)");
+
+        // 🔥 关键修复：从 min_crf 开始测试（最高质量）
+        log_msg!("   🔄 Testing min CRF {:.1} (highest quality)...", self.config.min_crf);
+        let min_size = encode_size_only(self.config.min_crf, &mut size_cache, &mut last_encoded_key, self)?;
+        iterations += 1;
+
+        if min_size < self.input_size {
+            // min_crf 就能压缩！这是最佳情况
+            log_msg!("      ✨ Size: {:+.1}% - Compresses at highest quality!", self.calc_change_pct(min_size));
+            log_msg!("   📍 Phase 2: SSIM validation");
+            let quality = validate_ssim(self.config.min_crf, &mut quality_cache, self)?;
+            let ssim = quality.0.unwrap_or(0.0);
+
+            let status = if ssim >= 0.999 { "✅ Excellent" }
+                else if ssim >= 0.99 { "✅ Very Good" }
+                else if ssim >= 0.98 { "✅ Good" }
+                else { "✅ Acceptable" };
+
+            log_msg!("   ═══════════════════════════════════════════════════");
+            log_msg!("   📊 RESULT: CRF {:.1}, SSIM {:.6} {}, Size {:+.1}%",
+                self.config.min_crf, ssim, status, self.calc_change_pct(min_size));
+            log_msg!("   📈 Iterations: {} (best case - min CRF compresses)", iterations);
+
+            return Ok(ExploreResult {
+                optimal_crf: self.config.min_crf,
+                output_size: min_size,
+                size_change_pct: self.calc_change_pct(min_size),
+                ssim: quality.0,
+                psnr: quality.1,
+                vmaf: quality.2,
+                iterations,
+                quality_passed: true,
+                log,
+            });
+        }
+
+        log_msg!("      Size: {:+.1}% - Too large, need higher CRF", self.calc_change_pct(min_size));
+
+        // 测试 max_crf 确认能否压缩
+        log_msg!("   🔄 Testing max CRF {:.1} (lowest quality)...", self.config.max_crf);
+        let max_size = encode_size_only(self.config.max_crf, &mut size_cache, &mut last_encoded_key, self)?;
         iterations += 1;
 
         if max_size >= self.input_size {
-            // 无法压缩
-            log_msg!("   ⚠️ Cannot compress even at max CRF");
-            let quality = self.validate_quality()?;
+            // 即使 max_crf 也无法压缩
+            log_msg!("      Size: {:+.1}% - Cannot compress even at max CRF!", self.calc_change_pct(max_size));
+            log_msg!("   ⚠️ File is already highly compressed");
+            let quality = validate_ssim(self.config.max_crf, &mut quality_cache, self)?;
+
+            log_msg!("   ═══════════════════════════════════════════════════");
+            log_msg!("   📊 RESULT: Cannot compress this file");
+
             return Ok(ExploreResult {
                 optimal_crf: self.config.max_crf,
                 output_size: max_size,
@@ -970,111 +1146,82 @@ impl VideoExplorer {
             });
         }
 
-        // max_crf 能压缩，初始化最佳值
-        let max_quality = self.validate_quality()?;
-        let mut best_crf = Some(self.config.max_crf);
-        let mut best_quality = max_quality;
-        let mut best_ssim = max_quality.0.unwrap_or(0.0);
-        log_msg!("      ✅ Max CRF compresses, SSIM {:.6}", best_ssim);
+        log_msg!("      Size: {:+.1}% - Compresses", self.calc_change_pct(max_size));
 
-        // Phase 2: 二分搜索找最低能压缩的 CRF
-        log_msg!("   📍 Phase 2: Binary search for lowest compressing CRF");
-        let mut low = self.config.initial_crf;
-        let mut high = self.config.max_crf;
+        // 🔥 二分搜索找压缩边界（最低能压缩的 CRF = 最高质量）
+        log_msg!("   📍 Binary search for compression boundary...");
+        let mut low = self.config.min_crf;  // 不能压缩
+        let mut high = self.config.max_crf; // 能压缩
+        let mut boundary_crf = self.config.max_crf;
 
-        while high - low > 1.0 && iterations < MAX_ITERATIONS {
-            let mid = ((low + high) / 2.0).round();
+        while high - low > 0.5 && iterations < 12 {
+            let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
 
-            let size = self.encode(mid as f32)?;
+            log_msg!("   🔄 Testing CRF {:.1}...", mid);
+            let size = encode_size_only(mid, &mut size_cache, &mut last_encoded_key, self)?;
             iterations += 1;
 
             if size < self.input_size {
-                // 能压缩，验证质量并尝试更低 CRF
-                let quality = self.validate_quality()?;
-                let ssim = quality.0.unwrap_or(0.0);
-
-                if ssim > best_ssim {
-                    best_crf = Some(mid as f32);
-                    best_quality = quality;
-                    best_ssim = ssim;
-                    log_msg!("      ✅ CRF {:.0}: SSIM {:.6} (new best)", mid, ssim);
-                }
+                // 能压缩，记录并尝试更低 CRF（更高质量）
+                boundary_crf = mid;
                 high = mid;
+                log_msg!("      ✅ {:+.1}% - Compresses, trying lower CRF", self.calc_change_pct(size));
             } else {
-                log_msg!("      ❌ CRF {:.0}: too large", mid);
+                // 不能压缩，需要更高 CRF
                 low = mid;
+                log_msg!("      ❌ {:+.1}% - Too large, trying higher CRF", self.calc_change_pct(size));
             }
         }
 
-        // Phase 3: 精细调整 ±0.5
-        if let Some(boundary) = best_crf {
-            if iterations < MAX_ITERATIONS {
-                log_msg!("   📍 Phase 3: Fine-tune around CRF {:.1}", boundary);
-                for offset in [-0.5_f32, -1.0] {
-                    let crf = (boundary + offset).max(self.config.min_crf);
-                    if iterations >= MAX_ITERATIONS { break; }
+        log_msg!("   📍 Compression boundary found: CRF {:.1}", boundary_crf);
 
-                    let size = self.encode(crf)?;
-                    iterations += 1;
+        // ═══════════════════════════════════════════════════════════
+        // Phase 2: 边界SSIM验证（只算1次）
+        // ═══════════════════════════════════════════════════════════
+        log_msg!("   📍 Phase 2: SSIM validation at boundary");
 
-                    if size >= self.input_size {
-                        log_msg!("      ❌ CRF {:.1}: doesn't compress", crf);
-                        break;
-                    }
-
-                    let quality = self.validate_quality()?;
-                    let ssim = quality.0.unwrap_or(0.0);
-
-                    if ssim > best_ssim {
-                        best_crf = Some(crf);
-                        best_quality = quality;
-                        best_ssim = ssim;
-                        log_msg!("      ✅ CRF {:.1}: SSIM {:.6} (new best)", crf, ssim);
-                    }
-                }
-            }
+        // 确保输出文件是 boundary_crf 的版本
+        let boundary_key = (boundary_crf * 10.0).round() as i32;
+        if last_encoded_key != boundary_key {
+            log_msg!("   🔄 Re-encoding to boundary CRF {:.1}...", boundary_crf);
+            let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_key, self)?;
         }
 
-        // 🔥 v4.8: 避免重复编码，直接使用已知的最佳结果
-        // best_crf 对应的文件已经在之前的搜索中生成
-        let final_crf = best_crf.unwrap_or(self.config.max_crf);
-        
-        // 获取最终文件大小（文件已存在，只需读取 metadata）
-        let final_size = std::fs::metadata(&self.output_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
+        let ssim = quality.0.unwrap_or(0.0);
+        let final_size = *size_cache.get(&boundary_key).unwrap();
+
         let size_change_pct = self.calc_change_pct(final_size);
-        let compressed = final_size < self.input_size;
-
-        let status = if best_ssim >= 0.999 { "✅ Excellent" }
-            else if best_ssim >= 0.99 { "✅ Very Good" }
-            else if best_ssim >= 0.98 { "✅ Good" }
+        let status = if ssim >= 0.999 { "✅ Excellent" }
+            else if ssim >= 0.99 { "✅ Very Good" }
+            else if ssim >= 0.98 { "✅ Good" }
             else { "✅ Acceptable" };
 
         log_msg!("   ═══════════════════════════════════════════════════");
         log_msg!("   📊 RESULT: CRF {:.1}, SSIM {:.6} {}, Size {:+.1}%",
-            final_crf, best_ssim, status, size_change_pct);
-        if compressed {
-            log_msg!("      ✅ Saved {} bytes", self.input_size - final_size);
-        }
-        log_msg!("   📈 Iterations: {}", iterations);
+            boundary_crf, ssim, status, size_change_pct);
+        log_msg!("      ✅ Saved {} bytes ({:.2} MB)",
+            self.input_size - final_size,
+            (self.input_size - final_size) as f64 / 1024.0 / 1024.0);
+        log_msg!("   📈 Iterations: {} (SSIM calculated only {} time)", iterations, quality_cache.len());
 
         Ok(ExploreResult {
-            optimal_crf: final_crf,
+            optimal_crf: boundary_crf,
             output_size: final_size,
             size_change_pct,
-            ssim: best_quality.0,
-            psnr: best_quality.1,
-            vmaf: best_quality.2,
+            ssim: quality.0,
+            psnr: quality.1,
+            vmaf: quality.2,
             iterations,
-            quality_passed: best_ssim >= self.config.quality_thresholds.min_ssim,
+            quality_passed: ssim >= self.config.quality_thresholds.min_ssim,
             log,
         })
     }
-    
+
     /// 🔥 v4.1: 检查交叉验证一致性
-    /// 
+    ///
     /// 当多个质量指标一致时，可以更快确认最优点
+    #[allow(dead_code)]  // 保留供将来使用
     fn check_cross_validation_consistency(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> CrossValidationResult {
         let t = &self.config.quality_thresholds;
         
@@ -1100,11 +1247,12 @@ impl VideoExplorer {
     }
     
     /// 🔥 v4.1: 计算综合质量评分
-    /// 
+    ///
     /// 综合 SSIM、PSNR、VMAF 计算加权评分
     /// - SSIM 权重: 50% (主要指标)
     /// - VMAF 权重: 35% (感知质量)
     /// - PSNR 权重: 15% (参考指标)
+    #[allow(dead_code)]  // 保留供将来使用
     fn calculate_composite_score(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> f64 {
         let ssim = quality.0.unwrap_or(0.0);
         let psnr = quality.1.unwrap_or(0.0);
@@ -1129,11 +1277,12 @@ impl VideoExplorer {
             // 仅 SSIM
             ssim_norm
         };
-        
+
         score
     }
-    
+
     /// 格式化质量指标字符串
+    #[allow(dead_code)]  // 保留供将来使用
     fn format_quality_metrics(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> String {
         let mut parts = Vec::new();
         if let Some(ssim) = quality.0 {
@@ -1153,39 +1302,209 @@ impl VideoExplorer {
     }
     
     /// 编码视频
-    /// 🔥 v3.4: crf 参数改为 f32，支持小数点精度 (如 23.5)
+    /// 🔥 v4.9: GPU 加速 + 实时进度输出
     fn encode(&self, crf: f32) -> Result<u64> {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::Stdio;
+
         let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-threads").arg(self.max_threads.to_string())
+        cmd.arg("-y");
+
+        // 🔥 v4.9: GPU 加速编码
+        let gpu = crate::gpu_accel::GpuAccel::detect();
+        let (encoder_name, crf_args, extra_args, accel_type) = if self.use_gpu {
+            match self.encoder {
+                VideoEncoder::Hevc => {
+                    if let Some(enc) = gpu.get_hevc_encoder() {
+                        (
+                            enc.name,
+                            enc.get_crf_args(crf),
+                            enc.get_extra_args(),
+                            format!("🚀 GPU ({})", gpu.gpu_type),
+                        )
+                    } else {
+                        (
+                            self.encoder.ffmpeg_name(),
+                            vec!["-crf".to_string(), format!("{:.1}", crf)],
+                            vec![],
+                            "CPU".to_string(),
+                        )
+                    }
+                }
+                VideoEncoder::Av1 => {
+                    if let Some(enc) = gpu.get_av1_encoder() {
+                        (
+                            enc.name,
+                            enc.get_crf_args(crf),
+                            enc.get_extra_args(),
+                            format!("🚀 GPU ({})", gpu.gpu_type),
+                        )
+                    } else {
+                        (
+                            self.encoder.ffmpeg_name(),
+                            vec!["-crf".to_string(), format!("{:.1}", crf)],
+                            vec![],
+                            "CPU".to_string(),
+                        )
+                    }
+                }
+                VideoEncoder::H264 => {
+                    if let Some(enc) = gpu.get_h264_encoder() {
+                        (
+                            enc.name,
+                            enc.get_crf_args(crf),
+                            enc.get_extra_args(),
+                            format!("🚀 GPU ({})", gpu.gpu_type),
+                        )
+                    } else {
+                        (
+                            self.encoder.ffmpeg_name(),
+                            vec!["-crf".to_string(), format!("{:.1}", crf)],
+                            vec![],
+                            "CPU".to_string(),
+                        )
+                    }
+                }
+            }
+        } else {
+            (
+                self.encoder.ffmpeg_name(),
+                vec!["-crf".to_string(), format!("{:.1}", crf)],
+                vec![],
+                "CPU".to_string(),
+            )
+        };
+
+        // 基础参数
+        cmd.arg("-threads").arg(self.max_threads.to_string())
             .arg("-i").arg(&self.input_path)
-            .arg("-c:v").arg(self.encoder.ffmpeg_name())
-            .arg("-crf").arg(format!("{:.1}", crf)) // 🔥 支持小数点 CRF
-            .arg("-preset").arg("medium");
-        
-        for arg in self.encoder.extra_args(self.max_threads) {
+            .arg("-c:v").arg(encoder_name);
+
+        // CRF/质量参数
+        for arg in &crf_args {
             cmd.arg(arg);
         }
-        
+
+        // GPU 特定的额外参数
+        for arg in &extra_args {
+            cmd.arg(*arg);
+        }
+
+        // CPU 编码的 preset（GPU 编码通常不需要）
+        if !self.use_gpu || extra_args.is_empty() {
+            cmd.arg("-preset").arg("medium");
+        }
+
+        // 进度输出
+        cmd.arg("-progress").arg("pipe:1")
+            .arg("-stats_period").arg("0.5");
+
+        // CPU 编码器特定参数
+        if !self.use_gpu {
+            for arg in self.encoder.extra_args(self.max_threads) {
+                cmd.arg(arg);
+            }
+        }
+
+        // 视频滤镜
         for arg in &self.vf_args {
             cmd.arg(arg);
         }
-        
+
         cmd.arg(&self.output_path);
-        
-        let output = cmd.output()
-            .context("Failed to execute ffmpeg")?;
-        
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("ffmpeg encoding failed: {}", stderr);
+
+        // 🔥 v4.12: 修复管道死锁 - stderr 必须被消耗
+        cmd.stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
+            .context("Failed to spawn ffmpeg")?;
+
+        // 获取输入文件的时长（用于计算进度百分比）
+        let duration_secs = self.get_input_duration().unwrap_or(0.0);
+
+        // 🔥 v4.12: 后台线程排空 stderr，防止缓冲区满导致死锁
+        let stderr_handle = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = [0u8; 4096];
+                let mut stderr = stderr;
+                while let Ok(n) = stderr.read(&mut buf) {
+                    if n == 0 { break; }
+                }
+            })
+        });
+
+        // 🔥 实时读取 stdout（-progress 输出）
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let mut last_time_us: u64 = 0;
+            let mut last_fps: f64 = 0.0;
+            let mut last_speed: String = String::new();
+
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if let Some(val) = line.strip_prefix("out_time_us=") {
+                        if let Ok(time_us) = val.parse::<u64>() {
+                            last_time_us = time_us;
+                        }
+                    } else if let Some(val) = line.strip_prefix("fps=") {
+                        if let Ok(fps) = val.parse::<f64>() {
+                            last_fps = fps;
+                        }
+                    } else if let Some(val) = line.strip_prefix("speed=") {
+                        last_speed = val.to_string();
+                    } else if line == "progress=continue" || line == "progress=end" {
+                        let current_secs = last_time_us as f64 / 1_000_000.0;
+                        if duration_secs > 0.0 {
+                            let pct = (current_secs / duration_secs * 100.0).min(100.0);
+                            eprint!("\r      ⏳ {} {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
+                                accel_type, pct, current_secs, duration_secs, last_fps, last_speed.trim());
+                        } else {
+                            eprint!("\r      ⏳ {} {:.1}s | {:.0}fps | {}   ",
+                                accel_type, current_secs, last_fps, last_speed.trim());
+                        }
+                        let _ = std::io::stderr().flush();
+                    }
+                }
+            }
         }
-        
+
+        // 等待 stderr 线程完成
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
+
+        // 等待进程完成
+        let status = child.wait()
+            .context("Failed to wait for ffmpeg")?;
+
+        // 清除进度行并换行
+        eprintln!("\r      ✅ {} Encoding complete                                    ", accel_type);
+
+        if !status.success() {
+            bail!("ffmpeg encoding failed with exit code: {:?}", status.code());
+        }
+
         let size = fs::metadata(&self.output_path)
             .context("Failed to read output file")?
             .len();
-        
+
         Ok(size)
+    }
+
+    /// 获取输入文件时长（秒）
+    fn get_input_duration(&self) -> Option<f64> {
+        let output = Command::new("ffprobe")
+            .arg("-v").arg("error")
+            .arg("-show_entries").arg("format=duration")
+            .arg("-of").arg("default=noprint_wrappers=1:nokey=1")
+            .arg(&self.input_path)
+            .output()
+            .ok()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.trim().parse::<f64>().ok()
     }
     
     /// 计算大小变化百分比
@@ -1219,57 +1538,111 @@ impl VideoExplorer {
     }
     
     /// 计算 SSIM（增强版：更严格的解析和验证）
-    /// 
+    ///
+    /// 🔥 v4.9: 添加实时进度输出
     /// 🔥 精确度改进 v3.2：
     /// - 使用 scale 滤镜处理分辨率差异（HEVC 要求偶数分辨率）
     /// - 更严格的解析逻辑
     /// - 验证 SSIM 值在有效范围内
     /// - 失败时响亮报错
     fn calculate_ssim(&self) -> Result<Option<f64>> {
+        use std::io::{BufRead, BufReader};
+        use std::process::Stdio;
+
+        eprint!("      📊 Calculating SSIM...");
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+
         // 🔥 v3.2: 使用 scale 滤镜将输入缩放到输出分辨率
-        // HEVC 编码器会将奇数分辨率调整为偶数，导致 SSIM 计算失败
-        // 滤镜链：[0:v]scale=iw:ih:flags=bicubic[ref];[ref][1:v]ssim
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim=stats_file=-";
-        
-        let output = Command::new("ffmpeg")
-            .arg("-i").arg(&self.input_path)
+
+        let duration_secs = self.get_input_duration().unwrap_or(0.0);
+
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-i").arg(&self.input_path)
             .arg("-i").arg(&self.output_path)
             .arg("-lavfi").arg(filter)
+            .arg("-progress").arg("pipe:1")
+            .arg("-stats_period").arg("1")
             .arg("-f").arg("null")
             .arg("-")
-            .output();
-        
-        match output {
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                
-                // 🔥 更严格的解析：查找 "All:" 后的数值
-                for line in stderr.lines() {
-                    if let Some(pos) = line.find("All:") {
-                        let value_str = &line[pos + 4..];
-                        let value_str = value_str.trim_start();
-                        // 提取数字部分（包括小数点）
-                        let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
-                            .unwrap_or(value_str.len());
-                        if end > 0 {
-                            if let Ok(ssim) = value_str[..end].parse::<f64>() {
-                                // 🔥 裁判验证：SSIM 必须在 [0, 1] 范围内
-                                if precision::is_valid_ssim(ssim) {
-                                    return Ok(Some(ssim));
-                                }
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
+            .context("Failed to spawn ffmpeg for SSIM")?;
+
+        let mut ssim_value: Option<f64> = None;
+
+        // 同时读取 stdout（进度）和 stderr（结果）
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        // 在单独的线程读取进度
+        let progress_handle = if let Some(stdout) = stdout {
+            Some(std::thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                let mut last_time_us: u64 = 0;
+
+                for line in reader.lines().flatten() {
+                    if let Some(val) = line.strip_prefix("out_time_us=") {
+                        if let Ok(time_us) = val.parse::<u64>() {
+                            last_time_us = time_us;
+                        }
+                    } else if line == "progress=continue" || line == "progress=end" {
+                        let current_secs = last_time_us as f64 / 1_000_000.0;
+                        if duration_secs > 0.0 {
+                            let pct = (current_secs / duration_secs * 100.0).min(100.0);
+                            eprint!("\r      📊 Calculating SSIM... {:.0}%   ", pct);
+                        }
+                        let _ = std::io::stderr().flush();
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        // 读取 stderr 获取 SSIM 结果
+        if let Some(stderr) = stderr {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                if let Some(pos) = line.find("All:") {
+                    let value_str = &line[pos + 4..];
+                    let value_str = value_str.trim_start();
+                    let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
+                        .unwrap_or(value_str.len());
+                    if end > 0 {
+                        if let Ok(ssim) = value_str[..end].parse::<f64>() {
+                            if precision::is_valid_ssim(ssim) {
+                                ssim_value = Some(ssim);
                             }
                         }
                     }
                 }
-                
-                // 如果没有找到 SSIM 但命令成功，返回 None（可能是格式问题）
-                Ok(None)
-            }
-            Err(e) => {
-                // 🔥 响亮报错：ffmpeg 执行失败
-                bail!("Failed to execute ffmpeg for SSIM calculation: {}", e)
             }
         }
+
+        // 等待进度线程完成
+        if let Some(handle) = progress_handle {
+            let _ = handle.join();
+        }
+
+        // 等待进程完成
+        let status = child.wait()
+            .context("Failed to wait for ffmpeg SSIM")?;
+
+        if ssim_value.is_some() {
+            eprintln!("\r      📊 SSIM: {:.6}                    ", ssim_value.unwrap());
+        } else {
+            eprintln!("\r      📊 SSIM: N/A                          ");
+        }
+
+        if !status.success() && ssim_value.is_none() {
+            bail!("ffmpeg SSIM calculation failed");
+        }
+
+        Ok(ssim_value)
     }
     
     /// 计算 PSNR（增强版：更严格的解析和验证）
@@ -1511,7 +1884,7 @@ pub fn explore_compress_only(
 }
 
 /// 🔥 v4.6: 压缩 + 粗略质量验证（--compress --match-quality 组合）
-/// 
+///
 /// 确保输出 < 输入 + SSIM >= 0.95
 pub fn explore_compress_with_quality(
     input: &Path,
@@ -1523,6 +1896,99 @@ pub fn explore_compress_with_quality(
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
     VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v4.15: GPU 控制变体 - 支持强制 CPU 编码
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v4.15: 精确质量匹配 + 压缩（带 GPU 控制）
+///
+/// 与 `explore_precise_quality_match_with_compression` 相同，但可以显式控制 GPU/CPU 编码
+/// - `use_gpu: true` → 使用 GPU 加速（VideoToolbox/NVENC 等）
+/// - `use_gpu: false` → 强制 CPU 编码（libx265）以获得更高 SSIM（0.98+）
+pub fn explore_precise_quality_match_with_compression_gpu(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+    min_ssim: f64,
+    use_gpu: bool,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+}
+
+/// 🔥 v4.15: 精确质量匹配（带 GPU 控制）
+pub fn explore_precise_quality_match_gpu(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+    min_ssim: f64,
+    use_gpu: bool,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+}
+
+/// 🔥 v4.15: 仅压缩（带 GPU 控制）
+pub fn explore_compress_only_gpu(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+    use_gpu: bool,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::compress_only(initial_crf, max_crf);
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+}
+
+/// 🔥 v4.15: 压缩 + 质量验证（带 GPU 控制）
+pub fn explore_compress_with_quality_gpu(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+    use_gpu: bool,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+}
+
+/// 🔥 v4.15: 仅探索大小（带 GPU 控制）
+pub fn explore_size_only_gpu(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+    use_gpu: bool,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::size_only(initial_crf, max_crf);
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+}
+
+/// 🔥 v4.15: 仅匹配质量（带 GPU 控制）
+pub fn explore_quality_match_gpu(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    predicted_crf: f32,
+    use_gpu: bool,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::quality_match(predicted_crf);
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
 }
 
 /// 快速探索（仅基于大小，不验证质量）- 兼容旧 API

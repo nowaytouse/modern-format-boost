@@ -72,6 +72,16 @@ enum Commands {
         /// Use with --explore --match-quality for precise quality match + guaranteed compression
         #[arg(long, default_value_t = false)]
         compress: bool,
+
+        /// 🍎 Apple compatibility mode: Skip AV1 conversion (AV1 not natively supported on Apple devices)
+        /// When enabled, shows a warning that AV1 files may not play on Apple devices
+        #[arg(long, default_value_t = false)]
+        apple_compat: bool,
+
+        /// 🔥 v4.15: Force CPU encoding (libaom) instead of hardware acceleration
+        /// Use --cpu for maximum quality (higher SSIM)
+        #[arg(long, default_value_t = false)]
+        cpu: bool,
     },
 
     /// Simple mode: ALL videos → AV1 MP4
@@ -127,7 +137,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress, apple_compat, cpu } => {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -142,6 +152,8 @@ fn main() -> anyhow::Result<()> {
                 validate_vmaf: false, // 默认不启用 VMAF（较慢）
                 min_vmaf: 85.0,       // 默认 VMAF 阈值
                 require_compression: compress, // 🔥 v4.6
+                apple_compat,         // 🍎 v4.15
+                use_gpu: !cpu,        // 🔥 v4.15: CPU mode = no GPU
             };
             
             info!("🎬 Auto Mode Conversion (AV1)");
@@ -161,6 +173,12 @@ fn main() -> anyhow::Result<()> {
             }
             if recursive {
                 info!("   📂 Recursive: ENABLED");
+            }
+            if apple_compat {
+                info!("   🍎 Apple Compatibility: ENABLED (⚠️ Note: AV1 not natively supported on Apple devices)");
+            }
+            if cpu {
+                info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
             info!("");
             
