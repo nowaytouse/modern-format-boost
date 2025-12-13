@@ -6,14 +6,16 @@
 
 ---
 
-### 🔥 Core Features (v5.3)
+### 🔥 Core Features (v5.6)
 
 | Feature | Description |
 |---------|-------------|
-| **GPU+CPU Smart Search** | Phase 1: GPU 60s sampling (step=2) → Phase 2: CPU 0.5→0.1 step fine-tune |
-| **Quality Matching** | SSIM ≥ 0.95 validation with three-phase search |
+| **GPU+CPU Dual Fine-Tuning** | GPU 3-stage search (step 4→1→0.5) + SSIM validation → CPU 0.5→0.1 step fine-tune |
+| **GPU SSIM Ceiling** | VideoToolbox max ~0.97 SSIM, CPU achieves 0.98+ |
+| **Quality Matching** | SSIM ≥ 0.95 validation with smart termination |
 | **Compression Guarantee** | `--compress` ensures output < input |
 | **Apple Compatibility** | `--apple-compat` converts AV1/VP9 → HEVC |
+| **Short Video Handling** | Videos <60s use full duration for GPU sampling |
 | **Metadata Preservation** | EXIF, ICC profiles, timestamps, macOS xattr |
 
 ---
@@ -431,14 +433,16 @@ modern_format_boost/
 <a id="中文"></a>
 ## 中文
 
-### 🔥 核心功能 (v5.3)
+### 🔥 核心功能 (v5.6)
 
 | 功能 | 说明 |
 |------|------|
-| **GPU+CPU 智能搜索** | Phase 1: GPU 60秒采样 (step=2) → Phase 2: CPU 0.5→0.1 步进精细调整 |
-| **质量匹配** | SSIM ≥ 0.95 验证 + 三阶段搜索 |
+| **GPU+CPU 双精细化** | GPU 三阶段搜索 (step 4→1→0.5) + SSIM 验证 → CPU 0.5→0.1 步进精细调整 |
+| **GPU SSIM 上限** | VideoToolbox 最高 ~0.97 SSIM，CPU 可达 0.98+ |
+| **质量匹配** | SSIM ≥ 0.95 验证 + 智能终止 |
 | **压缩保证** | `--compress` 确保输出 < 输入 |
 | **Apple 兼容** | `--apple-compat` 将 AV1/VP9 转换为 HEVC |
+| **短视频处理** | <60秒视频使用完整时长进行 GPU 采样 |
 | **元数据保留** | EXIF、ICC 配置、时间戳、macOS xattr |
 
 ---
