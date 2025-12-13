@@ -1125,138 +1125,115 @@ impl VideoExplorer {
         let min_size = encode_size_only_with_phase(self.config.min_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
         iterations += 1;
 
+        // 🔥 v5.0: 即使 min_crf 能压缩，也要记录边界，后续用 CPU 精细编码
+        let mut boundary_crf = self.config.max_crf;
+        let mut found_compression_at_min = false;
+        
         if min_size < self.input_size {
-            // min_crf 就能压缩！这是最佳情况
+            // min_crf 就能压缩！记录边界，但不立即返回
             log_msg!("      ✨ Size: {:+.1}% - Compresses at highest quality!", self.calc_change_pct(min_size));
-            log_msg!("   📍 Phase 2: SSIM validation");
-            let quality = validate_ssim(self.config.min_crf, &mut quality_cache, self)?;
-            let ssim = quality.0.unwrap_or(0.0);
-
-            let status = if ssim >= 0.999 { "✅ Excellent" }
-                else if ssim >= 0.99 { "✅ Very Good" }
-                else if ssim >= 0.98 { "✅ Good" }
-                else { "✅ Acceptable" };
-
-            log_msg!("   ═══════════════════════════════════════════════════");
-            log_msg!("   📊 RESULT: CRF {:.1}, SSIM {:.6} {}, Size {:+.1}%",
-                self.config.min_crf, ssim, status, self.calc_change_pct(min_size));
-            log_msg!("   📈 Iterations: {} (best case - min CRF compresses)", iterations);
-
-            return Ok(ExploreResult {
-                optimal_crf: self.config.min_crf,
-                output_size: min_size,
-                size_change_pct: self.calc_change_pct(min_size),
-                ssim: quality.0,
-                psnr: quality.1,
-                vmaf: quality.2,
-                iterations,
-                quality_passed: true,
-                log,
-            });
+            boundary_crf = self.config.min_crf;
+            found_compression_at_min = true;
+            // 🔥 v5.0: 不再直接返回，继续到 Phase 3 用 CPU 精细编码
         }
 
-        log_msg!("      Size: {:+.1}% - Too large, need higher CRF", self.calc_change_pct(min_size));
-
-        // 测试 max_crf 确认能否压缩
-        log_msg!("   🔄 Testing max CRF {:.1} (lowest quality)...", self.config.max_crf);
-        let max_size = encode_size_only_with_phase(self.config.max_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
-        iterations += 1;
-
-        if max_size >= self.input_size {
-            // 即使 max_crf 也无法压缩
-            log_msg!("      Size: {:+.1}% - Cannot compress even at max CRF!", self.calc_change_pct(max_size));
-            log_msg!("   ⚠️ File is already highly compressed");
-            let quality = validate_ssim(self.config.max_crf, &mut quality_cache, self)?;
-
-            log_msg!("   ═══════════════════════════════════════════════════");
-            log_msg!("   📊 RESULT: Cannot compress this file");
-
-            return Ok(ExploreResult {
-                optimal_crf: self.config.max_crf,
-                output_size: max_size,
-                size_change_pct: self.calc_change_pct(max_size),
-                ssim: quality.0,
-                psnr: quality.1,
-                vmaf: quality.2,
-                iterations,
-                quality_passed: false,
-                log,
-            });
-        }
-
-        log_msg!("      Size: {:+.1}% - Compresses", self.calc_change_pct(max_size));
-
-        // 🔥 v4.13: 智能提前终止
-        // - 滑动窗口方差检测：最近 N 次编码的 size 变化很小 → 已接近边界
-        // - 相对变化率检测：size 变化率 < 阈值 → 提前终止
-        const WINDOW_SIZE: usize = 3;
-        const VARIANCE_THRESHOLD: f64 = 0.0001;  // 0.01% 方差阈值
+        // 🔥 v5.0: 辅助函数（提前定义，供后续阶段使用）
         const CHANGE_RATE_THRESHOLD: f64 = 0.005; // 0.5% 变化率阈值
-        let mut size_history: Vec<(f32, u64)> = Vec::new(); // (crf, size)
-
-        // 计算滑动窗口方差（相对于输入大小的百分比）
-        let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
-            if history.len() < WINDOW_SIZE { return f64::MAX; }
-            let recent: Vec<f64> = history.iter()
-                .rev()
-                .take(WINDOW_SIZE)
-                .map(|(_, s)| *s as f64 / input_size as f64)
-                .collect();
-            let mean = recent.iter().sum::<f64>() / recent.len() as f64;
-            recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
-        };
-
-        // 计算相对变化率
         let calc_change_rate = |prev: u64, curr: u64| -> f64 {
             if prev == 0 { return f64::MAX; }
             ((curr as f64 - prev as f64) / prev as f64).abs()
         };
 
-        // 🔥 二分搜索找压缩边界（最低能压缩的 CRF = 最高质量）[🚀 GPU]
-        log_msg!("   📍 Phase 1b: Binary search (0.5 step) [🚀 GPU]");
-        let mut low = self.config.min_crf;  // 不能压缩
-        let mut high = self.config.max_crf; // 能压缩
-        let mut boundary_crf = self.config.max_crf;
-        let mut prev_size: Option<u64> = None;
+        // 🔥 v5.0: 只有在 min_crf 不能压缩时才需要二分搜索
+        if !found_compression_at_min {
+            log_msg!("      Size: {:+.1}% - Too large, need higher CRF", self.calc_change_pct(min_size));
 
-        while high - low > 0.5 && iterations < 12 {
-            let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
-
-            log_msg!("   🔄 Testing CRF {:.1}...", mid);
-            let size = encode_size_only_with_phase(mid, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
+            // 测试 max_crf 确认能否压缩
+            log_msg!("   🔄 Testing max CRF {:.1} (lowest quality)...", self.config.max_crf);
+            let max_size = encode_size_only_with_phase(self.config.max_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
             iterations += 1;
-            size_history.push((mid, size));
 
-            // 智能提前终止检测
-            let variance = calc_window_variance(&size_history, self.input_size);
-            let change_rate = prev_size.map(|p| calc_change_rate(p, size)).unwrap_or(f64::MAX);
-            
-            if size < self.input_size {
-                // 能压缩，记录并尝试更低 CRF（更高质量）
-                boundary_crf = mid;
-                high = mid;
-                log_msg!("      ✅ {:+.1}% - Compresses", self.calc_change_pct(size));
-            } else {
-                // 不能压缩，需要更高 CRF
-                low = mid;
-                log_msg!("      ❌ {:+.1}% - Too large", self.calc_change_pct(size));
+            if max_size >= self.input_size {
+                // 即使 max_crf 也无法压缩
+                log_msg!("      Size: {:+.1}% - Cannot compress even at max CRF!", self.calc_change_pct(max_size));
+                log_msg!("   ⚠️ File is already highly compressed");
+                let quality = validate_ssim(self.config.max_crf, &mut quality_cache, self)?;
+
+                log_msg!("   ═══════════════════════════════════════════════════");
+                log_msg!("   📊 RESULT: Cannot compress this file");
+
+                return Ok(ExploreResult {
+                    optimal_crf: self.config.max_crf,
+                    output_size: max_size,
+                    size_change_pct: self.calc_change_pct(max_size),
+                    ssim: quality.0,
+                    psnr: quality.1,
+                    vmaf: quality.2,
+                    iterations,
+                    quality_passed: false,
+                    log,
+                });
             }
 
-            // 检查提前终止条件
-            if variance < VARIANCE_THRESHOLD && size_history.len() >= WINDOW_SIZE {
-                log_msg!("   ⚡ Early stop: variance {:.6} < {:.6}", variance, VARIANCE_THRESHOLD);
-                break;
-            }
-            if change_rate < CHANGE_RATE_THRESHOLD && prev_size.is_some() {
-                log_msg!("   ⚡ Early stop: change rate {:.4}% < {:.4}%", 
-                    change_rate * 100.0, CHANGE_RATE_THRESHOLD * 100.0);
-                break;
-            }
+            log_msg!("      Size: {:+.1}% - Compresses", self.calc_change_pct(max_size));
 
-            prev_size = Some(size);
+            // 🔥 v4.13: 智能提前终止
+            const WINDOW_SIZE: usize = 3;
+            const VARIANCE_THRESHOLD: f64 = 0.0001;  // 0.01% 方差阈值
+            let mut size_history: Vec<(f32, u64)> = Vec::new();
+
+            let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
+                if history.len() < WINDOW_SIZE { return f64::MAX; }
+                let recent: Vec<f64> = history.iter()
+                    .rev()
+                    .take(WINDOW_SIZE)
+                    .map(|(_, s)| *s as f64 / input_size as f64)
+                    .collect();
+                let mean = recent.iter().sum::<f64>() / recent.len() as f64;
+                recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+            };
+
+            // 🔥 二分搜索找压缩边界（最低能压缩的 CRF = 最高质量）[🚀 GPU]
+            log_msg!("   📍 Phase 1b: Binary search (0.5 step) [🚀 GPU]");
+            let mut low = self.config.min_crf;
+            let mut high = self.config.max_crf;
+            let mut prev_size: Option<u64> = None;
+
+            while high - low > 0.5 && iterations < 12 {
+                let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
+
+                log_msg!("   🔄 Testing CRF {:.1}...", mid);
+                let size = encode_size_only_with_phase(mid, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
+                iterations += 1;
+                size_history.push((mid, size));
+
+                let variance = calc_window_variance(&size_history, self.input_size);
+                let change_rate = prev_size.map(|p| calc_change_rate(p, size)).unwrap_or(f64::MAX);
+                
+                if size < self.input_size {
+                    boundary_crf = mid;
+                    high = mid;
+                    log_msg!("      ✅ {:+.1}% - Compresses", self.calc_change_pct(size));
+                } else {
+                    low = mid;
+                    log_msg!("      ❌ {:+.1}% - Too large", self.calc_change_pct(size));
+                }
+
+                if variance < VARIANCE_THRESHOLD && size_history.len() >= WINDOW_SIZE {
+                    log_msg!("   ⚡ Early stop: variance {:.6} < {:.6}", variance, VARIANCE_THRESHOLD);
+                    break;
+                }
+                if change_rate < CHANGE_RATE_THRESHOLD && prev_size.is_some() {
+                    log_msg!("   ⚡ Early stop: change rate {:.4}% < {:.4}%", 
+                        change_rate * 100.0, CHANGE_RATE_THRESHOLD * 100.0);
+                    break;
+                }
+
+                prev_size = Some(size);
+            }
         }
 
-        log_msg!("   📍 Boundary (0.5 step): CRF {:.1}", boundary_crf);
+        log_msg!("   📍 Boundary (GPU): CRF {:.1}", boundary_crf);
 
         // ═══════════════════════════════════════════════════════════
         // Phase 2: 0.1 精细调整（在 0.5 边界两侧搜索更精确的点）[🎯 CPU]
