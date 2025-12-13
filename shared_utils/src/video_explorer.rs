@@ -2620,13 +2620,14 @@ pub fn explore_with_gpu_coarse_search(
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{GpuAccel, GpuCoarseConfig, gpu_coarse_search, get_cpu_search_range_from_gpu, CrfMapping};
     
-    let mut log = Vec::new();
+    // 🔥 v5.1.4: 不收集日志到 result.log，因为已经实时输出了
+    // 这样可以避免 conversion_api.rs 重复打印日志
     
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
             eprintln!("{}", msg);
-            log.push(msg);
+            // 不收集到 log，避免重复打印
         }};
     }
     
@@ -2678,10 +2679,8 @@ pub fn explore_with_gpu_coarse_search(
         
         match gpu_coarse_search(input, &temp_output, encoder_name, input_size, &gpu_config) {
             Ok(gpu_result) => {
-                // 将 GPU 日志添加到总日志
-                for line in &gpu_result.log {
-                    log.push(line.clone());
-                }
+                // 🔥 v5.1.4: GPU 日志已经实时输出，不需要再收集
+                // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
                     // GPU 找到边界，计算 CPU 搜索范围
@@ -2756,10 +2755,9 @@ pub fn explore_with_gpu_coarse_search(
     let explorer = VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, false)?;
     let mut result = explorer.explore()?;
     
-    // 合并日志
-    let mut final_log = log;
-    final_log.extend(result.log);
-    result.log = final_log;
+    // 🔥 v5.1.4: 清空日志，避免 conversion_api.rs 重复打印
+    // 所有日志已经通过 eprintln! 实时输出了
+    result.log.clear();
     
     // 打印 CRF 映射信息
     if gpu.is_available() && has_gpu_encoder {
