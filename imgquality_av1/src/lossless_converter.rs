@@ -180,7 +180,7 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
             }
 
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
             
             mark_as_processed(input);
             
@@ -277,7 +277,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             }
 
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
             
             mark_as_processed(input);
             
@@ -366,7 +366,7 @@ pub fn convert_to_avif(input: &Path, quality: Option<u8>, options: &ConvertOptio
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
 
             mark_as_processed(input);
 
@@ -470,7 +470,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
             
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
             
             mark_as_processed(input);
             
@@ -558,7 +558,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
             
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
             
             mark_as_processed(input);
             
@@ -686,7 +686,7 @@ pub fn convert_to_av1_mp4_matched(
     let reduction = 1.0 - (output_size as f64 / input_size as f64);
     
     // Copy metadata and timestamps
-    copy_metadata(input, &output);
+    shared_utils::copy_metadata(input, &output);
     
     mark_as_processed(input);
     
@@ -896,7 +896,7 @@ pub fn convert_to_jxl_matched(
             }
 
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
             
             mark_as_processed(input);
             
@@ -1001,7 +1001,7 @@ pub fn convert_to_av1_mp4_lossless(input: &Path, options: &ConvertOptions) -> Re
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             // Copy metadata and timestamps
-            copy_metadata(input, &output);
+            shared_utils::copy_metadata(input, &output);
 
             mark_as_processed(input);
 
@@ -1042,17 +1042,8 @@ pub fn convert_to_av1_mp4_lossless(input: &Path, options: &ConvertOptions) -> Re
 // MacOS specialized timestamp setter (creation time + date added)
 
 
-// Helper to copy metadata and timestamps from source to destination
-// Maximum metadata preservation: centralized via shared_utils::metadata
-fn copy_metadata(src: &Path, dst: &Path) {
-    // shared_utils::preserve_metadata handles ALL layers:
-    // 1. Internal (Exif/IPTC via ExifTool)
-    // 2. Network (WhereFroms check)
-    // 3. System (ACL, Flags, Xattr, Timestamps via copyfile)
-    if let Err(e) = shared_utils::preserve_metadata(src, dst) {
-        eprintln!("⚠️ Failed to preserve metadata: {}", e);
-    }
-}
+// 🔥 v4.8: 使用 shared_utils::copy_metadata 替代本地实现
+// copy_metadata 函数已移至 shared_utils::copy_metadata
 
 // ============================================================
 // 🔧 cjxl 输入预处理

@@ -232,7 +232,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let output_size = execute_av1_lossless(&detection, &output_path)?;
     
     // Preserve metadata (complete copy)
-    copy_metadata(input, &output_path);
+    shared_utils::copy_metadata(input, &output_path);
     
     let size_ratio = output_size as f64 / detection.file_size as f64;
     
@@ -407,7 +407,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     };
     
     // Preserve metadata (complete copy)
-    copy_metadata(input, &output_path);
+    shared_utils::copy_metadata(input, &output_path);
     
     let size_ratio = output_size as f64 / detection.file_size as f64;
     
@@ -495,133 +495,9 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
 /// 4. 自校准：如果初始 CRF 不满足质量，向下搜索
 /// 
 /// ## 评价标准 (Evaluation Criteria)
-/// - SSIM >= 0.95: 视觉无损 (Good)
-/// - SSIM >= 0.98: 几乎无法区分 (Excellent)
-/// - VMAF >= 85: 流媒体质量 (Good)
-/// - VMAF >= 93: 存档质量 (Excellent)
-fn explore_precise_quality_match_av1(
-    detection: &VideoDetectionResult,
-    output_path: &Path,
-    min_ssim: f64,
-    validate_vmaf: bool,
-    min_vmaf: f64,
-) -> Result<(u64, u8, u8)> {
-    use shared_utils::video_explorer::{
-        VideoExplorer, VideoEncoder, ExploreConfig, ExploreMode, QualityThresholds
-    };
-    
-    let input_path = std::path::Path::new(&detection.file_path);
-    
-    // 计算 AI 预测的 CRF
-    let initial_crf = calculate_matched_crf(detection);
-    
-    info!("   🔬 Precise Quality-Match Exploration (AV1)");
-    info!("      Input: {} bytes", detection.file_size);
-    info!("      Initial CRF: {} (AI predicted)", initial_crf);
-    info!("      Min SSIM: {:.4}", min_ssim);
-    if validate_vmaf {
-        info!("      Min VMAF: {:.1}", min_vmaf);
-    }
-    
-    // 配置探索器
-    let config = ExploreConfig {
-        mode: ExploreMode::PreciseQualityMatch,
-        initial_crf: initial_crf as f32,
-        min_crf: 15.0,  // AV1 最低 CRF
-        max_crf: 40.0,  // AV1 最高可接受 CRF
-        target_ratio: 1.0,  // 目标：输出 <= 输入
-        quality_thresholds: QualityThresholds {
-            min_ssim,
-            min_psnr: 35.0,
-            min_vmaf,
-            validate_ssim: true,
-            validate_psnr: false,
-            validate_vmaf,
-        },
-        max_iterations: 8,  // 最多 8 次迭代
-    };
-    
-    // 获取视频滤镜参数
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
-    
-    // 创建探索器
-    let explorer = VideoExplorer::new(
-        input_path,
-        output_path,
-        VideoEncoder::Av1,
-        vf_args,
-        config,
-    ).map_err(|e| VidQualityError::ConversionError(format!("Explorer init failed: {}", e)))?;
-    
-    // 执行探索
-    let result = explorer.explore()
-        .map_err(|e| VidQualityError::ConversionError(format!("Exploration failed: {}", e)))?;
-    
-    // 输出探索日志
-    for line in &result.log {
-        info!("{}", line);
-    }
-    
-    // 🔥 裁判验证结果
-    if result.quality_passed {
-        info!("   ✅ Quality validation PASSED");
-        if let Some(ssim) = result.ssim {
-            info!("      SSIM: {:.4} ({})", ssim, shared_utils::video_explorer::precision::ssim_quality_grade(ssim));
-        }
-        if let Some(vmaf) = result.vmaf {
-            info!("      VMAF: {:.2} ({})", vmaf, shared_utils::video_explorer::precision::vmaf_quality_grade(vmaf));
-        }
-    } else {
-        warn!("   ⚠️  Quality validation FAILED - using best available CRF");
-        if let Some(ssim) = result.ssim {
-            warn!("      SSIM: {:.4} < {:.4} threshold", ssim, min_ssim);
-        }
-    }
-    
-    info!("   📊 Final: CRF {:.1}, {} bytes ({:+.1}%)", 
-        result.optimal_crf, result.output_size, result.size_change_pct);
-    
-    Ok((result.output_size, result.optimal_crf.round() as u8, result.iterations as u8))
-}
-
-/// Explore smaller size by trying higher CRF values (conservative approach)
-/// Starts at CRF 0 and increases until output < input (even by 1 byte counts)
-fn explore_smaller_size(
-    detection: &VideoDetectionResult,
-    output_path: &Path,
-) -> Result<(u64, u8, u8)> {
-    let input_size = detection.file_size;
-    let mut current_crf: u8 = 0;
-    let mut attempts: u8 = 0;
-    const MAX_CRF: u8 = 23;  // Conservative limit
-    const CRF_STEP: u8 = 1;   // Step size for exploration (conservative)
-    
-    info!("   🔍 Exploring smaller size (input: {} bytes)", input_size);
-    
-    loop {
-        let output_size = execute_av1_conversion(detection, output_path, current_crf)?;
-        attempts += 1;
-        
-        info!("   📊 CRF {}: {} bytes ({:.1}%)", 
-            current_crf, output_size, (output_size as f64 / input_size as f64) * 100.0);
-        
-        // Success: output is smaller (even by 1 byte)
-        if output_size < input_size {
-            info!("   ✅ Found smaller output at CRF {}", current_crf);
-            return Ok((output_size, current_crf, attempts));
-        }
-        
-        // Try next CRF
-        current_crf += CRF_STEP;
-        
-        // Safety limit
-        if current_crf > MAX_CRF {
-            warn!("   ⚠️  Reached CRF limit, using CRF {}", MAX_CRF);
-            let output_size = execute_av1_conversion(detection, output_path, MAX_CRF)?;
-            return Ok((output_size, MAX_CRF, attempts));
-        }
-    }
-}
+// 🔥 v4.8: 已删除重复实现
+// explore_precise_quality_match_av1 → 使用 shared_utils::explore_precise_quality_match
+// explore_smaller_size → 使用 shared_utils::explore_size_only
 
 /// Execute FFV1 conversion
 fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path) -> Result<u64> {
@@ -787,17 +663,8 @@ fn check_input_output_conflict(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-// Helper to copy metadata and timestamps from source to destination
-// Maximum metadata preservation: centralized via shared_utils::metadata
-pub fn copy_metadata(src: &Path, dst: &Path) {
-    // shared_utils::preserve_metadata handles ALL layers:
-    // 1. Internal (Exif/IPTC via ExifTool)
-    // 2. Network (WhereFroms check)
-    // 3. System (ACL, Flags, Xattr, Timestamps via copyfile)
-    if let Err(e) = shared_utils::preserve_metadata(src, dst) {
-         eprintln!("⚠️ Failed to preserve metadata: {}", e);
-    }
-}
+// 🔥 v4.8: 使用 shared_utils::copy_metadata 替代本地实现
+// pub use shared_utils::copy_metadata;
 
 
 
