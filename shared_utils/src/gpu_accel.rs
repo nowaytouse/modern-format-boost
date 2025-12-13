@@ -971,13 +971,20 @@ pub fn gpu_coarse_search(
     let mut iterations = 0u32;
     let mut boundary_crf: Option<f32> = None;
     
-    // 快速编码函数（GPU）
+    // 🔥 v5.1.4: GPU 粗略搜索只编码前 30 秒，大幅加速长视频处理
+    // 对于短视频（<30秒），编码整个视频
+    // 对于长视频（>30秒），只编码前 30 秒来估算压缩边界
+    const GPU_SAMPLE_DURATION: f32 = 30.0;
+    log_msg!("   💡 GPU samples first {:.0}s only (fast estimation)", GPU_SAMPLE_DURATION);
+    
+    // 快速编码函数（GPU）- 只编码前 30 秒
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.get_extra_args();
         
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
+            .arg("-t").arg(format!("{}", GPU_SAMPLE_DURATION))  // 🔥 只编码前 30 秒
             .arg("-i").arg(input)
             .arg("-c:v").arg(gpu_encoder.name);
         
@@ -1001,6 +1008,32 @@ pub fn gpu_coarse_search(
         Ok(std::fs::metadata(output)?.len())
     };
     
+    // 🔥 计算采样部分的输入大小（按比例估算）
+    // 如果视频 > 30秒，需要按比例计算采样部分的预期大小
+    let sample_input_size = {
+        // 获取视频时长
+        let duration_output = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg(input)
+            .output();
+        
+        let duration: f32 = duration_output
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+            .unwrap_or(GPU_SAMPLE_DURATION);
+        
+        if duration <= GPU_SAMPLE_DURATION {
+            // 短视频，使用完整大小
+            input_size
+        } else {
+            // 长视频，按比例计算采样部分的预期大小
+            let ratio = GPU_SAMPLE_DURATION / duration;
+            (input_size as f64 * ratio as f64) as u64
+        }
+    };
+    
+    log_msg!("   📊 Sample input size: {} bytes (for comparison)", sample_input_size);
+    
     // 从 max_crf 向下搜索（找最低能压缩的 CRF = 最高质量）
     let mut test_crf = config.max_crf;
     
@@ -1010,9 +1043,10 @@ pub fn gpu_coarse_search(
         match encode_gpu(test_crf) {
             Ok(size) => {
                 iterations += 1;
-                let ratio = size as f64 / input_size as f64;
+                // 🔥 使用采样大小进行比较
+                let ratio = size as f64 / sample_input_size as f64;
                 
-                if size < input_size {
+                if size < sample_input_size {
                     // 能压缩
                     boundary_crf = Some(test_crf);
                     log_msg!("      ✅ {:.1}% - Compresses", ratio * 100.0);
