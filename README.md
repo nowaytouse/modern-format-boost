@@ -119,17 +119,20 @@ Static images (JPEG/PNG) always use lossless conversion regardless of these flag
 | None | Default | Fixed CRF from strategy | 1 |
 | `--match-quality` | Quality Match | AI-predicted CRF + SSIM validation | 1 |
 | `--explore` | Size Only | Binary search for smaller output | up to 8 |
-| `--explore --match-quality` | Precise Match | 🔥 **v4.3** Optimized search + Triple cross-validation + Real-time logging | ~15-20 |
+| `--explore --match-quality` | Smart Match | 🔥 **v4.4** Binary search for smallest file meeting quality threshold | ~8-12 |
 
-#### 🔥 v4.3: Precise Quality Match - Optimized Search
+#### 🔥 v4.4: Smart Quality Match - Efficient & Practical
 
 When using `--explore --match-quality` together, the algorithm enables:
 
-**Optimized Four-Phase Search Strategy (v4.3):**
-1. **Sparse Scan** (step 5.0): Quick region detection (~4 iterations)
-2. **Region Refinement** (step 2.0, ±5 CRF): Narrow down (~5 iterations)
-3. **Fine Tuning** (step 0.5, ±2 CRF): Precise location (~8 iterations)
-4. **Extreme Precision** (step 0.1): Only when SSIM close to target, with plateau detection
+**Core Philosophy Change (v4.4):**
+- **Old goal**: Approach SSIM=1.0 (unrealistic, causes output > input)
+- **New goal**: Find **HIGHEST CRF** (smallest file) that **meets quality threshold**
+
+**Efficient Three-Phase Search:**
+1. **AI Prediction Test**: Start from predicted CRF (~1 iteration)
+2. **Binary Search**: Find highest CRF meeting SSIM ≥ 0.99 (~5-8 iterations)
+3. **Fine Tuning**: ±1 CRF with step 0.5 (~2-3 iterations)
 
 **Triple Cross-Validation (SSIM + PSNR + VMAF):**
 - 🟢 All metrics agree → High confidence, early termination
@@ -143,14 +146,14 @@ When using `--explore --match-quality` together, the algorithm enables:
 | VMAF | 35% | Netflix perceptual quality |
 | PSNR | 15% | Reference signal-to-noise |
 
-**🔥 v4.3 Real-time Logging:**
-- All progress output via `eprintln!()` for immediate visibility
-- No more "frozen" terminal during long encodes
-- Each encoding step shows: `🔄 Encoding CRF X.X...` → `📊 Calculating quality metrics...` → Results
+**Smart Termination (v4.4):**
+- Output > Input → Stop immediately, source already well-compressed
+- SSIM meets threshold + quality OK → Stop, found optimal
+- Binary search converged → Stop, no better CRF exists
 
 **Detailed Output Log:**
 ```
-🔬 Precise Quality-Match v4.3 (Hevc)
+🔬 Smart Quality-Match v4.4 (Hevc)
    📁 Input: 1234567 bytes (1205.63 KB)
    📐 CRF range: [10.0, 28.0], Initial: 20.0
    🎯 Goal: Approach SSIM=1.0 (no time limit)
@@ -498,17 +501,20 @@ modern_format_boost/
 | 无 | 默认 | 策略固定 CRF | 1 |
 | `--match-quality` | 质量匹配 | AI 预测 CRF + SSIM 验证 | 1 |
 | `--explore` | 仅大小 | 二分搜索更小输出 | 最多 8 |
-| `--explore --match-quality` | 精确匹配 | 🔥 **v4.3** 优化搜索 + 三重交叉验证 + 实时日志 | ~15-20 |
+| `--explore --match-quality` | 智能匹配 | 🔥 **v4.4** 二分搜索找满足质量阈值的最小文件 | ~8-12 |
 
-#### 🔥 v4.3: 精确质量匹配 - 优化搜索
+#### 🔥 v4.4: 智能质量匹配 - 高效实用
 
 当同时使用 `--explore --match-quality` 时，算法启用：
 
-**优化四阶段搜索策略 (v4.3)：**
-1. **稀疏扫描** (步长 5.0)：快速定位最佳区域（~4次迭代）
-2. **区域精细化** (步长 2.0, ±5 CRF)：缩小范围（~5次迭代）
-3. **精细调整** (步长 0.5, ±2 CRF)：精确定位（~8次迭代）
-4. **极限逼近** (步长 0.1)：仅在 SSIM 接近目标时启用，有平台检测
+**核心理念变更 (v4.4)：**
+- **旧目标**：无限逼近 SSIM=1.0（不现实，导致输出比输入大）
+- **新目标**：找到**最高 CRF**（最小文件）且**满足质量阈值**
+
+**高效三阶段搜索：**
+1. **AI 预测测试**：从预测 CRF 开始（~1次迭代）
+2. **二分搜索**：找到满足 SSIM ≥ 0.99 的最高 CRF（~5-8次迭代）
+3. **精细调整**：±1 CRF，步长 0.5（~2-3次迭代）
 
 **三重交叉验证 (SSIM + PSNR + VMAF)：**
 - 🟢 所有指标一致 → 高置信度，提前终止
@@ -522,14 +528,14 @@ modern_format_boost/
 | VMAF | 35% | Netflix 感知质量 |
 | PSNR | 15% | 参考信噪比 |
 
-**🔥 v4.3 实时日志：**
-- 所有进度通过 `eprintln!()` 即时输出
-- 长时间编码不再出现"冻结"终端
-- 每个编码步骤显示：`🔄 Encoding CRF X.X...` → `📊 Calculating quality metrics...` → 结果
+**智能终止条件 (v4.4)：**
+- 输出 > 输入 → 立即停止，源文件已经很好压缩
+- SSIM 达到阈值 + 质量OK → 停止，找到最优
+- 二分搜索收敛 → 停止，不存在更好的 CRF
 
 **详细输出日志：**
 ```
-🔬 Precise Quality-Match v4.3 (Hevc)
+🔬 Smart Quality-Match v4.4 (Hevc)
    📁 Input: 1234567 bytes (1205.63 KB)
    📐 CRF range: [10.0, 28.0], Initial: 20.0
    🎯 Goal: Approach SSIM=1.0 (no time limit)
