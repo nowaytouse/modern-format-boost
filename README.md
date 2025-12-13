@@ -2,7 +2,7 @@
 
 🗃️ Collection-Grade Media Archive Tool - Premium Quality for Long-term Storage
 
-[English](#english) | [中文](#中文)
+**📚 Documentation**: [Algorithm Deep Dive v4.6](./ALGORITHM_DEEP_DIVE_v4.6.md) | [English](#english) | [中文](#中文)
 
 ---
 
