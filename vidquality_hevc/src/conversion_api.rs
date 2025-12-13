@@ -233,7 +233,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     
     let output_size = execute_hevc_conversion(&detection, &output_path, 18)?;
     
-    copy_metadata(input, &output_path);
+    shared_utils::copy_metadata(input, &output_path);
     
     let size_ratio = output_size as f64 / detection.file_size as f64;
     
@@ -467,7 +467,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::Skip => unreachable!(),
     };
     
-    copy_metadata(input, &output_path);
+    shared_utils::copy_metadata(input, &output_path);
     
     let size_ratio = output_size as f64 / detection.file_size as f64;
     
@@ -680,12 +680,8 @@ fn execute_hevc_lossless(detection: &VideoDetectionResult, output: &Path) -> Res
     Ok(std::fs::metadata(output)?.len())
 }
 
-/// Copy metadata and timestamps from source to destination
-pub fn copy_metadata(src: &Path, dst: &Path) {
-    if let Err(e) = shared_utils::preserve_metadata(src, dst) {
-         eprintln!("⚠️ Failed to preserve metadata: {}", e);
-    }
-}
+// 🔥 v4.8: 使用 shared_utils::copy_metadata 替代本地实现
+// pub use shared_utils::copy_metadata;
 
 /// Legacy alias for backward compatibility
 pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {

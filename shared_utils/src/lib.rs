@@ -40,7 +40,7 @@ pub use report::*;
 pub use ffprobe::{FFprobeResult, FFprobeError, probe_video, get_duration, get_frame_count, parse_frame_rate, detect_bit_depth, is_ffprobe_available};
 pub use tools::*;
 pub use codecs::*;
-pub use metadata::{preserve_metadata, preserve_pro};
+pub use metadata::{preserve_metadata, preserve_pro, copy_metadata};
 pub use conversion::*;
 pub use video::*;
 pub use date_analysis::{analyze_directory, DateAnalysisConfig, DateAnalysisResult, FileDateInfo, DateSource, print_analysis};
