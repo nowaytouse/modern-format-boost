@@ -252,7 +252,8 @@ process_images() {
     echo -e "${BOLD}🖼️  处理图像 ($IMG_COUNT 个文件)${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     
-    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --cpu --apple-compat)
+    # 🔥 v5.1: 移除 --cpu flag，让 GPU 粗略搜索 + CPU 精细搜索智能化处理
+    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
     
     "$IMGQUALITY_HEVC" "${args[@]}" || true
@@ -269,7 +270,8 @@ process_videos() {
     echo -e "${BOLD}🎬 处理视频 ($VID_COUNT 个文件)${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     
-    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --cpu --apple-compat)
+    # 🔥 v5.1: 移除 --cpu flag，让 GPU 粗略搜索 + CPU 精细搜索智能化处理
+    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
     
     "$VIDQUALITY_HEVC" "${args[@]}" || true
