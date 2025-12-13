@@ -71,9 +71,8 @@ pub struct ConversionConfig {
     /// 🔥 v4.5: Require compression - output must be smaller than input
     /// Use with --explore --match-quality for precise quality match + guaranteed compression
     pub require_compression: bool,
-    /// 🔥 v4.15: Use GPU acceleration (default: true)
-    /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
-    /// VideoToolbox hardware encoding caps at ~0.95 SSIM
+    /// 🔥 v5.0: 智能 GPU 控制（内部使用，用户无需设置）
+    /// 粗搜索阶段自动使用 GPU，精细调整阶段（0.5/0.1 步长）自动切换 CPU
     pub use_gpu: bool,
 }
 
@@ -90,7 +89,7 @@ impl Default for ConversionConfig {
             in_place: false,
             apple_compat: false,
             require_compression: false,
-            use_gpu: true,  // 🔥 v4.15: GPU by default
+            use_gpu: true,  // 🔥 v5.0: 智能 GPU 控制（自动切换）
         }
     }
 }
@@ -341,11 +340,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     config.require_compression
                 ).map_err(|e| VidQualityError::ConversionError(e))?;
 
-                // 🔥 v4.15: 使用 GPU 控制变体支持 --cpu 模式
+                // 🔥 v5.0: 智能 GPU 控制 - 粗搜索用 GPU，精细调整自动切换 CPU
                 let use_gpu = config.use_gpu;
-                if !use_gpu {
-                    info!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
-                }
 
                 let explore_result = match flag_mode {
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
@@ -585,7 +581,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> f32 {
 // 🔥 旧的 explore_smaller_size 函数已被 shared_utils::video_explorer 替代
 // 新的探索器支持三种模式：
 // 1. SizeOnly (--explore): 仅探索更小的文件大小
-// 2. QualityMatch (--match-quality): 使用 AI 预测 CRF + SSIM 验证
+// 2. QualityMatch (--match-quality): 使用算法预测 CRF + SSIM 验证
 // 3. PreciseQualityMatch (--explore + --match-quality): 二分搜索 + SSIM 裁判验证
 
 /// Execute HEVC conversion with specified CRF (using libx265)

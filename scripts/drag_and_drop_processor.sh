@@ -1,16 +1,7 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor
-# 拖拽式一键处理脚本
+# Modern Format Boost - Drag & Drop Processor v5.2
 # 
 # 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
-# Usage: Drag folder to this script, or double-click and select folder
-#
-# 🔥 v5.1: 改进交互体验
-#   - 方向键选择模式
-#   - 统一进度条样式
-#   - 更好的视觉反馈
-
-set -e
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,12 +13,11 @@ VIDQUALITY_HEVC="$PROJECT_ROOT/vidquality_hevc/target/release/vidquality-hevc"
 XMP_MERGER="$PROJECT_ROOT/xmp_merger/target/release/xmp-merge"
 
 # 模式设置
-OUTPUT_MODE="inplace"  # inplace 或 adjacent
+OUTPUT_MODE="inplace"
 OUTPUT_DIR=""
+SELECTED=0
 
-# ═══════════════════════════════════════════════════════════════
-# 终端颜色和样式
-# ═══════════════════════════════════════════════════════════════
+# 终端颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -35,104 +25,78 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
-NC='\033[0m' # No Color
-
-# 清屏并移动光标
-clear_screen() {
-    printf "\033[2J\033[H"
-}
-
-# 隐藏/显示光标
-hide_cursor() { printf "\033[?25l"; }
-show_cursor() { printf "\033[?25h"; }
-
-# 移动光标到指定行
-move_to_line() { printf "\033[%d;0H" "$1"; }
-
-# 清除当前行
-clear_line() { printf "\033[2K"; }
+NC='\033[0m'
 
 # ═══════════════════════════════════════════════════════════════
-# 方向键选择菜单
+# 方向键选择菜单 (v5.2)
+# 使用全局变量 SELECTED 返回结果，避免 set -e 问题
 # ═══════════════════════════════════════════════════════════════
-select_with_arrows() {
-    local options=("$@")
-    local selected=0
-    local count=${#options[@]}
+select_menu() {
+    local opt1="$1"
+    local opt2="$2"
+    SELECTED=0
     
-    hide_cursor
+    # 隐藏光标
+    printf '\033[?25l'
     
-    # 保存起始行
-    local start_line
-    start_line=$(tput lines)
+    # 绘制函数
+    draw() {
+        if [[ $SELECTED -eq 0 ]]; then
+            printf "  \033[32m▶ \033[1m%s\033[0m\n" "$opt1"
+            printf "    \033[2m%s\033[0m\n" "$opt2"
+        else
+            printf "    \033[2m%s\033[0m\n" "$opt1"
+            printf "  \033[32m▶ \033[1m%s\033[0m\n" "$opt2"
+        fi
+    }
+    
+    # 清除两行
+    clear2() {
+        printf '\033[A\033[2K\033[A\033[2K'
+    }
+    
+    draw
     
     while true; do
-        # 显示选项
-        for i in "${!options[@]}"; do
-            if [[ $i -eq $selected ]]; then
-                echo -e "  ${GREEN}▶ ${BOLD}${options[$i]}${NC}"
-            else
-                echo -e "    ${DIM}${options[$i]}${NC}"
+        # 读取一个字符
+        local c
+        IFS= read -rsn1 c 2>/dev/null || c=""
+        
+        # 检查 ESC 序列
+        if [[ "$c" == $'\033' ]]; then
+            local c2 c3
+            IFS= read -rsn1 -t 0.1 c2 2>/dev/null || c2=""
+            IFS= read -rsn1 -t 0.1 c3 2>/dev/null || c3=""
+            # 上箭头: ESC [ A 或 ESC O A
+            if [[ "$c2" == "[" && "$c3" == "A" ]] || [[ "$c2" == "O" && "$c3" == "A" ]]; then
+                SELECTED=$((1 - SELECTED))
+                clear2; draw
+            # 下箭头: ESC [ B 或 ESC O B
+            elif [[ "$c2" == "[" && "$c3" == "B" ]] || [[ "$c2" == "O" && "$c3" == "B" ]]; then
+                SELECTED=$((1 - SELECTED))
+                clear2; draw
             fi
-        done
-        
-        # 读取按键
-        read -rsn1 key
-        
-        # 处理方向键（方向键是 ESC + [ + A/B/C/D）
-        if [[ $key == $'\x1b' ]]; then
-            read -rsn2 key
-            case $key in
-                '[A') # 上
-                    ((selected--))
-                    [[ $selected -lt 0 ]] && selected=$((count - 1))
-                    ;;
-                '[B') # 下
-                    ((selected++))
-                    [[ $selected -ge $count ]] && selected=0
-                    ;;
-            esac
-        elif [[ $key == '' ]]; then  # Enter
+        # Enter
+        elif [[ "$c" == "" ]]; then
             break
-        elif [[ $key == 'q' || $key == 'Q' ]]; then
-            show_cursor
-            echo ""
-            echo -e "${RED}❌ 用户取消${NC}"
+        # j/k vim 风格
+        elif [[ "$c" == "j" || "$c" == "k" ]]; then
+            SELECTED=$((1 - SELECTED))
+            clear2; draw
+        # 数字 1/2
+        elif [[ "$c" == "1" ]]; then
+            SELECTED=0; clear2; draw
+        elif [[ "$c" == "2" ]]; then
+            SELECTED=1; clear2; draw
+        # q 退出
+        elif [[ "$c" == "q" || "$c" == "Q" ]]; then
+            printf '\033[?25h'
+            echo -e "\n${RED}❌ 用户取消${NC}"
             exit 0
         fi
-        
-        # 清除已显示的选项，重新绘制
-        for ((i=0; i<count; i++)); do
-            printf "\033[A\033[2K"
-        done
     done
     
-    show_cursor
-    return $selected
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 固定位置进度条
-# ═══════════════════════════════════════════════════════════════
-draw_progress_bar() {
-    local current=$1
-    local total=$2
-    local width=50
-    local percent=$((current * 100 / total))
-    local filled=$((current * width / total))
-    local empty=$((width - filled))
-    
-    # 构建进度条
-    local bar=""
-    for ((i=0; i<filled; i++)); do bar+="█"; done
-    for ((i=0; i<empty; i++)); do bar+="░"; done
-    
-    # 颜色根据进度变化
-    local color=$GREEN
-    [[ $percent -lt 30 ]] && color=$RED
-    [[ $percent -ge 30 && $percent -lt 70 ]] && color=$YELLOW
-    
-    printf "\r  ${color}[${bar}]${NC} ${BOLD}%3d%%${NC} (%d/%d)" "$percent" "$current" "$total"
+    printf '\033[?25h'
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -140,26 +104,16 @@ draw_progress_bar() {
 # ═══════════════════════════════════════════════════════════════
 check_tools() {
     local need_build=false
-    
-    if [[ ! -f "$IMGQUALITY_HEVC" ]]; then
-        echo -e "${RED}❌ imgquality-hevc not found${NC}"
-        need_build=true
-    fi
-    
-    if [[ ! -f "$VIDQUALITY_HEVC" ]]; then
-        echo -e "${RED}❌ vidquality-hevc not found${NC}"
-        need_build=true
-    fi
-    
-    if [[ ! -f "$XMP_MERGER" ]]; then
-        echo -e "${RED}❌ xmp-merge not found${NC}"
-        need_build=true
-    fi
+    [[ ! -f "$IMGQUALITY_HEVC" ]] && need_build=true
+    [[ ! -f "$VIDQUALITY_HEVC" ]] && need_build=true
+    [[ ! -f "$XMP_MERGER" ]] && need_build=true
     
     if [[ "$need_build" == "true" ]]; then
         echo -e "${YELLOW}🔧 Building tools...${NC}"
-        cd "$PROJECT_ROOT"
-        cargo build --release -p imgquality-hevc -p vidquality-hevc -p xmp_merger 2>&1 | tail -5
+        (cd "$PROJECT_ROOT/imgquality_hevc" && cargo build --release 2>/dev/null) &
+        (cd "$PROJECT_ROOT/vidquality_hevc" && cargo build --release 2>/dev/null) &
+        (cd "$PROJECT_ROOT/xmp_merger" && cargo build --release 2>/dev/null) &
+        wait
         echo -e "${GREEN}✅ Build complete${NC}"
     fi
 }
@@ -168,56 +122,41 @@ check_tools() {
 # 显示欢迎信息
 # ═══════════════════════════════════════════════════════════════
 show_welcome() {
-    clear_screen
+    printf '\033[2J\033[H'
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════╗"
-    echo "  ║                                                      ║"
-    echo "  ║     🚀 Modern Format Boost v5.1                      ║"
-    echo "  ║                                                      ║"
+    echo "  ║     🚀 Modern Format Boost v5.2                      ║"
     echo "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
-    echo ""
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BLUE}📋${NC} XMP合并：自动检测并合并 sidecar 元数据"
-    echo -e "  ${BLUE}🍎${NC} Apple兼容：默认启用（AV1/VP9 → HEVC）"
-    echo -e "  ${BLUE}🔄${NC} 断点续传：支持中断后继续处理"
-    echo -e "  ${BLUE}🎯${NC} 智能压缩：v4.13 三阶段精确搜索"
+    echo -e "  ${BLUE}📋${NC} XMP合并  ${BLUE}🍎${NC} Apple兼容  ${BLUE}🔄${NC} 断点续传  ${BLUE}🎯${NC} v4.13算法"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 选择运行模式（方向键）
+# 选择运行模式
 # ═══════════════════════════════════════════════════════════════
 select_mode() {
-    echo -e "${BOLD}请选择输出模式：${NC} ${DIM}(↑↓ 选择, Enter 确认, Q 退出)${NC}"
+    echo -e "${BOLD}请选择输出模式：${NC} ${DIM}(↑↓/jk 选择, Enter 确认, Q 退出)${NC}"
     echo ""
     
-    local options=(
-        "🚀 原地转换 - 删除原文件，节省空间"
-        "📂 输出到相邻目录 - 保留原文件，安全预览"
-    )
-    
-    select_with_arrows "${options[@]}"
-    local choice=$?
+    select_menu "🚀 原地转换 - 删除原文件，节省空间" "📂 输出到相邻目录 - 保留原文件，安全预览"
     
     echo ""
-    
-    case $choice in
-        0)
-            OUTPUT_MODE="inplace"
-            echo -e "${GREEN}✅ 已选择：原地转换模式${NC}"
-            ;;
-        1)
-            OUTPUT_MODE="adjacent"
-            local base_name=$(basename "$TARGET_DIR")
-            OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_converted"
-            mkdir -p "$OUTPUT_DIR"
-            echo -e "${GREEN}✅ 已选择：输出到相邻目录${NC}"
-            echo -e "   ${DIM}→ $OUTPUT_DIR${NC}"
-            ;;
-    esac
+    if [[ $SELECTED -eq 0 ]]; then
+        OUTPUT_MODE="inplace"
+        echo -e "${GREEN}✅ 已选择：原地转换模式${NC}"
+    else
+        OUTPUT_MODE="adjacent"
+        local base_name
+        base_name=$(basename "$TARGET_DIR")
+        OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_converted"
+        mkdir -p "$OUTPUT_DIR"
+        echo -e "${GREEN}✅ 已选择：输出到相邻目录${NC}"
+        echo -e "   ${DIM}→ $OUTPUT_DIR${NC}"
+    fi
     echo ""
 }
 
@@ -229,9 +168,13 @@ get_target_directory() {
         TARGET_DIR="$1"
     else
         echo -e "${BOLD}请将要处理的文件夹拖拽到此窗口，然后按回车：${NC}"
-        echo ""
         read -r TARGET_DIR
-        TARGET_DIR=$(echo "$TARGET_DIR" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/^"//;s/"$//')
+        TARGET_DIR="${TARGET_DIR%\"}"
+        TARGET_DIR="${TARGET_DIR#\"}"
+        TARGET_DIR="${TARGET_DIR%\'}"
+        TARGET_DIR="${TARGET_DIR#\'}"
+        TARGET_DIR="${TARGET_DIR## }"
+        TARGET_DIR="${TARGET_DIR%% }"
     fi
     
     if [[ ! -d "$TARGET_DIR" ]]; then
@@ -246,18 +189,16 @@ get_target_directory() {
 # 安全检查
 # ═══════════════════════════════════════════════════════════════
 safety_check() {
-    # 危险目录检查
     case "$TARGET_DIR" in
-        "/" | "/System"* | "/usr"* | "/bin"* | "/sbin"* | "$HOME" | "$HOME/Desktop" | "$HOME/Documents")
+        "/"|"/System"*|"/usr"*|"/bin"*|"/sbin"*|"$HOME"|"$HOME/Desktop"|"$HOME/Documents")
             echo -e "${RED}❌ 危险目录，拒绝处理: $TARGET_DIR${NC}"
             exit 1
             ;;
     esac
     
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        echo ""
         echo -e "${YELLOW}⚠️  即将开始原地处理（会删除原文件）${NC}"
-        echo -e "${BOLD}确认继续？${NC} ${DIM}(y/N)${NC}: "
+        echo -ne "${BOLD}确认继续？${NC} ${DIM}(y/N)${NC}: "
         read -r CONFIRM
         if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
             echo -e "${RED}❌ 用户取消${NC}"
@@ -270,7 +211,6 @@ safety_check() {
 # 统计文件数量
 # ═══════════════════════════════════════════════════════════════
 count_files() {
-    echo ""
     echo -e "${CYAN}📊 统计文件...${NC}"
     
     XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" 2>/dev/null | wc -l | tr -d ' ')
@@ -283,12 +223,7 @@ count_files() {
         -o -iname "*.webm" -o -iname "*.m4v" \
     \) 2>/dev/null | wc -l | tr -d ' ')
     
-    echo ""
-    echo -e "  ${DIM}┌─────────────────────────────┐${NC}"
-    echo -e "  ${DIM}│${NC}  📋 XMP:  ${BOLD}$XMP_COUNT${NC}"
-    echo -e "  ${DIM}│${NC}  🖼️  图像: ${BOLD}$IMG_COUNT${NC}"
-    echo -e "  ${DIM}│${NC}  🎬 视频: ${BOLD}$VID_COUNT${NC}"
-    echo -e "  ${DIM}└─────────────────────────────┘${NC}"
+    echo -e "  📋 XMP: ${BOLD}$XMP_COUNT${NC}  🖼️ 图像: ${BOLD}$IMG_COUNT${NC}  🎬 视频: ${BOLD}$VID_COUNT${NC}"
     
     if [[ $((IMG_COUNT + VID_COUNT)) -eq 0 ]]; then
         echo -e "${RED}❌ 未找到支持的媒体文件${NC}"
@@ -300,80 +235,46 @@ count_files() {
 # XMP 合并
 # ═══════════════════════════════════════════════════════════════
 merge_xmp_files() {
-    [[ $XMP_COUNT -eq 0 ]] && return
-    
-    if ! command -v exiftool &> /dev/null; then
-        echo -e "${YELLOW}⚠️  ExifTool 未安装，跳过 XMP 合并${NC}"
-        return
-    fi
-    
-    echo ""
+    [[ $XMP_COUNT -eq 0 ]] && return 0
+    command -v exiftool &>/dev/null || { echo -e "${YELLOW}⚠️ ExifTool 未安装${NC}"; return 0; }
     echo -e "${CYAN}📋 合并 XMP 元数据...${NC}"
-    "$XMP_MERGER" --delete-xmp "$TARGET_DIR"
+    "$XMP_MERGER" --delete-xmp "$TARGET_DIR" || true
 }
 
 # ═══════════════════════════════════════════════════════════════
 # 处理图像
 # ═══════════════════════════════════════════════════════════════
 process_images() {
-    [[ $IMG_COUNT -eq 0 ]] && return
+    [[ $IMG_COUNT -eq 0 ]] && return 0
     
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BOLD}🖼️  处理图像 ($IMG_COUNT 个文件)${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
     
-    # 🔥 v4.8: 默认启用 --explore --match-quality --compress --cpu --apple-compat
-    local args=(
-        auto "$TARGET_DIR"
-        --recursive
-        --explore
-        --match-quality
-        --compress
-        --cpu
-        --apple-compat
-    )
+    # 🔥 v5.0: 移除 --cpu flag，现在使用智能 GPU 控制（粗搜索用 GPU，精细调整自动切换 CPU）
+    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
+    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
     
-    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        args+=(--in-place)
-    else
-        args+=(--output "$OUTPUT_DIR")
-    fi
-    
-    "$IMGQUALITY_HEVC" "${args[@]}"
+    "$IMGQUALITY_HEVC" "${args[@]}" || true
 }
 
 # ═══════════════════════════════════════════════════════════════
 # 处理视频
 # ═══════════════════════════════════════════════════════════════
 process_videos() {
-    [[ $VID_COUNT -eq 0 ]] && return
+    [[ $VID_COUNT -eq 0 ]] && return 0
     
     echo ""
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BOLD}🎬 处理视频 ($VID_COUNT 个文件)${NC}"
     echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
     
-    # 🔥 v4.8: 默认启用 --explore --match-quality --compress --cpu --apple-compat
-    local args=(
-        auto "$TARGET_DIR"
-        --recursive
-        --explore
-        --match-quality true
-        --compress
-        --cpu
-        --apple-compat
-    )
+    # 🔥 v5.0: 移除 --cpu flag，现在使用智能 GPU 控制（粗搜索用 GPU，精细调整自动切换 CPU）
+    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
+    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
     
-    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        args+=(--in-place)
-    else
-        args+=(--output "$OUTPUT_DIR")
-    fi
-    
-    "$VIDQUALITY_HEVC" "${args[@]}"
+    "$VIDQUALITY_HEVC" "${args[@]}" || true
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -381,37 +282,26 @@ process_videos() {
 # ═══════════════════════════════════════════════════════════════
 show_completion() {
     echo ""
-    echo -e "${GREEN}${BOLD}"
-    echo "  ╔══════════════════════════════════════════════════════╗"
-    echo "  ║                                                      ║"
-    echo "  ║     🎉 处理完成！                                    ║"
-    echo "  ║                                                      ║"
-    echo "  ╚══════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
+    echo -e "${GREEN}${BOLD}  ╔══════════════════════════════════════════════════════╗"
+    echo -e "  ║     🎉 处理完成！                                    ║"
+    echo -e "  ╚══════════════════════════════════════════════════════╝${NC}"
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         echo -e "  ${BLUE}📂${NC} 输出目录: ${BOLD}$OUTPUT_DIR${NC}"
-        echo ""
-        echo -e "  ${BOLD}是否打开输出目录？${NC} ${DIM}(y/N)${NC}: "
-        read -r OPEN_DIR
-        if [[ "$OPEN_DIR" =~ ^[Yy]$ ]]; then
-            open "$OUTPUT_DIR" 2>/dev/null || true
-        fi
-    else
-        echo -e "  ${BLUE}📂${NC} 处理目录: ${BOLD}$TARGET_DIR${NC}"
+        echo -ne "  是否打开？ ${DIM}(y/N)${NC}: "
+        read -r ans
+        [[ "$ans" =~ ^[Yy]$ ]] && open "$OUTPUT_DIR" 2>/dev/null
     fi
     
-    echo ""
     echo -e "  ${DIM}按任意键退出...${NC}"
-    read -n 1
+    read -rsn1
 }
 
 # ═══════════════════════════════════════════════════════════════
 # 主函数
 # ═══════════════════════════════════════════════════════════════
 main() {
-    # 确保退出时显示光标
-    trap 'show_cursor; echo ""; echo -e "${YELLOW}⚠️ 处理被中断${NC}"; read -n 1' INT TERM EXIT
+    trap 'printf "\033[?25h"; echo -e "\n${YELLOW}⚠️ 中断${NC}"' INT TERM
     
     check_tools
     get_target_directory "$@"
@@ -423,9 +313,6 @@ main() {
     process_images
     process_videos
     show_completion
-    
-    # 正常退出时移除 trap
-    trap - EXIT
 }
 
 main "$@"

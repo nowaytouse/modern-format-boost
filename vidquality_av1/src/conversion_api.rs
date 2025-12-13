@@ -489,7 +489,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
 /// 找到满足质量阈值的最高 CRF（最小文件）
 /// 
 /// ## 裁判机制 (Referee Mechanism)
-/// 1. 使用 AI 预测的 CRF 作为起点
+/// 1. 使用算法预测的 CRF 作为起点
 /// 2. 二分搜索找到满足 SSIM >= min_ssim 的最高 CRF
 /// 3. 可选 VMAF 验证（更准确但更慢）
 /// 4. 自校准：如果初始 CRF 不满足质量，向下搜索

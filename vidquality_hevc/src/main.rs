@@ -63,10 +63,6 @@ enum Commands {
         /// Use with --explore --match-quality for precise quality match + guaranteed compression
         #[arg(long, default_value_t = false)]
         compress: bool,
-        /// 🔥 v4.15: Force CPU encoding (libx265) instead of GPU
-        /// VideoToolbox hardware encoding caps at ~0.95 SSIM. Use --cpu to achieve 0.98+ SSIM
-        #[arg(long, default_value_t = false)]
-        cpu: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -113,7 +109,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, cpu } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress } => {
+            // 🔥 v5.1: Validate flag combinations for consistency
+            if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -125,7 +127,7 @@ fn main() -> anyhow::Result<()> {
                 in_place,
                 apple_compat,
                 require_compression: compress,
-                use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
+                use_gpu: true,  // 🔥 v5.0: 智能 GPU 控制 - 粗搜索用 GPU，精细调整自动切换 CPU
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -150,9 +152,7 @@ fn main() -> anyhow::Result<()> {
             if recursive {
                 info!("   📂 Recursive: ENABLED");
             }
-            if cpu {
-                info!("   🖥️  CPU Encoding: ENABLED (libx265 for SSIM ≥0.98)");
-            }
+            info!("   🚀 Smart GPU: Coarse search → GPU | Fine-tune (0.5/0.1) → CPU");
             info!("");
             
             if input.is_dir() {
