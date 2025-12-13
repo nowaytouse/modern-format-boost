@@ -2697,7 +2697,7 @@ pub fn explore_with_gpu_coarse_search(
     max_crf: f32,
     min_ssim: f64,
 ) -> Result<ExploreResult> {
-    use crate::gpu_accel::{GpuAccel, GpuCoarseConfig, gpu_coarse_search, get_cpu_search_range_from_gpu, CrfMapping};
+    use crate::gpu_accel::{GpuAccel, GpuCoarseConfig, gpu_coarse_search, CrfMapping};
     
     // 🔥 v5.1.4: 不收集日志到 result.log，因为已经实时输出了
     // 这样可以避免 conversion_api.rs 重复打印日志

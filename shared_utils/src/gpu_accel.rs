@@ -36,7 +36,16 @@ pub const GPU_SAMPLE_DURATION: f32 = 60.0;
 /// GPU 粗略搜索步长
 pub const GPU_COARSE_STEP: f32 = 2.0;
 
-/// GPU 粗略搜索最大迭代次数
+/// GPU Stage 1 粗略搜索最大迭代次数
+pub const GPU_STAGE1_MAX_ITERATIONS: u32 = 8;
+
+/// GPU Stage 2 精细搜索最大迭代次数
+pub const GPU_STAGE2_MAX_ITERATIONS: u32 = 15;
+
+/// GPU Stage 3 超精细搜索最大迭代次数
+pub const GPU_STAGE3_MAX_ITERATIONS: u32 = 20;
+
+/// GPU 配置默认最大迭代次数
 pub const GPU_MAX_ITERATIONS: u32 = 10;
 
 /// GPU 默认最小 CRF
@@ -1104,7 +1113,7 @@ pub fn gpu_coarse_search(
     let mut coarse_boundary: Option<f32> = None;
     let mut test_crf = config.max_crf;
     
-    while test_crf >= config.min_crf && iterations < 8 {
+    while test_crf >= config.min_crf && iterations < GPU_STAGE1_MAX_ITERATIONS {
         log_msg!("   🔄 GPU CRF {:.0}...", test_crf);
         match encode_cached(test_crf, &mut size_cache) {
             Ok(size) => {
@@ -1135,7 +1144,7 @@ pub fn gpu_coarse_search(
         // 向下探索（更高质量）
         for offset in [1.0_f32, 2.0, 3.0] {
             let test = coarse - offset;
-            if test < config.min_crf || iterations >= 15 { break; }
+            if test < config.min_crf || iterations >= GPU_STAGE2_MAX_ITERATIONS { break; }
             
             let key = (test * 10.0).round() as i32;
             if size_cache.contains_key(&key) { continue; }
@@ -1165,7 +1174,7 @@ pub fn gpu_coarse_search(
         
         for offset in [0.5_f32, 1.0, 1.5, 2.0] {
             let test = fine - offset;
-            if test < config.min_crf || iterations >= 20 { break; }
+            if test < config.min_crf || iterations >= GPU_STAGE3_MAX_ITERATIONS { break; }
             
             let key = (test * 10.0).round() as i32;
             if size_cache.contains_key(&key) { continue; }
