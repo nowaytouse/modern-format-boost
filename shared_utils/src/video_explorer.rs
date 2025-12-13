@@ -1176,25 +1176,29 @@ impl VideoExplorer {
         log_msg!("   📍 Compression boundary (0.5 step): CRF {:.1}", boundary_crf);
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: 0.1 精细调整（在 0.5 边界附近搜索更精确的点）
+        // Phase 2: 0.1 精细调整（在 0.5 边界两侧搜索更精确的点）
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 2: Fine-tune with 0.1 step around boundary");
+        log_msg!("   📍 Phase 2: Fine-tune ±0.4 with 0.1 step");
 
-        // 在边界附近测试 -0.4, -0.3, -0.2, -0.1 找到最低能压缩的 CRF
-        // 注意：只往更低 CRF 方向探索（更高质量），因为边界已经是能压缩的最低 0.5 步进点
+        // 🔥 v4.12: 双向搜索
+        // - 向下探索 (-0.1 ~ -0.4)：找更低 CRF（更高质量）
+        // - 向上探索 (+0.1 ~ +0.4)：确认边界精度
         let mut best_boundary = boundary_crf;
-        for offset in [-0.4_f32, -0.3, -0.2, -0.1] {
+        
+        // 先向下探索（更高质量方向）
+        log_msg!("   📍 Searching lower CRF (higher quality)...");
+        for offset in [-0.1_f32, -0.2, -0.3, -0.4] {
             let test_crf = boundary_crf + offset;
             
             // 边界检查
             if test_crf < self.config.min_crf { continue; }
-            if iterations >= 15 { break; }
+            if iterations >= 18 { break; }
             
             // 跳过已测试的值
             let key = (test_crf * 10.0).round() as i32;
             if size_cache.contains_key(&key) { continue; }
 
-            log_msg!("   🔄 Fine-tune: CRF {:.1}...", test_crf);
+            log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
             let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
             iterations += 1;
 
@@ -1204,17 +1208,46 @@ impl VideoExplorer {
                 log_msg!("      ✅ {:+.1}% - New best!", self.calc_change_pct(size));
             } else {
                 // 不能压缩，停止向更低 CRF 探索
-                log_msg!("      ❌ {:+.1}% - Too large, stop", self.calc_change_pct(size));
+                log_msg!("      ❌ {:+.1}% - Too large, stop searching lower", self.calc_change_pct(size));
                 break;
             }
         }
 
+        // 如果向下没找到更好的，向上探索确认边界
+        if best_boundary == boundary_crf {
+            log_msg!("   📍 Searching higher CRF (confirm boundary)...");
+            for offset in [0.1_f32, 0.2, 0.3, 0.4] {
+                let test_crf = boundary_crf + offset;
+                
+                // 边界检查
+                if test_crf > self.config.max_crf { continue; }
+                if iterations >= 18 { break; }
+                
+                // 跳过已测试的值
+                let key = (test_crf * 10.0).round() as i32;
+                if size_cache.contains_key(&key) { continue; }
+
+                log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
+                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                iterations += 1;
+
+                if size < self.input_size {
+                    // 能压缩，但 CRF 更高（质量更低），不更新 best
+                    log_msg!("      ✅ {:+.1}% - Compresses (but higher CRF)", self.calc_change_pct(size));
+                } else {
+                    // 不能压缩，说明当前边界是正确的
+                    log_msg!("      ❌ {:+.1}% - Confirms boundary", self.calc_change_pct(size));
+                    break;
+                }
+            }
+        }
+
         if best_boundary != boundary_crf {
-            log_msg!("   📍 Refined boundary: {:.1} → {:.1} (saved {:.1} CRF)", 
-                boundary_crf, best_boundary, boundary_crf - best_boundary);
+            log_msg!("   📍 Refined: CRF {:.1} → {:.1} (Δ{:+.1})", 
+                boundary_crf, best_boundary, best_boundary - boundary_crf);
             boundary_crf = best_boundary;
         } else {
-            log_msg!("   📍 Boundary unchanged at CRF {:.1}", boundary_crf);
+            log_msg!("   📍 Boundary confirmed at CRF {:.1}", boundary_crf);
         }
 
         // ═══════════════════════════════════════════════════════════
