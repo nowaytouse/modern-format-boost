@@ -59,6 +59,10 @@ enum Commands {
         /// Only HEVC videos will be skipped (already Apple compatible)
         #[arg(long, default_value_t = false)]
         apple_compat: bool,
+        /// 🔥 Require compression: output must be smaller than input
+        /// Use with --explore --match-quality for precise quality match + guaranteed compression
+        #[arg(long, default_value_t = false)]
+        compress: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -105,7 +109,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress } => {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -116,6 +120,7 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 in_place,
                 apple_compat,
+                require_compression: compress,
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");

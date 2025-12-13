@@ -81,6 +81,8 @@ pub use video_explorer::{
     ExploreMode,
     // New API: mode-specific functions
     explore_size_only, explore_quality_match, explore_precise_quality_match,
+    // 🔥 v4.5: 精确质量匹配 + 压缩
+    explore_precise_quality_match_with_compression,
     // HEVC convenience functions
     explore_hevc, explore_hevc_size_only, explore_hevc_quality_match,
     // AV1 convenience functions
