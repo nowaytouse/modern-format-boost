@@ -4,11 +4,17 @@
 
 **📚 Documentation**: [Algorithm Deep Dive v4.6](./ALGORITHM_DEEP_DIVE_v4.6.md) | [Bug Analysis v4.8](./BUG_ANALYSIS_v4.8.md) | [English](#english) | [中文](#中文)
 
-### 🔥 v4.8 Updates
+### 🔥 v4.13 Updates
 
-- **Performance**: Added encoding cache to avoid redundant encoding
-- **CLI**: Added `--cpu` flag for CPU-only encoding (maximum quality)
-- **Bug Fix**: Fixed `explore_size_only` binary search logic
+- **Smart Termination**: Sliding window variance detection + relative change rate detection for early termination
+- **Precision**: Three-phase search: 0.5 step binary search → ±0.4 fine-tune with 0.1 step → SSIM validation
+- **Efficiency**: Reduces encoding iterations by 30-50% on stable content
+- **Bidirectional Search**: Phase 2 searches both lower CRF (higher quality) and higher CRF (confirm boundary)
+
+### v4.8-v4.12 Updates
+
+- **v4.12**: Added 0.1 fine-tune phase after 0.5 step binary search
+- **v4.8**: Added encoding cache, `--cpu` flag, fixed binary search logic
 - **Precision**: CRF precision upgraded to ±0.1
 
 ---
@@ -425,6 +431,21 @@ modern_format_boost/
 
 <a id="中文"></a>
 ## 中文
+
+### 🔥 v4.13 更新
+
+- **智能终止**：滑动窗口方差检测 + 相对变化率检测，实现提前终止
+- **精度**：三阶段搜索：0.5 步进二分搜索 → ±0.4 范围 0.1 步进精细调整 → SSIM 验证
+- **效率**：稳定内容可减少 30-50% 编码次数
+- **双向搜索**：Phase 2 同时向低 CRF（更高质量）和高 CRF（确认边界）方向搜索
+
+### v4.8-v4.12 更新
+
+- **v4.12**：在 0.5 步进二分搜索后添加 0.1 精细调整阶段
+- **v4.8**：添加编码缓存、`--cpu` flag、修复二分搜索逻辑
+- **精度**：CRF 精度升级到 ±0.1
+
+---
 
 ### 🎯 定位：收藏/归档优化工具
 
