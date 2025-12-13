@@ -17,7 +17,9 @@ struct AutoConvertConfig<'a> {
     delete_original: bool,
     in_place: bool,
     lossless: bool,
+    explore: bool,
     match_quality: bool,
+    compress: bool,
 }
 
 #[derive(Parser)]
@@ -81,9 +83,21 @@ enum Commands {
         #[arg(long)]
         lossless: bool,
 
+        /// Explore smaller file sizes for animated→video conversion ONLY.
+        /// Alone: Binary search for smaller output (no quality validation).
+        /// With --match-quality: Precise quality match (binary search + SSIM validation).
+        #[arg(long)]
+        explore: bool,
+
         /// Match input quality level for animated→video conversion (auto-calculate CRF)
         #[arg(long)]
         match_quality: bool,
+
+        /// 🔥 Require compression for animated→video conversion ONLY.
+        /// Alone: Just ensure output < input (even 1KB smaller counts).
+        /// With --match-quality: output < input + SSIM validation.
+        #[arg(long)]
+        compress: bool,
     },
 
     /// Verify conversion quality
@@ -157,16 +171,24 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             in_place,
             lossless,
+            explore,
             match_quality,
+            compress,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
             
+            // 🔥 v4.6: 使用模块化的 flag 验证器
+            if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+            
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-            }
-            if match_quality {
-                eprintln!("🎯 Match quality mode: ENABLED (auto-calculate CRF for video)");
+            } else {
+                let flag_mode = shared_utils::validate_flags_result(explore, match_quality, compress).unwrap();
+                eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
             }
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
@@ -178,7 +200,9 @@ fn main() -> anyhow::Result<()> {
                 delete_original: should_delete,
                 in_place,
                 lossless,
+                explore,
                 match_quality,
+                compress,
             };
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -476,8 +500,9 @@ fn auto_convert_single_file(
         output_dir: config.output_dir.map(|p| p.to_path_buf()),
         delete_original: config.delete_original,
         in_place: config.in_place,
-        explore: false,  // imgquality_av1 不支持 explore 模式（仅用于视频）
-        match_quality: config.match_quality,   // 用于 JPEG→JXL 质量匹配
+        explore: config.explore,
+        match_quality: config.match_quality,
+        compress: config.compress,
         apple_compat: false,  // imgquality_av1 不需要 Apple 兼容模式
     };
     

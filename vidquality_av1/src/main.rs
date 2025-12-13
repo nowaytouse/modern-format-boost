@@ -67,6 +67,11 @@ enum Commands {
         /// Enabled by default for video processing
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         match_quality: bool,
+        
+        /// 🔥 Require compression: output must be smaller than input
+        /// Use with --explore --match-quality for precise quality match + guaranteed compression
+        #[arg(long, default_value_t = false)]
+        compress: bool,
     },
 
     /// Simple mode: ALL videos → AV1 MP4
@@ -122,7 +127,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress } => {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -136,6 +141,7 @@ fn main() -> anyhow::Result<()> {
                 min_ssim: 0.95,       // 默认 SSIM 阈值
                 validate_vmaf: false, // 默认不启用 VMAF（较慢）
                 min_vmaf: 85.0,       // 默认 VMAF 阈值
+                require_compression: compress, // 🔥 v4.6
             };
             
             info!("🎬 Auto Mode Conversion (AV1)");
@@ -149,6 +155,9 @@ fn main() -> anyhow::Result<()> {
             }
             if explore {
                 info!("   📊 Size exploration: ENABLED");
+            }
+            if compress {
+                info!("   📦 Compression: ENABLED");
             }
             if recursive {
                 info!("   📂 Recursive: ENABLED");

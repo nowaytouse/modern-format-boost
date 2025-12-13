@@ -180,11 +180,13 @@ process_images() {
     echo ""
     echo "🖼️  处理图像..."
     
+    # 🔥 v4.6: 默认启用 --explore --match-quality --compress --apple-compat
     local args=(
         auto "$TARGET_DIR"
         --recursive
-        --match-quality
         --explore
+        --match-quality
+        --compress
         --apple-compat
     )
     
@@ -204,11 +206,13 @@ process_videos() {
     echo ""
     echo "🎬 处理视频..."
     
+    # 🔥 v4.6: 默认启用 --explore --match-quality --compress --apple-compat
     local args=(
         auto "$TARGET_DIR"
         --recursive
-        --match-quality true
         --explore
+        --match-quality true
+        --compress
         --apple-compat
     )
     

@@ -112,15 +112,28 @@ Explores CRF values to find optimal quality-size balance:
 **⚠️ ONLY affects animated→video and video→video conversion!**
 Static images (JPEG/PNG) always use lossless conversion regardless of these flags.
 
-#### Exploration Modes
+#### 🔥 v4.6 Flag Combinations
 
-| Flags | Mode | Strategy | Iterations |
-|-------|------|----------|------------|
-| None | Default | Fixed CRF from strategy | 1 |
-| `--match-quality` | Quality Match | AI-predicted CRF + SSIM validation | 1 |
-| `--explore` | Size Only | Binary search for smaller output | up to 8 |
-| `--explore --match-quality` | Precise Match | 🔥 **v4.5** Find highest SSIM (best quality match) | ~8-12 |
-| `--explore --match-quality --compress` | Precise+Compress | 🔥 **v4.5** Highest SSIM with output < input | ~10-15 |
+| Flags | Mode | Behavior |
+|-------|------|----------|
+| None | Default | Fixed CRF from strategy |
+| `--compress` | Compress Only | Just ensure output < input (even 1KB) |
+| `--explore` | Explore Only | Find smallest possible output |
+| `--match-quality` | Quality Only | Basic SSIM validation |
+| `--compress --match-quality` | Compress+Quality | output < input + basic SSIM validation |
+| `--explore --match-quality` | Precise Quality | Find highest SSIM (size doesn't matter) |
+| `--explore --match-quality --compress` | Precise+Compress | Highest SSIM + must compress |
+| `--explore --compress` | ❌ **INVALID** | Loud error - conflicting goals |
+
+**Invalid Combination Error:**
+```
+❌ 无效的 flag 组合: --explore --compress
+💡 --explore 寻找最小输出，--compress 只要更小即可，两者目标冲突
+💡 有效组合:
+   • --compress 单独：只要输出 < 输入
+   • --explore 单独：寻找尽可能更小的输出
+   • --explore --match-quality --compress：精确质量匹配 + 必须压缩
+```
 
 #### 🔥 v4.5: Precise Quality Match - Efficient Search
 
@@ -506,15 +519,28 @@ modern_format_boost/
 **⚠️ 仅影响动图→视频和视频→视频转换！**
 静态图像（JPEG/PNG）始终使用无损转换，不受这些标志影响。
 
-#### 探索模式
+#### 🔥 v4.6 Flag 组合
 
-| 标志 | 模式 | 策略 | 迭代次数 |
-|------|------|------|----------|
-| 无 | 默认 | 策略固定 CRF | 1 |
-| `--match-quality` | 质量匹配 | AI 预测 CRF + SSIM 验证 | 1 |
-| `--explore` | 仅大小 | 二分搜索更小输出 | 最多 8 |
-| `--explore --match-quality` | 精确匹配 | 🔥 **v4.5** 找最高 SSIM（最佳质量匹配） | ~8-12 |
-| `--explore --match-quality --compress` | 精确匹配+压缩 | 🔥 **v4.5** 最高 SSIM 且输出 < 输入 | ~10-15 |
+| 标志 | 模式 | 行为 |
+|------|------|------|
+| 无 | 默认 | 策略固定 CRF |
+| `--compress` | 仅压缩 | 只要输出 < 输入（哪怕 1KB） |
+| `--explore` | 仅探索 | 寻找尽可能更小的输出 |
+| `--match-quality` | 仅质量 | 粗略 SSIM 验证 |
+| `--compress --match-quality` | 压缩+质量 | 输出 < 输入 + 粗略 SSIM 验证 |
+| `--explore --match-quality` | 精确质量 | 找最高 SSIM（不在乎大小） |
+| `--explore --match-quality --compress` | 精确+压缩 | 最高 SSIM + 必须压缩 |
+| `--explore --compress` | ❌ **无效** | 响亮报错 - 目标冲突 |
+
+**无效组合错误信息：**
+```
+❌ 无效的 flag 组合: --explore --compress
+💡 --explore 寻找最小输出，--compress 只要更小即可，两者目标冲突
+💡 有效组合:
+   • --compress 单独：只要输出 < 输入
+   • --explore 单独：寻找尽可能更小的输出
+   • --explore --match-quality --compress：精确质量匹配 + 必须压缩
+```
 
 #### 🔥 v4.5: 精确质量匹配 - 高效搜索
 

@@ -30,6 +30,7 @@ pub mod video_quality_detector;
 pub mod video_explorer;
 pub mod checkpoint;
 pub mod xmp_merger;
+pub mod flag_validator;
 
 pub use progress::*;
 pub use safety::*;
@@ -83,10 +84,14 @@ pub use video_explorer::{
     explore_size_only, explore_quality_match, explore_precise_quality_match,
     // 🔥 v4.5: 精确质量匹配 + 压缩
     explore_precise_quality_match_with_compression,
+    // 🔥 v4.6: 仅压缩 + 压缩+质量
+    explore_compress_only, explore_compress_with_quality,
     // HEVC convenience functions
     explore_hevc, explore_hevc_size_only, explore_hevc_quality_match,
+    explore_hevc_compress_only, explore_hevc_compress_with_quality,
     // AV1 convenience functions
     explore_av1, explore_av1_size_only, explore_av1_quality_match,
+    explore_av1_compress_only, explore_av1_compress_with_quality,
     // Precision module (精确度规范)
     precision,
 };
@@ -103,4 +108,9 @@ pub use checkpoint::{
 
 pub use xmp_merger::{
     XmpMerger, XmpMergerConfig, XmpFile, MergeResult, MergeSummary,
+};
+
+// 🔥 v4.6: Flag 组合验证器
+pub use flag_validator::{
+    FlagMode, FlagValidation, validate_flags, validate_flags_result, print_flag_help,
 };
