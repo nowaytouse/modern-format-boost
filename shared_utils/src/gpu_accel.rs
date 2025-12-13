@@ -910,9 +910,20 @@ pub fn gpu_coarse_search(
     
     let gpu = GpuAccel::detect();
     
+    // 🔥 v5.1: 响亮报告 - GPU 粗略搜索始终使用 GPU（忽略 --cpu flag）
+    log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+    log_msg!("   ║  🚀 GPU COARSE SEARCH PHASE (--cpu flag IGNORED here!)   ║");
+    log_msg!("   ║  GPU is used for FAST boundary estimation ONLY           ║");
+    log_msg!("   ║  Final precise result will use CPU encoding              ║");
+    log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
+    
     // 检查 GPU 是否可用
     if !gpu.is_available() {
-        log_msg!("   ⚠️ No GPU available, skipping coarse search");
+        log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+        log_msg!("   ║  ⚠️  FALLBACK: No GPU available!                          ║");
+        log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
+        log_msg!("   ║  This may take longer but results will be accurate        ║");
+        log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
         return Ok(GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_type: GpuType::None,
@@ -934,7 +945,11 @@ pub fn gpu_coarse_search(
     let gpu_encoder = match gpu_encoder {
         Some(enc) => enc,
         None => {
-            log_msg!("   ⚠️ No GPU encoder for {}, skipping coarse search", encoder);
+            log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+            log_msg!("   ║  ⚠️  FALLBACK: No GPU encoder for {}!              ║", encoder.to_uppercase());
+            log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
+            log_msg!("   ║  This may take longer but results will be accurate        ║");
+            log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
             return Ok(GpuCoarseResult {
                 gpu_boundary_crf: config.initial_crf,
                 gpu_type: gpu.gpu_type,

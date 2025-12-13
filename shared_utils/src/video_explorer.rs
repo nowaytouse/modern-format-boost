@@ -2650,11 +2650,18 @@ pub fn explore_with_gpu_coarse_search(
     
     log_msg!("🔬 Smart GPU+CPU Explore v5.1 ({:?})", encoder);
     log_msg!("   📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
+    log_msg!("");
+    log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+    log_msg!("   ║  📋 STRATEGY: GPU Coarse → CPU Fine                       ║");
+    log_msg!("   ║  • Phase 1: GPU finds rough boundary (FAST, ignores --cpu)║");
+    log_msg!("   ║  • Phase 2: CPU finds precise CRF (ACCURATE)              ║");
+    log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
     
     // ═══════════════════════════════════════════════════════════
     // Phase 1: GPU 粗略搜索（如果可用）
     // ═══════════════════════════════════════════════════════════
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available() && has_gpu_encoder {
+        log_msg!("");
         log_msg!("   ═══════════════════════════════════════════════════");
         log_msg!("   📍 Phase 1: GPU Coarse Search");
         
@@ -2684,22 +2691,38 @@ pub fn explore_with_gpu_coarse_search(
                     (low, high, center)
                 } else {
                     // GPU 没找到边界，使用原始范围
-                    log_msg!("   ⚠️ GPU didn't find boundary, using full range");
+                    log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+                    log_msg!("   ║  ⚠️  GPU didn't find compression boundary                 ║");
+                    log_msg!("   ║  File may already be highly compressed                    ║");
+                    log_msg!("   ║  Using full CRF range for CPU search                      ║");
+                    log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
                     (initial_crf, max_crf, initial_crf)
                 }
             }
             Err(e) => {
-                log_msg!("   ⚠️ GPU coarse search failed: {}", e);
-                log_msg!("   📍 Falling back to CPU-only search");
+                log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+                log_msg!("   ║  ⚠️  FALLBACK: GPU coarse search failed!                  ║");
+                log_msg!("   ║  Error: {}                                 ║", e);
+                log_msg!("   ║  Falling back to CPU-only search (full range)            ║");
+                log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
                 (initial_crf, max_crf, initial_crf)
             }
         }
     } else {
         // 无 GPU，直接使用 CPU 搜索
+        log_msg!("");
         if !gpu.is_available() {
-            log_msg!("   ⚠️ No GPU available, using CPU-only search");
+            log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+            log_msg!("   ║  ⚠️  FALLBACK: No GPU available!                          ║");
+            log_msg!("   ║  Skipping GPU coarse search phase                         ║");
+            log_msg!("   ║  Using CPU-only search (may take longer)                  ║");
+            log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
         } else {
-            log_msg!("   ⚠️ No GPU encoder for {:?}, using CPU-only search", encoder);
+            log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+            log_msg!("   ║  ⚠️  FALLBACK: No GPU encoder for {:?}!              ║", encoder);
+            log_msg!("   ║  Skipping GPU coarse search phase                         ║");
+            log_msg!("   ║  Using CPU-only search (may take longer)                  ║");
+            log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
         }
         (initial_crf, max_crf, initial_crf)
     };
