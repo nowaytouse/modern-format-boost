@@ -58,14 +58,14 @@
 ### 图像处理
 - `--in-place`: 原地转换
 - `--recursive`: 递归子目录
-- `--match-quality`: AI质量匹配
+- `--match-quality`: 算法预测质量
 - `--explore`: 二分搜索最优CRF
 - `--apple-compat`: Apple兼容模式
 
 ### 视频处理
 - `--in-place`: 原地转换
 - `--recursive`: 递归子目录
-- `--match-quality`: AI质量匹配
+- `--match-quality`: 算法预测质量
 - `--explore`: 二分搜索最优CRF
 - `--apple-compat`: Apple兼容模式
 
