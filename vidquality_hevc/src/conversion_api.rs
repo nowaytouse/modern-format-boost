@@ -71,8 +71,9 @@ pub struct ConversionConfig {
     /// 🔥 v4.5: Require compression - output must be smaller than input
     /// Use with --explore --match-quality for precise quality match + guaranteed compression
     pub require_compression: bool,
-    /// 🔥 v5.0: 智能 GPU 控制（内部使用，用户无需设置）
-    /// 粗搜索阶段自动使用 GPU，精细调整阶段（0.5/0.1 步长）自动切换 CPU
+    /// 🔥 v4.15: Use GPU acceleration (default: true)
+    /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
+    /// VideoToolbox hardware encoding caps at ~0.95 SSIM
     pub use_gpu: bool,
 }
 
@@ -89,7 +90,7 @@ impl Default for ConversionConfig {
             in_place: false,
             apple_compat: false,
             require_compression: false,
-            use_gpu: true,  // 🔥 v5.0: 智能 GPU 控制（自动切换）
+            use_gpu: true,  // 🔥 v4.15: GPU by default
         }
     }
 }
@@ -340,8 +341,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     config.require_compression
                 ).map_err(|e| VidQualityError::ConversionError(e))?;
 
-                // 🔥 v5.0: 智能 GPU 控制 - 粗搜索用 GPU，精细调整自动切换 CPU
+                // 🔥 v4.15: 使用 GPU 控制变体支持 --cpu 模式
                 let use_gpu = config.use_gpu;
+                if !use_gpu {
+                    info!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
+                }
 
                 let explore_result = match flag_mode {
                     shared_utils::FlagMode::PreciseQualityWithCompress => {

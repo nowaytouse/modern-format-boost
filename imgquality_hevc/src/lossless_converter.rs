@@ -654,8 +654,11 @@ pub fn convert_to_hevc_mp4_matched(
     let flag_mode = options.flag_mode()
         .map_err(|e| ImgQualityError::ConversionError(e))?;
 
-    // 🔥 v5.0: 智能 GPU 控制 - 粗搜索用 GPU，精细调整自动切换 CPU
+    // 🔥 v4.15: GPU 控制
     let use_gpu = options.use_gpu;
+    if !use_gpu {
+        eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
+    }
 
     eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
 

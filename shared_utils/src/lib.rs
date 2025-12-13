@@ -93,13 +93,20 @@ pub use video_explorer::{
     // AV1 convenience functions
     explore_av1, explore_av1_size_only, explore_av1_quality_match,
     explore_av1_compress_only, explore_av1_compress_with_quality,
-    // 🔥 v4.15: GPU 控制变体
-    explore_precise_quality_match_with_compression_gpu,
-    explore_precise_quality_match_gpu,
-    explore_compress_only_gpu, explore_compress_with_quality_gpu,
-    explore_size_only_gpu, explore_quality_match_gpu,
     // Precision module (精确度规范)
     precision,
+};
+
+// 🔥 v5.0: GPU 控制变体 (deprecated, GPU is now automatic)
+// 保留向后兼容，但不推荐使用
+#[allow(deprecated)]
+pub use video_explorer::{
+    explore_precise_quality_match_with_compression_gpu,
+    explore_precise_quality_match_gpu,
+    explore_compress_only_gpu,
+    explore_compress_with_quality_gpu,
+    explore_size_only_gpu,
+    explore_quality_match_gpu,
 };
 
 // Legacy API re-exports (deprecated but still available)
@@ -122,6 +129,20 @@ pub use flag_validator::{
 };
 
 // 🔥 v4.9: GPU 加速模块
+// 🔥 v5.0: 新增 GPU→CPU 边界估算函数
+// 🔥 v5.1: 新增 GPU 粗略搜索 + CRF 映射
 pub use gpu_accel::{
     GpuAccel, GpuEncoder, GpuType,
+    // v5.0: GPU→CPU 边界估算
+    estimate_cpu_search_center, gpu_boundary_to_cpu_range,
+    // v5.1: GPU 粗略搜索
+    GpuCoarseResult, GpuCoarseConfig, CrfMapping,
+    gpu_coarse_search, get_cpu_search_range_from_gpu,
+};
+
+// 🔥 v5.1: GPU+CPU 智能探索
+pub use video_explorer::{
+    explore_with_gpu_coarse_search,
+    explore_hevc_with_gpu_coarse,
+    explore_av1_with_gpu_coarse,
 };

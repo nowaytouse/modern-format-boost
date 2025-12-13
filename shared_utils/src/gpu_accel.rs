@@ -646,6 +646,442 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
     (base_bitrate as f32 * crf_factor) as u32
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.0: GPU → CPU 压缩边界估算
+// ═══════════════════════════════════════════════════════════════
+
+/// GPU 压缩边界到 CPU 压缩边界的估算
+/// 
+/// ## 背景
+/// GPU 硬件编码器（NVENC, VideoToolbox, QSV 等）压缩效率低于 CPU 软件编码器：
+/// - 相同 CRF 下，GPU 输出文件更大（压缩效率低）
+/// - 质量排序：x264/x265 > QSV > NVENC > VCE (AMD)
+/// - 差异程度取决于内容复杂度、preset 等因素
+/// 
+/// ## 映射目的
+/// GPU 粗略搜索找到的"压缩边界"（刚好能压缩的 CRF）需要转换为 CPU 的等效边界：
+/// - GPU 在 CRF=20 刚好能压缩 → CPU 在更低 CRF（如 16-18）就能达到相同大小
+/// - 因为 CPU 效率更高，相同 CRF 下文件更小
+/// 
+/// ## 策略
+/// 返回一个**估算的 CPU 搜索中心点**，实际边界由 CPU 精细搜索确定。
+/// 这只是缩小搜索范围的提示，不是精确映射。
+/// 
+/// ## 注意
+/// - 这不是精确的 CRF 转换，只是搜索范围的估算
+/// - 实际差异取决于内容、preset、编码器版本等
+/// - CPU 精细搜索会找到真正的边界
+pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, _codec: &str) -> f32 {
+    // GPU 效率低 → 相同文件大小需要更高 CRF
+    // 反过来：GPU 边界 CRF → CPU 可以用更低 CRF 达到相同大小
+    // 
+    // 估算：CPU 边界 ≈ GPU 边界 - offset
+    // offset 取决于 GPU 类型（效率差异）
+    let offset = match gpu_type {
+        GpuType::Apple => {
+            // VideoToolbox 效率相对较好（Apple 优化）
+            2.0
+        }
+        GpuType::Nvidia => {
+            // NVENC 效率中等
+            3.0
+        }
+        GpuType::IntelQsv => {
+            // QSV 效率较好
+            2.5
+        }
+        GpuType::AmdAmf => {
+            // AMF 效率较低
+            3.5
+        }
+        GpuType::Vaapi => {
+            // VAAPI 效率中等
+            3.0
+        }
+        GpuType::None => {
+            // 无 GPU，不需要偏移
+            0.0
+        }
+    };
+    
+    // CPU 边界估算 = GPU 边界 - offset（更低 CRF = 更高质量）
+    // 但不能低于合理范围
+    (gpu_boundary - offset).max(1.0)
+}
+
+/// 计算 CPU 搜索范围
+/// 
+/// 基于 GPU 粗略边界，返回 CPU 精细搜索的范围 (low, high)
+/// 
+/// ## 策略
+/// - 以估算的 CPU 边界为中心
+/// - 扩展 ±4 CRF 作为安全边界（覆盖不确定性）
+/// - 确保不超出 min_crf/max_crf 限制
+pub fn gpu_boundary_to_cpu_range(
+    gpu_boundary: f32, 
+    gpu_type: GpuType, 
+    codec: &str, 
+    min_crf: f32, 
+    max_crf: f32
+) -> (f32, f32) {
+    let cpu_center = estimate_cpu_search_center(gpu_boundary, gpu_type, codec);
+    
+    // 扩展范围：±4 CRF 作为安全边界
+    // 因为 GPU/CPU 差异不确定，需要足够的搜索空间
+    let margin = 4.0;
+    let cpu_low = (cpu_center - margin).max(min_crf);
+    let cpu_high = (cpu_center + margin).min(max_crf);
+    
+    (cpu_low, cpu_high)
+}
+
+/// 兼容旧 API（deprecated）
+#[deprecated(since = "5.0.1", note = "use estimate_cpu_search_center instead")]
+pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
+    estimate_cpu_search_center(gpu_crf, gpu_type, codec)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.1: GPU 粗略搜索 + CPU 精细搜索 智能化处理
+// ═══════════════════════════════════════════════════════════════
+
+/// GPU 粗略搜索结果
+#[derive(Debug, Clone)]
+pub struct GpuCoarseResult {
+    /// GPU 找到的压缩边界 CRF（刚好能压缩的最低 CRF）
+    pub gpu_boundary_crf: f32,
+    /// GPU 类型
+    pub gpu_type: GpuType,
+    /// 编解码器
+    pub codec: String,
+    /// 搜索迭代次数
+    pub iterations: u32,
+    /// 是否找到有效边界
+    pub found_boundary: bool,
+    /// 日志
+    pub log: Vec<String>,
+}
+
+/// GPU/CPU CRF 映射表
+/// 
+/// ## 背景
+/// GPU 和 CPU 编码器对 CRF 的解释不同：
+/// - GPU CRF 10 可能产生的文件大小 ≈ CPU CRF 15 的文件大小
+/// - 这是因为 GPU 编码器压缩效率较低
+/// 
+/// ## 映射方向
+/// - `gpu_to_cpu`: GPU CRF → 等效 CPU CRF（用于搜索范围估算）
+/// - `cpu_to_gpu`: CPU CRF → 等效 GPU CRF（用于预览）
+/// 
+/// ## 注意
+/// 这些映射是**近似值**，实际差异取决于：
+/// - 视频内容复杂度
+/// - 分辨率和帧率
+/// - 编码器版本和 preset
+#[derive(Debug, Clone)]
+pub struct CrfMapping {
+    /// GPU 类型
+    pub gpu_type: GpuType,
+    /// 编解码器 (hevc, av1, h264)
+    pub codec: &'static str,
+    /// GPU CRF → CPU CRF 偏移量（CPU = GPU - offset）
+    /// 正值表示 CPU 效率更高（相同质量需要更低 CRF）
+    pub offset: f32,
+    /// 映射的不确定性范围（±）
+    pub uncertainty: f32,
+}
+
+impl CrfMapping {
+    /// 获取 HEVC 编码器的 CRF 映射
+    pub fn hevc(gpu_type: GpuType) -> Self {
+        let (offset, uncertainty) = match gpu_type {
+            GpuType::Apple => (2.0, 1.5),      // VideoToolbox 效率较好
+            GpuType::Nvidia => (3.0, 2.0),     // NVENC 效率中等
+            GpuType::IntelQsv => (2.5, 1.5),   // QSV 效率较好
+            GpuType::AmdAmf => (3.5, 2.5),     // AMF 效率较低
+            GpuType::Vaapi => (3.0, 2.0),      // VAAPI 效率中等
+            GpuType::None => (0.0, 0.0),       // 无 GPU
+        };
+        Self { gpu_type, codec: "hevc", offset, uncertainty }
+    }
+    
+    /// 获取 AV1 编码器的 CRF 映射
+    pub fn av1(gpu_type: GpuType) -> Self {
+        let (offset, uncertainty) = match gpu_type {
+            GpuType::Apple => (0.0, 0.0),      // VideoToolbox 不支持 AV1
+            GpuType::Nvidia => (4.0, 2.5),     // NVENC AV1 效率较低
+            GpuType::IntelQsv => (3.5, 2.0),   // QSV AV1 效率中等
+            GpuType::AmdAmf => (4.5, 3.0),     // AMF AV1 效率较低
+            GpuType::Vaapi => (4.0, 2.5),      // VAAPI AV1 效率中等
+            GpuType::None => (0.0, 0.0),       // 无 GPU
+        };
+        Self { gpu_type, codec: "av1", offset, uncertainty }
+    }
+    
+    /// GPU CRF → 等效 CPU CRF
+    /// 
+    /// 返回 (center, low, high) 三元组：
+    /// - center: 估算的 CPU CRF 中心点
+    /// - low: 搜索范围下限（更高质量）
+    /// - high: 搜索范围上限（更低质量）
+    pub fn gpu_to_cpu_range(&self, gpu_crf: f32, min_crf: f32, max_crf: f32) -> (f32, f32, f32) {
+        let center = (gpu_crf - self.offset).max(min_crf);
+        let low = (center - self.uncertainty).max(min_crf);
+        let high = (center + self.uncertainty).min(max_crf);
+        (center, low, high)
+    }
+    
+    /// CPU CRF → 等效 GPU CRF（用于预览）
+    pub fn cpu_to_gpu(&self, cpu_crf: f32) -> f32 {
+        cpu_crf + self.offset
+    }
+    
+    /// 打印映射信息
+    pub fn print_mapping_info(&self) {
+        eprintln!("   📊 GPU/CPU CRF Mapping ({} - {}):", self.gpu_type, self.codec.to_uppercase());
+        eprintln!("      • GPU CRF 10 ≈ CPU CRF {:.1}", 10.0 - self.offset);
+        eprintln!("      • GPU CRF 18 ≈ CPU CRF {:.1}", 18.0 - self.offset);
+        eprintln!("      • GPU CRF 23 ≈ CPU CRF {:.1}", 23.0 - self.offset);
+        eprintln!("      • GPU CRF 28 ≈ CPU CRF {:.1}", 28.0 - self.offset);
+        eprintln!("      • Uncertainty: ±{:.1} CRF", self.uncertainty);
+    }
+}
+
+/// GPU 粗略搜索配置
+#[derive(Debug, Clone)]
+pub struct GpuCoarseConfig {
+    /// 起始 CRF（通常是算法预测值）
+    pub initial_crf: f32,
+    /// 最小 CRF（最高质量）
+    pub min_crf: f32,
+    /// 最大 CRF（最低质量）
+    pub max_crf: f32,
+    /// 搜索步长（粗略搜索用大步长）
+    pub step: f32,
+    /// 最大迭代次数
+    pub max_iterations: u32,
+}
+
+impl Default for GpuCoarseConfig {
+    fn default() -> Self {
+        Self {
+            initial_crf: 18.0,
+            min_crf: 10.0,
+            max_crf: 40.0,
+            step: 4.0,  // 粗略搜索用 4 CRF 步长
+            max_iterations: 6,
+        }
+    }
+}
+
+/// 执行 GPU 粗略搜索
+/// 
+/// ## 目的
+/// 快速找到一个**压缩边界的大致范围**，供 CPU 精细搜索使用。
+/// 
+/// ## 策略
+/// 1. 从 initial_crf 开始，用大步长（4 CRF）快速搜索
+/// 2. 找到"刚好能压缩"的 CRF 边界
+/// 3. 返回边界值，供 CPU 精细搜索缩小范围
+/// 
+/// ## 注意
+/// - 这只是粗略估算，不追求精确
+/// - GPU 编码速度快，适合快速预览
+/// - 最终精确结果由 CPU 搜索确定
+pub fn gpu_coarse_search(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    encoder: &str,  // "hevc" or "av1"
+    input_size: u64,
+    config: &GpuCoarseConfig,
+) -> anyhow::Result<GpuCoarseResult> {
+    use std::process::Command;
+    use anyhow::{Context, bail};
+    
+    let mut log = Vec::new();
+    
+    macro_rules! log_msg {
+        ($($arg:tt)*) => {{
+            let msg = format!($($arg)*);
+            eprintln!("{}", msg);
+            log.push(msg);
+        }};
+    }
+    
+    let gpu = GpuAccel::detect();
+    
+    // 检查 GPU 是否可用
+    if !gpu.is_available() {
+        log_msg!("   ⚠️ No GPU available, skipping coarse search");
+        return Ok(GpuCoarseResult {
+            gpu_boundary_crf: config.initial_crf,
+            gpu_type: GpuType::None,
+            codec: encoder.to_string(),
+            iterations: 0,
+            found_boundary: false,
+            log,
+        });
+    }
+    
+    // 获取对应的 GPU 编码器
+    let gpu_encoder = match encoder {
+        "hevc" => gpu.get_hevc_encoder(),
+        "av1" => gpu.get_av1_encoder(),
+        "h264" => gpu.get_h264_encoder(),
+        _ => None,
+    };
+    
+    let gpu_encoder = match gpu_encoder {
+        Some(enc) => enc,
+        None => {
+            log_msg!("   ⚠️ No GPU encoder for {}, skipping coarse search", encoder);
+            return Ok(GpuCoarseResult {
+                gpu_boundary_crf: config.initial_crf,
+                gpu_type: gpu.gpu_type,
+                codec: encoder.to_string(),
+                iterations: 0,
+                found_boundary: false,
+                log,
+            });
+        }
+    };
+    
+    log_msg!("🚀 GPU Coarse Search v5.1 ({} - {})", gpu.gpu_type, encoder.to_uppercase());
+    log_msg!("   📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
+    log_msg!("   🎯 Goal: Find compression boundary (step={:.0})", config.step);
+    log_msg!("   ═══════════════════════════════════════════════════");
+    
+    // 打印 CRF 映射信息
+    let mapping = match encoder {
+        "hevc" => CrfMapping::hevc(gpu.gpu_type),
+        "av1" => CrfMapping::av1(gpu.gpu_type),
+        _ => CrfMapping::hevc(gpu.gpu_type),
+    };
+    mapping.print_mapping_info();
+    log_msg!("   ═══════════════════════════════════════════════════");
+    
+    let mut iterations = 0u32;
+    let mut boundary_crf: Option<f32> = None;
+    
+    // 快速编码函数（GPU）
+    let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
+        let crf_args = gpu_encoder.get_crf_args(crf);
+        let extra_args = gpu_encoder.get_extra_args();
+        
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y")
+            .arg("-i").arg(input)
+            .arg("-c:v").arg(gpu_encoder.name);
+        
+        for arg in &crf_args {
+            cmd.arg(arg);
+        }
+        for arg in &extra_args {
+            cmd.arg(*arg);
+        }
+        
+        cmd.arg("-an")  // 忽略音频，加速
+            .arg(output);
+        
+        let result = cmd.output().context("Failed to run ffmpeg")?;
+        
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            bail!("GPU encoding failed: {}", stderr.lines().last().unwrap_or("unknown error"));
+        }
+        
+        Ok(std::fs::metadata(output)?.len())
+    };
+    
+    // 从 max_crf 向下搜索（找最低能压缩的 CRF = 最高质量）
+    let mut test_crf = config.max_crf;
+    
+    while test_crf >= config.min_crf && iterations < config.max_iterations {
+        log_msg!("   🔄 GPU Testing CRF {:.0}...", test_crf);
+        
+        match encode_gpu(test_crf) {
+            Ok(size) => {
+                iterations += 1;
+                let ratio = size as f64 / input_size as f64;
+                
+                if size < input_size {
+                    // 能压缩
+                    boundary_crf = Some(test_crf);
+                    log_msg!("      ✅ {:.1}% - Compresses", ratio * 100.0);
+                    
+                    // 继续向下搜索更低的 CRF（更高质量）
+                    test_crf -= config.step;
+                } else {
+                    // 不能压缩，停止搜索
+                    log_msg!("      ❌ {:.1}% - Too large, stop", ratio * 100.0);
+                    break;
+                }
+            }
+            Err(e) => {
+                log_msg!("      ⚠️ GPU encoding failed: {}", e);
+                break;
+            }
+        }
+    }
+    
+    // 确定边界
+    let (final_boundary, found) = if let Some(b) = boundary_crf {
+        // 边界 = 最后一个能压缩的 CRF + step（因为我们是向下搜索的）
+        // 这样可以确保边界是"刚好能压缩"的点
+        let adjusted = (b + config.step).min(config.max_crf);
+        (adjusted, true)
+    } else {
+        // 没找到能压缩的点
+        (config.max_crf, false)
+    };
+    
+    log_msg!("   ═══════════════════════════════════════════════════");
+    if found {
+        log_msg!("   📊 GPU Boundary: CRF {:.0}", final_boundary);
+        let (cpu_center, cpu_low, cpu_high) = mapping.gpu_to_cpu_range(final_boundary, config.min_crf, config.max_crf);
+        log_msg!("   📊 CPU Search Range: [{:.1}, {:.1}] (center: {:.1})", cpu_low, cpu_high, cpu_center);
+    } else {
+        log_msg!("   ⚠️ No compression boundary found (file may be already compressed)");
+    }
+    log_msg!("   📈 GPU Iterations: {}", iterations);
+    
+    // 清理临时文件
+    let _ = std::fs::remove_file(output);
+    
+    Ok(GpuCoarseResult {
+        gpu_boundary_crf: final_boundary,
+        gpu_type: gpu.gpu_type,
+        codec: encoder.to_string(),
+        iterations,
+        found_boundary: found,
+        log,
+    })
+}
+
+/// 获取 GPU 粗略搜索后的 CPU 搜索范围
+/// 
+/// ## 返回值
+/// (min_crf, max_crf, center_crf) - CPU 精细搜索的范围
+pub fn get_cpu_search_range_from_gpu(
+    gpu_result: &GpuCoarseResult,
+    original_min_crf: f32,
+    original_max_crf: f32,
+) -> (f32, f32, f32) {
+    if !gpu_result.found_boundary {
+        // GPU 没找到边界，使用原始范围
+        let center = (original_min_crf + original_max_crf) / 2.0;
+        return (original_min_crf, original_max_crf, center);
+    }
+    
+    let mapping = match gpu_result.codec.as_str() {
+        "hevc" => CrfMapping::hevc(gpu_result.gpu_type),
+        "av1" => CrfMapping::av1(gpu_result.gpu_type),
+        _ => CrfMapping::hevc(gpu_result.gpu_type),
+    };
+    
+    mapping.gpu_to_cpu_range(gpu_result.gpu_boundary_crf, original_min_crf, original_max_crf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,5 +1117,36 @@ mod tests {
 
         let args = encoder.get_crf_args(23.5);
         assert_eq!(args, vec!["-cq", "24"]);
+    }
+    
+    #[test]
+    fn test_estimate_cpu_search_center() {
+        // VideoToolbox: offset = 2.0
+        let cpu_center = estimate_cpu_search_center(20.0, GpuType::Apple, "hevc");
+        assert!((cpu_center - 18.0).abs() < 0.1, "Expected ~18.0, got {}", cpu_center);
+        
+        // NVENC: offset = 3.0
+        let cpu_center = estimate_cpu_search_center(20.0, GpuType::Nvidia, "hevc");
+        assert!((cpu_center - 17.0).abs() < 0.1, "Expected ~17.0, got {}", cpu_center);
+        
+        // None: offset = 0
+        let cpu_center = estimate_cpu_search_center(20.0, GpuType::None, "hevc");
+        assert!((cpu_center - 20.0).abs() < 0.1, "Expected ~20.0, got {}", cpu_center);
+        
+        // 边界情况：不能低于 1.0
+        let cpu_center = estimate_cpu_search_center(2.0, GpuType::Nvidia, "hevc");
+        assert!(cpu_center >= 1.0, "Should not go below 1.0");
+    }
+    
+    #[test]
+    fn test_gpu_boundary_to_cpu_range() {
+        // Apple: center = 20 - 2 = 18, range = [14, 22]
+        let (low, high) = gpu_boundary_to_cpu_range(20.0, GpuType::Apple, "hevc", 10.0, 28.0);
+        assert!(low >= 10.0 && low <= 18.0, "low={} should be in [10, 18]", low);
+        assert!(high >= 18.0 && high <= 28.0, "high={} should be in [18, 28]", high);
+        
+        // 边界限制测试
+        let (low, _high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
+        assert!(low >= 10.0, "low should respect min_crf");
     }
 }
