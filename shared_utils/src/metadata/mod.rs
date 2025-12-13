@@ -152,6 +152,16 @@ pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     preserve_pro(src, dst)
 }
 
+/// 🔥 v4.8: 便捷函数 - 复制元数据（静默错误）
+/// 
+/// 与 preserve_metadata 相同，但错误时只打印警告而不返回 Result。
+/// 这是各个工具中 copy_metadata 函数的统一实现。
+pub fn copy_metadata(src: &Path, dst: &Path) {
+    if let Err(e) = preserve_metadata(src, dst) {
+        eprintln!("⚠️ Failed to preserve metadata: {}", e);
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 fn copy_xattrs_manual(src: &Path, dst: &Path) {
     if let Ok(iter) = xattr::list(src) {
