@@ -103,7 +103,7 @@
 
 ### Quality Modes & Flags
 
-#### `--match-quality` - AI-Predicted Quality Matching
+#### `--match-quality` - Algorithm-Predicted Quality Matching
 
 Automatically calculates optimal CRF based on input analysis:
 - **Video tools**: Enabled by default (`--match-quality=false` to disable)
@@ -353,7 +353,7 @@ Options:
       --in-place         Same as --delete-original
       --lossless         Mathematical lossless (slow!)
       --explore          Binary search for optimal CRF (animations only)
-      --match-quality    AI-predicted CRF + SSIM validation (animations only)
+      --match-quality    Algorithm-predicted CRF + SSIM validation (animations only)
       --compress         🔥 Require output < input
       --apple-compat     🍎 Convert non-Apple-compatible animated formats to HEVC
       --cpu              🖥️ Force CPU encoding (x265) for maximum quality
@@ -411,7 +411,7 @@ modern_format_boost/
 ├── imgquality_av1/      # Image tool (AV1, best compression)
 ├── vidquality_hevc/     # Video tool (HEVC, Apple compatible)
 ├── vidquality_av1/      # Video tool (AV1, best compression)
-└── shared_utils/        # Common: quality_matcher, video_explorer, metadata
+├── shared_utils/        # Common: quality_matcher, video_explorer, metadata
 ```
 
 ---
@@ -528,7 +528,7 @@ modern_format_boost/
 
 ### 质量模式与标志
 
-#### `--match-quality` - AI 预测质量匹配
+#### `--match-quality` - 算法预测质量匹配
 
 根据输入分析自动计算最佳 CRF：
 - **视频工具**：默认开启（`--match-quality=false` 关闭）
@@ -767,7 +767,7 @@ cargo build --release -p imgquality-hevc -p vidquality-hevc
       --in-place         等同于 --delete-original
       --lossless         数学无损（慢！）
       --explore          二分搜索最优 CRF（仅动图）
-      --match-quality    AI 预测 CRF + SSIM 验证（仅动图）
+      --match-quality    算法预测 CRF + SSIM 验证（仅动图）
       --compress         🔥 要求输出 < 输入
       --apple-compat     🍎 将非 Apple 兼容的动图格式转换为 HEVC
       --cpu              🖥️ 强制 CPU 编码 (x265) 以获得最高质量
@@ -825,7 +825,7 @@ modern_format_boost/
 ├── imgquality_av1/      # 图像工具（AV1，最佳压缩）
 ├── vidquality_hevc/     # 视频工具（HEVC，Apple 兼容）
 ├── vidquality_av1/      # 视频工具（AV1，最佳压缩）
-└── shared_utils/        # 公共：quality_matcher, video_explorer, metadata
+├── shared_utils/        # 公共：quality_matcher, video_explorer, metadata
 ```
 
 ---

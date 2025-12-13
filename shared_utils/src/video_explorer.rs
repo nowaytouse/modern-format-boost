@@ -8,6 +8,17 @@
 //! ⚠️ 仅支持动态图片→视频和视频→视频转换！
 //! ⚠️ 静态图片使用无损转换，不支持探索模式！
 //!
+//! ## 🔥 v5.0: 智能 GPU 控制
+//! 
+//! 根据搜索阶段自动选择编码器：
+//! - **粗搜索阶段**（步长 >= 1.0）：使用 GPU 加速，速度优先
+//! - **精细调整阶段**（步长 0.5, 0.1）：强制 CPU 编码，精度优先
+//! 
+//! 这种策略结合了 GPU 的速度优势和 CPU 的精度优势：
+//! - GPU 编码速度快但质量控制不如 CPU 精确
+//! - 在粗搜索阶段，速度更重要
+//! - 在精细调整阶段（±0.5, ±0.1），质量精度更重要
+//!
 //! ## 模块化设计
 //! 
 //! 所有探索逻辑集中在此模块，其他模块（imgquality_hevc, vidquality_hevc）
@@ -69,6 +80,19 @@ pub enum CrossValidationResult {
     MajorityAgree,
     /// 指标分歧 (1/3 或更少)
     Divergent,
+}
+
+/// 🔥 v5.0: 搜索阶段 - 用于智能 GPU 控制
+/// 
+/// ## 策略
+/// - `Coarse`: 粗搜索阶段（步长 >= 1.0），使用 GPU 加速
+/// - `Fine`: 精细调整阶段（步长 0.5, 0.1），强制 CPU 编码以获得更高精度
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchPhase {
+    /// 粗搜索阶段 - 使用 GPU 加速（如果可用）
+    Coarse,
+    /// 精细调整阶段 - 强制 CPU 编码
+    Fine,
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -134,7 +158,7 @@ impl Default for QualityThresholds {
 pub struct ExploreConfig {
     /// 探索模式
     pub mode: ExploreMode,
-    /// 起始 CRF（AI 预测值）
+    /// 起始 CRF（算法预测值）
     /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
     pub initial_crf: f32,
     /// 最小 CRF（最高质量）
@@ -500,7 +524,7 @@ impl VideoExplorer {
     
     /// 模式 2: 仅匹配输入质量（--match-quality 单独使用）
     /// 
-    /// 策略：使用 AI 预测的 CRF 值，单次编码
+    /// 策略：使用算法预测的 CRF 值，单次编码
     /// 验证 SSIM 但不探索，快速完成
     fn explore_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
@@ -544,7 +568,7 @@ impl VideoExplorer {
         })
     }
     
-    /// 🔥 v4.8 模式 5: 仅压缩（--compress 单独使用）
+    /// 🔥 v5.0 模式 5: 仅压缩（--compress 单独使用）
     ///
     /// ## 目标
     /// 确保输出 < 输入（哪怕只小 1KB 也算成功）
@@ -553,6 +577,7 @@ impl VideoExplorer {
     /// 1. 先测试 initial_crf，如果能压缩直接返回（最高质量）
     /// 2. 二分搜索找最低能压缩的 CRF
     /// 3. 使用缓存避免重复编码
+    /// 4. 🔥 v5.0: 智能 GPU 控制 - 粗搜索用 GPU，精细调整用 CPU
     fn explore_compress_only(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         let mut cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
@@ -565,28 +590,29 @@ impl VideoExplorer {
             }};
         }
 
-        // 带缓存的编码
-        let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>, explorer: &VideoExplorer| -> Result<u64> {
+        // 🔥 v5.0: 带缓存和智能 GPU 控制的编码
+        let encode_cached_with_phase = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>, explorer: &VideoExplorer, phase: SearchPhase| -> Result<u64> {
             let key = (crf * 10.0).round() as i32;
             if let Some(&size) = cache.get(&key) {
                 return Ok(size);
             }
-            let size = explorer.encode(crf)?;
+            let size = explorer.encode_with_phase(crf, phase)?;
             cache.insert(key, size);
             Ok(size)
         };
 
-        log_realtime!("📦 Compress-Only v4.8 ({:?})", self.encoder);
+        log_realtime!("📦 Compress-Only v5.0 ({:?})", self.encoder);
         log_realtime!("   📁 Input: {} bytes ({:.2} MB)",
             self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
         log_realtime!("   🎯 Goal: output < input (best quality that compresses)");
+        log_realtime!("   🚀 GPU: Coarse search | 🎯 CPU: Fine-tune (0.5 step)");
         log_realtime!("   ═══════════════════════════════════════════════════");
 
         let mut iterations = 0u32;
 
-        // 先测试 initial_crf
+        // 先测试 initial_crf [🚀 GPU]
         log_realtime!("   🔄 Testing initial CRF {:.1}...", self.config.initial_crf);
-        let initial_size = encode_cached(self.config.initial_crf, &mut cache, self)?;
+        let initial_size = encode_cached_with_phase(self.config.initial_crf, &mut cache, self, SearchPhase::Coarse)?;
         iterations += 1;
 
         if initial_size < self.input_size {
@@ -606,7 +632,7 @@ impl VideoExplorer {
             });
         }
 
-        // 二分搜索找最低能压缩的 CRF
+        // 二分搜索找最低能压缩的 CRF [🚀 GPU for coarse, 🎯 CPU for fine]
         log_realtime!("   📍 Binary search for compression boundary");
         let mut low = self.config.initial_crf;
         let mut high = self.config.max_crf;
@@ -615,9 +641,11 @@ impl VideoExplorer {
 
         while high - low > precision::FINE_STEP && iterations < self.config.max_iterations {
             let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
+            // 🔥 v5.0: 步长 > 0.5 用 GPU，步长 <= 0.5 用 CPU
+            let phase = if high - low > 1.0 { SearchPhase::Coarse } else { SearchPhase::Fine };
 
-            log_realtime!("   🔄 Testing CRF {:.1}...", mid);
-            let size = encode_cached(mid, &mut cache, self)?;
+            log_realtime!("   🔄 Testing CRF {:.1}{}...", mid, if phase == SearchPhase::Fine { " [CPU]" } else { "" });
+            let size = encode_cached_with_phase(mid, &mut cache, self, phase)?;
             iterations += 1;
 
             if size < self.input_size {
@@ -639,7 +667,7 @@ impl VideoExplorer {
         } else {
             // 无法压缩，测试 max_crf
             log_realtime!("   ⚠️ Cannot compress this file");
-            let size = encode_cached(self.config.max_crf, &mut cache, self)?;
+            let size = encode_cached_with_phase(self.config.max_crf, &mut cache, self, SearchPhase::Fine)?;
             (self.config.max_crf, size)
         };
 
@@ -673,6 +701,7 @@ impl VideoExplorer {
     /// 1. 二分搜索找最低能压缩的 CRF
     /// 2. 验证 SSIM 是否满足阈值
     /// 3. 使用缓存避免重复编码
+    /// 4. 🔥 v5.0: 智能 GPU 控制 - 粗搜索用 GPU，精细调整用 CPU
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
         // 缓存：CRF (x10) -> (size, ssim)
@@ -687,16 +716,17 @@ impl VideoExplorer {
         }
 
         let min_ssim = self.config.quality_thresholds.min_ssim;
-        log_realtime!("📦 Compress + Quality v4.8 ({:?})", self.encoder);
+        log_realtime!("📦 Compress + Quality v5.0 ({:?})", self.encoder);
         log_realtime!("   📁 Input: {} bytes", self.input_size);
         log_realtime!("   🎯 Goal: output < input + SSIM >= {:.2}", min_ssim);
+        log_realtime!("   🚀 GPU: Coarse search | 🎯 CPU: Fine-tune");
         log_realtime!("   ═══════════════════════════════════════════════════");
 
         let mut iterations = 0u32;
         let mut best_result: Option<(f32, u64, f64)> = None; // (crf, size, ssim)
 
-        // Phase 1: 二分搜索找最低能压缩的 CRF
-        log_realtime!("   📍 Phase 1: Binary search for compression boundary");
+        // Phase 1: 二分搜索找最低能压缩的 CRF [🚀 GPU]
+        log_realtime!("   📍 Phase 1: Binary search [🚀 GPU]");
         let mut low = self.config.initial_crf;
         let mut high = self.config.max_crf;
         let mut compress_boundary: Option<f32> = None;
@@ -705,7 +735,8 @@ impl VideoExplorer {
             let mid = ((low + high) / 2.0).round();
 
             log_realtime!("   🔄 Testing CRF {:.0}...", mid);
-            let size = self.encode(mid as f32)?;
+            // 🔥 v5.0: 粗搜索使用 GPU
+            let size = self.encode_with_phase(mid as f32, SearchPhase::Coarse)?;
             iterations += 1;
 
             let key = (mid * 10.0).round() as i32;
@@ -721,16 +752,17 @@ impl VideoExplorer {
             }
         }
 
-        // Phase 2: 在压缩边界验证质量
+        // Phase 2: 在压缩边界验证质量 [🎯 CPU]
         if let Some(boundary) = compress_boundary {
-            log_realtime!("   📍 Phase 2: Validate quality at CRF {:.1}", boundary);
+            log_realtime!("   📍 Phase 2: Validate quality [🎯 CPU]");
 
             // 直接在边界点验证质量（边界点是最低能压缩的 CRF = 最高质量）
             let key = (boundary * 10.0).round() as i32;
             let size = if let Some(&(s, _)) = cache.get(&key) {
                 s
             } else {
-                let s = self.encode(boundary)?;
+                // 🔥 v5.0: 精细验证使用 CPU
+                let s = self.encode_with_phase(boundary, SearchPhase::Fine)?;
                 iterations += 1;
                 s
             };
@@ -755,8 +787,8 @@ impl VideoExplorer {
         let (final_crf, final_size, final_ssim) = if let Some((crf, size, ssim)) = best_result {
             (crf, size, ssim)
         } else {
-            // 无法压缩，测试 max_crf
-            let size = self.encode(self.config.max_crf)?;
+            // 无法压缩，测试 max_crf [🎯 CPU]
+            let size = self.encode_with_phase(self.config.max_crf, SearchPhase::Fine)?;
             let quality = self.validate_quality()?;
             (self.config.max_crf, size, quality.0.unwrap_or(0.0))
         };
@@ -831,28 +863,30 @@ impl VideoExplorer {
         let mut best_quality: (Option<f64>, Option<f64>, Option<f64>);
         let mut best_ssim: f64;
 
-        // 🔥 v4.9: 带缓存和跟踪的编码函数
-        let encode_cached = |crf: f32,
+        // 🔥 v5.0: 带缓存、跟踪和智能 GPU 控制的编码函数
+        let encode_cached_with_phase = |crf: f32,
                             cache: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
                             last_key: &mut i32,
-                            explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
+                            explorer: &VideoExplorer,
+                            phase: SearchPhase| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
             let key = (crf * 10.0).round() as i32;
             if let Some(&cached) = cache.get(&key) {
                 return Ok(cached);
             }
 
-            let size = explorer.encode(crf)?;
+            // 🔥 v5.0: 根据搜索阶段选择 GPU/CPU
+            let size = explorer.encode_with_phase(crf, phase)?;
             let quality = explorer.validate_quality()?;
             cache.insert(key, (size, quality));
             *last_key = key;  // 更新最后编码的 key
             Ok((size, quality))
         };
 
-        // Phase 1: 边界测试
-        log_realtime!("   📍 Phase 1: Boundary test");
+        // Phase 1: 边界测试（🔥 v5.0: 使用 GPU 加速）
+        log_realtime!("   📍 Phase 1: Boundary test [🚀 GPU]");
 
         log_realtime!("   🔄 Testing min CRF {:.1}...", self.config.min_crf);
-        let (min_size, min_quality) = encode_cached(self.config.min_crf, &mut cache, &mut last_encoded_key, self)?;
+        let (min_size, min_quality) = encode_cached_with_phase(self.config.min_crf, &mut cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
         iterations += 1;
         let min_ssim = min_quality.0.unwrap_or(0.0);
         log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
@@ -864,7 +898,7 @@ impl VideoExplorer {
         best_ssim = min_ssim;
 
         log_realtime!("   🔄 Testing max CRF {:.1}...", self.config.max_crf);
-        let (max_size, max_quality) = encode_cached(self.config.max_crf, &mut cache, &mut last_encoded_key, self)?;
+        let (max_size, max_quality) = encode_cached_with_phase(self.config.max_crf, &mut cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
         iterations += 1;
         let max_ssim = max_quality.0.unwrap_or(0.0);
         log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
@@ -881,8 +915,8 @@ impl VideoExplorer {
             best_quality = max_quality;
             best_ssim = max_ssim;
         } else {
-            // Phase 2: 黄金分割搜索找平台边缘
-            log_realtime!("   📍 Phase 2: Golden section search");
+            // Phase 2: 黄金分割搜索找平台边缘（🔥 v5.0: 使用 GPU 加速）
+            log_realtime!("   📍 Phase 2: Golden section search [🚀 GPU]");
             const PHI: f32 = 0.618;
 
             let mut low = self.config.min_crf;
@@ -894,7 +928,7 @@ impl VideoExplorer {
                 let mid_rounded = (mid * 2.0).round() / 2.0;
 
                 log_realtime!("   🔄 Testing CRF {:.1}...", mid_rounded);
-                let (size, quality) = encode_cached(mid_rounded, &mut cache, &mut last_encoded_key, self)?;
+                let (size, quality) = encode_cached_with_phase(mid_rounded, &mut cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
                 iterations += 1;
                 let ssim = quality.0.unwrap_or(0.0);
                 log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
@@ -918,17 +952,17 @@ impl VideoExplorer {
                 prev_ssim = ssim;
             }
 
-            // Phase 3: 精细调整 ±0.5 和 ±0.1
+            // Phase 3: 精细调整 ±0.5 和 ±0.1（🔥 v5.0: 强制 CPU 编码以获得更高精度）
             if iterations < MAX_ITERATIONS {
-                log_realtime!("   📍 Phase 3: Fine-tune around CRF {:.1}", best_crf);
+                log_realtime!("   📍 Phase 3: Fine-tune around CRF {:.1} [🎯 CPU for precision]", best_crf);
 
-                // 先测试 ±0.5
+                // 先测试 ±0.5（🔥 v5.0: 使用 CPU）
                 for offset in [-0.5_f32, 0.5] {
                     let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
                     if iterations >= MAX_ITERATIONS { break; }
 
                     log_realtime!("   🔄 Testing CRF {:.1}...", crf);
-                    let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
+                    let (size, quality) = encode_cached_with_phase(crf, &mut cache, &mut last_encoded_key, self, SearchPhase::Fine)?;
                     iterations += 1;
                     let ssim = quality.0.unwrap_or(0.0);
                     log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
@@ -941,7 +975,7 @@ impl VideoExplorer {
                     }
                 }
 
-                // 🔥 v4.9: 进一步 ±0.1 精细调整（达到 ±0.1 精度）
+                // 🔥 v5.0: 进一步 ±0.1 精细调整（强制 CPU 编码）
                 if iterations < MAX_ITERATIONS {
                     for offset in [-0.1_f32, 0.1, -0.2, 0.2] {
                         let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
@@ -951,7 +985,7 @@ impl VideoExplorer {
                         if iterations >= MAX_ITERATIONS { break; }
 
                         log_realtime!("   🔄 Testing CRF {:.1}...", crf);
-                        let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
+                        let (size, quality) = encode_cached_with_phase(crf, &mut cache, &mut last_encoded_key, self, SearchPhase::Fine)?;
                         iterations += 1;
                         let ssim = quality.0.unwrap_or(0.0);
                         log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
@@ -1042,16 +1076,18 @@ impl VideoExplorer {
             }};
         }
 
-        // 仅编码（不计算SSIM）
-        let encode_size_only = |crf: f32,
+        // 🔥 v5.0: 仅编码（不计算SSIM）- 支持智能 GPU 控制
+        let encode_size_only_with_phase = |crf: f32,
                                size_cache: &mut std::collections::HashMap<i32, u64>,
                                last_key: &mut i32,
-                               explorer: &VideoExplorer| -> Result<u64> {
+                               explorer: &VideoExplorer,
+                               phase: SearchPhase| -> Result<u64> {
             let key = (crf * 10.0).round() as i32;
             if let Some(&size) = size_cache.get(&key) {
                 return Ok(size);
             }
-            let size = explorer.encode(crf)?;
+            // 🔥 v5.0: 根据搜索阶段选择 GPU/CPU
+            let size = explorer.encode_with_phase(crf, phase)?;
             size_cache.insert(key, size);
             *last_key = key;
             Ok(size)
@@ -1070,22 +1106,23 @@ impl VideoExplorer {
             Ok(quality)
         };
 
-        log_msg!("🔬 Quality + Compress v4.13 ({:?})", self.encoder);
+        log_msg!("🔬 Quality + Compress v5.0 ({:?})", self.encoder);
         log_msg!("   📁 Input: {} bytes ({:.2} MB)", self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
         log_msg!("   🎯 Goal: HIGHEST SSIM with output < input");
         log_msg!("   💡 Strategy: Find lowest CRF that compresses (= highest quality)");
+        log_msg!("   🚀 GPU: Coarse search | 🎯 CPU: Fine-tune (0.5/0.1 step)");
         log_msg!("   ═══════════════════════════════════════════════════");
 
         let mut iterations = 0u32;
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 1: 纯大小搜索（从 min_crf 向上搜索找压缩边界）
+        // Phase 1: 纯大小搜索（从 min_crf 向上搜索找压缩边界）[🚀 GPU]
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 1: Size-only search (NO SSIM calculation)");
+        log_msg!("   📍 Phase 1: Size-only search [🚀 GPU]");
 
         // 🔥 关键修复：从 min_crf 开始测试（最高质量）
         log_msg!("   🔄 Testing min CRF {:.1} (highest quality)...", self.config.min_crf);
-        let min_size = encode_size_only(self.config.min_crf, &mut size_cache, &mut last_encoded_key, self)?;
+        let min_size = encode_size_only_with_phase(self.config.min_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
         iterations += 1;
 
         if min_size < self.input_size {
@@ -1122,7 +1159,7 @@ impl VideoExplorer {
 
         // 测试 max_crf 确认能否压缩
         log_msg!("   🔄 Testing max CRF {:.1} (lowest quality)...", self.config.max_crf);
-        let max_size = encode_size_only(self.config.max_crf, &mut size_cache, &mut last_encoded_key, self)?;
+        let max_size = encode_size_only_with_phase(self.config.max_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
         iterations += 1;
 
         if max_size >= self.input_size {
@@ -1175,8 +1212,8 @@ impl VideoExplorer {
             ((curr as f64 - prev as f64) / prev as f64).abs()
         };
 
-        // 🔥 二分搜索找压缩边界（最低能压缩的 CRF = 最高质量）
-        log_msg!("   📍 Phase 1: Binary search (0.5 step) with smart termination");
+        // 🔥 二分搜索找压缩边界（最低能压缩的 CRF = 最高质量）[🚀 GPU]
+        log_msg!("   📍 Phase 1b: Binary search (0.5 step) [🚀 GPU]");
         let mut low = self.config.min_crf;  // 不能压缩
         let mut high = self.config.max_crf; // 能压缩
         let mut boundary_crf = self.config.max_crf;
@@ -1186,7 +1223,7 @@ impl VideoExplorer {
             let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
 
             log_msg!("   🔄 Testing CRF {:.1}...", mid);
-            let size = encode_size_only(mid, &mut size_cache, &mut last_encoded_key, self)?;
+            let size = encode_size_only_with_phase(mid, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Coarse)?;
             iterations += 1;
             size_history.push((mid, size));
 
@@ -1222,11 +1259,11 @@ impl VideoExplorer {
         log_msg!("   📍 Boundary (0.5 step): CRF {:.1}", boundary_crf);
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 2: 0.1 精细调整（在 0.5 边界两侧搜索更精确的点）
+        // Phase 2: 0.1 精细调整（在 0.5 边界两侧搜索更精确的点）[🎯 CPU]
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 2: Fine-tune ±0.4 with 0.1 step");
+        log_msg!("   📍 Phase 2: Fine-tune ±0.4 with 0.1 step [🎯 CPU for precision]");
 
-        // 🔥 v4.12: 双向搜索 + v4.13 智能终止
+        // 🔥 v5.0: 双向搜索 + 智能终止 + CPU 编码
         let mut best_boundary = boundary_crf;
         let mut fine_tune_history: Vec<u64> = Vec::new();
         
@@ -1244,7 +1281,8 @@ impl VideoExplorer {
             if size_cache.contains_key(&key) { continue; }
 
             log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
-            let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+            // 🔥 v5.0: 精细调整阶段强制使用 CPU 编码
+            let size = encode_size_only_with_phase(test_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Fine)?;
             iterations += 1;
             fine_tune_history.push(size);
 
@@ -1286,7 +1324,8 @@ impl VideoExplorer {
                 if size_cache.contains_key(&key) { continue; }
 
                 log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
-                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                // 🔥 v5.0: 精细调整阶段强制使用 CPU 编码
+                let size = encode_size_only_with_phase(test_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Fine)?;
                 iterations += 1;
                 fine_tune_history.push(size);
 
@@ -1318,15 +1357,15 @@ impl VideoExplorer {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 3: 边界SSIM验证（只算1次）
+        // Phase 3: 边界SSIM验证（只算1次）[🎯 CPU]
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 3: SSIM validation at final boundary");
+        log_msg!("   📍 Phase 3: SSIM validation at final boundary [🎯 CPU]");
 
-        // 确保输出文件是 boundary_crf 的版本
+        // 确保输出文件是 boundary_crf 的版本（🔥 v5.0: 最终编码使用 CPU 以获得最高精度）
         let boundary_key = (boundary_crf * 10.0).round() as i32;
         if last_encoded_key != boundary_key {
             log_msg!("   🔄 Re-encoding to boundary CRF {:.1}...", boundary_crf);
-            let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_key, self)?;
+            let _ = encode_size_only_with_phase(boundary_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Fine)?;
         }
 
         let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
@@ -1444,17 +1483,40 @@ impl VideoExplorer {
     }
     
     /// 编码视频
-    /// 🔥 v4.9: GPU 加速 + 实时进度输出
+    /// 🔥 v5.0: 智能 GPU 控制 - 根据搜索阶段自动选择编码器
+    /// 
+    /// ## 策略
+    /// - 粗搜索阶段（步长 >= 1.0）：使用 GPU 加速，速度优先
+    /// - 精细调整阶段（步长 0.5, 0.1）：强制 CPU 编码，精度优先
+    /// 
+    /// ## 参数
+    /// - `crf`: CRF 值
+    /// - `phase`: 搜索阶段 - `SearchPhase::Coarse` 或 `SearchPhase::Fine`
+    fn encode_with_phase(&self, crf: f32, phase: SearchPhase) -> Result<u64> {
+        let use_gpu_for_this_encode = match phase {
+            SearchPhase::Coarse => self.use_gpu,  // 粗搜索：使用 GPU（如果可用）
+            SearchPhase::Fine => false,            // 精细调整：强制 CPU
+        };
+        self.encode_internal(crf, use_gpu_for_this_encode)
+    }
+
+    /// 🔥 v4.9: GPU 加速 + 实时进度输出（默认使用实例的 use_gpu 设置）
     fn encode(&self, crf: f32) -> Result<u64> {
+        self.encode_internal(crf, self.use_gpu)
+    }
+
+    /// 🔥 v5.0: 内部编码实现 - 支持动态 GPU 控制 + 智能 fallback
+    fn encode_internal(&self, crf: f32, use_gpu_override: bool) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y");
 
-        // 🔥 v4.9: GPU 加速编码
+        // 🔥 v5.0: 智能 GPU 控制 + 自动 fallback
         let gpu = crate::gpu_accel::GpuAccel::detect();
-        let (encoder_name, crf_args, extra_args, accel_type) = if self.use_gpu {
+        let (encoder_name, crf_args, extra_args, accel_type) = if use_gpu_override && gpu.is_available() {
+            // 请求 GPU 且 GPU 可用
             match self.encoder {
                 VideoEncoder::Hevc => {
                     if let Some(enc) = gpu.get_hevc_encoder() {
@@ -1465,11 +1527,12 @@ impl VideoExplorer {
                             format!("🚀 GPU ({})", gpu.gpu_type),
                         )
                     } else {
+                        // GPU 可用但没有 HEVC 编码器，fallback 到 CPU
                         (
                             self.encoder.ffmpeg_name(),
                             vec!["-crf".to_string(), format!("{:.1}", crf)],
                             vec![],
-                            "CPU".to_string(),
+                            "🖥️ CPU (no GPU HEVC)".to_string(),
                         )
                     }
                 }
@@ -1482,11 +1545,12 @@ impl VideoExplorer {
                             format!("🚀 GPU ({})", gpu.gpu_type),
                         )
                     } else {
+                        // GPU 可用但没有 AV1 编码器，fallback 到 CPU
                         (
                             self.encoder.ffmpeg_name(),
                             vec!["-crf".to_string(), format!("{:.1}", crf)],
                             vec![],
-                            "CPU".to_string(),
+                            "🖥️ CPU (no GPU AV1)".to_string(),
                         )
                     }
                 }
@@ -1499,21 +1563,31 @@ impl VideoExplorer {
                             format!("🚀 GPU ({})", gpu.gpu_type),
                         )
                     } else {
+                        // GPU 可用但没有 H264 编码器，fallback 到 CPU
                         (
                             self.encoder.ffmpeg_name(),
                             vec!["-crf".to_string(), format!("{:.1}", crf)],
                             vec![],
-                            "CPU".to_string(),
+                            "🖥️ CPU (no GPU H264)".to_string(),
                         )
                     }
                 }
             }
-        } else {
+        } else if use_gpu_override && !gpu.is_available() {
+            // 请求 GPU 但 GPU 不可用，智能 fallback 到 CPU
             (
                 self.encoder.ffmpeg_name(),
                 vec!["-crf".to_string(), format!("{:.1}", crf)],
                 vec![],
-                "CPU".to_string(),
+                "🖥️ CPU (GPU unavailable)".to_string(),
+            )
+        } else {
+            // 明确请求 CPU（精细调整阶段）
+            (
+                self.encoder.ffmpeg_name(),
+                vec!["-crf".to_string(), format!("{:.1}", crf)],
+                vec![],
+                "🎯 CPU (precision)".to_string(),
             )
         };
 
@@ -1533,7 +1607,7 @@ impl VideoExplorer {
         }
 
         // CPU 编码的 preset（GPU 编码通常不需要）
-        if !self.use_gpu || extra_args.is_empty() {
+        if !use_gpu_override || extra_args.is_empty() {
             cmd.arg("-preset").arg("medium");
         }
 
@@ -1542,7 +1616,7 @@ impl VideoExplorer {
             .arg("-stats_period").arg("0.5");
 
         // CPU 编码器特定参数
-        if !self.use_gpu {
+        if !use_gpu_override {
             for arg in self.encoder.extra_args(self.max_threads) {
                 cmd.arg(arg);
             }
@@ -1565,15 +1639,26 @@ impl VideoExplorer {
         // 获取输入文件的时长（用于计算进度百分比）
         let duration_secs = self.get_input_duration().unwrap_or(0.0);
 
-        // 🔥 v4.12: 后台线程排空 stderr，防止缓冲区满导致死锁
+        // 🔥 v5.2: 后台线程排空 stderr 防死锁，同时保留最后 N 行用于错误诊断
         let stderr_handle = child.stderr.take().map(|stderr| {
             std::thread::spawn(move || {
-                use std::io::Read;
-                let mut buf = [0u8; 4096];
-                let mut stderr = stderr;
-                while let Ok(n) = stderr.read(&mut buf) {
-                    if n == 0 { break; }
+                use std::io::{BufRead, BufReader};
+                use std::collections::VecDeque;
+                const MAX_LINES: usize = 10;
+                
+                let reader = BufReader::new(stderr);
+                let mut recent_lines: VecDeque<String> = VecDeque::with_capacity(MAX_LINES);
+                
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        if recent_lines.len() >= MAX_LINES {
+                            recent_lines.pop_front();
+                        }
+                        recent_lines.push_back(line);
+                    }
                 }
+                
+                recent_lines.into_iter().collect::<Vec<_>>().join("\n")
             })
         });
 
@@ -1612,10 +1697,10 @@ impl VideoExplorer {
             }
         }
 
-        // 等待 stderr 线程完成
-        if let Some(handle) = stderr_handle {
-            let _ = handle.join();
-        }
+        // 等待 stderr 线程完成并获取内容
+        let stderr_content = stderr_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
 
         // 等待进程完成
         let status = child.wait()
@@ -1625,7 +1710,18 @@ impl VideoExplorer {
         eprintln!("\r      ✅ {} Encoding complete                                    ", accel_type);
 
         if !status.success() {
-            bail!("ffmpeg encoding failed with exit code: {:?}", status.code());
+            // 🔥 v5.2: 显示 ffmpeg 错误信息
+            let error_lines: Vec<&str> = stderr_content
+                .lines()
+                .filter(|l| l.contains("Error") || l.contains("error") || l.contains("Invalid") || l.contains("failed"))
+                .take(5)
+                .collect();
+            let error_detail = if error_lines.is_empty() {
+                stderr_content.lines().rev().take(3).collect::<Vec<_>>().join("\n")
+            } else {
+                error_lines.join("\n")
+            };
+            bail!("ffmpeg encoding failed (exit code: {:?}):\n{}", status.code(), error_detail);
         }
 
         let size = fs::metadata(&self.output_path)
@@ -1964,7 +2060,7 @@ pub fn explore_size_only(
 
 /// 仅匹配输入质量（--match-quality 单独使用）
 /// 
-/// 使用 AI 预测的 CRF，单次编码，验证 SSIM
+/// 使用算法预测的 CRF，单次编码，验证 SSIM
 /// 🔥 v3.4: CRF 参数改为 f32，支持小数点精度
 pub fn explore_quality_match(
     input: &Path,

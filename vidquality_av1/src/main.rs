@@ -77,11 +77,6 @@ enum Commands {
         /// When enabled, shows a warning that AV1 files may not play on Apple devices
         #[arg(long, default_value_t = false)]
         apple_compat: bool,
-
-        /// 🔥 v4.15: Force CPU encoding (libaom) instead of hardware acceleration
-        /// Use --cpu for maximum quality (higher SSIM)
-        #[arg(long, default_value_t = false)]
-        cpu: bool,
     },
 
     /// Simple mode: ALL videos → AV1 MP4
@@ -137,7 +132,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress, apple_compat, cpu } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress, apple_compat } => {
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -153,7 +148,7 @@ fn main() -> anyhow::Result<()> {
                 min_vmaf: 85.0,       // 默认 VMAF 阈值
                 require_compression: compress, // 🔥 v4.6
                 apple_compat,         // 🍎 v4.15
-                use_gpu: !cpu,        // 🔥 v4.15: CPU mode = no GPU
+                use_gpu: true,        // 🔥 v5.0: 智能 GPU 控制（自动切换）
             };
             
             info!("🎬 Auto Mode Conversion (AV1)");
@@ -177,9 +172,7 @@ fn main() -> anyhow::Result<()> {
             if apple_compat {
                 info!("   🍎 Apple Compatibility: ENABLED (⚠️ Note: AV1 not natively supported on Apple devices)");
             }
-            if cpu {
-                info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
-            }
+            info!("   🚀 Smart GPU: Coarse search → GPU | Fine-tune (0.5/0.1) → CPU");
             info!("");
             
             if input.is_dir() {
