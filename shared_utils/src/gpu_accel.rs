@@ -26,6 +26,25 @@
 use std::process::Command;
 use std::sync::OnceLock;
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.3: 全局常量 - 避免硬编码
+// ═══════════════════════════════════════════════════════════════
+
+/// GPU 采样时长（秒）- 用于长视频的快速边界估算
+pub const GPU_SAMPLE_DURATION: f32 = 60.0;
+
+/// GPU 粗略搜索步长
+pub const GPU_COARSE_STEP: f32 = 2.0;
+
+/// GPU 粗略搜索最大迭代次数
+pub const GPU_MAX_ITERATIONS: u32 = 10;
+
+/// GPU 默认最小 CRF
+pub const GPU_DEFAULT_MIN_CRF: f32 = 10.0;
+
+/// GPU 默认最大 CRF
+pub const GPU_DEFAULT_MAX_CRF: f32 = 40.0;
+
 /// GPU 加速检测结果（全局缓存）
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
 
@@ -865,10 +884,10 @@ impl Default for GpuCoarseConfig {
     fn default() -> Self {
         Self {
             initial_crf: 18.0,
-            min_crf: 10.0,
-            max_crf: 40.0,
-            step: 2.0,  // 🔥 v5.3: 精细搜索用 2 CRF 步长
-            max_iterations: 6,
+            min_crf: GPU_DEFAULT_MIN_CRF,
+            max_crf: GPU_DEFAULT_MAX_CRF,
+            step: GPU_COARSE_STEP,
+            max_iterations: GPU_MAX_ITERATIONS,
         }
     }
 }
@@ -970,10 +989,9 @@ pub fn gpu_coarse_search(
     let mut iterations = 0u32;
     let mut boundary_crf: Option<f32> = None;
     
-    // 🔥 v5.3: GPU 采样改为 60 秒，更精确的边界估算
+    // 🔥 v5.3: GPU 采样使用全局常量，更精确的边界估算
     // 对于短视频（<60秒），编码整个视频
     // 对于长视频（>60秒），只编码前 60 秒来估算压缩边界
-    const GPU_SAMPLE_DURATION: f32 = 60.0;
     
     // 🔥 v5.3: 获取视频时长，智能处理短视频
     let duration: f32 = {

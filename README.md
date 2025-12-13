@@ -2,29 +2,19 @@
 
 🗃️ Collection-Grade Media Archive Tool - Premium Quality for Long-term Storage
 
-**📚 Documentation**: [Algorithm Deep Dive v4.6](./ALGORITHM_DEEP_DIVE_v4.6.md) | [Bug Analysis v4.8](./BUG_ANALYSIS_v4.8.md) | [English](#english) | [中文](#中文)
+**📚 Documentation**: [English](#english) | [中文](#中文)
 
-### 🔥 v5.3 Updates
+---
 
-- **GPU+CPU Smart Search**: Two-phase intelligent exploration
-  - Phase 1: GPU coarse search (60s sampling, step=2) finds rough boundary FAST
-  - Phase 2: CPU fine search (0.5 step → 0.1 step) finds precise CRF ACCURATELY
-- **Smart Short Video Handling**: Videos < 60s use full duration for GPU sampling with loud warning
-- **Improved Boundary Detection**: GPU returns actual boundary CRF (not +step), CPU explores from there
-- **Stage Naming**: Internal stages renamed to Stage A/B/C to avoid confusion with outer Phase 1/2
+### 🔥 Core Features (v5.3)
 
-### v4.13-v5.2 Updates
-
-- **v5.2**: Fixed Stage B upward search to update best_boundary; GPU only narrows upper bound
-- **v4.13**: Smart termination with sliding window variance + change rate detection
-- **Precision**: Three-phase search: 0.5 step binary search → ±0.4 fine-tune with 0.1 step → SSIM validation
-- **Efficiency**: Reduces encoding iterations by 30-50% on stable content
-
-### v4.8-v4.12 Updates
-
-- **v4.12**: Added 0.1 fine-tune phase after 0.5 step binary search
-- **v4.8**: Added encoding cache, `--cpu` flag, fixed binary search logic
-- **Precision**: CRF precision upgraded to ±0.1
+| Feature | Description |
+|---------|-------------|
+| **GPU+CPU Smart Search** | Phase 1: GPU 60s sampling (step=2) → Phase 2: CPU 0.5→0.1 step fine-tune |
+| **Quality Matching** | SSIM ≥ 0.95 validation with three-phase search |
+| **Compression Guarantee** | `--compress` ensures output < input |
+| **Apple Compatibility** | `--apple-compat` converts AV1/VP9 → HEVC |
+| **Metadata Preservation** | EXIF, ICC profiles, timestamps, macOS xattr |
 
 ---
 
@@ -441,27 +431,15 @@ modern_format_boost/
 <a id="中文"></a>
 ## 中文
 
-### 🔥 v5.3 更新
+### 🔥 核心功能 (v5.3)
 
-- **GPU+CPU 智能搜索**：两阶段智能探索
-  - Phase 1: GPU 粗略搜索（60秒采样，step=2）快速找到粗略边界
-  - Phase 2: CPU 精细搜索（0.5 步进 → 0.1 步进）精确找到最优 CRF
-- **短视频智能处理**：< 60秒的视频使用完整时长进行 GPU 采样，并响亮警告
-- **改进边界检测**：GPU 返回实际边界 CRF（不再 +step），CPU 从该点继续探索
-- **阶段命名**：内部阶段重命名为 Stage A/B/C，避免与外部 Phase 1/2 混淆
-
-### v4.13-v5.2 更新
-
-- **v5.2**：修复 Stage B 向上搜索更新 best_boundary；GPU 只缩小上限
-- **v4.13**：滑动窗口方差 + 变化率检测实现智能终止
-- **精度**：三阶段搜索：0.5 步进二分搜索 → ±0.4 范围 0.1 步进精细调整 → SSIM 验证
-- **效率**：稳定内容可减少 30-50% 编码次数
-
-### v4.8-v4.12 更新
-
-- **v4.12**：在 0.5 步进二分搜索后添加 0.1 精细调整阶段
-- **v4.8**：添加编码缓存、`--cpu` flag、修复二分搜索逻辑
-- **精度**：CRF 精度升级到 ±0.1
+| 功能 | 说明 |
+|------|------|
+| **GPU+CPU 智能搜索** | Phase 1: GPU 60秒采样 (step=2) → Phase 2: CPU 0.5→0.1 步进精细调整 |
+| **质量匹配** | SSIM ≥ 0.95 验证 + 三阶段搜索 |
+| **压缩保证** | `--compress` 确保输出 < 输入 |
+| **Apple 兼容** | `--apple-compat` 将 AV1/VP9 转换为 HEVC |
+| **元数据保留** | EXIF、ICC 配置、时间戳、macOS xattr |
 
 ---
 

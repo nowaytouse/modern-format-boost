@@ -19,6 +19,28 @@ use std::fs;
 use anyhow::{Result, Context, bail};
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v5.3: 全局常量 - 避免硬编码
+// ═══════════════════════════════════════════════════════════════
+
+/// 绝对最低 CRF（最高质量边界）
+pub const ABSOLUTE_MIN_CRF: f32 = 10.0;
+
+/// 绝对最高 CRF（最低质量边界）
+pub const ABSOLUTE_MAX_CRF: f32 = 51.0;
+
+/// Stage B-1 快速搜索最大迭代次数
+pub const STAGE_B1_MAX_ITERATIONS: u32 = 20;
+
+/// Stage B-2 精细调整最大迭代次数
+pub const STAGE_B2_MAX_ITERATIONS: u32 = 25;
+
+/// Stage B 双向搜索最大迭代次数
+pub const STAGE_B_BIDIRECTIONAL_MAX: u32 = 18;
+
+/// 二分搜索最大迭代次数
+pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
+
+// ═══════════════════════════════════════════════════════════════
 // 探索模式枚举
 // ═══════════════════════════════════════════════════════════════
 
@@ -1095,12 +1117,10 @@ impl VideoExplorer {
             // 🔥 v5.3: 先用 0.5 步长快速向下探索，再用 0.1 精细调整
             let mut best_crf = self.config.min_crf;
             let mut best_size = min_size;
-            let absolute_min_crf = 10.0_f32; // 绝对最低 CRF
-            
             // Stage B-1: 0.5 步长快速向下探索
             log_msg!("   📍 Stage B-1: Fast search below min_crf (0.5 step)");
             let mut test_crf = self.config.min_crf - 0.5;
-            while test_crf >= absolute_min_crf && iterations < 20 {
+            while test_crf >= ABSOLUTE_MIN_CRF && iterations < STAGE_B1_MAX_ITERATIONS {
                 log_msg!("   🔄 Testing CRF {:.1}...", test_crf);
                 let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
                 iterations += 1;
@@ -1120,8 +1140,8 @@ impl VideoExplorer {
             log_msg!("   📍 Stage B-2: Fine-tune around CRF {:.1} (0.1 step)", best_crf);
             for offset in [-0.1_f32, -0.2, -0.3, -0.4] {
                 let fine_crf = best_crf + offset;
-                if fine_crf < absolute_min_crf { break; }
-                if iterations >= 25 { break; }
+                if fine_crf < ABSOLUTE_MIN_CRF { break; }
+                if iterations >= STAGE_B2_MAX_ITERATIONS { break; }
                 
                 let key = (fine_crf * 10.0).round() as i32;
                 if size_cache.contains_key(&key) { continue; }
@@ -1293,7 +1313,7 @@ impl VideoExplorer {
             
             // 边界检查
             if test_crf < self.config.min_crf { continue; }
-            if iterations >= 18 { break; }
+            if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
             
             // 跳过已测试的值
             let key = (test_crf * 10.0).round() as i32;
@@ -1335,7 +1355,7 @@ impl VideoExplorer {
                 
                 // 边界检查
                 if test_crf > self.config.max_crf { continue; }
-                if iterations >= 18 { break; }
+                if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
                 
                 // 跳过已测试的值
                 let key = (test_crf * 10.0).round() as i32;
