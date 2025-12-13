@@ -1334,20 +1334,18 @@ impl VideoExplorer {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // Phase 3: 边界SSIM验证（只算1次）[🎯 CPU]
+        // Phase 3: CPU 最终编码 + SSIM 验证 [🎯 CPU]
         // ═══════════════════════════════════════════════════════════
-        log_msg!("   📍 Phase 3: SSIM validation at final boundary [🎯 CPU]");
+        log_msg!("   📍 Phase 3: Final CPU encoding + SSIM validation [🎯 CPU]");
 
-        // 确保输出文件是 boundary_crf 的版本（🔥 v5.0: 最终编码使用 CPU 以获得最高精度）
-        let boundary_key = (boundary_crf * 10.0).round() as i32;
-        if last_encoded_key != boundary_key {
-            log_msg!("   🔄 Re-encoding to boundary CRF {:.1}...", boundary_crf);
-            let _ = encode_size_only_with_phase(boundary_crf, &mut size_cache, &mut last_encoded_key, self, SearchPhase::Fine)?;
-        }
+        // 🔥 v5.0: 总是用 CPU 重新编码最终结果，确保最高精度
+        // 即使之前已经用 GPU 编码过同一个 CRF，也要用 CPU 重做
+        log_msg!("   🔄 Final encoding with CPU at CRF {:.1}...", boundary_crf);
+        let final_size = self.encode_with_phase(boundary_crf, SearchPhase::Fine)?;
+        iterations += 1;
 
-        let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
+        let quality = self.validate_quality()?;
         let ssim = quality.0.unwrap_or(0.0);
-        let final_size = *size_cache.get(&boundary_key).unwrap();
 
         let size_change_pct = self.calc_change_pct(final_size);
         let status = if ssim >= 0.999 { "✅ Excellent" }
