@@ -593,10 +593,13 @@ fn auto_convert_single_file(
         //   - 长动画(>=3s) 或 高质量 → HEVC MP4
         //   - 短动画(<3s) 且 非高质量 → GIF (Bayer 256色)
         (format, is_lossless, true) => {
-            // 🔥 v3.8: GIF 已经是 Apple 兼容格式，直接跳过
-            // 重新编码 GIF 通常会导致文件变大（LZW 压缩不是确定性的）
-            if format == "GIF" {
-                println!("⏭️ Skipping GIF (already Apple compatible, re-encoding would increase size): {}", input.display());
+            // 🔥 v5.1: GIF 处理策略
+            // - 如果用户启用了 --explore --match-quality --compress，尝试转换为 HEVC
+            // - 否则跳过（GIF 已经是 Apple 兼容格式）
+            let should_try_compress_gif = config.explore && config.match_quality && config.compress;
+            if format == "GIF" && !should_try_compress_gif {
+                println!("⏭️ Skipping GIF (already Apple compatible): {}", input.display());
+                println!("   💡 Use --explore --match-quality --compress to try HEVC conversion");
                 return Ok(());
             }
             
