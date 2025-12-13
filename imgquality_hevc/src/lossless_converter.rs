@@ -650,23 +650,35 @@ pub fn convert_to_hevc_mp4_matched(
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, analysis.has_alpha);
     
-    // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
-    let explore_mode = options.explore_mode();
-    let mode_name = match explore_mode {
-        shared_utils::ExploreMode::PreciseQualityMatch => "🔬 Precise Quality-Match",
-        shared_utils::ExploreMode::SizeOnly => "🔍 Size-Only Exploration",
-        shared_utils::ExploreMode::QualityMatch => "🎯 Quality-Match",
-    };
-    eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", mode_name, initial_crf);
+    // 🔥 v4.6: 使用模块化的 flag 验证器
+    let flag_mode = options.flag_mode()
+        .map_err(|e| ImgQualityError::ConversionError(e))?;
     
-    let explore_result = match explore_mode {
-        shared_utils::ExploreMode::PreciseQualityMatch => {
+    eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
+    
+    let explore_result = match flag_mode {
+        shared_utils::FlagMode::PreciseQualityWithCompress => {
+            shared_utils::explore_precise_quality_match_with_compression(
+                input, &output, shared_utils::VideoEncoder::Hevc, vf_args,
+                initial_crf, 40.0, 0.91
+            )
+        }
+        shared_utils::FlagMode::PreciseQuality => {
             shared_utils::explore_hevc(input, &output, vf_args, initial_crf)
         }
-        shared_utils::ExploreMode::SizeOnly => {
+        shared_utils::FlagMode::CompressWithQuality => {
+            shared_utils::explore_hevc_compress_with_quality(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::QualityOnly => {
+            shared_utils::explore_hevc_quality_match(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::ExploreOnly => {
             shared_utils::explore_hevc_size_only(input, &output, vf_args, initial_crf)
         }
-        shared_utils::ExploreMode::QualityMatch => {
+        shared_utils::FlagMode::CompressOnly => {
+            shared_utils::explore_hevc_compress_only(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::Default => {
             shared_utils::explore_hevc_quality_match(input, &output, vf_args, initial_crf)
         }
     }.map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;

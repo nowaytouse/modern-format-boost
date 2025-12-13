@@ -329,32 +329,57 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
                 let input_path = Path::new(&detection.file_path);
                 
-                let explore_result = if config.explore_smaller && config.match_quality && config.require_compression {
-                    // 🔥 v4.5 模式 4: --explore + --match-quality + --compress（精确质量匹配 + 压缩）
-                    let initial_crf = calculate_matched_crf(&detection);
-                    info!("   🔬 Precise Quality-Match + Compression: CRF {:.1}", initial_crf);
-                    shared_utils::explore_precise_quality_match_with_compression(
-                        input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
-                        initial_crf, 40.0, 0.91
-                    )
-                } else if config.explore_smaller && config.match_quality {
-                    // 模式 3: --explore + --match-quality 组合（精确质量匹配）
-                    let initial_crf = calculate_matched_crf(&detection);
-                    info!("   🔬 Precise Quality-Match: CRF {:.1} + SSIM validation", initial_crf);
-                    shared_utils::explore_hevc(input_path, &output_path, vf_args, initial_crf)
-                } else if config.explore_smaller {
-                    // 模式 1: --explore 单独使用（仅探索更小大小）
-                    info!("   🔍 Size-Only Exploration: finding smaller output");
-                    shared_utils::explore_hevc_size_only(input_path, &output_path, vf_args, strategy.crf)
-                } else if config.match_quality {
-                    // 模式 2: --match-quality 单独使用（单次编码 + SSIM 验证）
-                    let matched_crf = calculate_matched_crf(&detection);
-                    info!("   🎯 Quality-Match: CRF {:.1} + SSIM validation", matched_crf);
-                    shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, matched_crf)
-                } else {
-                    // 默认模式：使用策略 CRF，单次编码
-                    info!("   📦 Default: CRF {:.1}", strategy.crf);
-                    shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, strategy.crf)
+                // 🔥 v4.6: 使用模块化的 flag 验证器
+                let flag_mode = shared_utils::validate_flags_result(
+                    config.explore_smaller, 
+                    config.match_quality, 
+                    config.require_compression
+                ).map_err(|e| VidQualityError::ConversionError(e))?;
+                
+                let explore_result = match flag_mode {
+                    shared_utils::FlagMode::PreciseQualityWithCompress => {
+                        // 模式 6: --explore --match-quality --compress
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_precise_quality_match_with_compression(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            initial_crf, 40.0, 0.91
+                        )
+                    }
+                    shared_utils::FlagMode::PreciseQuality => {
+                        // 模式 5: --explore --match-quality
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_hevc(input_path, &output_path, vf_args, initial_crf)
+                    }
+                    shared_utils::FlagMode::CompressWithQuality => {
+                        // 模式 4: --compress --match-quality
+                        let matched_crf = calculate_matched_crf(&detection);
+                        info!("   📦 {}: CRF {:.1}", flag_mode.description_cn(), matched_crf);
+                        shared_utils::explore_hevc_compress_with_quality(input_path, &output_path, vf_args, matched_crf)
+                    }
+                    shared_utils::FlagMode::QualityOnly => {
+                        // 模式 3: --match-quality 单独
+                        let matched_crf = calculate_matched_crf(&detection);
+                        info!("   🎯 {}: CRF {:.1}", flag_mode.description_cn(), matched_crf);
+                        shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, matched_crf)
+                    }
+                    shared_utils::FlagMode::ExploreOnly => {
+                        // 模式 2: --explore 单独
+                        info!("   🔍 {}", flag_mode.description_cn());
+                        shared_utils::explore_hevc_size_only(input_path, &output_path, vf_args, strategy.crf)
+                    }
+                    shared_utils::FlagMode::CompressOnly => {
+                        // 模式 1: --compress 单独
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   📦 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_hevc_compress_only(input_path, &output_path, vf_args, initial_crf)
+                    }
+                    shared_utils::FlagMode::Default => {
+                        // 默认模式
+                        info!("   📦 {}: CRF {:.1}", flag_mode.description_cn(), strategy.crf);
+                        shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, strategy.crf)
+                    }
                 }.map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
                 
                 // 打印探索日志

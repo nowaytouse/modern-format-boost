@@ -73,6 +73,8 @@ pub struct ConversionConfig {
     pub validate_vmaf: bool,
     /// 🔥 v3.5: Minimum VMAF threshold (default: 85.0)
     pub min_vmaf: f64,
+    /// 🔥 v4.6: Require compression - output must be smaller than input
+    pub require_compression: bool,
 }
 
 impl Default for ConversionConfig {
@@ -89,6 +91,7 @@ impl Default for ConversionConfig {
             min_ssim: 0.95,      // 🔥 v3.5: Default SSIM threshold
             validate_vmaf: false, // 🔥 v3.5: VMAF disabled by default (slower)
             min_vmaf: 85.0,      // 🔥 v3.5: Default VMAF threshold
+            require_compression: false, // 🔥 v4.6
         }
     }
 }
@@ -325,29 +328,73 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                  info!("   🚀 Using AV1 Mathematical Lossless Mode");
                  let size = execute_av1_lossless(&detection, &output_path)?;
                  (size, 0, 0)
-            } else if config.explore_smaller && config.match_quality {
-                // 🔥 v3.5: 精确质量匹配模式 (--explore + --match-quality)
-                // 二分搜索 + SSIM/VMAF 裁判验证，找到最优质量-大小平衡
-                info!("   🔬 Precise Quality-Match Mode: binary search + quality validation");
-                explore_precise_quality_match_av1(
-                    &detection, 
-                    &output_path, 
-                    config.min_ssim,
-                    config.validate_vmaf,
-                    config.min_vmaf,
-                )?
-            } else if config.explore_smaller {
-                // Size exploration mode (only valid for lossy)
-                explore_smaller_size(&detection, &output_path)?
-            } else if config.match_quality {
-                // Calculate CRF to match input quality
-                let matched_crf = calculate_matched_crf(&detection);
-                info!("   🎯 Match Quality Mode: using CRF {} to match input quality", matched_crf);
-                let size = execute_av1_conversion(&detection, &output_path, matched_crf)?;
-                (size, matched_crf, 0)
             } else {
-                let size = execute_av1_conversion(&detection, &output_path, 0)?;
-                (size, 0, 0)
+                // 🔥 v4.6: 使用模块化的 flag 验证器
+                let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+                let input_path = Path::new(&detection.file_path);
+                
+                let flag_mode = shared_utils::validate_flags_result(
+                    config.explore_smaller, 
+                    config.match_quality, 
+                    config.require_compression
+                ).map_err(|e| VidQualityError::ConversionError(e))?;
+                
+                let explore_result = match flag_mode {
+                    shared_utils::FlagMode::PreciseQualityWithCompress => {
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   🔬 {}: CRF {}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_precise_quality_match_with_compression(
+                            input_path, &output_path, shared_utils::VideoEncoder::Av1, vf_args,
+                            initial_crf as f32, 50.0, config.min_ssim
+                        )
+                    }
+                    shared_utils::FlagMode::PreciseQuality => {
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   🔬 {}: CRF {}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_av1(input_path, &output_path, vf_args, initial_crf as f32)
+                    }
+                    shared_utils::FlagMode::CompressWithQuality => {
+                        let matched_crf = calculate_matched_crf(&detection);
+                        info!("   📦 {}: CRF {}", flag_mode.description_cn(), matched_crf);
+                        shared_utils::explore_av1_compress_with_quality(input_path, &output_path, vf_args, matched_crf as f32)
+                    }
+                    shared_utils::FlagMode::QualityOnly => {
+                        let matched_crf = calculate_matched_crf(&detection);
+                        info!("   🎯 {}: CRF {}", flag_mode.description_cn(), matched_crf);
+                        shared_utils::explore_av1_quality_match(input_path, &output_path, vf_args, matched_crf as f32)
+                    }
+                    shared_utils::FlagMode::ExploreOnly => {
+                        info!("   🔍 {}", flag_mode.description_cn());
+                        shared_utils::explore_av1_size_only(input_path, &output_path, vf_args, 30.0)
+                    }
+                    shared_utils::FlagMode::CompressOnly => {
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   📦 {}: CRF {}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_av1_compress_only(input_path, &output_path, vf_args, initial_crf as f32)
+                    }
+                    shared_utils::FlagMode::Default => {
+                        let size = execute_av1_conversion(&detection, &output_path, 0)?;
+                        return Ok(ConversionOutput {
+                            input_path: input.display().to_string(),
+                            output_path: output_path.display().to_string(),
+                            strategy: strategy.clone(),
+                            input_size: detection.file_size,
+                            output_size: size,
+                            size_ratio: size as f64 / detection.file_size as f64,
+                            success: true,
+                            message: "Conversion successful".to_string(),
+                            final_crf: 0,
+                            exploration_attempts: 0,
+                        });
+                    }
+                }.map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+                
+                // 打印探索日志
+                for log_line in &explore_result.log {
+                    info!("{}", log_line);
+                }
+                
+                (explore_result.output_size, explore_result.optimal_crf as u8, explore_result.iterations as u8)
             }
         }
         TargetVideoFormat::Skip => unreachable!(), // Handled above

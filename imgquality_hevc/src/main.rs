@@ -96,6 +96,14 @@ enum Commands {
         #[arg(long)]
         match_quality: bool,
 
+        /// 🔥 Require compression for animated→video conversion ONLY.
+        /// Alone: Just ensure output < input (even 1KB smaller counts).
+        /// With --match-quality: output < input + SSIM validation.
+        /// With --explore --match-quality: Precise quality match + must compress.
+        /// Does NOT affect static images (JPEG/PNG always use lossless conversion).
+        #[arg(long)]
+        compress: bool,
+
         /// 🍎 Apple compatibility mode: Convert non-Apple-compatible animated formats to HEVC
         /// When enabled, animated WebP (VP8/VP9) will be converted to HEVC MP4
         /// instead of being skipped as "modern format"
@@ -176,38 +184,25 @@ fn main() -> anyhow::Result<()> {
             lossless,
             explore,
             match_quality,
+            compress,
             apple_compat,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
+            
+            // 🔥 v4.6: 使用模块化的 flag 验证器
+            if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
             
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
                 eprintln!("   Smart quality matching: DISABLED");
             } else {
                 // 显示探索模式信息
-                match (explore, match_quality) {
-                    (true, true) => {
-                        eprintln!("🔬 Precise Quality-Match: ENABLED (for animated→video)");
-                        eprintln!("   - Binary search + SSIM validation");
-                        eprintln!("   - Auto-skip if output larger than input");
-                    }
-                    (true, false) => {
-                        eprintln!("🔍 Size-Only Exploration: ENABLED (for animated→video)");
-                        eprintln!("   - Binary search for smaller output");
-                        eprintln!("   - No quality validation");
-                    }
-                    (false, true) => {
-                        eprintln!("🎯 Quality-Match: ENABLED (for animated→video)");
-                        eprintln!("   - AI-predicted CRF + SSIM validation");
-                        eprintln!("   - Auto-skip if output larger than input");
-                    }
-                    (false, false) => {
-                        eprintln!("🎯 Default Quality-Match: ENABLED (for animated→video)");
-                        eprintln!("   - AI-predicted CRF + SSIM validation");
-                        eprintln!("   - Auto-skip if output larger than input");
-                    }
-                }
+                let flag_mode = shared_utils::validate_flags_result(explore, match_quality, compress).unwrap();
+                eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             if apple_compat {
@@ -224,6 +219,7 @@ fn main() -> anyhow::Result<()> {
                 lossless,
                 explore,
                 match_quality,
+                compress,
                 apple_compat,
             };
             
@@ -513,6 +509,8 @@ struct AutoConvertConfig {
     lossless: bool,
     explore: bool,
     match_quality: bool,
+    /// 🔥 v4.6: 压缩模式
+    compress: bool,
     /// 🍎 Apple compatibility mode
     apple_compat: bool,
 }
@@ -543,6 +541,7 @@ fn auto_convert_single_file(
         in_place: config.in_place,
         explore: config.explore,
         match_quality: config.match_quality,
+        compress: config.compress,
         apple_compat: config.apple_compat,
     };
     
