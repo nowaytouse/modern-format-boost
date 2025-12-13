@@ -774,6 +774,8 @@ pub struct GpuCoarseResult {
     pub gpu_boundary_crf: f32,
     /// GPU 最优点的输出大小
     pub gpu_best_size: Option<u64>,
+    /// 🔥 v5.6: GPU 最优点的 SSIM（用于评估 GPU 质量上限）
+    pub gpu_best_ssim: Option<f64>,
     /// GPU 类型
     pub gpu_type: GpuType,
     /// 编解码器
@@ -952,6 +954,7 @@ pub fn gpu_coarse_search(
         return Ok(GpuCoarseResult {
             gpu_boundary_crf: config.initial_crf,
             gpu_best_size: None,
+            gpu_best_ssim: None,
             gpu_type: GpuType::None,
             codec: encoder.to_string(),
             iterations: 0,
@@ -980,6 +983,7 @@ pub fn gpu_coarse_search(
             return Ok(GpuCoarseResult {
                 gpu_boundary_crf: config.initial_crf,
                 gpu_best_size: None,
+                gpu_best_ssim: None,
                 gpu_type: gpu.gpu_type,
                 codec: encoder.to_string(),
                 iterations: 0,
@@ -1192,12 +1196,61 @@ pub fn gpu_coarse_search(
         (config.max_crf, false, false)
     };
     
+    // 🔥 v5.6: 计算 GPU 最优点的 SSIM（评估 GPU 质量上限）
+    let gpu_ssim = if found {
+        // 重新编码最优点以计算 SSIM
+        log_msg!("   📍 GPU Stage 4: SSIM validation at best CRF {:.1}", final_boundary);
+        match encode_gpu(final_boundary) {
+            Ok(_) => {
+                // 计算 SSIM
+                let ssim_output = Command::new("ffmpeg")
+                    .arg("-i").arg(input)
+                    .arg("-i").arg(output)
+                    .arg("-lavfi").arg("ssim")
+                    .arg("-f").arg("null")
+                    .arg("-")
+                    .output();
+                
+                match ssim_output {
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        // 解析 SSIM: "SSIM Y:0.998990 ... All:0.968472"
+                        if let Some(line) = stderr.lines().find(|l| l.contains("SSIM") && l.contains("All:")) {
+                            if let Some(all_pos) = line.find("All:") {
+                                let after_all = &line[all_pos + 4..];
+                                if let Some(space_pos) = after_all.find(' ') {
+                                    if let Ok(ssim) = after_all[..space_pos].parse::<f64>() {
+                                        log_msg!("      📊 GPU SSIM: {:.6} (ceiling ~0.97)", ssim);
+                                        Some(ssim)
+                                    } else { None }
+                                } else if let Ok(ssim) = after_all.trim().parse::<f64>() {
+                                    log_msg!("      📊 GPU SSIM: {:.6} (ceiling ~0.97)", ssim);
+                                    Some(ssim)
+                                } else { None }
+                            } else { None }
+                        } else { None }
+                    }
+                    Err(_) => None,
+                }
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    
     log_msg!("   ═══════════════════════════════════════════════════");
     if found {
         log_msg!("   📊 GPU Best CRF: {:.1}", final_boundary);
         if let Some(size) = best_size {
             let ratio = size as f64 / sample_input_size as f64 * 100.0;
             log_msg!("   📊 GPU Best Size: {:.1}% of input", ratio);
+        }
+        if let Some(ssim) = gpu_ssim {
+            let quality_hint = if ssim >= 0.97 { "🟢 Near ceiling" } 
+                              else if ssim >= 0.95 { "🟡 Good" } 
+                              else { "🟠 Below expected" };
+            log_msg!("   📊 GPU Best SSIM: {:.6} {}", ssim, quality_hint);
         }
         let (cpu_center, cpu_low, cpu_high) = mapping.gpu_to_cpu_range(final_boundary, config.min_crf, config.max_crf);
         log_msg!("   📊 CPU Search Range: [{:.1}, {:.1}] (center: {:.1})", cpu_low, cpu_high, cpu_center);
@@ -1212,6 +1265,7 @@ pub fn gpu_coarse_search(
     Ok(GpuCoarseResult {
         gpu_boundary_crf: final_boundary,
         gpu_best_size: best_size,
+        gpu_best_ssim: gpu_ssim,
         gpu_type: gpu.gpu_type,
         codec: encoder.to_string(),
         iterations,
