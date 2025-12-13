@@ -1749,6 +1749,58 @@ mod tests {
         assert!(c.quality_thresholds.validate_ssim);
     }
     
+    /// 🔥 v4.5: 测试精确质量匹配 + 压缩配置
+    #[test]
+    fn test_explore_config_precise_quality_match_with_compression() {
+        let c = ExploreConfig::precise_quality_match_with_compression(20.0, 35.0, 0.95);
+        assert_eq!(c.mode, ExploreMode::PreciseQualityMatchWithCompression);
+        assert_eq!(c.initial_crf, 20.0);
+        assert_eq!(c.max_crf, 35.0);
+        assert_eq!(c.quality_thresholds.min_ssim, 0.95);
+        assert!(c.quality_thresholds.validate_ssim);
+    }
+    
+    /// 🔥 v4.5: 测试所有探索模式枚举
+    #[test]
+    fn test_explore_modes() {
+        // 测试所有模式都能正确创建
+        let size_only = ExploreConfig::size_only(20.0, 30.0);
+        assert_eq!(size_only.mode, ExploreMode::SizeOnly);
+        
+        let quality_match = ExploreConfig::quality_match(22.0);
+        assert_eq!(quality_match.mode, ExploreMode::QualityMatch);
+        
+        let precise = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
+        assert_eq!(precise.mode, ExploreMode::PreciseQualityMatch);
+        
+        let precise_compress = ExploreConfig::precise_quality_match_with_compression(18.0, 28.0, 0.97);
+        assert_eq!(precise_compress.mode, ExploreMode::PreciseQualityMatchWithCompression);
+    }
+    
+    /// 🔥 v4.5: 测试 flag 组合语义
+    #[test]
+    fn test_flag_combinations_semantics() {
+        // --explore 单独: SizeOnly 模式
+        let explore_only = ExploreConfig::size_only(20.0, 30.0);
+        assert_eq!(explore_only.mode, ExploreMode::SizeOnly);
+        assert!(!explore_only.quality_thresholds.validate_ssim, "SizeOnly should NOT validate SSIM");
+        
+        // --match-quality 单独: QualityMatch 模式
+        let match_only = ExploreConfig::quality_match(22.0);
+        assert_eq!(match_only.mode, ExploreMode::QualityMatch);
+        assert_eq!(match_only.max_iterations, 1, "QualityMatch should be single-shot");
+        
+        // --explore --match-quality: PreciseQualityMatch 模式
+        let explore_match = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
+        assert_eq!(explore_match.mode, ExploreMode::PreciseQualityMatch);
+        assert!(explore_match.quality_thresholds.validate_ssim, "PreciseQualityMatch MUST validate SSIM");
+        
+        // --explore --match-quality --compress: PreciseQualityMatchWithCompression 模式
+        let explore_match_compress = ExploreConfig::precise_quality_match_with_compression(18.0, 28.0, 0.97);
+        assert_eq!(explore_match_compress.mode, ExploreMode::PreciseQualityMatchWithCompression);
+        assert!(explore_match_compress.quality_thresholds.validate_ssim, "Compression mode MUST validate SSIM");
+    }
+    
     #[test]
     fn test_video_encoder_names() {
         assert_eq!(VideoEncoder::Hevc.ffmpeg_name(), "libx265");
