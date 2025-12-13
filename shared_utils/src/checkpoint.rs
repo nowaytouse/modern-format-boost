@@ -6,24 +6,31 @@
 //! - Lock file: Prevent concurrent processing of same directory
 //!
 //! # Usage
-//! ```ignore
+//! ```no_run
 //! use shared_utils::checkpoint::{CheckpointManager, safe_delete_original};
+//! use std::path::Path;
 //!
-//! // Initialize checkpoint for a directory
-//! let mut checkpoint = CheckpointManager::new(target_dir)?;
+//! fn main() -> anyhow::Result<()> {
+//!     let target_dir = Path::new("/tmp/test");
+//!     let file_path = Path::new("/tmp/test/file.jpg");
+//!     let input = Path::new("/tmp/test/input.jpg");
+//!     let output = Path::new("/tmp/test/output.jxl");
 //!
-//! // Check if file was already processed
-//! if checkpoint.is_completed(&file_path) {
-//!     continue; // Skip
+//!     // Initialize checkpoint for a directory
+//!     let mut checkpoint = CheckpointManager::new(target_dir)?;
+//!
+//!     // Check if file was already processed
+//!     if !checkpoint.is_completed(&file_path) {
+//!         // ... do conversion ...
+//!
+//!         // Mark as completed
+//!         checkpoint.mark_completed(&file_path)?;
+//!     }
+//!
+//!     // Safe delete with integrity check
+//!     safe_delete_original(&input, &output, 100)?;
+//!     Ok(())
 //! }
-//!
-//! // ... do conversion ...
-//!
-//! // Mark as completed
-//! checkpoint.mark_completed(&file_path)?;
-//!
-//! // Safe delete with integrity check
-//! safe_delete_original(&input, &output, 100)?;
 //! ```
 
 use std::collections::HashSet;
