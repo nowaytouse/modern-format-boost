@@ -839,11 +839,11 @@ impl CrfMapping {
     /// 打印映射信息
     pub fn print_mapping_info(&self) {
         eprintln!("   📊 GPU/CPU CRF Mapping ({} - {}):", self.gpu_type, self.codec.to_uppercase());
-        eprintln!("      • GPU CRF 10 ≈ CPU CRF {:.1}", 10.0 - self.offset);
-        eprintln!("      • GPU CRF 18 ≈ CPU CRF {:.1}", 18.0 - self.offset);
-        eprintln!("      • GPU CRF 23 ≈ CPU CRF {:.1}", 23.0 - self.offset);
-        eprintln!("      • GPU CRF 28 ≈ CPU CRF {:.1}", 28.0 - self.offset);
-        eprintln!("      • Uncertainty: ±{:.1} CRF", self.uncertainty);
+        eprintln!("      • GPU boundary CRF → CPU search starts from 10.0 (higher efficiency)");
+        eprintln!("      • GPU CRF 24 ≈ CPU CRF {:.1} (reference point)", 24.0 - self.offset);
+        eprintln!("      • CPU efficiency: {:.1}x better (offset: {:.1})", 1.0 + self.offset / 10.0, self.offset);
+        eprintln!("      • Uncertainty: ±{:.1} CRF (GPU sampling error)", self.uncertainty);
+        eprintln!("      • 💡 CPU will explore full range to find true boundary");
     }
 }
 
