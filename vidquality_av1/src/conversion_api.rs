@@ -75,6 +75,10 @@ pub struct ConversionConfig {
     pub min_vmaf: f64,
     /// 🔥 v4.6: Require compression - output must be smaller than input
     pub require_compression: bool,
+    /// 🍎 v4.15: Apple compatibility mode (warn about AV1 not being Apple-native)
+    pub apple_compat: bool,
+    /// 🔥 v4.15: Use GPU acceleration (default: true for AV1 it's CPU anyway)
+    pub use_gpu: bool,
 }
 
 impl Default for ConversionConfig {
@@ -92,6 +96,8 @@ impl Default for ConversionConfig {
             validate_vmaf: false, // 🔥 v3.5: VMAF disabled by default (slower)
             min_vmaf: 85.0,      // 🔥 v3.5: Default VMAF threshold
             require_compression: false, // 🔥 v4.6
+            apple_compat: false, // 🍎 v4.15
+            use_gpu: true,       // 🔥 v4.15: GPU by default (AV1 uses CPU anyway)
         }
     }
 }

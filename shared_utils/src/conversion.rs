@@ -201,7 +201,6 @@ impl ConversionResult {
 
 /// Common conversion options
 #[derive(Debug, Clone)]
-#[derive(Default)]
 pub struct ConvertOptions {
     /// Force conversion even if already processed
     pub force: bool,
@@ -230,6 +229,26 @@ pub struct ConvertOptions {
     /// - 与 match_quality 组合：输出 < 输入 + 粗略 SSIM 验证
     /// - 与 explore + match_quality 组合：精确质量匹配 + 必须压缩
     pub compress: bool,
+    /// 🔥 v4.15: Use GPU acceleration (default: true)
+    /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
+    /// VideoToolbox hardware encoding caps at ~0.95 SSIM
+    pub use_gpu: bool,
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self {
+            force: false,
+            output_dir: None,
+            delete_original: false,
+            in_place: false,
+            explore: false,
+            match_quality: false,
+            apple_compat: false,
+            compress: false,
+            use_gpu: true,  // 🔥 v4.15: GPU by default
+        }
+    }
 }
 
 
@@ -635,5 +654,230 @@ mod tests {
         let msg1 = format_size_change(1000, 500);
         let msg2 = format_size_change(1000, 500);
         assert_eq!(msg1, msg2, "Format message must be deterministic");
+    }
+
+    // ============================================================
+    // 🔥 v4.15: GPU/CPU Mode Tests (裁判机制)
+    // ============================================================
+
+    #[test]
+    fn test_convert_options_default_use_gpu() {
+        // 🔥 v4.15: 默认应该使用 GPU
+        let opts = ConvertOptions::default();
+        assert!(opts.use_gpu, "Default should use GPU (use_gpu = true)");
+    }
+
+    #[test]
+    fn test_convert_options_cpu_mode() {
+        // 🔥 v4.15: 显式设置 CPU 模式
+        let mut opts = ConvertOptions::default();
+        opts.use_gpu = false;
+        assert!(!opts.use_gpu, "CPU mode should have use_gpu = false");
+    }
+
+    #[test]
+    fn test_convert_options_gpu_mode_explicit() {
+        // 显式设置 GPU 模式
+        let mut opts = ConvertOptions::default();
+        opts.use_gpu = true;
+        assert!(opts.use_gpu, "GPU mode should have use_gpu = true");
+    }
+
+    // ============================================================
+    // 🔥 v4.15: Flag Mode with GPU/CPU Combinations (裁判机制)
+    // ============================================================
+
+    #[test]
+    fn test_flag_mode_with_gpu() {
+        let mut opts = ConvertOptions::default();
+        opts.explore = true;
+        opts.match_quality = true;
+        opts.compress = true;
+        opts.use_gpu = true;  // GPU mode
+
+        let mode = opts.flag_mode().unwrap();
+        assert_eq!(mode, crate::flag_validator::FlagMode::PreciseQualityWithCompress);
+        assert!(opts.use_gpu, "GPU should remain enabled");
+    }
+
+    #[test]
+    fn test_flag_mode_with_cpu() {
+        let mut opts = ConvertOptions::default();
+        opts.explore = true;
+        opts.match_quality = true;
+        opts.compress = true;
+        opts.use_gpu = false;  // CPU mode
+
+        let mode = opts.flag_mode().unwrap();
+        assert_eq!(mode, crate::flag_validator::FlagMode::PreciseQualityWithCompress);
+        assert!(!opts.use_gpu, "CPU mode should remain disabled");
+    }
+
+    #[test]
+    fn test_all_flag_combinations_with_gpu_cpu() {
+        // 测试所有有效 flag 组合与 GPU/CPU 模式的独立性
+        let valid_flag_combinations = [
+            (false, false, false),  // Default
+            (false, false, true),   // CompressOnly
+            (false, true, false),   // QualityOnly
+            (false, true, true),    // CompressWithQuality
+            (true, false, false),   // ExploreOnly
+            (true, true, false),    // PreciseQuality
+            (true, true, true),     // PreciseQualityWithCompress
+        ];
+
+        for (explore, match_quality, compress) in valid_flag_combinations {
+            // 测试 GPU 模式
+            let mut opts_gpu = ConvertOptions::default();
+            opts_gpu.explore = explore;
+            opts_gpu.match_quality = match_quality;
+            opts_gpu.compress = compress;
+            opts_gpu.use_gpu = true;
+
+            let mode_gpu = opts_gpu.flag_mode();
+            assert!(mode_gpu.is_ok(),
+                "Flag combination ({}, {}, {}) should be valid with GPU",
+                explore, match_quality, compress);
+
+            // 测试 CPU 模式
+            let mut opts_cpu = ConvertOptions::default();
+            opts_cpu.explore = explore;
+            opts_cpu.match_quality = match_quality;
+            opts_cpu.compress = compress;
+            opts_cpu.use_gpu = false;
+
+            let mode_cpu = opts_cpu.flag_mode();
+            assert!(mode_cpu.is_ok(),
+                "Flag combination ({}, {}, {}) should be valid with CPU",
+                explore, match_quality, compress);
+
+            // Flag mode 应该与 GPU/CPU 选择无关
+            assert_eq!(mode_gpu.unwrap(), mode_cpu.unwrap(),
+                "Flag mode should be independent of GPU/CPU selection");
+        }
+    }
+
+    // ============================================================
+    // 🔥 v4.15: Edge Cases for ConvertOptions (裁判机制)
+    // ============================================================
+
+    #[test]
+    fn test_convert_options_all_flags_enabled() {
+        let mut opts = ConvertOptions::default();
+        opts.force = true;
+        opts.delete_original = true;
+        opts.in_place = true;
+        opts.explore = true;
+        opts.match_quality = true;
+        opts.compress = true;
+        opts.apple_compat = true;
+        opts.use_gpu = false;  // CPU mode
+
+        assert!(opts.force);
+        assert!(opts.should_delete_original());
+        assert!(opts.apple_compat);
+        assert!(!opts.use_gpu);
+
+        let mode = opts.flag_mode().unwrap();
+        assert_eq!(mode, crate::flag_validator::FlagMode::PreciseQualityWithCompress);
+    }
+
+    #[test]
+    fn test_convert_options_invalid_flag_combination() {
+        let mut opts = ConvertOptions::default();
+        opts.explore = true;
+        opts.match_quality = false;
+        opts.compress = true;
+
+        // This is the invalid combination: --explore --compress without --match-quality
+        let result = opts.flag_mode();
+        assert!(result.is_err(), "explore + compress without match_quality should be invalid");
+    }
+
+    #[test]
+    fn test_convert_options_explore_mode_mapping() {
+        // 测试 explore_mode() 方法正确映射到 ExploreMode
+        let test_cases = [
+            (false, false, false, crate::video_explorer::ExploreMode::QualityMatch),  // Default
+            (false, false, true, crate::video_explorer::ExploreMode::CompressOnly),
+            (false, true, false, crate::video_explorer::ExploreMode::QualityMatch),
+            (false, true, true, crate::video_explorer::ExploreMode::CompressWithQuality),
+            (true, false, false, crate::video_explorer::ExploreMode::SizeOnly),
+            (true, true, false, crate::video_explorer::ExploreMode::PreciseQualityMatch),
+            (true, true, true, crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression),
+        ];
+
+        for (explore, match_quality, compress, expected_mode) in test_cases {
+            let mut opts = ConvertOptions::default();
+            opts.explore = explore;
+            opts.match_quality = match_quality;
+            opts.compress = compress;
+
+            let mode = opts.explore_mode();
+            assert_eq!(mode, expected_mode,
+                "explore_mode() for ({}, {}, {}) should map to {:?}",
+                explore, match_quality, compress, expected_mode);
+        }
+    }
+
+    // ============================================================
+    // 🔥 v4.15: Delete Original Edge Cases (裁判机制)
+    // ============================================================
+
+    #[test]
+    fn test_should_delete_original_both_false() {
+        let opts = ConvertOptions::default();
+        assert!(!opts.delete_original);
+        assert!(!opts.in_place);
+        assert!(!opts.should_delete_original());
+    }
+
+    #[test]
+    fn test_should_delete_original_delete_true() {
+        let mut opts = ConvertOptions::default();
+        opts.delete_original = true;
+        opts.in_place = false;
+        assert!(opts.should_delete_original());
+    }
+
+    #[test]
+    fn test_should_delete_original_inplace_true() {
+        let mut opts = ConvertOptions::default();
+        opts.delete_original = false;
+        opts.in_place = true;
+        assert!(opts.should_delete_original());
+    }
+
+    #[test]
+    fn test_should_delete_original_both_true() {
+        let mut opts = ConvertOptions::default();
+        opts.delete_original = true;
+        opts.in_place = true;
+        assert!(opts.should_delete_original());
+    }
+
+    // ============================================================
+    // 🔥 v4.15: ConvertOptions Clone/Debug Tests (裁判机制)
+    // ============================================================
+
+    #[test]
+    fn test_convert_options_clone() {
+        let mut opts = ConvertOptions::default();
+        opts.explore = true;
+        opts.match_quality = true;
+        opts.use_gpu = false;
+
+        let cloned = opts.clone();
+        assert_eq!(opts.explore, cloned.explore);
+        assert_eq!(opts.match_quality, cloned.match_quality);
+        assert_eq!(opts.use_gpu, cloned.use_gpu);
+    }
+
+    #[test]
+    fn test_convert_options_debug() {
+        let opts = ConvertOptions::default();
+        let debug_str = format!("{:?}", opts);
+        assert!(debug_str.contains("ConvertOptions"));
+        assert!(debug_str.contains("use_gpu"));
     }
 }

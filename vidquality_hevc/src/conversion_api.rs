@@ -71,6 +71,10 @@ pub struct ConversionConfig {
     /// 🔥 v4.5: Require compression - output must be smaller than input
     /// Use with --explore --match-quality for precise quality match + guaranteed compression
     pub require_compression: bool,
+    /// 🔥 v4.15: Use GPU acceleration (default: true)
+    /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
+    /// VideoToolbox hardware encoding caps at ~0.95 SSIM
+    pub use_gpu: bool,
 }
 
 impl Default for ConversionConfig {
@@ -86,6 +90,7 @@ impl Default for ConversionConfig {
             in_place: false,
             apple_compat: false,
             require_compression: false,
+            use_gpu: true,  // 🔥 v4.15: GPU by default
         }
     }
 }
@@ -328,57 +333,93 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
                 let input_path = Path::new(&detection.file_path);
-                
+
                 // 🔥 v4.6: 使用模块化的 flag 验证器
                 let flag_mode = shared_utils::validate_flags_result(
-                    config.explore_smaller, 
-                    config.match_quality, 
+                    config.explore_smaller,
+                    config.match_quality,
                     config.require_compression
                 ).map_err(|e| VidQualityError::ConversionError(e))?;
-                
+
+                // 🔥 v4.15: 使用 GPU 控制变体支持 --cpu 模式
+                let use_gpu = config.use_gpu;
+                if !use_gpu {
+                    info!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
+                }
+
                 let explore_result = match flag_mode {
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
                         // 模式 6: --explore --match-quality --compress
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_precise_quality_match_with_compression(
+                        shared_utils::explore_precise_quality_match_with_compression_gpu(
                             input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
-                            initial_crf, 40.0, 0.91
+                            initial_crf, 40.0, 0.91, use_gpu
                         )
                     }
                     shared_utils::FlagMode::PreciseQuality => {
                         // 模式 5: --explore --match-quality
                         let initial_crf = calculate_matched_crf(&detection);
+                        let (max_crf, min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
+                            initial_crf, shared_utils::VideoEncoder::Hevc
+                        );
                         info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_hevc(input_path, &output_path, vf_args, initial_crf)
+                        shared_utils::explore_precise_quality_match_gpu(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            initial_crf, max_crf, min_ssim, use_gpu
+                        )
                     }
                     shared_utils::FlagMode::CompressWithQuality => {
                         // 模式 4: --compress --match-quality
                         let matched_crf = calculate_matched_crf(&detection);
+                        let (max_crf, _) = shared_utils::video_explorer::calculate_smart_thresholds(
+                            matched_crf, shared_utils::VideoEncoder::Hevc
+                        );
                         info!("   📦 {}: CRF {:.1}", flag_mode.description_cn(), matched_crf);
-                        shared_utils::explore_hevc_compress_with_quality(input_path, &output_path, vf_args, matched_crf)
+                        shared_utils::explore_compress_with_quality_gpu(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            matched_crf, max_crf, use_gpu
+                        )
                     }
                     shared_utils::FlagMode::QualityOnly => {
                         // 模式 3: --match-quality 单独
                         let matched_crf = calculate_matched_crf(&detection);
                         info!("   🎯 {}: CRF {:.1}", flag_mode.description_cn(), matched_crf);
-                        shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, matched_crf)
+                        shared_utils::explore_quality_match_gpu(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            matched_crf, use_gpu
+                        )
                     }
                     shared_utils::FlagMode::ExploreOnly => {
                         // 模式 2: --explore 单独
+                        let (max_crf, _) = shared_utils::video_explorer::calculate_smart_thresholds(
+                            strategy.crf, shared_utils::VideoEncoder::Hevc
+                        );
                         info!("   🔍 {}", flag_mode.description_cn());
-                        shared_utils::explore_hevc_size_only(input_path, &output_path, vf_args, strategy.crf)
+                        shared_utils::explore_size_only_gpu(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            strategy.crf, max_crf, use_gpu
+                        )
                     }
                     shared_utils::FlagMode::CompressOnly => {
                         // 模式 1: --compress 单独
                         let initial_crf = calculate_matched_crf(&detection);
+                        let (max_crf, _) = shared_utils::video_explorer::calculate_smart_thresholds(
+                            initial_crf, shared_utils::VideoEncoder::Hevc
+                        );
                         info!("   📦 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_hevc_compress_only(input_path, &output_path, vf_args, initial_crf)
+                        shared_utils::explore_compress_only_gpu(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            initial_crf, max_crf, use_gpu
+                        )
                     }
                     shared_utils::FlagMode::Default => {
                         // 默认模式
                         info!("   📦 {}: CRF {:.1}", flag_mode.description_cn(), strategy.crf);
-                        shared_utils::explore_hevc_quality_match(input_path, &output_path, vf_args, strategy.crf)
+                        shared_utils::explore_quality_match_gpu(
+                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
+                            strategy.crf, use_gpu
+                        )
                     }
                 }.map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
                 
