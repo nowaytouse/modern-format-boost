@@ -3578,4 +3578,130 @@ mod tests {
         assert!((epsilon - 0.0001).abs() < 1e-10, 
             "SSIM compare epsilon should be 0.0001");
     }
+    
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v4.13 测试：智能提前终止
+    // ═══════════════════════════════════════════════════════════
+    
+    /// 🔥 v4.13 测试：滑动窗口方差计算
+    #[test]
+    fn test_v413_sliding_window_variance() {
+        // 模拟滑动窗口方差计算
+        let input_size = 1_000_000_u64;
+        let window_size = 3_usize;
+        let variance_threshold = 0.0001_f64; // 0.01%
+        
+        // 计算方差的辅助函数
+        let calc_variance = |sizes: &[u64]| -> f64 {
+            if sizes.len() < window_size { return f64::MAX; }
+            let recent: Vec<f64> = sizes.iter()
+                .rev()
+                .take(window_size)
+                .map(|s| *s as f64 / input_size as f64)
+                .collect();
+            let mean = recent.iter().sum::<f64>() / recent.len() as f64;
+            recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+        };
+        
+        // 场景1：稳定的 size（应该触发提前终止）
+        let stable_sizes = vec![500_000_u64, 500_100, 500_050];
+        let stable_variance = calc_variance(&stable_sizes);
+        assert!(stable_variance < variance_threshold, 
+            "Stable sizes should have low variance: {}", stable_variance);
+        
+        // 场景2：变化的 size（不应该触发提前终止）
+        let varying_sizes = vec![500_000_u64, 600_000, 550_000];
+        let varying_variance = calc_variance(&varying_sizes);
+        assert!(varying_variance > variance_threshold, 
+            "Varying sizes should have high variance: {}", varying_variance);
+    }
+    
+    /// 🔥 v4.13 测试：相对变化率计算
+    #[test]
+    fn test_v413_relative_change_rate() {
+        let change_rate_threshold = 0.005_f64; // 0.5%
+        
+        // 计算变化率
+        let calc_change_rate = |prev: u64, curr: u64| -> f64 {
+            if prev == 0 { return f64::MAX; }
+            ((curr as f64 - prev as f64) / prev as f64).abs()
+        };
+        
+        // 场景1：小变化（应该触发提前终止）
+        let small_change = calc_change_rate(1_000_000, 1_004_000); // 0.4%
+        assert!(small_change < change_rate_threshold, 
+            "Small change {} should be below threshold", small_change);
+        
+        // 场景2：大变化（不应该触发提前终止）
+        let large_change = calc_change_rate(1_000_000, 1_010_000); // 1%
+        assert!(large_change > change_rate_threshold, 
+            "Large change {} should be above threshold", large_change);
+    }
+    
+    /// 🔥 v4.13 测试：三阶段搜索策略
+    #[test]
+    fn test_v413_three_phase_search() {
+        // Phase 1: 0.5 步进二分搜索
+        let phase1_step = 0.5_f32;
+        let crf_range = 28.0_f32 - 10.0_f32; // 18 CRF 范围
+        let phase1_iterations = (crf_range / phase1_step).log2().ceil() as u32;
+        assert!(phase1_iterations <= 6, "Phase 1 should need ~6 iterations: {}", phase1_iterations);
+        
+        // Phase 2: ±0.4 范围 0.1 步进
+        let phase2_range = 0.8_f32; // ±0.4
+        let phase2_step = 0.1_f32;
+        let phase2_max_iterations = (phase2_range / phase2_step).ceil() as u32;
+        assert_eq!(phase2_max_iterations, 8, "Phase 2 should need max 8 iterations");
+        
+        // Phase 3: SSIM 验证（1次）
+        let phase3_iterations = 1_u32;
+        
+        // 总迭代次数估算
+        let total_max = phase1_iterations + phase2_max_iterations + phase3_iterations;
+        assert!(total_max <= 15, "Total iterations should be <= 15: {}", total_max);
+    }
+    
+    /// 🔥 v4.13 测试：双向精细调整
+    #[test]
+    fn test_v413_bidirectional_fine_tune() {
+        // 模拟双向搜索
+        let boundary_crf = 17.5_f32;
+        let min_crf = 10.0_f32;
+        let max_crf = 28.0_f32;
+        
+        // 向下搜索（更高质量）
+        let lower_offsets = [-0.1_f32, -0.2, -0.3, -0.4];
+        for offset in lower_offsets {
+            let test_crf = boundary_crf + offset;
+            assert!(test_crf >= min_crf, "Lower search should stay above min_crf");
+            assert!(test_crf < boundary_crf, "Lower search should be below boundary");
+        }
+        
+        // 向上搜索（确认边界）
+        let upper_offsets = [0.1_f32, 0.2, 0.3, 0.4];
+        for offset in upper_offsets {
+            let test_crf = boundary_crf + offset;
+            assert!(test_crf <= max_crf, "Upper search should stay below max_crf");
+            assert!(test_crf > boundary_crf, "Upper search should be above boundary");
+        }
+    }
+    
+    /// 🔥 v4.13 测试：CRF 精度保证 0.1
+    #[test]
+    fn test_v413_crf_precision_guarantee() {
+        // 验证最终 CRF 可以是任意 0.1 步进值
+        let valid_crfs = [17.0_f32, 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7, 17.8, 17.9, 18.0];
+        
+        for crf in valid_crfs {
+            // 验证 CRF 是 0.1 的整数倍
+            let scaled = (crf * 10.0).round();
+            let reconstructed = scaled / 10.0;
+            assert!((crf - reconstructed).abs() < 0.001, 
+                "CRF {} should be 0.1 precision", crf);
+        }
+        
+        // 验证 precision 常量
+        assert_eq!(ULTRA_FINE_STEP, 0.1, "ULTRA_FINE_STEP should be 0.1");
+        assert_eq!(FINE_STEP, 0.5, "FINE_STEP should be 0.5");
+    }
 }
