@@ -638,81 +638,81 @@ pub fn convert_to_av1_mp4_matched(
     }
     
     // Calculate matched CRF based on input characteristics
-    // For animated images, we estimate quality based on:
-    // - File size per frame
-    // - Resolution
-    // - Duration
-    let crf = calculate_matched_crf_for_animation(analysis, input_size);
-    eprintln!("   🎯 Matched CRF: {} (based on input quality analysis)", crf);
+    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size) as f32;
     
     // 🔥 健壮性：获取输入尺寸并生成视频滤镜链
-    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" 错误
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, analysis.has_alpha);
     
-    // AV1 with calculated CRF (使用 SVT-AV1 编码器)
-    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-    let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")  // Overwrite
-        .arg("-threads").arg(max_threads.to_string())  // 限制线程数
-        .arg("-i").arg(input)
-        .arg("-c:v").arg("libsvtav1")  // 🔥 使用 SVT-AV1 (比 libaom-av1 快 10-20 倍)
-        .arg("-crf").arg(crf.to_string())
-        .arg("-preset").arg("6")  // 0-13, 6 是平衡点
-        .arg("-svtav1-params").arg(&svt_params);  // 限制 SVT-AV1 线程数
+    // 🔥 v4.6: 使用模块化的 flag 验证器
+    let flag_mode = options.flag_mode()
+        .map_err(|e| ImgQualityError::ConversionError(e))?;
     
-    // 添加视频滤镜（尺寸修正 + 像素格式）
-    for arg in &vf_args {
-        cmd.arg(arg);
+    eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
+    
+    let explore_result = match flag_mode {
+        shared_utils::FlagMode::PreciseQualityWithCompress => {
+            shared_utils::explore_precise_quality_match_with_compression(
+                input, &output, shared_utils::VideoEncoder::Av1, vf_args,
+                initial_crf, 50.0, 0.91
+            )
+        }
+        shared_utils::FlagMode::PreciseQuality => {
+            shared_utils::explore_av1(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::CompressWithQuality => {
+            shared_utils::explore_av1_compress_with_quality(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::QualityOnly => {
+            shared_utils::explore_av1_quality_match(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::ExploreOnly => {
+            shared_utils::explore_av1_size_only(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::CompressOnly => {
+            shared_utils::explore_av1_compress_only(input, &output, vf_args, initial_crf)
+        }
+        shared_utils::FlagMode::Default => {
+            shared_utils::explore_av1_quality_match(input, &output, vf_args, initial_crf)
+        }
+    }.map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+    
+    // 打印探索日志
+    for log in &explore_result.log {
+        eprintln!("{}", log);
     }
     
-    cmd.arg(&output);
-    let result = cmd.output();
+    let output_size = explore_result.output_size;
+    let reduction = 1.0 - (output_size as f64 / input_size as f64);
     
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-            
-            // Copy metadata and timestamps
-            copy_metadata(input, &output);
-            
-            mark_as_processed(input);
-            
-            if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
-                // Already handled by safe_delete_original
-            }
-            
-            // 🔥 修复：正确显示 size reduction/increase 消息
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!("Quality-matched AV1 (CRF {}): size reduced {:.1}%", crf, reduction_pct)
-            } else {
-                format!("Quality-matched AV1 (CRF {}): size increased {:.1}%", crf, -reduction_pct)
-            };
-            
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
-        }
-        Ok(output_cmd) => {
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            Err(ImgQualityError::ConversionError(format!("ffmpeg failed: {}", stderr)))
-        }
-        Err(e) => {
-            Err(ImgQualityError::ToolNotFound(format!("ffmpeg not found: {}", e)))
-        }
+    // Copy metadata and timestamps
+    copy_metadata(input, &output);
+    
+    mark_as_processed(input);
+    
+    if options.should_delete_original() && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+        // Already handled by safe_delete_original
     }
+    
+    // 🔥 修复：正确显示 size reduction/increase 消息
+    let reduction_pct = reduction * 100.0;
+    let message = if reduction >= 0.0 {
+        format!("Quality-matched AV1 (CRF {:.1}): size reduced {:.1}%", explore_result.optimal_crf, reduction_pct)
+    } else {
+        format!("Quality-matched AV1 (CRF {:.1}): size increased {:.1}%", explore_result.optimal_crf, -reduction_pct)
+    };
+    
+    Ok(ConversionResult {
+        success: true,
+        input_path: input.display().to_string(),
+        output_path: Some(output.display().to_string()),
+        input_size,
+        output_size: Some(output_size),
+        size_reduction: Some(reduction_pct),
+        message,
+        skipped: false,
+        skip_reason: None,
+    })
 }
 
 /// Calculate CRF to match input animation quality (Enhanced Algorithm)

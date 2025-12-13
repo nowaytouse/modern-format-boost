@@ -47,6 +47,17 @@ pub enum ExploreMode {
     /// - 目标：找到**最高 SSIM** 且 **输出 < 输入**
     /// - 如果无法同时满足，优先保证压缩，然后在压缩范围内找最高 SSIM
     PreciseQualityMatchWithCompression,
+    
+    /// 🔥 v4.6: 仅压缩（--compress 单独使用）
+    /// - 目标：确保输出 < 输入（哪怕只小 1KB 也算成功）
+    /// - 不验证 SSIM 质量
+    /// - 与 SizeOnly 不同：SizeOnly 寻找**最小**输出，CompressOnly 只要**更小**即可
+    CompressOnly,
+    
+    /// 🔥 v4.6: 压缩 + 粗略质量验证（--compress --match-quality 组合）
+    /// - 目标：确保输出 < 输入 + 粗略 SSIM 验证
+    /// - 与 PreciseQualityMatchWithCompression 不同：不追求最高 SSIM，只要通过阈值即可
+    CompressWithQuality,
 }
 
 /// 🔥 v4.1: 交叉验证结果
@@ -227,6 +238,48 @@ impl ExploreConfig {
             ..Default::default()
         }
     }
+    
+    /// 🔥 v4.6: 创建仅压缩的配置（--compress 单独使用）
+    /// 
+    /// - 目标：确保输出 < 输入（哪怕只小 1KB 也算成功）
+    /// - 不验证 SSIM 质量
+    /// - 与 size_only 不同：size_only 寻找最小输出，compress_only 只要更小即可
+    pub fn compress_only(initial_crf: f32, max_crf: f32) -> Self {
+        Self {
+            mode: ExploreMode::CompressOnly,
+            initial_crf,
+            max_crf,
+            quality_thresholds: QualityThresholds {
+                validate_ssim: false, // 不验证质量
+                validate_psnr: false,
+                validate_vmaf: false,
+                ..Default::default()
+            },
+            max_iterations: 8, // 较少迭代，因为只需要找到能压缩的点
+            ..Default::default()
+        }
+    }
+    
+    /// 🔥 v4.6: 创建压缩 + 粗略质量验证的配置（--compress --match-quality 组合）
+    /// 
+    /// - 目标：确保输出 < 输入 + 粗略 SSIM 验证
+    /// - 与 precise_quality_match_with_compression 不同：不追求最高 SSIM，只要通过阈值即可
+    pub fn compress_with_quality(initial_crf: f32, max_crf: f32) -> Self {
+        Self {
+            mode: ExploreMode::CompressWithQuality,
+            initial_crf,
+            max_crf,
+            quality_thresholds: QualityThresholds {
+                min_ssim: 0.95, // 粗略验证阈值
+                validate_ssim: true,
+                validate_psnr: false,
+                validate_vmaf: false,
+                ..Default::default()
+            },
+            max_iterations: 10,
+            ..Default::default()
+        }
+    }
 }
 
 /// 视频编码器类型
@@ -333,6 +386,8 @@ impl VideoExplorer {
             ExploreMode::QualityMatch => self.explore_quality_match(),
             ExploreMode::PreciseQualityMatch => self.explore_precise_quality_match(),
             ExploreMode::PreciseQualityMatchWithCompression => self.explore_precise_quality_match_with_compression(),
+            ExploreMode::CompressOnly => self.explore_compress_only(),
+            ExploreMode::CompressWithQuality => self.explore_compress_with_quality(),
         }
     }
     
@@ -469,6 +524,242 @@ impl VideoExplorer {
         })
     }
     
+    /// 🔥 v4.6 模式 5: 仅压缩（--compress 单独使用）
+    /// 
+    /// ## 目标
+    /// 确保输出 < 输入（哪怕只小 1KB 也算成功）
+    /// 
+    /// ## 与 SizeOnly 的区别
+    /// - SizeOnly (--explore): 寻找**最小**输出（二分搜索找最高 CRF）
+    /// - CompressOnly (--compress): 只要**更小**即可（找到第一个能压缩的 CRF 就停止）
+    /// 
+    /// ## 策略
+    /// 1. 从 initial_crf 开始编码
+    /// 2. 如果输出 < 输入，成功
+    /// 3. 如果输出 >= 输入，增加 CRF 重试（最多到 max_crf）
+    fn explore_compress_only(&self) -> Result<ExploreResult> {
+        let mut log = Vec::new();
+        
+        // 实时日志输出宏
+        macro_rules! log_realtime {
+            ($($arg:tt)*) => {{
+                let msg = format!($($arg)*);
+                eprintln!("{}", msg);
+                log.push(msg);
+            }};
+        }
+        
+        log_realtime!("📦 Compress-Only Mode v4.6 ({:?})", self.encoder);
+        log_realtime!("   📁 Input: {} bytes ({:.2} MB)", 
+            self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
+        log_realtime!("   🎯 Goal: output < input (any reduction counts)");
+        log_realtime!("   📐 CRF range: [{:.1}, {:.1}]", 
+            self.config.initial_crf, self.config.max_crf);
+        log_realtime!("   ═══════════════════════════════════════════════════");
+        
+        let mut iterations = 0u32;
+        let mut current_crf = self.config.initial_crf;
+        
+        // 从 initial_crf 开始，逐步增加 CRF 直到能压缩
+        while current_crf <= self.config.max_crf && iterations < self.config.max_iterations {
+            iterations += 1;
+            
+            log_realtime!("   🔄 Encoding CRF {:.1}...", current_crf);
+            let output_size = self.encode(current_crf)?;
+            let size_change_pct = self.calc_change_pct(output_size);
+            
+            if output_size < self.input_size {
+                // 成功压缩！
+                let saved = self.input_size - output_size;
+                log_realtime!("   ✅ CRF {:.1}: {} bytes ({:+.1}%) - COMPRESSED!", 
+                    current_crf, output_size, size_change_pct);
+                log_realtime!("   ═══════════════════════════════════════════════════");
+                log_realtime!("   📊 FINAL RESULT (v4.6 Compress-Only)");
+                log_realtime!("      CRF: {:.1}", current_crf);
+                log_realtime!("      Size: {} bytes ({:+.1}%)", output_size, size_change_pct);
+                log_realtime!("      ✅ Saved: {} bytes ({:.2} KB)", saved, saved as f64 / 1024.0);
+                log_realtime!("   📈 Iterations: {}", iterations);
+                
+                return Ok(ExploreResult {
+                    optimal_crf: current_crf,
+                    output_size,
+                    size_change_pct,
+                    ssim: None, // 不验证质量
+                    psnr: None,
+                    vmaf: None,
+                    iterations,
+                    quality_passed: true, // 压缩成功即为通过
+                    log,
+                });
+            } else {
+                log_realtime!("   ❌ CRF {:.1}: {} bytes ({:+.1}%) - still larger", 
+                    current_crf, output_size, size_change_pct);
+                // 增加 CRF（降低质量以减小文件）
+                current_crf += 2.0; // 步长 2.0，快速找到能压缩的点
+            }
+        }
+        
+        // 无法压缩 - 使用最高 CRF 的结果
+        log_realtime!("   ⚠️ Could not compress even at max CRF {:.1}", self.config.max_crf);
+        let final_size = self.encode(self.config.max_crf)?;
+        let size_change_pct = self.calc_change_pct(final_size);
+        
+        log_realtime!("   ═══════════════════════════════════════════════════");
+        log_realtime!("   📊 FINAL RESULT (v4.6 Compress-Only)");
+        log_realtime!("      CRF: {:.1}", self.config.max_crf);
+        log_realtime!("      Size: {} bytes ({:+.1}%)", final_size, size_change_pct);
+        log_realtime!("      ⚠️ Could not compress - source already well-optimized");
+        log_realtime!("   📈 Iterations: {}", iterations);
+        
+        Ok(ExploreResult {
+            optimal_crf: self.config.max_crf,
+            output_size: final_size,
+            size_change_pct,
+            ssim: None,
+            psnr: None,
+            vmaf: None,
+            iterations,
+            quality_passed: final_size < self.input_size, // 只有真正压缩了才算通过
+            log,
+        })
+    }
+    
+    /// 🔥 v4.6 模式 4: 压缩 + 粗略质量验证（--compress --match-quality 组合）
+    /// 
+    /// ## 目标
+    /// 确保输出 < 输入 + 粗略 SSIM 验证（>= 0.95）
+    /// 
+    /// ## 与 PreciseQualityMatchWithCompression 的区别
+    /// - 本模式：找到第一个满足条件的 CRF 就停止（快速）
+    /// - 精确模式：在满足条件的范围内找最高 SSIM（慢但精确）
+    /// 
+    /// ## 策略
+    /// 1. 从 initial_crf 开始编码
+    /// 2. 检查：输出 < 输入 且 SSIM >= 0.95
+    /// 3. 如果不满足，调整 CRF 重试
+    fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
+        let mut log = Vec::new();
+        
+        macro_rules! log_realtime {
+            ($($arg:tt)*) => {{
+                let msg = format!($($arg)*);
+                eprintln!("{}", msg);
+                log.push(msg);
+            }};
+        }
+        
+        log_realtime!("📦 Compress + Quality-Match v4.6 ({:?})", self.encoder);
+        log_realtime!("   📁 Input: {} bytes ({:.2} MB)", 
+            self.input_size, self.input_size as f64 / 1024.0 / 1024.0);
+        log_realtime!("   🎯 Goal: output < input + SSIM >= {:.2}", 
+            self.config.quality_thresholds.min_ssim);
+        log_realtime!("   📐 CRF range: [{:.1}, {:.1}]", 
+            self.config.initial_crf, self.config.max_crf);
+        log_realtime!("   ═══════════════════════════════════════════════════");
+        
+        let mut iterations = 0u32;
+        let mut current_crf = self.config.initial_crf;
+        let min_ssim = self.config.quality_thresholds.min_ssim;
+        
+        // 记录最佳结果（满足压缩 + 质量的）
+        let mut best_result: Option<(f32, u64, f64)> = None; // (crf, size, ssim)
+        
+        // 从 initial_crf 开始，逐步调整
+        while current_crf <= self.config.max_crf && iterations < self.config.max_iterations {
+            iterations += 1;
+            
+            log_realtime!("   🔄 Encoding CRF {:.1}...", current_crf);
+            let output_size = self.encode(current_crf)?;
+            
+            log_realtime!("   📊 Calculating SSIM...");
+            let quality = self.validate_quality()?;
+            let ssim = quality.0.unwrap_or(0.0);
+            let size_change_pct = self.calc_change_pct(output_size);
+            
+            let compressed = output_size < self.input_size;
+            let quality_ok = ssim >= min_ssim;
+            
+            let status = match (compressed, quality_ok) {
+                (true, true) => "✅ PASS",
+                (true, false) => "⚠️ SSIM low",
+                (false, true) => "⚠️ Not compressed",
+                (false, false) => "❌ Both failed",
+            };
+            
+            log_realtime!("   CRF {:.1}: {} bytes ({:+.1}%), SSIM {:.4} {}", 
+                current_crf, output_size, size_change_pct, ssim, status);
+            
+            if compressed && quality_ok {
+                // 找到满足条件的结果！
+                best_result = Some((current_crf, output_size, ssim));
+                log_realtime!("   ✅ Found valid result at CRF {:.1}", current_crf);
+                break;
+            } else if !compressed {
+                // 文件太大，增加 CRF
+                current_crf += 2.0;
+                log_realtime!("      → Increasing CRF to compress");
+            } else if !quality_ok {
+                // SSIM 太低，降低 CRF（但可能导致文件变大）
+                // 如果已经是最低 CRF，放弃
+                if current_crf <= self.config.initial_crf {
+                    log_realtime!("      ⚠️ Cannot improve SSIM without increasing file size");
+                    // 记录当前结果作为备选（压缩成功但质量不够）
+                    if best_result.is_none() {
+                        best_result = Some((current_crf, output_size, ssim));
+                    }
+                    break;
+                }
+                current_crf -= 1.0;
+                log_realtime!("      → Decreasing CRF to improve quality");
+            }
+        }
+        
+        // 使用最佳结果或最后尝试的结果
+        let (final_crf, final_size, final_ssim) = if let Some((crf, _size, ssim)) = best_result {
+            // 重新编码最佳 CRF
+            let new_size = self.encode(crf)?;
+            (crf, new_size, ssim)
+        } else {
+            // 没找到满足条件的，使用 max_crf
+            let size = self.encode(self.config.max_crf)?;
+            let quality = self.validate_quality()?;
+            (self.config.max_crf, size, quality.0.unwrap_or(0.0))
+        };
+        
+        let size_change_pct = self.calc_change_pct(final_size);
+        let compressed = final_size < self.input_size;
+        let quality_ok = final_ssim >= min_ssim;
+        let passed = compressed && quality_ok;
+        
+        log_realtime!("   ═══════════════════════════════════════════════════");
+        log_realtime!("   📊 FINAL RESULT (v4.6 Compress + Quality)");
+        log_realtime!("      CRF: {:.1}", final_crf);
+        log_realtime!("      Size: {} bytes ({:+.1}%)", final_size, size_change_pct);
+        log_realtime!("      SSIM: {:.4} (threshold: {:.2})", final_ssim, min_ssim);
+        if passed {
+            log_realtime!("      ✅ Both compression and quality requirements met");
+        } else if compressed {
+            log_realtime!("      ⚠️ Compressed but SSIM below threshold");
+        } else if quality_ok {
+            log_realtime!("      ⚠️ Quality OK but could not compress");
+        } else {
+            log_realtime!("      ❌ Neither requirement met");
+        }
+        log_realtime!("   📈 Iterations: {}", iterations);
+        
+        Ok(ExploreResult {
+            optimal_crf: final_crf,
+            output_size: final_size,
+            size_change_pct,
+            ssim: Some(final_ssim),
+            psnr: None,
+            vmaf: None,
+            iterations,
+            quality_passed: passed,
+            log,
+        })
+    }
+    
     /// 模式 3: 精确质量匹配（--explore + --match-quality 组合）
     /// 
     /// 🔥 v4.1: 激进精度追求 + 三重交叉验证
@@ -527,7 +818,7 @@ impl VideoExplorer {
         
         // 记录最高 SSIM 的 CRF
         let mut best_crf = self.config.min_crf;
-        let mut best_size = 0u64;
+        let mut _best_size = 0u64; // 用于调试，暂时保留
         let mut best_quality: (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
         let mut best_ssim = 0.0_f64;
         
@@ -571,7 +862,7 @@ impl VideoExplorer {
         iterations += 1;
         let min_ssim = min_quality.0.unwrap_or(0.0);
         best_crf = self.config.min_crf;
-        best_size = min_size;
+        _best_size = min_size;
         best_quality = min_quality;
         best_ssim = min_ssim;
         log_realtime!("      Min CRF {:.1}: SSIM = {:.6}", self.config.min_crf, min_ssim);
@@ -594,7 +885,7 @@ impl VideoExplorer {
             // SSIM 几乎没有变化，使用最高 CRF（最小文件）
             log_realtime!("   📍 Phase 2: SSIM plateau detected, using max CRF for smallest file");
             best_crf = self.config.max_crf;
-            best_size = max_size;
+            _best_size = max_size;
             best_quality = max_quality;
             best_ssim = max_ssim;
         } else {
@@ -619,7 +910,7 @@ impl VideoExplorer {
                 // 更新最佳（在平台内选择更高 CRF = 更小文件）
                 if ssim >= best_ssim - 0.0001 { // 允许微小误差
                     best_crf = current;
-                    best_size = size;
+                    _best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
                     log_realtime!("      🎯 Plateau continues at CRF {:.1}, SSIM {:.6}", current, ssim);
@@ -648,7 +939,7 @@ impl VideoExplorer {
                 // 选择最高 SSIM，如果 SSIM 相同则选择更高 CRF（更小文件）
                 if ssim > best_ssim || (ssim >= best_ssim - 0.00001 && current > best_crf) {
                     best_crf = current;
-                    best_size = size;
+                    _best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
                 }
@@ -740,7 +1031,7 @@ impl VideoExplorer {
         
         // 记录能压缩且 SSIM 最高的 CRF
         let mut best_crf: Option<f32> = None;
-        let mut best_size = u64::MAX;
+        let mut _best_size = u64::MAX; // 用于调试，暂时保留
         let mut best_quality: (Option<f64>, Option<f64>, Option<f64>) = (None, None, None);
         let mut best_ssim = 0.0_f64;
         
@@ -792,7 +1083,7 @@ impl VideoExplorer {
             // 最高 CRF 就能压缩，记录为候选
             compression_boundary = Some(self.config.max_crf);
             best_crf = Some(self.config.max_crf);
-            best_size = max_size;
+            _best_size = max_size;
             best_quality = max_quality;
             best_ssim = max_quality.0.unwrap_or(0.0);
             log_realtime!("      ✅ Max CRF {:.1} compresses, SSIM {:.6}", self.config.max_crf, best_ssim);
@@ -812,7 +1103,7 @@ impl VideoExplorer {
                 let ssim = quality.0.unwrap_or(0.0);
                 if ssim > best_ssim {
                     best_crf = Some(mid as f32);
-                    best_size = size;
+                    _best_size = size;
                     best_quality = quality;
                     best_ssim = ssim;
                     log_realtime!("      ✅ CRF {:.0} compresses, SSIM {:.6} (new best)", mid, ssim);
@@ -841,7 +1132,7 @@ impl VideoExplorer {
                     let ssim = quality.0.unwrap_or(0.0);
                     if ssim > best_ssim {
                         best_crf = Some(current);
-                        best_size = size;
+                        _best_size = size;
                         best_quality = quality;
                         best_ssim = ssim;
                         log_realtime!("      ✅ CRF {:.1} compresses, SSIM {:.6} (new best)", current, ssim);
@@ -857,7 +1148,7 @@ impl VideoExplorer {
             log_realtime!("   ⚠️ No CRF can compress this file!");
             log_realtime!("   💡 Source is already well-optimized, using max CRF");
             best_crf = Some(self.config.max_crf);
-            best_size = max_size;
+            _best_size = max_size;
             best_quality = max_quality;
             best_ssim = max_quality.0.unwrap_or(0.0);
         }
@@ -1326,6 +1617,37 @@ pub fn explore_precise_quality_match_with_compression(
     VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
 }
 
+/// 🔥 v4.6: 仅压缩（--compress 单独使用）
+/// 
+/// 确保输出 < 输入，哪怕只小 1KB 也算成功
+/// 不验证 SSIM 质量
+pub fn explore_compress_only(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::compress_only(initial_crf, max_crf);
+    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+}
+
+/// 🔥 v4.6: 压缩 + 粗略质量验证（--compress --match-quality 组合）
+/// 
+/// 确保输出 < 输入 + SSIM >= 0.95
+pub fn explore_compress_with_quality(
+    input: &Path,
+    output: &Path,
+    encoder: VideoEncoder,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    max_crf: f32,
+) -> Result<ExploreResult> {
+    let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
+    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+}
+
 /// 快速探索（仅基于大小，不验证质量）- 兼容旧 API
 #[deprecated(since = "2.0.0", note = "Use explore_size_only instead")]
 pub fn quick_explore(
@@ -1455,6 +1777,32 @@ pub fn explore_hevc_quality_match(
     explore_quality_match(input, output, VideoEncoder::Hevc, vf_args, predicted_crf)
 }
 
+/// 🔥 v4.6: HEVC 仅压缩（--compress 单独使用）
+/// 
+/// 确保输出 < 输入，哪怕只小 1KB 也算成功
+pub fn explore_hevc_compress_only(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
+    explore_compress_only(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf)
+}
+
+/// 🔥 v4.6: HEVC 压缩 + 粗略质量验证（--compress --match-quality 组合）
+/// 
+/// 确保输出 < 输入 + SSIM >= 0.95
+pub fn explore_hevc_compress_with_quality(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
+    explore_compress_with_quality(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf)
+}
+
 /// AV1 探索 - 默认使用精确质量匹配
 /// 
 /// 🔥 v3.8: 使用智能阈值计算系统，消除硬编码
@@ -1489,6 +1837,32 @@ pub fn explore_av1_quality_match(
     predicted_crf: f32,
 ) -> Result<ExploreResult> {
     explore_quality_match(input, output, VideoEncoder::Av1, vf_args, predicted_crf)
+}
+
+/// 🔥 v4.6: AV1 仅压缩（--compress 单独使用）
+/// 
+/// 确保输出 < 输入，哪怕只小 1KB 也算成功
+pub fn explore_av1_compress_only(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
+    explore_compress_only(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf)
+}
+
+/// 🔥 v4.6: AV1 压缩 + 粗略质量验证（--compress --match-quality 组合）
+/// 
+/// 确保输出 < 输入 + SSIM >= 0.95
+pub fn explore_av1_compress_with_quality(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
+    explore_compress_with_quality(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf)
 }
 
 // ═══════════════════════════════════════════════════════════════

@@ -225,6 +225,11 @@ pub struct ConvertOptions {
     /// When enabled, AV1/VP9 animated images will be converted to HEVC MP4
     /// instead of being skipped as "modern format"
     pub apple_compat: bool,
+    /// 🔥 v4.6: 压缩模式：确保输出 < 输入
+    /// - 单独使用：只要输出 < 输入（哪怕 1KB）
+    /// - 与 match_quality 组合：输出 < 输入 + 粗略 SSIM 验证
+    /// - 与 explore + match_quality 组合：精确质量匹配 + 必须压缩
+    pub compress: bool,
 }
 
 
@@ -234,13 +239,40 @@ impl ConvertOptions {
         self.delete_original || self.in_place
     }
     
-    /// 获取探索模式
+    /// 🔥 v4.6: 获取 flag 模式（使用模块化验证器）
+    /// 
+    /// 返回 Result，无效组合会返回错误信息
+    pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
+        crate::flag_validator::validate_flags_result(self.explore, self.match_quality, self.compress)
+    }
+    
+    /// 获取探索模式（兼容旧 API）
+    /// 
+    /// 🔥 v4.6: 内部使用 flag_mode()，但忽略 compress flag 以保持兼容性
+    /// 新代码应使用 flag_mode() 获取完整的 flag 组合信息
     pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
-        match (self.explore, self.match_quality) {
-            (true, true) => crate::video_explorer::ExploreMode::PreciseQualityMatch,
-            (true, false) => crate::video_explorer::ExploreMode::SizeOnly,
-            (false, true) => crate::video_explorer::ExploreMode::QualityMatch,
-            (false, false) => crate::video_explorer::ExploreMode::QualityMatch, // 默认使用质量匹配
+        // 使用 flag_mode 但映射到旧的 ExploreMode
+        match self.flag_mode() {
+            Ok(mode) => match mode {
+                crate::flag_validator::FlagMode::PreciseQualityWithCompress => 
+                    crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
+                crate::flag_validator::FlagMode::PreciseQuality => 
+                    crate::video_explorer::ExploreMode::PreciseQualityMatch,
+                crate::flag_validator::FlagMode::CompressWithQuality => 
+                    crate::video_explorer::ExploreMode::CompressWithQuality,
+                crate::flag_validator::FlagMode::QualityOnly => 
+                    crate::video_explorer::ExploreMode::QualityMatch,
+                crate::flag_validator::FlagMode::ExploreOnly => 
+                    crate::video_explorer::ExploreMode::SizeOnly,
+                crate::flag_validator::FlagMode::CompressOnly => 
+                    crate::video_explorer::ExploreMode::CompressOnly,
+                crate::flag_validator::FlagMode::Default => 
+                    crate::video_explorer::ExploreMode::QualityMatch,
+            },
+            Err(_) => {
+                // 无效组合时返回默认模式（调用者应该先用 flag_mode() 检查）
+                crate::video_explorer::ExploreMode::QualityMatch
+            }
         }
     }
 }
