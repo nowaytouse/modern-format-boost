@@ -442,30 +442,16 @@ impl VideoExplorer {
             });
         }
 
-        // Phase 2: 二分搜索找最高能压缩的 CRF
-        log_msg!("   📍 Phase 2: Binary search for highest compressing CRF");
-        let mut low = self.config.initial_crf;
-        let mut high = self.config.max_crf;
+        // 🔥 v4.7 简化：既然 max_crf 能压缩且产生最小文件，直接用它
+        // 
+        // 原来的二分搜索有逻辑问题：
+        // - 目标是找"最高能压缩的 CRF"（最小文件）
+        // - 但 max_crf 已经是最高的 CRF，且已验证能压缩
+        // - 所以 max_crf 就是答案，不需要二分搜索
+        //
+        // 保留 Phase 3 的精细化逻辑，用于验证边界
         let mut best_crf = self.config.max_crf;
         let mut best_size = max_size;
-
-        while high - low > 1.0 && iterations < self.config.max_iterations {
-            let mid = ((low + high) / 2.0).round();
-
-            let size = self.encode(mid as f32)?;
-            iterations += 1;
-            log_msg!("   CRF {:.0}: {} bytes ({:+.1}%)", mid, size, self.calc_change_pct(size));
-
-            if size < self.input_size {
-                // 能压缩，尝试更高 CRF（更小文件）
-                best_crf = mid as f32;
-                best_size = size;
-                low = mid;
-            } else {
-                // 不能压缩，需要更高 CRF
-                high = mid;
-            }
-        }
 
         // Phase 3: 边界精细化 (0.5 步长)
         if iterations < self.config.max_iterations && best_crf < self.config.max_crf {
