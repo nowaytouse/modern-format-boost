@@ -2718,11 +2718,14 @@ pub fn explore_with_gpu_coarse_search(
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
-                    // GPU 找到边界，计算 CPU 搜索范围
-                    let (center, low, high) = get_cpu_search_range_from_gpu(&gpu_result, 10.0, max_crf);
+                    // 🔥 v5.2: GPU 只缩小上限，不改变下限！
+                    // GPU 给出的是粗略边界，CPU 仍需完整探索
+                    let (center, _low, high) = get_cpu_search_range_from_gpu(&gpu_result, 10.0, max_crf);
+                    let original_min_crf = 10.0_f32; // 保持原始下限，让 CPU 完整探索
                     log_msg!("   ✅ GPU found boundary: CRF {:.0}", gpu_result.gpu_boundary_crf);
-                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (center: {:.1})", low, high, center);
-                    (low, high, center)
+                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (GPU narrowed upper bound only)", original_min_crf, high);
+                    log_msg!("   💡 CPU will explore full range from {:.1} to find true boundary", original_min_crf);
+                    (original_min_crf, high, center)
                 } else {
                     // GPU 没找到边界，使用原始范围
                     log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
