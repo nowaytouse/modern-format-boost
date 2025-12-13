@@ -130,7 +130,7 @@ When using `--explore --match-quality` together, the algorithm enables:
 - **New goal**: Find **HIGHEST CRF** (smallest file) that **meets quality threshold**
 
 **Efficient Three-Phase Search:**
-1. **AI Prediction Test**: Start from predicted CRF (~1 iteration)
+1. **Start from Calculated CRF**: Use quality_matcher's formula-based CRF (~1 iteration)
 2. **Binary Search**: Find highest CRF meeting SSIM ≥ 0.99 (~5-8 iterations)
 3. **Fine Tuning**: ±1 CRF with step 0.5 (~2-3 iterations)
 
@@ -512,7 +512,7 @@ modern_format_boost/
 - **新目标**：找到**最高 CRF**（最小文件）且**满足质量阈值**
 
 **高效三阶段搜索：**
-1. **AI 预测测试**：从预测 CRF 开始（~1次迭代）
+1. **从计算 CRF 开始**：使用 quality_matcher 公式计算的 CRF（~1次迭代）
 2. **二分搜索**：找到满足 SSIM ≥ 0.99 的最高 CRF（~5-8次迭代）
 3. **精细调整**：±1 CRF，步长 0.5（~2-3次迭代）
 
