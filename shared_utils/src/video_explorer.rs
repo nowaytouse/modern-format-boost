@@ -3136,11 +3136,12 @@ fn cpu_fine_tune_from_gpu_boundary(
         best_size = Some(gpu_size);
         eprintln!("✅ GPU boundary CRF {:.1} compresses ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
 
-        // 🔥 向下快速探测 1.0 CRF（0.5 步进）找更高质量区域
-        let mut test_crf = gpu_boundary_crf - 0.5;
+        // 🔥 v5.52: 向下微调 1.0 CRF（0.1 步进）找更高质量区域
+        // 用户要求："GPU 覆盖 0.5 步进，CPU 仅做 0.1 精度"
+        let mut test_crf = gpu_boundary_crf - 0.1;
         let quick_search_limit = (gpu_boundary_crf - 1.5).max(min_crf);
 
-        while test_crf >= quick_search_limit && iterations < 10 {
+        while test_crf >= quick_search_limit && iterations < 20 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let ratio = size as f64 / input_size as f64;
@@ -3149,7 +3150,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
-                test_crf -= 0.5;
+                test_crf -= 0.1;  // 🔥 v5.52: 改为 0.1 步进（之前是 0.5）
             } else {
                 eprintln!("   ✗ CRF {:.1}: {:.1}% fails → boundary found", test_crf, ratio * 100.0);
                 break;

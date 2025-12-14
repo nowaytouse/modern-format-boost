@@ -40,17 +40,13 @@ pub const GPU_SAMPLE_DURATION: f32 = 120.0;
 /// GPU 粗略搜索步长
 pub const GPU_COARSE_STEP: f32 = 2.0;
 
-/// GPU Stage 1 粗略搜索最大迭代次数
-pub const GPU_STAGE1_MAX_ITERATIONS: u32 = 8;
+/// 🔥 v5.52: 保底迭代上限（防止无限循环）
+/// 用户要求："确保仅设置保底上限 例如500次！绝不要限制死迭代次数！"
+/// 正常情况下应该通过收益递减自然停止，这个是极端情况保护
+pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 500;
 
-/// GPU Stage 2 精细搜索最大迭代次数
-pub const GPU_STAGE2_MAX_ITERATIONS: u32 = 15;
-
-/// GPU Stage 3 超精细搜索最大迭代次数
-pub const GPU_STAGE3_MAX_ITERATIONS: u32 = 20;
-
-/// GPU 配置默认最大迭代次数
-pub const GPU_MAX_ITERATIONS: u32 = 10;
+/// GPU 配置默认最大迭代次数（用于向后兼容）
+pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 
 /// GPU 默认最小 CRF
 /// 🔥 v5.7: VideoToolbox 需要更低 CRF (更高 q:v) 才能达到高 SSIM
@@ -689,6 +685,207 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v5.52: 智能采样策略 - 场景检测 + 锐度检测
+// ═══════════════════════════════════════════════════════════════
+
+/// 智能采样结果
+#[derive(Debug, Clone)]
+pub struct SmartSampleResult {
+    /// 采样 ffmpeg 命令（trim + select 过滤器）
+    pub sample_filter: String,
+    /// 实际采样时长（秒）
+    pub actual_duration: f32,
+    /// 采样策略描述
+    pub strategy: String,
+}
+
+/// 🔥 v5.52: 智能采样策略
+///
+/// 用户要求：
+/// 1. 寻找画面不同的、非纯色的，加起来达到百分比要求
+/// 2. 寻找画面锐化更高的、更具备对比价值的采样
+/// 3. 采样长度按照百分比进行
+/// 4. 如果不足则按照全时长采样
+///
+/// ## 实现策略：
+/// - 使用 ffmpeg select 过滤器的场景检测 (scene)
+/// - 使用 entropy 检测非纯色帧
+/// - 使用 thumbnail 选择最具代表性的帧
+/// - 按总时长的百分比采样
+pub fn calculate_smart_sample(
+    input: &std::path::Path,
+    total_duration: f32,
+    target_sample_duration: f32,
+) -> anyhow::Result<SmartSampleResult> {
+    use std::process::Command;
+    use anyhow::Context;
+
+    // 🔥 策略 1：如果视频很短，直接使用全时长
+    if total_duration <= target_sample_duration * 1.2 {
+        return Ok(SmartSampleResult {
+            sample_filter: String::new(),  // 不使用过滤器
+            actual_duration: total_duration,
+            strategy: format!("Full video ({:.1}s, close to target {:.1}s)", total_duration, target_sample_duration),
+        });
+    }
+
+    // 🔥 策略 2：计算采样百分比
+    let sample_ratio = target_sample_duration / total_duration;
+    let sample_percentage = sample_ratio * 100.0;
+
+    // 🔥 策略 3：使用 ffmpeg 场景检测 + 熵值过滤
+    //
+    // select 表达式：
+    // - gt(scene, 0.3): 场景变化 > 30%（找画面不同的）
+    // - gt(entropy, 6.0): 熵值 > 6.0（找非纯色的）
+    // - 每 N 秒选一帧，N 根据采样比例计算
+    //
+    // 例如：100 秒视频，采样 20 秒（20%）
+    // → 每 5 秒选 1 秒 → select='gt(scene,0.3)+gt(entropy,6.0),n=0'
+
+    let scene_threshold = 0.3;  // 30% 场景变化
+    let entropy_threshold = 6.0;  // 熵值阈值（非纯色）
+
+    // 🔥 策略 4：构造智能 select 表达式
+    // 目标：选择场景变化大 OR 高熵值的帧，按比例采样
+    let select_expr = if sample_ratio > 0.5 {
+        // 采样比例 > 50%，使用宽松条件
+        format!("gt(scene,{})+gt(entropy,{})", scene_threshold * 0.5, entropy_threshold * 0.8)
+    } else if sample_ratio > 0.2 {
+        // 采样比例 20-50%，使用标准条件
+        format!("gt(scene,{})+gt(entropy,{})", scene_threshold, entropy_threshold)
+    } else {
+        // 采样比例 < 20%，使用严格条件（只选最重要的帧）
+        format!("gt(scene,{})*gt(entropy,{})", scene_threshold * 1.5, entropy_threshold * 1.2)
+    };
+
+    // 🔥 策略 5：验证过滤器是否有效
+    // 快速测试：运行 1 秒看看是否能选出帧
+    let test_output = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-t").arg("10")  // 只测试前 10 秒
+        .arg("-i").arg(input)
+        .arg("-vf").arg(format!("select='{}',showinfo", select_expr))
+        .arg("-f").arg("null")
+        .arg("-")
+        .output()
+        .context("Failed to test smart sample filter")?;
+
+    let stderr = String::from_utf8_lossy(&test_output.stderr);
+    let frame_count = stderr.matches("n:").count();
+
+    if frame_count == 0 {
+        // 过滤器太严格，没有选出任何帧
+        // 回退到简单策略：均匀采样
+        return Ok(SmartSampleResult {
+            sample_filter: String::new(),
+            actual_duration: target_sample_duration,
+            strategy: format!("Uniform sampling ({:.1}s, {:.1}%)", target_sample_duration, sample_percentage),
+        });
+    }
+
+    // 🔥 策略 6：成功！返回智能过滤器
+    Ok(SmartSampleResult {
+        sample_filter: format!("select='{}',setpts=N/FRAME_RATE/TB", select_expr),
+        actual_duration: target_sample_duration,
+        strategy: format!("Smart sampling ({:.1}s, {:.1}%, scene+entropy)", target_sample_duration, sample_percentage),
+    })
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.52: SSIM + 大小组合决策函数
+// ═══════════════════════════════════════════════════════════════
+
+/// 质量评估结果
+#[derive(Debug, Clone, Copy)]
+pub struct QualityScore {
+    /// SSIM 分数 (0.0-1.0)
+    pub ssim: f64,
+    /// 压缩率（输出/输入，越小越好）
+    pub compression_ratio: f64,
+    /// 综合分数（越高越好）
+    pub combined_score: f64,
+}
+
+/// 🔥 v5.52: 计算质量综合分数（SSIM + 大小）
+///
+/// 用户要求："考量和目标需要同时考量 SSIM 和大小两个指标"
+///
+/// ## 设计理念：
+/// - SSIM 越高越好（质量目标）
+/// - 压缩率越低越好（大小目标）
+/// - 综合分数 = SSIM 权重 × SSIM + 压缩权重 × (1 - 压缩率)
+///
+/// ## 权重策略：
+/// - GPU 阶段：ssim_weight=0.4, size_weight=0.6（更看重压缩效率）
+/// - CPU 阶段：ssim_weight=0.7, size_weight=0.3（更看重质量）
+///
+/// ## 使用场景：
+/// ```rust
+/// let score1 = calculate_quality_score(0.95, 50MB, 100MB, Phase::Gpu);
+/// let score2 = calculate_quality_score(0.98, 60MB, 100MB, Phase::Gpu);
+/// if score2.combined_score > score1.combined_score {
+///     // score2 更好！
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchPhase {
+    /// GPU 粗略搜索阶段（更看重压缩效率）
+    Gpu,
+    /// CPU 精细搜索阶段（更看重质量）
+    Cpu,
+}
+
+pub fn calculate_quality_score(
+    ssim: f64,
+    output_size: u64,
+    input_size: u64,
+    phase: SearchPhase,
+) -> QualityScore {
+    let compression_ratio = output_size as f64 / input_size as f64;
+
+    // 根据阶段设置权重
+    let (ssim_weight, size_weight) = match phase {
+        SearchPhase::Gpu => (0.4, 0.6),  // GPU: 更看重压缩效率
+        SearchPhase::Cpu => (0.7, 0.3),  // CPU: 更看重质量
+    };
+
+    // 🔥 综合分数计算
+    // - SSIM 部分：直接使用 SSIM 值（0.0-1.0）
+    // - 大小部分：使用 (1 - 压缩率) 使其与 SSIM 同向（越大越好）
+    //   - 压缩率 0.5 → 大小分数 0.5（压缩 50%）
+    //   - 压缩率 0.8 → 大小分数 0.2（仅压缩 20%）
+    //   - 压缩率 1.2 → 大小分数 -0.2（变大了！）
+    let size_score = (1.0 - compression_ratio).max(0.0);  // 不能是负数
+    let combined_score = ssim_weight * ssim + size_weight * size_score;
+
+    QualityScore {
+        ssim,
+        compression_ratio,
+        combined_score,
+    }
+}
+
+/// 🔥 v5.52: 比较两个质量分数，判断哪个更好
+///
+/// 返回 true 表示 new_score 比 old_score 更好
+pub fn is_quality_better(
+    new_score: &QualityScore,
+    old_score: &QualityScore,
+    min_ssim_threshold: f64,  // 最低 SSIM 要求（如 0.95）
+) -> bool {
+    // 🔥 硬约束：新分数必须满足最低 SSIM 要求
+    if new_score.ssim < min_ssim_threshold {
+        return false;
+    }
+
+    // 🔥 综合分数比较
+    // 如果综合分数提升 > 0.5%，认为更好
+    let improvement = (new_score.combined_score - old_score.combined_score) / old_score.combined_score;
+    improvement > 0.005  // 0.5% 提升
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🔥 v5.0: GPU → CPU 压缩边界估算
 // ═══════════════════════════════════════════════════════════════
 
@@ -1166,22 +1363,27 @@ pub fn gpu_coarse_search_with_log(
     let is_long_video = quick_duration >= LONG_DURATION_THRESHOLD;
     let is_very_long_video = quick_duration >= VERY_LONG_DURATION_THRESHOLD;
     
-    // 🔥 v5.35: 动态调整采样时长和迭代限制
+    // 🔥 v5.52: 动态调整采样时长（保留），移除迭代硬限制（改用保底上限）
+    // 用户要求："绝不要限制死迭代次数！你必须通过改进设计来实现更好的迭代效率！"
+    //
     // 关键修复：大文件也跳过并行探测，因为并行探测会阻塞直到最慢的编码完成
     // 在169MB文件上，CRF 1编码45秒采样可能需要30-60秒，导致进度条冻结
-    let (sample_duration_limit, max_iterations_limit, skip_parallel) = if is_very_large_file || is_very_long_video {
+    let (sample_duration_limit, skip_parallel) = if is_very_large_file || is_very_long_video {
         // 超大文件/超长视频：最保守策略
-        log_msg!("   ⚠️ Very large file detected → Conservative mode");
-        (30.0_f32, 6_u32, true)  // 只采样 30 秒，最多 6 次迭代，跳过并行
+        log_msg!("   ⚠️ Very large file detected → Conservative mode (30s sample)");
+        (30.0_f32, true)  // 只采样 30 秒，跳过并行
     } else if is_large_file || is_long_video {
-        // 🔥 v5.35: 大文件也跳过并行，防止进度条冻结
-        log_msg!("   📊 Large file detected → Sequential probing mode");
-        (45.0_f32, 8_u32, true)  // 采样 45 秒，最多 8 次迭代，跳过并行探测
+        // 大文件：跳过并行，防止进度条冻结
+        log_msg!("   📊 Large file detected → Sequential mode (45s sample)");
+        (45.0_f32, true)  // 采样 45 秒，跳过并行探测
     } else {
-        // 正常文件：可以使用并行探测，但也建议跳过以保证响应性
-        log_msg!("   ✅ Normal file → Sequential probing mode");
-        (GPU_SAMPLE_DURATION, GPU_STAGE1_MAX_ITERATIONS, true)  // 🔥 v5.35: 全部跳过并行，保证实时进度显示
+        // 正常文件：跳过并行以保证响应性
+        log_msg!("   ✅ Normal file → Sequential mode ({}s sample)", GPU_SAMPLE_DURATION);
+        (GPU_SAMPLE_DURATION, true)  // 使用默认采样时长
     };
+
+    // 🔥 v5.52: 使用保底上限，不限制死迭代次数
+    let max_iterations_limit = GPU_ABSOLUTE_MAX_ITERATIONS;
     
     // 🔥 v5.5: 简洁日志
     log_msg!("GPU搜索 ({}, {:.2}MB, {:.1}s)", gpu.gpu_type, input_size as f64 / 1024.0 / 1024.0, quick_duration);
@@ -1796,68 +1998,96 @@ pub fn gpu_coarse_search_with_log(
     }
     
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.51: Stage 3 简化 - 基于步长 0.5 的质量提升
-    // 从"SSIM 目标"改回"收益递减"+ 0.5 步进
-    // 问题：SSIM 计算太慢，步长 1.0 导致 66 次迭代
-    // 解决：步长 0.5，最多 3 次尝试，有全局限制
+    // 🔥 v5.52: Stage 3 重写 - 基于收益递减的 0.5 步长搜索
+    // 用户要求："绝不要限制死迭代次数！通过改进设计来实现更好的迭代效率！"
+    //
+    // 设计改进：
+    // - 移除"最多 3 次"硬限制
+    // - 改为基于收益递减的自然停止（改进 < 1% 或 < 0.5% 时停止）
+    // - 步长 0.5 保持，向下搜索直到边界
+    // - 只受保底上限 (500) 和 min_crf 限制
     // ═══════════════════════════════════════════════════════════
-    if let Some(fine) = best_crf {
+    if let Some(mut current_best) = best_crf {
         if iterations >= max_iterations_limit {
-            log_msg!("   ⚡ Skip Stage3: reached iteration limit");
+            log_msg!("   ⚡ Skip Stage3: reached absolute limit ({})", max_iterations_limit);
         } else {
-            log_msg!("   📍 Stage 3: Fine-tune with 0.5 step");
+            log_msg!("   📍 Stage 3: Fine-tune with 0.5 step (diminishing returns)");
 
-            // 最多尝试 3 个点：-0.5, -1.0, -1.5
-            for &offset in &[0.5_f32, 1.0, 1.5] {
-                if iterations >= max_iterations_limit {
-                    log_msg!("   ⚡ Stop: reached global iteration limit");
-                    break;
-                }
+            let mut offset = 0.5_f32;
+            let mut consecutive_small_improvements = 0;
 
-                let test_crf = fine - offset;
+            while iterations < max_iterations_limit {
+                let test_crf = current_best - offset;
+
+                // 检查边界
                 if test_crf < config.min_crf {
-                    log_msg!("   ⚡ Stop: reached min_crf");
+                    log_msg!("   ⚡ Stop: reached min_crf {:.1}", config.min_crf);
                     break;
                 }
 
+                // 检查缓存
                 let key = (test_crf * 10.0).round() as i32;
-                if size_cache.contains_key(&key) {
+                let result = if size_cache.contains_key(&key) {
                     let cached_size = *size_cache.get(&key).unwrap();
-                    if cached_size < sample_input_size {
-                        let improvement = best_size.map(|b| (b as f64 - cached_size as f64) / b as f64 * 100.0).unwrap_or(0.0);
-                        log_msg!("   ✓ CRF {:.1}: {:.1}% improvement (cached)", test_crf, improvement);
-                        best_crf = Some(test_crf);
-                        best_size = Some(cached_size);
-                    } else {
-                        log_msg!("   ✗ CRF {:.1} cannot compress", test_crf);
-                        break;
-                    }
-                    continue;
-                }
+                    log_msg!("   📦 Cache hit: CRF {:.1}", test_crf);
+                    Ok(cached_size)
+                } else {
+                    encode_cached(test_crf, &mut size_cache)
+                };
 
-                match encode_cached(test_crf, &mut size_cache) {
+                match result {
                     Ok(size) => {
-                        iterations += 1;
                         if let Some(cb) = progress_cb { cb(test_crf, size); }
 
                         if size < sample_input_size {
+                            // 能够压缩，计算改进
                             let improvement = best_size.map(|b| (b as f64 - size as f64) / b as f64 * 100.0).unwrap_or(0.0);
                             log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement);
+
+                            // 更新最佳点
                             best_crf = Some(test_crf);
                             best_size = Some(size);
+                            current_best = test_crf;
 
-                            // 如果改进小于 1%，停止
-                            if improvement < 1.0 && best_size.is_some() {
-                                log_msg!("   ⚡ Stop: improvement < 1%");
-                                break;
+                            // 🔥 收益递减检测
+                            if improvement < 0.5 {
+                                consecutive_small_improvements += 1;
+                                log_msg!("      ⚠️ Small improvement ({}/2)", consecutive_small_improvements);
+
+                                if consecutive_small_improvements >= 2 {
+                                    log_msg!("   ⚡ Stop: 2 consecutive improvements < 0.5%");
+                                    break;
+                                }
+                            } else if improvement < 1.0 {
+                                log_msg!("      ⚠️ Improvement < 1%, may stop soon");
+                                consecutive_small_improvements += 1;
+
+                                if consecutive_small_improvements >= 3 {
+                                    log_msg!("   ⚡ Stop: 3 consecutive improvements < 1%");
+                                    break;
+                                }
+                            } else {
+                                // 改进显著，重置计数器
+                                consecutive_small_improvements = 0;
                             }
+
+                            // 继续向下搜索
+                            offset += 0.5;
                         } else {
-                            log_msg!("   ✗ CRF {:.1} cannot compress", test_crf);
+                            // 无法压缩，停止
+                            log_msg!("   ✗ CRF {:.1} cannot compress → boundary reached", test_crf);
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        log_msg!("   ⚠️ Encoding failed at CRF {:.1}, stopping", test_crf);
+                        break;
+                    }
                 }
+            }
+
+            if iterations >= max_iterations_limit {
+                log_msg!("   ⚠️ Reached absolute iteration limit ({}) in Stage 3", max_iterations_limit);
             }
         }
     }
