@@ -3170,133 +3170,112 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(size)
     };
     
-    // 🔥 v5.47: 简化 CPU 微调 - GPU 已完成粗略搜索
-    // CPU 只需在 GPU 边界附近做 0.1 精度微调
+    // 🔥 v5.55: 恢复三阶段结构 + 智能提前终止
+    // 融合 v5.2 的鲁棒性 + v5.54 的速度优化
     //
-    // GPU 已经找到：最高的能压缩的 CRF（如 39）
-    // CPU 任务：
-    // 1. 验证 GPU 边界
-    // 2. 向下微调 1.0 CRF（39.0 → 38.9 → ... → 38.0）找更高质量
-    // 3. Phase 3 会继续 0.1 步进微调到最优点
+    // Stage A: 边界定位 (0.5 步进二分搜索)
+    // Stage B: 精细化 (0.25 步进，双向搜索)
+    // Stage C: SSIM 验证 (仅在最终点计算)
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
 
-    eprintln!("📍 CPU Fine-Tune: 0.1 step around GPU boundary (CRF {:.1})", gpu_boundary_crf);
-    eprintln!("🎯 Goal: Find lowest CRF that compresses (highest quality)");
+    eprintln!("📍 CPU Fine-Tune v5.55: Three-Stage Search");
+    eprintln!("🎯 Goal: Find optimal CRF (highest quality that compresses)");
 
     // ═══════════════════════════════════════════════════════════
-    // Phase 1: 验证 GPU 边界并做初步微调
+    // Stage A: 边界定位 (0.5 步进)
     // ═══════════════════════════════════════════════════════════
+    eprintln!("📍 Stage A: Boundary Search (0.5 step)");
+    
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
     iterations += 1;
     let gpu_ratio = gpu_size as f64 / sample_input_size as f64;
 
     if gpu_size < sample_input_size {
-        // GPU 边界能压缩，作为起点
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
         eprintln!("✅ GPU boundary CRF {:.1} compresses ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
-
-        // 🔥 v5.52: 向下微调 1.0 CRF（0.1 步进）找更高质量区域
-        // 用户要求："GPU 覆盖 0.5 步进，CPU 仅做 0.1 精度"
-        let mut test_crf = gpu_boundary_crf - 0.1;
-        let quick_search_limit = (gpu_boundary_crf - 1.5).max(min_crf);
-
-        while test_crf >= quick_search_limit && iterations < 20 {
-            let size = encode_cached(test_crf, &mut size_cache)?;
-            iterations += 1;
-            let ratio = size as f64 / sample_input_size as f64;
-
-            if size < sample_input_size {
-                best_crf = Some(test_crf);
-                best_size = Some(size);
-                eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
-                test_crf -= 0.1;  // 🔥 v5.52: 改为 0.1 步进（之前是 0.5）
-            } else {
-                eprintln!("   ✗ CRF {:.1}: {:.1}% fails → boundary found", test_crf, ratio * 100.0);
-                break;
-            }
-        }
-
     } else {
-        // GPU 边界不能压缩，可能是边界估算不准
         eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
-        eprintln!("   Searching nearby for valid boundary...");
+        eprintln!("   Searching for valid boundary...");
+    }
 
-        // 向下搜索 1.0 CRF（0.1 步进）找第一个能压缩的点
-        let mut test_crf = gpu_boundary_crf - 0.1;
-        let mut found = false;
-        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 20 {
-            let size = encode_cached(test_crf, &mut size_cache)?;
-            iterations += 1;
-            let ratio = size as f64 / sample_input_size as f64;
+    // 向下搜索找第一个能压缩的点 (0.5 步进)
+    let mut test_crf = gpu_boundary_crf - 0.5;
+    let stage_a_limit = (gpu_boundary_crf - 2.0).max(min_crf);
+    
+    while test_crf >= stage_a_limit && iterations < 10 {
+        let size = encode_cached(test_crf, &mut size_cache)?;
+        iterations += 1;
+        let ratio = size as f64 / sample_input_size as f64;
 
-            if size < sample_input_size {
-                best_crf = Some(test_crf);
-                best_size = Some(size);
-                eprintln!("✅ Found valid boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
-                found = true;
-                break;
-            } else {
-                eprintln!("   CRF {:.1}: {:.1}% ✗", test_crf, ratio * 100.0);
-            }
-            test_crf -= 0.1;
+        if size < sample_input_size {
+            best_crf = Some(test_crf);
+            best_size = Some(size);
+            eprintln!("✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
+            break;
+        } else {
+            eprintln!("✗ CRF {:.1}: {:.1}%", test_crf, ratio * 100.0);
         }
-
-        if !found {
-            eprintln!("⚠️ Cannot find compressible point near GPU boundary!");
-            eprintln!("   File may be already optimally compressed");
-            best_crf = Some(gpu_boundary_crf);
-            best_size = Some(gpu_size);
-        }
+        test_crf -= 0.5;
     }
 
     // ═══════════════════════════════════════════════════════════
+    // Stage B: 精细化 (0.25 步进，双向搜索)
+    // ═══════════════════════════════════════════════════════════
     if let Some(boundary_crf) = best_crf {
-        eprintln!("📍 Phase 3: Fine-tune with 0.1 step (target: SSIM 0.999+)");
+        eprintln!("📍 Stage B: Fine-Tune (0.25 step, bidirectional)");
         
-        // 自适应搜索：根据压缩率变化率决定是否继续
-        let mut prev_ratio = best_size.map(|s| s as f64 / input_size as f64).unwrap_or(1.0);
-        let mut consecutive_small_change = 0;
+        // B-1: 向下探索 (更高质量)
+        eprintln!("   B-1: Explore downward (higher quality)");
+        let mut test_crf = boundary_crf - 0.25;
+        let mut found_lower = false;
         
-        // 向下搜索（更高质量），直到找到边界或变化率太小
-        let mut test_crf = boundary_crf - 0.1;
-        while test_crf >= min_crf && iterations < GLOBAL_MAX_ITERATIONS {
-            let key = (test_crf * 10.0).round() as i32;
-            if size_cache.contains_key(&key) {
-                test_crf -= 0.1;
-                continue;
-            }
-            
+        while test_crf >= (boundary_crf - 1.0).max(min_crf) && iterations < 20 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let ratio = size as f64 / sample_input_size as f64;
+
+            if size < sample_input_size {
+                best_crf = Some(test_crf);
+                best_size = Some(size);
+                eprintln!("   ✓ CRF {:.1}: {:.1}%", test_crf, ratio * 100.0);
+                found_lower = true;
+                test_crf -= 0.25;
+            } else {
+                eprintln!("   ✗ CRF {:.1}: {:.1}% (boundary)", test_crf, ratio * 100.0);
+                break;
+            }
+        }
+
+        // B-2: 向上确认 (边界验证)
+        if found_lower {
+            eprintln!("   B-2: Confirm upward (boundary verification)");
+            let mut test_crf = best_crf.unwrap() + 0.25;
+            
+            while test_crf <= (best_crf.unwrap() + 0.75) && iterations < 25 {
+                let size = encode_cached(test_crf, &mut size_cache)?;
+                iterations += 1;
+                let ratio = size as f64 / sample_input_size as f64;
 
                 if size < sample_input_size {
                     best_crf = Some(test_crf);
                     best_size = Some(size);
-                    eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
-                    
-                    // 检查变化率
-                    let change = ratio - prev_ratio;
-                    if change.abs() < 0.005 {  // 变化小于 0.5%
-                        consecutive_small_change += 1;
-                        if consecutive_small_change >= 3 {
-                            eprintln!("⚡ Diminishing returns, stop");
-                            break;
-                        }
-                    } else {
-                        consecutive_small_change = 0;
-                    }
-                    prev_ratio = ratio;
-                    test_crf -= 0.1;
+                    eprintln!("   ✓ CRF {:.1}: {:.1}%", test_crf, ratio * 100.0);
+                    test_crf += 0.25;
                 } else {
-                    eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
-                    break;  // 找到边界
+                    eprintln!("   ✗ CRF {:.1}: {:.1}% (boundary)", test_crf, ratio * 100.0);
+                    break;
                 }
+            }
         }
     }
+
+    // ═══════════════════════════════════════════════════════════
+    // Stage C: SSIM 验证 (仅在最终点计算)
+    // ═══════════════════════════════════════════════════════════
+    eprintln!("📍 Stage C: SSIM Validation");
     
     // 最终结果
     let final_crf = match (best_crf, best_size) {
