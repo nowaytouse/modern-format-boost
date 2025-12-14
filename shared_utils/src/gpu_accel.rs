@@ -32,10 +32,15 @@ use std::io::Read;
 // ═══════════════════════════════════════════════════════════════
 
 /// GPU 采样时长（秒）- 用于长视频的快速边界估算
-/// 🔥 v5.51: 从 600 秒调整到 120 秒（2分钟）- 平衡精度和速度
-/// 用户反馈：10分钟太慢且效果不好（SSIM 0.85）
-/// 策略：用更短的采样 + 更智能的搜索逻辑
-pub const GPU_SAMPLE_DURATION: f32 = 120.0;
+/// 🔥 v5.64: 多段采样总时长（5段 × 10秒 = 50秒）
+/// 策略：采样开头+25%+50%+75%+结尾，覆盖视频全局特征
+pub const GPU_SAMPLE_DURATION: f32 = 50.0;
+
+/// 🔥 v5.64: 每段采样时长（秒）
+pub const GPU_SEGMENT_DURATION: f32 = 10.0;
+
+/// 🔥 v5.64: 采样段数
+pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
 /// GPU 粗略搜索步长
 pub const GPU_COARSE_STEP: f32 = 2.0;
@@ -1395,13 +1400,16 @@ pub fn gpu_coarse_search_with_log(
     let duration = quick_duration;
     let actual_sample_duration = duration.min(sample_duration_limit);
 
-    // 🔥 v5.45: 提前计算采样部分的输入大小（供整个函数使用）
-    let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
+    // 🔥 v5.64: 计算采样部分的输入大小
+    // 短视频（<60s）：使用完整大小
+    // 长视频（>=60s）：多段采样（5段×10秒=50秒）
+    let sample_input_size = if duration < 60.0 {
         // 短视频，使用完整大小
         input_size
     } else {
-        // 长视频，按比例计算采样部分的预期大小
-        let ratio = actual_sample_duration / duration;
+        // 长视频，多段采样总时长 = 50 秒
+        let multi_segment_duration = GPU_SAMPLE_DURATION; // 50 秒
+        let ratio = multi_segment_duration / duration;
         (input_size as f64 * ratio as f64) as u64
     };
 
@@ -1476,9 +1484,15 @@ pub fn gpu_coarse_search_with_log(
     }
     log_msg!("   🔥 Warmup: max_crf={:.0} can compress → continue search", config.max_crf);
 
-    // 🔥 v5.5: 简洁 - 不打印采样信息，直接开始搜索
+    // 🔥 v5.64: 打印采样策略
+    if duration >= 60.0 {
+        log_msg!("   📊 Multi-segment sampling: 5 segments × 10s = 50s (0%, 25%, 50%, 75%, 90%)");
+    } else {
+        log_msg!("   📊 Full video sampling: {:.1}s", duration);
+    }
 
-    // 快速编码函数（GPU）- 只编码前 N 秒
+    // 🔥 v5.64: 多段采样函数 - 采样开头+25%+50%+75%+结尾
+    // 覆盖视频全局特征，避免"开头简单、结尾复杂"导致的误判
     // 🔥 v5.42: 实时进度更新 - 读取ffmpeg的-progress输出，多次调用progress_cb
     // 🔥 v5.44: 简化超时逻辑 - 仅保留 12 小时底线超时，响亮 fallback
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
@@ -1490,10 +1504,44 @@ pub fn gpu_coarse_search_with_log(
         let extra_args = gpu_encoder.get_extra_args();
 
         let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-t").arg(format!("{}", actual_sample_duration))
-            .arg("-i").arg(input)
+        cmd.arg("-y");
+        
+        // 🔥 v5.64: 多段采样策略
+        // 短视频（<60s）：直接采样全片
+        // 长视频（>=60s）：采样5个关键片段（开头+25%+50%+75%+结尾）
+        let use_multi_segment = duration >= 60.0;
+        
+        if !use_multi_segment {
+            // 短视频：直接采样前 N 秒
+            cmd.arg("-t").arg(format!("{}", actual_sample_duration));
+        }
+        
+        cmd.arg("-i").arg(input)
             .arg("-c:v").arg(gpu_encoder.name);
+        
+        // 🔥 v5.64: 长视频使用 select 滤镜多段采样
+        if use_multi_segment {
+            // 采样位置：0%, 25%, 50%, 75%, 90%（避免结尾可能的黑屏）
+            let seg_dur = GPU_SEGMENT_DURATION;
+            let positions = [
+                0.0,                           // 开头
+                duration * 0.25,               // 25%
+                duration * 0.50,               // 50%
+                duration * 0.75,               // 75%
+                (duration * 0.90).max(duration - seg_dur), // 结尾（避免黑屏）
+            ];
+            
+            // 构建 select 滤镜表达式
+            let select_expr: Vec<String> = positions.iter()
+                .map(|&pos| format!("between(t,{:.1},{:.1})", pos, pos + seg_dur))
+                .collect();
+            let select_filter = format!(
+                "select='{}',setpts=N/FRAME_RATE/TB",
+                select_expr.join("+")
+            );
+            
+            cmd.arg("-vf").arg(&select_filter);
+        }
 
         for arg in &crf_args {
             cmd.arg(arg);
