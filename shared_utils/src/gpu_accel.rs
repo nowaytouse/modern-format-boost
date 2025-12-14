@@ -1254,14 +1254,27 @@ pub fn gpu_coarse_search_with_log(
         });
     }
     log_msg!("   🔥 Warmup: max_crf={:.0} can compress → continue search", config.max_crf);
-    
+
+    // 🔥 v5.43: 计算采样部分的输入大小（按比例估算），提前定义供闭包使用
+    let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
+        // 短视频，使用完整大小
+        input_size
+    } else {
+        // 长视频，按比例计算采样部分的预期大小
+        let ratio = actual_sample_duration / duration;
+        (input_size as f64 * ratio as f64) as u64
+    };
+
     // 🔥 v5.5: 简洁 - 不打印采样信息，直接开始搜索
     
     // 快速编码函数（GPU）- 只编码前 N 秒
     // 🔥 v5.42: 实时进度更新 - 读取ffmpeg的-progress输出，多次调用progress_cb
+    // 🔥 v5.43: 添加超时保护防止无限等待，改进线程管理，减少I/O开销
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
-        use std::io::{BufRead, BufReader};
         use std::process::Stdio;
+        use std::time::{Instant, Duration};
+        use std::io::{BufRead, BufReader};
+        use std::sync::mpsc;
 
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.get_extra_args();
@@ -1286,22 +1299,34 @@ pub fn gpu_coarse_search_with_log(
             .stderr(Stdio::piped());  // 捕获 stderr (ffmpeg日志)
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs((actual_sample_duration as u64) + 60);  // 🔥 v5.43: 编码超时保护
 
-        // 🔥 v5.42: 后台线程读取 stderr 防止死锁
+        // 🔥 v5.43: 后台线程读取 stderr 防止死锁，使用 mpsc 通道
+        let (tx, rx) = mpsc::channel();
         let stderr_handle = if let Some(stderr) = child.stderr.take() {
             Some(std::thread::spawn(move || {
                 let _ = std::io::Read::read_to_end(&mut std::io::BufReader::new(stderr).by_ref(), &mut vec![]);
+                let _ = tx.send(()); // 通知 stderr 读取完成
             }))
         } else {
             None
         };
 
-        // 🔥 v5.42: 在主线程读取 stdout (进度信息)
-        let mut last_progress_time = std::time::Instant::now();
+        // 🔥 v5.43: 在主线程读取 stdout (进度数据)，添加超时保护
+        let mut last_progress_time = Instant::now();
+        let mut last_metadata_check = Instant::now();  // 🔥 v5.43: 避免频繁调用 metadata
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
 
             for line in reader.lines() {
+                // 🔥 v5.43: 检查总体超时，防止无限等待
+                if start_time.elapsed() > timeout {
+                    eprintln!("⏱️ GPU encoding timeout, killing ffmpeg...");
+                    let _ = child.kill();
+                    break;
+                }
+
                 if let Ok(line) = line {
                     // 解析 out_time_us=XXXXX
                     if let Some(val) = line.strip_prefix("out_time_us=") {
@@ -1311,13 +1336,27 @@ pub fn gpu_coarse_search_with_log(
                                 let current_secs = time_us as f64 / 1_000_000.0;
                                 let pct = (current_secs / actual_sample_duration as f64 * 100.0).min(100.0);
 
-                                // 估算最终输出大小（线性假设）
-                                let estimated_final_size = (std::fs::metadata(output).map(|m| m.len()).unwrap_or(0) as f64 / pct.max(1.0) * 100.0) as u64;
+                                // 🔥 v5.43: 减少 metadata 调用频率（每 3 秒调用一次，避免 I/O 瓶颈）
+                                let estimated_final_size = if last_metadata_check.elapsed().as_secs_f64() >= 3.0 {
+                                    std::fs::metadata(output).map(|m| m.len()).unwrap_or(0)
+                                } else {
+                                    0  // 会在下面用线性估算
+                                };
+
+                                let estimated_final_size = if estimated_final_size > 0 {
+                                    (estimated_final_size as f64 / pct.max(1.0) * 100.0) as u64
+                                } else {
+                                    // 使用线性估算，避免频繁 I/O
+                                    (sample_input_size as f64 * (1.0 / pct.max(0.1))).min(sample_input_size as f64 * 10.0) as u64
+                                };
 
                                 if let Some(cb) = progress_cb {
                                     cb(crf, estimated_final_size);
                                 }
-                                last_progress_time = std::time::Instant::now();
+                                last_progress_time = Instant::now();
+                                if last_metadata_check.elapsed().as_secs_f64() >= 3.0 {
+                                    last_metadata_check = Instant::now();
+                                }
                             }
                         }
                     }
@@ -1325,12 +1364,27 @@ pub fn gpu_coarse_search_with_log(
             }
         }
 
-        // 等待编码完成
-        let status = child.wait().context("Failed to wait for ffmpeg")?;
+        // 🔥 v5.43: 带超时的等待，避免无限等待
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if start_time.elapsed() > timeout {
+                        eprintln!("⏱️ GPU encoding exceeded timeout, killing process");
+                        let _ = child.kill();
+                        break child.wait().context("Failed to wait for killed ffmpeg")?;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.into()),
+            }
+        };
 
-        // 等待 stderr 线程完成
+        // 🔥 v5.43: 等待 stderr 线程完成，添加超时
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
+            // 等待通道信号，但不阻塞太久
+            let _ = rx.recv_timeout(Duration::from_secs(5));
         }
 
         if !status.success() {
@@ -1394,19 +1448,7 @@ pub fn gpu_coarse_search_with_log(
         
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (0.0, Err(anyhow::anyhow!("thread panic"))))).collect()
     };
-    
-    // 🔥 v5.3: 计算采样部分的输入大小（按比例估算）
-    let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
-        // 短视频，使用完整大小
-        input_size
-    } else {
-        // 长视频，按比例计算采样部分的预期大小
-        let ratio = actual_sample_duration / duration;
-        (input_size as f64 * ratio as f64) as u64
-    };
-    
-    // 🔥 v5.5: 不打印采样大小
-    
+
     // 缓存已测试的 CRF 结果
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
     let mut best_crf: Option<f32> = None;
