@@ -852,6 +852,8 @@ pub struct GpuCoarseResult {
     pub fine_tuned: bool,
     /// 日志
     pub log: Vec<String>,
+    /// 🔥 v5.45: GPU 采样输入大小（用于正确计算压缩率）
+    pub sample_input_size: u64,
 }
 
 /// GPU/CPU CRF 映射表
@@ -1068,6 +1070,7 @@ pub fn gpu_coarse_search_with_log(
             found_boundary: false,
             fine_tuned: false,
             log,
+            sample_input_size: input_size,
         });
     }
     
@@ -1097,6 +1100,7 @@ pub fn gpu_coarse_search_with_log(
                 found_boundary: false,
                 fine_tuned: false,
                 log,
+                sample_input_size: input_size,
             });
         }
     };
@@ -1149,6 +1153,7 @@ pub fn gpu_coarse_search_with_log(
             found_boundary: false,
             fine_tuned: false,
             log,
+            sample_input_size: input_size,
         });
     }
     
@@ -1184,7 +1189,17 @@ pub fn gpu_coarse_search_with_log(
     // 🔥 v5.17: 使用动态采样时长
     let duration = quick_duration;
     let actual_sample_duration = duration.min(sample_duration_limit);
-    
+
+    // 🔥 v5.45: 提前计算采样部分的输入大小（供整个函数使用）
+    let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
+        // 短视频，使用完整大小
+        input_size
+    } else {
+        // 长视频，按比例计算采样部分的预期大小
+        let ratio = actual_sample_duration / duration;
+        (input_size as f64 * ratio as f64) as u64
+    };
+
     // ═══════════════════════════════════════════════════════════
     // 🔥 v5.18: 缓存预热（Cache Warmup）
     // 用极短采样（5秒）快速测试 max_crf，获取压缩趋势
@@ -1251,22 +1266,13 @@ pub fn gpu_coarse_search_with_log(
             found_boundary: false,
             fine_tuned: false,
             log,
+            sample_input_size,
         });
     }
     log_msg!("   🔥 Warmup: max_crf={:.0} can compress → continue search", config.max_crf);
 
-    // 🔥 v5.43: 计算采样部分的输入大小（按比例估算），提前定义供闭包使用
-    let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
-        // 短视频，使用完整大小
-        input_size
-    } else {
-        // 长视频，按比例计算采样部分的预期大小
-        let ratio = actual_sample_duration / duration;
-        (input_size as f64 * ratio as f64) as u64
-    };
-
     // 🔥 v5.5: 简洁 - 不打印采样信息，直接开始搜索
-    
+
     // 快速编码函数（GPU）- 只编码前 N 秒
     // 🔥 v5.42: 实时进度更新 - 读取ffmpeg的-progress输出，多次调用progress_cb
     // 🔥 v5.44: 简化超时逻辑 - 仅保留 12 小时底线超时，响亮 fallback
@@ -1576,7 +1582,9 @@ pub fn gpu_coarse_search_with_log(
     // ═══════════════════════════════════════════════════════════
     // Stage 1: 指数搜索（如果并行探测未完全确定边界）
     // 🔥 v5.17: 使用动态迭代限制
+    // 🔥 v5.45: 智能终止 - 基于收益递减和质量目标
     // ═══════════════════════════════════════════════════════════
+
     if !found_compress_point && (boundary_high - boundary_low) > 4.0 {
         // 并行探测未找到压缩点，继续指数搜索
         let mut step: f32 = 1.0;
@@ -1651,16 +1659,16 @@ pub fn gpu_coarse_search_with_log(
     } else {
         false
     };
-    
+
     if found_compress_point && !skip_stage2 && (boundary_high - boundary_low) > 1.0 {
         let mut lo = boundary_low.ceil() as i32;
         let mut hi = boundary_high.floor() as i32;
-        
+
         // 最多 log2(range) 次迭代
         let max_binary_iter = 5;
         let mut binary_iter = 0;
-        
-        while lo < hi && iterations < GPU_STAGE2_MAX_ITERATIONS && binary_iter < max_binary_iter {
+
+        while lo < hi && iterations < max_iterations_limit && binary_iter < max_binary_iter {
             binary_iter += 1;
             let mid = lo + (hi - lo) / 2;
             let test_crf = mid as f32;
@@ -1709,25 +1717,63 @@ pub fn gpu_coarse_search_with_log(
     }
     
     // ═══════════════════════════════════════════════════════════
-    // Stage 3: 自适应精细化 O(1) - 0.5 精度探测
+    // Stage 3: 智能精细化 - 收益递减终止
     // GPU 只到 0.5 精度，0.1 交给 CPU
+    // 🔥 v5.45: 基于收益递减的智能终止，避免过度搜索
     // ═══════════════════════════════════════════════════════════
     if let Some(fine) = best_crf {
-        // 只测试 -0.5 和 -1.0 两个点（自适应：如果 -0.5 不行就停）
+        log_msg!("   📍 Stage 3: Fine-tune (diminishing returns detection)");
+
+        // 智能终止阈值
+        const MIN_SIZE_IMPROVEMENT: f64 = 0.01;  // 最小改进 1%
+        const MIN_CRF_MARGIN: f32 = 1.0;         // 距离 min_crf 至少 1.0
+        const MAX_NO_IMPROVEMENT: u32 = 2;        // 最多连续 2 次无显著改进
+
+        let mut no_improvement_count = 0u32;
+        let mut last_improvement: Option<f64> = None;
+
+        // 只测试 -0.5 和 -1.0 两个点（如果 -0.5 改进不明显就停）
         for &offset in &[0.5_f32, 1.0] {
             let test_crf = fine - offset;
-            if test_crf < config.min_crf || iterations >= GPU_STAGE3_MAX_ITERATIONS {
+
+            // 🔥 保护条件 1: 距离 min_crf 太近
+            if test_crf < config.min_crf + MIN_CRF_MARGIN {
+                log_msg!("   ⚡ Stop: Too close to min_crf ({:.1} < {:.1})", test_crf, config.min_crf + MIN_CRF_MARGIN);
                 break;
             }
-            
+
+            // 🔥 保护条件 2: 连续无显著改进
+            if no_improvement_count >= MAX_NO_IMPROVEMENT {
+                log_msg!("   ⚡ Stop: {} consecutive steps with < {:.1}% improvement", MAX_NO_IMPROVEMENT, MIN_SIZE_IMPROVEMENT * 100.0);
+                break;
+            }
+
             let key = (test_crf * 10.0).round() as i32;
             if size_cache.contains_key(&key) {
                 let cached_size = *size_cache.get(&key).unwrap();
-                if cached_size < sample_input_size {
+
+                // 🔥 计算改进幅度
+                if let Some(current_best) = best_size {
+                    let improvement = (current_best as f64 - cached_size as f64) / current_best as f64;
+
+                    if cached_size < sample_input_size && improvement >= MIN_SIZE_IMPROVEMENT {
+                        // 显著改进
+                        best_crf = Some(test_crf);
+                        best_size = Some(cached_size);
+                        no_improvement_count = 0;
+                        last_improvement = Some(improvement);
+                        log_msg!("   ✓ CRF {:.1}: {:.1}% improvement (cached)", test_crf, improvement * 100.0);
+                    } else if improvement < MIN_SIZE_IMPROVEMENT {
+                        // 改进太小
+                        no_improvement_count += 1;
+                        log_msg!("   ⚠ CRF {:.1}: only {:.2}% improvement, not worth it", test_crf, improvement * 100.0);
+                        if cached_size >= sample_input_size {
+                            break;  // 不能压缩就停
+                        }
+                    }
+                } else if cached_size < sample_input_size {
                     best_crf = Some(test_crf);
                     best_size = Some(cached_size);
-                } else {
-                    break;  // 自适应：不能压缩就停
                 }
                 continue;
             }
@@ -1737,25 +1783,45 @@ pub fn gpu_coarse_search_with_log(
                     iterations += 1;
                     if let Some(cb) = progress_cb { cb(test_crf, size); }
 
-                    if size < sample_input_size {
-                        best_crf = Some(test_crf);
-                        best_size = Some(size);
-                        
-                        // 智能终止
-                        if let Some(prev) = prev_size {
-                            let rate = calc_change_rate(prev, size);
-                            if rate < CHANGE_RATE_THRESHOLD {
-                                log_msg!("   ⚡ Stage3 early stop: Δ{:.3}%", rate * 100.0);
-                                break;
+                    // 🔥 计算改进幅度
+                    if let Some(current_best) = best_size {
+                        let improvement = (current_best as f64 - size as f64) / current_best as f64;
+
+                        if size < sample_input_size && improvement >= MIN_SIZE_IMPROVEMENT {
+                            // 显著改进
+                            best_crf = Some(test_crf);
+                            best_size = Some(size);
+                            no_improvement_count = 0;
+                            last_improvement = Some(improvement);
+                            log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement * 100.0);
+                        } else if improvement < MIN_SIZE_IMPROVEMENT {
+                            // 改进太小，收益递减
+                            no_improvement_count += 1;
+                            log_msg!("   ⚠ CRF {:.1}: only {:.2}% improvement, diminishing returns", test_crf, improvement * 100.0);
+                            if size >= sample_input_size {
+                                break;  // 不能压缩就停
+                            }
+                        } else {
+                            // size < sample_input_size 但 improvement < 0（更差了）
+                            no_improvement_count += 1;
+                            if size < sample_input_size {
+                                best_crf = Some(test_crf);
+                                best_size = Some(size);
                             }
                         }
-                        prev_size = Some(size);
+                    } else if size < sample_input_size {
+                        best_crf = Some(test_crf);
+                        best_size = Some(size);
                     } else {
-                        break;  // 自适应：不能压缩就停
+                        break;  // 不能压缩就停
                     }
                 }
                 Err(_) => break,
             }
+        }
+
+        if let Some(imp) = last_improvement {
+            log_msg!("   📊 Stage 3 best improvement: {:.2}%", imp * 100.0);
         }
     }
     
@@ -1847,6 +1913,7 @@ pub fn gpu_coarse_search_with_log(
         found_boundary: found,
         fine_tuned,
         log,
+        sample_input_size,
     })
 }
 
