@@ -1026,15 +1026,22 @@ pub fn gpu_coarse_search_with_log(
     use anyhow::{Context, bail};
     
     let mut log = Vec::new();
-    
+
+    // 🔥 v5.35: 在有progress callback时进入静默模式，防止日志刷屏
+    // 进度条已经显示实时信息，不需要大量详细日志
+    let silent_mode = progress_cb.is_some();
+
     // 🔥 v5.22: 如果有日志回调，使用回调输出；否则直接 eprintln
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
-            if let Some(cb) = &log_cb {
-                cb(&msg);
-            } else {
-                eprintln!("{}", msg);
+            // 只在非静默模式时输出日志，防止progress bar刷屏
+            if !silent_mode {
+                if let Some(cb) = &log_cb {
+                    cb(&msg);
+                } else {
+                    eprintln!("{}", msg);
+                }
             }
             log.push(msg);
         }};
