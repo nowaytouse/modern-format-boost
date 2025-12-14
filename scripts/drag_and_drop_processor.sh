@@ -289,33 +289,32 @@ process_images() {
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
 
-    # 🔥 v5.39: 强化键盘输入防护
-    # 关键洞察: ProgressDrawTarget::hidden() 冻结进度条，改用 100Hz 刷新覆盖
-    # 因此需要更强的终端级防护来配合
+    # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
+    # 关键洞察：需要在多个层面完全阻止键盘输入
 
     # 保存原始终端设置
     local original_stty
     original_stty=$(stty -g 2>/dev/null) || original_stty=""
 
-    # 1. 关闭 stdin
-    exec 0<&-
+    # 1️⃣ 文件描述符级别：关闭所有输入源
+    exec 0</dev/null          # stdin 重定向到 /dev/null（完全禁止输入）
 
-    # 2. 强化终端设置
-    if [[ -t 1 ]]; then  # 只在连接到终端时应用
-        # 禁用 echo, canonical 模式, 所有特殊字符处理
-        stty -echo -icanon -isig 2>/dev/null || true
-        # 设置原始模式防止任何输入处理
-        stty -onlcr 2>/dev/null || true
+    # 2️⃣ 终端级别：完全禁用所有输入模式
+    if [[ -t 1 ]]; then
+        # 禁用：echo, canonical, 信号处理, 特殊字符, newline转换, 流控制
+        stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
+        # 设置最小读取字节数为0（非阻塞）
+        stty min 0 time 0 2>/dev/null || true
     fi
 
-    # 3. 设置多个环境变量告诉程序禁用交互
-    TERM=dumb LANG=C "$IMGQUALITY_HEVC" "${args[@]}" || true
+    # 3️⃣ 环境级别：告诉程序禁用交互
+    TERM=dumb LANG=C LC_ALL=C "$IMGQUALITY_HEVC" "${args[@]}" || true
 
-    # 恢复终端设置
+    # 恢复原始终端设置
     if [[ -n "$original_stty" ]]; then
         stty "$original_stty" 2>/dev/null || true
     else
-        stty echo icanon isig 2>/dev/null || true
+        stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
     fi
 }
 
@@ -336,33 +335,32 @@ process_videos() {
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
 
-    # 🔥 v5.39: 强化键盘输入防护
-    # 关键洞察: ProgressDrawTarget::hidden() 冻结进度条，改用 100Hz 刷新覆盖
-    # 因此需要更强的终端级防护来配合
+    # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
+    # 关键洞察：需要在多个层面完全阻止键盘输入
 
     # 保存原始终端设置
     local original_stty
     original_stty=$(stty -g 2>/dev/null) || original_stty=""
 
-    # 1. 关闭 stdin
-    exec 0<&-
+    # 1️⃣ 文件描述符级别：关闭所有输入源
+    exec 0</dev/null          # stdin 重定向到 /dev/null（完全禁止输入）
 
-    # 2. 强化终端设置
-    if [[ -t 1 ]]; then  # 只在连接到终端时应用
-        # 禁用 echo, canonical 模式, 所有特殊字符处理
-        stty -echo -icanon -isig 2>/dev/null || true
-        # 设置原始模式防止任何输入处理
-        stty -onlcr 2>/dev/null || true
+    # 2️⃣ 终端级别：完全禁用所有输入模式
+    if [[ -t 1 ]]; then
+        # 禁用：echo, canonical, 信号处理, 特殊字符, newline转换, 流控制
+        stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
+        # 设置最小读取字节数为0（非阻塞）
+        stty min 0 time 0 2>/dev/null || true
     fi
 
-    # 3. 设置多个环境变量告诉程序禁用交互
-    TERM=dumb LANG=C "$VIDQUALITY_HEVC" "${args[@]}" || true
+    # 3️⃣ 环境级别：告诉程序禁用交互
+    TERM=dumb LANG=C LC_ALL=C "$VIDQUALITY_HEVC" "${args[@]}" || true
 
-    # 恢复终端设置
+    # 恢复原始终端设置
     if [[ -n "$original_stty" ]]; then
         stty "$original_stty" 2>/dev/null || true
     else
-        stty echo icanon isig 2>/dev/null || true
+        stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
     fi
 }
 
