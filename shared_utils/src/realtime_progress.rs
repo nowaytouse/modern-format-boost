@@ -15,41 +15,19 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// 🔥 v5.35: 终端原始模式控制 - 防止键盘输入干扰
-/// 在Unix系统上禁用echo，Windows上无操作
+/// 🔥 v5.35: 终端控制已移除（导致崩溃）
+/// indicatif库已经正确处理了所有终端兼容性问题
+/// 不应该尝试自己调用stty或termios，这会干扰进度条显示并导致崩溃
 #[allow(dead_code)]
 fn disable_terminal_echo() {
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        // 使用stty禁用echo和输入缓冲（Unix/Linux/macOS）
-        // 对所有文件描述符应用
-        let _ = Command::new("stty")
-            .arg("-echo")
-            .arg("-icanon")  // 禁用规范模式（行缓冲）
-            .arg("min")
-            .arg("0")        // 非阻塞读
-            .stdin(std::process::Stdio::inherit())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .output();
-    }
+    // 🔥 v5.35: 禁用echo的尝试导致了终端崩溃
+    // 移除所有手动终端控制，改为依赖indicatif库
+    // indicatif已经在内部处理了所有终端兼容性问题
 }
 
 #[allow(dead_code)]
 fn restore_terminal_echo() {
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        // 恢复echo和规范模式设置
-        let _ = Command::new("stty")
-            .arg("echo")
-            .arg("icanon")   // 恢复规范模式
-            .stdin(std::process::Stdio::inherit())
-            .stdout(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .output();
-    }
+    // 无需恢复，因为我们没有修改终端状态
 }
 
 /// 🔥 v5.34: 简单迭代进度条 - 基于真实迭代次数

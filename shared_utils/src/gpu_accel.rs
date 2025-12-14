@@ -1406,24 +1406,26 @@ pub fn gpu_coarse_search_with_log(
     let mut boundary_high: f32 = config.max_crf;
     let mut prev_size: Option<u64> = None;
     let mut found_compress_point = false;
-    
+
     // 🔥 v5.17: 并行探测 3 个关键点（大文件时跳过）
+    // 🔥 v5.35: 改变探测顺序 - 从mid_crf开始，避免很慢的min_crf编码
     let mid_crf = (config.min_crf + config.max_crf) / 2.0;
-    let probe_crfs = [config.min_crf, mid_crf, config.max_crf];
-    
+    let probe_crfs = [mid_crf, config.max_crf, config.min_crf];  // 改变顺序：mid → max → min
+
     // 🔥 v5.17: 检查是否跳过并行探测
     let probe_results = if skip_parallel {
         log_msg!("   ⚡ Skip parallel probe (large file mode)");
-        // 大文件模式：只测试 max_crf 一个点
-        let single_result = encode_gpu(config.max_crf);
+        // 大文件模式：从mid_crf开始，避免很慢的min_crf
+        log_msg!("   🔄 Testing CRF {:.0} (mid-point)...", mid_crf);
+        let single_result = encode_gpu(mid_crf);
         if let Ok(size) = &single_result {
-            let key = (config.max_crf * 10.0).round() as i32;
+            let key = (mid_crf * 10.0).round() as i32;
             size_cache.insert(key, *size);
             iterations += 1;
-            size_history.push((config.max_crf, *size));
-            if let Some(cb) = progress_cb { cb(config.max_crf, *size); }
+            size_history.push((mid_crf, *size));
+            if let Some(cb) = progress_cb { cb(mid_crf, *size); }
         }
-        vec![(config.max_crf, single_result)]
+        vec![(mid_crf, single_result)]
     } else {
         log_msg!("   🚀 Parallel probe: CRF {:.0}, {:.0}, {:.0}", probe_crfs[0], probe_crfs[1], probe_crfs[2]);
         encode_parallel(&probe_crfs)
