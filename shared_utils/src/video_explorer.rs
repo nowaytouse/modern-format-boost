@@ -3109,140 +3109,87 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(size)
     };
     
-    // 🔥 v6.0: 三阶段智能搜索
-    // Phase 1: 黄金分割找压缩边界
-    // Phase 2: 二分搜索精确定位
-    // Phase 3: 0.1 步进微调找最优点
-    
+    // 🔥 v5.47: 简化 CPU 微调 - GPU 已完成粗略搜索
+    // CPU 只需在 GPU 边界附近做 0.1 精度微调
+    //
+    // GPU 已经找到：最高的能压缩的 CRF（如 39）
+    // CPU 任务：
+    // 1. 验证 GPU 边界
+    // 2. 向下微调 1.0 CRF（39.0 → 38.9 → ... → 38.0）找更高质量
+    // 3. Phase 3 会继续 0.1 步进微调到最优点
+
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
-    
+
+    eprintln!("📍 CPU Fine-Tune: 0.1 step around GPU boundary (CRF {:.1})", gpu_boundary_crf);
+    eprintln!("🎯 Goal: Find lowest CRF that compresses (highest quality)");
+
     // ═══════════════════════════════════════════════════════════
-    eprintln!("📍 Phase 1: Golden section search for compression boundary");
-    
-    let phi = 1.618033988749895_f32;  // 黄金比例
-    let mut low = gpu_boundary_crf;
-    let mut high = max_crf.min(gpu_boundary_crf + 15.0);  // 最多搜索 15 CRF 范围
-    
-    // 先测试边界
-    let low_size = encode_cached(low, &mut size_cache)?;
+    // Phase 1: 验证 GPU 边界并做初步微调
+    // ═══════════════════════════════════════════════════════════
+    let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
     iterations += 1;
-    let low_ratio = low_size as f64 / input_size as f64;
-    eprintln!("🔄 CRF {:.1}: {:.1}%", low, low_ratio * 100.0);
-    
-    if low_size < input_size {
-        // GPU 边界能压缩
-        best_crf = Some(low);
-        best_size = Some(low_size);
-        eprintln!("✅ GPU boundary compresses!");
-        
-        // 🔥 v5.25: 智能二分搜索 - 根据搜索范围动态计算迭代次数
-        // 二分搜索理论迭代次数 = log2(range) + 1
-        let search_range = low - min_crf;
-        // 动态计算：log2(range) + 安全余量，底线 50 次
-        let max_binary_iter = ((search_range.log2().ceil() as u32) + 3).max(5);
-        eprintln!("📍 Binary search (range={:.0}, max_iter={})", search_range, max_binary_iter);
-        
-        let mut bin_low = min_crf;
-        let mut bin_high = low;
-        let binary_start_iter = iterations;
-        
-        while bin_high - bin_low > 1.0 && (iterations - binary_start_iter) < max_binary_iter {
-            let mid = ((bin_low + bin_high) / 2.0).round();
-            let size = encode_cached(mid, &mut size_cache)?;
+    let gpu_ratio = gpu_size as f64 / input_size as f64;
+
+    if gpu_size < input_size {
+        // GPU 边界能压缩，作为起点
+        best_crf = Some(gpu_boundary_crf);
+        best_size = Some(gpu_size);
+        eprintln!("✅ GPU boundary CRF {:.1} compresses ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
+
+        // 🔥 向下快速探测 1.0 CRF（0.5 步进）找更高质量区域
+        let mut test_crf = gpu_boundary_crf - 0.5;
+        let quick_search_limit = (gpu_boundary_crf - 1.5).max(min_crf);
+
+        while test_crf >= quick_search_limit && iterations < 10 {
+            let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / input_size as f64 * 100.0;
-            
+            let ratio = size as f64 / input_size as f64;
+
             if size < input_size {
-                // 能压缩，尝试更低 CRF
-                best_crf = Some(mid);
+                best_crf = Some(test_crf);
                 best_size = Some(size);
-                bin_high = mid;
-                eprintln!("🔄 CRF {:.0}: {:.1}% ✓", mid, ratio);
+                eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
+                test_crf -= 0.5;
             } else {
-                // 不能压缩，需要更高 CRF
-                bin_low = mid;
-                eprintln!("🔄 CRF {:.0}: {:.1}% ✗", mid, ratio);
-            }
-        }
-    } else {
-        // 需要搜索更高 CRF
-        let high_size = encode_cached(high, &mut size_cache)?;
-        iterations += 1;
-        let high_ratio = high_size as f64 / input_size as f64;
-        eprintln!("   🔄 CRF {:.1}: {:.1}%", high, high_ratio * 100.0);
-        
-        if high_size >= input_size {
-            // 即使最高 CRF 也无法压缩
-            eprintln!("      ⚠️ Cannot compress even at CRF {:.1}", high);
-            best_crf = Some(high);
-            best_size = Some(high_size);
-        } else {
-            // 黄金分割搜索
-            while high - low > 0.5 && iterations < GLOBAL_MAX_ITERATIONS {
-                let mid1 = high - (high - low) / phi;
-                
-                // 四舍五入到 0.5
-                let mid1 = (mid1 * 2.0).round() / 2.0;
-                
-                let size1 = encode_cached(mid1, &mut size_cache)?;
-                iterations += 1;
-                
-                if size1 < input_size {
-                    // mid1 能压缩，向下搜索
-                    high = mid1;
-                    best_crf = Some(mid1);
-                    best_size = Some(size1);
-                    eprintln!("🔄 CRF {:.1}: {:.1}% ✓", mid1, size1 as f64 / input_size as f64 * 100.0);
-                } else {
-                    // mid1 不能压缩，向上搜索
-                    low = mid1;
-                    eprintln!("🔄 CRF {:.1}: {:.1}% ✗", mid1, size1 as f64 / input_size as f64 * 100.0);
-                }
-            }
-        }
-    }
-    
-    // ═══════════════════════════════════════════════════════════
-    if let Some(compress_crf) = best_crf {
-        eprintln!("📍 Phase 2: Binary search for precise boundary");
-        
-        // 在 [compress_crf - 2, compress_crf] 范围内二分搜索
-        let mut bin_low = (compress_crf - 2.0).max(min_crf);
-        let mut bin_high = compress_crf;
-        
-        while bin_high - bin_low > 0.4 && iterations < GLOBAL_MAX_ITERATIONS {
-            let mid = ((bin_low + bin_high) / 2.0 * 2.0).round() / 2.0;
-            
-            if mid <= bin_low || mid >= bin_high {
+                eprintln!("   ✗ CRF {:.1}: {:.1}% fails → boundary found", test_crf, ratio * 100.0);
                 break;
             }
-            
-            let key = (mid * 10.0).round() as i32;
-            let size = if size_cache.contains_key(&key) {
-                *size_cache.get(&key).unwrap()
-            } else {
-                let s = encode_cached(mid, &mut size_cache)?;
-                iterations += 1;
-                let ratio = s as f64 / input_size as f64 * 100.0;
-                if s < input_size {
-                    eprintln!("   🔄 CRF {:.1}: {:.1}% ✓", mid, ratio);
-                } else {
-                    eprintln!("   🔄 CRF {:.1}: {:.1}% ✗", mid, ratio);
-                }
-                s
-            };
-            
+        }
+
+    } else {
+        // GPU 边界不能压缩，可能是边界估算不准
+        eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
+        eprintln!("   Searching nearby for valid boundary...");
+
+        // 向下搜索 1.0 CRF（0.1 步进）找第一个能压缩的点
+        let mut test_crf = gpu_boundary_crf - 0.1;
+        let mut found = false;
+        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 20 {
+            let size = encode_cached(test_crf, &mut size_cache)?;
+            iterations += 1;
+            let ratio = size as f64 / input_size as f64;
+
             if size < input_size {
-                bin_high = mid;
-                best_crf = Some(mid);
+                best_crf = Some(test_crf);
                 best_size = Some(size);
+                eprintln!("✅ Found valid boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
+                found = true;
+                break;
             } else {
-                bin_low = mid;
+                eprintln!("   CRF {:.1}: {:.1}% ✗", test_crf, ratio * 100.0);
             }
+            test_crf -= 0.1;
+        }
+
+        if !found {
+            eprintln!("⚠️ Cannot find compressible point near GPU boundary!");
+            eprintln!("   File may be already optimally compressed");
+            best_crf = Some(gpu_boundary_crf);
+            best_size = Some(gpu_size);
         }
     }
-    
+
     // ═══════════════════════════════════════════════════════════
     if let Some(boundary_crf) = best_crf {
         eprintln!("📍 Phase 3: Fine-tune with 0.1 step (target: SSIM 0.999+)");
