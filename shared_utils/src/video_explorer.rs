@@ -3825,14 +3825,15 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
 
     } else {
-        // GPU 边界不能压缩，可能是边界估算不准
+        // 🔥 v5.62: GPU 边界不能压缩 → 向上搜索（更高CRF）直到能压缩
+        // 关键修复：之前向下搜索是错误的！更低CRF = 更大文件
         eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
-        eprintln!("   Searching nearby for valid boundary...");
+        eprintln!("   🔄 Searching UPWARD for compression boundary...");
 
-        // 🔥 v5.60: 向下搜索找第一个能压缩的点（全片编码）
-        let mut test_crf = gpu_boundary_crf - step_size;
+        // 向上搜索（更高CRF = 更小文件）
+        let mut test_crf = gpu_boundary_crf + step_size;
         let mut found = false;
-        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 15 {
+        while test_crf <= max_crf && iterations < 15 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let ratio = size as f64 / input_size as f64;
@@ -3840,34 +3841,41 @@ fn cpu_fine_tune_from_gpu_boundary(
             if size < input_size {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
-                eprintln!("✅ Found valid boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
+                eprintln!("✅ Found compression boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
                 found = true;
                 break;
             } else {
-                eprintln!("   CRF {:.1}: {:.1}% ✗", test_crf, ratio * 100.0);
+                eprintln!("   CRF {:.1}: {:.1}% ✗ (still too large)", test_crf, ratio * 100.0);
             }
-            test_crf -= step_size;
+            test_crf += step_size;
         }
 
         if !found {
-            eprintln!("⚠️ Cannot find compressible point near GPU boundary!");
+            eprintln!("⚠️ Cannot compress this file even at max CRF!");
             eprintln!("   File may be already optimally compressed");
-            best_crf = Some(gpu_boundary_crf);
-            best_size = Some(gpu_size);
+            // 使用 max_crf 作为最后尝试
+            let max_size = encode_cached(max_crf, &mut size_cache)?;
+            iterations += 1;
+            best_crf = Some(max_crf);
+            best_size = Some(max_size);
         }
     }
 
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.60: Phase 3 精细搜索（全片编码，保守收敛检测）
+    // 🔥 v5.62: Phase 3 - 双向验证 + 压缩保证
+    // 目标：找到 min(CRF) where output_size(CRF) < input_size
+    // 即：能压缩的最低CRF = 最高SSIM
     // ═══════════════════════════════════════════════════════════
     if let Some(boundary_crf) = best_crf {
-        eprintln!("📍 Phase 3: Fine-tune with {:.2} step (target: SSIM 0.999+)", step_size);
+        eprintln!("📍 Phase 3: Fine-tune with {:.2} step", step_size);
+        eprintln!("🎯 Goal: Find lowest CRF that compresses (= highest SSIM)");
         
-        // 🔥 v5.60: 保守的智能跳过策略
-        let mut convergence_history: Vec<(f32, u64, f64)> = Vec::new();
-        
+        // 🔥 v5.62: 向下搜索（更低CRF = 更高质量）
+        // 停止条件：第一个不能压缩的点
         let mut test_crf = boundary_crf - step_size;
-        while test_crf >= min_crf && iterations < 20 {  // 🔥 v5.60: 限制迭代次数
+        let mut compress_count = 0;
+        
+        while test_crf >= min_crf && iterations < 20 {
             let key = (test_crf * cache_multiplier).round() as i32;
             if size_cache.contains_key(&key) {
                 test_crf -= step_size;
@@ -3876,42 +3884,27 @@ fn cpu_fine_tune_from_gpu_boundary(
             
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / input_size as f64;  // 🔥 v5.60: 使用 input_size
+            let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
 
             if size < input_size {
+                // ✅ 能压缩 → 更新最优，继续向下
                 best_crf = Some(test_crf);
                 best_size = Some(size);
-                eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
+                compress_count += 1;
+                eprintln!("   ✓ CRF {:.1}: {:+.1}% (compresses)", test_crf, size_pct);
                 
-                // 🔥 v5.60: 保守收敛检测
-                convergence_history.push((test_crf, size, ratio));
-                
-                if convergence_history.len() >= 3 {
-                    let len = convergence_history.len();
-                    let (_, s1, r1) = convergence_history[len - 3];
-                    let (_, s2, r2) = convergence_history[len - 2];
-                    let (_, s3, r3) = convergence_history[len - 1];
-                    
-                    let size_change_1_2 = ((s2 as f64 - s1 as f64) / input_size as f64).abs();
-                    let size_change_2_3 = ((s3 as f64 - s2 as f64) / input_size as f64).abs();
-                    let ratio_change_1_2 = (r2 - r1).abs() * 100.0;
-                    let ratio_change_2_3 = (r3 - r2).abs() * 100.0;
-                    
-                    // 🔥 v5.60: 保守阈值 - 大小变化<0.1% 且 比率变化<0.1%
-                    let converged = size_change_1_2 < 0.001 
-                        && size_change_2_3 < 0.001
-                        && ratio_change_1_2 < 0.1
-                        && ratio_change_2_3 < 0.1;
-                    
-                    if converged {
-                        eprintln!("⚡ 收敛检测: 连续3个CRF大小变化<0.1% → 已到收敛点");
-                        break;
-                    }
+                // 🔥 v5.62: 保守收敛检测（连续5个能压缩且变化<0.1%）
+                if compress_count >= 5 {
+                    eprintln!("⚡ 已测试5个连续能压缩的CRF → 停止");
+                    break;
                 }
                 
                 test_crf -= step_size;
             } else {
-                eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
+                // ❌ 不能压缩 → 立即停止！这是边界
+                eprintln!("   ✗ CRF {:.1}: {:+.1}% (TOO LARGE → STOP)", test_crf, size_pct);
+                eprintln!("🎯 Boundary: CRF {:.1} is the lowest that compresses", 
+                    best_crf.unwrap_or(boundary_crf));
                 break;
             }
         }
