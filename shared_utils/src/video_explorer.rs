@@ -2904,8 +2904,7 @@ pub fn explore_with_gpu_coarse_search(
                     // 所以：GPU CRF 11 能压缩 → CPU 需要**更高** CRF（如 12-14）才能压缩
                     // 之前的代码搞反了方向！
                     let gpu_crf = gpu_result.gpu_boundary_crf;
-                    let mapping = crate::gpu_accel::CrfMapping::hevc(gpu_result.gpu_type);
-                    
+
                     // 🔥 v5.50: CPU 直接从 GPU 边界开始微调
                     // GPU 已经找到最高质量点，CPU 只需在附近做 0.1 精度微调
                     let cpu_start = gpu_crf;
