@@ -572,12 +572,12 @@ impl ExploreLogger {
         
         eprintln!("\r\x1b[K");
         eprintln!("   ═══════════════════════════════════════════════════");
-        eprintln!("   📊 结果: CRF {:.1} | SSIM {:.4} | {:+.1}%", 
+        eprintln!("   📊 Result: CRF {:.1} | SSIM {:.4} | {:+.1}%", 
             self.best_crf, self.best_ssim, size_change);
         if saved > 0 {
-            eprintln!("   💾 节省: {} ({:.2} MB)", format_bytes(saved), saved as f64 / 1024.0 / 1024.0);
+            eprintln!("   💾 Saved: {} ({:.2} MB)", format_bytes(saved), saved as f64 / 1024.0 / 1024.0);
         }
-        eprintln!("   📈 迭代: {} 次 | 耗时: {:.1}s", self.iterations, elapsed.as_secs_f64());
+        eprintln!("   📈 Iterations: {} | Time: {:.1}s", self.iterations, elapsed.as_secs_f64());
     }
 }
 
