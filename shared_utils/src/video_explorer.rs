@@ -2744,6 +2744,267 @@ pub mod precision {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v5.56: 预检查模块 - BPP 分析和压缩可行性评估
+// ═══════════════════════════════════════════════════════════════
+
+/// 预检查模块 - 在探索开始前评估压缩可行性
+pub mod precheck {
+    use anyhow::{Context, Result};
+    use std::path::Path;
+    use std::process::Command;
+
+    /// 压缩可行性等级
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum Compressibility {
+        /// 高压缩潜力 (bpp > 0.30)
+        High,
+        /// 中等压缩潜力 (0.15 <= bpp <= 0.30)
+        Medium,
+        /// 低压缩潜力 (bpp < 0.15) - 文件已高度优化
+        Low,
+    }
+
+    /// 视频信息结构
+    #[derive(Debug, Clone)]
+    pub struct VideoInfo {
+        pub width: u32,
+        pub height: u32,
+        pub frame_count: u64,
+        pub duration: f64,
+        pub file_size: u64,
+        pub bpp: f64,
+        pub compressibility: Compressibility,
+    }
+
+    /// 获取视频信息（宽、高、帧数、时长）
+    /// 
+    /// 使用 ffprobe 快速提取视频元数据
+    pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
+        let file_size = std::fs::metadata(input)
+            .context("无法读取文件元数据")?
+            .len();
+
+        // 使用 ffprobe 获取视频信息
+        let output = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,nb_frames,duration",
+                "-of", "csv=p=0",
+            ])
+            .arg(input)
+            .output()
+            .context("ffprobe 执行失败")?;
+
+        let info_str = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = info_str.trim().split(',').collect();
+
+        // 解析宽高
+        let width: u32 = parts.get(0)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1920);
+        let height: u32 = parts.get(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1080);
+
+        // 解析帧数（可能为 N/A）
+        let frame_count: u64 = parts.get(2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        // 解析时长
+        let duration: f64 = parts.get(3)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
+
+        // 如果帧数为 0，尝试从时长估算（假设 30fps）
+        let frame_count = if frame_count == 0 && duration > 0.0 {
+            (duration * 30.0) as u64
+        } else {
+            frame_count.max(1)
+        };
+
+        // 计算 BPP: (file_size * 8) / (width * height * frame_count)
+        let total_pixels = width as u64 * height as u64 * frame_count;
+        let bpp = if total_pixels > 0 {
+            (file_size as f64 * 8.0) / total_pixels as f64
+        } else {
+            0.5 // 默认中等
+        };
+
+        // 评估压缩可行性
+        let compressibility = if bpp < 0.15 {
+            Compressibility::Low
+        } else if bpp > 0.30 {
+            Compressibility::High
+        } else {
+            Compressibility::Medium
+        };
+
+        Ok(VideoInfo {
+            width,
+            height,
+            frame_count,
+            duration,
+            file_size,
+            bpp,
+            compressibility,
+        })
+    }
+
+    /// 计算 BPP (bits per pixel)
+    /// 
+    /// 公式: (file_size × 8) / (width × height × frame_count)
+    /// 
+    /// BPP 阈值参考:
+    /// - < 0.15: 低（文件已高度优化，压缩空间有限）
+    /// - 0.15-0.30: 中等（适度压缩潜力）
+    /// - > 0.30: 高（有较大压缩空间）
+    pub fn calculate_bpp(input: &Path) -> Result<f64> {
+        let info = get_video_info(input)?;
+        Ok(info.bpp)
+    }
+
+    /// 打印预检查报告
+    /// 
+    /// 在探索开始前输出压缩可行性评估
+    pub fn print_precheck_report(info: &VideoInfo) {
+        eprintln!("┌─────────────────────────────────────────────────────");
+        eprintln!("│ 📊 预检查报告 (Precheck Report)");
+        eprintln!("├─────────────────────────────────────────────────────");
+        eprintln!("│ 📐 分辨率: {}x{}", info.width, info.height);
+        eprintln!("│ 🎞️  帧数: {} ({:.1}s)", info.frame_count, info.duration);
+        eprintln!("│ 📁 文件大小: {:.2} MB", info.file_size as f64 / 1024.0 / 1024.0);
+        eprintln!("│ 📈 BPP: {:.3} bits/pixel", info.bpp);
+        
+        match info.compressibility {
+            Compressibility::High => {
+                eprintln!("│ ✅ 压缩潜力: 高 (High)");
+                eprintln!("│    → 有较大压缩空间，预期效果良好");
+            }
+            Compressibility::Medium => {
+                eprintln!("│ 🔵 压缩潜力: 中等 (Medium)");
+                eprintln!("│    → 适度压缩潜力，预期效果正常");
+            }
+            Compressibility::Low => {
+                eprintln!("│ ⚠️  压缩潜力: 低 (Low)");
+                eprintln!("│    → 文件已高度优化，压缩空间有限");
+                eprintln!("│    → 建议：可能需要降低质量预期");
+            }
+        }
+        eprintln!("└─────────────────────────────────────────────────────");
+    }
+
+    /// 执行预检查并返回信息
+    /// 
+    /// 这是主入口函数，在 explore_with_gpu_coarse_search 开始时调用
+    pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
+        let info = get_video_info(input)?;
+        print_precheck_report(&info);
+        Ok(info)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.56: GPU→CPU 自适应校准模块
+// ═══════════════════════════════════════════════════════════════
+
+/// GPU→CPU 自适应校准模块
+/// 
+/// 根据 GPU 搜索结果智能预测 CPU 起点，避免盲目搜索
+pub mod calibration {
+    /// GPU→CPU 校准点
+    /// 
+    /// 包含 GPU 搜索结果和预测的 CPU 起点
+    #[derive(Debug, Clone)]
+    pub struct CalibrationPoint {
+        /// GPU 找到的边界 CRF
+        pub gpu_crf: f32,
+        /// GPU 输出大小
+        pub gpu_size: u64,
+        /// GPU SSIM（如果有）
+        pub gpu_ssim: Option<f64>,
+        /// 预测的 CPU 起点 CRF
+        pub predicted_cpu_crf: f32,
+        /// 预测置信度 (0.0-1.0)
+        pub confidence: f64,
+        /// 校准说明
+        pub reason: &'static str,
+    }
+
+    impl CalibrationPoint {
+        /// 根据 GPU 结果计算 CPU 校准点
+        /// 
+        /// ## 校准逻辑
+        /// - GPU 压缩余量大 (size_ratio < 0.95) → CPU 可以更激进 (+1.0)
+        /// - GPU 刚好压缩 (0.95 <= size_ratio < 1.0) → CPU 小幅调整 (+0.5)
+        /// - GPU 没压缩 (size_ratio >= 1.0) → CPU 需要更低 CRF (-1.0)
+        /// 
+        /// ## 参数
+        /// - `gpu_crf`: GPU 找到的边界 CRF
+        /// - `gpu_size`: GPU 输出大小
+        /// - `input_size`: 输入文件大小
+        /// - `gpu_ssim`: GPU SSIM（可选）
+        /// - `base_offset`: 基础 GPU→CPU 偏移量（来自 CrfMapping）
+        pub fn from_gpu_result(
+            gpu_crf: f32,
+            gpu_size: u64,
+            input_size: u64,
+            gpu_ssim: Option<f64>,
+            base_offset: f32,
+        ) -> Self {
+            let size_ratio = gpu_size as f64 / input_size as f64;
+            
+            // 根据压缩比例调整 CPU 起点
+            let (adjustment, confidence, reason) = if size_ratio < 0.95 {
+                // GPU 压缩余量大，CPU 可以更激进
+                (1.0, 0.85, "GPU压缩余量大，CPU可更激进")
+            } else if size_ratio < 1.0 {
+                // GPU 刚好压缩，CPU 小幅调整
+                (0.5, 0.90, "GPU刚好压缩，CPU小幅调整")
+            } else if size_ratio < 1.05 {
+                // GPU 略微超出，CPU 需要稍低 CRF
+                (-0.5, 0.80, "GPU略超，CPU需稍低CRF")
+            } else {
+                // GPU 没压缩，CPU 需要更低 CRF
+                (-1.0, 0.70, "GPU未压缩，CPU需更低CRF")
+            };
+
+            // 计算预测的 CPU CRF
+            // CPU CRF = GPU CRF + base_offset + adjustment
+            let predicted_cpu_crf = (gpu_crf + base_offset + adjustment).clamp(10.0, 51.0);
+
+            Self {
+                gpu_crf,
+                gpu_size,
+                gpu_ssim,
+                predicted_cpu_crf,
+                confidence,
+                reason,
+            }
+        }
+
+        /// 打印校准报告
+        pub fn print_report(&self, input_size: u64) {
+            let size_ratio = self.gpu_size as f64 / input_size as f64;
+            let size_pct = (size_ratio - 1.0) * 100.0;
+            
+            eprintln!("┌─────────────────────────────────────────────────────");
+            eprintln!("│ 🎯 GPU→CPU 校准报告 (Calibration Report)");
+            eprintln!("├─────────────────────────────────────────────────────");
+            eprintln!("│ 📍 GPU 边界: CRF {:.1} → {:.1}% 大小", self.gpu_crf, size_pct);
+            if let Some(ssim) = self.gpu_ssim {
+                eprintln!("│ 📊 GPU SSIM: {:.4}", ssim);
+            }
+            eprintln!("│ 🎯 预测 CPU 起点: CRF {:.1}", self.predicted_cpu_crf);
+            eprintln!("│ 📈 置信度: {:.0}%", self.confidence * 100.0);
+            eprintln!("│ 💡 原因: {}", self.reason);
+            eprintln!("└─────────────────────────────────────────────────────");
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🔥 v5.1: GPU 粗略搜索 + CPU 精细搜索 智能化处理
 // ═══════════════════════════════════════════════════════════════
 
@@ -2794,6 +3055,11 @@ pub fn explore_with_gpu_coarse_search(
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     // 🔥 v5.35: 简化流程 - 完全移除旧的RealtimeExploreProgress
     // 只使用SimpleIterationProgress，避免多个进度条混乱
+
+    // 🔥 v5.56: 预检查 - BPP 分析和压缩可行性评估
+    let precheck_info = precheck::run_precheck(input)?;
+    let _compressibility = precheck_info.compressibility; // 保存以备后用
+    eprintln!("");
 
     // 🔥 v5.32: 先打印 GPU 信息
     let gpu = GpuAccel::detect();
@@ -2904,10 +3170,27 @@ pub fn explore_with_gpu_coarse_search(
                     // 所以：GPU CRF 11 能压缩 → CPU 需要**更高** CRF（如 12-14）才能压缩
                     // 之前的代码搞反了方向！
                     let gpu_crf = gpu_result.gpu_boundary_crf;
+                    let gpu_size = gpu_result.gpu_best_size.unwrap_or(input_size);
 
-                    // 🔥 v5.50: CPU 直接从 GPU 边界开始微调
-                    // GPU 已经找到最高质量点，CPU 只需在附近做 0.1 精度微调
-                    let cpu_start = gpu_crf;
+                    // 🔥 v5.56: GPU→CPU 自适应校准
+                    // 根据 GPU 压缩比例智能预测 CPU 起点
+                    let mapping = match encoder {
+                        VideoEncoder::Hevc => CrfMapping::hevc(gpu.gpu_type),
+                        VideoEncoder::Av1 => CrfMapping::av1(gpu.gpu_type),
+                        VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type),
+                    };
+                    let calibration = calibration::CalibrationPoint::from_gpu_result(
+                        gpu_crf,
+                        gpu_size,
+                        input_size,
+                        gpu_result.gpu_best_ssim,
+                        mapping.offset,
+                    );
+                    calibration.print_report(input_size);
+                    eprintln!("");
+
+                    // 使用校准后的 CPU 起点
+                    let cpu_start = calibration.predicted_cpu_crf;
                     
                     eprintln!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
                     if let Some(size) = gpu_result.gpu_best_size {
@@ -2928,10 +3211,12 @@ pub fn explore_with_gpu_coarse_search(
                             ((gpu_crf - expand).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                         } else {
                             eprintln!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
-                            (gpu_crf, (cpu_start + 5.0).min(max_crf))
+                            // 🔥 v5.56: 使用校准后的起点作为搜索中心
+                            ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                         }
                     } else {
-                        (gpu_crf, (cpu_start + 5.0).min(max_crf))
+                        // 🔥 v5.56: 使用校准后的起点作为搜索中心
+                        ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                     };
                     
                     eprintln!("   📊 CPU search range: [{:.1}, {:.1}] (start: {:.1})", cpu_min, cpu_max, cpu_start);
