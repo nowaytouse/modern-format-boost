@@ -46,6 +46,17 @@ impl SimpleIterationProgress {
     pub fn new(stage: &str, input_size: u64, total_iterations: u64) -> Arc<Self> {
         let bar = ProgressBar::new(total_iterations);
 
+        // 🔥 v5.38: 检测非交互环境（脚本启动时设置了 TERM=dumb）
+        // 当检测到非交互环境时，完全禁用进度条的交互特性
+        let is_non_interactive = std::env::var("TERM")
+            .map(|t| t == "dumb" || t.is_empty())
+            .unwrap_or(false)
+            || std::env::var("CI").is_ok();  // CI 环境
+
+        // 🔥 v5.38: Debug output for TERM detection verification
+        let term_value = std::env::var("TERM").unwrap_or_else(|_| "(not set)".to_string());
+        eprintln!("🔧 [DEBUG] TERM={}, is_non_interactive={}", term_value, is_non_interactive);
+
         // 统一进度条样式
         bar.set_style(
             ProgressStyle::default_bar()
@@ -57,8 +68,19 @@ impl SimpleIterationProgress {
         bar.set_prefix(stage.to_string());
         bar.set_message("Initializing...");
 
-        // 🔥 v5.34: 20Hz 刷新率确保实时性
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
+        // 🔥 v5.38: 非交互环境使用完全禁用的输出模式，交互环境使用100Hz超快刷新
+        if is_non_interactive {
+            // ⚠️ 完全隐藏进度条：禁用所有交互、颜色、光标控制
+            // 这防止 indicatif 尝试打开 /dev/tty 或修改终端状态
+            eprintln!("🔧 [DEBUG] Applying ProgressDrawTarget::hidden()");
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            // 🔥 v5.38: 超快刷新率 100Hz（每 10ms 更新一次）
+            // 这样能立即覆盖键盘输入，使其对用户不可见
+            // 用户的建议："让进度条持续刷新！保持时刻毫秒级的更新！"
+            eprintln!("🔧 [DEBUG] Applying ProgressDrawTarget::stderr_with_hz(100) - ultra-fast refresh");
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+        }
 
         Arc::new(Self {
             bar,
@@ -207,6 +229,16 @@ impl RealtimeExploreProgress {
     pub fn with_crf_range(stage: &str, input_size: u64, min_crf: f32, max_crf: f32) -> Arc<Self> {
         let bar = ProgressBar::new(100);
 
+        // 🔥 v5.38: 检测非交互环境
+        let is_non_interactive = std::env::var("TERM")
+            .map(|t| t == "dumb" || t.is_empty())
+            .unwrap_or(false)
+            || std::env::var("CI").is_ok();
+
+        // 🔥 v5.38: Debug output for TERM detection verification
+        let term_value = std::env::var("TERM").unwrap_or_else(|_| "(not set)".to_string());
+        eprintln!("🔧 [DEBUG] RealtimeExploreProgress: TERM={}, is_non_interactive={}", term_value, is_non_interactive);
+
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::EXPLORE_TEMPLATE)
@@ -217,7 +249,14 @@ impl RealtimeExploreProgress {
         bar.set_prefix(stage.to_string());
         bar.set_message("Initializing...");
 
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
+        // 🔥 v5.38: 非交互环境完全禁用，交互环境使用100Hz超快刷新
+        if is_non_interactive {
+            eprintln!("🔧 [DEBUG] Applying ProgressDrawTarget::hidden()");
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            eprintln!("🔧 [DEBUG] Applying ProgressDrawTarget::stderr_with_hz(100) - ultra-fast refresh");
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+        }
 
         Arc::new(Self {
             bar,
