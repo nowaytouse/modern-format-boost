@@ -3467,11 +3467,16 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
 
     // 🔥 v5.54: 完整编码（用于最终输出，无 -t 参数）
+    // 🔥 v5.58: 添加实时进度显示（从 v5.2 合并）
     let encode_full = |crf: f32| -> Result<u64> {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::Stdio;
+        
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y");
 
-        // 🔥 v5.54: 最终输出必须编码完整视频，不使用 -t 参数
+        // 🔥 v5.58: 添加 -progress 参数获取实时进度
+        cmd.arg("-progress").arg("pipe:1");
 
         cmd.arg("-i").arg(input)
             .arg("-c:v").arg(encoder.ffmpeg_name())
@@ -3490,10 +3495,54 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-c:a").arg("copy")
             .arg(output);
 
-        let result = cmd.output().context("Failed to run ffmpeg")?;
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            anyhow::bail!("Encoding failed: {}", stderr.lines().last().unwrap_or("unknown"));
+        // 🔥 v5.58: 使用 spawn 而非 output，以便实时读取进度
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        
+        let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
+        
+        // 读取 stdout（-progress 输出）
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            let mut last_fps = 0.0_f64;
+            let mut last_speed = String::new();
+            let mut last_time_us = 0_i64;
+            let duration_secs = duration as f64;
+            
+            for line in reader.lines().map_while(Result::ok) {
+                if let Some(val) = line.strip_prefix("out_time_us=") {
+                    if let Ok(time_us) = val.parse::<i64>() {
+                        last_time_us = time_us;
+                    }
+                } else if let Some(val) = line.strip_prefix("fps=") {
+                    if let Ok(fps) = val.parse::<f64>() {
+                        last_fps = fps;
+                    }
+                } else if let Some(val) = line.strip_prefix("speed=") {
+                    last_speed = val.trim().to_string();
+                } else if line == "progress=continue" || line == "progress=end" {
+                    // 🔥 v5.58: 实时显示编码进度（固定底部）
+                    let current_secs = last_time_us as f64 / 1_000_000.0;
+                    if duration_secs > 0.0 {
+                        let pct = (current_secs / duration_secs * 100.0).min(100.0);
+                        eprint!("\r      ⏳ Encoding {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
+                            pct, current_secs, duration_secs, last_fps, last_speed);
+                    } else {
+                        eprint!("\r      ⏳ Encoding {:.1}s | {:.0}fps | {}   ",
+                            current_secs, last_fps, last_speed);
+                    }
+                    let _ = std::io::stderr().flush();
+                }
+            }
+        }
+        
+        let status = child.wait().context("Failed to wait for ffmpeg")?;
+        
+        // 清除进度行
+        eprintln!("\r      ✅ Encoding complete                                        ");
+        
+        if !status.success() {
+            anyhow::bail!("Encoding failed");
         }
 
         Ok(fs::metadata(output)?.len())
