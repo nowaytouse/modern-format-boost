@@ -941,6 +941,8 @@ impl Default for GpuCoarseConfig {
 /// - 这只是粗略估算，不追求精确
 /// - GPU 编码速度快，适合快速预览
 /// - 最终精确结果由 CPU 搜索确定
+/// 
+/// 🔥 v5.22: 添加 log_cb 参数，让调用者控制日志输出方式
 pub fn gpu_coarse_search(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -949,15 +951,33 @@ pub fn gpu_coarse_search(
     config: &GpuCoarseConfig,
     progress_cb: Option<&dyn Fn(f32, u64)>,
 ) -> anyhow::Result<GpuCoarseResult> {
+    gpu_coarse_search_with_log(input, output, encoder, input_size, config, progress_cb, None)
+}
+
+/// 🔥 v5.22: 带日志回调的 GPU 粗略搜索
+pub fn gpu_coarse_search_with_log(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    encoder: &str,
+    input_size: u64,
+    config: &GpuCoarseConfig,
+    progress_cb: Option<&dyn Fn(f32, u64)>,
+    log_cb: Option<&dyn Fn(&str)>,
+) -> anyhow::Result<GpuCoarseResult> {
     use std::process::Command;
     use anyhow::{Context, bail};
     
     let mut log = Vec::new();
     
+    // 🔥 v5.22: 如果有日志回调，使用回调输出；否则直接 eprintln
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
-            eprintln!("{}", msg);
+            if let Some(cb) = &log_cb {
+                cb(&msg);
+            } else {
+                eprintln!("{}", msg);
+            }
             log.push(msg);
         }};
     }
