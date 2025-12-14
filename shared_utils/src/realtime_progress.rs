@@ -61,7 +61,6 @@ impl SimpleIterationProgress {
         // 关键洞察: ProgressDrawTarget::hidden() 在 macOS 上冻结进度条
         // 解决方案: 用毫秒级刷新(10ms) 来覆盖键盘输入，使其对用户不可见
         // 用户的建议："让进度条持续刷新！保持时刻毫秒级的更新！"
-        eprintln!("🔧 [DEBUG] Applying ProgressDrawTarget::stderr_with_hz(100) - ultra-fast 10ms refresh to overwrite keyboard input");
         bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
 
         Arc::new(Self {
@@ -223,7 +222,6 @@ impl RealtimeExploreProgress {
 
         // 🔥 v5.39: 使用超快刷新率 100Hz 覆盖任何键盘输入
         // hidden() 模式在 macOS 上会冻结进度条，所以始终使用 100Hz 刷新
-        eprintln!("🔧 [DEBUG] Applying ProgressDrawTarget::stderr_with_hz(100) - ultra-fast 10ms refresh");
         bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
 
         Arc::new(Self {

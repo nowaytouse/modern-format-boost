@@ -2835,7 +2835,27 @@ pub fn explore_with_gpu_coarse_search(
 
         // 创建临时输出文件用于 GPU 搜索
         let temp_output = output.with_extension("gpu_temp.mp4");
-        
+
+        // 🔥 v5.45: 计算 GPU 采样输入大小（与 gpu_accel.rs 中的逻辑一致）
+        let duration: f32 = {
+            use std::process::Command;
+            let duration_output = Command::new("ffprobe")
+                .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
+                .arg(input)
+                .output();
+            duration_output
+                .ok()
+                .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+                .unwrap_or(crate::gpu_accel::GPU_SAMPLE_DURATION)
+        };
+        let gpu_sample_input_size = if duration <= crate::gpu_accel::GPU_SAMPLE_DURATION {
+            input_size  // 短视频，使用完整大小
+        } else {
+            // 长视频，按比例计算采样部分的预期大小
+            let ratio = crate::gpu_accel::GPU_SAMPLE_DURATION / duration;
+            (input_size as f64 * ratio as f64) as u64
+        };
+
         let gpu_config = GpuCoarseConfig {
             initial_crf,
             min_crf: crate::gpu_accel::GPU_DEFAULT_MIN_CRF,  // 🔥 v5.7: 使用常量 (1.0 for VideoToolbox)
@@ -2845,8 +2865,9 @@ pub fn explore_with_gpu_coarse_search(
         };
 
         // 🔥 v5.34: GPU 阶段使用新的基于迭代计数的进度条（修复跳跃问题）
+        // 🔥 v5.45: 使用采样输入大小来正确计算压缩率
         let gpu_progress = crate::SimpleIterationProgress::new(
-            "🔍 GPU Search", input_size,
+            "🔍 GPU Search", gpu_sample_input_size,
             gpu_config.max_iterations as u64
         );
 
@@ -2864,7 +2885,13 @@ pub fn explore_with_gpu_coarse_search(
             input, &temp_output, encoder_name, input_size, &gpu_config,
             Some(&progress_callback), Some(&log_callback)
         );
-        gpu_progress.finish(0.0, 0, None);  // 完成 GPU 进度条
+
+        // 🔥 v5.45: 使用实际的 GPU 搜索结果更新进度条
+        let (final_crf, final_size) = match &gpu_result {
+            Ok(result) if result.found_boundary => (result.gpu_boundary_crf, result.gpu_best_size.unwrap_or(0)),
+            _ => (gpu_config.max_crf, input_size),  // 失败时使用 max_crf 和输入大小
+        };
+        gpu_progress.finish(final_crf, final_size, None);
         
         match gpu_result {
             Ok(gpu_result) => {
