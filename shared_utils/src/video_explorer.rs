@@ -3022,29 +3022,31 @@ fn cpu_fine_tune_from_gpu_boundary(
     min_ssim: f64,
 ) -> Result<ExploreResult> {
     let mut log = Vec::new();
-    
-    // 🔥 v5.7: Unified Process
-    let pb = crate::progress::create_professional_spinner("🔬 CPU Fine-Tune");
-    
-    macro_rules! log_msg {
-        ($($arg:tt)*) => {{
-            let msg = format!($($arg)*);
-            pb.suspend(|| eprintln!("{}", msg));
-            log.push(msg);
-        }};
-    }
-    
+
     let input_size = fs::metadata(input)
         .context("Failed to read input file metadata")?
         .len();
+
+    // 🔥 v5.34: 创建基于迭代计数的进度条
+    let cpu_progress = crate::SimpleIterationProgress::new(
+        "🔬 CPU Fine-Tune",
+        input_size,
+        25  // 预估25次迭代
+    );
+
+    // 🔥 v5.34: 使用 SimpleIterationProgress 替代 spinner
+    macro_rules! log_msg {
+        ($($arg:tt)*) => {{
+            let msg = format!($($arg)*);
+            cpu_progress.bar.suspend(|| eprintln!("{}", msg));
+            log.push(msg);
+        }};
+    }
     
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
     
     // 创建编码器
     let encode = |crf: f32| -> Result<u64> {
-        let pb = pb.clone();
-        pb.set_prefix("🔬 CPU Phase");
-        pb.set_message(format!("Encoding CRF {:.1}...", crf));
             
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y")
@@ -3081,14 +3083,18 @@ fn cpu_fine_tune_from_gpu_boundary(
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
     
-    // 带缓存的编码
+    // 带缓存的编码 + 进度条更新
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
         let key = (crf * 10.0).round() as i32;
         if let Some(&size) = cache.get(&key) {
+            // 从缓存读取，仍然更新进度条
+            cpu_progress.inc_iteration(crf, size, None);
             return Ok(size);
         }
         let size = encode(crf)?;
         cache.insert(key, size);
+        // 🔥 v5.34: 编码完成立即更新进度条
+        cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
     };
     
@@ -3331,9 +3337,9 @@ fn cpu_fine_tune_from_gpu_boundary(
     let quality_passed = final_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
     
     log_msg!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
-    
-    pb.finish_and_clear();
-    
+
+    cpu_progress.finish(final_crf, final_size, ssim);
+
     Ok(ExploreResult {
         optimal_crf: final_crf,
         output_size: final_size,
