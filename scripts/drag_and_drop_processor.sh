@@ -141,19 +141,13 @@ select_menu() {
 # 检查工具
 # ═══════════════════════════════════════════════════════════════
 check_tools() {
-    local need_build=false
-    [[ ! -f "$IMGQUALITY_HEVC" ]] && need_build=true
-    [[ ! -f "$VIDQUALITY_HEVC" ]] && need_build=true
-    [[ ! -f "$XMP_MERGER" ]] && need_build=true
-    
-    if [[ "$need_build" == "true" ]]; then
-        echo -e "${YELLOW}🔧 Building tools...${NC}"
-        (cd "$PROJECT_ROOT/imgquality_hevc" && cargo build --release 2>/dev/null) &
-        (cd "$PROJECT_ROOT/vidquality_hevc" && cargo build --release 2>/dev/null) &
-        (cd "$PROJECT_ROOT/xmp_merger" && cargo build --release 2>/dev/null) &
-        wait
-        echo -e "${GREEN}✅ Build complete${NC}"
-    fi
+    # 🔥 v5.35: 强制重新编译以确保使用最新代码
+    echo -e "${YELLOW}🔧 Rebuilding tools with latest fixes...${NC}"
+    (cd "$PROJECT_ROOT/imgquality_hevc" && cargo build --release 2>/dev/null) &
+    (cd "$PROJECT_ROOT/vidquality_hevc" && cargo build --release 2>/dev/null) &
+    (cd "$PROJECT_ROOT/xmp_merger" && cargo build --release 2>/dev/null) &
+    wait
+    echo -e "${GREEN}✅ Build complete${NC}"
 }
 
 # ═══════════════════════════════════════════════════════════════
