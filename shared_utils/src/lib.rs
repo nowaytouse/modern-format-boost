@@ -14,6 +14,7 @@
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 
 pub mod progress;
+pub mod simple_progress;
 pub mod safety;
 pub mod batch;
 pub mod report;
@@ -33,7 +34,16 @@ pub mod xmp_merger;
 pub mod flag_validator;
 pub mod gpu_accel;
 
-pub use progress::*;
+pub use progress::{
+    // 🔥 v5.5: 新增固定底部进度条
+    FixedBottomProgress, ProgressStats, ExploreProgress, ExploreLogger,
+    GlobalProgressManager,
+    // 原有导出
+    create_progress_bar, create_detailed_progress_bar, create_compact_progress_bar,
+    create_progress_bar_with_eta, SmartProgressBar,
+    create_spinner, create_multi_progress,
+    BatchProgress, format_bytes, format_duration,
+};
 pub use safety::*;
 pub use batch::*;
 pub use report::*;
