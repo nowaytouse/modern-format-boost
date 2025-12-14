@@ -1149,18 +1149,21 @@ pub fn gpu_coarse_search_with_log(
     let is_long_video = quick_duration >= LONG_DURATION_THRESHOLD;
     let is_very_long_video = quick_duration >= VERY_LONG_DURATION_THRESHOLD;
     
-    // 动态调整采样时长和迭代限制
+    // 🔥 v5.35: 动态调整采样时长和迭代限制
+    // 关键修复：大文件也跳过并行探测，因为并行探测会阻塞直到最慢的编码完成
+    // 在169MB文件上，CRF 1编码45秒采样可能需要30-60秒，导致进度条冻结
     let (sample_duration_limit, max_iterations_limit, skip_parallel) = if is_very_large_file || is_very_long_video {
         // 超大文件/超长视频：最保守策略
         log_msg!("   ⚠️ Very large file detected → Conservative mode");
         (30.0_f32, 6_u32, true)  // 只采样 30 秒，最多 6 次迭代，跳过并行
     } else if is_large_file || is_long_video {
-        // 大文件/长视频：适度保守
-        log_msg!("   📊 Large file detected → Optimized mode");
-        (45.0_f32, 8_u32, false)  // 采样 45 秒，最多 8 次迭代
+        // 🔥 v5.35: 大文件也跳过并行，防止进度条冻结
+        log_msg!("   📊 Large file detected → Sequential probing mode");
+        (45.0_f32, 8_u32, true)  // 采样 45 秒，最多 8 次迭代，跳过并行探测
     } else {
-        // 正常文件
-        (GPU_SAMPLE_DURATION, GPU_STAGE1_MAX_ITERATIONS, false)
+        // 正常文件：可以使用并行探测，但也建议跳过以保证响应性
+        log_msg!("   ✅ Normal file → Sequential probing mode");
+        (GPU_SAMPLE_DURATION, GPU_STAGE1_MAX_ITERATIONS, true)  // 🔥 v5.35: 全部跳过并行，保证实时进度显示
     };
     
     // 🔥 v5.5: 简洁日志
