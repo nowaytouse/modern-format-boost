@@ -1,16 +1,198 @@
-//! Progress Bar Module v5.5
+//! Progress Bar Module v5.30
 //! 
-//! 🔥 全面改进的进度条系统：
+//! 🔥 统一进度条系统：
+//! - 全项目统一样式: ████████▓▓░░░░░░
+//! - 更粗更显眼的进度条
 //! - 固定在终端底部显示
 //! - 详细进度参数（当前文件、剩余时间、处理速度、SSIM、CRF等）
-//! - 特别优化 --explore --match-quality --compress 组合时的进度显示
 //! 
 //! Reference: media/CONTRIBUTING.md - Visual Progress Bar requirement
 
 use indicatif::{ProgressBar, ProgressStyle, MultiProgress, ProgressDrawTarget};
-use std::sync::{Arc, Mutex, atomic::{AtomicU64, AtomicUsize, Ordering}};
+use crate::modern_ui::progress_style;
+use std::sync::{Arc, Mutex, atomic::{AtomicU64, AtomicUsize, AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 use std::io::{self, Write};
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.31: 固定位置粗进度条 - 真正不刷屏的实现
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v5.31: 固定位置的粗进度条
+///
+/// 特点：
+/// - 使用 ANSI 转义序列固定在当前行
+/// - 不会因按键或其他输出而刷屏
+/// - 粗大的进度条块（█ ▓ ░）
+/// - 现代化美观的设计
+/// - 自动隐藏光标防止闪烁
+pub struct CoarseProgressBar {
+    total: u64,
+    current: AtomicU64,
+    start_time: Instant,
+    prefix: String,
+    last_render: Arc<Mutex<Instant>>,
+    is_finished: AtomicBool,
+}
+
+impl CoarseProgressBar {
+    /// 创建新的粗进度条
+    pub fn new(total: u64, prefix: &str) -> Self {
+        // 隐藏光标
+        eprint!("\x1b[?25l");
+        let _ = io::stderr().flush();
+
+        Self {
+            total,
+            current: AtomicU64::new(0),
+            start_time: Instant::now(),
+            prefix: prefix.to_string(),
+            last_render: Arc::new(Mutex::new(Instant::now())),
+            is_finished: AtomicBool::new(false),
+        }
+    }
+
+    /// 更新进度
+    pub fn set(&self, current: u64) {
+        self.current.store(current, Ordering::Relaxed);
+
+        // 🔥 限流：每 200ms 渲染一次，防止过度刷新
+        if let Ok(mut last) = self.last_render.try_lock() {
+            if last.elapsed() >= Duration::from_millis(200) {
+                self.render();
+                *last = Instant::now();
+            }
+        }
+    }
+
+    /// 增加进度
+    pub fn inc(&self) {
+        let current = self.current.fetch_add(1, Ordering::Relaxed) + 1;
+        if current % 10 == 0 {  // 每 10 次更新渲染一次
+            self.set(current);
+        }
+    }
+
+    /// 设置消息
+    pub fn set_message(&self, _msg: &str) {
+        // 粗进度条不显示详细消息，保持简洁
+        self.render();
+    }
+
+    /// 渲染进度条
+    fn render(&self) {
+        if self.is_finished.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let current = self.current.load(Ordering::Relaxed);
+        let total = self.total.max(1);
+        let percent = (current as f64 / total as f64 * 100.0).min(100.0);
+        let elapsed = self.start_time.elapsed();
+
+        // 🔥 使用统一的进度条宽度（35 字符）
+        let bar_width: usize = progress_style::BAR_WIDTH;
+        let filled = ((percent / 100.0) * bar_width as f64) as usize;
+        let empty = bar_width.saturating_sub(filled);
+
+        // 🔥 使用统一的进度条字符
+        let bar = format!(
+            "{}{}",
+            "█".repeat(filled),
+            "░".repeat(empty)
+        );
+
+        // 🔥 使用 ANSI 颜色代码保持一致（绿色）
+        let color = "\x1b[32m";  // 统一绿色
+
+        // 计算 ETA
+        let eta_str = if current > 0 && current < total {
+            let avg_time = elapsed.as_secs_f64() / current as f64;
+            let remaining_secs = ((total - current) as f64 * avg_time) as u64;
+            format_eta_simple(remaining_secs)
+        } else {
+            "---".to_string()
+        };
+
+        // 🔥 使用统一的边框字符（▕ ▏）
+        eprint!("\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {:.1}s • ETA: {}\x1b[0m",
+            color,
+            self.prefix,
+            progress_style::BAR_LEFT,
+            color,
+            bar,
+            color,
+            percent,
+            current,
+            total,
+            elapsed.as_secs_f64(),
+            eta_str
+        );
+        let _ = io::stderr().flush();
+    }
+
+    /// 完成进度条
+    pub fn finish(&self) {
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;  // 已经完成
+        }
+
+        let total = self.total;
+        let elapsed = self.start_time.elapsed();
+
+        // 🔥 使用统一的样式显示完成状态
+        let bar_width: usize = progress_style::BAR_WIDTH;
+        let bar = "█".repeat(bar_width);
+
+        eprint!("\r\x1b[K\x1b[32m{} {}{}{}{}▏ ✅ 100% • {}/{} • ⏱️ {:.1}s\x1b[0m\n",
+            self.prefix,
+            progress_style::BAR_LEFT,
+            "\x1b[32m",
+            bar,
+            "\x1b[32m",
+            total,
+            total,
+            elapsed.as_secs_f64()
+        );
+
+        // 恢复光标
+        eprint!("\x1b[?25h");
+        let _ = io::stderr().flush();
+    }
+
+    /// 完成并清除
+    pub fn finish_and_clear(&self) {
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        eprint!("\r\x1b[K");
+        eprint!("\x1b[?25h");  // 恢复光标
+        let _ = io::stderr().flush();
+    }
+}
+
+impl Drop for CoarseProgressBar {
+    fn drop(&mut self) {
+        if !self.is_finished.load(Ordering::Relaxed) {
+            self.finish();
+        }
+    }
+}
+
+/// 简化的 ETA 格式化
+fn format_eta_simple(seconds: u64) -> String {
+    if seconds > 86400 {
+        return ">1d".to_string();
+    }
+    if seconds >= 3600 {
+        format!("{}h{}m", seconds / 3600, (seconds % 3600) / 60)
+    } else if seconds >= 60 {
+        format!("{}m{}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}s", seconds)
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.5: 固定底部进度条 - 核心组件
@@ -41,16 +223,17 @@ impl FixedBottomProgress {
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
         
-        // 🔥 v5.7: Ultra-Professional Combined Style
+        // 🔥 v5.30: 统一进度条样式 - 更粗更显眼
         bar.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:30.blue}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta_precise}) • {msg}")
+                .template(progress_style::BATCH_TEMPLATE)
                 .expect("Invalid progress bar template")
-                .progress_chars("█▓▒░")
+                .progress_chars(progress_style::PROGRESS_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS)
         );
         bar.set_prefix(prefix.to_string());
-        // Ultra-fluid 60fps-like updates (16ms is too fast, 50ms is good)
-        bar.enable_steady_tick(Duration::from_millis(50));
+        // 🔥 v5.31: 降低刷新频率防止刷屏 (50ms → 100ms)
+        bar.enable_steady_tick(Duration::from_millis(100));
         
         // High refresh rate for responsiveness
         bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
@@ -402,48 +585,47 @@ impl ExploreLogger {
 // 原有函数保持兼容
 // ═══════════════════════════════════════════════════════════════
 
-/// 🔥 v5.7: Create a unified professional spinner
+/// 🔥 v5.30: 统一专业 Spinner
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
-            .template("{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed_precise} • {msg}")
+            .template(progress_style::SPINNER_TEMPLATE)
             .expect("Invalid spinner template")
-            // Classic detailed spinner
-            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+            .tick_chars(progress_style::SPINNER_CHARS)
     );
     pb.set_prefix(prefix.to_string());
-    pb.enable_steady_tick(Duration::from_millis(50));
+    // 🔥 v5.31: 降低刷新频率防止刷屏
+    pb.enable_steady_tick(Duration::from_millis(100));
     pb
 }
 
 /// Create a styled progress bar for batch processing with improved ETA
 /// 
-/// 🔥 v5.5: 升级为固定底部样式
+/// 🔥 v5.30: 统一进度条样式
 pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("\r{prefix:.cyan.bold} [{bar:40.green/dim}] {pos}/{len} ({percent}%) | {elapsed_precise} | ETA: {eta_precise} | {msg}")
+            .template(progress_style::BATCH_TEMPLATE)
             .expect("Invalid progress bar template")
-            .progress_chars("━╸─")
+            .progress_chars(progress_style::PROGRESS_CHARS)
+            .tick_chars(progress_style::SPINNER_CHARS)
     );
     pb.set_prefix(prefix.to_string());
     pb.enable_steady_tick(Duration::from_millis(100));
     pb
 }
 
-/// 🔥 v5.5: 创建详细进度条（带更多参数）
+/// 🔥 v5.30: 创建详细进度条（带更多参数）- 统一样式
 pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template(concat!(
-                "\r{prefix:.cyan.bold} [{bar:35.green/dim}] {pos}/{len} ({percent:>3}%)\n",
-                "  ⏱️ {elapsed_precise} | ETA: {eta_precise} | {per_sec} | {msg}"
-            ))
+            .template(progress_style::BATCH_TEMPLATE)
             .expect("Invalid progress bar template")
-            .progress_chars("━╸─")
+            .progress_chars(progress_style::PROGRESS_CHARS)
+            .tick_chars(progress_style::SPINNER_CHARS)
     );
     pb.set_prefix(prefix.to_string());
     pb.enable_steady_tick(Duration::from_millis(100));
@@ -451,14 +633,14 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     pb
 }
 
-/// 🔥 v5.1: 创建紧凑型进度条（单行，不刷屏）
+/// 🔥 v5.30: 创建紧凑型进度条（单行，不刷屏）- 统一样式
 pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("\r{prefix:.cyan} [{bar:30.green/dim}] {percent:>3}% ({pos}/{len}) {msg:.dim}")
+            .template(progress_style::COMPACT_TEMPLATE)
             .expect("Invalid progress bar template")
-            .progress_chars("━╸─")
+            .progress_chars(progress_style::PROGRESS_CHARS)
     );
     pb.set_prefix(prefix.to_string());
     pb.enable_steady_tick(Duration::from_millis(200));
@@ -483,11 +665,13 @@ pub struct SmartProgressBar {
 impl SmartProgressBar {
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
+        // 🔥 v5.30: 统一样式
         bar.set_style(
             ProgressStyle::default_bar()
-                .template("{prefix:.cyan.bold} [{bar:40.green/dim}] {pos}/{len} ({percent}%) | ETA: {msg}")
+                .template(progress_style::BATCH_TEMPLATE)
                 .expect("Invalid progress bar template")
-                .progress_chars("━╸─")
+                .progress_chars(progress_style::PROGRESS_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS)
         );
         bar.set_prefix(prefix.to_string());
         bar.enable_steady_tick(Duration::from_millis(100));
@@ -561,10 +745,12 @@ fn format_eta(seconds: f64) -> String {
 /// Create a spinner for indeterminate progress
 pub fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
+    // 🔥 v5.30: 统一 Spinner 样式
     spinner.set_style(
         ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
+            .template("{spinner:.green} {msg}")
             .expect("Invalid spinner template")
+            .tick_chars(progress_style::SPINNER_CHARS)
     );
     spinner.set_message(message.to_string());
     spinner.enable_steady_tick(Duration::from_millis(80));
@@ -685,7 +871,8 @@ pub struct GlobalProgressManager {
     multi: MultiProgress,
     main_bar: Option<ProgressBar>,
     sub_bar: Option<ProgressBar>,
-    start_time: Instant,
+    #[allow(dead_code)]
+    _start_time: Instant,
 }
 
 impl GlobalProgressManager {
@@ -694,18 +881,19 @@ impl GlobalProgressManager {
             multi: MultiProgress::new(),
             main_bar: None,
             sub_bar: None,
-            start_time: Instant::now(),
+            _start_time: Instant::now(),
         }
     }
     
-    /// 创建主进度条（总体进度）
+    /// 创建主进度条（总体进度）- 🔥 v5.30 统一样式
     pub fn create_main(&mut self, total: u64, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new(total));
         bar.set_style(
             ProgressStyle::default_bar()
-                .template("\r{prefix:.cyan.bold} [{bar:40.green/dim}] {pos}/{len} ({percent}%) | {elapsed_precise} | ETA: {eta_precise}")
+                .template(progress_style::BATCH_TEMPLATE)
                 .expect("Invalid template")
-                .progress_chars("━╸─")
+                .progress_chars(progress_style::PROGRESS_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS)
         );
         bar.set_prefix(prefix.to_string());
         bar.enable_steady_tick(Duration::from_millis(100));
@@ -713,13 +901,14 @@ impl GlobalProgressManager {
         self.main_bar.as_ref().unwrap()
     }
     
-    /// 创建子进度条（当前文件进度）
+    /// 创建子进度条（当前文件进度）- 🔥 v5.30 统一样式
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());
         bar.set_style(
             ProgressStyle::default_spinner()
-                .template("  {spinner:.dim} {prefix:.dim}: {msg}")
+                .template("  {spinner:.green} {prefix:.dim}: {msg}")
                 .expect("Invalid template")
+                .tick_chars(progress_style::SPINNER_CHARS)
         );
         bar.set_prefix(prefix.to_string());
         bar.enable_steady_tick(Duration::from_millis(80));

@@ -142,14 +142,16 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Create progress bar
+    // Create progress bar - 🔥 v5.30: 统一进度条样式
     let pb = ProgressBar::new(pending_files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+            .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta_precise}) • {msg}")
             .unwrap()
-            .progress_chars("█▓░"),
+            .progress_chars("██▓░")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     );
+    pb.set_prefix("XMP Merge");
 
     // Process files with checkpoint tracking
     let mut results = Vec::with_capacity(pending_files.len());
