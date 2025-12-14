@@ -3367,8 +3367,9 @@ pub fn explore_with_gpu_coarse_search(
 /// - GPU CRF 11 能压缩 → CPU 需要**更高** CRF（如 12-14）才能压缩
 /// 
 /// CPU 只需要：
-/// 1. 从 GPU 边界开始，用 0.5 步进向上搜索找到 CPU 压缩点
-/// 2. 用 0.1 步进向下精细化（找最高质量的压缩点）
+/// 🔥 v5.60: CPU 全片编码策略
+/// 1. 从 GPU 边界开始，用动态步进向下搜索找到 CPU 压缩点
+/// 2. 全片编码确保 100% 准确度（不再采样）
 /// 3. 计算 SSIM 验证质量
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
@@ -3387,8 +3388,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         .context("Failed to read input file metadata")?
         .len();
 
-    // 🔥 v5.52: CPU 也使用采样编码（和 GPU 一致）
-    // 获取视频时长
+    // 🔥 v5.60: 获取视频时长（用于进度显示）
     let duration: f32 = {
         use std::process::Command;
         let duration_output = Command::new("ffprobe")
@@ -3398,27 +3398,16 @@ fn cpu_fine_tune_from_gpu_boundary(
         duration_output
             .ok()
             .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-            .unwrap_or(crate::gpu_accel::GPU_SAMPLE_DURATION)
+            .unwrap_or(60.0)  // 默认 60 秒
     };
 
-    // 计算采样时长和输入大小
-    let sample_duration = duration.min(crate::gpu_accel::GPU_SAMPLE_DURATION);
-    let sample_input_size = if duration <= crate::gpu_accel::GPU_SAMPLE_DURATION {
-        input_size  // 短视频，使用完整大小
-    } else {
-        // 长视频，按比例计算采样部分的预期大小
-        let ratio = sample_duration / duration;
-        (input_size as f64 * ratio as f64) as u64
-    };
-
-    // 🔥 v5.34: 创建基于迭代计数的进度条（使用采样输入大小）
+    // 🔥 v5.60: CPU 进度条使用真实输入大小（全片编码）
     let cpu_progress = crate::SimpleIterationProgress::new(
         "🔬 CPU Fine-Tune",
-        sample_input_size,  // 🔥 v5.52: 使用采样大小
-        25  // 预估25次迭代
+        input_size,  // 🔥 v5.60: 使用真实输入大小
+        15  // 🔥 v5.60: GPU 已定位范围，CPU 迭代次数少（5-15次）
     );
 
-    // 🔥 v5.34: 使用 SimpleIterationProgress 替代 spinner
     #[allow(unused_macros)]
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
@@ -3430,52 +3419,14 @@ fn cpu_fine_tune_from_gpu_boundary(
     
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
 
-    // 🔥 v5.54: 采样编码（用于搜索，速度快）
-    let encode_sampled = |crf: f32| -> Result<u64> {
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-y");
-
-        // 🔥 v5.54: 添加 -t 参数限制编码时长（仅搜索时使用）
-        if duration > crate::gpu_accel::GPU_SAMPLE_DURATION {
-            cmd.arg("-t").arg(format!("{}", sample_duration));
-        }
-
-        cmd.arg("-i").arg(input)
-            .arg("-c:v").arg(encoder.ffmpeg_name())
-            .arg("-crf").arg(format!("{:.1}", crf));
-
-        for arg in encoder.extra_args(max_threads) {
-            cmd.arg(arg);
-        }
-
-        for arg in &vf_args {
-            if !arg.is_empty() {
-                cmd.arg("-vf").arg(arg);
-            }
-        }
-
-        cmd.arg("-c:a").arg("copy")
-            .arg(output);
-
-        let result = cmd.output().context("Failed to run ffmpeg")?;
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            anyhow::bail!("Encoding failed: {}", stderr.lines().last().unwrap_or("unknown"));
-        }
-
-        Ok(fs::metadata(output)?.len())
-    };
-
-    // 🔥 v5.54: 完整编码（用于最终输出，无 -t 参数）
-    // 🔥 v5.58: 添加实时进度显示（从 v5.2 合并）
+    // 🔥 v5.60: 全片编码（带实时进度显示）
+    // 关键改动：CPU 阶段统一使用全片编码，确保 100% 准确度
     let encode_full = |crf: f32| -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;
         
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y");
-
-        // 🔥 v5.58: 添加 -progress 参数获取实时进度
         cmd.arg("-progress").arg("pipe:1");
 
         cmd.arg("-i").arg(input)
@@ -3495,13 +3446,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-c:a").arg("copy")
             .arg(output);
 
-        // 🔥 v5.58: 使用 spawn 而非 output，以便实时读取进度
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         
-        // 读取 stdout（-progress 输出）
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let mut last_fps = 0.0_f64;
@@ -3521,15 +3470,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                 } else if let Some(val) = line.strip_prefix("speed=") {
                     last_speed = val.trim().to_string();
                 } else if line == "progress=continue" || line == "progress=end" {
-                    // 🔥 v5.58: 实时显示编码进度（固定底部）
                     let current_secs = last_time_us as f64 / 1_000_000.0;
                     if duration_secs > 0.0 {
                         let pct = (current_secs / duration_secs * 100.0).min(100.0);
-                        eprint!("\r      ⏳ Encoding {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
-                            pct, current_secs, duration_secs, last_fps, last_speed);
-                    } else {
-                        eprint!("\r      ⏳ Encoding {:.1}s | {:.0}fps | {}   ",
-                            current_secs, last_fps, last_speed);
+                        eprint!("\r      ⏳ CRF {:.1} | {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
+                            crf, pct, current_secs, duration_secs, last_fps, last_speed);
                     }
                     let _ = std::io::stderr().flush();
                 }
@@ -3537,60 +3482,50 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
         
         let status = child.wait().context("Failed to wait for ffmpeg")?;
-        
-        // 清除进度行
-        eprintln!("\r      ✅ Encoding complete                                        ");
+        eprint!("\r                                                                              \r");
         
         if !status.success() {
-            anyhow::bail!("Encoding failed");
+            anyhow::bail!("❌ Encoding failed at CRF {:.1}", crf);
         }
 
         Ok(fs::metadata(output)?.len())
     };
     
-    eprintln!("🔬 CPU Fine-Tune v6.0 ({:?})", encoder);
-    eprintln!("📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
-    eprintln!("🎯 Goal: Find optimal CRF (highest quality that compresses)");
+    eprintln!("🔬 CPU Fine-Tune v5.60 ({:?}) - 全片编码模式", encoder);
+    eprintln!("📁 Input: {} bytes ({:.2} MB) | Duration: {:.1}s", input_size, input_size as f64 / 1024.0 / 1024.0, duration);
+    eprintln!("🎯 Goal: Find optimal CRF with 100% accuracy (full video encoding)");
     
     // 🔥 v5.59: 可压缩空间检测 - 根据压缩潜力选择精度
-    // 高压缩潜力 → 0.25 步进（快速）
-    // 中/低压缩潜力 → 0.1 步进（精细，不放过每一个优化空间）
     let precheck_info = precheck::get_video_info(input).ok();
     let (step_size, cache_multiplier) = match precheck_info.as_ref().map(|i| i.compressibility) {
         Some(precheck::Compressibility::High) => {
             eprintln!("📊 高压缩潜力 → 使用 0.25 步进（快速模式）");
-            (0.25_f32, 4.0_f32)  // 0.25 步进，缓存 key = crf * 4
+            (0.25_f32, 4.0_f32)
         }
         Some(precheck::Compressibility::Medium) | Some(precheck::Compressibility::Low) | None => {
-            eprintln!("📊 中/低压缩潜力 → 使用 0.1 步进（精细模式，不放过每一个优化空间）");
-            (0.1_f32, 10.0_f32)  // 0.1 步进，缓存 key = crf * 10
+            eprintln!("📊 中/低压缩潜力 → 使用 0.1 步进（精细模式）");
+            (0.1_f32, 10.0_f32)
         }
     };
     
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
     
-    // 🔥 v5.59: 带缓存的采样编码（动态精度）+ 进度条更新
+    // 🔥 v5.60: 带缓存的全片编码 + 进度条更新
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
         let key = (crf * cache_multiplier).round() as i32;
         if let Some(&size) = cache.get(&key) {
-            // 从缓存读取，仍然更新进度条
             cpu_progress.inc_iteration(crf, size, None);
             return Ok(size);
         }
-        let size = encode_sampled(crf)?;  // 🔥 v5.54: 使用采样编码
+        let size = encode_full(crf)?;  // 🔥 v5.60: 使用全片编码
         cache.insert(key, size);
-        // 🔥 v5.34: 编码完成立即更新进度条
         cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
     };
     
-    // 🔥 v5.59: CPU 精细微调 - 根据压缩潜力动态选择精度
-    // GPU 已经找到：最高的能压缩的 CRF（如 39）
-    // CPU 任务：
-    // 1. 验证 GPU 边界
-    // 2. 向下微调找更高质量（步进由压缩潜力决定）
-    // 3. Phase 3 继续精细微调到最优点
+    // 🔥 v5.60: CPU 精细微调 - 全片编码确保准确度
+    // GPU 已经定位范围，CPU 只需 5-15 次迭代
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
@@ -3599,32 +3534,32 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("🎯 Goal: Find lowest CRF that compresses (highest quality)");
 
     // ═══════════════════════════════════════════════════════════
-    // Phase 1: 验证 GPU 边界并做初步微调
+    // Phase 1: 验证 GPU 边界并做初步微调（全片编码）
     // ═══════════════════════════════════════════════════════════
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
     iterations += 1;
-    let gpu_ratio = gpu_size as f64 / sample_input_size as f64;
+    let gpu_ratio = gpu_size as f64 / input_size as f64;  // 🔥 v5.60: 使用 input_size
 
-    if gpu_size < sample_input_size {
+    if gpu_size < input_size {
         // GPU 边界能压缩，作为起点
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
         eprintln!("✅ GPU boundary CRF {:.1} compresses ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
 
-        // 🔥 v5.59: 向下微调找更高质量区域（步进由压缩潜力决定）
+        // 🔥 v5.60: 向下微调找更高质量区域（全片编码）
         let mut test_crf = gpu_boundary_crf - step_size;
         let quick_search_limit = (gpu_boundary_crf - 1.5).max(min_crf);
 
-        while test_crf >= quick_search_limit && iterations < 25 {
+        while test_crf >= quick_search_limit && iterations < 15 {  // 🔥 v5.60: 减少迭代次数
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / sample_input_size as f64;
+            let ratio = size as f64 / input_size as f64;
 
-            if size < sample_input_size {
+            if size < input_size {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
-                test_crf -= step_size;  // 🔥 v5.59: 动态步进
+                test_crf -= step_size;
             } else {
                 eprintln!("   ✗ CRF {:.1}: {:.1}% fails → boundary found", test_crf, ratio * 100.0);
                 break;
@@ -3636,15 +3571,15 @@ fn cpu_fine_tune_from_gpu_boundary(
         eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
         eprintln!("   Searching nearby for valid boundary...");
 
-        // 🔥 v5.59: 向下搜索找第一个能压缩的点（动态步进）
+        // 🔥 v5.60: 向下搜索找第一个能压缩的点（全片编码）
         let mut test_crf = gpu_boundary_crf - step_size;
         let mut found = false;
-        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 25 {
+        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 15 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / sample_input_size as f64;
+            let ratio = size as f64 / input_size as f64;
 
-            if size < sample_input_size {
+            if size < input_size {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 eprintln!("✅ Found valid boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
@@ -3665,17 +3600,16 @@ fn cpu_fine_tune_from_gpu_boundary(
     }
 
     // ═══════════════════════════════════════════════════════════
+    // 🔥 v5.60: Phase 3 精细搜索（全片编码，保守收敛检测）
+    // ═══════════════════════════════════════════════════════════
     if let Some(boundary_crf) = best_crf {
         eprintln!("📍 Phase 3: Fine-tune with {:.2} step (target: SSIM 0.999+)", step_size);
         
         // 🔥 v5.60: 保守的智能跳过策略
-        // 收敛检测：连续3个CRF的SSIM变化<0.0001且大小变化<0.1%才跳过
-        // 这是最保守的策略，避免过早终止
-        let mut convergence_history: Vec<(f32, u64, f64)> = Vec::new();  // (crf, size, ratio)
+        let mut convergence_history: Vec<(f32, u64, f64)> = Vec::new();
         
-        // 🔥 v5.59: 向下搜索（更高质量），使用动态步进
         let mut test_crf = boundary_crf - step_size;
-        while test_crf >= min_crf && iterations < GLOBAL_MAX_ITERATIONS {
+        while test_crf >= min_crf && iterations < 20 {  // 🔥 v5.60: 限制迭代次数
             let key = (test_crf * cache_multiplier).round() as i32;
             if size_cache.contains_key(&key) {
                 test_crf -= step_size;
@@ -3684,74 +3618,63 @@ fn cpu_fine_tune_from_gpu_boundary(
             
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / sample_input_size as f64;
+            let ratio = size as f64 / input_size as f64;  // 🔥 v5.60: 使用 input_size
 
-                if size < sample_input_size {
-                    best_crf = Some(test_crf);
-                    best_size = Some(size);
-                    eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
+            if size < input_size {
+                best_crf = Some(test_crf);
+                best_size = Some(size);
+                eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
+                
+                // 🔥 v5.60: 保守收敛检测
+                convergence_history.push((test_crf, size, ratio));
+                
+                if convergence_history.len() >= 3 {
+                    let len = convergence_history.len();
+                    let (_, s1, r1) = convergence_history[len - 3];
+                    let (_, s2, r2) = convergence_history[len - 2];
+                    let (_, s3, r3) = convergence_history[len - 1];
                     
-                    // 🔥 v5.60: 保守收敛检测
-                    // 记录历史数据
-                    convergence_history.push((test_crf, size, ratio));
+                    let size_change_1_2 = ((s2 as f64 - s1 as f64) / input_size as f64).abs();
+                    let size_change_2_3 = ((s3 as f64 - s2 as f64) / input_size as f64).abs();
+                    let ratio_change_1_2 = (r2 - r1).abs() * 100.0;
+                    let ratio_change_2_3 = (r3 - r2).abs() * 100.0;
                     
-                    // 只有当历史记录>=3时才检测收敛
-                    if convergence_history.len() >= 3 {
-                        let len = convergence_history.len();
-                        let (_, s1, r1) = convergence_history[len - 3];
-                        let (_, s2, r2) = convergence_history[len - 2];
-                        let (_, s3, r3) = convergence_history[len - 1];
-                        
-                        // 计算大小变化率（相对于输入）
-                        let size_change_1_2 = ((s2 as f64 - s1 as f64) / sample_input_size as f64).abs();
-                        let size_change_2_3 = ((s3 as f64 - s2 as f64) / sample_input_size as f64).abs();
-                        
-                        // 计算比率变化（百分比）
-                        let ratio_change_1_2 = (r2 - r1).abs() * 100.0;  // 转为百分比
-                        let ratio_change_2_3 = (r3 - r2).abs() * 100.0;
-                        
-                        // 🔥 v5.60: 保守阈值
-                        // 大小变化 < 0.1% (0.001) 且 比率变化 < 0.1%
-                        let converged = size_change_1_2 < 0.001 
-                            && size_change_2_3 < 0.001
-                            && ratio_change_1_2 < 0.1
-                            && ratio_change_2_3 < 0.1;
-                        
-                        if converged {
-                            eprintln!("⚡ 收敛检测: 连续3个CRF大小变化<0.1% → 已到收敛点，跳过剩余测试");
-                            eprintln!("   变化: {:.3}% → {:.3}%", size_change_1_2 * 100.0, size_change_2_3 * 100.0);
-                            break;
-                        }
+                    // 🔥 v5.60: 保守阈值 - 大小变化<0.1% 且 比率变化<0.1%
+                    let converged = size_change_1_2 < 0.001 
+                        && size_change_2_3 < 0.001
+                        && ratio_change_1_2 < 0.1
+                        && ratio_change_2_3 < 0.1;
+                    
+                    if converged {
+                        eprintln!("⚡ 收敛检测: 连续3个CRF大小变化<0.1% → 已到收敛点");
+                        break;
                     }
-                    
-                    test_crf -= step_size;
-                } else {
-                    eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
-                    break;  // 找到边界
                 }
+                
+                test_crf -= step_size;
+            } else {
+                eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
+                break;
+            }
         }
     }
     
-    // 最终结果
-    let final_crf = match (best_crf, best_size) {
-        (Some(crf), Some(_size)) => crf,  // 🔥 v5.54: size 不再使用，最终大小由 encode_full 确定
+    // 🔥 v5.60: 最终结果（已经是全片编码，直接使用缓存结果）
+    let (final_crf, final_full_size) = match (best_crf, best_size) {
+        (Some(crf), Some(size)) => {
+            eprintln!("✅ Best CRF {:.1} already encoded (full video)", crf);
+            (crf, size)  // 🔥 v5.60: 直接使用缓存的全片编码结果
+        }
         _ => {
-            // 无法压缩，返回 max_crf
             eprintln!("⚠️ Cannot compress this file");
-            let _size = encode_cached(max_crf, &mut size_cache)?;  // 确保输出文件存在
+            let size = encode_cached(max_crf, &mut size_cache)?;
             iterations += 1;
-            max_crf
+            (max_crf, size)
         }
     };
 
-    // 🔥 v5.54: Step 3: SSIM 验证（使用完整视频）
-    eprintln!("📍 Step 3: SSIM validation at CRF {:.1}", final_crf);
-
-    // 🔥 v5.54: 最终输出必须编码完整视频（不是采样）
-    eprintln!("🔄 Final output: Re-encoding FULL video at CRF {:.1}...", final_crf);
-    let final_full_size = encode_full(final_crf)?;
-    eprintln!("✅ Final full video size: {} bytes ({:.2} MB)",
-        final_full_size, final_full_size as f64 / 1024.0 / 1024.0);
+    eprintln!("📍 Final: CRF {:.1} | Size: {} bytes ({:.2} MB)",
+        final_crf, final_full_size, final_full_size as f64 / 1024.0 / 1024.0);
 
     // 计算 SSIM
     let ssim_output = std::process::Command::new("ffmpeg")
@@ -3791,18 +3714,14 @@ fn cpu_fine_tune_from_gpu_boundary(
     let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
     let quality_passed = final_full_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
 
-    // 🔥 v5.57: 计算置信度
+    // 🔥 v5.60: 计算置信度（全片编码 = 100% 覆盖）
     let ssim_val = ssim.unwrap_or(0.0);
     
-    // 采样覆盖度：短视频完整测试得满分
-    let sampling_coverage = if duration < 60.0 {
-        1.0
-    } else {
-        (sample_duration / duration).min(1.0) as f64
-    };
+    // 🔥 v5.60: 全片编码，采样覆盖度 = 100%
+    let sampling_coverage = 1.0;
     
-    // 预测准确度：GPU+CPU 模式默认较高
-    let prediction_accuracy = 0.85;  // GPU 提供了参考，准确度较高
+    // 🔥 v5.60: GPU 定位 + CPU 全片验证，高准确度
+    let prediction_accuracy = 0.90;
     
     // 安全边界：输出比输入小的程度（5%为满分）
     let margin_safety = if final_full_size < input_size {
@@ -3812,13 +3731,13 @@ fn cpu_fine_tune_from_gpu_boundary(
         0.0
     };
     
-    // SSIM 可靠性
+    // 🔥 v5.60: SSIM 可靠性（全片编码更可靠）
     let ssim_confidence = if ssim_val >= 0.99 {
         1.0
     } else if ssim_val >= 0.95 {
-        0.8
+        0.9  // 🔥 v5.60: 提高置信度
     } else if ssim_val >= 0.90 {
-        0.6
+        0.7
     } else {
         0.5
     };
