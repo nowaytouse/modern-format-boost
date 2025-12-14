@@ -8,7 +8,7 @@
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+// Mutex 暂未使用，保留以备将来扩展
 use std::time::Instant;
 
 // ═══════════════════════════════════════════════════════════════
@@ -69,16 +69,52 @@ pub mod symbols {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v5.30: 统一进度条样式 - 更粗更显眼
+// ═══════════════════════════════════════════════════════════════
+
+/// 统一进度条样式常量 - 全项目使用
+pub mod progress_style {
+    /// 🔥 统一进度条字符: 填充 + 当前位置 + 空白
+    /// indicatif 需要 3 个字符: (filled, current, empty)
+    /// 视觉效果: ████████▓░░░░░░░
+    pub const PROGRESS_CHARS: &str = "█▓░";
+    
+    /// 进度条宽度 - 统一 35 字符，足够显眼
+    pub const BAR_WIDTH: usize = 35;
+    
+    /// 进度条边框字符
+    pub const BAR_LEFT: &str = "▕";
+    pub const BAR_RIGHT: &str = "▏";
+    
+    /// Spinner 字符序列 - 统一使用 Braille 点阵
+    pub const SPINNER_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+    
+    /// 统一模板 - 批量处理进度条
+    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta_precise}) • {msg}";
+    
+    /// 统一模板 - 探索进度条（迭代次数在 msg 中显示）
+    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • ⏱️ {elapsed_precise} • {msg}";
+    
+    /// 统一模板 - 简洁进度条
+    pub const COMPACT_TEMPLATE: &str = "{prefix:.cyan} ▕{bar:30.green/black}▏ {percent:>3}% ({pos}/{len}) {msg:.dim}";
+    
+    /// 统一模板 - Spinner
+    pub const SPINNER_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed_precise} • {msg}";
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🔄 Spinner 动画
 // ═══════════════════════════════════════════════════════════════
 
 /// Spinner 帧序列
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_DOTS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+#[allow(dead_code)]
 const SPINNER_BOUNCE: &[&str] = &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
 
 /// 全局 Spinner 状态
 static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
+#[allow(dead_code)]
 static SPINNER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// 获取当前 Spinner 帧
@@ -226,7 +262,7 @@ impl ExploreProgressState {
         let elapsed = self.start_time.elapsed().as_secs_f64();
         
         // 大小变化图标和颜色
-        let (size_icon, size_color) = if self.size_pct < 0.0 {
+        let (_size_icon, size_color) = if self.size_pct < 0.0 {
             (SAVE, BRIGHT_GREEN)
         } else {
             (WARNING, BRIGHT_YELLOW)
@@ -374,7 +410,7 @@ fn strip_ansi(s: &str) -> String {
 // ═══════════════════════════════════════════════════════════════
 
 /// 显示阶段标题
-pub fn print_stage(icon: &str, title: &str) {
+pub fn print_stage(_icon: &str, title: &str) {
     use colors::*;
     eprintln!("{}📍{} {}{}{}", DIM, RESET, BOLD, title, RESET);
     let _ = io::stderr().flush();
