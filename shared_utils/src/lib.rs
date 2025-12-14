@@ -176,5 +176,8 @@ pub use modern_ui::{
 
 // 🔥 v5.20: 真正的实时进度条
 pub use realtime_progress::{
+    // 🔥 v5.34: 新的基于迭代计数的进度条（推荐）
+    SimpleIterationProgress,
+    // v5.31: 旧的基于CRF范围的进度条（已弃用但保留兼容）
     RealtimeExploreProgress, RealtimeSpinner,
 };

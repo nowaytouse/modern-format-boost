@@ -2861,25 +2861,25 @@ pub fn explore_with_gpu_coarse_search(
             step: 2.0,  // 🔥 v5.3: 精细搜索用 2 CRF 步长
             max_iterations: 15,  // 🔥 v5.7: 更多迭代以支持更大 CRF 范围
         };
-        
-        // 🔥 v5.31: GPU 阶段使用真实 CRF 范围的进度条
-        let gpu_progress = crate::realtime_progress::RealtimeExploreProgress::with_crf_range(
-            "🔍 GPU Search", input_size, 
-            gpu_config.min_crf, gpu_config.max_crf
+
+        // 🔥 v5.34: GPU 阶段使用新的基于迭代计数的进度条（修复跳跃问题）
+        let gpu_progress = crate::SimpleIterationProgress::new(
+            "🔍 GPU Search", input_size,
+            gpu_config.max_iterations as u64
         );
-        
-        // Progress callback - 更新条状进度条
+
+        // Progress callback - 每次编码完成立即更新
         let progress_callback = |crf: f32, size: u64| {
-            gpu_progress.update(crf, size, None);
+            gpu_progress.inc_iteration(crf, size, None);
         };
-        
+
         // Log callback - 使用 suspend 输出日志，不干扰进度条
         let log_callback = |msg: &str| {
             gpu_progress.bar.suspend(|| eprintln!("{}", msg));
         };
 
         let gpu_result = crate::gpu_accel::gpu_coarse_search_with_log(
-            input, &temp_output, encoder_name, input_size, &gpu_config, 
+            input, &temp_output, encoder_name, input_size, &gpu_config,
             Some(&progress_callback), Some(&log_callback)
         );
         gpu_progress.finish(0.0, 0, None);  // 完成 GPU 进度条
