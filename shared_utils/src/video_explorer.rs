@@ -3533,11 +3533,19 @@ pub fn explore_with_gpu_coarse_search(
                             eprintln!("   ⚠️ GPU SSIM too low! Expanding CPU search to lower CRF");
                             let expand = ((0.95 - ssim) * 30.0) as f32;  // 每 0.01 SSIM 差距扩展 0.3 CRF
                             ((gpu_crf - expand).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
+                        } else if gpu_result.fine_tuned {
+                            // 🔥 v5.65: GPU 已精细搜索，CPU 只需小范围验证
+                            eprintln!("   ⚡ GPU fine-tuned → CPU narrow search ±1.5 CRF");
+                            ((cpu_start - 1.5).max(ABSOLUTE_MIN_CRF), (cpu_start + 1.5).min(max_crf))
                         } else {
                             eprintln!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
                             // 🔥 v5.56: 使用校准后的起点作为搜索中心
                             ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                         }
+                    } else if gpu_result.fine_tuned {
+                        // 🔥 v5.65: GPU 已精细搜索，CPU 只需小范围验证
+                        eprintln!("   ⚡ GPU fine-tuned → CPU narrow search ±1.5 CRF");
+                        ((cpu_start - 1.5).max(ABSOLUTE_MIN_CRF), (cpu_start + 1.5).min(max_crf))
                     } else {
                         // 🔥 v5.56: 使用校准后的起点作为搜索中心
                         ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
