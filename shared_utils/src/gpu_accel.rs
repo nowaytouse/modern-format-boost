@@ -1602,72 +1602,126 @@ pub fn gpu_coarse_search_with_log(
     }
     
     // ═══════════════════════════════════════════════════════════
-    // Stage 1: 指数搜索（如果并行探测未完全确定边界）
-    // 🔥 v5.17: 使用动态迭代限制
-    // 🔥 v5.45: 智能终止 - 基于收益递减和质量目标
+    // 🔥 v5.47: Stage 1 重写 - 双向智能搜索找真正的边界
+    //
+    // 核心改进：
+    // 1. 如果 initial_crf 能压缩 → 向上搜索找**最高**的可压缩 CRF
+    // 2. 如果 initial_crf 不能压缩 → 向下搜索找**最低**的可压缩 CRF
+    // 3. 使用大步长（2.0 CRF）快速跳跃
+    // 4. 不在找到第一个点就停，而是找到真正的边界
     // ═══════════════════════════════════════════════════════════
 
-    if !found_compress_point && (boundary_high - boundary_low) > 4.0 {
-        // 并行探测未找到压缩点，继续指数搜索
-        let mut step: f32 = 1.0;
+    if (boundary_high - boundary_low) > 4.0 {
+        if found_compress_point {
+            // ✅ 场景 A: 初始探测找到压缩点 → 向上搜索更高的 CRF
+            // 目标：找到最高的仍能压缩的 CRF（比如从 35 搜到 39）
+            log_msg!("   📈 Stage 1A: Search upward from CRF {:.1} to find highest compressible CRF", boundary_low);
 
-        while iterations < max_iterations_limit && !found_compress_point {
-            let test_crf = (boundary_low + step).min(config.max_crf);
-            
-            let key = (test_crf * 10.0).round() as i32;
-            if size_cache.contains_key(&key) {
-                // 已有缓存，检查结果
-                let cached_size = *size_cache.get(&key).unwrap();
-                if cached_size < sample_input_size {
-                    boundary_high = test_crf;
-                    best_crf = Some(test_crf);
-                    best_size = Some(cached_size);
-                    found_compress_point = true;
-                } else {
-                    boundary_low = test_crf;
-                    prev_size = Some(cached_size);
-                }
-                step *= 2.0;
-                if test_crf >= config.max_crf { break; }
-                continue;
-            }
-            
-            match encode_cached(test_crf, &mut size_cache) {
-                Ok(size) => {
-                    iterations += 1;
-                    size_history.push((test_crf, size));
-                    if let Some(cb) = progress_cb { cb(test_crf, size); }
-                    
-                    // 智能终止检测
-                    let variance = calc_window_variance(&size_history, sample_input_size);
-                    let change_rate = prev_size.map(|p| calc_change_rate(p, size)).unwrap_or(f64::MAX);
-                    
-                    if size < sample_input_size {
-                        // 找到能压缩的点！
-                        boundary_high = test_crf;
+            let mut test_crf = boundary_low + 2.0;
+            let mut last_compressible_crf = boundary_low;
+            let mut last_compressible_size = best_size.unwrap_or(0);
+
+            while test_crf <= config.max_crf && iterations < max_iterations_limit {
+                let key = (test_crf * 10.0).round() as i32;
+                if size_cache.contains_key(&key) {
+                    let cached_size = *size_cache.get(&key).unwrap();
+                    if cached_size < sample_input_size {
+                        last_compressible_crf = test_crf;
+                        last_compressible_size = cached_size;
                         best_crf = Some(test_crf);
-                        best_size = Some(size);
-                        found_compress_point = true;
-                        
-                        // 智能终止
-                        if variance < VARIANCE_THRESHOLD && size_history.len() >= WINDOW_SIZE {
-                            log_msg!("   ⚡ Stage1 early stop: variance {:.6}", variance);
-                        }
-                        if change_rate < CHANGE_RATE_THRESHOLD && prev_size.is_some() {
-                            log_msg!("   ⚡ Stage1 early stop: Δ{:.3}%", change_rate * 100.0);
-                        }
-                        break;  // 找到压缩点就停
-                    } else {
-                        // 还不能压缩，继续向上
+                        best_size = Some(cached_size);
                         boundary_low = test_crf;
-                        prev_size = Some(size);
-                        step *= 2.0;  // 指数增长
+                        log_msg!("   ✓ CRF {:.1} compresses ({:.1}%) → continue", test_crf, (cached_size as f64 / sample_input_size as f64 - 1.0) * 100.0);
+                        test_crf += 2.0;
+                    } else {
+                        log_msg!("   ✗ CRF {:.1} fails → boundary found at {:.1}", test_crf, last_compressible_crf);
+                        boundary_high = test_crf;
+                        break;
                     }
+                    continue;
                 }
-                Err(_) => break,
+
+                match encode_cached(test_crf, &mut size_cache) {
+                    Ok(size) => {
+                        iterations += 1;
+                        if let Some(cb) = progress_cb { cb(test_crf, size); }
+
+                        if size < sample_input_size {
+                            // 还能压缩！记录并继续向上
+                            last_compressible_crf = test_crf;
+                            last_compressible_size = size;
+                            best_crf = Some(test_crf);
+                            best_size = Some(size);
+                            boundary_low = test_crf;
+                            log_msg!("   ✓ CRF {:.1} compresses ({:.1}%) → continue", test_crf, (size as f64 / sample_input_size as f64 - 1.0) * 100.0);
+                            test_crf += 2.0;
+                        } else {
+                            // 不能压缩了！找到上边界
+                            log_msg!("   ✗ CRF {:.1} fails → boundary found at {:.1}", test_crf, last_compressible_crf);
+                            boundary_high = test_crf;
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
-            
-            if test_crf >= config.max_crf { break; }
+
+            // 确保 best_crf 是最后一个能压缩的点
+            if last_compressible_crf > 0.0 {
+                best_crf = Some(last_compressible_crf);
+                best_size = Some(last_compressible_size);
+            }
+
+        } else {
+            // ✅ 场景 B: 初始探测未找到压缩点 → 向下搜索找第一个能压缩的 CRF
+            log_msg!("   📉 Stage 1B: Search downward from CRF {:.1} to find compressible CRF", boundary_high);
+
+            let mut test_crf = boundary_high - 2.0;
+
+            while test_crf >= config.min_crf && iterations < max_iterations_limit {
+                let key = (test_crf * 10.0).round() as i32;
+                if size_cache.contains_key(&key) {
+                    let cached_size = *size_cache.get(&key).unwrap();
+                    if cached_size < sample_input_size {
+                        best_crf = Some(test_crf);
+                        best_size = Some(cached_size);
+                        found_compress_point = true;
+                        boundary_low = test_crf;
+                        log_msg!("   ✓ CRF {:.1} compresses → boundary found", test_crf);
+                        break;
+                    } else {
+                        boundary_high = test_crf;
+                        prev_size = Some(cached_size);
+                        log_msg!("   ✗ CRF {:.1} fails → continue down", test_crf);
+                        test_crf -= 2.0;
+                    }
+                    continue;
+                }
+
+                match encode_cached(test_crf, &mut size_cache) {
+                    Ok(size) => {
+                        iterations += 1;
+                        if let Some(cb) = progress_cb { cb(test_crf, size); }
+
+                        if size < sample_input_size {
+                            // 找到第一个能压缩的点！
+                            best_crf = Some(test_crf);
+                            best_size = Some(size);
+                            found_compress_point = true;
+                            boundary_low = test_crf;
+                            log_msg!("   ✓ CRF {:.1} compresses → boundary found", test_crf);
+                            break;
+                        } else {
+                            // 还不能压缩，继续向下
+                            boundary_high = test_crf;
+                            prev_size = Some(size);
+                            log_msg!("   ✗ CRF {:.1} fails → continue down", test_crf);
+                            test_crf -= 2.0;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
         }
     }
     
