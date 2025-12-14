@@ -32,7 +32,9 @@ use std::io::Read;
 // ═══════════════════════════════════════════════════════════════
 
 /// GPU 采样时长（秒）- 用于长视频的快速边界估算
-pub const GPU_SAMPLE_DURATION: f32 = 60.0;
+/// 🔥 v5.49: 从 60 秒增加到 120 秒，提高映射精度
+/// 更长的采样 → 更准确的压缩估算 → 减少 GPU/CPU 映射误差
+pub const GPU_SAMPLE_DURATION: f32 = 120.0;
 
 /// GPU 粗略搜索步长
 pub const GPU_COARSE_STEP: f32 = 2.0;
