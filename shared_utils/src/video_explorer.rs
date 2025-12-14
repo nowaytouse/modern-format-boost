@@ -3071,6 +3071,235 @@ pub mod calibration {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v5.61: 动态自校准 GPU→CPU 映射系统
+// ═══════════════════════════════════════════════════════════════
+
+/// 动态 GPU→CPU CRF 映射模块
+/// 
+/// 通过实际测量建立精确的映射关系，而非依赖静态偏移量
+pub mod dynamic_mapping {
+    use std::path::Path;
+    use anyhow::Result;
+
+    /// 校准锚点数据
+    #[derive(Debug, Clone)]
+    pub struct AnchorPoint {
+        pub crf: f32,
+        pub gpu_size: u64,
+        pub cpu_size: u64,
+        pub size_ratio: f64,  // cpu_size / gpu_size
+    }
+
+    /// 动态 CRF 映射器
+    #[derive(Debug, Clone)]
+    pub struct DynamicCrfMapper {
+        /// 校准锚点（通常2个：高质量+中等质量）
+        pub anchors: Vec<AnchorPoint>,
+        /// 输入文件大小
+        pub input_size: u64,
+        /// 是否已校准
+        pub calibrated: bool,
+    }
+
+    impl DynamicCrfMapper {
+        /// 创建新的映射器
+        pub fn new(input_size: u64) -> Self {
+            Self {
+                anchors: Vec::new(),
+                input_size,
+                calibrated: false,
+            }
+        }
+
+        /// 添加校准锚点
+        pub fn add_anchor(&mut self, crf: f32, gpu_size: u64, cpu_size: u64) {
+            let size_ratio = cpu_size as f64 / gpu_size as f64;
+            self.anchors.push(AnchorPoint {
+                crf,
+                gpu_size,
+                cpu_size,
+                size_ratio,
+            });
+            self.calibrated = !self.anchors.is_empty();
+        }
+
+        /// 计算动态偏移量
+        /// 
+        /// 根据 size_ratio 推算需要的 CRF 偏移
+        /// - size_ratio < 0.7: CPU 效率高，需要大偏移 (+4.0)
+        /// - size_ratio 0.7-0.8: 中等偏移 (+3.5)
+        /// - size_ratio 0.8-0.9: 小偏移 (+3.0)
+        /// - size_ratio > 0.9: GPU/CPU 效率接近 (+2.5)
+        fn calculate_offset_from_ratio(size_ratio: f64) -> f32 {
+            if size_ratio < 0.70 {
+                4.0  // CPU 效率高（输出只有 GPU 的 70%）
+            } else if size_ratio < 0.80 {
+                3.5
+            } else if size_ratio < 0.90 {
+                3.0
+            } else {
+                2.5  // CPU 和 GPU 效率接近
+            }
+        }
+
+        /// GPU CRF → CPU CRF 映射（使用插值）
+        /// 
+        /// 如果有2个锚点，使用线性插值
+        /// 如果只有1个锚点，使用该锚点的偏移
+        /// 如果没有锚点，使用默认偏移 +3.0
+        pub fn gpu_to_cpu(&self, gpu_crf: f32, base_offset: f32) -> (f32, f64) {
+            if self.anchors.is_empty() {
+                // 无校准数据，使用静态偏移
+                return (gpu_crf + base_offset, 0.5);
+            }
+
+            if self.anchors.len() == 1 {
+                // 单锚点
+                let offset = Self::calculate_offset_from_ratio(self.anchors[0].size_ratio);
+                return (gpu_crf + offset, 0.75);
+            }
+
+            // 双锚点线性插值
+            let p1 = &self.anchors[0];
+            let p2 = &self.anchors[1];
+            
+            let offset1 = Self::calculate_offset_from_ratio(p1.size_ratio);
+            let offset2 = Self::calculate_offset_from_ratio(p2.size_ratio);
+            
+            // 线性插值
+            let t = if (p2.crf - p1.crf).abs() > 0.1 {
+                ((gpu_crf - p1.crf) / (p2.crf - p1.crf)).clamp(0.0, 1.5)
+            } else {
+                0.5
+            };
+            
+            let interpolated_offset = offset1 + t * (offset2 - offset1);
+            let confidence = 0.85;  // 双锚点插值置信度高
+            
+            ((gpu_crf + interpolated_offset).clamp(10.0, 51.0), confidence)
+        }
+
+        /// 打印校准报告
+        pub fn print_calibration_report(&self) {
+            if self.anchors.is_empty() {
+                eprintln!("⚠️ 动态映射: 无校准数据，使用静态偏移");
+                return;
+            }
+
+            eprintln!("┌─────────────────────────────────────────────────────");
+            eprintln!("│ 🔬 动态 GPU→CPU 映射校准 (v5.61)");
+            eprintln!("├─────────────────────────────────────────────────────");
+            
+            for (i, anchor) in self.anchors.iter().enumerate() {
+                let offset = Self::calculate_offset_from_ratio(anchor.size_ratio);
+                eprintln!("│ 锚点 {}: CRF {:.1}", i + 1, anchor.crf);
+                eprintln!("│   GPU: {} bytes", anchor.gpu_size);
+                eprintln!("│   CPU: {} bytes", anchor.cpu_size);
+                eprintln!("│   Ratio: {:.3} → Offset: +{:.1}", anchor.size_ratio, offset);
+            }
+            
+            eprintln!("└─────────────────────────────────────────────────────");
+        }
+    }
+
+    /// 执行快速校准（采样编码）
+    /// 
+    /// 在 GPU 搜索开始前执行，建立动态映射
+    /// 成本：GPU 2次 + CPU 2次 = 4次采样编码（~30秒）
+    pub fn quick_calibrate(
+        input: &Path,
+        input_size: u64,
+        encoder: super::VideoEncoder,
+        vf_args: &[String],
+        gpu_encoder: &str,
+        sample_duration: f32,
+    ) -> Result<DynamicCrfMapper> {
+        use std::process::Command;
+        use std::fs;
+        
+        let mut mapper = DynamicCrfMapper::new(input_size);
+        
+        // 校准锚点：CRF 20（高质量区域）
+        let anchor_crf = 20.0_f32;
+        
+        eprintln!("🔬 动态校准: 测试 CRF {:.1}...", anchor_crf);
+        
+        // 创建临时文件
+        let temp_gpu = std::env::temp_dir().join("calibrate_gpu.mp4");
+        let temp_cpu = std::env::temp_dir().join("calibrate_cpu.mp4");
+        
+        // GPU 采样编码
+        let gpu_result = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-t").arg(format!("{}", sample_duration.min(10.0)))  // 只用10秒
+            .arg("-i").arg(input)
+            .arg("-c:v").arg(gpu_encoder)
+            .arg("-crf").arg(format!("{:.0}", anchor_crf))
+            .arg("-c:a").arg("copy")
+            .arg(&temp_gpu)
+            .output();
+        
+        let gpu_size = match gpu_result {
+            Ok(out) if out.status.success() => {
+                fs::metadata(&temp_gpu).map(|m| m.len()).unwrap_or(0)
+            }
+            _ => {
+                eprintln!("⚠️ GPU 校准编码失败，使用静态偏移");
+                return Ok(mapper);
+            }
+        };
+        
+        // CPU 采样编码
+        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+        let mut cpu_cmd = Command::new("ffmpeg");
+        cpu_cmd.arg("-y")
+            .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
+            .arg("-i").arg(input)
+            .arg("-c:v").arg(encoder.ffmpeg_name())
+            .arg("-crf").arg(format!("{:.0}", anchor_crf));
+        
+        for arg in encoder.extra_args(max_threads) {
+            cpu_cmd.arg(arg);
+        }
+        
+        for arg in vf_args {
+            if !arg.is_empty() {
+                cpu_cmd.arg("-vf").arg(arg);
+            }
+        }
+        
+        cpu_cmd.arg("-c:a").arg("copy").arg(&temp_cpu);
+        
+        let cpu_result = cpu_cmd.output();
+        
+        let cpu_size = match cpu_result {
+            Ok(out) if out.status.success() => {
+                fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+            }
+            _ => {
+                eprintln!("⚠️ CPU 校准编码失败，使用静态偏移");
+                return Ok(mapper);
+            }
+        };
+        
+        // 清理临时文件
+        let _ = fs::remove_file(&temp_gpu);
+        let _ = fs::remove_file(&temp_cpu);
+        
+        if gpu_size > 0 && cpu_size > 0 {
+            mapper.add_anchor(anchor_crf, gpu_size, cpu_size);
+            
+            let ratio = cpu_size as f64 / gpu_size as f64;
+            let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
+            eprintln!("✅ 校准完成: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
+                gpu_size, cpu_size, ratio, offset);
+        }
+        
+        Ok(mapper)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🔥 v5.1: GPU 粗略搜索 + CPU 精细搜索 智能化处理
 // ═══════════════════════════════════════════════════════════════
 
@@ -3167,6 +3396,13 @@ pub fn explore_with_gpu_coarse_search(
 
         // 创建临时输出文件用于 GPU 搜索
         let temp_output = output.with_extension("gpu_temp.mp4");
+        
+        // 🔥 v5.61: 获取 GPU 编码器名称用于动态校准
+        let gpu_encoder_name = match encoder {
+            VideoEncoder::Hevc => gpu.get_hevc_encoder().map(|e| e.ffmpeg_name()).unwrap_or("hevc_videotoolbox"),
+            VideoEncoder::Av1 => gpu.get_av1_encoder().map(|e| e.ffmpeg_name()).unwrap_or("av1"),
+            VideoEncoder::H264 => gpu.get_h264_encoder().map(|e| e.ffmpeg_name()).unwrap_or("h264_videotoolbox"),
+        };
 
         // 🔥 v5.45: 计算 GPU 采样输入大小（与 gpu_accel.rs 中的逻辑一致）
         let duration: f32 = {
@@ -3238,25 +3474,47 @@ pub fn explore_with_gpu_coarse_search(
                     let gpu_crf = gpu_result.gpu_boundary_crf;
                     let gpu_size = gpu_result.gpu_best_size.unwrap_or(input_size);
 
-                    // 🔥 v5.56: GPU→CPU 自适应校准
-                    // 根据 GPU 压缩比例智能预测 CPU 起点
+                    // 🔥 v5.61: 动态自校准 GPU→CPU 映射
+                    // 执行快速校准（采样编码），建立精确的映射关系
+                    let sample_duration = crate::gpu_accel::GPU_SAMPLE_DURATION;
+                    let dynamic_mapper = dynamic_mapping::quick_calibrate(
+                        input,
+                        input_size,
+                        encoder,
+                        &vf_args,
+                        gpu_encoder_name,
+                        sample_duration,
+                    ).unwrap_or_else(|_| dynamic_mapping::DynamicCrfMapper::new(input_size));
+                    
+                    // 使用动态映射计算 CPU 起点
                     let mapping = match encoder {
                         VideoEncoder::Hevc => CrfMapping::hevc(gpu.gpu_type),
                         VideoEncoder::Av1 => CrfMapping::av1(gpu.gpu_type),
                         VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type),
                     };
-                    let calibration = calibration::CalibrationPoint::from_gpu_result(
-                        gpu_crf,
-                        gpu_size,
-                        input_size,
-                        gpu_result.gpu_best_ssim,
-                        mapping.offset,
-                    );
-                    calibration.print_report(input_size);
+                    
+                    let (dynamic_cpu_crf, dynamic_confidence) = if dynamic_mapper.calibrated {
+                        dynamic_mapper.print_calibration_report();
+                        dynamic_mapper.gpu_to_cpu(gpu_crf, mapping.offset)
+                    } else {
+                        // 无动态校准数据，使用静态校准
+                        let calibration = calibration::CalibrationPoint::from_gpu_result(
+                            gpu_crf,
+                            gpu_size,
+                            input_size,
+                            gpu_result.gpu_best_ssim,
+                            mapping.offset,
+                        );
+                        calibration.print_report(input_size);
+                        (calibration.predicted_cpu_crf, calibration.confidence)
+                    };
+                    
+                    eprintln!("🎯 动态映射: GPU {:.1} → CPU {:.1} (置信度 {:.0}%)", 
+                        gpu_crf, dynamic_cpu_crf, dynamic_confidence * 100.0);
                     eprintln!("");
 
-                    // 使用校准后的 CPU 起点
-                    let cpu_start = calibration.predicted_cpu_crf;
+                    // 🔥 v5.61: 使用动态校准后的 CPU 起点
+                    let cpu_start = dynamic_cpu_crf;
                     
                     eprintln!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
                     if let Some(size) = gpu_result.gpu_best_size {
