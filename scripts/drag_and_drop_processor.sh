@@ -279,19 +279,20 @@ merge_xmp_files() {
 # ═══════════════════════════════════════════════════════════════
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
-    
+
     echo ""
     echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "${CYAN}│${NC} ${BOLD}🖼️  处理图像${NC} │ $IMG_COUNT 个文件 │ --explore --match-quality --compress │"
     echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────╯${NC}"
     echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
     echo ""
-    
-    # 🔥 v5.5: 使用 --explore --match-quality --compress 组合
+
+    # 🔥 v5.35: 使用 --explore --match-quality --compress 组合
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
-    
-    "$IMGQUALITY_HEVC" "${args[@]}" || true
+
+    # 🔥 v5.35: 重定向stdin禁止键盘输入（避免ANSI escape codes污染）
+    "$IMGQUALITY_HEVC" "${args[@]}" < /dev/null || true
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -299,19 +300,20 @@ process_images() {
 # ═══════════════════════════════════════════════════════════════
 process_videos() {
     [[ $VID_COUNT -eq 0 ]] && return 0
-    
+
     echo ""
     echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "${CYAN}│${NC} ${BOLD}🎬 处理视频${NC} │ $VID_COUNT 个文件 │ --explore --match-quality --compress │"
     echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────╯${NC}"
     echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
     echo ""
-    
+
     # 🔥 v5.5: 使用 --explore --match-quality --compress 组合
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
-    
-    "$VIDQUALITY_HEVC" "${args[@]}" || true
+
+    # 🔥 v5.35: 重定向stdin禁止键盘输入（避免ANSI escape codes污染和终端崩溃）
+    "$VIDQUALITY_HEVC" "${args[@]}" < /dev/null || true
 }
 
 # ═══════════════════════════════════════════════════════════════

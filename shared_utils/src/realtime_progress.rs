@@ -15,21 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// 🔥 v5.35: 终端控制已移除（导致崩溃）
-/// indicatif库已经正确处理了所有终端兼容性问题
-/// 不应该尝试自己调用stty或termios，这会干扰进度条显示并导致崩溃
-#[allow(dead_code)]
-fn disable_terminal_echo() {
-    // 🔥 v5.35: 禁用echo的尝试导致了终端崩溃
-    // 移除所有手动终端控制，改为依赖indicatif库
-    // indicatif已经在内部处理了所有终端兼容性问题
-}
-
-#[allow(dead_code)]
-fn restore_terminal_echo() {
-    // 无需恢复，因为我们没有修改终端状态
-}
-
 /// 🔥 v5.34: 简单迭代进度条 - 基于真实迭代次数
 ///
 /// 这是新的核心进度显示机制，解决原有的CRF范围映射问题
@@ -49,9 +34,6 @@ pub struct SimpleIterationProgress {
     #[allow(dead_code)]
     last_update: std::sync::Mutex<Instant>,
     is_finished: AtomicBool,
-    /// 🔥 v5.35: 记录是否禁用了echo，便于恢复
-    #[allow(dead_code)]
-    echo_disabled: AtomicBool,
 }
 
 impl SimpleIterationProgress {
@@ -62,9 +44,6 @@ impl SimpleIterationProgress {
     /// - input_size: 输入文件大小（字节）
     /// - total_iterations: 预期总迭代次数（用于计算进度）
     pub fn new(stage: &str, input_size: u64, total_iterations: u64) -> Arc<Self> {
-        // 🔥 v5.35: 禁用终端echo防止键盘干扰
-        disable_terminal_echo();
-
         let bar = ProgressBar::new(total_iterations);
 
         // 统一进度条样式
@@ -93,7 +72,6 @@ impl SimpleIterationProgress {
             start_time: Instant::now(),
             last_update: std::sync::Mutex::new(Instant::now()),
             is_finished: AtomicBool::new(false),
-            echo_disabled: AtomicBool::new(true),  // 🔥 v5.35: 记录echo已禁用
         })
     }
 
@@ -186,22 +164,12 @@ impl SimpleIterationProgress {
 
         self.bar.set_position(self.total_iterations);
         self.bar.finish_with_message(msg);
-
-        // 🔥 v5.35: 恢复终端echo
-        if self.echo_disabled.load(Ordering::Relaxed) {
-            restore_terminal_echo();
-        }
     }
 
     /// 失败结束
     pub fn fail(&self, error: &str) {
         self.is_finished.store(true, Ordering::Relaxed);
         self.bar.abandon_with_message(format!("❌ {}", error));
-
-        // 🔥 v5.35: 恢复终端echo
-        if self.echo_disabled.load(Ordering::Relaxed) {
-            restore_terminal_echo();
-        }
     }
 }
 
