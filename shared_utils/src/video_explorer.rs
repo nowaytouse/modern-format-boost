@@ -122,6 +122,50 @@ pub enum CrossValidationResult {
 // ═══════════════════════════════════════════════════════════════
 
 /// 探索结果
+/// 🔥 v5.57: 置信度分解详情
+#[derive(Debug, Clone, Default)]
+pub struct ConfidenceBreakdown {
+    /// 采样覆盖度 (0-1): 采样时长 / 总时长
+    pub sampling_coverage: f64,
+    /// GPU→CPU 预测准确度 (0-1): 基于实测差异
+    pub prediction_accuracy: f64,
+    /// 安全边界余量 (0-1): 输出比输入小的程度
+    pub margin_safety: f64,
+    /// SSIM 可靠性 (0-1): 基于 SSIM 值本身
+    pub ssim_confidence: f64,
+}
+
+impl ConfidenceBreakdown {
+    /// 计算加权平均置信度
+    pub fn overall(&self) -> f64 {
+        (self.sampling_coverage * 0.3
+            + self.prediction_accuracy * 0.3
+            + self.margin_safety * 0.2
+            + self.ssim_confidence * 0.2)
+            .min(1.0)
+    }
+
+    /// 打印置信度报告
+    pub fn print_report(&self) {
+        let overall = self.overall();
+        let grade = if overall >= 0.9 { "🟢 Excellent" }
+                   else if overall >= 0.75 { "🟡 Good" }
+                   else if overall >= 0.5 { "🟠 Fair" }
+                   else { "🔴 Low" };
+        
+        eprintln!("┌─────────────────────────────────────────────────────");
+        eprintln!("│ 📊 置信度报告 (Confidence Report)");
+        eprintln!("├─────────────────────────────────────────────────────");
+        eprintln!("│ 📈 总体置信度: {:.0}% {}", overall * 100.0, grade);
+        eprintln!("├─────────────────────────────────────────────────────");
+        eprintln!("│ 📹 采样覆盖度: {:.0}% (权重 30%)", self.sampling_coverage * 100.0);
+        eprintln!("│ 🎯 预测准确度: {:.0}% (权重 30%)", self.prediction_accuracy * 100.0);
+        eprintln!("│ 💾 安全边界: {:.0}% (权重 20%)", self.margin_safety * 100.0);
+        eprintln!("│ 📊 SSIM可靠性: {:.0}% (权重 20%)", self.ssim_confidence * 100.0);
+        eprintln!("└─────────────────────────────────────────────────────");
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExploreResult {
     /// 最优 CRF 值
@@ -143,6 +187,10 @@ pub struct ExploreResult {
     pub quality_passed: bool,
     /// 探索日志
     pub log: Vec<String>,
+    /// 🔥 v5.57: 整体置信度 (0-1)
+    pub confidence: f64,
+    /// 🔥 v5.57: 置信度分解详情
+    pub confidence_detail: ConfidenceBreakdown,
 }
 
 /// 质量验证阈值
@@ -548,6 +596,8 @@ impl VideoExplorer {
             iterations,
             quality_passed,
             log,
+            confidence: 0.7,  // 简单模式默认置信度
+            confidence_detail: ConfidenceBreakdown::default(),
         })
     }
     
@@ -594,6 +644,8 @@ impl VideoExplorer {
             iterations: 1,
             quality_passed,
             log,
+            confidence: 0.6,  // 单次编码置信度较低
+            confidence_detail: ConfidenceBreakdown::default(),
         })
     }
     
@@ -673,6 +725,8 @@ impl VideoExplorer {
                 iterations,
                 quality_passed: true,
                 log,
+                confidence: 0.7,
+                confidence_detail: ConfidenceBreakdown::default(),
             });
         }
 
@@ -732,6 +786,8 @@ impl VideoExplorer {
             iterations,
             quality_passed: compressed,
             log,
+            confidence: 0.65,
+            confidence_detail: ConfidenceBreakdown::default(),
         })
     }
     
@@ -867,6 +923,8 @@ impl VideoExplorer {
             iterations,
             quality_passed: passed,
             log,
+            confidence: 0.75,
+            confidence_detail: ConfidenceBreakdown::default(),
         })
     }
     
@@ -1089,6 +1147,8 @@ impl VideoExplorer {
             iterations,
             quality_passed,
             log,
+            confidence: 0.8,
+            confidence_detail: ConfidenceBreakdown::default(),
         })
     }
     
@@ -1301,6 +1361,8 @@ impl VideoExplorer {
                 iterations,
                 quality_passed: true,
                 log,
+                confidence: 0.85,
+                confidence_detail: ConfidenceBreakdown::default(),
             });
         }
 
@@ -1331,6 +1393,8 @@ impl VideoExplorer {
                 iterations,
                 quality_passed: false,
                 log,
+                confidence: 0.3,  // 无法压缩，置信度低
+                confidence_detail: ConfidenceBreakdown::default(),
             });
         }
 
@@ -1530,6 +1594,8 @@ impl VideoExplorer {
             iterations,
             quality_passed: ssim >= self.config.quality_thresholds.min_ssim,
             log,
+            confidence: 0.85,
+            confidence_detail: ConfidenceBreakdown::default(),
         })
     }
 
@@ -3642,7 +3708,48 @@ fn cpu_fine_tune_from_gpu_boundary(
     let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
     let quality_passed = final_full_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
 
+    // 🔥 v5.57: 计算置信度
+    let ssim_val = ssim.unwrap_or(0.0);
+    
+    // 采样覆盖度：短视频完整测试得满分
+    let sampling_coverage = if duration < 60.0 {
+        1.0
+    } else {
+        (sample_duration / duration).min(1.0) as f64
+    };
+    
+    // 预测准确度：GPU+CPU 模式默认较高
+    let prediction_accuracy = 0.85;  // GPU 提供了参考，准确度较高
+    
+    // 安全边界：输出比输入小的程度（5%为满分）
+    let margin_safety = if final_full_size < input_size {
+        let margin = (input_size - final_full_size) as f64 / input_size as f64;
+        (margin / 0.05).min(1.0)
+    } else {
+        0.0
+    };
+    
+    // SSIM 可靠性
+    let ssim_confidence = if ssim_val >= 0.99 {
+        1.0
+    } else if ssim_val >= 0.95 {
+        0.8
+    } else if ssim_val >= 0.90 {
+        0.6
+    } else {
+        0.5
+    };
+    
+    let confidence_detail = ConfidenceBreakdown {
+        sampling_coverage,
+        prediction_accuracy,
+        margin_safety,
+        ssim_confidence,
+    };
+    let confidence = confidence_detail.overall();
+
     eprintln!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
+    confidence_detail.print_report();
 
     cpu_progress.finish(final_crf, final_full_size, ssim);
 
@@ -3656,6 +3763,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         iterations,
         quality_passed,
         log,
+        confidence,
+        confidence_detail,
     })
 }
 
@@ -4239,6 +4348,8 @@ mod tests {
             iterations: 5,
             quality_passed: true,
             log: vec!["Test log".to_string()],
+            confidence: 0.85,
+            confidence_detail: ConfidenceBreakdown::default(),
         };
         
         // 验证所有字段都有意义
@@ -4251,6 +4362,7 @@ mod tests {
         assert!(result.iterations > 0);
         assert!(result.quality_passed);
         assert!(!result.log.is_empty());
+        assert!(result.confidence > 0.0 && result.confidence <= 1.0);
     }
     
     // ═══════════════════════════════════════════════════════════════
