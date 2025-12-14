@@ -32,10 +32,10 @@ use std::io::Read;
 // ═══════════════════════════════════════════════════════════════
 
 /// GPU 采样时长（秒）- 用于长视频的快速边界估算
-/// 🔥 v5.50: 从 120 秒增加到 600 秒（10分钟），大幅提高映射精度
-/// 更长的采样 → 更准确的 SSIM 估算 → GPU 能找到接近上限的质量点
-/// 用户要求："GPU采样改为10分钟 确保时间花在值得的地方！在这个过程中精确的CRF映射极其重要"
-pub const GPU_SAMPLE_DURATION: f32 = 600.0;
+/// 🔥 v5.51: 从 600 秒调整到 120 秒（2分钟）- 平衡精度和速度
+/// 用户反馈：10分钟太慢且效果不好（SSIM 0.85）
+/// 策略：用更短的采样 + 更智能的搜索逻辑
+pub const GPU_SAMPLE_DURATION: f32 = 120.0;
 
 /// GPU 粗略搜索步长
 pub const GPU_COARSE_STEP: f32 = 2.0;
@@ -1468,14 +1468,14 @@ pub fn gpu_coarse_search_with_log(
     
     // 智能终止常量
     const WINDOW_SIZE: usize = 3;
-    const VARIANCE_THRESHOLD: f64 = 0.0001;    // 0.01% 方差阈值
+    const _VARIANCE_THRESHOLD: f64 = 0.0001;    // 0.01% 方差阈值（保留备用）
     const CHANGE_RATE_THRESHOLD: f64 = 0.02;   // 🔥 v5.21: 放宽到 2%（避免过早终止导致低 SSIM）
-    
+
     // 滑动窗口历史记录 (crf, size)
     let mut size_history: Vec<(f32, u64)> = Vec::new();
-    
-    // 计算滑动窗口方差
-    let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
+
+    // 计算滑动窗口方差（保留备用）
+    let _calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
         if history.len() < WINDOW_SIZE { return f64::MAX; }
         let recent: Vec<f64> = history.iter()
             .rev()
@@ -1796,101 +1796,69 @@ pub fn gpu_coarse_search_with_log(
     }
     
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.50: Stage 3 重写 - 基于 SSIM 目标搜索
-    // 目标：找到 SSIM 接近 GPU 上限（0.95-0.97）的点
-    // 用户要求："GPU 能达到的目标是 SSIM 的 GPU 能达到的最大值"
+    // 🔥 v5.51: Stage 3 简化 - 基于步长 0.5 的质量提升
+    // 从"SSIM 目标"改回"收益递减"+ 0.5 步进
+    // 问题：SSIM 计算太慢，步长 1.0 导致 66 次迭代
+    // 解决：步长 0.5，最多 3 次尝试，有全局限制
     // ═══════════════════════════════════════════════════════════
-    if let Some(boundary) = best_crf {
-        log_msg!("   📍 Stage 3: Search for GPU SSIM ceiling (~0.95-0.97)");
-
-        // GPU SSIM 目标范围
-        const TARGET_SSIM_MIN: f64 = 0.95;  // 最低目标
-        const TARGET_SSIM_MAX: f64 = 0.97;  // 理想目标（VideoToolbox 上限）
-        const MAX_STAGE3_ITER: u32 = 10;     // 最多 10 次迭代
-
-        // SSIM 计算辅助函数
-        let calc_ssim_from_output = || -> Option<f64> {
-            let ssim_output = Command::new("ffmpeg")
-                .arg("-i").arg(input)
-                .arg("-i").arg(output)
-                .arg("-lavfi").arg("ssim")
-                .arg("-f").arg("null")
-                .arg("-")
-                .output();
-
-            if let Ok(out) = ssim_output {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if let Some(line) = stderr.lines().find(|l| l.contains("SSIM") && l.contains("All:")) {
-                    if let Some(all_pos) = line.find("All:") {
-                        let after_all = &line[all_pos + 4..];
-                        if let Some(space_pos) = after_all.find(' ') {
-                            return after_all[..space_pos].parse::<f64>().ok();
-                        } else {
-                            return after_all.trim().parse::<f64>().ok();
-                        }
-                    }
-                }
-            }
-            None
-        };
-
-        // 先编码当前边界点并计算 SSIM
-        let current_ssim = if let Ok(_) = encode_cached(boundary, &mut size_cache) {
-            calc_ssim_from_output()
+    if let Some(fine) = best_crf {
+        if iterations >= max_iterations_limit {
+            log_msg!("   ⚡ Skip Stage3: reached iteration limit");
         } else {
-            None
-        };
+            log_msg!("   📍 Stage 3: Fine-tune with 0.5 step");
 
-        if let Some(ssim) = current_ssim {
-            log_msg!("   📊 Current CRF {:.1}: SSIM {:.6}", boundary, ssim);
+            // 最多尝试 3 个点：-0.5, -1.0, -1.5
+            for &offset in &[0.5_f32, 1.0, 1.5] {
+                if iterations >= max_iterations_limit {
+                    log_msg!("   ⚡ Stop: reached global iteration limit");
+                    break;
+                }
 
-            if ssim >= TARGET_SSIM_MIN {
-                // 已经达到目标！
-                log_msg!("   ✅ Already at target SSIM range [{:.2}, {:.2}]", TARGET_SSIM_MIN, TARGET_SSIM_MAX);
-            } else {
-                // SSIM 太低，向下搜索（降低 CRF，提高质量）
-                log_msg!("   📉 SSIM {:.6} < target {:.2}, searching downward...", ssim, TARGET_SSIM_MIN);
+                let test_crf = fine - offset;
+                if test_crf < config.min_crf {
+                    log_msg!("   ⚡ Stop: reached min_crf");
+                    break;
+                }
 
-                let mut test_crf = boundary - 1.0;
-                let mut stage3_iter = 0;
-
-                while test_crf >= config.min_crf && stage3_iter < MAX_STAGE3_ITER {
-                    stage3_iter += 1;
-                    iterations += 1;
-
-                    let size = encode_cached(test_crf, &mut size_cache)?;
-                    if let Some(cb) = progress_cb { cb(test_crf, size); }
-
-                    if size >= sample_input_size {
-                        // 不能压缩了，停止
-                        log_msg!("   ✗ CRF {:.1} cannot compress → boundary", test_crf);
+                let key = (test_crf * 10.0).round() as i32;
+                if size_cache.contains_key(&key) {
+                    let cached_size = *size_cache.get(&key).unwrap();
+                    if cached_size < sample_input_size {
+                        let improvement = best_size.map(|b| (b as f64 - cached_size as f64) / b as f64 * 100.0).unwrap_or(0.0);
+                        log_msg!("   ✓ CRF {:.1}: {:.1}% improvement (cached)", test_crf, improvement);
+                        best_crf = Some(test_crf);
+                        best_size = Some(cached_size);
+                    } else {
+                        log_msg!("   ✗ CRF {:.1} cannot compress", test_crf);
                         break;
                     }
+                    continue;
+                }
 
-                    // 计算 SSIM
-                    if let Some(test_ssim) = calc_ssim_from_output() {
-                        log_msg!("   ✓ CRF {:.1}: SSIM {:.6}, size {:.1}%",
-                            test_crf, test_ssim, size as f64 / sample_input_size as f64 * 100.0);
+                match encode_cached(test_crf, &mut size_cache) {
+                    Ok(size) => {
+                        iterations += 1;
+                        if let Some(cb) = progress_cb { cb(test_crf, size); }
 
-                        best_crf = Some(test_crf);
-                        best_size = Some(size);
+                        if size < sample_input_size {
+                            let improvement = best_size.map(|b| (b as f64 - size as f64) / b as f64 * 100.0).unwrap_or(0.0);
+                            log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement);
+                            best_crf = Some(test_crf);
+                            best_size = Some(size);
 
-                        if test_ssim >= TARGET_SSIM_MIN {
-                            log_msg!("   ✅ Reached target SSIM {:.6} >= {:.2}", test_ssim, TARGET_SSIM_MIN);
-                            break;
-                        }
-
-                        if test_ssim >= TARGET_SSIM_MAX {
-                            log_msg!("   🌟 Exceeded ideal SSIM {:.6} >= {:.2}!", test_ssim, TARGET_SSIM_MAX);
+                            // 如果改进小于 1%，停止
+                            if improvement < 1.0 && best_size.is_some() {
+                                log_msg!("   ⚡ Stop: improvement < 1%");
+                                break;
+                            }
+                        } else {
+                            log_msg!("   ✗ CRF {:.1} cannot compress", test_crf);
                             break;
                         }
                     }
-
-                    test_crf -= 1.0;
+                    Err(_) => break,
                 }
             }
-        } else {
-            log_msg!("   ⚠️ Cannot calculate SSIM, skipping Stage 3");
         }
     }
     
