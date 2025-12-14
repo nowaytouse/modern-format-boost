@@ -437,7 +437,7 @@ fn print_analysis_human(analysis: &imgquality_av1::ImageAnalysis) {
     
     // JPEG specific analysis with enhanced details
     if let Some(ref jpeg) = analysis.jpeg_analysis {
-        println!("\n🎯 JPEGQuality Analysis (精度: ±1)");
+        println!("\n🎯 JPEGQuality Analysis (accuracy: ±1)");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         println!("📊 Estimated quality: Q={} ({})", jpeg.estimated_quality, jpeg.quality_description);
         println!("🎯 Confidence:   {:.1}%", jpeg.confidence * 100.0);
@@ -482,13 +482,13 @@ fn print_recommendation_human(rec: &imgquality_av1::UpgradeRecommendation) {
         println!("ℹ️  {}", rec.reason);
     } else {
         println!("✅ {} → {}", rec.current_format, rec.recommended_format);
-        println!("📝 原因: {}", rec.reason);
-        println!("🎯 质量: {}", rec.quality_preservation);
+        println!("📝 Reason: {}", rec.reason);
+        println!("🎯 Quality: {}", rec.quality_preservation);
         if rec.expected_size_reduction > 0.0 {
-            println!("💾 预期减少: {:.1}%", rec.expected_size_reduction);
+            println!("💾 Expected reduction: {:.1}%", rec.expected_size_reduction);
         }
         if !rec.command.is_empty() {
-            println!("⚙️  命令: {}", rec.command);
+            println!("⚙️  Command: {}", rec.command);
         }
     }
 }
@@ -559,8 +559,8 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
-                    eprintln!("⚠️  无法获取动画时长，跳过转换: {}", input.display());
-                    eprintln!("   💡 可能原因: ffprobe 未安装或文件格式不支持时长检测");
+                    eprintln!("⚠️  Cannot get animation duration, skipping conversion: {}", input.display());
+                    eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
                     return Ok(());
                 }
             };
@@ -587,8 +587,8 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
-                    eprintln!("⚠️  无法获取动画时长，跳过转换: {}", input.display());
-                    eprintln!("   💡 可能原因: ffprobe 未安装或文件格式不支持时长检测");
+                    eprintln!("⚠️  Cannot get animation duration, skipping conversion: {}", input.display());
+                    eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
                     return Ok(());
                 }
             };

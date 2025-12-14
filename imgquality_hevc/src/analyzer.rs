@@ -618,8 +618,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             (probe.width, probe.height, false, 8)
         } else {
             // 🔥 响亮警告：无法获取 JXL 尺寸
-            eprintln!("⚠️  无法获取 JXL 文件尺寸: jxlinfo 和 ffprobe 都不可用");
-            eprintln!("   💡 建议安装 jxlinfo: brew install jpeg-xl");
+            eprintln!("⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable");
+            eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
             (0, 0, false, 8)
         }
     };

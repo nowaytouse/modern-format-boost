@@ -154,14 +154,14 @@ impl ConfidenceBreakdown {
                    else { "🔴 Low" };
         
         eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 📊 置信度报告 (Confidence Report)");
+        eprintln!("│ 📊 Confidence Report");
         eprintln!("├─────────────────────────────────────────────────────");
-        eprintln!("│ 📈 总体置信度: {:.0}% {}", overall * 100.0, grade);
+        eprintln!("│ 📈 Overall Confidence: {:.0}% {}", overall * 100.0, grade);
         eprintln!("├─────────────────────────────────────────────────────");
-        eprintln!("│ 📹 采样覆盖度: {:.0}% (权重 30%)", self.sampling_coverage * 100.0);
-        eprintln!("│ 🎯 预测准确度: {:.0}% (权重 30%)", self.prediction_accuracy * 100.0);
-        eprintln!("│ 💾 安全边界: {:.0}% (权重 20%)", self.margin_safety * 100.0);
-        eprintln!("│ 📊 SSIM可靠性: {:.0}% (权重 20%)", self.ssim_confidence * 100.0);
+        eprintln!("│ 📹 Sampling Coverage: {:.0}% (weight 30%)", self.sampling_coverage * 100.0);
+        eprintln!("│ 🎯 Prediction Accuracy: {:.0}% (weight 30%)", self.prediction_accuracy * 100.0);
+        eprintln!("│ 💾 Safety Margin: {:.0}% (weight 20%)", self.margin_safety * 100.0);
+        eprintln!("│ 📊 SSIM Reliability: {:.0}% (weight 20%)", self.ssim_confidence * 100.0);
         eprintln!("└─────────────────────────────────────────────────────");
     }
 }
@@ -2936,26 +2936,26 @@ pub mod precheck {
     /// 在探索开始前输出压缩可行性评估
     pub fn print_precheck_report(info: &VideoInfo) {
         eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 📊 预检查报告 (Precheck Report)");
+        eprintln!("│ 📊 Precheck Report");
         eprintln!("├─────────────────────────────────────────────────────");
-        eprintln!("│ 📐 分辨率: {}x{}", info.width, info.height);
-        eprintln!("│ 🎞️  帧数: {} ({:.1}s)", info.frame_count, info.duration);
-        eprintln!("│ 📁 文件大小: {:.2} MB", info.file_size as f64 / 1024.0 / 1024.0);
+        eprintln!("│ 📐 Resolution: {}x{}", info.width, info.height);
+        eprintln!("│ 🎞️  Frames: {} ({:.1}s)", info.frame_count, info.duration);
+        eprintln!("│ 📁 File Size: {:.2} MB", info.file_size as f64 / 1024.0 / 1024.0);
         eprintln!("│ 📈 BPP: {:.3} bits/pixel", info.bpp);
         
         match info.compressibility {
             Compressibility::High => {
-                eprintln!("│ ✅ 压缩潜力: 高 (High)");
-                eprintln!("│    → 有较大压缩空间，预期效果良好");
+                eprintln!("│ ✅ Compression Potential: High");
+                eprintln!("│    → Large compression space, good results expected");
             }
             Compressibility::Medium => {
-                eprintln!("│ 🔵 压缩潜力: 中等 (Medium)");
-                eprintln!("│    → 适度压缩潜力，预期效果正常");
+                eprintln!("│ 🔵 Compression Potential: Medium");
+                eprintln!("│    → Moderate compression potential, normal results expected");
             }
             Compressibility::Low => {
-                eprintln!("│ ⚠️  压缩潜力: 低 (Low)");
-                eprintln!("│    → 文件已高度优化，压缩空间有限");
-                eprintln!("│    → 建议：可能需要降低质量预期");
+                eprintln!("│ ⚠️  Compression Potential: Low");
+                eprintln!("│    → File already highly optimized, limited compression space");
+                eprintln!("│    → Suggestion: May need to lower quality expectations");
             }
         }
         eprintln!("└─────────────────────────────────────────────────────");
@@ -3056,15 +3056,15 @@ pub mod calibration {
             let size_pct = (size_ratio - 1.0) * 100.0;
             
             eprintln!("┌─────────────────────────────────────────────────────");
-            eprintln!("│ 🎯 GPU→CPU 校准报告 (Calibration Report)");
+            eprintln!("│ 🎯 GPU→CPU Calibration Report");
             eprintln!("├─────────────────────────────────────────────────────");
-            eprintln!("│ 📍 GPU 边界: CRF {:.1} → {:.1}% 大小", self.gpu_crf, size_pct);
+            eprintln!("│ 📍 GPU Boundary: CRF {:.1} → {:.1}% size", self.gpu_crf, size_pct);
             if let Some(ssim) = self.gpu_ssim {
                 eprintln!("│ 📊 GPU SSIM: {:.4}", ssim);
             }
-            eprintln!("│ 🎯 预测 CPU 起点: CRF {:.1}", self.predicted_cpu_crf);
-            eprintln!("│ 📈 置信度: {:.0}%", self.confidence * 100.0);
-            eprintln!("│ 💡 原因: {}", self.reason);
+            eprintln!("│ 🎯 Predicted CPU Start: CRF {:.1}", self.predicted_cpu_crf);
+            eprintln!("│ 📈 Confidence: {:.0}%", self.confidence * 100.0);
+            eprintln!("│ 💡 Reason: {}", self.reason);
             eprintln!("└─────────────────────────────────────────────────────");
         }
     }
@@ -3182,17 +3182,17 @@ pub mod dynamic_mapping {
         /// 打印校准报告
         pub fn print_calibration_report(&self) {
             if self.anchors.is_empty() {
-                eprintln!("⚠️ 动态映射: 无校准数据，使用静态偏移");
+                eprintln!("⚠️ Dynamic mapping: No calibration data, using static offset");
                 return;
             }
 
             eprintln!("┌─────────────────────────────────────────────────────");
-            eprintln!("│ 🔬 动态 GPU→CPU 映射校准 (v5.61)");
+            eprintln!("│ 🔬 Dynamic GPU→CPU Mapping Calibration (v5.61)");
             eprintln!("├─────────────────────────────────────────────────────");
             
             for (i, anchor) in self.anchors.iter().enumerate() {
                 let offset = Self::calculate_offset_from_ratio(anchor.size_ratio);
-                eprintln!("│ 锚点 {}: CRF {:.1}", i + 1, anchor.crf);
+                eprintln!("│ Anchor {}: CRF {:.1}", i + 1, anchor.crf);
                 eprintln!("│   GPU: {} bytes", anchor.gpu_size);
                 eprintln!("│   CPU: {} bytes", anchor.cpu_size);
                 eprintln!("│   Ratio: {:.3} → Offset: +{:.1}", anchor.size_ratio, offset);
@@ -3222,7 +3222,7 @@ pub mod dynamic_mapping {
         // 校准锚点：CRF 20（高质量区域）
         let anchor_crf = 20.0_f32;
         
-        eprintln!("🔬 动态校准: 测试 CRF {:.1}...", anchor_crf);
+        eprintln!("🔬 Dynamic calibration: Testing CRF {:.1}...", anchor_crf);
         
         // 创建临时文件
         let temp_gpu = std::env::temp_dir().join("calibrate_gpu.mp4");
@@ -3244,7 +3244,7 @@ pub mod dynamic_mapping {
                 fs::metadata(&temp_gpu).map(|m| m.len()).unwrap_or(0)
             }
             _ => {
-                eprintln!("⚠️ GPU 校准编码失败，使用静态偏移");
+                eprintln!("⚠️ GPU calibration encoding failed, using static offset");
                 return Ok(mapper);
             }
         };
@@ -3277,7 +3277,7 @@ pub mod dynamic_mapping {
                 fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
             }
             _ => {
-                eprintln!("⚠️ CPU 校准编码失败，使用静态偏移");
+                eprintln!("⚠️ CPU calibration encoding failed, using static offset");
                 return Ok(mapper);
             }
         };
@@ -3291,7 +3291,7 @@ pub mod dynamic_mapping {
             
             let ratio = cpu_size as f64 / gpu_size as f64;
             let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
-            eprintln!("✅ 校准完成: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
+            eprintln!("✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
                 gpu_size, cpu_size, ratio, offset);
         }
         
@@ -3509,7 +3509,7 @@ pub fn explore_with_gpu_coarse_search(
                         (calibration.predicted_cpu_crf, calibration.confidence)
                     };
                     
-                    eprintln!("🎯 动态映射: GPU {:.1} → CPU {:.1} (置信度 {:.0}%)", 
+                    eprintln!("🎯 Dynamic mapping: GPU {:.1} → CPU {:.1} (confidence {:.0}%)", 
                         gpu_crf, dynamic_cpu_crf, dynamic_confidence * 100.0);
                     eprintln!("");
 
@@ -3524,7 +3524,7 @@ pub fn explore_with_gpu_coarse_search(
                     // 🔥 v5.66: 显示 GPU 质量天花板信息
                     if let (Some(ceiling_crf), Some(ceiling_ssim)) = (gpu_result.quality_ceiling_crf, gpu_result.quality_ceiling_ssim) {
                         eprintln!("   🎯 GPU Quality Ceiling: CRF {:.1}, SSIM {:.4}", ceiling_crf, ceiling_ssim);
-                        eprintln!("      (GPU 的 SSIM 天花板，CPU 可以突破到 0.99+)");
+                        eprintln!("      (GPU SSIM ceiling, CPU can break through to 0.99+)");
                     }
                     
                     // 🔥 v5.26: 根据 GPU SSIM 动态调整 CPU 搜索范围
@@ -3771,25 +3771,25 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.67: 使用颜色输出
     use crate::modern_ui::colors::*;
     
-    eprintln!("{}🔬 CPU Fine-Tune v5.67{} ({:?}) - {}边际效益递减 + 压缩保证{}", 
+    eprintln!("{}🔬 CPU Fine-Tune v5.67{} ({:?}) - {}Marginal Benefit + Compression Guarantee{}", 
         BRIGHT_CYAN, RESET, encoder, BRIGHT_GREEN, RESET);
     eprintln!("{}📁{} Input: {} ({}) | Duration: {}", 
         CYAN, RESET,
         crate::modern_ui::format_size(input_size),
         format!("{} bytes", input_size),
         crate::modern_ui::format_duration(duration as f64));
-    eprintln!("{}🎯{} Goal: {}min(CRF){} where {}output < input{} (最高SSIM + 必须压缩)", 
+    eprintln!("{}🎯{} Goal: {}min(CRF){} where {}output < input{} (Highest SSIM + Must Compress)", 
         YELLOW, RESET, BOLD, RESET, BRIGHT_GREEN, RESET);
     
     // 🔥 v5.59: 可压缩空间检测 - 根据压缩潜力选择精度
     let precheck_info = precheck::get_video_info(input).ok();
     let (step_size, cache_multiplier) = match precheck_info.as_ref().map(|i| i.compressibility) {
         Some(precheck::Compressibility::High) => {
-            eprintln!("📊 高压缩潜力 → 使用 0.25 步进（快速模式）");
+            eprintln!("{}📊{} High compression potential → Using 0.25 step (fast mode)", CYAN, RESET);
             (0.25_f32, 4.0_f32)
         }
         Some(precheck::Compressibility::Medium) | Some(precheck::Compressibility::Low) | None => {
-            eprintln!("📊 中/低压缩潜力 → 使用 0.1 步进（精细模式）");
+            eprintln!("{}📊{} Medium/Low compression potential → Using 0.1 step (precise mode)", CYAN, RESET);
             (0.1_f32, 10.0_f32)
         }
     };
@@ -3799,8 +3799,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 当边际效益 < 阈值时，继续搜索的价值不大
     #[allow(dead_code)]
     const MARGINAL_BENEFIT_THRESHOLD: f64 = 0.001;  // SSIM 提升 0.001 / 文件增大 1%（预留）
-    const MAX_CONSECUTIVE_FAILURES: u32 = 3;  // 连续3次不能压缩才放弃
-    const MAX_SIZE_OVERSHOOT_PCT: f64 = 5.0;  // 允许文件最多超出 5% 继续探索
+    const MAX_CONSECUTIVE_FAILURES: u32 = 3;  // Give up after 3 consecutive compression failures
+    const MAX_SIZE_OVERSHOOT_PCT: f64 = 5.0;  // Allow up to 5% size overshoot to continue exploring
     
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
@@ -3920,7 +3920,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
                     DIM, ssim_gain, RESET, BRIGHT_GREEN, RESET);
                 
-                // 🔥 v5.67: SSIM 平台检测（收益递减）
+                // 🔥 v5.67: SSIM plateau detection (diminishing returns)
                 if ssim_gain < 0.0001 && current_ssim >= 0.99 {
                     eprintln!("   {}📊{} {}SSIM plateau{} (>= 0.99, gain < 0.0001) → {}STOP{}", 
                         YELLOW, RESET, BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET);
@@ -3940,14 +3940,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                     BRIGHT_RED, size_pct, RESET, RED, RESET,
                     YELLOW, consecutive_failures, MAX_CONSECUTIVE_FAILURES, RESET);
                 
-                // 🔥 v5.67: 不是立即停止，检查是否值得继续
+                // 🔥 v5.67: Not immediate stop, check if worth continuing
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                     eprintln!("   {}📊{} {} consecutive failures → {}STOP{}", 
                         YELLOW, RESET, MAX_CONSECUTIVE_FAILURES, BRIGHT_GREEN, RESET);
                     break;
                 }
                 
-                // 🔥 v5.67: 如果超出太多，也停止
+                // 🔥 v5.67: Stop if overshoot is too much
                 if overshoot_pct > MAX_SIZE_OVERSHOOT_PCT {
                     eprintln!("   {}📊{} Size overshoot > {:.0}% → {}STOP{}", 
                         YELLOW, RESET, MAX_SIZE_OVERSHOOT_PCT, BRIGHT_GREEN, RESET);
