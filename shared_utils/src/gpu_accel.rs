@@ -684,53 +684,50 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
 // 🔥 v5.0: GPU → CPU 压缩边界估算
 // ═══════════════════════════════════════════════════════════════
 
-/// GPU 压缩边界到 CPU 压缩边界的估算
+/// GPU 压缩边界到 CPU 压缩边界的估算（v5.9 修正方向）
 /// 
 /// ## 背景
-/// GPU 硬件编码器（NVENC, VideoToolbox, QSV 等）压缩效率低于 CPU 软件编码器：
+/// GPU 硬件编码器（NVENC, VideoToolbox, QSV 等）压缩效率**低于** CPU 软件编码器：
 /// - 相同 CRF 下，GPU 输出文件更大（压缩效率低）
 /// - 质量排序：x264/x265 > QSV > NVENC > VCE (AMD)
-/// - 差异程度取决于内容复杂度、preset 等因素
 /// 
-/// ## 映射目的
+/// ## 映射目的（v5.9 修正）
 /// GPU 粗略搜索找到的"压缩边界"（刚好能压缩的 CRF）需要转换为 CPU 的等效边界：
-/// - GPU 在 CRF=20 刚好能压缩 → CPU 在更低 CRF（如 16-18）就能达到相同大小
-/// - 因为 CPU 效率更高，相同 CRF 下文件更小
+/// - GPU 在 CRF=11 刚好能压缩 → CPU 需要**更高** CRF（如 13-14）才能压缩
+/// - 因为 CPU 效率更高，相同 CRF 下文件更小，所以需要更高 CRF 才能达到相同大小
 /// 
 /// ## 策略
-/// 返回一个**估算的 CPU 搜索中心点**，实际边界由 CPU 精细搜索确定。
-/// 这只是缩小搜索范围的提示，不是精确映射。
+/// 返回一个**估算的 CPU 搜索起点**，CPU 从这里开始向上搜索。
 /// 
 /// ## 注意
 /// - 这不是精确的 CRF 转换，只是搜索范围的估算
 /// - 实际差异取决于内容、preset、编码器版本等
 /// - CPU 精细搜索会找到真正的边界
 pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, _codec: &str) -> f32 {
+    // 🔥 v5.9: 基于实测数据更新 offset
     // GPU 效率低 → 相同文件大小需要更高 CRF
-    // 反过来：GPU 边界 CRF → CPU 可以用更低 CRF 达到相同大小
-    // 
-    // 估算：CPU 边界 ≈ GPU 边界 - offset
-    // offset 取决于 GPU 类型（效率差异）
+    // 实测：VideoToolbox GPU q:v 75 (170%) ≈ CPU CRF 14 (124%)
+    // 差距约 4-6 CRF
     let offset = match gpu_type {
         GpuType::Apple => {
-            // VideoToolbox 效率相对较好（Apple 优化）
-            2.0
+            // 🔥 v5.9: 实测 offset=5
+            5.0
         }
         GpuType::Nvidia => {
             // NVENC 效率中等
-            3.0
+            4.0
         }
         GpuType::IntelQsv => {
             // QSV 效率较好
-            2.5
+            3.5
         }
         GpuType::AmdAmf => {
             // AMF 效率较低
-            3.5
+            5.0
         }
         GpuType::Vaapi => {
             // VAAPI 效率中等
-            3.0
+            4.0
         }
         GpuType::None => {
             // 无 GPU，不需要偏移
@@ -738,19 +735,18 @@ pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, _codec: 
         }
     };
     
-    // CPU 边界估算 = GPU 边界 - offset（更低 CRF = 更高质量）
-    // 但不能低于合理范围
-    (gpu_boundary - offset).max(1.0)
+    // CPU 起点估算 = GPU 边界 + offset（更高 CRF = 更小文件）
+    gpu_boundary + offset
 }
 
-/// 计算 CPU 搜索范围
+/// 计算 CPU 搜索范围（v5.9 修正方向）
 /// 
 /// 基于 GPU 粗略边界，返回 CPU 精细搜索的范围 (low, high)
 /// 
-/// ## 策略
-/// - 以估算的 CPU 边界为中心
-/// - 扩展 ±4 CRF 作为安全边界（覆盖不确定性）
-/// - 确保不超出 min_crf/max_crf 限制
+/// ## 策略（v5.9 修正）
+/// - CPU 从 GPU 边界开始向上搜索
+/// - low = GPU 边界（最高质量点）
+/// - high = 估算的 CPU 压缩点 + margin
 pub fn gpu_boundary_to_cpu_range(
     gpu_boundary: f32, 
     gpu_type: GpuType, 
@@ -760,11 +756,10 @@ pub fn gpu_boundary_to_cpu_range(
 ) -> (f32, f32) {
     let cpu_center = estimate_cpu_search_center(gpu_boundary, gpu_type, codec);
     
-    // 扩展范围：±4 CRF 作为安全边界
-    // 因为 GPU/CPU 差异不确定，需要足够的搜索空间
-    let margin = 4.0;
-    let cpu_low = (cpu_center - margin).max(min_crf);
-    let cpu_high = (cpu_center + margin).min(max_crf);
+    // 🔥 v5.9: 修正方向
+    // CPU 从 GPU 边界开始，向上搜索
+    let cpu_low = gpu_boundary.max(min_crf);  // 从 GPU 边界开始
+    let cpu_high = (cpu_center + 3.0).min(max_crf);  // 向上扩展
     
     (cpu_low, cpu_high)
 }
@@ -805,13 +800,13 @@ pub struct GpuCoarseResult {
 /// GPU/CPU CRF 映射表
 /// 
 /// ## 背景
-/// GPU 和 CPU 编码器对 CRF 的解释不同：
-/// - GPU CRF 10 可能产生的文件大小 ≈ CPU CRF 15 的文件大小
-/// - 这是因为 GPU 编码器压缩效率较低
+/// GPU 和 CPU 编码器压缩效率不同：
+/// - GPU 效率**低于** CPU（相同 CRF 下 GPU 输出更大）
+/// - GPU CRF 11 能压缩 → CPU 需要**更高** CRF（如 12-14）才能压缩
 /// 
-/// ## 映射方向
-/// - `gpu_to_cpu`: GPU CRF → 等效 CPU CRF（用于搜索范围估算）
-/// - `cpu_to_gpu`: CPU CRF → 等效 GPU CRF（用于预览）
+/// ## 映射方向（v5.9 修正）
+/// - GPU 边界 CRF 11 → CPU 需要从 CRF 11 向上搜索（+offset）
+/// - offset 表示 CPU 需要增加的 CRF 值
 /// 
 /// ## 注意
 /// 这些映射是**近似值**，实际差异取决于：
@@ -824,8 +819,8 @@ pub struct CrfMapping {
     pub gpu_type: GpuType,
     /// 编解码器 (hevc, av1, h264)
     pub codec: &'static str,
-    /// GPU CRF → CPU CRF 偏移量（CPU = GPU - offset）
-    /// 正值表示 CPU 效率更高（相同质量需要更低 CRF）
+    /// GPU → CPU 偏移量（CPU 需要更高 CRF = GPU + offset）
+    /// 正值表示 CPU 效率更高（相同压缩效果需要更高 CRF）
     pub offset: f32,
     /// 映射的不确定性范围（±）
     pub uncertainty: f32,
@@ -833,13 +828,17 @@ pub struct CrfMapping {
 
 impl CrfMapping {
     /// 获取 HEVC 编码器的 CRF 映射
+    /// 
+    /// 🔥 v5.9: 基于实测数据更新 offset
+    /// VideoToolbox 实测：GPU q:v 75 (170%) ≈ CPU CRF 14 (124%)
+    /// 差距约 4-6 CRF，取 5.0 作为 offset
     pub fn hevc(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
-            GpuType::Apple => (2.0, 1.5),      // VideoToolbox 效率较好
-            GpuType::Nvidia => (3.0, 2.0),     // NVENC 效率中等
-            GpuType::IntelQsv => (2.5, 1.5),   // QSV 效率较好
-            GpuType::AmdAmf => (3.5, 2.5),     // AMF 效率较低
-            GpuType::Vaapi => (3.0, 2.0),      // VAAPI 效率中等
+            GpuType::Apple => (5.0, 2.0),      // 🔥 v5.9: 实测 offset=5, uncertainty=2
+            GpuType::Nvidia => (4.0, 2.0),     // NVENC 效率中等
+            GpuType::IntelQsv => (3.5, 1.5),   // QSV 效率较好
+            GpuType::AmdAmf => (5.0, 2.5),     // AMF 效率较低
+            GpuType::Vaapi => (4.0, 2.0),      // VAAPI 效率中等
             GpuType::None => (0.0, 0.0),       // 无 GPU
         };
         Self { gpu_type, codec: "hevc", offset, uncertainty }
@@ -858,37 +857,45 @@ impl CrfMapping {
         Self { gpu_type, codec: "av1", offset, uncertainty }
     }
     
-    /// GPU CRF → 等效 CPU CRF
+    /// GPU CRF → CPU 搜索范围（v5.9 修正方向）
+    /// 
+    /// GPU 效率低，CPU 效率高，所以：
+    /// - GPU CRF 11 能压缩 → CPU 需要更高 CRF（如 13）才能压缩
     /// 
     /// 返回 (center, low, high) 三元组：
-    /// - center: 估算的 CPU CRF 中心点
-    /// - low: 搜索范围下限（更高质量）
-    /// - high: 搜索范围上限（更低质量）
+    /// - center: 估算的 CPU 压缩点（GPU + offset）
+    /// - low: 搜索范围下限（从 GPU 边界开始）
+    /// - high: 搜索范围上限（center + uncertainty）
     pub fn gpu_to_cpu_range(&self, gpu_crf: f32, min_crf: f32, max_crf: f32) -> (f32, f32, f32) {
-        let center = (gpu_crf - self.offset).max(min_crf);
-        let low = (center - self.uncertainty).max(min_crf);
+        // 🔥 v5.9: 修正方向！CPU 需要更高 CRF
+        let center = (gpu_crf + self.offset).min(max_crf);
+        let low = gpu_crf.max(min_crf);  // 从 GPU 边界开始
         let high = (center + self.uncertainty).min(max_crf);
         (center, low, high)
     }
     
     /// CPU CRF → 等效 GPU CRF（用于预览）
+    /// GPU 效率低，所以 GPU 需要更低 CRF 才能达到相同效果
     pub fn cpu_to_gpu(&self, cpu_crf: f32) -> f32 {
-        cpu_crf + self.offset
+        cpu_crf - self.offset
     }
     
     /// 打印映射信息
     pub fn print_mapping_info(&self) {
         eprintln!("   📊 GPU/CPU CRF Mapping ({} - {}):", self.gpu_type, self.codec.to_uppercase());
         if self.gpu_type == GpuType::Apple {
-            // 🔥 v5.5: VideoToolbox 特殊说明
+            // 🔥 v5.9: VideoToolbox 实测数据
+            // q:v 100: SSIM 0.91-0.97 (内容相关)
+            // q:v 75-80: SSIM 0.90-0.97, 最佳性价比
+            // q:v 1: SSIM 0.73-0.90 (最低)
             eprintln!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
-            eprintln!("      • SSIM ceiling: ~0.97 (cannot reach 0.98+)");
-            eprintln!("      • CRF 10 → q:v 80, CRF 20 → q:v 60, CRF 30 → q:v 40");
+            eprintln!("      • SSIM ceiling: 0.91~0.97 (content-dependent, cannot reach 0.98+)");
+            eprintln!("      • Best value: q:v 75-80 (SSIM ~0.97, good compression)");
         } else {
             eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
         }
-        eprintln!("      • CPU offset: {:.1} (GPU CRF - {:.1} = CPU CRF)", self.offset, self.offset);
-        eprintln!("      • Uncertainty: ±{:.1} CRF", self.uncertainty);
+        // 🔥 v5.9: 修正说明 - CPU 需要更高 CRF
+        eprintln!("      • CPU offset: +{:.1} (CPU needs higher CRF for same compression)", self.offset);
         eprintln!("      • 💡 CPU fine-tunes for SSIM 0.98+ (GPU max ~0.97)");
     }
 }
@@ -940,6 +947,7 @@ pub fn gpu_coarse_search(
     encoder: &str,  // "hevc" or "av1"
     input_size: u64,
     config: &GpuCoarseConfig,
+    progress_cb: Option<&dyn Fn(f32, u64)>,
 ) -> anyhow::Result<GpuCoarseResult> {
     use std::process::Command;
     use anyhow::{Context, bail};
@@ -1006,28 +1014,23 @@ pub fn gpu_coarse_search(
         }
     };
     
-    log_msg!("🚀 GPU Fine Search v5.4 ({} - {})", gpu.gpu_type, encoder.to_uppercase());
-    log_msg!("   📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
-    log_msg!("   🎯 Goal: Find compression boundary (step={:.0})", config.step);
-    log_msg!("   ═══════════════════════════════════════════════════");
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v5.15: 智能跳过 GPU（极短视频/小文件场景）
+    // 🔥 v5.17: 性能保护（极大视频/边缘案例）
+    // ═══════════════════════════════════════════════════════════
     
-    // 打印 CRF 映射信息
-    let mapping = match encoder {
-        "hevc" => CrfMapping::hevc(gpu.gpu_type),
-        "av1" => CrfMapping::av1(gpu.gpu_type),
-        _ => CrfMapping::hevc(gpu.gpu_type),
-    };
-    mapping.print_mapping_info();
-    log_msg!("   ═══════════════════════════════════════════════════");
+    // 跳过阈值
+    const SKIP_GPU_SIZE_THRESHOLD: u64 = 500 * 1024;  // 500KB - 太小跳过
+    const SKIP_GPU_DURATION_THRESHOLD: f32 = 3.0;     // 3秒 - 太短跳过
     
-    let mut iterations = 0u32;
+    // 🔥 v5.17: 性能保护阈值
+    const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;  // 500MB - 大文件
+    const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;  // 2GB - 超大文件
+    const LONG_DURATION_THRESHOLD: f32 = 600.0;  // 10分钟 - 长视频
+    const VERY_LONG_DURATION_THRESHOLD: f32 = 3600.0;  // 1小时 - 超长视频
     
-    // 🔥 v5.3: GPU 采样使用全局常量，更精确的边界估算
-    // 对于短视频（<60秒），编码整个视频
-    // 对于长视频（>60秒），只编码前 60 秒来估算压缩边界
-    
-    // 🔥 v5.3: 获取视频时长，智能处理短视频
-    let duration: f32 = {
+    // 快速获取时长
+    let quick_duration: f32 = {
         let duration_output = Command::new("ffprobe")
             .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
             .arg(input)
@@ -1039,14 +1042,130 @@ pub fn gpu_coarse_search(
             .unwrap_or(GPU_SAMPLE_DURATION)
     };
     
-    // 实际采样时长（短视频使用完整时长）
-    let actual_sample_duration = duration.min(GPU_SAMPLE_DURATION);
+    // 判断是否跳过 GPU（太小/太短）
+    let skip_gpu = input_size < SKIP_GPU_SIZE_THRESHOLD || quick_duration < SKIP_GPU_DURATION_THRESHOLD;
     
-    if duration < GPU_SAMPLE_DURATION {
-        log_msg!("   ⚠️ Short video ({:.1}s < {:.0}s), using full duration for GPU sampling", duration, GPU_SAMPLE_DURATION);
-    } else {
-        log_msg!("   💡 GPU samples first {:.0}s of {:.1}s (accurate estimation)", actual_sample_duration, duration);
+    if skip_gpu {
+        let reason = if input_size < SKIP_GPU_SIZE_THRESHOLD {
+            format!("file too small ({:.1}KB < 500KB)", input_size as f64 / 1024.0)
+        } else {
+            format!("duration too short ({:.1}s < 3s)", quick_duration)
+        };
+        log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
+        return Ok(GpuCoarseResult {
+            gpu_boundary_crf: config.initial_crf,
+            gpu_best_size: None,
+            gpu_best_ssim: None,
+            gpu_type: gpu.gpu_type,
+            codec: encoder.to_string(),
+            iterations: 0,
+            found_boundary: false,
+            fine_tuned: false,
+            log,
+        });
     }
+    
+    // 🔥 v5.17: 性能模式判断
+    let is_large_file = input_size >= LARGE_FILE_THRESHOLD;
+    let is_very_large_file = input_size >= VERY_LARGE_FILE_THRESHOLD;
+    let is_long_video = quick_duration >= LONG_DURATION_THRESHOLD;
+    let is_very_long_video = quick_duration >= VERY_LONG_DURATION_THRESHOLD;
+    
+    // 动态调整采样时长和迭代限制
+    let (sample_duration_limit, max_iterations_limit, skip_parallel) = if is_very_large_file || is_very_long_video {
+        // 超大文件/超长视频：最保守策略
+        log_msg!("   ⚠️ Very large file detected → Conservative mode");
+        (30.0_f32, 6_u32, true)  // 只采样 30 秒，最多 6 次迭代，跳过并行
+    } else if is_large_file || is_long_video {
+        // 大文件/长视频：适度保守
+        log_msg!("   📊 Large file detected → Optimized mode");
+        (45.0_f32, 8_u32, false)  // 采样 45 秒，最多 8 次迭代
+    } else {
+        // 正常文件
+        (GPU_SAMPLE_DURATION, GPU_STAGE1_MAX_ITERATIONS, false)
+    };
+    
+    // 🔥 v5.5: 简洁日志
+    log_msg!("GPU搜索 ({}, {:.2}MB, {:.1}s)", gpu.gpu_type, input_size as f64 / 1024.0 / 1024.0, quick_duration);
+    log.push(format!("GPU: {} | Input: {:.2}MB | Duration: {:.1}s", gpu.gpu_type, input_size as f64 / 1024.0 / 1024.0, quick_duration));
+    
+    let mut iterations = 0u32;
+    
+    // 🔥 v5.17: 使用动态采样时长
+    let duration = quick_duration;
+    let actual_sample_duration = duration.min(sample_duration_limit);
+    
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v5.18: 缓存预热（Cache Warmup）
+    // 用极短采样（5秒）快速测试 max_crf，获取压缩趋势
+    // 如果 max_crf 都无法压缩，提前退出节省时间
+    // ═══════════════════════════════════════════════════════════
+    const WARMUP_DURATION: f32 = 5.0;  // 预热只用 5 秒
+    let warmup_duration = duration.min(WARMUP_DURATION);
+    
+    // 预热编码函数（极短采样）
+    let encode_warmup = |crf: f32| -> anyhow::Result<u64> {
+        let crf_args = gpu_encoder.get_crf_args(crf);
+        let extra_args = gpu_encoder.get_extra_args();
+        let warmup_output = output.with_extension("warmup.mp4");
+        
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-y")
+            .arg("-t").arg(format!("{}", warmup_duration))
+            .arg("-i").arg(input)
+            .arg("-c:v").arg(gpu_encoder.name);
+        
+        for arg in &crf_args {
+            cmd.arg(arg);
+        }
+        for arg in &extra_args {
+            cmd.arg(*arg);
+        }
+        
+        cmd.arg("-an")
+            .arg(&warmup_output);
+        
+        let result = cmd.output().context("Failed to run warmup encode")?;
+        let size = if result.status.success() {
+            std::fs::metadata(&warmup_output).map(|m| m.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        let _ = std::fs::remove_file(&warmup_output);
+        Ok(size)
+    };
+    
+    // 执行预热：测试 max_crf
+    let warmup_input_size = if duration <= WARMUP_DURATION {
+        input_size
+    } else {
+        (input_size as f64 * warmup_duration as f64 / duration as f64) as u64
+    };
+    
+    let warmup_result = encode_warmup(config.max_crf);
+    let can_compress_at_max = match &warmup_result {
+        Ok(size) => *size < warmup_input_size,
+        Err(_) => true,  // 编码失败时继续正常流程
+    };
+    
+    if !can_compress_at_max {
+        // max_crf 都无法压缩，提前退出
+        log_msg!("   ⚡ Warmup: max_crf={:.0} cannot compress → skip GPU search", config.max_crf);
+        return Ok(GpuCoarseResult {
+            gpu_boundary_crf: config.max_crf,
+            gpu_best_size: warmup_result.ok(),
+            gpu_best_ssim: None,
+            gpu_type: gpu.gpu_type,
+            codec: encoder.to_string(),
+            iterations: 1,
+            found_boundary: false,
+            fine_tuned: false,
+            log,
+        });
+    }
+    log_msg!("   🔥 Warmup: max_crf={:.0} can compress → continue search", config.max_crf);
+    
+    // 🔥 v5.5: 简洁 - 不打印采样信息，直接开始搜索
     
     // 快速编码函数（GPU）- 只编码前 N 秒
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
@@ -1079,6 +1198,61 @@ pub fn gpu_coarse_search(
         Ok(std::fs::metadata(output)?.len())
     };
     
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v5.16: 并行编码函数（2-3 路）
+    // 用于 Stage 1 初始探测，同时测试多个 CRF 点
+    // ═══════════════════════════════════════════════════════════
+    let encode_parallel = |crfs: &[f32]| -> Vec<(f32, anyhow::Result<u64>)> {
+        use std::thread;
+        
+        let handles: Vec<_> = crfs.iter().enumerate().map(|(i, &crf)| {
+            let crf_args = gpu_encoder.get_crf_args(crf);
+            let extra_args: Vec<String> = gpu_encoder.get_extra_args().iter().map(|s| s.to_string()).collect();
+            let input_path = input.to_path_buf();
+            let output_path = output.with_extension(format!("tmp{}.mp4", i));
+            let encoder_name = gpu_encoder.name.to_string();
+            let sample_dur = actual_sample_duration;
+            
+            thread::spawn(move || {
+                let mut cmd = Command::new("ffmpeg");
+                cmd.arg("-y")
+                    .arg("-t").arg(format!("{}", sample_dur))
+                    .arg("-i").arg(&input_path)
+                    .arg("-c:v").arg(&encoder_name);
+                
+                for arg in &crf_args {
+                    cmd.arg(arg);
+                }
+                for arg in &extra_args {
+                    cmd.arg(arg);
+                }
+                
+                cmd.arg("-an")
+                    .arg(&output_path);
+                
+                let result = cmd.output();
+                
+                let size = match result {
+                    Ok(out) if out.status.success() => {
+                        std::fs::metadata(&output_path).map(|m| m.len()).map_err(|e| anyhow::anyhow!("{}", e))
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        Err(anyhow::anyhow!("GPU encoding failed: {}", stderr.lines().last().unwrap_or("unknown")))
+                    }
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                };
+                
+                // 清理临时文件
+                let _ = std::fs::remove_file(&output_path);
+                
+                (crf, size)
+            })
+        }).collect();
+        
+        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (0.0, Err(anyhow::anyhow!("thread panic"))))).collect()
+    };
+    
     // 🔥 v5.3: 计算采样部分的输入大小（按比例估算）
     let sample_input_size = if duration <= GPU_SAMPLE_DURATION {
         // 短视频，使用完整大小
@@ -1089,7 +1263,7 @@ pub fn gpu_coarse_search(
         (input_size as f64 * ratio as f64) as u64
     };
     
-    log_msg!("   📊 Sample input size: {} bytes (for comparison)", sample_input_size);
+    // 🔥 v5.5: 不打印采样大小
     
     // 缓存已测试的 CRF 结果
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
@@ -1108,92 +1282,314 @@ pub fn gpu_coarse_search(
     };
     
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.4: GPU 三阶段精细化搜索
+    // 🔥 v5.14: 优化三阶段搜索
+    // 
+    // 改进：
+    // 1. Stage 1: 标准指数搜索（从 min_crf 向上倍增）
+    // 2. Stage 2: 智能跳过（如果已经是 0.5 精度）
+    // 3. 提前终止阈值放宽到 0.1%（更稳健）
     // ═══════════════════════════════════════════════════════════
     
-    // Stage 1: 粗略搜索 (step=4) 找大致边界
-    log_msg!("   📍 GPU Stage 1: Coarse search (step=4)");
-    let mut coarse_boundary: Option<f32> = None;
-    let mut test_crf = config.max_crf;
+    // 智能终止常量
+    const WINDOW_SIZE: usize = 3;
+    const VARIANCE_THRESHOLD: f64 = 0.0001;    // 0.01% 方差阈值
+    const CHANGE_RATE_THRESHOLD: f64 = 0.001;  // 🔥 v5.14: 放宽到 0.1%（更稳健）
     
-    while test_crf >= config.min_crf && iterations < GPU_STAGE1_MAX_ITERATIONS {
-        log_msg!("   🔄 GPU CRF {:.0}...", test_crf);
-        match encode_cached(test_crf, &mut size_cache) {
-            Ok(size) => {
+    // 滑动窗口历史记录 (crf, size)
+    let mut size_history: Vec<(f32, u64)> = Vec::new();
+    
+    // 计算滑动窗口方差
+    let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
+        if history.len() < WINDOW_SIZE { return f64::MAX; }
+        let recent: Vec<f64> = history.iter()
+            .rev()
+            .take(WINDOW_SIZE)
+            .map(|(_, s)| *s as f64 / input_size as f64)
+            .collect();
+        let mean = recent.iter().sum::<f64>() / recent.len() as f64;
+        recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
+    };
+    
+    // 计算相对变化率
+    let calc_change_rate = |prev: u64, curr: u64| -> f64 {
+        if prev == 0 { return f64::MAX; }
+        ((curr as f64 - prev as f64) / prev as f64).abs()
+    };
+    
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v5.16: 并行初始探测（可选）
+    // 同时测试 3 个关键点：min_crf, mid_crf, max_crf
+    // 快速确定搜索区间，减少后续迭代
+    // ═══════════════════════════════════════════════════════════
+    let mut boundary_low: f32 = config.min_crf;
+    let mut boundary_high: f32 = config.max_crf;
+    let mut prev_size: Option<u64> = None;
+    let mut found_compress_point = false;
+    
+    // 🔥 v5.17: 并行探测 3 个关键点（大文件时跳过）
+    let mid_crf = (config.min_crf + config.max_crf) / 2.0;
+    let probe_crfs = [config.min_crf, mid_crf, config.max_crf];
+    
+    // 🔥 v5.17: 检查是否跳过并行探测
+    let probe_results = if skip_parallel {
+        log_msg!("   ⚡ Skip parallel probe (large file mode)");
+        // 大文件模式：只测试 max_crf 一个点
+        let single_result = encode_gpu(config.max_crf);
+        if let Ok(size) = &single_result {
+            let key = (config.max_crf * 10.0).round() as i32;
+            size_cache.insert(key, *size);
+            iterations += 1;
+            size_history.push((config.max_crf, *size));
+            if let Some(cb) = progress_cb { cb(config.max_crf, *size); }
+        }
+        vec![(config.max_crf, single_result)]
+    } else {
+        log_msg!("   🚀 Parallel probe: CRF {:.0}, {:.0}, {:.0}", probe_crfs[0], probe_crfs[1], probe_crfs[2]);
+        encode_parallel(&probe_crfs)
+    };
+    
+    // 处理并行结果（非跳过模式时）
+    if !skip_parallel {
+        for (crf, result) in &probe_results {
+            if let Ok(size) = result {
+                let key = (*crf * 10.0).round() as i32;
+                size_cache.insert(key, *size);
                 iterations += 1;
-                let ratio = size as f64 / sample_input_size as f64 * 100.0;
-                if size < sample_input_size {
-                    coarse_boundary = Some(test_crf);
-                    best_crf = Some(test_crf);
-                    best_size = Some(size);
-                    log_msg!("      ✅ {:.1}% - Compresses", ratio);
-                    test_crf -= 4.0;
-                } else {
-                    log_msg!("      ❌ {:.1}% - Too large", ratio);
-                    break;
-                }
-            }
-            Err(e) => {
-                log_msg!("      ⚠️ Error: {}", e);
-                break;
+                size_history.push((*crf, *size));
+                if let Some(cb) = progress_cb { cb(*crf, *size); }
             }
         }
     }
     
-    // Stage 2: 精细搜索 (step=1) 在边界附近
-    if let Some(coarse) = coarse_boundary {
-        log_msg!("   📍 GPU Stage 2: Fine search around CRF {:.0} (step=1)", coarse);
+    // 分析并行结果，确定搜索区间
+    let min_result = probe_results.iter().find(|(c, _)| (*c - config.min_crf).abs() < 0.1);
+    let mid_result = probe_results.iter().find(|(c, _)| (*c - mid_crf).abs() < 0.1);
+    let max_result = probe_results.iter().find(|(c, _)| (*c - config.max_crf).abs() < 0.1);
+    
+    // 根据并行结果快速定位边界
+    if let Some((_, Ok(min_size))) = min_result {
+        if *min_size < sample_input_size {
+            // min_crf 就能压缩！最佳情况
+            best_crf = Some(config.min_crf);
+            best_size = Some(*min_size);
+            boundary_high = config.min_crf;
+            found_compress_point = true;
+            log_msg!("   ⚡ Parallel: min_crf compresses! Best case.");
+        } else if let Some((_, Ok(mid_size))) = mid_result {
+            if *mid_size < sample_input_size {
+                // mid_crf 能压缩，边界在 [min, mid]
+                boundary_low = config.min_crf;
+                boundary_high = mid_crf;
+                best_crf = Some(mid_crf);
+                best_size = Some(*mid_size);
+                found_compress_point = true;
+                prev_size = Some(*min_size);
+                log_msg!("   ⚡ Parallel: boundary in [{:.0}, {:.0}]", boundary_low, boundary_high);
+            } else if let Some((_, Ok(max_size))) = max_result {
+                if *max_size < sample_input_size {
+                    // max_crf 能压缩，边界在 [mid, max]
+                    boundary_low = mid_crf;
+                    boundary_high = config.max_crf;
+                    best_crf = Some(config.max_crf);
+                    best_size = Some(*max_size);
+                    found_compress_point = true;
+                    prev_size = Some(*mid_size);
+                    log_msg!("   ⚡ Parallel: boundary in [{:.0}, {:.0}]", boundary_low, boundary_high);
+                } else {
+                    // 即使 max_crf 也无法压缩
+                    log_msg!("   ⚠️ Parallel: cannot compress even at max CRF");
+                    prev_size = Some(*max_size);
+                }
+            }
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // Stage 1: 指数搜索（如果并行探测未完全确定边界）
+    // 🔥 v5.17: 使用动态迭代限制
+    // ═══════════════════════════════════════════════════════════
+    if !found_compress_point && (boundary_high - boundary_low) > 4.0 {
+        // 并行探测未找到压缩点，继续指数搜索
+        let mut step: f32 = 1.0;
+        let mut test_crf = boundary_low;
         
-        // 向下探索（更高质量）
-        for offset in [1.0_f32, 2.0, 3.0] {
-            let test = coarse - offset;
-            if test < config.min_crf || iterations >= GPU_STAGE2_MAX_ITERATIONS { break; }
+        while iterations < max_iterations_limit && !found_compress_point {
+            test_crf = (boundary_low + step).min(config.max_crf);
             
-            let key = (test * 10.0).round() as i32;
-            if size_cache.contains_key(&key) { continue; }
+            let key = (test_crf * 10.0).round() as i32;
+            if size_cache.contains_key(&key) {
+                // 已有缓存，检查结果
+                let cached_size = *size_cache.get(&key).unwrap();
+                if cached_size < sample_input_size {
+                    boundary_high = test_crf;
+                    best_crf = Some(test_crf);
+                    best_size = Some(cached_size);
+                    found_compress_point = true;
+                } else {
+                    boundary_low = test_crf;
+                    prev_size = Some(cached_size);
+                }
+                step *= 2.0;
+                if test_crf >= config.max_crf { break; }
+                continue;
+            }
             
-            log_msg!("   🔄 GPU CRF {:.0}...", test);
-            match encode_cached(test, &mut size_cache) {
+            if let Some(cb) = progress_cb { cb(test_crf, 0); }
+            
+            match encode_cached(test_crf, &mut size_cache) {
                 Ok(size) => {
                     iterations += 1;
-                    let ratio = size as f64 / sample_input_size as f64 * 100.0;
+                    size_history.push((test_crf, size));
+                    if let Some(cb) = progress_cb { cb(test_crf, size); }
+                    
+                    // 智能终止检测
+                    let variance = calc_window_variance(&size_history, sample_input_size);
+                    let change_rate = prev_size.map(|p| calc_change_rate(p, size)).unwrap_or(f64::MAX);
+                    
                     if size < sample_input_size {
-                        best_crf = Some(test);
+                        // 找到能压缩的点！
+                        boundary_high = test_crf;
+                        best_crf = Some(test_crf);
                         best_size = Some(size);
-                        log_msg!("      ✅ {:.1}% - New best!", ratio);
+                        found_compress_point = true;
+                        
+                        // 智能终止
+                        if variance < VARIANCE_THRESHOLD && size_history.len() >= WINDOW_SIZE {
+                            log_msg!("   ⚡ Stage1 early stop: variance {:.6}", variance);
+                        }
+                        if change_rate < CHANGE_RATE_THRESHOLD && prev_size.is_some() {
+                            log_msg!("   ⚡ Stage1 early stop: Δ{:.3}%", change_rate * 100.0);
+                        }
+                        break;  // 找到压缩点就停
                     } else {
-                        log_msg!("      ❌ {:.1}% - Too large, stop", ratio);
-                        break;
+                        // 还不能压缩，继续向上
+                        boundary_low = test_crf;
+                        prev_size = Some(size);
+                        step *= 2.0;  // 指数增长
+                    }
+                }
+                Err(_) => break,
+            }
+            
+            if test_crf >= config.max_crf { break; }
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════
+    // Stage 2: 整数二分搜索
+    // 🔥 v5.14: 智能跳过 - 如果边界已经是整数或 0.5 精度，跳过
+    // ═══════════════════════════════════════════════════════════
+    let skip_stage2 = if let Some(b) = best_crf {
+        let fract = (b * 2.0).fract();  // 检查是否是 0.5 的倍数
+        fract.abs() < 0.01 || (fract - 1.0).abs() < 0.01
+    } else {
+        false
+    };
+    
+    if found_compress_point && !skip_stage2 && (boundary_high - boundary_low) > 1.0 {
+        let mut lo = boundary_low.ceil() as i32;
+        let mut hi = boundary_high.floor() as i32;
+        
+        // 最多 log2(range) 次迭代
+        let max_binary_iter = 5;
+        let mut binary_iter = 0;
+        
+        while lo < hi && iterations < GPU_STAGE2_MAX_ITERATIONS && binary_iter < max_binary_iter {
+            binary_iter += 1;
+            let mid = lo + (hi - lo) / 2;
+            let test_crf = mid as f32;
+            
+            let key = (test_crf * 10.0).round() as i32;
+            if size_cache.contains_key(&key) {
+                let cached_size = *size_cache.get(&key).unwrap();
+                if cached_size < sample_input_size {
+                    hi = mid;
+                    best_crf = Some(test_crf);
+                    best_size = Some(cached_size);
+                } else {
+                    lo = mid + 1;
+                }
+                continue;
+            }
+            
+            if let Some(cb) = progress_cb { cb(test_crf, 0); }
+            
+            match encode_cached(test_crf, &mut size_cache) {
+                Ok(size) => {
+                    iterations += 1;
+                    if let Some(cb) = progress_cb { cb(test_crf, size); }
+                    
+                    // 智能终止
+                    if let Some(prev) = prev_size {
+                        let rate = calc_change_rate(prev, size);
+                        if rate < CHANGE_RATE_THRESHOLD {
+                            log_msg!("   ⚡ Stage2 early stop: Δ{:.3}%", rate * 100.0);
+                            break;
+                        }
+                    }
+                    
+                    if size < sample_input_size {
+                        hi = mid;
+                        best_crf = Some(test_crf);
+                        best_size = Some(size);
+                        prev_size = Some(size);
+                    } else {
+                        lo = mid + 1;
                     }
                 }
                 Err(_) => break,
             }
         }
+    } else if skip_stage2 {
+        log_msg!("   ⚡ Skip Stage2: boundary at 0.5 precision");
     }
     
-    // Stage 3: 超精细搜索 (step=0.5) 找 GPU 最优点
+    // ═══════════════════════════════════════════════════════════
+    // Stage 3: 自适应精细化 O(1) - 0.5 精度探测
+    // GPU 只到 0.5 精度，0.1 交给 CPU
+    // ═══════════════════════════════════════════════════════════
     if let Some(fine) = best_crf {
-        log_msg!("   📍 GPU Stage 3: Ultra-fine search around CRF {:.1} (step=0.5)", fine);
-        
-        for offset in [0.5_f32, 1.0, 1.5, 2.0] {
-            let test = fine - offset;
-            if test < config.min_crf || iterations >= GPU_STAGE3_MAX_ITERATIONS { break; }
+        // 只测试 -0.5 和 -1.0 两个点（自适应：如果 -0.5 不行就停）
+        for &offset in &[0.5_f32, 1.0] {
+            let test_crf = fine - offset;
+            if test_crf < config.min_crf || iterations >= GPU_STAGE3_MAX_ITERATIONS {
+                break;
+            }
             
-            let key = (test * 10.0).round() as i32;
-            if size_cache.contains_key(&key) { continue; }
+            let key = (test_crf * 10.0).round() as i32;
+            if size_cache.contains_key(&key) {
+                let cached_size = *size_cache.get(&key).unwrap();
+                if cached_size < sample_input_size {
+                    best_crf = Some(test_crf);
+                    best_size = Some(cached_size);
+                } else {
+                    break;  // 自适应：不能压缩就停
+                }
+                continue;
+            }
             
-            log_msg!("   🔄 GPU CRF {:.1}...", test);
-            match encode_cached(test, &mut size_cache) {
+            if let Some(cb) = progress_cb { cb(test_crf, 0); }
+            
+            match encode_cached(test_crf, &mut size_cache) {
                 Ok(size) => {
                     iterations += 1;
-                    let ratio = size as f64 / sample_input_size as f64 * 100.0;
+                    if let Some(cb) = progress_cb { cb(test_crf, size); }
+                    
                     if size < sample_input_size {
-                        best_crf = Some(test);
+                        best_crf = Some(test_crf);
                         best_size = Some(size);
-                        log_msg!("      ✅ {:.1}% - New best!", ratio);
+                        
+                        // 智能终止
+                        if let Some(prev) = prev_size {
+                            let rate = calc_change_rate(prev, size);
+                            if rate < CHANGE_RATE_THRESHOLD {
+                                log_msg!("   ⚡ Stage3 early stop: Δ{:.3}%", rate * 100.0);
+                                break;
+                            }
+                        }
+                        prev_size = Some(size);
                     } else {
-                        log_msg!("      ❌ {:.1}% - Too large, stop", ratio);
-                        break;
+                        break;  // 自适应：不能压缩就停
                     }
                 }
                 Err(_) => break,
@@ -1264,6 +1660,11 @@ pub fn gpu_coarse_search(
                               else { "🟠 Below expected" };
             log_msg!("   📊 GPU Best SSIM: {:.6} {}", ssim, quality_hint);
         }
+        let mapping = match encoder {
+            "hevc" => CrfMapping::hevc(gpu.gpu_type),
+            "av1" => CrfMapping::av1(gpu.gpu_type),
+            _ => CrfMapping::hevc(gpu.gpu_type),
+        };
         let (cpu_center, cpu_low, cpu_high) = mapping.gpu_to_cpu_range(final_boundary, config.min_crf, config.max_crf);
         log_msg!("   📊 CPU Search Range: [{:.1}, {:.1}] (center: {:.1})", cpu_low, cpu_high, cpu_center);
     } else {
@@ -1350,32 +1751,30 @@ mod tests {
     
     #[test]
     fn test_estimate_cpu_search_center() {
-        // VideoToolbox: offset = 2.0
-        let cpu_center = estimate_cpu_search_center(20.0, GpuType::Apple, "hevc");
-        assert!((cpu_center - 18.0).abs() < 0.1, "Expected ~18.0, got {}", cpu_center);
+        // 🔥 v5.9: 基于实测数据更新
+        // VideoToolbox: offset = 5.0, GPU 10 → CPU 15
+        let cpu_center = estimate_cpu_search_center(10.0, GpuType::Apple, "hevc");
+        assert!((cpu_center - 15.0).abs() < 0.1, "Expected ~15.0, got {}", cpu_center);
         
-        // NVENC: offset = 3.0
-        let cpu_center = estimate_cpu_search_center(20.0, GpuType::Nvidia, "hevc");
-        assert!((cpu_center - 17.0).abs() < 0.1, "Expected ~17.0, got {}", cpu_center);
+        // NVENC: offset = 4.0, GPU 10 → CPU 14
+        let cpu_center = estimate_cpu_search_center(10.0, GpuType::Nvidia, "hevc");
+        assert!((cpu_center - 14.0).abs() < 0.1, "Expected ~14.0, got {}", cpu_center);
         
-        // None: offset = 0
-        let cpu_center = estimate_cpu_search_center(20.0, GpuType::None, "hevc");
-        assert!((cpu_center - 20.0).abs() < 0.1, "Expected ~20.0, got {}", cpu_center);
-        
-        // 边界情况：不能低于 1.0
-        let cpu_center = estimate_cpu_search_center(2.0, GpuType::Nvidia, "hevc");
-        assert!(cpu_center >= 1.0, "Should not go below 1.0");
+        // None: offset = 0, GPU 10 → CPU 10
+        let cpu_center = estimate_cpu_search_center(10.0, GpuType::None, "hevc");
+        assert!((cpu_center - 10.0).abs() < 0.1, "Expected ~10.0, got {}", cpu_center);
     }
     
     #[test]
     fn test_gpu_boundary_to_cpu_range() {
-        // Apple: center = 20 - 2 = 18, range = [14, 22]
-        let (low, high) = gpu_boundary_to_cpu_range(20.0, GpuType::Apple, "hevc", 10.0, 28.0);
-        assert!(low >= 10.0 && low <= 18.0, "low={} should be in [10, 18]", low);
-        assert!(high >= 18.0 && high <= 28.0, "high={} should be in [18, 28]", high);
+        // 🔥 v5.9: 基于实测数据更新
+        // Apple: GPU 10 → CPU 从 10 开始向上搜索到 ~18 (center=15, +3)
+        let (low, high) = gpu_boundary_to_cpu_range(10.0, GpuType::Apple, "hevc", 8.0, 28.0);
+        assert!((low - 10.0).abs() < 0.1, "low={} should be ~10.0 (GPU boundary)", low);
+        assert!(high >= 15.0 && high <= 22.0, "high={} should be in [15, 22]", high);
         
         // 边界限制测试
         let (low, _high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
-        assert!(low >= 10.0, "low should respect min_crf");
+        assert!((low - 12.0).abs() < 0.1, "low should be GPU boundary");
     }
 }
