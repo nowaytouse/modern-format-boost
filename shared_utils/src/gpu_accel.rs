@@ -1032,6 +1032,7 @@ pub fn gpu_coarse_search_with_log(
     let silent_mode = progress_cb.is_some();
 
     // 🔥 v5.22: 如果有日志回调，使用回调输出；否则直接 eprintln
+    #[allow(unused_macros)]
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
