@@ -1,4 +1,4 @@
-//! 🔥 v5.34: 重构进度条系统 - 基于迭代计数的实时更新
+//! 🔥 v5.35: 重构进度条系统 - 基于迭代计数的实时更新 + 终端控制
 //!
 //! 核心改进：
 //! - ✅ 弃用 CRF 范围映射（导致非线性失败）
@@ -7,12 +7,39 @@
 //! - ✅ 分离 GPU 和 CPU 两个进度条
 //! - ✅ 20Hz 刷新率确保实时显示
 //! - ✅ 精确的时间戳连续递增
+//! - ✅ 禁用终端echo防止键盘干扰（v5.35）
 
 use crate::modern_ui::progress_style;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// 🔥 v5.35: 终端原始模式控制 - 防止键盘输入干扰
+/// 在Unix系统上禁用echo，Windows上无操作
+#[allow(dead_code)]
+fn disable_terminal_echo() {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        // 使用stty禁用echo（Unix/Linux/macOS）
+        let _ = Command::new("stty")
+            .arg("-echo")
+            .output();
+    }
+}
+
+#[allow(dead_code)]
+fn restore_terminal_echo() {
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        // 恢复echo设置
+        let _ = Command::new("stty")
+            .arg("echo")
+            .output();
+    }
+}
 
 /// 🔥 v5.34: 简单迭代进度条 - 基于真实迭代次数
 ///
@@ -33,6 +60,9 @@ pub struct SimpleIterationProgress {
     #[allow(dead_code)]
     last_update: std::sync::Mutex<Instant>,
     is_finished: AtomicBool,
+    /// 🔥 v5.35: 记录是否禁用了echo，便于恢复
+    #[allow(dead_code)]
+    echo_disabled: AtomicBool,
 }
 
 impl SimpleIterationProgress {
@@ -43,6 +73,9 @@ impl SimpleIterationProgress {
     /// - input_size: 输入文件大小（字节）
     /// - total_iterations: 预期总迭代次数（用于计算进度）
     pub fn new(stage: &str, input_size: u64, total_iterations: u64) -> Arc<Self> {
+        // 🔥 v5.35: 禁用终端echo防止键盘干扰
+        disable_terminal_echo();
+
         let bar = ProgressBar::new(total_iterations);
 
         // 统一进度条样式
@@ -71,6 +104,7 @@ impl SimpleIterationProgress {
             start_time: Instant::now(),
             last_update: std::sync::Mutex::new(Instant::now()),
             is_finished: AtomicBool::new(false),
+            echo_disabled: AtomicBool::new(true),  // 🔥 v5.35: 记录echo已禁用
         })
     }
 
@@ -163,12 +197,22 @@ impl SimpleIterationProgress {
 
         self.bar.set_position(self.total_iterations);
         self.bar.finish_with_message(msg);
+
+        // 🔥 v5.35: 恢复终端echo
+        if self.echo_disabled.load(Ordering::Relaxed) {
+            restore_terminal_echo();
+        }
     }
 
     /// 失败结束
     pub fn fail(&self, error: &str) {
         self.is_finished.store(true, Ordering::Relaxed);
         self.bar.abandon_with_message(format!("❌ {}", error));
+
+        // 🔥 v5.35: 恢复终端echo
+        if self.echo_disabled.load(Ordering::Relaxed) {
+            restore_terminal_echo();
+        }
     }
 }
 
