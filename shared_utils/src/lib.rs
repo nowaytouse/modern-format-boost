@@ -33,6 +33,7 @@ pub mod checkpoint;
 pub mod xmp_merger;
 pub mod flag_validator;
 pub mod gpu_accel;
+pub mod modern_ui;
 
 pub use progress::{
     // 🔥 v5.5: 新增固定底部进度条
@@ -155,4 +156,16 @@ pub use video_explorer::{
     explore_with_gpu_coarse_search,
     explore_hevc_with_gpu_coarse,
     explore_av1_with_gpu_coarse,
+};
+
+// 🔥 v5.19: 现代化 UI/UX 模块
+pub use modern_ui::{
+    colors, symbols,
+    render_progress_bar, render_colored_progress, ProgressStyle,
+    ExploreProgressState,
+    print_result_box, print_stage, print_substage,
+    print_success, print_warning, print_error, print_info,
+    format_size, format_size_change,
+    spinner_frame, spinner_dots,
+    // format_duration 已在 progress 模块导出，避免重复
 };
