@@ -13,26 +13,26 @@
 //! 所有探索逻辑集中在此模块，其他模块（imgquality_hevc, vidquality_hevc）
 //! 只需调用此模块的便捷函数，避免重复实现。
 
+use anyhow::{bail, Context, Result};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::fs;
-use std::io::{self, Write};
-use anyhow::{Result, Context, bail};
-use indicatif::ProgressStyle;
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.5: 进度条辅助宏 - 固定底部显示
 // ═══════════════════════════════════════════════════════════════
 
 /// 固定底部进度显示（覆盖当前行）
+#[allow(unused_macros)]
 macro_rules! progress_line {
     ($($arg:tt)*) => {{
         eprint!("\r\x1b[K{}", format!($($arg)*));
-        let _ = io::stderr().flush();
+        let _ = std::io::stderr().flush();
     }};
 }
 
 /// 进度完成后换行
+#[allow(unused_macros)]
 macro_rules! progress_done {
     () => {{
         eprintln!();
@@ -777,7 +777,8 @@ impl VideoExplorer {
         let mut high = self.config.max_crf;
         let mut compress_boundary: Option<f32> = None;
         
-        // 进度条辅助
+        // 进度条辅助（保留以备将来使用）
+        #[allow(unused_macros)]
         macro_rules! progress_log {
             ($($arg:tt)*) => {{
                 pb.set_message(format!($($arg)*));
@@ -1167,12 +1168,13 @@ impl VideoExplorer {
             }};
         }
 
+        // 🔥 v5.31: 优化缓存精度 (CRF*100) - 支持0.01精度
         // 仅编码（不计算SSIM）
         let encode_size_only = |crf: f32,
                                size_cache: &mut std::collections::HashMap<i32, u64>,
                                last_key: &mut i32,
                                explorer: &VideoExplorer| -> Result<u64> {
-            let key = (crf * 10.0).round() as i32;
+            let key = (crf * 100.0).round() as i32;  // 🔥 提升精度：10 → 100
             if let Some(&size) = size_cache.get(&key) {
                 return Ok(size);
             }
@@ -1186,7 +1188,7 @@ impl VideoExplorer {
         let validate_ssim = |crf: f32,
                             quality_cache: &mut std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)>,
                             explorer: &VideoExplorer| -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
-            let key = (crf * 10.0).round() as i32;
+            let key = (crf * 100.0).round() as i32;  // 🔥 提升精度：10 → 100
             if let Some(&quality) = quality_cache.get(&key) {
                 return Ok(quality);
             }
@@ -1244,14 +1246,14 @@ impl VideoExplorer {
                 let fine_crf = best_crf + offset;
                 if fine_crf < ABSOLUTE_MIN_CRF { break; }
                 if iterations >= STAGE_B2_MAX_ITERATIONS { break; }
-                
-                let key = (fine_crf * 10.0).round() as i32;
+
+                let key = (fine_crf * 100.0).round() as i32;  // 🔥 v5.31: 精度修正
                 if size_cache.contains_key(&key) { continue; }
-                
+
                 let size = encode_size_only(fine_crf, &mut size_cache, &mut last_encoded_key, self)?;
                 iterations += 1;
                 log_progress!("Stage B-2", fine_crf, size, iterations);
-                
+
                 if size < self.input_size {
                     best_crf = fine_crf;
                     best_size = size;
@@ -1261,9 +1263,9 @@ impl VideoExplorer {
                 }
             }
             progress_done!();
-            
+
             // 确保输出文件是 best_crf 的版本
-            let best_key = (best_crf * 10.0).round() as i32;
+            let best_key = (best_crf * 100.0).round() as i32;  // 🔥 v5.31: 精度修正
             if last_encoded_key != best_key {
                 progress_line!("│ 重新编码到最佳 CRF {:.1}... │", best_crf);
                 let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1334,12 +1336,13 @@ impl VideoExplorer {
 
         progress_done!();
 
-        // 🔥 v4.13: 智能提前终止
+        // 🔥 v5.31: 最保守的提前终止（保证质量第一）
         const WINDOW_SIZE: usize = 3;
-        const VARIANCE_THRESHOLD: f64 = 0.0001;
-        const CHANGE_RATE_THRESHOLD: f64 = 0.02;  // 🔥 v5.21: 放宽到 2%（避免过早终止）
+        const VARIANCE_THRESHOLD: f64 = 0.00001;  // 🔥 v5.31 修正：超保守（收敛度极高才终止）
+        const CHANGE_RATE_THRESHOLD: f64 = 0.005;  // 🔥 v5.31 修正：0.5%（极其保守）
         let mut size_history: Vec<(f32, u64)> = Vec::new();
 
+        // 🔥 v5.31: 最保守的方差计算 - 不归一化，用绝对值
         let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
             if history.len() < WINDOW_SIZE { return f64::MAX; }
             let recent: Vec<f64> = history.iter()
@@ -1351,12 +1354,13 @@ impl VideoExplorer {
             recent.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / recent.len() as f64
         };
 
+        // 🔥 v5.31: 最保守的变化率计算
         let calc_change_rate = |prev: u64, curr: u64| -> f64 {
             if prev == 0 { return f64::MAX; }
             ((curr as f64 - prev as f64) / prev as f64).abs()
         };
 
-        // 🔥 二分搜索找压缩边界
+        // 🔥 v5.31: 最保守的二分搜索 - 从粗到精的第一阶段
         log_header!("   📍 Stage A: 二分搜索 (0.5 步长)");
         let mut low = self.config.min_crf;
         let mut high = self.config.max_crf;
@@ -1373,7 +1377,7 @@ impl VideoExplorer {
 
             let variance = calc_window_variance(&size_history, self.input_size);
             let change_rate = prev_size.map(|p| calc_change_rate(p, size)).unwrap_or(f64::MAX);
-            
+
             if size < self.input_size {
                 boundary_crf = mid;
                 best_crf_so_far = mid;
@@ -1382,15 +1386,15 @@ impl VideoExplorer {
                 low = mid;
             }
 
-            // 检查提前终止条件
+            // 🔥 v5.31: 最保守的提前终止 - 只在极端情况下终止
             if variance < VARIANCE_THRESHOLD && size_history.len() >= WINDOW_SIZE {
                 progress_done!();
-                log_header!("   ⚡ 提前终止: 方差 {:.6} < {:.6}", variance, VARIANCE_THRESHOLD);
+                log_header!("   ⚡ 提前终止: 方差完全收敛 {:.8} < {:.8}", variance, VARIANCE_THRESHOLD);
                 break;
             }
             if change_rate < CHANGE_RATE_THRESHOLD && prev_size.is_some() {
                 progress_done!();
-                log_header!("   ⚡ 提前终止: 变化率 {:.4}% < {:.4}%", change_rate * 100.0, CHANGE_RATE_THRESHOLD * 100.0);
+                log_header!("   ⚡ 提前终止: 变化率极小 {:.4}% < {:.4}%", change_rate * 100.0, CHANGE_RATE_THRESHOLD * 100.0);
                 break;
             }
 
@@ -1399,14 +1403,14 @@ impl VideoExplorer {
         progress_done!();
 
         // ═══════════════════════════════════════════════════════════
-        // Stage B: 0.1 精细调整
+        // 🔥 v5.31: Stage B - 从粗到精的第二阶段：精细调整
         // ═══════════════════════════════════════════════════════════
         log_header!("   📍 Stage B: 精细调整 (0.1 步长)");
 
         let mut best_boundary = boundary_crf;
         let mut fine_tune_history: Vec<u64> = Vec::new();
-        
-        // 先向下探索（更高质量方向）
+
+        // 🔥 v5.31: 先向下探索（更高质量方向）- 智能步进
         for offset in [-0.1_f32, -0.2, -0.3, -0.4] {
             let test_crf = boundary_crf + offset;
             
@@ -2787,16 +2791,18 @@ pub fn explore_with_gpu_coarse_search(
     max_crf: f32,
     min_ssim: f64,
 ) -> Result<ExploreResult> {
-    use crate::gpu_accel::{GpuAccel, GpuCoarseConfig, gpu_coarse_search, CrfMapping};
+    use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     
-    // 🔥 v5.1.4: 不收集日志到 result.log，因为已经实时输出了
-    // 这样可以避免 conversion_api.rs 重复打印日志
+    // 🔥 v5.32: 先打印 GPU 信息，再创建进度条
+    let gpu = GpuAccel::detect();
+    gpu.print_detection_info();
     
-    // 🔥 v5.23: 使用真正的条状进度条！
-    let progress = crate::realtime_progress::RealtimeExploreProgress::with_max_iterations(
+    // 🔥 v5.31: 使用真实 CRF 范围的进度条
+    let progress = crate::realtime_progress::RealtimeExploreProgress::with_crf_range(
         "🔍 Smart Explore", 
         fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-        20  // 预估最大迭代次数
+        initial_crf.min(1.0),  // min_crf
+        max_crf,               // max_crf
     );
     
     macro_rules! log_msg {
@@ -2856,9 +2862,10 @@ pub fn explore_with_gpu_coarse_search(
             max_iterations: 15,  // 🔥 v5.7: 更多迭代以支持更大 CRF 范围
         };
         
-        // 🔥 v5.23: GPU 阶段使用真正的条状进度条！
-        let gpu_progress = crate::realtime_progress::RealtimeExploreProgress::with_max_iterations(
-            "🔍 GPU Search", input_size, 15
+        // 🔥 v5.31: GPU 阶段使用真实 CRF 范围的进度条
+        let gpu_progress = crate::realtime_progress::RealtimeExploreProgress::with_crf_range(
+            "🔍 GPU Search", input_size, 
+            gpu_config.min_crf, gpu_config.max_crf
         );
         
         // Progress callback - 更新条状进度条
@@ -2893,22 +2900,33 @@ pub fn explore_with_gpu_coarse_search(
                     // 🔥 v5.9: CPU 需要更高 CRF 才能达到相同压缩效果
                     // CPU 搜索起点 = GPU 边界 + offset（向上偏移）
                     let cpu_start = gpu_crf + mapping.offset;
-                    // CPU 搜索范围：从 GPU 边界开始，向上扩展 5 CRF
-                    let cpu_min = gpu_crf;  // 从 GPU 边界开始（最高质量点）
-                    let cpu_max = (cpu_start + 5.0).min(max_crf);  // 向上扩展
                     
                     log_msg!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
                     if let Some(size) = gpu_result.gpu_best_size {
                         log_msg!("   📊 GPU best size: {} bytes", size);
                     }
-                    if let Some(ssim) = gpu_result.gpu_best_ssim {
+                    
+                    // 🔥 v5.26: 根据 GPU SSIM 动态调整 CPU 搜索范围
+                    let (cpu_min, cpu_max) = if let Some(ssim) = gpu_result.gpu_best_ssim {
                         let quality_hint = if ssim >= 0.97 { "🟢 Near GPU ceiling" } 
                                           else if ssim >= 0.95 { "🟡 Good" } 
                                           else { "🟠 Below expected" };
                         log_msg!("   📊 GPU best SSIM: {:.6} {}", ssim, quality_hint);
-                        log_msg!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
-                    }
-                    log_msg!("   📊 CPU search: start at GPU boundary {:.1}, search upward to {:.1}", gpu_crf, cpu_max);
+                        
+                        if ssim < 0.90 {
+                            // SSIM 太低，需要更低的 CRF（更高质量）
+                            log_msg!("   ⚠️ GPU SSIM too low! Expanding CPU search to lower CRF");
+                            let expand = ((0.95 - ssim) * 30.0) as f32;  // 每 0.01 SSIM 差距扩展 0.3 CRF
+                            ((gpu_crf - expand).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
+                        } else {
+                            log_msg!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
+                            (gpu_crf, (cpu_start + 5.0).min(max_crf))
+                        }
+                    } else {
+                        (gpu_crf, (cpu_start + 5.0).min(max_crf))
+                    };
+                    
+                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (start: {:.1})", cpu_min, cpu_max, cpu_start);
                     (cpu_min, cpu_max, cpu_start)
                 } else {
                     // GPU 没找到边界，使用原始范围

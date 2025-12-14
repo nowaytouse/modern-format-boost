@@ -39,6 +39,8 @@ pub mod modern_ui;
 pub mod realtime_progress;
 
 pub use progress::{
+    // 🔥 v5.31: 新增粗进度条
+    CoarseProgressBar,
     // 🔥 v5.5: 新增固定底部进度条
     FixedBottomProgress, ProgressStats, ExploreProgress, ExploreLogger,
     GlobalProgressManager,
@@ -163,7 +165,7 @@ pub use video_explorer::{
 
 // 🔥 v5.19: 现代化 UI/UX 模块
 pub use modern_ui::{
-    colors, symbols,
+    colors, symbols, progress_style,
     render_progress_bar, render_colored_progress, ProgressStyle,
     ExploreProgressState,
     print_result_box, print_stage, print_substage,

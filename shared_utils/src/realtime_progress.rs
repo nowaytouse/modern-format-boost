@@ -1,63 +1,70 @@
-//! 🔥 v5.21: 真正的条状实时进度条
+//! 🔥 v5.31: 真实进度映射的实时进度条
 //!
 //! 特点：
-//! - 真正的条状进度条（不是 Spinner）
-//! - 彩色渐变显示
-//! - 后台线程自动更新
+//! - 统一样式: ████████▓▓░░░░░░ (更粗更显眼)
+//! - 🔥 真实进度映射：基于 CRF 搜索范围计算真实进度
+//! - 纯粹的进度显示，无阻塞，无超时
 //! - 原子操作更新状态，无锁竞争
-//! - 自动清理，不会死循环
 
-use indicatif::{ProgressBar, ProgressStyle, ProgressDrawTarget};
+use crate::modern_ui::progress_style;
+use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 实时探索进度条 - 真正的条状进度条
-/// 
-/// 使用 indicatif 的 steady_tick 实现真正的实时更新
+/// 实时探索进度条 - 基于 CRF 范围的真实进度映射
+///
+/// 进度计算方式：
+/// - 基于 CRF 搜索范围 [min_crf, max_crf]
+/// - 当前进度 = (current_crf - min_crf) / (max_crf - min_crf)
+/// - 这样进度条能真实反映搜索进度
 pub struct RealtimeExploreProgress {
-    pub bar: ProgressBar,  // 🔥 v5.23: 公开以便 suspend 使用
+    pub bar: ProgressBar, // 公开以便 suspend 使用
     input_size: u64,
-    max_iterations: u64,
+    // CRF 范围 - 用于计算真实进度
+    min_crf: AtomicU64, // f32 as bits
+    max_crf: AtomicU64, // f32 as bits
     // 原子状态 - 无锁更新
-    current_crf: AtomicU64,      // f32 as bits
+    current_crf: AtomicU64,  // f32 as bits
     current_size: AtomicU64,
-    current_ssim: AtomicU64,     // f64 as bits, 0 = None
+    current_ssim: AtomicU64, // f64 as bits, 0 = None
     iterations: AtomicU64,
-    best_crf: AtomicU64,         // f32 as bits
+    best_crf: AtomicU64, // f32 as bits
     is_finished: AtomicBool,
 }
 
 impl RealtimeExploreProgress {
-    /// 创建实时条状进度条
+    /// 创建实时进度条（默认 CRF 范围 1-51）
     pub fn new(stage: &str, input_size: u64) -> Arc<Self> {
-        Self::with_max_iterations(stage, input_size, 20) // 默认最大 20 次迭代
+        Self::with_crf_range(stage, input_size, 1.0, 51.0)
     }
-    
-    /// 创建带最大迭代次数的进度条
-    pub fn with_max_iterations(stage: &str, input_size: u64, max_iter: u64) -> Arc<Self> {
-        let bar = ProgressBar::new(max_iter);
-        
-        // 🔥 v5.21: 真正的条状进度条样式
+
+    /// 🔥 v5.31: 基于 CRF 范围创建进度条 - 真实进度映射
+    pub fn with_crf_range(stage: &str, input_size: u64, min_crf: f32, max_crf: f32) -> Arc<Self> {
+        // 进度条总长度 = 100（百分比）
+        let bar = ProgressBar::new(100);
+
+        // 统一进度条样式
         bar.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:25.green/black}▏ {percent:>3}% • {pos}/{len} iter • ⏱️ {elapsed_precise} • {msg}")
+                .template(progress_style::EXPLORE_TEMPLATE)
                 .expect("Invalid template")
-                .progress_chars("━━─")  // 彩色条状字符
+                .progress_chars(progress_style::PROGRESS_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS),
         );
         bar.set_prefix(stage.to_string());
         bar.set_message("Initializing...");
-        
-        // 🔥 关键：启用 steady_tick，后台线程自动更新
-        bar.enable_steady_tick(Duration::from_millis(80));
-        
-        // 高刷新率
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
-        
+
+        // 🔥 v5.32: 禁用 steady_tick 避免刷屏，改用手动 tick
+        // steady_tick 会导致终端刷屏问题
+        // 🔥 v5.33: 增加刷新率到 10Hz，让进度条更实时
+        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(10)); // 平衡刷新率和防刷屏
+
         Arc::new(Self {
             bar,
             input_size,
-            max_iterations: max_iter,
+            min_crf: AtomicU64::new(min_crf.to_bits() as u64),
+            max_crf: AtomicU64::new(max_crf.to_bits() as u64),
             current_crf: AtomicU64::new(0),
             current_size: AtomicU64::new(0),
             current_ssim: AtomicU64::new(0),
@@ -66,13 +73,25 @@ impl RealtimeExploreProgress {
             is_finished: AtomicBool::new(false),
         })
     }
-    
+
+    /// 兼容旧 API - 基于迭代次数（内部转换为 CRF 范围）
+    pub fn with_max_iterations(stage: &str, input_size: u64, _max_iter: u64) -> Arc<Self> {
+        // 忽略 max_iter，使用默认 CRF 范围
+        Self::with_crf_range(stage, input_size, 1.0, 51.0)
+    }
+
+    /// 动态更新 CRF 搜索范围（用于二分搜索缩小范围时）
+    pub fn set_crf_range(&self, min_crf: f32, max_crf: f32) {
+        self.min_crf.store(min_crf.to_bits() as u64, Ordering::Relaxed);
+        self.max_crf.store(max_crf.to_bits() as u64, Ordering::Relaxed);
+    }
+
     /// 更新阶段名称
     pub fn set_stage(&self, stage: &str) {
         self.bar.set_prefix(stage.to_string());
     }
-    
-    /// 更新当前测试状态
+
+    /// 🔥 v5.31: 更新进度 - 基于 CRF 计算真实进度
     pub fn update(&self, crf: f32, size: u64, ssim: Option<f64>) {
         // 原子更新状态
         self.current_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
@@ -80,20 +99,27 @@ impl RealtimeExploreProgress {
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
         }
-        let iter = self.iterations.fetch_add(1, Ordering::Relaxed) + 1;
-        
+        self.iterations.fetch_add(1, Ordering::Relaxed);
+
         // 更新最佳 CRF（如果能压缩）
         if size < self.input_size {
             self.best_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
         }
-        
-        // 🔥 更新进度条位置
-        self.bar.set_position(iter.min(self.max_iterations));
-        
+
+        // 🔥 计算真实进度：基于 CRF 在搜索范围中的位置
+        let min = f32::from_bits(self.min_crf.load(Ordering::Relaxed) as u32);
+        let max = f32::from_bits(self.max_crf.load(Ordering::Relaxed) as u32);
+        let range = (max - min).max(1.0);
+        let progress = ((crf - min) / range * 100.0).clamp(0.0, 100.0) as u64;
+        self.bar.set_position(progress);
+
         // 更新消息
         self.refresh_message();
+
+        // 🔥 v5.33: 立即刷新进度条显示，不等待下一个 Hz 周期
+        self.bar.tick();
     }
-    
+
     /// 刷新消息显示
     fn refresh_message(&self) {
         let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
@@ -101,17 +127,17 @@ impl RealtimeExploreProgress {
         let ssim_bits = self.current_ssim.load(Ordering::Relaxed);
         let iter = self.iterations.load(Ordering::Relaxed);
         let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed) as u32);
-        
+
         // 计算大小变化
         let size_pct = if self.input_size > 0 {
             ((size as f64 / self.input_size as f64) - 1.0) * 100.0
         } else {
             0.0
         };
-        
+
         // 压缩图标
         let icon = if size < self.input_size { "💾" } else { "📈" };
-        
+
         // SSIM 字符串
         let ssim_str = if ssim_bits != 0 {
             let ssim = f64::from_bits(ssim_bits);
@@ -119,48 +145,49 @@ impl RealtimeExploreProgress {
         } else {
             String::new()
         };
-        
+
         // 最佳 CRF
         let best_str = if best_crf > 0.0 {
             format!("Best: {:.1}", best_crf)
         } else {
             String::new()
         };
-        
+
         // 构建消息
         let msg = format!(
             "CRF {:.1} | {:+.1}% {} | {} | {} | Iter {}",
             crf, size_pct, icon, ssim_str, best_str, iter
         );
-        
+
         self.bar.set_message(msg);
     }
-    
+
     /// 完成进度条
     pub fn finish(&self, final_crf: f32, final_size: u64, final_ssim: Option<f64>) {
         self.is_finished.store(true, Ordering::Relaxed);
-        
+
         let size_pct = if self.input_size > 0 {
             ((final_size as f64 / self.input_size as f64) - 1.0) * 100.0
         } else {
             0.0
         };
         let iter = self.iterations.load(Ordering::Relaxed);
-        
+
         let ssim_str = final_ssim
             .map(|s| format!("SSIM {:.4}", s))
             .unwrap_or_default();
-        
+
         let icon = if size_pct < 0.0 { "✅" } else { "⚠️" };
-        
+
         let msg = format!(
             "CRF {:.1} • {:+.1}% {} • {} • {} iterations",
             final_crf, size_pct, icon, ssim_str, iter
         );
-        
+
+        self.bar.set_position(100); // 完成时设为 100%
         self.bar.finish_with_message(msg);
     }
-    
+
     /// 失败时结束
     pub fn fail(&self, error: &str) {
         self.is_finished.store(true, Ordering::Relaxed);
@@ -170,7 +197,7 @@ impl RealtimeExploreProgress {
 
 impl Drop for RealtimeExploreProgress {
     fn drop(&mut self) {
-        // 确保进度条被正确清理
+        // 确保进度条被正确清理，不阻塞
         if !self.is_finished.load(Ordering::Relaxed) {
             self.bar.finish_and_clear();
         }
@@ -183,14 +210,14 @@ pub struct RealtimeSpinner {
 }
 
 impl RealtimeSpinner {
-    /// 创建 Spinner
+    /// 创建 Spinner - 🔥 v5.30 统一样式
     pub fn new(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
         bar.set_style(
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} {msg}")
                 .expect("Invalid template")
-                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                .tick_chars(progress_style::SPINNER_CHARS)
         );
         bar.set_message(message.to_string());
         bar.enable_steady_tick(Duration::from_millis(80));

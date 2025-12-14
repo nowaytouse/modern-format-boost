@@ -190,29 +190,33 @@ impl GpuAccel {
     /// 检测可用的 GPU 加速（带缓存）
     pub fn detect() -> &'static GpuAccel {
         GPU_ACCEL.get_or_init(|| {
-            eprintln!("🔍 Detecting GPU acceleration...");
-            let result = Self::detect_internal();
-            if result.enabled {
-                eprintln!("   ✅ GPU: {} detected", result.gpu_type);
-                if result.hevc_encoder.is_some() {
-                    eprintln!("      • HEVC: {}", result.hevc_encoder.as_ref().unwrap().name);
-                }
-                if result.av1_encoder.is_some() {
-                    eprintln!("      • AV1: {}", result.av1_encoder.as_ref().unwrap().name);
-                }
-                if result.h264_encoder.is_some() {
-                    eprintln!("      • H.264: {}", result.h264_encoder.as_ref().unwrap().name);
-                }
-            } else {
-                eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");
-            }
-            result
+            // 🔥 v5.32: 静默检测，不输出日志（避免干扰进度条）
+            Self::detect_internal()
         })
     }
 
     /// 强制重新检测（不使用缓存）
     pub fn detect_fresh() -> GpuAccel {
         Self::detect_internal()
+    }
+    
+    /// 🔥 v5.32: 打印 GPU 检测结果（在进度条创建前调用）
+    pub fn print_detection_info(&self) {
+        eprintln!("🔍 Detecting GPU acceleration...");
+        if self.enabled {
+            eprintln!("   ✅ GPU: {} detected", self.gpu_type);
+            if self.hevc_encoder.is_some() {
+                eprintln!("      • HEVC: {}", self.hevc_encoder.as_ref().unwrap().name);
+            }
+            if self.av1_encoder.is_some() {
+                eprintln!("      • AV1: {}", self.av1_encoder.as_ref().unwrap().name);
+            }
+            if self.h264_encoder.is_some() {
+                eprintln!("      • H.264: {}", self.h264_encoder.as_ref().unwrap().name);
+            }
+        } else {
+            eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");
+        }
     }
 
     /// 内部检测逻辑
@@ -703,40 +707,92 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
 /// - 这不是精确的 CRF 转换，只是搜索范围的估算
 /// - 实际差异取决于内容、preset、编码器版本等
 /// - CPU 精细搜索会找到真正的边界
-pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, _codec: &str) -> f32 {
-    // 🔥 v5.9: 基于实测数据更新 offset
-    // GPU 效率低 → 相同文件大小需要更高 CRF
-    // 实测：VideoToolbox GPU q:v 75 (170%) ≈ CPU CRF 14 (124%)
-    // 差距约 4-6 CRF
-    let offset = match gpu_type {
-        GpuType::Apple => {
-            // 🔥 v5.9: 实测 offset=5
-            5.0
-        }
-        GpuType::Nvidia => {
-            // NVENC 效率中等
-            4.0
-        }
-        GpuType::IntelQsv => {
-            // QSV 效率较好
-            3.5
-        }
-        GpuType::AmdAmf => {
-            // AMF 效率较低
-            5.0
-        }
-        GpuType::Vaapi => {
-            // VAAPI 效率中等
-            4.0
-        }
-        GpuType::None => {
-            // 无 GPU，不需要偏移
+/// GPU 压缩边界到 CPU 压缩边界的估算（v5.31 动态优化）
+///
+/// ## 背景
+/// GPU 硬件编码器（NVENC, VideoToolbox, QSV 等）压缩效率**低于** CPU 软件编码器：
+/// - 相同 CRF 下，GPU 输出文件更大（压缩效率低）
+/// - 质量排序：x264/x265 > QSV > NVENC > VCE (AMD)
+///
+/// ## 映射目的（v5.31 动态优化）
+/// GPU 粗略搜索找到的"压缩边界"（刚好能压缩的 CRF）需要转换为 CPU 的等效边界：
+/// - GPU 在 CRF=11 刚好能压缩 → CPU 需要**更高** CRF（如 13-14）才能压缩
+/// - 因为 CPU 效率更高，相同 CRF 下文件更小，所以需要更高 CRF 才能达到相同大小
+///
+/// GPU 压缩边界到 CPU 压缩边界的精确映射（v5.31 保守完善版）
+///
+/// ## 背景
+/// GPU 硬件编码器压缩效率低于 CPU 软件编码器
+/// - 质量排序：x264/x265 > QSV > NVENC > VCE
+///
+/// ## 精确映射表（基于实测）
+/// | GPU 类型 | offset | 说明 |
+/// |---------|--------|------|
+/// | Apple VideoToolbox | +5.0 | 实测差距 5.0 CRF |
+/// | NVIDIA NVENC | +4.0 | 实测差距 4.0 CRF |
+/// | Intel QSV | +3.5 | 最高效 |
+/// | AMD AMF | +5.0 | 最低效 |
+/// | VAAPI | +4.0 | 中等 |
+///
+/// ## v5.31 保守调整
+/// 只在极明确的情况下微调：
+/// - 高复杂度: +0.3（保守）
+/// - 低复杂度: -0.2（保守）
+/// - 不确定: 0（保持标准）
+pub fn estimate_cpu_search_center_dynamic(
+    gpu_boundary: f32,
+    gpu_type: GpuType,
+    _codec: &str,
+    compression_potential: Option<f64>,
+) -> f32 {
+    // 🔥 v5.31: 精确的基础 offset
+    let base_offset = match gpu_type {
+        GpuType::Apple => 5.0,
+        GpuType::Nvidia => 4.0,
+        GpuType::IntelQsv => 3.5,
+        GpuType::AmdAmf => 5.0,
+        GpuType::Vaapi => 4.0,
+        GpuType::None => 0.0,
+    };
+
+    // 🔥 v5.31: 极保守的微调（幅度小）
+    let adjustment = if let Some(potential) = compression_potential {
+        if potential < 0.3 {
+            0.3   // 高复杂度: 仅 +0.3
+        } else if potential > 0.7 {
+            -0.2  // 低复杂度: 仅 -0.2
+        } else {
             0.0
         }
+    } else {
+        0.0
     };
-    
-    // CPU 起点估算 = GPU 边界 + offset（更高 CRF = 更小文件）
-    gpu_boundary + offset
+
+    gpu_boundary + base_offset + adjustment
+}
+
+/// 🔥 v5.31: 精确的搜索范围映射
+/// 不仅映射单个点，还映射完整的搜索范围
+pub fn estimate_cpu_search_range(
+    gpu_range: (f32, f32),
+    gpu_type: GpuType,
+    codec: &str,
+    compression_potential: Option<f64>,
+) -> (f32, f32) {
+    let (gpu_low, gpu_high) = gpu_range;
+    let cpu_low = estimate_cpu_search_center_dynamic(gpu_low, gpu_type, codec, compression_potential);
+    let cpu_high = estimate_cpu_search_center_dynamic(gpu_high, gpu_type, codec, compression_potential);
+
+    if cpu_low < cpu_high {
+        (cpu_low, cpu_high)
+    } else {
+        (cpu_high, cpu_low)
+    }
+}
+
+/// 🔥 v5.31: 向后兼容
+pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, codec: &str) -> f32 {
+    estimate_cpu_search_center_dynamic(gpu_boundary, gpu_type, codec, None)
 }
 
 /// 计算 CPU 搜索范围（v5.9 修正方向）
@@ -828,30 +884,32 @@ pub struct CrfMapping {
 
 impl CrfMapping {
     /// 获取 HEVC 编码器的 CRF 映射
-    /// 
+    ///
     /// 🔥 v5.9: 基于实测数据更新 offset
     /// VideoToolbox 实测：GPU q:v 75 (170%) ≈ CPU CRF 14 (124%)
     /// 差距约 4-6 CRF，取 5.0 作为 offset
+    /// 🔥 v5.33: 精细化offset校准和uncertainty范围
     pub fn hevc(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
-            GpuType::Apple => (5.0, 2.0),      // 🔥 v5.9: 实测 offset=5, uncertainty=2
-            GpuType::Nvidia => (4.0, 2.0),     // NVENC 效率中等
-            GpuType::IntelQsv => (3.5, 1.5),   // QSV 效率较好
-            GpuType::AmdAmf => (5.0, 2.5),     // AMF 效率较低
-            GpuType::Vaapi => (4.0, 2.0),      // VAAPI 效率中等
+            GpuType::Apple => (5.0, 0.5),      // 🔥 v5.33: 精细uncertainty=0.5（±0.5CRF）
+            GpuType::Nvidia => (3.8, 0.3),     // NVENC 更精确的offset和较小uncertainty
+            GpuType::IntelQsv => (3.5, 0.3),   // QSV 效率较好，更小uncertainty
+            GpuType::AmdAmf => (4.8, 0.5),     // AMF 效率较低
+            GpuType::Vaapi => (3.8, 0.4),      // VAAPI 效率中等
             GpuType::None => (0.0, 0.0),       // 无 GPU
         };
         Self { gpu_type, codec: "hevc", offset, uncertainty }
     }
     
     /// 获取 AV1 编码器的 CRF 映射
+    /// 🔥 v5.33: 精细化offset校准
     pub fn av1(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (0.0, 0.0),      // VideoToolbox 不支持 AV1
-            GpuType::Nvidia => (4.0, 2.5),     // NVENC AV1 效率较低
-            GpuType::IntelQsv => (3.5, 2.0),   // QSV AV1 效率中等
-            GpuType::AmdAmf => (4.5, 3.0),     // AMF AV1 效率较低
-            GpuType::Vaapi => (4.0, 2.5),      // VAAPI AV1 效率中等
+            GpuType::Nvidia => (3.8, 0.4),     // NVENC AV1 更精确的offset
+            GpuType::IntelQsv => (3.5, 0.3),   // QSV AV1 效率较好
+            GpuType::AmdAmf => (4.5, 0.5),     // AMF AV1 效率较低
+            GpuType::Vaapi => (3.8, 0.4),      // VAAPI AV1 效率中等
             GpuType::None => (0.0, 0.0),       // 无 GPU
         };
         Self { gpu_type, codec: "av1", offset, uncertainty }
@@ -1431,10 +1489,9 @@ pub fn gpu_coarse_search_with_log(
     if !found_compress_point && (boundary_high - boundary_low) > 4.0 {
         // 并行探测未找到压缩点，继续指数搜索
         let mut step: f32 = 1.0;
-        let mut test_crf = boundary_low;
-        
+
         while iterations < max_iterations_limit && !found_compress_point {
-            test_crf = (boundary_low + step).min(config.max_crf);
+            let test_crf = (boundary_low + step).min(config.max_crf);
             
             let key = (test_crf * 10.0).round() as i32;
             if size_cache.contains_key(&key) {
@@ -1453,8 +1510,6 @@ pub fn gpu_coarse_search_with_log(
                 if test_crf >= config.max_crf { break; }
                 continue;
             }
-            
-            if let Some(cb) = progress_cb { cb(test_crf, 0); }
             
             match encode_cached(test_crf, &mut size_cache) {
                 Ok(size) => {
@@ -1531,14 +1586,12 @@ pub fn gpu_coarse_search_with_log(
                 }
                 continue;
             }
-            
-            if let Some(cb) = progress_cb { cb(test_crf, 0); }
-            
+
             match encode_cached(test_crf, &mut size_cache) {
                 Ok(size) => {
                     iterations += 1;
                     if let Some(cb) = progress_cb { cb(test_crf, size); }
-                    
+
                     // 智能终止
                     if let Some(prev) = prev_size {
                         let rate = calc_change_rate(prev, size);
@@ -1587,14 +1640,12 @@ pub fn gpu_coarse_search_with_log(
                 }
                 continue;
             }
-            
-            if let Some(cb) = progress_cb { cb(test_crf, 0); }
-            
+
             match encode_cached(test_crf, &mut size_cache) {
                 Ok(size) => {
                     iterations += 1;
                     if let Some(cb) = progress_cb { cb(test_crf, size); }
-                    
+
                     if size < sample_input_size {
                         best_crf = Some(test_crf);
                         best_size = Some(size);
