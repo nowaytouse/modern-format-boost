@@ -2792,65 +2792,47 @@ pub fn explore_with_gpu_coarse_search(
     min_ssim: f64,
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
-    
-    // 🔥 v5.32: 先打印 GPU 信息，再创建进度条
+    // 🔥 v5.35: 简化流程 - 完全移除旧的RealtimeExploreProgress
+    // 只使用SimpleIterationProgress，避免多个进度条混乱
+
+    // 🔥 v5.32: 先打印 GPU 信息
     let gpu = GpuAccel::detect();
     gpu.print_detection_info();
-    
-    // 🔥 v5.31: 使用真实 CRF 范围的进度条
-    let progress = crate::realtime_progress::RealtimeExploreProgress::with_crf_range(
-        "🔍 Smart Explore", 
-        fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-        initial_crf.min(1.0),  // min_crf
-        max_crf,               // max_crf
-    );
-    
-    macro_rules! log_msg {
-        ($($arg:tt)*) => {{
-            let msg = format!($($arg)*);
-            progress.bar.suspend(|| eprintln!("{}", msg));
-        }};
-    }
-    
+
     let input_size = fs::metadata(input)
         .context("Failed to read input file metadata")?
         .len();
-    
+
     let gpu = GpuAccel::detect();
     let encoder_name = match encoder {
         VideoEncoder::Hevc => "hevc",
         VideoEncoder::Av1 => "av1",
         VideoEncoder::H264 => "h264",
     };
-    
+
     // 检查是否有对应的 GPU 编码器
     let has_gpu_encoder = match encoder {
         VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
         VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
         VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
     };
-    
-    log_msg!("🔬 Smart GPU+CPU Explore v5.1 ({:?})", encoder);
-    log_msg!("   📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
-    log_msg!("");
-    log_msg!("🔬 Smart GPU+CPU Explore v5.1 ({:?})", encoder);
-    log_msg!("📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
-    log_msg!("");
-    log_msg!("📋 STRATEGY: GPU Coarse → CPU Fine");
-    log_msg!("• Phase 1: GPU finds rough boundary (FAST)");
-    log_msg!("• Phase 2: CPU finds precise CRF (ACCURATE)");
+
+    // 🔥 v5.35: 在进度条显示前输出关键信息
+    eprintln!("🔬 Smart GPU+CPU Explore v5.1 ({:?})", encoder);
+    eprintln!("   📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
+    eprintln!("");
+    eprintln!("📋 STRATEGY: GPU Coarse → CPU Fine");
+    eprintln!("• Phase 1: GPU finds rough boundary (FAST)");
+    eprintln!("• Phase 2: CPU finds precise CRF (ACCURATE)");
+    eprintln!("");
     
     // ═══════════════════════════════════════════════════════════
     // Phase 1: GPU 粗略搜索（如果可用）
-    // 🔥 v5.22: 暂停 spinner 让 GPU 日志正常输出
     // ═══════════════════════════════════════════════════════════
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available() && has_gpu_encoder {
-        log_msg!("");
-        log_msg!("📍 Phase 1: GPU Coarse Search");
-        
-        // 🔥 v5.23: 暂停主进度条，让 GPU 搜索使用独立进度条
-        progress.bar.finish_and_clear();
-        
+        eprintln!("");
+        eprintln!("📍 Phase 1: GPU Coarse Search");
+
         // 创建临时输出文件用于 GPU 搜索
         let temp_output = output.with_extension("gpu_temp.mp4");
         
@@ -2901,9 +2883,9 @@ pub fn explore_with_gpu_coarse_search(
                     // CPU 搜索起点 = GPU 边界 + offset（向上偏移）
                     let cpu_start = gpu_crf + mapping.offset;
                     
-                    log_msg!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
+                    eprintln!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
                     if let Some(size) = gpu_result.gpu_best_size {
-                        log_msg!("   📊 GPU best size: {} bytes", size);
+                        eprintln!("   📊 GPU best size: {} bytes", size);
                     }
                     
                     // 🔥 v5.26: 根据 GPU SSIM 动态调整 CPU 搜索范围
@@ -2911,51 +2893,51 @@ pub fn explore_with_gpu_coarse_search(
                         let quality_hint = if ssim >= 0.97 { "🟢 Near GPU ceiling" } 
                                           else if ssim >= 0.95 { "🟡 Good" } 
                                           else { "🟠 Below expected" };
-                        log_msg!("   📊 GPU best SSIM: {:.6} {}", ssim, quality_hint);
+                        eprintln!("   📊 GPU best SSIM: {:.6} {}", ssim, quality_hint);
                         
                         if ssim < 0.90 {
                             // SSIM 太低，需要更低的 CRF（更高质量）
-                            log_msg!("   ⚠️ GPU SSIM too low! Expanding CPU search to lower CRF");
+                            eprintln!("   ⚠️ GPU SSIM too low! Expanding CPU search to lower CRF");
                             let expand = ((0.95 - ssim) * 30.0) as f32;  // 每 0.01 SSIM 差距扩展 0.3 CRF
                             ((gpu_crf - expand).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                         } else {
-                            log_msg!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
+                            eprintln!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
                             (gpu_crf, (cpu_start + 5.0).min(max_crf))
                         }
                     } else {
                         (gpu_crf, (cpu_start + 5.0).min(max_crf))
                     };
                     
-                    log_msg!("   📊 CPU search range: [{:.1}, {:.1}] (start: {:.1})", cpu_min, cpu_max, cpu_start);
+                    eprintln!("   📊 CPU search range: [{:.1}, {:.1}] (start: {:.1})", cpu_min, cpu_max, cpu_start);
                     (cpu_min, cpu_max, cpu_start)
                 } else {
                     // GPU 没找到边界，使用原始范围
-                    log_msg!("⚠️  GPU didn't find compression boundary");
-                    log_msg!("• File may already be highly compressed");
-                    log_msg!("• Using full CRF range for CPU search");
+                    eprintln!("⚠️  GPU didn't find compression boundary");
+                    eprintln!("• File may already be highly compressed");
+                    eprintln!("• Using full CRF range for CPU search");
                     // 🔥 v5.24: min_crf 使用全局最小值
                     (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
                 }
             }
             Err(e) => {
-                log_msg!("⚠️  FALLBACK: GPU coarse search failed!");
-                log_msg!("• Error: {}", e);
-                log_msg!("• Falling back to CPU-only search (full range)");
+                eprintln!("⚠️  FALLBACK: GPU coarse search failed!");
+                eprintln!("• Error: {}", e);
+                eprintln!("• Falling back to CPU-only search (full range)");
                 // 🔥 v5.24: min_crf 使用全局最小值
                 (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
             }
         }
     } else {
         // 无 GPU，直接使用 CPU 搜索
-        log_msg!("");
+        eprintln!("");
         if !gpu.is_available() {
-            log_msg!("⚠️  FALLBACK: No GPU available!");
-            log_msg!("• Skipping GPU coarse search phase");
-            log_msg!("• Using CPU-only search (may take longer)");
+            eprintln!("⚠️  FALLBACK: No GPU available!");
+            eprintln!("• Skipping GPU coarse search phase");
+            eprintln!("• Using CPU-only search (may take longer)");
         } else {
-            log_msg!("⚠️  FALLBACK: No GPU encoder for {:?}!              ", encoder);
-            log_msg!("• Skipping GPU coarse search phase");
-            log_msg!("• Using CPU-only search (may take longer)");
+            eprintln!("⚠️  FALLBACK: No GPU encoder for {:?}!              ", encoder);
+            eprintln!("• Skipping GPU coarse search phase");
+            eprintln!("• Using CPU-only search (may take longer)");
         }
         // 🔥 v5.24: min_crf 使用全局最小值，允许向下探索更高质量
         (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
@@ -2968,8 +2950,8 @@ pub fn explore_with_gpu_coarse_search(
     // 🔥 v5.8: GPU 已找到边界，CPU 只做 0.5→0.1 精细化
     // ═══════════════════════════════════════════════════════════
     // ═══════════════════════════════════════════════════════════
-    log_msg!("📍 Phase 2: CPU Fine-Tune (0.5→0.1 step)");
-    log_msg!("📊 Starting from GPU boundary: CRF {:.1}", cpu_center_crf);
+    eprintln!("📍 Phase 2: CPU Fine-Tune (0.5→0.1 step)");
+    eprintln!("📊 Starting from GPU boundary: CRF {:.1}", cpu_center_crf);
     
     // 🔥 v5.8: 直接从 GPU 边界开始精细化，跳过二分搜索
     let mut result = cpu_fine_tune_from_gpu_boundary(
@@ -3076,9 +3058,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(fs::metadata(output)?.len())
     };
     
-    log_msg!("🔬 CPU Fine-Tune v6.0 ({:?})", encoder);
-    log_msg!("📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
-    log_msg!("🎯 Goal: Find optimal CRF (highest quality that compresses)");
+    eprintln!("🔬 CPU Fine-Tune v6.0 ({:?})", encoder);
+    eprintln!("📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
+    eprintln!("🎯 Goal: Find optimal CRF (highest quality that compresses)");
     
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
@@ -3107,7 +3089,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let mut best_size: Option<u64> = None;
     
     // ═══════════════════════════════════════════════════════════
-    log_msg!("📍 Phase 1: Golden section search for compression boundary");
+    eprintln!("📍 Phase 1: Golden section search for compression boundary");
     
     let phi = 1.618033988749895_f32;  // 黄金比例
     let mut low = gpu_boundary_crf;
@@ -3117,20 +3099,20 @@ fn cpu_fine_tune_from_gpu_boundary(
     let low_size = encode_cached(low, &mut size_cache)?;
     iterations += 1;
     let low_ratio = low_size as f64 / input_size as f64;
-    log_msg!("🔄 CRF {:.1}: {:.1}%", low, low_ratio * 100.0);
+    eprintln!("🔄 CRF {:.1}: {:.1}%", low, low_ratio * 100.0);
     
     if low_size < input_size {
         // GPU 边界能压缩
         best_crf = Some(low);
         best_size = Some(low_size);
-        log_msg!("✅ GPU boundary compresses!");
+        eprintln!("✅ GPU boundary compresses!");
         
         // 🔥 v5.25: 智能二分搜索 - 根据搜索范围动态计算迭代次数
         // 二分搜索理论迭代次数 = log2(range) + 1
         let search_range = low - min_crf;
         // 动态计算：log2(range) + 安全余量，底线 50 次
         let max_binary_iter = ((search_range.log2().ceil() as u32) + 3).max(5);
-        log_msg!("📍 Binary search (range={:.0}, max_iter={})", search_range, max_binary_iter);
+        eprintln!("📍 Binary search (range={:.0}, max_iter={})", search_range, max_binary_iter);
         
         let mut bin_low = min_crf;
         let mut bin_high = low;
@@ -3147,11 +3129,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_crf = Some(mid);
                 best_size = Some(size);
                 bin_high = mid;
-                log_msg!("🔄 CRF {:.0}: {:.1}% ✓", mid, ratio);
+                eprintln!("🔄 CRF {:.0}: {:.1}% ✓", mid, ratio);
             } else {
                 // 不能压缩，需要更高 CRF
                 bin_low = mid;
-                log_msg!("🔄 CRF {:.0}: {:.1}% ✗", mid, ratio);
+                eprintln!("🔄 CRF {:.0}: {:.1}% ✗", mid, ratio);
             }
         }
     } else {
@@ -3159,11 +3141,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         let high_size = encode_cached(high, &mut size_cache)?;
         iterations += 1;
         let high_ratio = high_size as f64 / input_size as f64;
-        log_msg!("   🔄 CRF {:.1}: {:.1}%", high, high_ratio * 100.0);
+        eprintln!("   🔄 CRF {:.1}: {:.1}%", high, high_ratio * 100.0);
         
         if high_size >= input_size {
             // 即使最高 CRF 也无法压缩
-            log_msg!("      ⚠️ Cannot compress even at CRF {:.1}", high);
+            eprintln!("      ⚠️ Cannot compress even at CRF {:.1}", high);
             best_crf = Some(high);
             best_size = Some(high_size);
         } else {
@@ -3182,11 +3164,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                     high = mid1;
                     best_crf = Some(mid1);
                     best_size = Some(size1);
-                    log_msg!("🔄 CRF {:.1}: {:.1}% ✓", mid1, size1 as f64 / input_size as f64 * 100.0);
+                    eprintln!("🔄 CRF {:.1}: {:.1}% ✓", mid1, size1 as f64 / input_size as f64 * 100.0);
                 } else {
                     // mid1 不能压缩，向上搜索
                     low = mid1;
-                    log_msg!("🔄 CRF {:.1}: {:.1}% ✗", mid1, size1 as f64 / input_size as f64 * 100.0);
+                    eprintln!("🔄 CRF {:.1}: {:.1}% ✗", mid1, size1 as f64 / input_size as f64 * 100.0);
                 }
             }
         }
@@ -3194,7 +3176,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     
     // ═══════════════════════════════════════════════════════════
     if let Some(compress_crf) = best_crf {
-        log_msg!("📍 Phase 2: Binary search for precise boundary");
+        eprintln!("📍 Phase 2: Binary search for precise boundary");
         
         // 在 [compress_crf - 2, compress_crf] 范围内二分搜索
         let mut bin_low = (compress_crf - 2.0).max(min_crf);
@@ -3215,9 +3197,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                 iterations += 1;
                 let ratio = s as f64 / input_size as f64 * 100.0;
                 if s < input_size {
-                    log_msg!("   🔄 CRF {:.1}: {:.1}% ✓", mid, ratio);
+                    eprintln!("   🔄 CRF {:.1}: {:.1}% ✓", mid, ratio);
                 } else {
-                    log_msg!("   🔄 CRF {:.1}: {:.1}% ✗", mid, ratio);
+                    eprintln!("   🔄 CRF {:.1}: {:.1}% ✗", mid, ratio);
                 }
                 s
             };
@@ -3234,7 +3216,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     
     // ═══════════════════════════════════════════════════════════
     if let Some(boundary_crf) = best_crf {
-        log_msg!("📍 Phase 3: Fine-tune with 0.1 step (target: SSIM 0.999+)");
+        eprintln!("📍 Phase 3: Fine-tune with 0.1 step (target: SSIM 0.999+)");
         
         // 自适应搜索：根据压缩率变化率决定是否继续
         let mut prev_ratio = best_size.map(|s| s as f64 / input_size as f64).unwrap_or(1.0);
@@ -3256,14 +3238,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if size < input_size {
                     best_crf = Some(test_crf);
                     best_size = Some(size);
-                    log_msg!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
+                    eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
                     
                     // 检查变化率
                     let change = ratio - prev_ratio;
                     if change.abs() < 0.005 {  // 变化小于 0.5%
                         consecutive_small_change += 1;
                         if consecutive_small_change >= 3 {
-                            log_msg!("⚡ Diminishing returns, stop");
+                            eprintln!("⚡ Diminishing returns, stop");
                             break;
                         }
                     } else {
@@ -3272,7 +3254,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     prev_ratio = ratio;
                     test_crf -= 0.1;
                 } else {
-                    log_msg!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
+                    eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
                     break;  // 找到边界
                 }
         }
@@ -3283,7 +3265,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         (Some(crf), Some(size)) => (crf, size),
         _ => {
             // 无法压缩，返回 max_crf
-            log_msg!("⚠️ Cannot compress this file");
+            eprintln!("⚠️ Cannot compress this file");
             let size = encode_cached(max_crf, &mut size_cache)?;
             iterations += 1;
             (max_crf, size)
@@ -3291,7 +3273,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
     
     // Step 3: SSIM 验证
-    log_msg!("📍 Step 3: SSIM validation at CRF {:.1}", final_crf);
+    eprintln!("📍 Step 3: SSIM validation at CRF {:.1}", final_crf);
     
     // 确保输出文件是 final_crf 的版本
     let final_key = (final_crf * 10.0).round() as i32;
@@ -3330,13 +3312,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                           else if s >= 0.98 { "✅ Very Good" }
                           else if s >= 0.95 { "🟡 Good" }
                           else { "🟠 Below threshold" };
-        log_msg!("📊 SSIM: {:.6} {}", s, quality_hint);
+        eprintln!("📊 SSIM: {:.6} {}", s, quality_hint);
     }
     
     let size_change_pct = (final_size as f64 / input_size as f64 - 1.0) * 100.0;
     let quality_passed = final_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
     
-    log_msg!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
+    eprintln!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
 
     cpu_progress.finish(final_crf, final_size, ssim);
 
