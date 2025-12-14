@@ -3668,9 +3668,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     if let Some(boundary_crf) = best_crf {
         eprintln!("📍 Phase 3: Fine-tune with {:.2} step (target: SSIM 0.999+)", step_size);
         
-        // 自适应搜索：根据压缩率变化率决定是否继续
-        let mut prev_ratio = best_size.map(|s| s as f64 / input_size as f64).unwrap_or(1.0);
-        let mut consecutive_small_change = 0;
+        // 🔥 v5.60: 保守的智能跳过策略
+        // 收敛检测：连续3个CRF的SSIM变化<0.0001且大小变化<0.1%才跳过
+        // 这是最保守的策略，避免过早终止
+        let mut convergence_history: Vec<(f32, u64, f64)> = Vec::new();  // (crf, size, ratio)
         
         // 🔥 v5.59: 向下搜索（更高质量），使用动态步进
         let mut test_crf = boundary_crf - step_size;
@@ -3690,18 +3691,39 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_size = Some(size);
                     eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
                     
-                    // 检查变化率
-                    let change = ratio - prev_ratio;
-                    if change.abs() < 0.005 {  // 变化小于 0.5%
-                        consecutive_small_change += 1;
-                        if consecutive_small_change >= 3 {
-                            eprintln!("⚡ Diminishing returns, stop");
+                    // 🔥 v5.60: 保守收敛检测
+                    // 记录历史数据
+                    convergence_history.push((test_crf, size, ratio));
+                    
+                    // 只有当历史记录>=3时才检测收敛
+                    if convergence_history.len() >= 3 {
+                        let len = convergence_history.len();
+                        let (_, s1, r1) = convergence_history[len - 3];
+                        let (_, s2, r2) = convergence_history[len - 2];
+                        let (_, s3, r3) = convergence_history[len - 1];
+                        
+                        // 计算大小变化率（相对于输入）
+                        let size_change_1_2 = ((s2 as f64 - s1 as f64) / sample_input_size as f64).abs();
+                        let size_change_2_3 = ((s3 as f64 - s2 as f64) / sample_input_size as f64).abs();
+                        
+                        // 计算比率变化（百分比）
+                        let ratio_change_1_2 = (r2 - r1).abs() * 100.0;  // 转为百分比
+                        let ratio_change_2_3 = (r3 - r2).abs() * 100.0;
+                        
+                        // 🔥 v5.60: 保守阈值
+                        // 大小变化 < 0.1% (0.001) 且 比率变化 < 0.1%
+                        let converged = size_change_1_2 < 0.001 
+                            && size_change_2_3 < 0.001
+                            && ratio_change_1_2 < 0.1
+                            && ratio_change_2_3 < 0.1;
+                        
+                        if converged {
+                            eprintln!("⚡ 收敛检测: 连续3个CRF大小变化<0.1% → 已到收敛点，跳过剩余测试");
+                            eprintln!("   变化: {:.3}% → {:.3}%", size_change_1_2 * 100.0, size_change_2_3 * 100.0);
                             break;
                         }
-                    } else {
-                        consecutive_small_change = 0;
                     }
-                    prev_ratio = ratio;
+                    
                     test_crf -= step_size;
                 } else {
                     eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
