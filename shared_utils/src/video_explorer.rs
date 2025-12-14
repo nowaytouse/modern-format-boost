@@ -2861,7 +2861,7 @@ pub fn explore_with_gpu_coarse_search(
             min_crf: crate::gpu_accel::GPU_DEFAULT_MIN_CRF,  // 🔥 v5.7: 使用常量 (1.0 for VideoToolbox)
             max_crf,
             step: 2.0,  // 🔥 v5.3: 精细搜索用 2 CRF 步长
-            max_iterations: 15,  // 🔥 v5.7: 更多迭代以支持更大 CRF 范围
+            max_iterations: crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS,  // 🔥 v5.52: 使用保底上限 500
         };
 
         // 🔥 v5.34: GPU 阶段使用新的基于迭代计数的进度条（修复跳跃问题）
@@ -3036,10 +3036,34 @@ fn cpu_fine_tune_from_gpu_boundary(
         .context("Failed to read input file metadata")?
         .len();
 
-    // 🔥 v5.34: 创建基于迭代计数的进度条
+    // 🔥 v5.52: CPU 也使用采样编码（和 GPU 一致）
+    // 获取视频时长
+    let duration: f32 = {
+        use std::process::Command;
+        let duration_output = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"])
+            .arg(input)
+            .output();
+        duration_output
+            .ok()
+            .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
+            .unwrap_or(crate::gpu_accel::GPU_SAMPLE_DURATION)
+    };
+
+    // 计算采样时长和输入大小
+    let sample_duration = duration.min(crate::gpu_accel::GPU_SAMPLE_DURATION);
+    let sample_input_size = if duration <= crate::gpu_accel::GPU_SAMPLE_DURATION {
+        input_size  // 短视频，使用完整大小
+    } else {
+        // 长视频，按比例计算采样部分的预期大小
+        let ratio = sample_duration / duration;
+        (input_size as f64 * ratio as f64) as u64
+    };
+
+    // 🔥 v5.34: 创建基于迭代计数的进度条（使用采样输入大小）
     let cpu_progress = crate::SimpleIterationProgress::new(
         "🔬 CPU Fine-Tune",
-        input_size,
+        sample_input_size,  // 🔥 v5.52: 使用采样大小
         25  // 预估25次迭代
     );
 
@@ -3054,35 +3078,41 @@ fn cpu_fine_tune_from_gpu_boundary(
     }
     
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-    
-    // 创建编码器
+
+    // 🔥 v5.52: CPU 编码器也使用采样（和 GPU 一致）
     let encode = |crf: f32| -> Result<u64> {
-            
+
         let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-i").arg(input)
+        cmd.arg("-y");
+
+        // 🔥 v5.52: 添加 -t 参数限制编码时长
+        if duration > crate::gpu_accel::GPU_SAMPLE_DURATION {
+            cmd.arg("-t").arg(format!("{}", sample_duration));
+        }
+
+        cmd.arg("-i").arg(input)
             .arg("-c:v").arg(encoder.ffmpeg_name())
             .arg("-crf").arg(format!("{:.1}", crf));
-        
+
         for arg in encoder.extra_args(max_threads) {
             cmd.arg(arg);
         }
-        
+
         for arg in &vf_args {
             if !arg.is_empty() {
                 cmd.arg("-vf").arg(arg);
             }
         }
-        
+
         cmd.arg("-c:a").arg("copy")
             .arg(output);
-        
+
         let result = cmd.output().context("Failed to run ffmpeg")?;
         if !result.status.success() {
             let stderr = String::from_utf8_lossy(&result.stderr);
             anyhow::bail!("Encoding failed: {}", stderr.lines().last().unwrap_or("unknown"));
         }
-        
+
         Ok(fs::metadata(output)?.len())
     };
     
@@ -3128,9 +3158,9 @@ fn cpu_fine_tune_from_gpu_boundary(
     // ═══════════════════════════════════════════════════════════
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
     iterations += 1;
-    let gpu_ratio = gpu_size as f64 / input_size as f64;
+    let gpu_ratio = gpu_size as f64 / sample_input_size as f64;
 
-    if gpu_size < input_size {
+    if gpu_size < sample_input_size {
         // GPU 边界能压缩，作为起点
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
@@ -3144,9 +3174,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         while test_crf >= quick_search_limit && iterations < 20 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / input_size as f64;
+            let ratio = size as f64 / sample_input_size as f64;
 
-            if size < input_size {
+            if size < sample_input_size {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
@@ -3168,9 +3198,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 20 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / input_size as f64;
+            let ratio = size as f64 / sample_input_size as f64;
 
-            if size < input_size {
+            if size < sample_input_size {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 eprintln!("✅ Found valid boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
@@ -3209,9 +3239,9 @@ fn cpu_fine_tune_from_gpu_boundary(
             
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let ratio = size as f64 / input_size as f64;
-            
-                if size < input_size {
+            let ratio = size as f64 / sample_input_size as f64;
+
+                if size < sample_input_size {
                     best_crf = Some(test_crf);
                     best_size = Some(size);
                     eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
