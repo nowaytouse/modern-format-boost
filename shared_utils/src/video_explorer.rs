@@ -3552,12 +3552,27 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("📁 Input: {} bytes ({:.2} MB)", input_size, input_size as f64 / 1024.0 / 1024.0);
     eprintln!("🎯 Goal: Find optimal CRF (highest quality that compresses)");
     
+    // 🔥 v5.59: 可压缩空间检测 - 根据压缩潜力选择精度
+    // 高压缩潜力 → 0.25 步进（快速）
+    // 中/低压缩潜力 → 0.1 步进（精细，不放过每一个优化空间）
+    let precheck_info = precheck::get_video_info(input).ok();
+    let (step_size, cache_multiplier) = match precheck_info.as_ref().map(|i| i.compressibility) {
+        Some(precheck::Compressibility::High) => {
+            eprintln!("📊 高压缩潜力 → 使用 0.25 步进（快速模式）");
+            (0.25_f32, 4.0_f32)  // 0.25 步进，缓存 key = crf * 4
+        }
+        Some(precheck::Compressibility::Medium) | Some(precheck::Compressibility::Low) | None => {
+            eprintln!("📊 中/低压缩潜力 → 使用 0.1 步进（精细模式，不放过每一个优化空间）");
+            (0.1_f32, 10.0_f32)  // 0.1 步进，缓存 key = crf * 10
+        }
+    };
+    
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
     
-    // 🔥 v5.54: 带缓存的采样编码（用于搜索）+ 进度条更新
+    // 🔥 v5.59: 带缓存的采样编码（动态精度）+ 进度条更新
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
-        let key = (crf * 4.0).round() as i32;
+        let key = (crf * cache_multiplier).round() as i32;
         if let Some(&size) = cache.get(&key) {
             // 从缓存读取，仍然更新进度条
             cpu_progress.inc_iteration(crf, size, None);
@@ -3570,19 +3585,17 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(size)
     };
     
-    // 🔥 v5.47: 简化 CPU 微调 - GPU 已完成粗略搜索
-    // CPU 只需在 GPU 边界附近做 0.1 精度微调
-    //
+    // 🔥 v5.59: CPU 精细微调 - 根据压缩潜力动态选择精度
     // GPU 已经找到：最高的能压缩的 CRF（如 39）
     // CPU 任务：
     // 1. 验证 GPU 边界
-    // 2. 向下微调 1.0 CRF（39.0 → 38.9 → ... → 38.0）找更高质量
-    // 3. Phase 3 会继续 0.1 步进微调到最优点
+    // 2. 向下微调找更高质量（步进由压缩潜力决定）
+    // 3. Phase 3 继续精细微调到最优点
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
 
-    eprintln!("📍 CPU Fine-Tune: 0.1 step around GPU boundary (CRF {:.1})", gpu_boundary_crf);
+    eprintln!("📍 CPU Fine-Tune: {:.2} step around GPU boundary (CRF {:.1})", step_size, gpu_boundary_crf);
     eprintln!("🎯 Goal: Find lowest CRF that compresses (highest quality)");
 
     // ═══════════════════════════════════════════════════════════
@@ -3598,12 +3611,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         best_size = Some(gpu_size);
         eprintln!("✅ GPU boundary CRF {:.1} compresses ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
 
-        // 🔥 v5.52: 向下微调 1.0 CRF（0.1 步进）找更高质量区域
-        // 用户要求："GPU 覆盖 0.5 步进，CPU 仅做 0.1 精度"
-        let mut test_crf = gpu_boundary_crf - 0.25;
+        // 🔥 v5.59: 向下微调找更高质量区域（步进由压缩潜力决定）
+        let mut test_crf = gpu_boundary_crf - step_size;
         let quick_search_limit = (gpu_boundary_crf - 1.5).max(min_crf);
 
-        while test_crf >= quick_search_limit && iterations < 20 {
+        while test_crf >= quick_search_limit && iterations < 25 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let ratio = size as f64 / sample_input_size as f64;
@@ -3612,7 +3624,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
-                test_crf -= 0.25;  // 🔥 v5.52: 改为 0.1 步进（之前是 0.5）
+                test_crf -= step_size;  // 🔥 v5.59: 动态步进
             } else {
                 eprintln!("   ✗ CRF {:.1}: {:.1}% fails → boundary found", test_crf, ratio * 100.0);
                 break;
@@ -3624,10 +3636,10 @@ fn cpu_fine_tune_from_gpu_boundary(
         eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
         eprintln!("   Searching nearby for valid boundary...");
 
-        // 向下搜索 1.0 CRF（0.1 步进）找第一个能压缩的点
-        let mut test_crf = gpu_boundary_crf - 0.25;
+        // 🔥 v5.59: 向下搜索找第一个能压缩的点（动态步进）
+        let mut test_crf = gpu_boundary_crf - step_size;
         let mut found = false;
-        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 20 {
+        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 25 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let ratio = size as f64 / sample_input_size as f64;
@@ -3641,7 +3653,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 eprintln!("   CRF {:.1}: {:.1}% ✗", test_crf, ratio * 100.0);
             }
-            test_crf -= 0.25;
+            test_crf -= step_size;
         }
 
         if !found {
@@ -3654,18 +3666,18 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     // ═══════════════════════════════════════════════════════════
     if let Some(boundary_crf) = best_crf {
-        eprintln!("📍 Phase 3: Fine-tune with 0.1 step (target: SSIM 0.999+)");
+        eprintln!("📍 Phase 3: Fine-tune with {:.2} step (target: SSIM 0.999+)", step_size);
         
         // 自适应搜索：根据压缩率变化率决定是否继续
         let mut prev_ratio = best_size.map(|s| s as f64 / input_size as f64).unwrap_or(1.0);
         let mut consecutive_small_change = 0;
         
-        // 向下搜索（更高质量），直到找到边界或变化率太小
-        let mut test_crf = boundary_crf - 0.25;
+        // 🔥 v5.59: 向下搜索（更高质量），使用动态步进
+        let mut test_crf = boundary_crf - step_size;
         while test_crf >= min_crf && iterations < GLOBAL_MAX_ITERATIONS {
-            let key = (test_crf * 4.0).round() as i32;
+            let key = (test_crf * cache_multiplier).round() as i32;
             if size_cache.contains_key(&key) {
-                test_crf -= 0.25;
+                test_crf -= step_size;
                 continue;
             }
             
@@ -3690,7 +3702,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         consecutive_small_change = 0;
                     }
                     prev_ratio = ratio;
-                    test_crf -= 0.25;
+                    test_crf -= step_size;
                 } else {
                     eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
                     break;  // 找到边界
