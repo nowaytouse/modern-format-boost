@@ -1,8 +1,9 @@
-//! 🔥 v5.20: 真正的实时进度条
+//! 🔥 v5.21: 真正的条状实时进度条
 //!
 //! 特点：
-//! - 后台线程自动更新 Spinner（不阻塞主线程）
-//! - 使用 indicatif 的 steady_tick 实现流畅动画
+//! - 真正的条状进度条（不是 Spinner）
+//! - 彩色渐变显示
+//! - 后台线程自动更新
 //! - 原子操作更新状态，无锁竞争
 //! - 自动清理，不会死循环
 
@@ -11,12 +12,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 实时探索进度条
+/// 实时探索进度条 - 真正的条状进度条
 /// 
 /// 使用 indicatif 的 steady_tick 实现真正的实时更新
 pub struct RealtimeExploreProgress {
     bar: ProgressBar,
     input_size: u64,
+    max_iterations: u64,
     // 原子状态 - 无锁更新
     current_crf: AtomicU64,      // f32 as bits
     current_size: AtomicU64,
@@ -27,21 +29,26 @@ pub struct RealtimeExploreProgress {
 }
 
 impl RealtimeExploreProgress {
-    /// 创建实时进度条
+    /// 创建实时条状进度条
     pub fn new(stage: &str, input_size: u64) -> Arc<Self> {
-        let bar = ProgressBar::new_spinner();
+        Self::with_max_iterations(stage, input_size, 20) // 默认最大 20 次迭代
+    }
+    
+    /// 创建带最大迭代次数的进度条
+    pub fn with_max_iterations(stage: &str, input_size: u64, max_iter: u64) -> Arc<Self> {
+        let bar = ProgressBar::new(max_iter);
         
-        // 设置样式 - 带 Spinner 动画
+        // 🔥 v5.21: 真正的条状进度条样式
         bar.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {prefix:.bold} • ⏱️ {elapsed_precise} • {msg}")
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:25.green/black}▏ {percent:>3}% • {pos}/{len} iter • ⏱️ {elapsed_precise} • {msg}")
                 .expect("Invalid template")
-                .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+                .progress_chars("━━─")  // 彩色条状字符
         );
         bar.set_prefix(stage.to_string());
         bar.set_message("Initializing...");
         
-        // 🔥 关键：启用 steady_tick，后台线程自动更新 Spinner
+        // 🔥 关键：启用 steady_tick，后台线程自动更新
         bar.enable_steady_tick(Duration::from_millis(80));
         
         // 高刷新率
@@ -50,6 +57,7 @@ impl RealtimeExploreProgress {
         Arc::new(Self {
             bar,
             input_size,
+            max_iterations: max_iter,
             current_crf: AtomicU64::new(0),
             current_size: AtomicU64::new(0),
             current_ssim: AtomicU64::new(0),
@@ -72,12 +80,15 @@ impl RealtimeExploreProgress {
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
         }
-        self.iterations.fetch_add(1, Ordering::Relaxed);
+        let iter = self.iterations.fetch_add(1, Ordering::Relaxed) + 1;
         
         // 更新最佳 CRF（如果能压缩）
         if size < self.input_size {
             self.best_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
         }
+        
+        // 🔥 更新进度条位置
+        self.bar.set_position(iter.min(self.max_iterations));
         
         // 更新消息
         self.refresh_message();
