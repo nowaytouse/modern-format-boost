@@ -291,10 +291,14 @@ process_images() {
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
 
-    # 🔥 v5.35: 关闭stdin文件描述符，禁止任何键盘输入
-    # 程序无法读取任何输入，避免ANSI escape codes污染
+    # 🔥 v5.35: 完全禁止键盘交互 - 多层防护
+    # 1. 关闭stdin文件描述符
+    # 2. 禁用终端canonical模式和echo
+    # 3. 设置TERM=dumb告诉程序终端不支持交互
     exec 0<&-
-    "$IMGQUALITY_HEVC" "${args[@]}" || true
+    stty -echo -icanon 2>/dev/null || true
+    TERM=dumb "$IMGQUALITY_HEVC" "${args[@]}" || true
+    stty echo icanon 2>/dev/null || true
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -314,10 +318,14 @@ process_videos() {
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
 
-    # 🔥 v5.35: 关闭stdin文件描述符，禁止任何键盘输入
-    # 程序无法读取任何输入，避免ANSI escape codes污染和终端干扰
+    # 🔥 v5.35: 完全禁止键盘交互 - 多层防护
+    # 1. 关闭stdin文件描述符
+    # 2. 禁用终端canonical模式和echo
+    # 3. 设置TERM=dumb告诉程序终端不支持交互
     exec 0<&-
-    "$VIDQUALITY_HEVC" "${args[@]}" || true
+    stty -echo -icanon 2>/dev/null || true
+    TERM=dumb "$VIDQUALITY_HEVC" "${args[@]}" || true
+    stty echo icanon 2>/dev/null || true
 }
 
 # ═══════════════════════════════════════════════════════════════
