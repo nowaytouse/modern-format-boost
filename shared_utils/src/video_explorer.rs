@@ -3079,16 +3079,48 @@ fn cpu_fine_tune_from_gpu_boundary(
     
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
 
-    // 🔥 v5.52: CPU 编码器也使用采样（和 GPU 一致）
-    let encode = |crf: f32| -> Result<u64> {
-
+    // 🔥 v5.54: 采样编码（用于搜索，速度快）
+    let encode_sampled = |crf: f32| -> Result<u64> {
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y");
 
-        // 🔥 v5.52: 添加 -t 参数限制编码时长
+        // 🔥 v5.54: 添加 -t 参数限制编码时长（仅搜索时使用）
         if duration > crate::gpu_accel::GPU_SAMPLE_DURATION {
             cmd.arg("-t").arg(format!("{}", sample_duration));
         }
+
+        cmd.arg("-i").arg(input)
+            .arg("-c:v").arg(encoder.ffmpeg_name())
+            .arg("-crf").arg(format!("{:.1}", crf));
+
+        for arg in encoder.extra_args(max_threads) {
+            cmd.arg(arg);
+        }
+
+        for arg in &vf_args {
+            if !arg.is_empty() {
+                cmd.arg("-vf").arg(arg);
+            }
+        }
+
+        cmd.arg("-c:a").arg("copy")
+            .arg(output);
+
+        let result = cmd.output().context("Failed to run ffmpeg")?;
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            anyhow::bail!("Encoding failed: {}", stderr.lines().last().unwrap_or("unknown"));
+        }
+
+        Ok(fs::metadata(output)?.len())
+    };
+
+    // 🔥 v5.54: 完整编码（用于最终输出，无 -t 参数）
+    let encode_full = |crf: f32| -> Result<u64> {
+        let mut cmd = std::process::Command::new("ffmpeg");
+        cmd.arg("-y");
+
+        // 🔥 v5.54: 最终输出必须编码完整视频，不使用 -t 参数
 
         cmd.arg("-i").arg(input)
             .arg("-c:v").arg(encoder.ffmpeg_name())
@@ -3123,7 +3155,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
     
-    // 带缓存的编码 + 进度条更新
+    // 🔥 v5.54: 带缓存的采样编码（用于搜索）+ 进度条更新
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
         let key = (crf * 10.0).round() as i32;
         if let Some(&size) = cache.get(&key) {
@@ -3131,7 +3163,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             cpu_progress.inc_iteration(crf, size, None);
             return Ok(size);
         }
-        let size = encode(crf)?;
+        let size = encode_sampled(crf)?;  // 🔥 v5.54: 使用采样编码
         cache.insert(key, size);
         // 🔥 v5.34: 编码完成立即更新进度条
         cpu_progress.inc_iteration(crf, size, None);
@@ -3267,26 +3299,26 @@ fn cpu_fine_tune_from_gpu_boundary(
     }
     
     // 最终结果
-    let (final_crf, final_size) = match (best_crf, best_size) {
-        (Some(crf), Some(size)) => (crf, size),
+    let final_crf = match (best_crf, best_size) {
+        (Some(crf), Some(_size)) => crf,  // 🔥 v5.54: size 不再使用，最终大小由 encode_full 确定
         _ => {
             // 无法压缩，返回 max_crf
             eprintln!("⚠️ Cannot compress this file");
-            let size = encode_cached(max_crf, &mut size_cache)?;
+            let _size = encode_cached(max_crf, &mut size_cache)?;  // 确保输出文件存在
             iterations += 1;
-            (max_crf, size)
+            max_crf
         }
     };
-    
-    // Step 3: SSIM 验证
+
+    // 🔥 v5.54: Step 3: SSIM 验证（使用完整视频）
     eprintln!("📍 Step 3: SSIM validation at CRF {:.1}", final_crf);
-    
-    // 确保输出文件是 final_crf 的版本
-    let final_key = (final_crf * 10.0).round() as i32;
-    if !size_cache.contains_key(&final_key) || fs::metadata(output).map(|m| m.len()).unwrap_or(0) != final_size {
-        encode(final_crf)?;
-    }
-    
+
+    // 🔥 v5.54: 最终输出必须编码完整视频（不是采样）
+    eprintln!("🔄 Final output: Re-encoding FULL video at CRF {:.1}...", final_crf);
+    let final_full_size = encode_full(final_crf)?;
+    eprintln!("✅ Final full video size: {} bytes ({:.2} MB)",
+        final_full_size, final_full_size as f64 / 1024.0 / 1024.0);
+
     // 计算 SSIM
     let ssim_output = std::process::Command::new("ffmpeg")
         .arg("-i").arg(input)
@@ -3320,17 +3352,18 @@ fn cpu_fine_tune_from_gpu_boundary(
                           else { "🟠 Below threshold" };
         eprintln!("📊 SSIM: {:.6} {}", s, quality_hint);
     }
-    
-    let size_change_pct = (final_size as f64 / input_size as f64 - 1.0) * 100.0;
-    let quality_passed = final_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
-    
+
+    // 🔥 v5.54: 使用完整视频大小计算结果
+    let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
+    let quality_passed = final_full_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
+
     eprintln!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
 
-    cpu_progress.finish(final_crf, final_size, ssim);
+    cpu_progress.finish(final_crf, final_full_size, ssim);
 
     Ok(ExploreResult {
         optimal_crf: final_crf,
-        output_size: final_size,
+        output_size: final_full_size,  // 🔥 v5.54: 使用完整视频大小
         size_change_pct,
         ssim,
         psnr: None,
