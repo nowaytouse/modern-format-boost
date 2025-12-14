@@ -25,6 +25,7 @@
 
 use std::process::Command;
 use std::sync::OnceLock;
+use std::io::Read;
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.3: 全局常量 - 避免硬编码
@@ -1257,33 +1258,85 @@ pub fn gpu_coarse_search_with_log(
     // 🔥 v5.5: 简洁 - 不打印采样信息，直接开始搜索
     
     // 快速编码函数（GPU）- 只编码前 N 秒
+    // 🔥 v5.42: 实时进度更新 - 读取ffmpeg的-progress输出，多次调用progress_cb
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
+        use std::io::{BufRead, BufReader};
+        use std::process::Stdio;
+
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.get_extra_args();
-        
+
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .arg("-t").arg(format!("{}", actual_sample_duration))  // 🔥 使用实际采样时长
             .arg("-i").arg(input)
             .arg("-c:v").arg(gpu_encoder.name);
-        
+
         for arg in &crf_args {
             cmd.arg(arg);
         }
         for arg in &extra_args {
             cmd.arg(*arg);
         }
-        
+
         cmd.arg("-an")  // 忽略音频，加速
-            .arg(output);
-        
-        let result = cmd.output().context("Failed to run ffmpeg")?;
-        
-        if !result.status.success() {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-            bail!("GPU encoding failed: {}", stderr.lines().last().unwrap_or("unknown error"));
+            .arg("-progress").arg("pipe:1")  // 🔥 v5.42: 读取实时进度
+            .arg(output)
+            .stdout(Stdio::piped())  // 捕获 stdout (进度信息)
+            .stderr(Stdio::piped());  // 捕获 stderr (ffmpeg日志)
+
+        let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
+
+        // 🔥 v5.42: 后台线程读取 stderr 防止死锁
+        let stderr_handle = if let Some(stderr) = child.stderr.take() {
+            Some(std::thread::spawn(move || {
+                let _ = std::io::Read::read_to_end(&mut std::io::BufReader::new(stderr).by_ref(), &mut vec![]);
+            }))
+        } else {
+            None
+        };
+
+        // 🔥 v5.42: 在主线程读取 stdout (进度信息)
+        let mut last_progress_time = std::time::Instant::now();
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    // 解析 out_time_us=XXXXX
+                    if let Some(val) = line.strip_prefix("out_time_us=") {
+                        if let Ok(time_us) = val.parse::<u64>() {
+                            // 🔥 v5.42: 每 1 秒更新一次进度条
+                            if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
+                                let current_secs = time_us as f64 / 1_000_000.0;
+                                let pct = (current_secs / actual_sample_duration as f64 * 100.0).min(100.0);
+
+                                // 估算最终输出大小（线性假设）
+                                let estimated_final_size = (std::fs::metadata(output).map(|m| m.len()).unwrap_or(0) as f64 / pct.max(1.0) * 100.0) as u64;
+
+                                if let Some(cb) = progress_cb {
+                                    cb(crf, estimated_final_size);
+                                }
+                                last_progress_time = std::time::Instant::now();
+                            }
+                        }
+                    }
+                }
+            }
         }
-        
+
+        // 等待编码完成
+        let status = child.wait().context("Failed to wait for ffmpeg")?;
+
+        // 等待 stderr 线程完成
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
+
+        if !status.success() {
+            bail!("GPU encoding failed (exit code: {:?})", status.code());
+        }
+
         Ok(std::fs::metadata(output)?.len())
     };
     
