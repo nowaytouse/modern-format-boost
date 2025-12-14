@@ -821,9 +821,9 @@ pub struct QualityScore {
 /// - CPU 阶段：ssim_weight=0.7, size_weight=0.3（更看重质量）
 ///
 /// ## 使用场景：
-/// ```rust
-/// let score1 = calculate_quality_score(0.95, 50MB, 100MB, Phase::Gpu);
-/// let score2 = calculate_quality_score(0.98, 60MB, 100MB, Phase::Gpu);
+/// ```ignore
+/// let score1 = calculate_quality_score(0.95, 50_000_000, 100_000_000, SearchPhase::Gpu);
+/// let score2 = calculate_quality_score(0.98, 60_000_000, 100_000_000, SearchPhase::Gpu);
 /// if score2.combined_score > score1.combined_score {
 ///     // score2 更好！
 /// }

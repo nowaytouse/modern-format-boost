@@ -617,7 +617,7 @@ impl VideoExplorer {
         
         // 带缓存的编码
         let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>, explorer: &VideoExplorer| -> Result<u64> {
-            let key = (crf * 10.0).round() as i32;
+            let key = (crf * 4.0).round() as i32;
             if let Some(&size) = cache.get(&key) {
                 return Ok(size);
             }
@@ -921,7 +921,7 @@ impl VideoExplorer {
                             cache: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
                             last_key: &mut i32,
                             explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
-            let key = (crf * 10.0).round() as i32;
+            let key = (crf * 4.0).round() as i32;
             if let Some(&cached) = cache.get(&key) {
                 return Ok(cached);
             }
@@ -1028,10 +1028,10 @@ impl VideoExplorer {
 
                 // 🔥 v4.9: 进一步 ±0.1 精细调整（达到 ±0.1 精度）
                 if iterations < MAX_ITERATIONS {
-                    for offset in [-0.1_f32, 0.1, -0.2, 0.2] {
+                    for offset in [-0.25_f32, 0.25, -0.5, 0.5] {
                         let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
                         // 避免重复测试已缓存的值
-                        let key = (crf * 10.0).round() as i32;
+                        let key = (crf * 4.0).round() as i32;
                         if cache.contains_key(&key) { continue; }
                         if iterations >= MAX_ITERATIONS { break; }
 
@@ -1053,7 +1053,7 @@ impl VideoExplorer {
         }
 
         // 🔥 v4.9: 智能最终编码 - 只有必要时才重新编码
-        let best_key = (best_crf * 10.0).round() as i32;
+        let best_key = (best_crf * 4.0).round() as i32;
         let (final_size, final_quality) = if last_encoded_key == best_key {
             // 最后一次编码就是 best_crf，直接使用缓存
             log_realtime!("   ✨ Output already at best CRF {:.1} (no re-encoding needed)", best_crf);
@@ -1174,7 +1174,7 @@ impl VideoExplorer {
                                size_cache: &mut std::collections::HashMap<i32, u64>,
                                last_key: &mut i32,
                                explorer: &VideoExplorer| -> Result<u64> {
-            let key = (crf * 100.0).round() as i32;  // 🔥 提升精度：10 → 100
+            let key = (crf * 4.0).round() as i32;  // 🔥 提升精度：10 → 100
             if let Some(&size) = size_cache.get(&key) {
                 return Ok(size);
             }
@@ -1188,7 +1188,7 @@ impl VideoExplorer {
         let validate_ssim = |crf: f32,
                             quality_cache: &mut std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)>,
                             explorer: &VideoExplorer| -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
-            let key = (crf * 100.0).round() as i32;  // 🔥 提升精度：10 → 100
+            let key = (crf * 4.0).round() as i32;  // 🔥 提升精度：10 → 100
             if let Some(&quality) = quality_cache.get(&key) {
                 return Ok(quality);
             }
@@ -1242,12 +1242,12 @@ impl VideoExplorer {
             
             // Stage B-2: 0.1 步长精细调整（在 best_crf 附近）
             log_header!("   📍 Stage B-2: 精细调整 (0.1 步长)");
-            for offset in [-0.1_f32, -0.2, -0.3, -0.4] {
+            for offset in [-0.25_f32, -0.5, -0.75, -1.0] {
                 let fine_crf = best_crf + offset;
                 if fine_crf < ABSOLUTE_MIN_CRF { break; }
                 if iterations >= STAGE_B2_MAX_ITERATIONS { break; }
 
-                let key = (fine_crf * 100.0).round() as i32;  // 🔥 v5.31: 精度修正
+                let key = (fine_crf * 4.0).round() as i32;  // 🔥 v5.31: 精度修正
                 if size_cache.contains_key(&key) { continue; }
 
                 let size = encode_size_only(fine_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1265,7 +1265,7 @@ impl VideoExplorer {
             progress_done!();
 
             // 确保输出文件是 best_crf 的版本
-            let best_key = (best_crf * 100.0).round() as i32;  // 🔥 v5.31: 精度修正
+            let best_key = (best_crf * 4.0).round() as i32;  // 🔥 v5.31: 精度修正
             if last_encoded_key != best_key {
                 progress_line!("│ 重新编码到最佳 CRF {:.1}... │", best_crf);
                 let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1411,13 +1411,13 @@ impl VideoExplorer {
         let mut fine_tune_history: Vec<u64> = Vec::new();
 
         // 🔥 v5.31: 先向下探索（更高质量方向）- 智能步进
-        for offset in [-0.1_f32, -0.2, -0.3, -0.4] {
+        for offset in [-0.25_f32, -0.5, -0.75, -1.0] {
             let test_crf = boundary_crf + offset;
             
             if test_crf < self.config.min_crf { continue; }
             if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
             
-            let key = (test_crf * 10.0).round() as i32;
+            let key = (test_crf * 4.0).round() as i32;
             if size_cache.contains_key(&key) { continue; }
 
             let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1447,13 +1447,13 @@ impl VideoExplorer {
         if best_boundary == boundary_crf {
             fine_tune_history.clear();
             
-            for offset in [0.1_f32, 0.2, 0.3, 0.4] {
+            for offset in [0.25_f32, 0.5, 0.75, 1.0] {
                 let test_crf = boundary_crf + offset;
                 
                 if test_crf > self.config.max_crf { continue; }
                 if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
                 
-                let key = (test_crf * 10.0).round() as i32;
+                let key = (test_crf * 4.0).round() as i32;
                 if size_cache.contains_key(&key) { continue; }
 
                 let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1491,7 +1491,7 @@ impl VideoExplorer {
         log_header!("   📍 Stage C: SSIM 验证");
 
         // 确保输出文件是 boundary_crf 的版本
-        let boundary_key = (boundary_crf * 10.0).round() as i32;
+        let boundary_key = (boundary_crf * 4.0).round() as i32;
         if last_encoded_key != boundary_key {
             progress_line!("│ 重新编码到 CRF {:.1}... │", boundary_crf);
             let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -2578,8 +2578,8 @@ pub fn explore_av1_compress_with_quality(
 /// | >= 0.85   | Fair      | 可见差异 |
 /// | < 0.85    | Poor      | 明显质量损失 |
 pub mod precision {
-    /// 🔥 v4.6: CRF 搜索精度：±0.1（四阶段搜索保证）
-    pub const CRF_PRECISION: f32 = 0.1;
+    /// 🔥 v5.55: CRF 搜索精度：±0.25（速度优化）
+    pub const CRF_PRECISION: f32 = 0.25;
     
     /// 🔥 v4.6: 粗搜索步长
     pub const COARSE_STEP: f32 = 2.0;
@@ -2587,8 +2587,8 @@ pub mod precision {
     /// 🔥 v4.6: 细搜索步长
     pub const FINE_STEP: f32 = 0.5;
     
-    /// 🔥 v4.6: 精细搜索步长
-    pub const ULTRA_FINE_STEP: f32 = 0.1;
+    /// 🔥 v5.55: 精细搜索步长 (从 0.1 改为 0.25，速度提升 2-3 倍)
+    pub const ULTRA_FINE_STEP: f32 = 0.25;
     
     /// SSIM 显示精度：4 位小数
     pub const SSIM_DISPLAY_PRECISION: u32 = 4;
@@ -3157,7 +3157,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     
     // 🔥 v5.54: 带缓存的采样编码（用于搜索）+ 进度条更新
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
-        let key = (crf * 10.0).round() as i32;
+        let key = (crf * 4.0).round() as i32;
         if let Some(&size) = cache.get(&key) {
             // 从缓存读取，仍然更新进度条
             cpu_progress.inc_iteration(crf, size, None);
@@ -3170,69 +3170,40 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(size)
     };
     
-    // 🔥 v5.55: 恢复三阶段结构 + 智能提前终止
-    // 融合 v5.2 的鲁棒性 + v5.54 的速度优化
+    // 🔥 v5.47: 简化 CPU 微调 - GPU 已完成粗略搜索
+    // CPU 只需在 GPU 边界附近做 0.1 精度微调
     //
-    // Stage A: 边界定位 (0.5 步进二分搜索)
-    // Stage B: 精细化 (0.25 步进，双向搜索)
-    // Stage C: SSIM 验证 (仅在最终点计算)
+    // GPU 已经找到：最高的能压缩的 CRF（如 39）
+    // CPU 任务：
+    // 1. 验证 GPU 边界
+    // 2. 向下微调 1.0 CRF（39.0 → 38.9 → ... → 38.0）找更高质量
+    // 3. Phase 3 会继续 0.1 步进微调到最优点
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
 
-    eprintln!("📍 CPU Fine-Tune v5.55: Three-Stage Search");
-    eprintln!("🎯 Goal: Find optimal CRF (highest quality that compresses)");
+    eprintln!("📍 CPU Fine-Tune: 0.1 step around GPU boundary (CRF {:.1})", gpu_boundary_crf);
+    eprintln!("🎯 Goal: Find lowest CRF that compresses (highest quality)");
 
     // ═══════════════════════════════════════════════════════════
-    // Stage A: 边界定位 (0.5 步进)
+    // Phase 1: 验证 GPU 边界并做初步微调
     // ═══════════════════════════════════════════════════════════
-    eprintln!("📍 Stage A: Boundary Search (0.5 step)");
-    
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
     iterations += 1;
     let gpu_ratio = gpu_size as f64 / sample_input_size as f64;
 
     if gpu_size < sample_input_size {
+        // GPU 边界能压缩，作为起点
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
         eprintln!("✅ GPU boundary CRF {:.1} compresses ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
-    } else {
-        eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
-        eprintln!("   Searching for valid boundary...");
-    }
 
-    // 向下搜索找第一个能压缩的点 (0.5 步进)
-    let mut test_crf = gpu_boundary_crf - 0.5;
-    let stage_a_limit = (gpu_boundary_crf - 2.0).max(min_crf);
-    
-    while test_crf >= stage_a_limit && iterations < 10 {
-        let size = encode_cached(test_crf, &mut size_cache)?;
-        iterations += 1;
-        let ratio = size as f64 / sample_input_size as f64;
+        // 🔥 v5.52: 向下微调 1.0 CRF（0.1 步进）找更高质量区域
+        // 用户要求："GPU 覆盖 0.5 步进，CPU 仅做 0.1 精度"
+        let mut test_crf = gpu_boundary_crf - 0.25;
+        let quick_search_limit = (gpu_boundary_crf - 1.5).max(min_crf);
 
-        if size < sample_input_size {
-            best_crf = Some(test_crf);
-            best_size = Some(size);
-            eprintln!("✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
-            break;
-        } else {
-            eprintln!("✗ CRF {:.1}: {:.1}%", test_crf, ratio * 100.0);
-        }
-        test_crf -= 0.5;
-    }
-
-    // ═══════════════════════════════════════════════════════════
-    // Stage B: 精细化 (0.25 步进，双向搜索)
-    // ═══════════════════════════════════════════════════════════
-    if let Some(boundary_crf) = best_crf {
-        eprintln!("📍 Stage B: Fine-Tune (0.25 step, bidirectional)");
-        
-        // B-1: 向下探索 (更高质量)
-        eprintln!("   B-1: Explore downward (higher quality)");
-        let mut test_crf = boundary_crf - 0.25;
-        let mut found_lower = false;
-        
-        while test_crf >= (boundary_crf - 1.0).max(min_crf) && iterations < 20 {
+        while test_crf >= quick_search_limit && iterations < 20 {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let ratio = size as f64 / sample_input_size as f64;
@@ -3240,42 +3211,92 @@ fn cpu_fine_tune_from_gpu_boundary(
             if size < sample_input_size {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
-                eprintln!("   ✓ CRF {:.1}: {:.1}%", test_crf, ratio * 100.0);
-                found_lower = true;
-                test_crf -= 0.25;
+                eprintln!("   ✓ CRF {:.1}: {:.1}% compresses", test_crf, ratio * 100.0);
+                test_crf -= 0.25;  // 🔥 v5.52: 改为 0.1 步进（之前是 0.5）
             } else {
-                eprintln!("   ✗ CRF {:.1}: {:.1}% (boundary)", test_crf, ratio * 100.0);
+                eprintln!("   ✗ CRF {:.1}: {:.1}% fails → boundary found", test_crf, ratio * 100.0);
                 break;
             }
         }
 
-        // B-2: 向上确认 (边界验证)
-        if found_lower {
-            eprintln!("   B-2: Confirm upward (boundary verification)");
-            let mut test_crf = best_crf.unwrap() + 0.25;
-            
-            while test_crf <= (best_crf.unwrap() + 0.75) && iterations < 25 {
-                let size = encode_cached(test_crf, &mut size_cache)?;
-                iterations += 1;
-                let ratio = size as f64 / sample_input_size as f64;
+    } else {
+        // GPU 边界不能压缩，可能是边界估算不准
+        eprintln!("⚠️ GPU boundary CRF {:.1} cannot compress ({:.1}%)", gpu_boundary_crf, gpu_ratio * 100.0);
+        eprintln!("   Searching nearby for valid boundary...");
 
-                if size < sample_input_size {
-                    best_crf = Some(test_crf);
-                    best_size = Some(size);
-                    eprintln!("   ✓ CRF {:.1}: {:.1}%", test_crf, ratio * 100.0);
-                    test_crf += 0.25;
-                } else {
-                    eprintln!("   ✗ CRF {:.1}: {:.1}% (boundary)", test_crf, ratio * 100.0);
-                    break;
-                }
+        // 向下搜索 1.0 CRF（0.1 步进）找第一个能压缩的点
+        let mut test_crf = gpu_boundary_crf - 0.25;
+        let mut found = false;
+        while test_crf >= (gpu_boundary_crf - 1.5).max(min_crf) && iterations < 20 {
+            let size = encode_cached(test_crf, &mut size_cache)?;
+            iterations += 1;
+            let ratio = size as f64 / sample_input_size as f64;
+
+            if size < sample_input_size {
+                best_crf = Some(test_crf);
+                best_size = Some(size);
+                eprintln!("✅ Found valid boundary at CRF {:.1} ({:.1}%)", test_crf, ratio * 100.0);
+                found = true;
+                break;
+            } else {
+                eprintln!("   CRF {:.1}: {:.1}% ✗", test_crf, ratio * 100.0);
             }
+            test_crf -= 0.25;
+        }
+
+        if !found {
+            eprintln!("⚠️ Cannot find compressible point near GPU boundary!");
+            eprintln!("   File may be already optimally compressed");
+            best_crf = Some(gpu_boundary_crf);
+            best_size = Some(gpu_size);
         }
     }
 
     // ═══════════════════════════════════════════════════════════
-    // Stage C: SSIM 验证 (仅在最终点计算)
-    // ═══════════════════════════════════════════════════════════
-    eprintln!("📍 Stage C: SSIM Validation");
+    if let Some(boundary_crf) = best_crf {
+        eprintln!("📍 Phase 3: Fine-tune with 0.1 step (target: SSIM 0.999+)");
+        
+        // 自适应搜索：根据压缩率变化率决定是否继续
+        let mut prev_ratio = best_size.map(|s| s as f64 / input_size as f64).unwrap_or(1.0);
+        let mut consecutive_small_change = 0;
+        
+        // 向下搜索（更高质量），直到找到边界或变化率太小
+        let mut test_crf = boundary_crf - 0.25;
+        while test_crf >= min_crf && iterations < GLOBAL_MAX_ITERATIONS {
+            let key = (test_crf * 4.0).round() as i32;
+            if size_cache.contains_key(&key) {
+                test_crf -= 0.25;
+                continue;
+            }
+            
+            let size = encode_cached(test_crf, &mut size_cache)?;
+            iterations += 1;
+            let ratio = size as f64 / sample_input_size as f64;
+
+                if size < sample_input_size {
+                    best_crf = Some(test_crf);
+                    best_size = Some(size);
+                    eprintln!("🔄 CRF {:.1}: {:.1}% ✓", test_crf, ratio * 100.0);
+                    
+                    // 检查变化率
+                    let change = ratio - prev_ratio;
+                    if change.abs() < 0.005 {  // 变化小于 0.5%
+                        consecutive_small_change += 1;
+                        if consecutive_small_change >= 3 {
+                            eprintln!("⚡ Diminishing returns, stop");
+                            break;
+                        }
+                    } else {
+                        consecutive_small_change = 0;
+                    }
+                    prev_ratio = ratio;
+                    test_crf -= 0.25;
+                } else {
+                    eprintln!("🔄 CRF {:.1}: {:.1}% ✗ (boundary found)", test_crf, ratio * 100.0);
+                    break;  // 找到边界
+                }
+        }
+    }
     
     // 最终结果
     let final_crf = match (best_crf, best_size) {
@@ -3761,11 +3782,11 @@ mod tests {
     
     #[test]
     fn test_precision_constants() {
-        // 🔥 v4.6: CRF 精度提升到 ±0.1
-        assert!((CRF_PRECISION - 0.1).abs() < 0.01, "CRF precision should be ±0.1");
+        // 🔥 v5.55: CRF 精度调整为 ±0.25（速度优化）
+        assert!((CRF_PRECISION - 0.25).abs() < 0.01, "CRF precision should be ±0.25");
         assert!((COARSE_STEP - 2.0).abs() < 0.01, "Coarse step should be 2.0");
         assert!((FINE_STEP - 0.5).abs() < 0.01, "Fine step should be 0.5");
-        assert!((ULTRA_FINE_STEP - 0.1).abs() < 0.01, "Ultra fine step should be 0.1");
+        assert!((ULTRA_FINE_STEP - 0.25).abs() < 0.01, "Ultra fine step should be 0.25");
         assert_eq!(SSIM_DISPLAY_PRECISION, 4);
         assert!((SSIM_COMPARE_EPSILON - 0.0001).abs() < 1e-10);
         assert!((DEFAULT_MIN_SSIM - 0.95).abs() < 1e-10);
@@ -4156,23 +4177,23 @@ mod tests {
             target_ssim, v3_target);
     }
     
-    /// 🔥 v4.0 测试：CRF 精度提升到 ±0.1
+    /// 🔥 v5.55 测试：CRF 精度调整为 ±0.25（速度优化）
     #[test]
     fn test_v4_crf_precision_0_1() {
-        // v4.0 精度从 ±0.5 提升到 ±0.1
-        let test_values: [f32; 10] = [18.0, 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7, 18.8, 18.9];
+        // v5.55 精度从 ±0.1 调整为 ±0.25（速度提升 2-3 倍）
+        let test_values: [f32; 5] = [18.0, 18.25, 18.5, 18.75, 19.0];
         
         for &crf in &test_values {
-            // 四舍五入到 0.1 步长
-            let rounded = (crf * 10.0).round() / 10.0;
+            // 四舍五入到 0.25 步长
+            let rounded = (crf * 4.0).round() / 4.0;
             assert!((rounded - crf).abs() < 0.01, 
-                "CRF {} should round to {} with 0.1 step", crf, rounded);
+                "CRF {} should round to {} with 0.25 step", crf, rounded);
         }
         
-        // 测试非 0.1 步长值的四舍五入
-        assert!(((23.34_f32 * 10.0).round() / 10.0 - 23.3).abs() < 0.01);
-        assert!(((23.36_f32 * 10.0).round() / 10.0 - 23.4).abs() < 0.01);
-        assert!(((23.35_f32 * 10.0).round() / 10.0 - 23.4).abs() < 0.01); // 四舍五入
+        // 测试非 0.25 步长值的四舍五入
+        assert!(((23.1_f32 * 4.0).round() / 4.0 - 23.0).abs() < 0.01);
+        assert!(((23.2_f32 * 4.0).round() / 4.0 - 23.25).abs() < 0.01);
+        assert!(((23.4_f32 * 4.0).round() / 4.0 - 23.5).abs() < 0.01);
     }
     
     /// 🔥 v4.0 测试：四阶段搜索策略
@@ -4303,40 +4324,42 @@ mod tests {
         // 而不是无限降低 CRF
     }
     
-    /// 🔥 v4.0 测试：缓存机制 - 避免重复编码
+    /// 🔥 v5.55 测试：缓存机制 - 0.25 精度（速度优化）
     #[test]
     fn test_v4_crf_cache_mechanism() {
-        // 模拟缓存机制：0.1 精度的 key
+        // 模拟缓存机制：0.25 精度的 key (crf * 4.0)
         let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
         
         // 测试 CRF 值到 key 的转换
-        let crf_to_key = |crf: f32| -> i32 { (crf * 10.0).round() as i32 };
+        // CRF 20.0 → key 80, CRF 20.25 → key 81, CRF 20.5 → key 82
+        let crf_to_key = |crf: f32| -> i32 { (crf * 4.0).round() as i32 };
         
         // 插入测试数据
-        cache.insert(crf_to_key(20.0), 0.9850);
-        cache.insert(crf_to_key(20.1), 0.9855);
-        cache.insert(crf_to_key(20.2), 0.9860);
+        cache.insert(crf_to_key(20.0), 0.9850);   // key = 80
+        cache.insert(crf_to_key(20.25), 0.9855);  // key = 81
+        cache.insert(crf_to_key(20.5), 0.9860);   // key = 82
         
         // 验证缓存命中
         assert!(cache.contains_key(&crf_to_key(20.0)));
-        assert!(cache.contains_key(&crf_to_key(20.1)));
-        assert!(cache.contains_key(&crf_to_key(20.2)));
+        assert!(cache.contains_key(&crf_to_key(20.25)));
+        assert!(cache.contains_key(&crf_to_key(20.5)));
         
         // 验证四舍五入后的缓存命中
-        // 20.05 四舍五入到 201 (20.1)，应该命中
-        assert!(cache.contains_key(&crf_to_key(20.05)), "20.05 should round to 201 and hit cache");
-        // 20.15 四舍五入到 202 (20.2)，应该命中
-        assert!(cache.contains_key(&crf_to_key(20.15)), "20.15 should round to 202 and hit cache");
+        // 20.1 四舍五入到 80 (20.0)，应该命中
+        assert!(cache.contains_key(&crf_to_key(20.1)), "20.1 should round to 80 and hit cache");
+        // 20.3 四舍五入到 81 (20.25)，应该命中
+        assert!(cache.contains_key(&crf_to_key(20.3)), "20.3 should round to 81 and hit cache");
         
         // 验证缓存未命中 - 未插入的值
-        assert!(!cache.contains_key(&crf_to_key(20.3))); // 203 未插入
-        assert!(!cache.contains_key(&crf_to_key(19.9))); // 199 未插入
+        assert!(!cache.contains_key(&crf_to_key(20.75))); // key 83 未插入
+        assert!(!cache.contains_key(&crf_to_key(19.75))); // key 79 未插入
         
         // 验证 key 计算正确性
-        assert_eq!(crf_to_key(20.04), 200); // 四舍五入到 200
-        assert_eq!(crf_to_key(20.05), 201); // 四舍五入到 201
-        assert_eq!(crf_to_key(20.14), 201); // 四舍五入到 201
-        assert_eq!(crf_to_key(20.15), 202); // 四舍五入到 202
+        assert_eq!(crf_to_key(20.0), 80);   // 20.0 * 4 = 80
+        assert_eq!(crf_to_key(20.25), 81);  // 20.25 * 4 = 81
+        assert_eq!(crf_to_key(20.5), 82);   // 20.5 * 4 = 82
+        assert_eq!(crf_to_key(20.1), 80);   // 20.1 * 4 = 80.4 → 80
+        assert_eq!(crf_to_key(20.15), 81);  // 20.15 * 4 = 80.6 → 81
     }
     
     /// 🔥 v4.0 测试：迭代次数无上限（耗时不是问题）
@@ -4501,7 +4524,7 @@ mod tests {
         let max_crf = 28.0_f32;
         
         // 向下搜索（更高质量）
-        let lower_offsets = [-0.1_f32, -0.2, -0.3, -0.4];
+        let lower_offsets = [-0.25_f32, -0.5, -0.75, -1.0];
         for offset in lower_offsets {
             let test_crf = boundary_crf + offset;
             assert!(test_crf >= min_crf, "Lower search should stay above min_crf");
@@ -4509,7 +4532,7 @@ mod tests {
         }
         
         // 向上搜索（确认边界）
-        let upper_offsets = [0.1_f32, 0.2, 0.3, 0.4];
+        let upper_offsets = [0.25_f32, 0.5, 0.75, 1.0];
         for offset in upper_offsets {
             let test_crf = boundary_crf + offset;
             assert!(test_crf <= max_crf, "Upper search should stay below max_crf");
@@ -4517,22 +4540,22 @@ mod tests {
         }
     }
     
-    /// 🔥 v4.13 测试：CRF 精度保证 0.1
+    /// 🔥 v5.55 测试：CRF 精度保证 0.25（速度优化）
     #[test]
     fn test_v413_crf_precision_guarantee() {
-        // 验证最终 CRF 可以是任意 0.1 步进值
-        let valid_crfs = [17.0_f32, 17.1, 17.2, 17.3, 17.4, 17.5, 17.6, 17.7, 17.8, 17.9, 18.0];
+        // 验证最终 CRF 可以是任意 0.25 步进值
+        let valid_crfs = [17.0_f32, 17.25, 17.5, 17.75, 18.0, 18.25, 18.5, 18.75, 19.0];
         
         for crf in valid_crfs {
-            // 验证 CRF 是 0.1 的整数倍
-            let scaled = (crf * 10.0).round();
-            let reconstructed = scaled / 10.0;
+            // 验证 CRF 是 0.25 的整数倍
+            let scaled = (crf * 4.0).round();
+            let reconstructed = scaled / 4.0;
             assert!((crf - reconstructed).abs() < 0.001, 
-                "CRF {} should be 0.1 precision", crf);
+                "CRF {} should be 0.25 precision", crf);
         }
         
         // 验证 precision 常量
-        assert_eq!(ULTRA_FINE_STEP, 0.1, "ULTRA_FINE_STEP should be 0.1");
+        assert_eq!(ULTRA_FINE_STEP, 0.25, "ULTRA_FINE_STEP should be 0.25");
         assert_eq!(FINE_STEP, 0.5, "FINE_STEP should be 0.5");
     }
 }
