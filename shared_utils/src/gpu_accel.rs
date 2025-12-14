@@ -32,9 +32,10 @@ use std::io::Read;
 // ═══════════════════════════════════════════════════════════════
 
 /// GPU 采样时长（秒）- 用于长视频的快速边界估算
-/// 🔥 v5.49: 从 60 秒增加到 120 秒，提高映射精度
-/// 更长的采样 → 更准确的压缩估算 → 减少 GPU/CPU 映射误差
-pub const GPU_SAMPLE_DURATION: f32 = 120.0;
+/// 🔥 v5.50: 从 120 秒增加到 600 秒（10分钟），大幅提高映射精度
+/// 更长的采样 → 更准确的 SSIM 估算 → GPU 能找到接近上限的质量点
+/// 用户要求："GPU采样改为10分钟 确保时间花在值得的地方！在这个过程中精确的CRF映射极其重要"
+pub const GPU_SAMPLE_DURATION: f32 = 600.0;
 
 /// GPU 粗略搜索步长
 pub const GPU_COARSE_STEP: f32 = 2.0;
@@ -1795,111 +1796,101 @@ pub fn gpu_coarse_search_with_log(
     }
     
     // ═══════════════════════════════════════════════════════════
-    // Stage 3: 智能精细化 - 收益递减终止
-    // GPU 只到 0.5 精度，0.1 交给 CPU
-    // 🔥 v5.45: 基于收益递减的智能终止，避免过度搜索
+    // 🔥 v5.50: Stage 3 重写 - 基于 SSIM 目标搜索
+    // 目标：找到 SSIM 接近 GPU 上限（0.95-0.97）的点
+    // 用户要求："GPU 能达到的目标是 SSIM 的 GPU 能达到的最大值"
     // ═══════════════════════════════════════════════════════════
-    if let Some(fine) = best_crf {
-        log_msg!("   📍 Stage 3: Fine-tune (diminishing returns detection)");
+    if let Some(boundary) = best_crf {
+        log_msg!("   📍 Stage 3: Search for GPU SSIM ceiling (~0.95-0.97)");
 
-        // 智能终止阈值
-        const MIN_SIZE_IMPROVEMENT: f64 = 0.01;  // 最小改进 1%
-        const MIN_CRF_MARGIN: f32 = 1.0;         // 距离 min_crf 至少 1.0
-        const MAX_NO_IMPROVEMENT: u32 = 2;        // 最多连续 2 次无显著改进
+        // GPU SSIM 目标范围
+        const TARGET_SSIM_MIN: f64 = 0.95;  // 最低目标
+        const TARGET_SSIM_MAX: f64 = 0.97;  // 理想目标（VideoToolbox 上限）
+        const MAX_STAGE3_ITER: u32 = 10;     // 最多 10 次迭代
 
-        let mut no_improvement_count = 0u32;
-        let mut last_improvement: Option<f64> = None;
+        // SSIM 计算辅助函数
+        let calc_ssim_from_output = || -> Option<f64> {
+            let ssim_output = Command::new("ffmpeg")
+                .arg("-i").arg(input)
+                .arg("-i").arg(output)
+                .arg("-lavfi").arg("ssim")
+                .arg("-f").arg("null")
+                .arg("-")
+                .output();
 
-        // 只测试 -0.5 和 -1.0 两个点（如果 -0.5 改进不明显就停）
-        for &offset in &[0.5_f32, 1.0] {
-            let test_crf = fine - offset;
-
-            // 🔥 保护条件 1: 距离 min_crf 太近
-            if test_crf < config.min_crf + MIN_CRF_MARGIN {
-                log_msg!("   ⚡ Stop: Too close to min_crf ({:.1} < {:.1})", test_crf, config.min_crf + MIN_CRF_MARGIN);
-                break;
-            }
-
-            // 🔥 保护条件 2: 连续无显著改进
-            if no_improvement_count >= MAX_NO_IMPROVEMENT {
-                log_msg!("   ⚡ Stop: {} consecutive steps with < {:.1}% improvement", MAX_NO_IMPROVEMENT, MIN_SIZE_IMPROVEMENT * 100.0);
-                break;
-            }
-
-            let key = (test_crf * 10.0).round() as i32;
-            if size_cache.contains_key(&key) {
-                let cached_size = *size_cache.get(&key).unwrap();
-
-                // 🔥 计算改进幅度
-                if let Some(current_best) = best_size {
-                    let improvement = (current_best as f64 - cached_size as f64) / current_best as f64;
-
-                    if cached_size < sample_input_size && improvement >= MIN_SIZE_IMPROVEMENT {
-                        // 显著改进
-                        best_crf = Some(test_crf);
-                        best_size = Some(cached_size);
-                        no_improvement_count = 0;
-                        last_improvement = Some(improvement);
-                        log_msg!("   ✓ CRF {:.1}: {:.1}% improvement (cached)", test_crf, improvement * 100.0);
-                    } else if improvement < MIN_SIZE_IMPROVEMENT {
-                        // 改进太小
-                        no_improvement_count += 1;
-                        log_msg!("   ⚠ CRF {:.1}: only {:.2}% improvement, not worth it", test_crf, improvement * 100.0);
-                        if cached_size >= sample_input_size {
-                            break;  // 不能压缩就停
+            if let Ok(out) = ssim_output {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if let Some(line) = stderr.lines().find(|l| l.contains("SSIM") && l.contains("All:")) {
+                    if let Some(all_pos) = line.find("All:") {
+                        let after_all = &line[all_pos + 4..];
+                        if let Some(space_pos) = after_all.find(' ') {
+                            return after_all[..space_pos].parse::<f64>().ok();
+                        } else {
+                            return after_all.trim().parse::<f64>().ok();
                         }
                     }
-                } else if cached_size < sample_input_size {
-                    best_crf = Some(test_crf);
-                    best_size = Some(cached_size);
                 }
-                continue;
             }
+            None
+        };
 
-            match encode_cached(test_crf, &mut size_cache) {
-                Ok(size) => {
+        // 先编码当前边界点并计算 SSIM
+        let current_ssim = if let Ok(_) = encode_cached(boundary, &mut size_cache) {
+            calc_ssim_from_output()
+        } else {
+            None
+        };
+
+        if let Some(ssim) = current_ssim {
+            log_msg!("   📊 Current CRF {:.1}: SSIM {:.6}", boundary, ssim);
+
+            if ssim >= TARGET_SSIM_MIN {
+                // 已经达到目标！
+                log_msg!("   ✅ Already at target SSIM range [{:.2}, {:.2}]", TARGET_SSIM_MIN, TARGET_SSIM_MAX);
+            } else {
+                // SSIM 太低，向下搜索（降低 CRF，提高质量）
+                log_msg!("   📉 SSIM {:.6} < target {:.2}, searching downward...", ssim, TARGET_SSIM_MIN);
+
+                let mut test_crf = boundary - 1.0;
+                let mut stage3_iter = 0;
+
+                while test_crf >= config.min_crf && stage3_iter < MAX_STAGE3_ITER {
+                    stage3_iter += 1;
                     iterations += 1;
+
+                    let size = encode_cached(test_crf, &mut size_cache)?;
                     if let Some(cb) = progress_cb { cb(test_crf, size); }
 
-                    // 🔥 计算改进幅度
-                    if let Some(current_best) = best_size {
-                        let improvement = (current_best as f64 - size as f64) / current_best as f64;
+                    if size >= sample_input_size {
+                        // 不能压缩了，停止
+                        log_msg!("   ✗ CRF {:.1} cannot compress → boundary", test_crf);
+                        break;
+                    }
 
-                        if size < sample_input_size && improvement >= MIN_SIZE_IMPROVEMENT {
-                            // 显著改进
-                            best_crf = Some(test_crf);
-                            best_size = Some(size);
-                            no_improvement_count = 0;
-                            last_improvement = Some(improvement);
-                            log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement * 100.0);
-                        } else if improvement < MIN_SIZE_IMPROVEMENT {
-                            // 改进太小，收益递减
-                            no_improvement_count += 1;
-                            log_msg!("   ⚠ CRF {:.1}: only {:.2}% improvement, diminishing returns", test_crf, improvement * 100.0);
-                            if size >= sample_input_size {
-                                break;  // 不能压缩就停
-                            }
-                        } else {
-                            // size < sample_input_size 但 improvement < 0（更差了）
-                            no_improvement_count += 1;
-                            if size < sample_input_size {
-                                best_crf = Some(test_crf);
-                                best_size = Some(size);
-                            }
-                        }
-                    } else if size < sample_input_size {
+                    // 计算 SSIM
+                    if let Some(test_ssim) = calc_ssim_from_output() {
+                        log_msg!("   ✓ CRF {:.1}: SSIM {:.6}, size {:.1}%",
+                            test_crf, test_ssim, size as f64 / sample_input_size as f64 * 100.0);
+
                         best_crf = Some(test_crf);
                         best_size = Some(size);
-                    } else {
-                        break;  // 不能压缩就停
-                    }
-                }
-                Err(_) => break,
-            }
-        }
 
-        if let Some(imp) = last_improvement {
-            log_msg!("   📊 Stage 3 best improvement: {:.2}%", imp * 100.0);
+                        if test_ssim >= TARGET_SSIM_MIN {
+                            log_msg!("   ✅ Reached target SSIM {:.6} >= {:.2}", test_ssim, TARGET_SSIM_MIN);
+                            break;
+                        }
+
+                        if test_ssim >= TARGET_SSIM_MAX {
+                            log_msg!("   🌟 Exceeded ideal SSIM {:.6} >= {:.2}!", test_ssim, TARGET_SSIM_MAX);
+                            break;
+                        }
+                    }
+
+                    test_crf -= 1.0;
+                }
+            }
+        } else {
+            log_msg!("   ⚠️ Cannot calculate SSIM, skipping Stage 3");
         }
     }
     
@@ -1909,14 +1900,13 @@ pub fn gpu_coarse_search_with_log(
     } else {
         (config.max_crf, false, false)
     };
-    
-    // 🔥 v5.6: 计算 GPU 最优点的 SSIM（评估 GPU 质量上限）
+
+    // 🔥 v5.50: Stage 3 已经计算了 SSIM，直接使用
+    // 重新计算最终点的 SSIM
     let gpu_ssim = if found {
-        // 重新编码最优点以计算 SSIM
-        log_msg!("   📍 GPU Stage 4: SSIM validation at best CRF {:.1}", final_boundary);
+        log_msg!("   📍 Final SSIM validation at CRF {:.1}", final_boundary);
         match encode_gpu(final_boundary) {
             Ok(_) => {
-                // 计算 SSIM
                 let ssim_output = Command::new("ffmpeg")
                     .arg("-i").arg(input)
                     .arg("-i").arg(output)
@@ -1924,21 +1914,20 @@ pub fn gpu_coarse_search_with_log(
                     .arg("-f").arg("null")
                     .arg("-")
                     .output();
-                
+
                 match ssim_output {
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
-                        // 解析 SSIM: "SSIM Y:0.998990 ... All:0.968472"
                         if let Some(line) = stderr.lines().find(|l| l.contains("SSIM") && l.contains("All:")) {
                             if let Some(all_pos) = line.find("All:") {
                                 let after_all = &line[all_pos + 4..];
                                 if let Some(space_pos) = after_all.find(' ') {
                                     if let Ok(ssim) = after_all[..space_pos].parse::<f64>() {
-                                        log_msg!("      📊 GPU SSIM: {:.6} (ceiling ~0.97)", ssim);
+                                        log_msg!("      📊 Final GPU SSIM: {:.6}", ssim);
                                         Some(ssim)
                                     } else { None }
                                 } else if let Ok(ssim) = after_all.trim().parse::<f64>() {
-                                    log_msg!("      📊 GPU SSIM: {:.6} (ceiling ~0.97)", ssim);
+                                    log_msg!("      📊 Final GPU SSIM: {:.6}", ssim);
                                     Some(ssim)
                                 } else { None }
                             } else { None }

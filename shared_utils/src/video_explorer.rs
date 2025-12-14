@@ -2906,9 +2906,9 @@ pub fn explore_with_gpu_coarse_search(
                     let gpu_crf = gpu_result.gpu_boundary_crf;
                     let mapping = crate::gpu_accel::CrfMapping::hevc(gpu_result.gpu_type);
                     
-                    // 🔥 v5.9: CPU 需要更高 CRF 才能达到相同压缩效果
-                    // CPU 搜索起点 = GPU 边界 + offset（向上偏移）
-                    let cpu_start = gpu_crf + mapping.offset;
+                    // 🔥 v5.50: CPU 直接从 GPU 边界开始微调
+                    // GPU 已经找到最高质量点，CPU 只需在附近做 0.1 精度微调
+                    let cpu_start = gpu_crf;
                     
                     eprintln!("   ✅ GPU found boundary: CRF {:.1} (fine-tuned: {})", gpu_crf, gpu_result.fine_tuned);
                     if let Some(size) = gpu_result.gpu_best_size {
