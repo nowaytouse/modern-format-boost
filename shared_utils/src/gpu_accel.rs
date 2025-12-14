@@ -1059,6 +1059,10 @@ pub struct GpuCoarseResult {
     pub log: Vec<String>,
     /// 🔥 v5.45: GPU 采样输入大小（用于正确计算压缩率）
     pub sample_input_size: u64,
+    /// 🔥 v5.66: GPU 质量天花板 CRF（SSIM 不再提升的点）
+    pub quality_ceiling_crf: Option<f32>,
+    /// 🔥 v5.66: GPU 质量天花板 SSIM（GPU 能达到的最高 SSIM）
+    pub quality_ceiling_ssim: Option<f64>,
 }
 
 /// GPU/CPU CRF 映射表
@@ -1276,6 +1280,8 @@ pub fn gpu_coarse_search_with_log(
             fine_tuned: false,
             log,
             sample_input_size: input_size,
+            quality_ceiling_crf: None,
+            quality_ceiling_ssim: None,
         });
     }
     
@@ -1306,6 +1312,8 @@ pub fn gpu_coarse_search_with_log(
                 fine_tuned: false,
                 log,
                 sample_input_size: input_size,
+                quality_ceiling_crf: None,
+                quality_ceiling_ssim: None,
             });
         }
     };
@@ -1359,6 +1367,8 @@ pub fn gpu_coarse_search_with_log(
             fine_tuned: false,
             log,
             sample_input_size: input_size,
+            quality_ceiling_crf: None,
+            quality_ceiling_ssim: None,
         });
     }
     
@@ -1480,6 +1490,8 @@ pub fn gpu_coarse_search_with_log(
             fine_tuned: false,
             log,
             sample_input_size,
+            quality_ceiling_crf: None,
+            quality_ceiling_ssim: None,
         });
     }
     log_msg!("   🔥 Warmup: max_crf={:.0} can compress → continue search", config.max_crf);
@@ -2216,6 +2228,14 @@ pub fn gpu_coarse_search_with_log(
     // 清理临时文件
     let _ = std::fs::remove_file(output);
     
+    // 🔥 v5.66: 质量天花板 = GPU 能达到的最高 SSIM 点
+    // 当前实现：使用最终边界点作为天花板（后续可以改进为实时检测 SSIM 平台）
+    let (quality_ceiling_crf, quality_ceiling_ssim) = if found && gpu_ssim.is_some() {
+        (Some(final_boundary), gpu_ssim)
+    } else {
+        (None, None)
+    };
+    
     Ok(GpuCoarseResult {
         gpu_boundary_crf: final_boundary,
         gpu_best_size: best_size,
@@ -2227,6 +2247,8 @@ pub fn gpu_coarse_search_with_log(
         fine_tuned,
         log,
         sample_input_size,
+        quality_ceiling_crf,
+        quality_ceiling_ssim,
     })
 }
 

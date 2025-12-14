@@ -3521,6 +3521,12 @@ pub fn explore_with_gpu_coarse_search(
                         eprintln!("   📊 GPU best size: {} bytes", size);
                     }
                     
+                    // 🔥 v5.66: 显示 GPU 质量天花板信息
+                    if let (Some(ceiling_crf), Some(ceiling_ssim)) = (gpu_result.quality_ceiling_crf, gpu_result.quality_ceiling_ssim) {
+                        eprintln!("   🎯 GPU Quality Ceiling: CRF {:.1}, SSIM {:.4}", ceiling_crf, ceiling_ssim);
+                        eprintln!("      (GPU 的 SSIM 天花板，CPU 可以突破到 0.99+)");
+                    }
+                    
                     // 🔥 v5.26: 根据 GPU SSIM 动态调整 CPU 搜索范围
                     let (cpu_min, cpu_max) = if let Some(ssim) = gpu_result.gpu_best_ssim {
                         let quality_hint = if ssim >= 0.97 { "🟢 Near GPU ceiling" } 
