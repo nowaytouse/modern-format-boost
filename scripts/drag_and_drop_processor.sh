@@ -291,14 +291,34 @@ process_images() {
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
 
-    # 🔥 v5.35: 完全禁止键盘交互 - 多层防护
-    # 1. 关闭stdin文件描述符
-    # 2. 禁用终端canonical模式和echo
-    # 3. 设置TERM=dumb告诉程序终端不支持交互
+    # 🔥 v5.39: 强化键盘输入防护
+    # 关键洞察: ProgressDrawTarget::hidden() 冻结进度条，改用 100Hz 刷新覆盖
+    # 因此需要更强的终端级防护来配合
+
+    # 保存原始终端设置
+    local original_stty
+    original_stty=$(stty -g 2>/dev/null) || original_stty=""
+
+    # 1. 关闭 stdin
     exec 0<&-
-    stty -echo -icanon 2>/dev/null || true
-    TERM=dumb "$IMGQUALITY_HEVC" "${args[@]}" || true
-    stty echo icanon 2>/dev/null || true
+
+    # 2. 强化终端设置
+    if [[ -t 1 ]]; then  # 只在连接到终端时应用
+        # 禁用 echo, canonical 模式, 所有特殊字符处理
+        stty -echo -icanon -isig 2>/dev/null || true
+        # 设置原始模式防止任何输入处理
+        stty -onlcr 2>/dev/null || true
+    fi
+
+    # 3. 设置多个环境变量告诉程序禁用交互
+    TERM=dumb LANG=C "$IMGQUALITY_HEVC" "${args[@]}" || true
+
+    # 恢复终端设置
+    if [[ -n "$original_stty" ]]; then
+        stty "$original_stty" 2>/dev/null || true
+    else
+        stty echo icanon isig 2>/dev/null || true
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -318,14 +338,34 @@ process_videos() {
     local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
 
-    # 🔥 v5.35: 完全禁止键盘交互 - 多层防护
-    # 1. 关闭stdin文件描述符
-    # 2. 禁用终端canonical模式和echo
-    # 3. 设置TERM=dumb告诉程序终端不支持交互
+    # 🔥 v5.39: 强化键盘输入防护
+    # 关键洞察: ProgressDrawTarget::hidden() 冻结进度条，改用 100Hz 刷新覆盖
+    # 因此需要更强的终端级防护来配合
+
+    # 保存原始终端设置
+    local original_stty
+    original_stty=$(stty -g 2>/dev/null) || original_stty=""
+
+    # 1. 关闭 stdin
     exec 0<&-
-    stty -echo -icanon 2>/dev/null || true
-    TERM=dumb "$VIDQUALITY_HEVC" "${args[@]}" || true
-    stty echo icanon 2>/dev/null || true
+
+    # 2. 强化终端设置
+    if [[ -t 1 ]]; then  # 只在连接到终端时应用
+        # 禁用 echo, canonical 模式, 所有特殊字符处理
+        stty -echo -icanon -isig 2>/dev/null || true
+        # 设置原始模式防止任何输入处理
+        stty -onlcr 2>/dev/null || true
+    fi
+
+    # 3. 设置多个环境变量告诉程序禁用交互
+    TERM=dumb LANG=C "$VIDQUALITY_HEVC" "${args[@]}" || true
+
+    # 恢复终端设置
+    if [[ -n "$original_stty" ]]; then
+        stty "$original_stty" 2>/dev/null || true
+    else
+        stty echo icanon isig 2>/dev/null || true
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════
