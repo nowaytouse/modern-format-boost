@@ -1490,34 +1490,46 @@ pub fn gpu_coarse_search_with_log(
     };
     
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.16: 并行初始探测（可选）
-    // 同时测试 3 个关键点：min_crf, mid_crf, max_crf
-    // 快速确定搜索区间，减少后续迭代
+    // 🔥 v5.46: 智能初始探测 - 使用 initial_crf 作为起点
+    // initial_crf 是质量分析预测的合适值，应该是最佳起点
     // ═══════════════════════════════════════════════════════════
     let mut boundary_low: f32 = config.min_crf;
     let mut boundary_high: f32 = config.max_crf;
     let mut prev_size: Option<u64> = None;
     let mut found_compress_point = false;
 
-    // 🔥 v5.17: 并行探测 3 个关键点（大文件时跳过）
-    // 🔥 v5.35: 改变探测顺序 - 从mid_crf开始，避免很慢的min_crf编码
-    let mid_crf = (config.min_crf + config.max_crf) / 2.0;
-    let probe_crfs = [mid_crf, config.max_crf, config.min_crf];  // 改变顺序：mid → max → min
+    // 🔥 v5.46: 策略改变 - initial_crf 优先
+    // 场景 1: initial_crf 在合理范围内 → 从它开始
+    // 场景 2: initial_crf 接近边界 → 使用 mid_crf
+    let use_initial = config.initial_crf >= config.min_crf + 5.0
+                   && config.initial_crf <= config.max_crf - 5.0;
+
+    let probe_crfs = if use_initial {
+        // 🔥 优先方案：initial_crf 在中间，向两侧探测
+        log_msg!("   🎯 Using initial_crf {:.0} as search anchor", config.initial_crf);
+        vec![config.initial_crf, config.max_crf, config.min_crf]
+    } else {
+        // 🔥 后备方案：initial_crf 太极端，使用三点探测
+        let mid_crf = (config.min_crf + config.max_crf) / 2.0;
+        log_msg!("   ⚠️ initial_crf {:.0} out of range, using mid_crf {:.0}", config.initial_crf, mid_crf);
+        vec![mid_crf, config.max_crf, config.min_crf]
+    };
 
     // 🔥 v5.17: 检查是否跳过并行探测
     let probe_results = if skip_parallel {
         log_msg!("   ⚡ Skip parallel probe (large file mode)");
-        // 大文件模式：从mid_crf开始，避免很慢的min_crf
-        log_msg!("   🔄 Testing CRF {:.0} (mid-point)...", mid_crf);
-        let single_result = encode_gpu(mid_crf);
+        // 大文件模式：只测试第一个探测点
+        let test_crf = probe_crfs[0];
+        log_msg!("   🔄 Testing CRF {:.0} (anchor point)...", test_crf);
+        let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
-            let key = (mid_crf * 10.0).round() as i32;
+            let key = (test_crf * 10.0).round() as i32;
             size_cache.insert(key, *size);
             iterations += 1;
-            size_history.push((mid_crf, *size));
-            if let Some(cb) = progress_cb { cb(mid_crf, *size); }
+            size_history.push((test_crf, *size));
+            if let Some(cb) = progress_cb { cb(test_crf, *size); }
         }
-        vec![(mid_crf, single_result)]
+        vec![(test_crf, single_result)]
     } else {
         log_msg!("   🚀 Parallel probe: CRF {:.0}, {:.0}, {:.0}", probe_crfs[0], probe_crfs[1], probe_crfs[2]);
         encode_parallel(&probe_crfs)
@@ -1535,45 +1547,55 @@ pub fn gpu_coarse_search_with_log(
             }
         }
     }
-    
-    // 分析并行结果，确定搜索区间
-    let min_result = probe_results.iter().find(|(c, _)| (*c - config.min_crf).abs() < 0.1);
-    let mid_result = probe_results.iter().find(|(c, _)| (*c - mid_crf).abs() < 0.1);
-    let max_result = probe_results.iter().find(|(c, _)| (*c - config.max_crf).abs() < 0.1);
-    
-    // 根据并行结果快速定位边界
-    if let Some((_, Ok(min_size))) = min_result {
-        if *min_size < sample_input_size {
-            // min_crf 就能压缩！最佳情况
-            best_crf = Some(config.min_crf);
-            best_size = Some(*min_size);
-            boundary_high = config.min_crf;
+
+    // 🔥 v5.46: 智能分析探测结果 - 基于 initial_crf 决定搜索方向
+    let initial_result = probe_results.iter().find(|(c, _)| (*c - probe_crfs[0]).abs() < 0.1);
+    let max_result = if probe_crfs.len() > 1 {
+        probe_results.iter().find(|(c, _)| (*c - probe_crfs[1]).abs() < 0.1)
+    } else {
+        None
+    };
+    let min_result = if probe_crfs.len() > 2 {
+        probe_results.iter().find(|(c, _)| (*c - probe_crfs[2]).abs() < 0.1)
+    } else {
+        None
+    };
+
+    // 根据 initial_crf 的结果智能决定搜索方向
+    if let Some((initial_crf_val, Ok(initial_size))) = initial_result {
+        if *initial_size < sample_input_size {
+            // ✅ initial_crf 能压缩！
+            best_crf = Some(*initial_crf_val);
+            best_size = Some(*initial_size);
             found_compress_point = true;
-            log_msg!("   ⚡ Parallel: min_crf compresses! Best case.");
-        } else if let Some((_, Ok(mid_size))) = mid_result {
-            if *mid_size < sample_input_size {
-                // mid_crf 能压缩，边界在 [min, mid]
-                boundary_low = config.min_crf;
-                boundary_high = mid_crf;
-                best_crf = Some(mid_crf);
-                best_size = Some(*mid_size);
-                found_compress_point = true;
-                prev_size = Some(*min_size);
-                log_msg!("   ⚡ Parallel: boundary in [{:.0}, {:.0}]", boundary_low, boundary_high);
-            } else if let Some((_, Ok(max_size))) = max_result {
-                if *max_size < sample_input_size {
-                    // max_crf 能压缩，边界在 [mid, max]
-                    boundary_low = mid_crf;
-                    boundary_high = config.max_crf;
+
+            // 🔥 关键决策：尝试更高的 CRF（更低质量，更小文件）
+            boundary_low = *initial_crf_val;
+            boundary_high = config.max_crf;
+            log_msg!("   ✅ initial_crf {:.0} compresses! Searching higher CRF [{:.0}, {:.0}]", initial_crf_val, boundary_low, boundary_high);
+
+            // 如果测试了 max_crf，检查它是否更好
+            if let Some((_, Ok(max_size))) = max_result {
+                if *max_size < sample_input_size && *max_size < *initial_size {
                     best_crf = Some(config.max_crf);
                     best_size = Some(*max_size);
+                    log_msg!("   📊 max_crf {:.0} is better: {:.1}% smaller", config.max_crf, (1.0 - *max_size as f64 / *initial_size as f64) * 100.0);
+                }
+            }
+        } else {
+            // ❌ initial_crf 不能压缩 - 需要更低 CRF（更高质量）
+            boundary_low = config.min_crf;
+            boundary_high = *initial_crf_val;
+            prev_size = Some(*initial_size);
+            log_msg!("   ⚠️ initial_crf {:.0} cannot compress! Searching lower CRF [{:.0}, {:.0}]", initial_crf_val, boundary_low, boundary_high);
+
+            // 检查 min_crf 是否能压缩
+            if let Some((_, Ok(min_size))) = min_result {
+                if *min_size < sample_input_size {
+                    best_crf = Some(config.min_crf);
+                    best_size = Some(*min_size);
                     found_compress_point = true;
-                    prev_size = Some(*mid_size);
-                    log_msg!("   ⚡ Parallel: boundary in [{:.0}, {:.0}]", boundary_low, boundary_high);
-                } else {
-                    // 即使 max_crf 也无法压缩
-                    log_msg!("   ⚠️ Parallel: cannot compress even at max CRF");
-                    prev_size = Some(*max_size);
+                    log_msg!("   ✅ min_crf {:.0} compresses!", config.min_crf);
                 }
             }
         }
