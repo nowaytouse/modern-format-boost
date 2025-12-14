@@ -34,6 +34,7 @@ pub mod xmp_merger;
 pub mod flag_validator;
 pub mod gpu_accel;
 pub mod modern_ui;
+pub mod realtime_progress;
 
 pub use progress::{
     // 🔥 v5.5: 新增固定底部进度条
@@ -167,5 +168,9 @@ pub use modern_ui::{
     print_success, print_warning, print_error, print_info,
     format_size, format_size_change,
     spinner_frame, spinner_dots,
-    // format_duration 已在 progress 模块导出，避免重复
+};
+
+// 🔥 v5.20: 真正的实时进度条
+pub use realtime_progress::{
+    RealtimeExploreProgress, RealtimeSpinner,
 };
