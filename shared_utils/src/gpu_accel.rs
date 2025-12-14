@@ -1269,19 +1269,18 @@ pub fn gpu_coarse_search_with_log(
     
     // 快速编码函数（GPU）- 只编码前 N 秒
     // 🔥 v5.42: 实时进度更新 - 读取ffmpeg的-progress输出，多次调用progress_cb
-    // 🔥 v5.43: 添加超时保护防止无限等待，改进线程管理，减少I/O开销
+    // 🔥 v5.44: 简化超时逻辑 - 仅保留 12 小时底线超时，响亮 fallback
     let encode_gpu = |crf: f32| -> anyhow::Result<u64> {
         use std::process::Stdio;
         use std::time::{Instant, Duration};
         use std::io::{BufRead, BufReader};
-        use std::sync::mpsc;
 
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.get_extra_args();
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
-            .arg("-t").arg(format!("{}", actual_sample_duration))  // 🔥 使用实际采样时长
+            .arg("-t").arg(format!("{}", actual_sample_duration))
             .arg("-i").arg(input)
             .arg("-c:v").arg(gpu_encoder.name);
 
@@ -1292,71 +1291,64 @@ pub fn gpu_coarse_search_with_log(
             cmd.arg(*arg);
         }
 
-        cmd.arg("-an")  // 忽略音频，加速
-            .arg("-progress").arg("pipe:1")  // 🔥 v5.42: 读取实时进度
+        cmd.arg("-an")
+            .arg("-progress").arg("pipe:1")
             .arg(output)
-            .stdout(Stdio::piped())  // 捕获 stdout (进度信息)
-            .stderr(Stdio::piped());  // 捕获 stderr (ffmpeg日志)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         let start_time = Instant::now();
-        let timeout = Duration::from_secs((actual_sample_duration as u64) + 60);  // 🔥 v5.43: 编码超时保护
+        // 🔥 v5.44: 仅保留底线超时 - 12 小时
+        let absolute_timeout = Duration::from_secs(12 * 3600);
 
-        // 🔥 v5.43: 后台线程读取 stderr 防止死锁，使用 mpsc 通道
-        let (tx, rx) = mpsc::channel();
+        // 后台线程读取 stderr 防止死锁
         let stderr_handle = if let Some(stderr) = child.stderr.take() {
             Some(std::thread::spawn(move || {
                 let _ = std::io::Read::read_to_end(&mut std::io::BufReader::new(stderr).by_ref(), &mut vec![]);
-                let _ = tx.send(()); // 通知 stderr 读取完成
             }))
         } else {
             None
         };
 
-        // 🔥 v5.43: 在主线程读取 stdout (进度数据)，添加超时保护
+        // 在主线程读取 stdout (进度数据)
         let mut last_progress_time = Instant::now();
-        let mut last_metadata_check = Instant::now();  // 🔥 v5.43: 避免频繁调用 metadata
+        let mut fallback_logged = false;  // 🔥 v5.44: 记录是否已打印过 fallback 日志
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
 
             for line in reader.lines() {
-                // 🔥 v5.43: 检查总体超时，防止无限等待
-                if start_time.elapsed() > timeout {
-                    eprintln!("⏱️ GPU encoding timeout, killing ffmpeg...");
-                    let _ = child.kill();
-                    break;
-                }
-
                 if let Ok(line) = line {
                     // 解析 out_time_us=XXXXX
                     if let Some(val) = line.strip_prefix("out_time_us=") {
                         if let Ok(time_us) = val.parse::<u64>() {
-                            // 🔥 v5.42: 每 1 秒更新一次进度条
+                            // 每 1 秒更新一次进度条
                             if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
                                 let current_secs = time_us as f64 / 1_000_000.0;
                                 let pct = (current_secs / actual_sample_duration as f64 * 100.0).min(100.0);
 
-                                // 🔥 v5.43: 减少 metadata 调用频率（每 3 秒调用一次，避免 I/O 瓶颈）
-                                let estimated_final_size = if last_metadata_check.elapsed().as_secs_f64() >= 3.0 {
-                                    std::fs::metadata(output).map(|m| m.len()).unwrap_or(0)
-                                } else {
-                                    0  // 会在下面用线性估算
-                                };
-
-                                let estimated_final_size = if estimated_final_size > 0 {
-                                    (estimated_final_size as f64 / pct.max(1.0) * 100.0) as u64
-                                } else {
-                                    // 使用线性估算，避免频繁 I/O
-                                    (sample_input_size as f64 * (1.0 / pct.max(0.1))).min(sample_input_size as f64 * 10.0) as u64
+                                // 尝试获取实时文件大小
+                                let estimated_final_size = match std::fs::metadata(output) {
+                                    Ok(metadata) => {
+                                        let current_size = metadata.len();
+                                        // 🔥 v5.44: 重置 fallback 标志（成功获取时）
+                                        fallback_logged = false;
+                                        (current_size as f64 / pct.max(1.0) * 100.0) as u64
+                                    }
+                                    Err(_) => {
+                                        // 🔥 v5.44: metadata 失败，使用线性估算 + 响亮 fallback
+                                        if !fallback_logged {
+                                            eprintln!("📍 Status: Using linear estimation (metadata unavailable)");
+                                            fallback_logged = true;
+                                        }
+                                        (sample_input_size as f64 * (1.0 / pct.max(0.1))).min(sample_input_size as f64 * 10.0) as u64
+                                    }
                                 };
 
                                 if let Some(cb) = progress_cb {
                                     cb(crf, estimated_final_size);
                                 }
                                 last_progress_time = Instant::now();
-                                if last_metadata_check.elapsed().as_secs_f64() >= 3.0 {
-                                    last_metadata_check = Instant::now();
-                                }
                             }
                         }
                     }
@@ -1364,27 +1356,18 @@ pub fn gpu_coarse_search_with_log(
             }
         }
 
-        // 🔥 v5.43: 带超时的等待，避免无限等待
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if start_time.elapsed() > timeout {
-                        eprintln!("⏱️ GPU encoding exceeded timeout, killing process");
-                        let _ = child.kill();
-                        break child.wait().context("Failed to wait for killed ffmpeg")?;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-                Err(e) => return Err(e.into()),
-            }
-        };
+        // 等待编码完成，简单阻塞等待（防止死锁）
+        let status = child.wait().context("Failed to wait for ffmpeg")?;
 
-        // 🔥 v5.43: 等待 stderr 线程完成，添加超时
+        // 等待 stderr 线程完成
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
-            // 等待通道信号，但不阻塞太久
-            let _ = rx.recv_timeout(Duration::from_secs(5));
+        }
+
+        // 🔥 v5.44: 编码完成后检查底线超时（12小时）
+        if start_time.elapsed() > absolute_timeout {
+            eprintln!("⏰ WARNING: GPU encoding took longer than 12 hours! Process was likely stuck.");
+            bail!("GPU encoding exceeded 12-hour timeout");
         }
 
         if !status.success() {
