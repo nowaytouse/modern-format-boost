@@ -142,12 +142,10 @@ select_menu() {
 # ═══════════════════════════════════════════════════════════════
 check_tools() {
     # 🔥 v5.35: 强制重新编译以确保使用最新代码
-    echo -e "${YELLOW}🔧 Rebuilding tools with latest fixes...${NC}"
-    (cd "$PROJECT_ROOT/imgquality_hevc" && cargo build --release 2>/dev/null) &
-    (cd "$PROJECT_ROOT/vidquality_hevc" && cargo build --release 2>/dev/null) &
-    (cd "$PROJECT_ROOT/xmp_merger" && cargo build --release 2>/dev/null) &
-    wait
-    echo -e "${GREEN}✅ Build complete${NC}"
+    "$PROJECT_ROOT/build_all.sh" || {
+        echo -e "${RED}❌ Build failed${NC}"
+        exit 1
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════

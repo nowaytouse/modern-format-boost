@@ -175,6 +175,7 @@ pub use modern_ui::{
 };
 
 // 🔥 v5.20: 真正的实时进度条
+#[allow(deprecated)]
 pub use realtime_progress::{
     // 🔥 v5.34: 新的基于迭代计数的进度条（推荐）
     SimpleIterationProgress,

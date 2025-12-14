@@ -3003,6 +3003,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     max_crf: f32,
     min_ssim: f64,
 ) -> Result<ExploreResult> {
+    #[allow(unused_mut)]
     let mut log = Vec::new();
 
     let input_size = fs::metadata(input)
@@ -3017,6 +3018,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     );
 
     // 🔥 v5.34: 使用 SimpleIterationProgress 替代 spinner
+    #[allow(unused_macros)]
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
