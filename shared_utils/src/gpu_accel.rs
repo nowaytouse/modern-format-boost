@@ -1293,7 +1293,7 @@ pub fn gpu_coarse_search(
     // 智能终止常量
     const WINDOW_SIZE: usize = 3;
     const VARIANCE_THRESHOLD: f64 = 0.0001;    // 0.01% 方差阈值
-    const CHANGE_RATE_THRESHOLD: f64 = 0.001;  // 🔥 v5.14: 放宽到 0.1%（更稳健）
+    const CHANGE_RATE_THRESHOLD: f64 = 0.02;   // 🔥 v5.21: 放宽到 2%（避免过早终止导致低 SSIM）
     
     // 滑动窗口历史记录 (crf, size)
     let mut size_history: Vec<(f32, u64)> = Vec::new();

@@ -1334,7 +1334,7 @@ impl VideoExplorer {
         // 🔥 v4.13: 智能提前终止
         const WINDOW_SIZE: usize = 3;
         const VARIANCE_THRESHOLD: f64 = 0.0001;
-        const CHANGE_RATE_THRESHOLD: f64 = 0.005;
+        const CHANGE_RATE_THRESHOLD: f64 = 0.02;  // 🔥 v5.21: 放宽到 2%（避免过早终止）
         let mut size_history: Vec<(f32, u64)> = Vec::new();
 
         let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
