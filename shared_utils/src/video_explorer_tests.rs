@@ -140,6 +140,8 @@ mod explore_result_tests {
             iterations: 5,
             quality_passed: true,
             log: vec![],
+            confidence: 0.85,
+            confidence_detail: ConfidenceBreakdown::default(),
         };
         
         assert!(result.size_change_pct < 0.0); // Compressed
@@ -158,6 +160,8 @@ mod explore_result_tests {
             iterations: 10,
             quality_passed: false,
             log: vec![],
+            confidence: 0.3,
+            confidence_detail: ConfidenceBreakdown::default(),
         };
         
         assert!(result.size_change_pct > 0.0); // Not compressed
