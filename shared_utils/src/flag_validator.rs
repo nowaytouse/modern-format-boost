@@ -152,19 +152,19 @@ pub fn validate_flags_result(explore: bool, match_quality: bool, compress: bool)
 
 /// 打印 flag 组合帮助信息
 pub fn print_flag_help() {
-    eprintln!("📋 Flag 组合说明:");
-    eprintln!("   --compress              只要输出 < 输入（哪怕 1KB）");
-    eprintln!("   --explore               寻找尽可能更小的输出");
-    eprintln!("   --match-quality         粗略 SSIM 验证");
+    eprintln!("📋 Flag Combination Guide:");
+    eprintln!("   --compress              Just need output < input (even 1KB)");
+    eprintln!("   --explore               Find smallest possible output");
+    eprintln!("   --match-quality         Rough SSIM validation");
     eprintln!("   --compress --match-quality");
-    eprintln!("                           输出 < 输入 + 粗略 SSIM 验证");
+    eprintln!("                           Output < input + rough SSIM validation");
     eprintln!("   --explore --match-quality");
-    eprintln!("                           精确质量匹配（最高 SSIM，不在乎大小）");
+    eprintln!("                           Precise quality match (highest SSIM, ignore size)");
     eprintln!("   --explore --match-quality --compress");
-    eprintln!("                           精确质量匹配 + 必须压缩");
+    eprintln!("                           Precise quality match + must compress");
     eprintln!("");
-    eprintln!("❌ 无效组合:");
-    eprintln!("   --explore --compress    目标冲突，请添加 --match-quality");
+    eprintln!("❌ Invalid combinations:");
+    eprintln!("   --explore --compress    Conflicting goals, please add --match-quality");
 }
 
 #[cfg(test)]
