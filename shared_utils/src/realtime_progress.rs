@@ -16,7 +16,7 @@ use std::time::Duration;
 /// 
 /// 使用 indicatif 的 steady_tick 实现真正的实时更新
 pub struct RealtimeExploreProgress {
-    bar: ProgressBar,
+    pub bar: ProgressBar,  // 🔥 v5.23: 公开以便 suspend 使用
     input_size: u64,
     max_iterations: u64,
     // 原子状态 - 无锁更新

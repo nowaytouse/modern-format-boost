@@ -29,6 +29,8 @@ pub mod quality_matcher;
 pub mod image_quality_detector;
 pub mod video_quality_detector;
 pub mod video_explorer;
+#[cfg(test)]
+mod video_explorer_tests;
 pub mod checkpoint;
 pub mod xmp_merger;
 pub mod flag_validator;
@@ -149,7 +151,7 @@ pub use gpu_accel::{
     estimate_cpu_search_center, gpu_boundary_to_cpu_range,
     // v5.1: GPU 粗略搜索
     GpuCoarseResult, GpuCoarseConfig, CrfMapping,
-    gpu_coarse_search, get_cpu_search_range_from_gpu,
+    gpu_coarse_search, gpu_coarse_search_with_log, get_cpu_search_range_from_gpu,
 };
 
 // 🔥 v5.1: GPU+CPU 智能探索

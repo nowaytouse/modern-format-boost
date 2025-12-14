@@ -61,6 +61,9 @@ pub const STAGE_B_BIDIRECTIONAL_MAX: u32 = 18;
 /// 二分搜索最大迭代次数
 pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 
+/// 🔥 v5.25: 全局迭代底线（防止无限循环）
+pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
+
 // ═══════════════════════════════════════════════════════════════
 // 探索模式枚举
 // ═══════════════════════════════════════════════════════════════
@@ -2789,13 +2792,17 @@ pub fn explore_with_gpu_coarse_search(
     // 🔥 v5.1.4: 不收集日志到 result.log，因为已经实时输出了
     // 这样可以避免 conversion_api.rs 重复打印日志
     
-    // 🔥 v5.7: Unified Process
-    let pb = crate::progress::create_professional_spinner("🔍 Smart Explore");
+    // 🔥 v5.23: 使用真正的条状进度条！
+    let progress = crate::realtime_progress::RealtimeExploreProgress::with_max_iterations(
+        "🔍 Smart Explore", 
+        fs::metadata(input).map(|m| m.len()).unwrap_or(0),
+        20  // 预估最大迭代次数
+    );
     
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
-            pb.suspend(|| eprintln!("{}", msg));
+            progress.bar.suspend(|| eprintln!("{}", msg));
         }};
     }
     
@@ -2829,10 +2836,14 @@ pub fn explore_with_gpu_coarse_search(
     
     // ═══════════════════════════════════════════════════════════
     // Phase 1: GPU 粗略搜索（如果可用）
+    // 🔥 v5.22: 暂停 spinner 让 GPU 日志正常输出
     // ═══════════════════════════════════════════════════════════
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available() && has_gpu_encoder {
         log_msg!("");
         log_msg!("📍 Phase 1: GPU Coarse Search");
+        
+        // 🔥 v5.23: 暂停主进度条，让 GPU 搜索使用独立进度条
+        progress.bar.finish_and_clear();
         
         // 创建临时输出文件用于 GPU 搜索
         let temp_output = output.with_extension("gpu_temp.mp4");
@@ -2845,21 +2856,28 @@ pub fn explore_with_gpu_coarse_search(
             max_iterations: 15,  // 🔥 v5.7: 更多迭代以支持更大 CRF 范围
         };
         
-        // Callback for GPU progress
+        // 🔥 v5.23: GPU 阶段使用真正的条状进度条！
+        let gpu_progress = crate::realtime_progress::RealtimeExploreProgress::with_max_iterations(
+            "🔍 GPU Search", input_size, 15
+        );
+        
+        // Progress callback - 更新条状进度条
         let progress_callback = |crf: f32, size: u64| {
-            let size_pct = if input_size > 0 {
-                ((size as f64 / input_size as f64) - 1.0) * 100.0
-            } else { 0.0 };
-            let icon = if size > 0 && size < input_size { "💾" } else { "⚠️" };
-            
-            pb.set_prefix("🔍 GPU Phase");
-            pb.set_message(format!(
-                "CRF {:.1} | {:+.1}% {} | Searching...", 
-                crf, size_pct, icon
-            ));
+            gpu_progress.update(crf, size, None);
+        };
+        
+        // Log callback - 使用 suspend 输出日志，不干扰进度条
+        let log_callback = |msg: &str| {
+            gpu_progress.bar.suspend(|| eprintln!("{}", msg));
         };
 
-        match gpu_coarse_search(input, &temp_output, encoder_name, input_size, &gpu_config, Some(&progress_callback)) {
+        let gpu_result = crate::gpu_accel::gpu_coarse_search_with_log(
+            input, &temp_output, encoder_name, input_size, &gpu_config, 
+            Some(&progress_callback), Some(&log_callback)
+        );
+        gpu_progress.finish(0.0, 0, None);  // 完成 GPU 进度条
+        
+        match gpu_result {
             Ok(gpu_result) => {
                 // 🔥 v5.1.4: GPU 日志已经实时输出，不需要再收集
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
@@ -2897,14 +2915,16 @@ pub fn explore_with_gpu_coarse_search(
                     log_msg!("⚠️  GPU didn't find compression boundary");
                     log_msg!("• File may already be highly compressed");
                     log_msg!("• Using full CRF range for CPU search");
-                    (initial_crf, max_crf, initial_crf)
+                    // 🔥 v5.24: min_crf 使用全局最小值
+                    (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
                 }
             }
             Err(e) => {
                 log_msg!("⚠️  FALLBACK: GPU coarse search failed!");
                 log_msg!("• Error: {}", e);
                 log_msg!("• Falling back to CPU-only search (full range)");
-                (initial_crf, max_crf, initial_crf)
+                // 🔥 v5.24: min_crf 使用全局最小值
+                (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
             }
         }
     } else {
@@ -2919,11 +2939,11 @@ pub fn explore_with_gpu_coarse_search(
             log_msg!("• Skipping GPU coarse search phase");
             log_msg!("• Using CPU-only search (may take longer)");
         }
-        (initial_crf, max_crf, initial_crf)
+        // 🔥 v5.24: min_crf 使用全局最小值，允许向下探索更高质量
+        (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
     };
     
-    // Clear GPU progress
-    pb.finish_and_clear();
+    // 🔥 v5.23: 主进度条已在 GPU 阶段结束时清理
     
     // ═══════════════════════════════════════════════════════════
     // Phase 2: CPU 精细搜索
@@ -3076,10 +3096,40 @@ fn cpu_fine_tune_from_gpu_boundary(
     log_msg!("🔄 CRF {:.1}: {:.1}%", low, low_ratio * 100.0);
     
     if low_size < input_size {
-        // GPU 边界就能压缩，直接使用
+        // GPU 边界能压缩
         best_crf = Some(low);
         best_size = Some(low_size);
         log_msg!("✅ GPU boundary compresses!");
+        
+        // 🔥 v5.25: 智能二分搜索 - 根据搜索范围动态计算迭代次数
+        // 二分搜索理论迭代次数 = log2(range) + 1
+        let search_range = low - min_crf;
+        // 动态计算：log2(range) + 安全余量，底线 50 次
+        let max_binary_iter = ((search_range.log2().ceil() as u32) + 3).max(5);
+        log_msg!("📍 Binary search (range={:.0}, max_iter={})", search_range, max_binary_iter);
+        
+        let mut bin_low = min_crf;
+        let mut bin_high = low;
+        let binary_start_iter = iterations;
+        
+        while bin_high - bin_low > 1.0 && (iterations - binary_start_iter) < max_binary_iter {
+            let mid = ((bin_low + bin_high) / 2.0).round();
+            let size = encode_cached(mid, &mut size_cache)?;
+            iterations += 1;
+            let ratio = size as f64 / input_size as f64 * 100.0;
+            
+            if size < input_size {
+                // 能压缩，尝试更低 CRF
+                best_crf = Some(mid);
+                best_size = Some(size);
+                bin_high = mid;
+                log_msg!("🔄 CRF {:.0}: {:.1}% ✓", mid, ratio);
+            } else {
+                // 不能压缩，需要更高 CRF
+                bin_low = mid;
+                log_msg!("🔄 CRF {:.0}: {:.1}% ✗", mid, ratio);
+            }
+        }
     } else {
         // 需要搜索更高 CRF
         let high_size = encode_cached(high, &mut size_cache)?;
@@ -3094,7 +3144,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             best_size = Some(high_size);
         } else {
             // 黄金分割搜索
-            while high - low > 0.5 && iterations < 50 {
+            while high - low > 0.5 && iterations < GLOBAL_MAX_ITERATIONS {
                 let mid1 = high - (high - low) / phi;
                 
                 // 四舍五入到 0.5
@@ -3126,7 +3176,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut bin_low = (compress_crf - 2.0).max(min_crf);
         let mut bin_high = compress_crf;
         
-        while bin_high - bin_low > 0.4 && iterations < 50 {
+        while bin_high - bin_low > 0.4 && iterations < GLOBAL_MAX_ITERATIONS {
             let mid = ((bin_low + bin_high) / 2.0 * 2.0).round() / 2.0;
             
             if mid <= bin_low || mid >= bin_high {
@@ -3168,7 +3218,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         
         // 向下搜索（更高质量），直到找到边界或变化率太小
         let mut test_crf = boundary_crf - 0.1;
-        while test_crf >= min_crf && iterations < 100 {
+        while test_crf >= min_crf && iterations < GLOBAL_MAX_ITERATIONS {
             let key = (test_crf * 10.0).round() as i32;
             if size_cache.contains_key(&key) {
                 test_crf -= 0.1;

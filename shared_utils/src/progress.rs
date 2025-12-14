@@ -787,6 +787,10 @@ mod tests {
     #[test]
     fn test_truncate_filename() {
         assert_eq!(truncate_filename("short.txt", 20), "short.txt");
-        assert_eq!(truncate_filename("very_long_filename_that_needs_truncation.txt", 20).len(), 20);
+        // 截断后长度 = 2 * half + 3，其中 half = (max_len - 3) / 2
+        // 当 max_len = 20 时，half = 8，结果长度 = 19
+        let truncated = truncate_filename("very_long_filename_that_needs_truncation.txt", 20);
+        assert!(truncated.len() <= 20, "truncated len {} > 20", truncated.len());
+        assert!(truncated.contains("..."));
     }
 }
