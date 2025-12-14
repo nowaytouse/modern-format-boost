@@ -22,9 +22,16 @@ fn disable_terminal_echo() {
     #[cfg(unix)]
     {
         use std::process::Command;
-        // 使用stty禁用echo（Unix/Linux/macOS）
+        // 使用stty禁用echo和输入缓冲（Unix/Linux/macOS）
+        // 对所有文件描述符应用
         let _ = Command::new("stty")
             .arg("-echo")
+            .arg("-icanon")  // 禁用规范模式（行缓冲）
+            .arg("min")
+            .arg("0")        // 非阻塞读
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
             .output();
     }
 }
@@ -34,9 +41,13 @@ fn restore_terminal_echo() {
     #[cfg(unix)]
     {
         use std::process::Command;
-        // 恢复echo设置
+        // 恢复echo和规范模式设置
         let _ = Command::new("stty")
             .arg("echo")
+            .arg("icanon")   // 恢复规范模式
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
             .output();
     }
 }
