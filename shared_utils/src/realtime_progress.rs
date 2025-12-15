@@ -143,6 +143,22 @@ impl SimpleIterationProgress {
         self.bar.set_message(msg);
     }
 
+    /// 🔥 v5.80: 暂停进度条，输出日志
+    ///
+    /// 这是统一的日志输出方法，确保日志不会与进度条冲突
+    ///
+    /// # 用法
+    /// ```rust
+    /// let progress = SimpleIterationProgress::new("🔍 Search", 1000000, 20);
+    /// progress.println("⚠️ Warning: something happened");
+    /// progress.println("✅ Step completed");
+    /// ```
+    pub fn println(&self, msg: &str) {
+        self.bar.suspend(|| {
+            eprintln!("{}", msg);
+        });
+    }
+
     /// 完成进度条
     pub fn finish(&self, final_crf: f32, final_size: u64, final_ssim: Option<f64>) {
         self.is_finished.store(true, Ordering::Relaxed);

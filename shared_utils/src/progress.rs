@@ -79,6 +79,31 @@ impl CoarseProgressBar {
         self.render();
     }
 
+    /// 🔥 v5.80: 暂停进度条，输出日志到上方
+    ///
+    /// 用法：
+    /// ```rust
+    /// let pb = CoarseProgressBar::new(100, "Processing");
+    /// pb.println("⚠️ Warning: something happened");
+    /// pb.println("✅ Step completed");
+    /// ```
+    pub fn println(&self, msg: &str) {
+        if self.is_finished.load(Ordering::Relaxed) {
+            eprintln!("{}", msg);
+            return;
+        }
+
+        // 1. 清除当前进度条行
+        eprint!("\r\x1b[K");
+        let _ = io::stderr().flush();
+
+        // 2. 输出日志（上移一行）
+        eprintln!("{}", msg);
+
+        // 3. 重新渲染进度条
+        self.render();
+    }
+
     /// 渲染进度条
     fn render(&self) {
         if self.is_finished.load(Ordering::Relaxed) {
