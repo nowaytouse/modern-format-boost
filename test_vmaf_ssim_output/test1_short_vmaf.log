@@ -1,0 +1,155 @@
+[2m2025-12-15T16:49:16.230046Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m 🎬 Auto Mode Conversion (HEVC/H.265)
+[2m2025-12-15T16:49:16.230088Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    Lossless sources → HEVC Lossless MKV
+[2m2025-12-15T16:49:16.230090Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    Lossy sources → HEVC MP4 (CRF auto-matched to input quality)
+[2m2025-12-15T16:49:16.230099Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    📊 Size exploration: ENABLED
+[2m2025-12-15T16:49:16.230102Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    🎯 Match Quality: ENABLED
+[2m2025-12-15T16:49:16.230103Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)
+[2m2025-12-15T16:49:16.230105Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    📊 VMAF Verification: ENABLED (threshold: 85.0)
+[2m2025-12-15T16:49:16.230109Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m 
+[2m2025-12-15T16:49:16.326334Z[0m [32m INFO[0m [2mvidquality_hevc::conversion_api[0m[2m:[0m 🎬 Auto Mode: scripts/../test_vmaf_ssim_output/short_10s.mp4 → HEVC MP4 (High Quality)
+[2m2025-12-15T16:49:16.326340Z[0m [32m INFO[0m [2mvidquality_hevc::conversion_api[0m[2m:[0m    Reason: Source is H.264 (Standard Quality) - compressing with HEVC CRF 20
+   📊 Quality Analysis v3.0 (HEVC):
+      Mode: Quality | Bias: Balanced
+      Confidence: 83%
+
+      📹 Source:
+         Codec: H.264 (H264, efficiency: 1.00)
+         Resolution: 640x480 (factor: 0.97)
+         Bit depth: 8-bit (factor: 1.00)
+
+      🔴 High Priority Factors:
+         Raw BPP: 0.0231
+         Video bitrate: 212 kbps (audio excluded)
+         GOP factor: 1.00
+         Chroma factor: 1.15
+            └─ Pixel format: yuv444p
+         HDR factor: 1.00
+
+      🟡 Medium Priority Factors:
+         Aspect factor: 1.00
+         Complexity factor: 0.95
+         Grain factor: 1.00
+         Alpha factor: 1.00
+
+      📈 Result:
+         Effective BPP: 0.0349
+         FPS: 30.00
+         Duration: 10.0s
+         ✅ Calculated CRF: 35
+[2m2025-12-15T16:49:16.326421Z[0m [32m INFO[0m [2mvidquality_hevc::conversion_api[0m[2m:[0m    🔬 精确质量匹配 + 必须压缩: CRF 35.0
+┌─────────────────────────────────────────────────────
+│ 📊 Precheck Report v5.75
+├─────────────────────────────────────────────────────
+│ 🎬 Codec: h264
+│ 📐 Resolution: 640x480
+│ 🎞️  Duration: 10.0s (3000 frames)
+│ 🎥 FPS: 300.00 🟡 扩展范围 (240-2000 fps) - 高速摄影/特殊软件
+│ 📁 File Size: 0.26 MB
+│ 📡 Bitrate: 212 kbps
+│ 📈 BPP: 0.0023 bits/pixel
+├─────────────────────────────────────────────────────
+│ 🖼️  Pixel Format: yuv444p
+│ 🔢 Bit Depth: 8-bit
+├─────────────────────────────────────────────────────
+│ ⚠️  Compression Potential: Low
+│    → File already optimized
+├─────────────────────────────────────────────────────
+│ 🔵 OPTIONAL: Marginal benefit expected
+│    → 文件已高度压缩（bitrate: 212 kbps < 1852 kbps, BPP: 0.0023 < 0.0500），转换收益有限，但仍可尝试现代编解码器获得边际改善
+└─────────────────────────────────────────────────────
+
+🔍 Detecting GPU acceleration...
+   ✅ GPU: Apple VideoToolbox detected
+      • HEVC: hevc_videotoolbox
+      • H.264: h264_videotoolbox
+🔬 Smart GPU+CPU Explore v5.1 (Hevc)
+   📁 Input: 267620 bytes (0.26 MB)
+
+📋 STRATEGY: GPU Coarse → CPU Fine
+• Phase 1: GPU finds rough boundary (FAST)
+• Phase 2: CPU finds precise CRF (ACCURATE)
+
+
+📍 Phase 1: GPU Coarse Search
+⚠️  GPU didn't find compression boundary
+• File may already be highly compressed
+• Using full CRF range for CPU search
+📍 Phase 2: CPU Fine-Tune (0.5→0.1 step)
+📊 Starting from GPU boundary: CRF 35.0
+[96m🔬 CPU Fine-Tune v5.86[0m (Hevc) - [92mMaximum SSIM Search[0m
+[36m📁[0m Input: 261.3 KB (267620 bytes) | Duration: 10.0s
+[33m🎯[0m Goal: [1mmin(CRF)[0m where [92moutput < input[0m (Highest SSIM + Must Compress)
+[36m📊[0m Using 0.25 step (fast coarse search) + 0.1 fine-tune
+[2m📍[0m Step: [96m0.25[0m | GPU boundary: [93mCRF 35.0[0m
+[2m🎯[0m Goal: min(CRF) where output < input
+[2m📈[0m Strategy: [92mMarginal benefit analysis[0m (not hard stop)
+
+[96m📍 Phase 1:[0m [1mVerify GPU boundary[0m
+      ⏳ CRF 35.0 | 99.3% | 9.9s/10.0s | 0fps | 19.8x                                                                                 [92m✅[0m GPU boundary [96mCRF 35.0[0m: [92m-82.9%[0m SSIM [93m0.9908[0m (compresses)
+
+[96m📍 Phase 2:[0m [1mMaximum SSIM Search[0m (v5.86)
+   [2m(Step 1.0→0.5→0.25→0.1, stop at SSIM >= 0.999)[0m
+      ⏳ CRF 34.0 | 99.3% | 9.9s/10.0s | 0fps | 22x                                                                                    [92m✓[0m [36mCRF 34.0[0m: [92m-82.3%[0m SSIM [93m0.9918[0m ([2mΔ+0.0010[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 33.0 | 99.3% | 9.9s/10.0s | 0fps | 21.9x                                                                                    [92m✓[0m [36mCRF 33.0[0m: [92m-81.5%[0m SSIM [93m0.9929[0m ([2mΔ+0.0011[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 32.0 | 99.3% | 9.9s/10.0s | 0fps | 21.2x                                                                                    [92m✓[0m [36mCRF 32.0[0m: [92m-81.5%[0m SSIM [93m0.9941[0m ([2mΔ+0.0012[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 31.0 | 99.3% | 9.9s/10.0s | 0fps | 21.2x                                                                                    [92m✓[0m [36mCRF 31.0[0m: [92m-81.2%[0m SSIM [93m0.9950[0m ([2mΔ+0.0008[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 30.0 | 99.3% | 9.9s/10.0s | 0fps | 20.1x                                                                                    [92m✓[0m [36mCRF 30.0[0m: [92m-80.5%[0m SSIM [93m0.9958[0m ([2mΔ+0.0008[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 29.0 | 96.7% | 9.7s/10.0s | 0fps | 19.1x         ⏳ CRF 29.0 | 99.3% | 9.9s/10.0s | 0fps | 19.4x                                                                                    [92m✓[0m [36mCRF 29.0[0m: [92m-79.9%[0m SSIM [93m0.9964[0m ([2mΔ+0.0007[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 28.0 | 99.3% | 9.9s/10.0s | 0fps | 21x                                                                                    [92m✓[0m [36mCRF 28.0[0m: [92m-78.8%[0m SSIM [93m0.9970[0m ([2mΔ+0.0005[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 27.0 | 99.3% | 9.9s/10.0s | 0fps | 20.2x                                                                                    [92m✓[0m [36mCRF 27.0[0m: [92m-78.1%[0m SSIM [93m0.9972[0m ([2mΔ+0.0003[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 26.0 | 97.0% | 9.7s/10.0s | 0fps | 19.2x         ⏳ CRF 26.0 | 99.3% | 9.9s/10.0s | 0fps | 19.4x                                                                                    [92m✓[0m [36mCRF 26.0[0m: [92m-77.7%[0m SSIM [93m0.9975[0m ([2mΔ+0.0003[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 25.0 | 99.3% | 9.9s/10.0s | 0fps | 20.1x                                                                                    [92m✓[0m [36mCRF 25.0[0m: [92m-76.1%[0m SSIM [93m0.9978[0m ([2mΔ+0.0003[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 24.0 | 86.7% | 8.7s/10.0s | 0fps | 17.3x         ⏳ CRF 24.0 | 99.3% | 9.9s/10.0s | 0fps | 17.8x                                                                                    [92m✓[0m [36mCRF 24.0[0m: [92m-75.2%[0m SSIM [93m0.9981[0m ([2mΔ+0.0003[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 23.0 | 91.0% | 9.1s/10.0s | 0fps | 18x         ⏳ CRF 23.0 | 99.3% | 9.9s/10.0s | 0fps | 18.3x                                                                                    [92m✓[0m [36mCRF 23.0[0m: [92m-74.1%[0m SSIM [93m0.9983[0m ([2mΔ+0.0002[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 22.0 | 99.3% | 9.9s/10.0s | 0fps | 19.9x                                                                                    [92m✓[0m [36mCRF 22.0[0m: [92m-72.3%[0m SSIM [93m0.9985[0m ([2mΔ+0.0002[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 21.0 | 97.0% | 9.7s/10.0s | 0fps | 19.2x         ⏳ CRF 21.0 | 99.3% | 9.9s/10.0s | 0fps | 19.4x                                                                                    [92m✓[0m [36mCRF 21.0[0m: [92m-70.3%[0m SSIM [93m0.9987[0m ([2mΔ+0.0002[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 20.0 | 91.3% | 9.1s/10.0s | 0fps | 18.1x         ⏳ CRF 20.0 | 99.3% | 9.9s/10.0s | 0fps | 18.4x                                                                                    [92m✓[0m [36mCRF 20.0[0m: [92m-68.3%[0m SSIM [93m0.9988[0m ([2mΔ+0.0001[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 19.0 | 91.3% | 9.1s/10.0s | 0fps | 18.1x         ⏳ CRF 19.0 | 99.3% | 9.9s/10.0s | 0fps | 18.4x                                                                                    [92m✓[0m [36mCRF 19.0[0m: [92m-65.5%[0m SSIM [93m0.9990[0m ([2mΔ+0.0002[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 18.0 | 86.7% | 8.7s/10.0s | 0fps | 17.2x         ⏳ CRF 18.0 | 99.3% | 9.9s/10.0s | 0fps | 17.7x                                                                                    [92m✓[0m [36mCRF 18.0[0m: [92m-62.5%[0m SSIM [93m0.9991[0m ([2mΔ+0.0001[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 17.0 | 81.7% | 8.2s/10.0s | 0fps | 16.3x         ⏳ CRF 17.0 | 99.3% | 9.9s/10.0s | 0fps | 16.8x                                                                                    [92m✓[0m [36mCRF 17.0[0m: [92m-58.5%[0m SSIM [93m0.9992[0m ([2mΔ+0.0001[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 16.0 | 83.0% | 8.3s/10.0s | 0fps | 16.6x         ⏳ CRF 16.0 | 99.3% | 9.9s/10.0s | 0fps | 16.8x                                                                                    [92m✓[0m [36mCRF 16.0[0m: [92m-54.5%[0m SSIM [93m0.9993[0m ([2mΔ+0.0001[0m, [2mstep 1.00[0m) [92m✅[0m
+      ⏳ CRF 15.0 | 81.7% | 8.2s/10.0s | 0fps | 16.2x         ⏳ CRF 15.0 | 99.3% | 9.9s/10.0s | 0fps | 16.1x                                                                                    [92m✓[0m [36mCRF 15.0[0m: [92m-50.0%[0m SSIM [93m0.9994[0m ([2mΔ+0.0001[0m, [2mstep 1.00[0m) [92m✅[0m
+   [92m🎯[0m [93mSSIM plateau reached[0m (0.9994 >= 0.999, gain 0.00008 < 0.0001) → [92mSTOP[0m
+✅ Best CRF 15.0 already encoded (full video)
+📍 Final: CRF 15.0 | Size: 133753 bytes (0.13 MB)
+   📊 SSIM calculated using standard method: 0.999422
+📊 SSIM: 0.999422 ✅ Excellent
+
+═══════════════════════════════════════════════════════════
+✅ RESULT: CRF 15.0 • Size -50.0% • Iterations: 21
+   🎯 Guarantee: output < input = ✅ YES
+┌─────────────────────────────────────────────────────
+│ 📊 Confidence Report
+├─────────────────────────────────────────────────────
+│ 📈 Overall Confidence: 98% 🟢 Excellent
+├─────────────────────────────────────────────────────
+│ 📹 Sampling Coverage: 100% (weight 30%)
+│ 🎯 Prediction Accuracy: 95% (weight 30%)
+│ 💾 Safety Margin: 100% (weight 20%)
+│ 📊 SSIM Reliability: 100% (weight 20%)
+└─────────────────────────────────────────────────────
+
+📊 Phase 3: Quality Verification
+   📹 Video duration: 10.0s (0.2 min)
+   ✅ Short video detected (≤5min)
+   🎯 Enabling VMAF precise verification...
+   📊 Calculating VMAF (precise video quality metric)...
+   📊 VMAF score: 1.00
+   ═══════════════════════════════════════════════════
+   📊 Final Quality Scores:
+      SSIM: 0.999422 (exploration metric)
+      VMAF: 1.00 (verification metric)
+      Grade: 🔴 Fair (noticeable artifacts)
+      SSIM-VMAF: ⚠️  Divergence detected
+   ⚠️  VMAF lower than expected!
+      Suggestion: Try lowering CRF by 1-2 for better quality
+
+   ═══════════════════════════════════════════════════
+   📊 CRF Mapping: CPU 15.0 ≈ GPU 10.0
+[2m2025-12-15T16:49:33.406212Z[0m [32m INFO[0m [2mvidquality_hevc::conversion_api[0m[2m:[0m    ✅ Complete: 50.0% of original
+[2m2025-12-15T16:49:33.406222Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m 
+[2m2025-12-15T16:49:33.406223Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m 📊 Conversion Summary:
+[2m2025-12-15T16:49:33.406224Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    Input:  scripts/../test_vmaf_ssim_output/short_10s.mp4 (267620 bytes)
+[2m2025-12-15T16:49:33.406225Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    Output: scripts/../test_vmaf_ssim_output/short_output.mp4/short_10s_hevc.mp4 (133753 bytes)
+[2m2025-12-15T16:49:33.406226Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    Ratio:  50.0%
+[2m2025-12-15T16:49:33.406227Z[0m [32m INFO[0m [2mvidquality_hevc[0m[2m:[0m    🔍 Explored 21 CRF values, final: CRF 15.0
