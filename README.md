@@ -1,956 +1,392 @@
 # Modern Format Boost
 
-🗃️ Collection-Grade Media Archive Tool - Premium Quality for Long-term Storage
+High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-**📚 Documentation**: [English](#english) | [中文](#中文)
+## Core Tools
 
----
+| Tool | Function | Output Format |
+|------|----------|---------------|
+| `vidquality-hevc` | Video → HEVC/H.265 | MP4 (Apple compatible) |
+| `vidquality-av1` | Video → AV1 | MP4 (max compression) |
+| `imgquality-hevc` | Image/Animation → JXL/HEVC | JXL + MP4 |
+| `imgquality-av1` | Image/Animation → JXL/AV1 | JXL + MP4 |
 
-### 🔥 Core Features (v5.72)
+## Key Features
 
-#### v5.72 Robustness Improvements
-| Feature | Description |
-|---------|-------------|
-| **LRU Cache Manager** | Capacity limits (size_cache: 100, quality_cache: 50) prevent memory leaks |
-| **Unified Error Handling** | Consistent error categories (Recoverable/Fatal/Optional) across codebase |
-| **GPU+CPU Dual Refinement** | GPU (4→1→0.5→0.25) + CPU (0.1 only) - CPU breaks SSIM ceiling |
-| **Real-Time Progress** | Detailed phase/CRF/SSIM/size tracking with ETA |
-| **Cache Persistence** | JSON serialization for cross-session cache reuse |
-| **Adaptive Sampling** | Up to 30s sampling for complex videos (from 10s baseline) |
+### 1. Smart Quality Matching System
+- **BPP Analysis**: Calculates bits-per-pixel from video bitrate (excludes audio)
+- **Codec Efficiency**: H.264=1.0, HEVC=0.65, AV1=0.50, VVC=0.35
+- **GOP Structure**: Analyzes keyframe interval and B-frame pyramid
+- **Content Detection**: Animation/Film/Screen recording optimization
+- **HDR Support**: BT.2020 color space detection
 
-**Strategy:** GPU does 4→1→0.5→0.25 (fast, SSIM ~0.97), CPU does 0.1 only (breaks to 0.98+)
+### 2. CRF Binary Search Explorer
+- **Three-phase search**: Coarse → Fine → Refine
+- **SSIM validation**: Default threshold ≥ 0.95
+- **Transparency report**: Shows every iteration with metrics
+- **Confidence scoring**: Sampling coverage + prediction accuracy
 
-#### v5.71 Precheck Module Improvements
-| Fix | Description |
-|-----|-------------|
-| **Legacy Codec Handling** | Theora/RealVideo/MJPEG → StronglyRecommended (not skip!) |
-| **Smart FPS Detection** | 4 levels: Normal(1-240), Extended(240-2K), Extreme(2K-10K), Invalid(>10K) |
-| **Codec-Adaptive Thresholds** | Bitrate/BPP thresholds adjusted by codec efficiency |
-| **HDR Detection** | bt2020 color space, 10-bit pixel format detection |
-| **5-Level Recommendations** | StronglyRecommended/Recommended/Optional/NotRecommended/CannotProcess |
+### 3. GPU Hardware Acceleration
 
-#### v5.5 Features
+| Platform | HEVC | AV1 | H.264 |
+|----------|------|-----|-------|
+| NVIDIA NVENC | hevc_nvenc | av1_nvenc | h264_nvenc |
+| Apple VideoToolbox | hevc_videotoolbox | - | h264_videotoolbox |
+| Intel QSV | hevc_qsv | av1_qsv | h264_qsv |
+| AMD AMF | hevc_amf | av1_amf | h264_amf |
+| VA-API (Linux) | hevc_vaapi | av1_vaapi | h264_vaapi |
 
-| Feature | Description |
-|---------|-------------|
-| **🆕 固定底部进度条** | 实时显示 CRF、SSIM、大小变化、迭代次数、耗时 |
-| **🆕 详细进度参数** | 每次编码测试都有可见的进度更新 |
-| **GPU+CPU Dual Fine-Tuning** | GPU 3-stage search (step 4→1→0.5) + SSIM validation → CPU 0.5→0.1 step fine-tune |
-| **GPU SSIM Ceiling** | VideoToolbox max ~0.97 SSIM, CPU achieves 0.98+ |
-| **Quality Matching** | SSIM ≥ 0.95 validation with smart termination |
-| **Compression Guarantee** | `--compress` ensures output < input |
-| **Apple Compatibility** | `--apple-compat` converts AV1/VP9 → HEVC |
-| **Short Video Handling** | Videos <60s use full duration for GPU sampling |
-| **Metadata Preservation** | EXIF, ICC profiles, timestamps, macOS xattr |
+### 4. Conversion Logic
 
-### 📊 v5.5 进度条改进
+**Static Images:**
+- JPEG → JXL: Lossless DCT transcode (zero quality loss)
+- PNG/TIFF/BMP → JXL: Mathematical lossless
+- WebP/AVIF/HEIC (lossy) → Skip (avoid generation loss)
 
+**Animated Images (≥3s duration):**
+- GIF/APNG → HEVC/AV1 MP4
+- Animated WebP → HEVC MP4 (with `--apple-compat`)
+- Short animations (<3s) → Skip
+
+**Video:**
+- H.264/MPEG/MJPEG → HEVC/AV1
+- HEVC/AV1/VP9 → Skip (already modern)
+- AV1/VP9 → HEVC (with `--apple-compat`)
+
+## Installation
+
+```bash
+cd modern_format_boost
+./build_all.sh
 ```
-╭─────────────────────────────────────────────────────────────────────────╮
-│ 🔬 精确质量匹配+压缩 (Hevc) │ 输入: 2.50 MB │
-│ 🎯 目标: 最高 SSIM + 输出 < 输入 │ CRF 范围: [18.0, 28.0] │
-╰─────────────────────────────────────────────────────────────────────────╯
-│ Stage A │ CRF 18.0 │ +5.2% ❌ │ Iter 1 │ Best: CRF 0.0 │ ⏱️ 2.3s │
-│ 二分搜索 │ CRF 23.0 │ -12.3% ✅ │ Iter 5 │ Best: 23.0 │ ⏱️ 8.1s │
-╭─────────────────────────────────────────────────────────────────────────╮
-│ 📊 结果: CRF 22.5 │ SSIM 0.9823 ✅ 良好 │ -15.2% │ 节省 0.38 MB │
-│ 📈 迭代: 8 次 │ SSIM 计算: 1 次 │ 耗时: 12.5s │
-╰─────────────────────────────────────────────────────────────────────────╯
+
+**Dependencies:** FFmpeg (libx265, libsvtav1, libjxl), Rust 1.70+
+
+
+## Commands
+
+### Subcommands
+
+```bash
+# Analyze media properties
+vidquality-hevc analyze input.mp4
+vidquality-hevc analyze input.mp4 --output json
+
+# Auto convert (intelligent mode selection)
+vidquality-hevc auto input.mp4 [OPTIONS]
+
+# Simple convert (all → target format)
+vidquality-hevc simple input.mp4
+
+# Show recommended strategy
+vidquality-hevc strategy input.mp4
 ```
 
----
-
-<a id="english"></a>
-## English
-
-### 🎯 Positioning: Collection/Archive Optimization Tool
-
-**Target Users**: Digital collectors, archivists, media libraries, long-term storage
-
-**Core Philosophy**: Preserve Everything, Upgrade Wisely
-
-| Priority | Description |
-|----------|-------------|
-| 🥇 Preservation | Complete metadata, ICC profiles, timestamps |
-| 🥈 Quality | Lossless or visually lossless only |
-| 🥉 Compatibility | Apple ecosystem support (HEVC option) |
-
----
-
-### Tools Overview
-
-| Tool | Input | Output | Encoder | Use Case |
-|------|-------|--------|---------|----------|
-| **imgquality-hevc** | Images/Animations | JXL / HEVC MP4 | cjxl, x265 | Apple ecosystem |
-| **imgquality** | Images/Animations | JXL / AV1 MP4 | cjxl, SVT-AV1 | Best compression |
-| **vidquality-hevc** | Videos | HEVC MP4 | x265 | Apple ecosystem |
-| **vidquality** | Videos | AV1 MP4 | SVT-AV1 | Best compression |
-
----
-
-### Conversion Strategy
-
-#### Static Images (JPEG/PNG/BMP/TIFF)
-
-| Input Format | Lossy? | Output | Strategy |
-|--------------|--------|--------|----------|
-| JPEG | N/A | JXL | **Lossless transcode** - preserves DCT coefficients, 100% reversible |
-| PNG (standard) | No | JXL (d=0) | **Mathematical lossless** - bit-perfect |
-| PNG (quantized) | Yes | JXL (d=0.1) | **Quality 100** - detected via IHDR analysis |
-| BMP/TIFF | No | JXL (d=0) | **Mathematical lossless** |
-| WebP/AVIF/HEIC | No | JXL (d=0) | **Mathematical lossless** |
-| WebP/AVIF/HEIC | Yes | **SKIP** | Avoid generation loss |
-| JXL | - | **SKIP** | Already modern format |
-
-**v3.7 PNG Quantization Detection (Referee System)**: Multi-factor weighted analysis to detect quantized PNGs:
-
-| Factor | Weight | Detection Method |
-|--------|--------|------------------|
-| Structural | 55% | IHDR color type, tRNS chunk, palette size vs image dimensions |
-| Metadata | 10% | Tool signatures (pngquant, TinyPNG, ImageOptim) |
-| Statistical | 25% | Dithering patterns, color distribution, gradient banding |
-| Heuristic | 10% | Compression efficiency anomalies |
-
-**Decision Thresholds:**
-- Score ≥ 0.70 → Definitely quantized (Lossy)
-- Score ≥ 0.50 → Likely quantized (Lossy)
-- Score < 0.50 → Lossless (conservative)
-
-**Key Insight**: Large images (>100K pixels) with indexed color (type 3) are almost always quantized, as natural photos have thousands of unique colors.
-
-#### Animations (GIF/APNG/Animated WebP)
-
-| Condition | Output | Strategy |
-|-----------|--------|----------|
-| Duration < 3s | **SKIP** | Too short, likely icon/sticker |
-| Lossless source | HEVC/AV1 MP4 (CRF 0) | **Visually lossless** |
-| Lossy source | HEVC/AV1 MP4 (auto CRF) | **Quality-matched** with SSIM validation |
-| Output > Input | **SKIP** | No benefit |
-
-#### Videos
-
-| Input Codec | Output | Strategy |
-|-------------|--------|----------|
-| H.264/AVC | HEVC/AV1 MP4 | **Upgrade** with quality matching |
-| MPEG-2/MPEG-4 | HEVC/AV1 MP4 | **Upgrade** with quality matching |
-| ProRes/DNxHD | HEVC/AV1 MKV | **Lossless** mode |
-| H.265/HEVC | **SKIP** | Already modern |
-| AV1 | **SKIP** | Already modern |
-| VP9 | **SKIP** | Already modern |
-| VVC/H.266 | **SKIP** | Cutting-edge |
-| AV2 | **SKIP** | Cutting-edge |
-
----
-
-### Quality Modes & Flags
-
-#### `--match-quality` - Algorithm-Predicted Quality Matching
-
-Automatically calculates optimal CRF based on input analysis:
-- **Video tools**: Enabled by default (`--match-quality=false` to disable)
-- **Image tools**: Disabled by default for static images (always lossless)
-- **Animation→Video**: Use `--match-quality` to enable
-
-**How it works:**
-1. Analyzes input: bitrate, resolution, codec, GOP structure, chroma subsampling
-2. Calculates effective BPP (bits per pixel)
-3. Predicts optimal CRF using calibrated formula
-4. Validates output with SSIM ≥ 0.95
-
-#### `--explore` - Binary Search Exploration
-
-Explores CRF values to find optimal quality-size balance:
-- **Alone**: Binary search for smaller output (no quality validation)
-- **With `--match-quality`**: Precise quality match with SSIM validation
-
-**⚠️ ONLY affects animated→video and video→video conversion!**
-Static images (JPEG/PNG) always use lossless conversion regardless of these flags.
-
-#### 🔥 v4.6 Flag Combinations
+### Flag Combinations (6 Valid Modes)
 
 | Flags | Mode | Behavior |
 |-------|------|----------|
-| None | Default | Fixed CRF from strategy |
-| `--compress` | Compress Only | Just ensure output < input (even 1KB) |
-| `--explore` | Explore Only | Find smallest possible output |
-| `--match-quality` | Quality Only | Basic SSIM validation |
-| `--compress --match-quality` | Compress+Quality | output < input + basic SSIM validation |
-| `--explore --match-quality` | Precise Quality | Find highest SSIM (size doesn't matter) |
-| `--explore --match-quality --compress` | Precise+Compress | Highest SSIM + must compress |
-| `--explore --compress` | ❌ **INVALID** | Loud error - conflicting goals |
+| (none) | Default | Single encode with AI-predicted CRF |
+| `--compress` | Compress-Only | Ensure output < input (even 1KB) |
+| `--explore` | Size-Only | Binary search for smallest file |
+| `--match-quality` | Quality-Match | Single encode + SSIM validation |
+| `--compress --match-quality` | Compress+Quality | output < input + SSIM check |
+| `--explore --match-quality` | Precise | Binary search + SSIM validation |
+| `--explore --match-quality --compress` | Full | Precise quality + must compress |
 
-**Invalid Combination Error:**
-```
-❌ 无效的 flag 组合: --explore --compress
-💡 --explore 寻找最小输出，--compress 只要更小即可，两者目标冲突
-💡 有效组合:
-   • --compress 单独：只要输出 < 输入
-   • --explore 单独：寻找尽可能更小的输出
-   • --explore --match-quality --compress：精确质量匹配 + 必须压缩
-```
+**Invalid:** `--explore --compress` (conflicting goals)
 
-#### 🔥 v4.5: Precise Quality Match - Efficient Search
-
-When using `--explore --match-quality` together, the algorithm enables:
-
-**Goal:** Find the **HIGHEST SSIM** (closest to source quality)
-- File size is NOT a concern in this mode
-- Add `--compress` flag if you need output < input
-
-**Efficient Three-Phase Search:**
-1. **Boundary Test**: Test min/max CRF to determine SSIM range (~2 iterations)
-2. **Plateau Search**: Find SSIM plateau (where lowering CRF no longer improves SSIM) (~4-6 iterations)
-3. **Fine Tuning**: ±1 CRF with step 0.5 (~2-4 iterations)
-
-#### 🔥 v4.5: `--compress` Flag - Precise Match + Compression
-
-When adding `--compress` flag:
-- **Goal**: Find **HIGHEST SSIM** with **output < input**
-- If both cannot be achieved, prioritize compression, then find highest SSIM within compressible range
-
-**Search Strategy:**
-1. **Binary search** to find compression boundary (CRF where output = input)
-2. **Search downward** within compressible range for highest SSIM
-
-**Triple Cross-Validation (SSIM + PSNR + VMAF):**
-- 🟢 All metrics agree → High confidence, early termination
-- 🟡 Majority agree (2/3) → Good confidence
-- 🔴 Metrics divergent → Continue searching
-
-**Composite Score Calculation:**
-| Metric | Weight | Description |
-|--------|--------|-------------|
-| SSIM | 50% | Primary structural similarity |
-| VMAF | 35% | Netflix perceptual quality |
-| PSNR | 15% | Reference signal-to-noise |
-
-**Smart Termination (v4.5):**
-- SSIM plateau detected → Stop, found optimal quality point
-- Max iterations reached → Stop with best found
-- SSIM range < 0.0001 → Use highest CRF (all CRFs produce same quality)
-
-**Detailed Output Log:**
-```
-🔬 Precise Quality-Match v4.5 (Hevc)
-   📁 Input: 1234567 bytes (1205.63 KB)
-   📐 CRF range: [10.0, 28.0], Initial: 20.0
-   🎯 Goal: Approach SSIM=1.0 (no time limit)
-   🔄 Cross-validation: ENABLED (SSIM=✓, PSNR=✓, VMAF=✓)
-   ⚠️ Thresholds: SSIM≥0.9500, PSNR≥40.0dB, VMAF≥90.0
-   ═══════════════════════════════════════════════════
-   📍 Phase 1: Full range scan (step 1.0)
-   CRF 10.0: 2345678 bytes (+89.9%) | SSIM:0.9987 | PSNR:48.32dB | VMAF:98.45 | 🟢
-      🎯 New best: CRF 10.0, Score 0.9876, SSIM 0.9987
-   ...
-   📊 FINAL RESULT
-      CRF: 15.0
-      Size: 1100000 bytes (-10.9%)
-      SSIM: 0.9965 ✅ Excellent
-      PSNR: 45.67 dB ✓
-      VMAF: 96.78 ✓
-      Composite Score: 0.9823
-      Cross-validation: 🟢 All metrics agree
-   📈 Iterations: 23, Precision: ±0.1 CRF
-```
-
-#### `--lossless` - Mathematical Lossless
-
-Forces mathematical lossless encoding (CRF 0):
-- ⚠️ **Very slow** encoding
-- ⚠️ **Large files** (often larger than input)
-- Use only for archival of lossless sources
-
----
-
-### Quality Matching v3.5 - Data-Driven Precision
-
-| Factor | Priority | Impact |
-|--------|----------|--------|
-| Video-only bitrate | 🔴 High | Excludes audio (10-30% more accurate) |
-| GOP structure | 🔴 High | GOP size + B-frames (up to 50% difference) |
-| Chroma subsampling | 🔴 High | YUV420 vs YUV444 (1.5x data) |
-| HDR detection | 🔴 High | BT.2020 needs 20-30% more bitrate |
-| Content type | 🔴 High | Animation +4 CRF, Film grain -3 CRF |
-| Pixel format | 🔴 High | yuv420p, yuv444p detection |
-| Aspect ratio | 🟡 Medium | Ultra-wide (>2.5:1) penalty |
-| SI/TI complexity | 🟡 Medium | Spatial/Temporal metrics |
-| Film grain | 🟡 Medium | High grain needs more bits |
-
-**v3.5 Improvements:**
-- CRF precision: 0.5 step (e.g., 23.5) instead of integer
-- Confidence score: ~92% (up from ~75%)
-- Full field support via VideoAnalysisBuilder
-
-**CRF Calculation Formula (HEVC):**
-```
-CRF = 46 - 5 × log₂(effective_bpp × 100) + content_adjustment + bias
-```
-
-**Why similar CRF values for similar content:**
-- Same source format (e.g., all GIFs) → similar codec efficiency factor
-- Similar resolution → similar pixel count
-- Similar duration → similar frame count
-- **No caching**: Each file is analyzed independently
-- **No hardcoding**: All values derived from actual content analysis
-
-**Example CRF mapping (HEVC):**
-| Effective BPP | Calculated CRF | Quality Level |
-|---------------|----------------|---------------|
-| 0.1 | ~26 | Standard |
-| 0.2 | ~23 | Good |
-| 0.3 | ~21 | High |
-| 0.5 | ~19 | Very High |
-| 1.0 | ~16 | Near-lossless |
-
----
-
-### Metadata Preservation
-
-| Type | Method | Preserved |
-|------|--------|-----------|
-| EXIF/IPTC/XMP | exiftool | ✅ All tags |
-| ICC Profiles | exiftool | ✅ Color profiles |
-| File timestamps | touch -r | ✅ mtime/atime |
-| macOS birthtime | SetFile | ✅ Creation time |
-| macOS xattr | xattr | ✅ Extended attributes |
-
----
-
-### Safety Features
-
-- **Smart rollback**: Skips if output ≥ input size
-- **Dangerous directory detection**: Blocks `/`, `/System`, `~`
-- **Duration threshold**: Animations < 3s skipped
-- **Format validation**: Skips modern formats to avoid generation loss
-- **No silent fallback**: Fails loudly with detailed errors
-- **🛡️ v3.8 Quality Protection**: When SSIM validation fails (< 0.95), original file is PROTECTED:
-  - Low-quality output is deleted
-  - Original file is kept intact
-  - Clear error message explains why
-
----
-
-### Usage Examples
-
-#### 🖱️ Drag & Drop (Easiest) ✅ TESTED
-
-**macOS:**
-1. Double-click `Modern Format Boost.app` → Select folder in dialog
-2. Or drag folder to `Modern Format Boost.app` icon
-3. Automatically opens Terminal with progress display
-
-**Windows:**
-1. Double-click `scripts/drag_and_drop_processor.bat` → Input folder path
-2. Or drag folder to `drag_and_drop_processor.bat`
-
-**Cross-platform:**
-```bash
-# Run the shell script directly
-./scripts/drag_and_drop_processor.sh /path/to/folder
-
-# Or interactive mode
-./scripts/drag_and_drop_processor.sh
-```
-
-**Features:**
-- 🛡️ Safety checks (blocks system directories)
-- 📊 File counting and progress display  
-- ⚠️ User confirmation before processing
-- 🔧 Auto-builds tools if missing
-- 📈 Success rate and size reduction reports
-
-#### 🔧 Command Line
+### All Options
 
 ```bash
-# Build all tools
-cd modern_format_boost
-cargo build --release -p imgquality-hevc -p vidquality-hevc
-
-# Image conversion (default: lossless for static, smart for animations)
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r
-
-# Image conversion with exploration (animations only)
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --explore --match-quality
-
-# Video conversion (quality matching enabled by default)
-./vidquality_hevc/target/release/vidquality-hevc auto /path/to/videos -r --explore
-
-# In-place conversion (delete originals) - Same as drag & drop
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --in-place --match-quality --explore
+-o, --output <DIR>     Output directory
+-f, --force            Overwrite existing files
+-r, --recursive        Recursive directory scan
+--delete-original      Delete original after conversion
+--in-place             Convert and delete original (replace)
+--lossless             Mathematical lossless (very slow)
+--cpu                  Force CPU encoding (higher SSIM ceiling)
+--apple-compat         Convert AV1/VP9 → HEVC for Apple devices
 ```
 
----
-
-### CLI Reference
-
-#### imgquality-hevc auto
-
-```
-Options:
-  -o, --output <DIR>     Output directory (default: same as input)
-  -f, --force            Force conversion even if processed
-  -r, --recursive        Process subdirectories
-      --delete-original  Delete original after success
-      --in-place         Same as --delete-original
-      --lossless         Mathematical lossless (slow!)
-      --explore          Binary search for optimal CRF (animations only)
-      --match-quality    Algorithm-predicted CRF + SSIM validation (animations only)
-      --compress         🔥 Require output < input
-      --apple-compat     🍎 Convert non-Apple-compatible animated formats to HEVC
-      --cpu              🖥️ Force CPU encoding (x265) for maximum quality
-```
-
-#### vidquality-hevc auto
-
-```
-Options:
-  -o, --output <DIR>     Output directory
-  -f, --force            Force conversion
-  -r, --recursive        Process subdirectories
-      --delete-original  Delete original after success
-      --in-place         Same as --delete-original
-      --lossless         Mathematical lossless
-      --explore          Binary search for optimal CRF
-      --match-quality    Quality matching [default: true]
-      --compress         🔥 Require output < input (use with --explore --match-quality)
-      --apple-compat     🍎 Convert AV1/VP9/VVC/AV2 to HEVC for Apple compatibility
-      --cpu              🖥️ Force CPU encoding (x265) for maximum quality
-```
-
-#### 🍎 Apple Compatibility Mode (`--apple-compat`)
-
-Converts non-Apple-compatible modern codecs to HEVC for seamless playback on Apple devices:
-
-| Without `--apple-compat` | With `--apple-compat` |
-|--------------------------|----------------------|
-| VP9 → **SKIP** | VP9 → **HEVC MP4** |
-| AV1 → **SKIP** | AV1 → **HEVC MP4** |
-| VVC/H.266 → **SKIP** | VVC → **HEVC MP4** |
-| HEVC → **SKIP** | HEVC → **SKIP** |
-
-**Use case**: When you need videos to play natively on iPhone, iPad, Mac, or Apple TV without software decoding.
-
----
-
-### Dependencies
-
-```bash
-# macOS
-brew install jpeg-xl ffmpeg exiftool
-
-# Linux (Debian/Ubuntu)
-apt install libjxl-tools ffmpeg libimage-exiftool-perl
-```
-
----
-
-### Project Structure
+## Architecture
 
 ```
 modern_format_boost/
-├── imgquality_hevc/     # Image tool (HEVC, Apple compatible)
-├── imgquality_av1/      # Image tool (AV1, best compression)
-├── vidquality_hevc/     # Video tool (HEVC, Apple compatible)
-├── vidquality_av1/      # Video tool (AV1, best compression)
-├── shared_utils/        # Common: quality_matcher, video_explorer, metadata
+├── vidquality_hevc/        # Video → HEVC converter
+├── vidquality_av1/         # Video → AV1 converter  
+├── imgquality_hevc/        # Image → JXL/HEVC converter
+├── imgquality_av1/         # Image → JXL/AV1 converter
+├── shared_utils/           # Core modules
+│   ├── video_explorer.rs   # CRF binary search + SSIM
+│   ├── quality_matcher.rs  # BPP→CRF prediction algorithm
+│   ├── gpu_accel.rs        # Multi-platform GPU detection
+│   ├── flag_validator.rs   # Flag combination validation
+│   ├── ssim_mapping.rs     # PSNR→SSIM dynamic mapping
+│   ├── lru_cache.rs        # LRU cache with eviction
+│   ├── checkpoint.rs       # Checkpoint/resume + atomic delete
+│   └── error_handler.rs    # Unified error handling
+├── xmp_merger/             # XMP sidecar merging tool
+├── scripts/                # Drag-and-drop scripts
+└── Modern Format Boost.app # macOS GUI app
 ```
 
----
+### 5. Error Handling System
+Three-level error classification with loud reporting:
+- **Recoverable**: Log warning, use fallback, continue
+- **Fatal**: Log error, abort operation
+- **Optional**: Log info, continue (non-critical)
 
-### HEVC vs AV1
+### 6. Checkpoint & Resume
+- **Progress tracking**: Resume after interruption
+- **Atomic delete**: Verify output integrity before deleting original
+- **Lock file**: Prevent concurrent processing
 
-| Aspect | HEVC (x265) | AV1 (SVT-AV1) |
-|--------|-------------|---------------|
-| Compression | Good | Better (~20% smaller) |
-| Speed | Fast | Slower |
-| Apple Support | Native | Software decode |
-| Browser | Safari only | Chrome/Firefox/Edge |
+### 7. LRU Cache
+- **Capacity limit**: Auto-evict oldest entries
+- **Persistence**: Save/load to JSON file
+- **Memory safety**: Prevent long-running memory leaks
 
-**Recommendation**: Use `*-hevc` for Apple devices, `*_av1` for maximum compression.
+### 8. PSNR→SSIM Mapping
+- **Dynamic prediction**: Linear interpolation from collected data
+- **Self-correction**: Update mapping with actual measurements
+- **Transparency**: Show predicted vs actual in reports
 
----
 
-<a id="中文"></a>
-## 中文
+## Quality Validation System
 
-### 🔥 核心功能 (v5.72)
+### SSIM Thresholds
+- Default: ≥ 0.95 (visually lossless)
+- Conservative: ≥ 0.98 (use `--cpu`)
+- GPU ceiling: ~0.95 (VideoToolbox limitation)
 
-#### v5.72 鲁棒性改进
-| 功能 | 说明 |
-|------|------|
-| **LRU缓存管理** | 容量限制（size_cache: 100, quality_cache: 50）防止内存泄漏 |
-| **统一错误处理** | 一致的错误分类（Recoverable/Fatal/Optional）贯穿整个代码库 |
-| **GPU+CPU双精细化** | GPU (4→1→0.5→0.25) + CPU (仅0.1) - CPU突破SSIM天花板 |
-| **实时进度透明** | 详细的阶段/CRF/SSIM/大小追踪 + 预估剩余时间 |
-| **缓存持久化** | JSON序列化支持跨会话缓存复用 |
-| **自适应采样** | 复杂视频采样最长30秒（基础10秒） |
-
-**策略：** GPU做4→1→0.5→0.25（快速，SSIM ~0.97），CPU仅做0.1（突破到0.98+）
-
-#### v5.71 预检查模块改进
-| 改进 | 说明 |
-|------|------|
-| **古老编解码器识别** | Theora/RealVideo/MJPEG → 强烈建议转换（10-50倍压缩提升） |
-| **智能FPS分类** | 4个等级：Normal(1-240)/Extended(240-2K)/Extreme(2K-10K)/Invalid(>10K) |
-| **编解码器自适应阈值** | 比特率/BPP 阈值根据编码效率调整（H.264:1.0/HEVC:0.65/AV1:0.5） |
-| **HDR检测** | bt2020色彩空间、10-bit像素格式自动识别 |
-| **5级处理建议** | StronglyRecommended/Recommended/Optional/NotRecommended/CannotProcess |
-
-#### v5.6 基础功能
-| 功能 | 说明 |
-|------|------|
-| **GPU+CPU 双精细化** | GPU 三阶段搜索 (step 4→1→0.5) + SSIM 验证 → CPU 0.5→0.1 步进精细调整 |
-| **GPU SSIM 上限** | VideoToolbox 最高 ~0.97 SSIM，CPU 可达 0.98+ |
-| **质量匹配** | SSIM ≥ 0.95 验证 + 智能终止 |
-| **压缩保证** | `--compress` 确保输出 < 输入 |
-| **Apple 兼容** | `--apple-compat` 将 AV1/VP9 转换为 HEVC |
-| **短视频处理** | <60秒视频使用完整时长进行 GPU 采样 |
-| **元数据保留** | EXIF、ICC 配置、时间戳、macOS xattr |
-
----
-
-### 📊 v5.72 GPU+CPU 双精细化流程
-
+### Confidence Report
 ```
-╭─────────────────────────────────────────────────────────────────────────╮
-│ 🔬 精确质量匹配+压缩 (Hevc) │ 输入: 2.50 MB │
-│ 🎯 目标: 最高 SSIM + 输出 < 输入 │ CRF 范围: [18.0, 28.0] │
-╰─────────────────────────────────────────────────────────────────────────╯
-│ 📍 Phase 1: GPU Search (VideoToolbox, SSIM ceiling ~0.97)               │
-│ GPU (step 4.0) │ CRF 18.0 │ +5.2% ❌ │ Iter 1 │ ⏱️ 0.5s │
-│ GPU (step 1.0) │ CRF 23.0 │ -8.3% ✅ │ Iter 3 │ ⏱️ 1.2s │
-│ GPU (step 0.5) │ CRF 22.5 │ -12.1% ✅ │ Iter 5 │ ⏱️ 2.0s │
-│ GPU (step 0.25) │ CRF 22.25 │ -14.1% ✅ │ SSIM 0.9712 │ ⏱️ 3.5s │
-├─────────────────────────────────────────────────────────────────────────┤
-│ 📍 Phase 2: CPU Final (libx265, breaks SSIM ceiling to 0.98+)           │
-│ CPU (step 0.1) │ CRF 22.2 │ SSIM 0.9856 ✅ │ ⏱️ 12.5s │
-╭─────────────────────────────────────────────────────────────────────────╮
-│ 📊 结果: CRF 22.2 │ SSIM 0.9856 ✅ 良好 │ -15.2% │ 节省 0.38 MB │
-│ 📈 GPU: 8次 (快速) + CPU: 3次 (精确) │ 耗时: 12.5s │
-╰─────────────────────────────────────────────────────────────────────────╯
+┌─────────────────────────────────────────────────────
+│ 📊 Confidence Report
+├─────────────────────────────────────────────────────
+│ 📈 Overall Confidence: 85% 🟡 Good
+├─────────────────────────────────────────────────────
+│ 📹 Sampling Coverage: 90% (weight 30%)
+│ 🎯 Prediction Accuracy: 80% (weight 30%)
+│ 💾 Safety Margin: 85% (weight 20%)
+│ 📊 SSIM Reliability: 88% (weight 20%)
+└─────────────────────────────────────────────────────
 ```
 
+### Transparency Report
+```
+┌────┬──────────────┬───────────┬─────────────┬─────────────┐
+│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │
+├────┼──────────────┼───────────┼─────────────┼─────────────┤
+│  1 │ Coarse       │ CRF  23.0 │  -45.2% ✅  │ 0.9612 ✅   │
+│  2 │ Fine         │ CRF  20.0 │  -32.1% ✅  │ 0.9734 ✅   │
+│  3 │ Refine       │ CRF  18.5 │  -25.8% ✅  │ 0.9821 ✅   │
+└────┴──────────────┴───────────┴─────────────┴─────────────┘
+```
+
+## Supported Formats
+
+**Video Input:** mp4, mkv, avi, mov, webm, flv, wmv, m4v, mpg, mpeg, ts, mts
+**Image Input:** png, jpg, jpeg, webp, gif, tiff, tif, heic, avif
+**Video Output:** MP4 (HEVC/AV1), MKV (lossless)
+**Image Output:** JXL
+
+## XMP Merger Tool
+
+Merge XMP sidecar metadata back into media files:
+
+```bash
+xmp-merge /path/to/directory
+```
+
+**Matching strategies (priority order):**
+1. Direct match: `photo.jpg.xmp` → `photo.jpg`
+2. Same name: `photo.xmp` → `photo.jpg`
+3. Case-insensitive: `PHOTO.xmp` → `photo.jpg`
+4. XMP metadata extraction: Read original filename from XMP tags
+5. DocumentID matching: Match by UUID
+6. Fuzzy match: Handle special characters, unicode
+7. Content hash: Last resort for renamed files
+
+## macOS App
+
+Double-click `Modern Format Boost.app` for drag-and-drop conversion with default flags:
+`--explore --match-quality --compress --in-place`
+
 ---
 
-### 🎯 定位：收藏/归档优化工具
 
-**目标用户**：数字收藏家、档案管理员、媒体库、长期存储
+# 中文文档
 
-**核心理念**：保留一切，智能升级
+高性能媒体转换工具集，支持智能质量匹配、SSIM验证和多平台GPU加速。
 
-| 优先级 | 说明 |
-|--------|------|
-| 🥇 保留 | 完整元数据、ICC 配置、时间戳 |
-| 🥈 质量 | 仅无损或视觉无损 |
-| 🥉 兼容 | Apple 生态支持（HEVC 选项） |
+## 核心工具
 
----
-
-### 工具概览
-
-| 工具 | 输入 | 输出 | 编码器 | 适用场景 |
-|------|------|------|--------|----------|
-| **imgquality-hevc** | 图像/动图 | JXL / HEVC MP4 | cjxl, x265 | Apple 生态 |
-| **imgquality** | 图像/动图 | JXL / AV1 MP4 | cjxl, SVT-AV1 | 最佳压缩 |
-| **vidquality-hevc** | 视频 | HEVC MP4 | x265 | Apple 生态 |
-| **vidquality** | 视频 | AV1 MP4 | SVT-AV1 | 最佳压缩 |
-
----
-
-### 转换策略
-
-#### 静态图像 (JPEG/PNG/BMP/TIFF)
-
-| 输入格式 | 有损？ | 输出 | 策略 |
-|----------|--------|------|------|
-| JPEG | N/A | JXL | **无损转码** - 保留 DCT 系数，100% 可逆 |
-| PNG（标准） | 否 | JXL (d=0) | **数学无损** - 比特级精确 |
-| PNG（量化） | 是 | JXL (d=0.1) | **质量 100** - 通过 IHDR 分析检测 |
-| BMP/TIFF | 否 | JXL (d=0) | **数学无损** |
-| WebP/AVIF/HEIC | 否 | JXL (d=0) | **数学无损** |
-| WebP/AVIF/HEIC | 是 | **跳过** | 避免代际损失 |
-| JXL | - | **跳过** | 已是现代格式 |
-
-**v3.7 PNG 量化检测（裁判系统）**：多因子加权分析检测量化 PNG：
-
-| 因子 | 权重 | 检测方法 |
+| 工具 | 功能 | 输出格式 |
 |------|------|----------|
-| 结构分析 | 55% | IHDR 颜色类型、tRNS 块、调色板大小 vs 图像尺寸 |
-| 元数据分析 | 10% | 工具签名（pngquant、TinyPNG、ImageOptim） |
-| 统计分析 | 25% | 抖动模式、颜色分布、渐变条带 |
-| 启发式分析 | 10% | 压缩效率异常 |
+| `vidquality-hevc` | 视频 → HEVC/H.265 | MP4（Apple兼容）|
+| `vidquality-av1` | 视频 → AV1 | MP4（最大压缩）|
+| `imgquality-hevc` | 图片/动图 → JXL/HEVC | JXL + MP4 |
+| `imgquality-av1` | 图片/动图 → JXL/AV1 | JXL + MP4 |
 
-**决策阈值：**
-- 分数 ≥ 0.70 → 确定量化（有损）
-- 分数 ≥ 0.50 → 可能量化（有损）
-- 分数 < 0.50 → 无损（保守）
+## 核心功能
 
-**关键洞察**：大图像（>10万像素）使用索引色（类型3）几乎都是量化的，因为自然照片有数千种独特颜色。
+### 1. 智能质量匹配系统
+- **BPP分析**：从视频码率计算每像素比特数（排除音频）
+- **编码效率**：H.264=1.0, HEVC=0.65, AV1=0.50, VVC=0.35
+- **GOP结构**：分析关键帧间隔和B帧金字塔
+- **内容检测**：动画/电影/屏幕录制优化
+- **HDR支持**：BT.2020色彩空间检测
 
-#### 动图 (GIF/APNG/动态 WebP)
+### 2. CRF二分搜索探索器
+- **三阶段搜索**：粗搜索 → 精搜索 → 微调
+- **SSIM验证**：默认阈值 ≥ 0.95
+- **透明度报告**：显示每次迭代的详细指标
+- **置信度评分**：采样覆盖度 + 预测准确度
 
-| 条件 | 输出 | 策略 |
-|------|------|------|
-| 时长 < 3秒 | **跳过** | 太短，可能是图标/贴纸 |
-| 无损源 | HEVC/AV1 MP4 (CRF 0) | **视觉无损** |
-| 有损源 | HEVC/AV1 MP4 (自动 CRF) | **质量匹配** + SSIM 验证 |
-| 输出 > 输入 | **跳过** | 无收益 |
+### 3. GPU硬件加速
 
-#### 视频
+| 平台 | HEVC | AV1 | H.264 |
+|------|------|-----|-------|
+| NVIDIA NVENC | hevc_nvenc | av1_nvenc | h264_nvenc |
+| Apple VideoToolbox | hevc_videotoolbox | - | h264_videotoolbox |
+| Intel QSV | hevc_qsv | av1_qsv | h264_qsv |
+| AMD AMF | hevc_amf | av1_amf | h264_amf |
+| VA-API (Linux) | hevc_vaapi | av1_vaapi | h264_vaapi |
 
-| 输入编码 | 输出 | 策略 |
-|----------|------|------|
-| **古老编解码器** | HEVC/AV1 MP4 | 🔥 **强烈建议转换** - 10-50倍压缩提升 |
-| Theora/RealVideo/MJPEG | HEVC/AV1 MP4 | 最佳升级目标 |
-| H.264/AVC | HEVC/AV1 MP4 | **升级** + 质量匹配 |
-| MPEG-2/MPEG-4 | HEVC/AV1 MP4 | **升级** + 质量匹配 |
-| ProRes/DNxHD | HEVC/AV1 MKV | **无损**模式 |
-| H.265/HEVC | **警告继续** | 已是现代格式，重编码可能质量损失 |
-| AV1 | **警告继续** | 已是现代格式，重编码可能质量损失 |
+### 4. 转换逻辑
 
-**v5.71 预检查决策流程**：
+**静态图片：**
+- JPEG → JXL：无损DCT转码（零质量损失）
+- PNG/TIFF/BMP → JXL：数学无损
+- WebP/AVIF/HEIC（有损）→ 跳过（避免代际损失）
 
-1. **文件异常检测** ❌ → 强制停止
-   - 分辨率异常（<16px 或 >16K）
-   - 时长过短（<0.05s）
-   - FPS异常（>10000 或 ≤0）
+**动态图片（≥3秒）：**
+- GIF/APNG → HEVC/AV1 MP4
+- 动态WebP → HEVC MP4（使用 `--apple-compat`）
+- 短动画（<3秒）→ 跳过
 
-2. **古老编解码器检测** 🔥 → 强烈建议处理
-   - Theora、RealVideo、VP6/VP7、WMV、MJPEG、Cinepak、Indeo 等
-   - 这些是**最值得升级**的目标！
+**视频：**
+- H.264/MPEG/MJPEG → HEVC/AV1
+- HEVC/AV1/VP9 → 跳过（已是现代编码）
+- AV1/VP9 → HEVC（使用 `--apple-compat`）
 
-3. **现代编解码器检测** ⚠️ → 警告但继续
-   - HEVC/H.265、AV1
-   - 重编码可能导致质量损失
 
-4. **编解码器自适应阈值** 🔵 → 可选/建议处理
-   - 根据编码效率调整比特率/BPP 阈值
-   - 极低BPP(<0.05) + 低比特率 → 可选（已高度压缩）
-   - 低BPP(<0.10) + 低比特率 → 建议（有提升空间）
-
-5. **默认情况** ✅ → 建议处理
-   - 标准编解码器，建议升级到现代格式
-| VP9 | **跳过** | 已是现代格式 |
-| VVC/H.266 | **跳过** | 前沿格式 |
-| AV2 | **跳过** | 前沿格式 |
-
----
-
-### 质量模式与标志
-
-#### `--match-quality` - 算法预测质量匹配
-
-根据输入分析自动计算最佳 CRF：
-- **视频工具**：默认开启（`--match-quality=false` 关闭）
-- **图像工具**：静态图像默认关闭（始终无损）
-- **动图→视频**：使用 `--match-quality` 开启
-
-**工作原理：**
-1. 分析输入：码率、分辨率、编码器、GOP 结构、色度采样
-2. 计算有效 BPP（每像素比特数）
-3. 使用校准公式预测最佳 CRF
-4. 使用 SSIM ≥ 0.95 验证输出
-
-#### `--explore` - 二分搜索探索
-
-探索 CRF 值以找到最佳质量-大小平衡：
-- **单独使用**：二分搜索更小输出（无质量验证）
-- **配合 `--match-quality`**：精确质量匹配 + SSIM 验证
-
-**⚠️ 仅影响动图→视频和视频→视频转换！**
-静态图像（JPEG/PNG）始终使用无损转换，不受这些标志影响。
-
-#### 🔥 v4.6 Flag 组合
-
-| 标志 | 模式 | 行为 |
-|------|------|------|
-| 无 | 默认 | 策略固定 CRF |
-| `--compress` | 仅压缩 | 只要输出 < 输入（哪怕 1KB） |
-| `--explore` | 仅探索 | 寻找尽可能更小的输出 |
-| `--match-quality` | 仅质量 | 粗略 SSIM 验证 |
-| `--compress --match-quality` | 压缩+质量 | 输出 < 输入 + 粗略 SSIM 验证 |
-| `--explore --match-quality` | 精确质量 | 找最高 SSIM（不在乎大小） |
-| `--explore --match-quality --compress` | 精确+压缩 | 最高 SSIM + 必须压缩 |
-| `--explore --compress` | ❌ **无效** | 响亮报错 - 目标冲突 |
-
-**无效组合错误信息：**
-```
-❌ 无效的 flag 组合: --explore --compress
-💡 --explore 寻找最小输出，--compress 只要更小即可，两者目标冲突
-💡 有效组合:
-   • --compress 单独：只要输出 < 输入
-   • --explore 单独：寻找尽可能更小的输出
-   • --explore --match-quality --compress：精确质量匹配 + 必须压缩
-```
-
-#### 🔥 v4.5: 精确质量匹配 - 高效搜索
-
-当同时使用 `--explore --match-quality` 时，算法启用：
-
-**目标：** 找到**最高 SSIM**（最接近源质量）
-- 此模式不关心文件大小
-- 如需同时压缩，添加 `--compress` flag
-
-**高效三阶段搜索：**
-1. **边界测试**：测试 min/max CRF 确定 SSIM 范围（~2次迭代）
-2. **平台搜索**：找到 SSIM 平台（继续降低 CRF 不再提升 SSIM 的点）（~4-6次迭代）
-3. **精细调整**：±1 CRF，步长 0.5（~2-4次迭代）
-
-#### 🔥 v4.5: `--compress` Flag - 精确匹配 + 压缩
-
-当添加 `--compress` flag 时：
-- **目标**：找到**最高 SSIM** 且 **输出 < 输入**
-- 如果无法同时满足，优先保证压缩，然后在压缩范围内找最高 SSIM
-
-**搜索策略：**
-1. **二分搜索**找到压缩边界（输出 = 输入的 CRF）
-2. **向下搜索**在能压缩的范围内找最高 SSIM
-
-**三重交叉验证 (SSIM + PSNR + VMAF)：**
-- 🟢 所有指标一致 → 高置信度，提前终止
-- 🟡 多数一致 (2/3) → 良好置信度
-- 🔴 指标分歧 → 继续搜索
-
-**综合评分计算：**
-| 指标 | 权重 | 说明 |
-|------|------|------|
-| SSIM | 50% | 主要结构相似性 |
-| VMAF | 35% | Netflix 感知质量 |
-| PSNR | 15% | 参考信噪比 |
-
-**智能终止条件 (v4.5)：**
-- SSIM 平台检测 → 停止，找到最优质量点
-- 达到最大迭代次数 → 停止，使用已找到的最佳
-- SSIM 范围 < 0.0001 → 使用最高 CRF（所有 CRF 产生相同质量）
-
-**详细输出日志：**
-```
-🔬 Precise Quality-Match v4.5 (Hevc)
-   📁 Input: 1234567 bytes (1205.63 KB)
-   📐 CRF range: [10.0, 28.0], Initial: 20.0
-   🎯 Goal: Approach SSIM=1.0 (no time limit)
-   🔄 Cross-validation: ENABLED (SSIM=✓, PSNR=✓, VMAF=✓)
-   ⚠️ Thresholds: SSIM≥0.9500, PSNR≥40.0dB, VMAF≥90.0
-   ═══════════════════════════════════════════════════
-   📍 Phase 1: Full range scan (step 1.0)
-   CRF 10.0: 2345678 bytes (+89.9%) | SSIM:0.9987 | PSNR:48.32dB | VMAF:98.45 | 🟢
-      🎯 New best: CRF 10.0, Score 0.9876, SSIM 0.9987
-   ...
-   📊 FINAL RESULT
-      CRF: 15.0
-      Size: 1100000 bytes (-10.9%)
-      SSIM: 0.9965 ✅ Excellent
-      PSNR: 45.67 dB ✓
-      VMAF: 96.78 ✓
-      Composite Score: 0.9823
-      Cross-validation: 🟢 All metrics agree
-   📈 Iterations: 23, Precision: ±0.1 CRF
-```
-
-#### `--lossless` - 数学无损
-
-强制数学无损编码（CRF 0）：
-- ⚠️ **非常慢**的编码
-- ⚠️ **大文件**（通常比输入更大）
-- 仅用于无损源的归档
-
----
-
-### 质量匹配 v3.5 - 数据驱动精度
-
-| 因子 | 优先级 | 影响 |
-|------|--------|------|
-| 视频专用码率 | 🔴 高 | 排除音频（精度提升 10-30%） |
-| GOP 结构 | 🔴 高 | GOP 大小 + B 帧（差异可达 50%） |
-| 色度采样 | 🔴 高 | YUV420 vs YUV444（数据量 1.5 倍） |
-| HDR 检测 | 🔴 高 | BT.2020 需要 20-30% 更多码率 |
-| 内容类型 | 🔴 高 | 动画 +4 CRF，胶片颗粒 -3 CRF |
-| 像素格式 | 🔴 高 | yuv420p, yuv444p 检测 |
-| 宽高比 | 🟡 中 | 超宽（>2.5:1）惩罚 |
-| SI/TI 复杂度 | 🟡 中 | 空间/时间指标 |
-| 胶片颗粒 | 🟡 中 | 高颗粒需要更多比特 |
-
-**v3.5 改进：**
-- CRF 精度：0.5 步长（如 23.5）而非整数
-- 置信度：~92%（从 ~75% 提升）
-- 通过 VideoAnalysisBuilder 完整字段支持
-
-**CRF 计算公式（HEVC）：**
-```
-CRF = 46 - 5 × log₂(有效BPP × 100) + 内容调整 + 偏好
-```
-
-**为什么相似内容的 CRF 值相似：**
-- 相同源格式（如全是 GIF）→ 相似的编码效率因子
-- 相似分辨率 → 相似的像素数
-- 相似时长 → 相似的帧数
-- **无缓存**：每个文件独立分析
-- **无硬编码**：所有值均来自实际内容分析
-
-**CRF 映射示例（HEVC）：**
-| 有效 BPP | 计算 CRF | 质量级别 |
-|----------|----------|----------|
-| 0.1 | ~26 | 标准 |
-| 0.2 | ~23 | 良好 |
-| 0.3 | ~21 | 高 |
-| 0.5 | ~19 | 非常高 |
-| 1.0 | ~16 | 接近无损 |
-
----
-
-### 元数据保留
-
-| 类型 | 方法 | 保留 |
-|------|------|------|
-| EXIF/IPTC/XMP | exiftool | ✅ 所有标签 |
-| ICC 配置文件 | exiftool | ✅ 颜色配置 |
-| 文件时间戳 | touch -r | ✅ mtime/atime |
-| macOS birthtime | SetFile | ✅ 创建时间 |
-| macOS xattr | xattr | ✅ 扩展属性 |
-
----
-
-### 安全特性
-
-- **智能回退**：输出 ≥ 输入大小时跳过
-- **危险目录检测**：阻止 `/`、`/System`、`~`
-- **时长阈值**：< 3 秒的动图跳过
-- **格式验证**：跳过现代格式以避免代际损失
-- **无静默回退**：失败时响亮报错，提供详细信息
-- **🛡️ v3.8 质量保护**：当 SSIM 验证失败（< 0.95）时，原文件受保护：
-  - 删除低质量输出
-  - 保留原文件完整
-  - 清晰的错误信息说明原因
-
----
-
-### 使用示例
-
-#### 🖱️ 拖拽使用（最简单）
-
-**macOS:**
-1. 双击 `Modern Format Boost.app` → 选择文件夹
-2. 或将文件夹拖拽到 `Modern Format Boost.app` 图标上
-
-**Windows:**
-1. 双击 `scripts/drag_and_drop_processor.bat` → 输入文件夹路径
-2. 或将文件夹拖拽到 `drag_and_drop_processor.bat` 上
-
-**跨平台:**
-```bash
-# 运行shell脚本
-./scripts/drag_and_drop_processor.sh /path/to/folder
-```
-
-#### 🔧 命令行
+## 安装
 
 ```bash
-# 编译所有工具
 cd modern_format_boost
-cargo build --release -p imgquality-hevc -p vidquality-hevc
-
-# 图像转换（默认：静态无损，动图智能）
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r
-
-# 图像转换 + 探索（仅动图）
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --explore --match-quality
-
-# 视频转换（默认开启质量匹配）
-./vidquality_hevc/target/release/vidquality-hevc auto /path/to/videos -r --explore
-
-# 原地转换（删除原文件）- 与拖拽模式相同
-./imgquality_hevc/target/release/imgquality-hevc auto /path/to/images -r --in-place --match-quality --explore
+./build_all.sh
 ```
 
----
+**依赖：** FFmpeg（libx265, libsvtav1, libjxl），Rust 1.70+
 
-### CLI 参考
+## 命令
 
-#### imgquality-hevc auto
-
-```
-选项：
-  -o, --output <DIR>     输出目录（默认：与输入相同）
-  -f, --force            强制转换即使已处理
-  -r, --recursive        处理子目录
-      --delete-original  成功后删除原文件
-      --in-place         等同于 --delete-original
-      --lossless         数学无损（慢！）
-      --explore          二分搜索最优 CRF（仅动图）
-      --match-quality    算法预测 CRF + SSIM 验证（仅动图）
-      --compress         🔥 要求输出 < 输入
-      --apple-compat     🍎 将非 Apple 兼容的动图格式转换为 HEVC
-      --cpu              🖥️ 强制 CPU 编码 (x265) 以获得最高质量
-```
-
-#### vidquality-hevc auto
-
-```
-选项：
-  -o, --output <DIR>     输出目录
-  -f, --force            强制转换
-  -r, --recursive        处理子目录
-      --delete-original  成功后删除原文件
-      --in-place         等同于 --delete-original
-      --lossless         数学无损
-      --explore          二分搜索最优 CRF
-      --match-quality    质量匹配 [默认: true]
-      --compress         🔥 要求输出 < 输入（配合 --explore --match-quality 使用）
-      --apple-compat     🍎 将 AV1/VP9/VVC/AV2 转换为 HEVC 以兼容 Apple 设备
-      --cpu              🖥️ 强制 CPU 编码 (x265) 以获得最高质量
-```
-
-#### 🍎 Apple 兼容模式 (`--apple-compat`)
-
-将非 Apple 兼容的现代编码转换为 HEVC，以便在 Apple 设备上无缝播放：
-
-| 不使用 `--apple-compat` | 使用 `--apple-compat` |
-|------------------------|----------------------|
-| VP9 → **跳过** | VP9 → **HEVC MP4** |
-| AV1 → **跳过** | AV1 → **HEVC MP4** |
-| VVC/H.266 → **跳过** | VVC → **HEVC MP4** |
-| HEVC → **跳过** | HEVC → **跳过** |
-
-**使用场景**：当你需要视频在 iPhone、iPad、Mac 或 Apple TV 上原生播放而无需软件解码时。
-
----
-
-### 依赖
+### 子命令
 
 ```bash
-# macOS
-brew install jpeg-xl ffmpeg exiftool
+# 分析媒体属性
+vidquality-hevc analyze input.mp4
+vidquality-hevc analyze input.mp4 --output json
 
-# Linux (Debian/Ubuntu)
-apt install libjxl-tools ffmpeg libimage-exiftool-perl
+# 自动转换（智能模式选择）
+vidquality-hevc auto input.mp4 [选项]
+
+# 简单转换（全部 → 目标格式）
+vidquality-hevc simple input.mp4
+
+# 显示推荐策略
+vidquality-hevc strategy input.mp4
 ```
+
+### 参数组合（6种有效模式）
+
+| 参数 | 模式 | 行为 |
+|------|------|------|
+| (无) | 默认 | 单次编码，使用AI预测CRF |
+| `--compress` | 仅压缩 | 确保输出 < 输入（哪怕1KB）|
+| `--explore` | 仅体积 | 二分搜索最小文件 |
+| `--match-quality` | 质量匹配 | 单次编码 + SSIM验证 |
+| `--compress --match-quality` | 压缩+质量 | 输出 < 输入 + SSIM检查 |
+| `--explore --match-quality` | 精确 | 二分搜索 + SSIM验证 |
+| `--explore --match-quality --compress` | 完整 | 精确质量 + 必须压缩 |
+
+**无效组合：** `--explore --compress`（目标冲突）
+
+### 所有选项
+
+```bash
+-o, --output <目录>    输出目录
+-f, --force            覆盖已存在文件
+-r, --recursive        递归扫描目录
+--delete-original      转换后删除原文件
+--in-place             原地转换（替换原文件）
+--lossless             数学无损（非常慢）
+--cpu                  强制CPU编码（更高SSIM上限）
+--apple-compat         AV1/VP9 → HEVC（Apple设备兼容）
+```
+
+## 质量验证系统
+
+### SSIM阈值
+- 默认：≥ 0.95（视觉无损）
+- 保守：≥ 0.98（使用 `--cpu`）
+- GPU上限：~0.95（VideoToolbox限制）
+
+## 高级功能
+
+### 5. 错误处理系统
+三级错误分类，响亮报告：
+- **Recoverable**：记录警告，使用回退，继续执行
+- **Fatal**：记录错误，中断操作
+- **Optional**：记录信息，继续执行（非关键）
+
+### 6. 断点续传
+- **进度追踪**：中断后可恢复
+- **原子删除**：验证输出完整性后才删除原文件
+- **锁文件**：防止并发处理
+
+### 7. LRU缓存
+- **容量限制**：自动驱逐最旧条目
+- **持久化**：保存/加载JSON文件
+- **内存安全**：防止长时间运行内存泄漏
+
+### 8. PSNR→SSIM映射
+- **动态预测**：从收集的数据线性插值
+- **自校正**：用实际测量值更新映射
+- **透明度**：报告中显示预测值 vs 实际值
+
+## 支持格式
+
+**视频输入：** mp4, mkv, avi, mov, webm, flv, wmv, m4v, mpg, mpeg, ts, mts
+**图片输入：** png, jpg, jpeg, webp, gif, tiff, tif, heic, avif
+**视频输出：** MP4（HEVC/AV1），MKV（无损）
+**图片输出：** JXL
+
+## XMP合并工具
+
+将XMP边车元数据合并回媒体文件：
+
+```bash
+xmp-merge /path/to/directory
+```
+
+**匹配策略（优先级顺序）：**
+1. 直接匹配：`photo.jpg.xmp` → `photo.jpg`
+2. 同名匹配：`photo.xmp` → `photo.jpg`
+3. 忽略大小写：`PHOTO.xmp` → `photo.jpg`
+4. XMP元数据提取：从XMP标签读取原始文件名
+5. DocumentID匹配：通过UUID匹配
+6. 模糊匹配：处理特殊字符、Unicode
+7. 内容哈希：重命名文件的最后手段
+
+## macOS应用
+
+双击 `Modern Format Boost.app` 即可拖拽转换，默认参数：
+`--explore --match-quality --compress --in-place`
 
 ---
 
-### 项目结构
-
-```
-modern_format_boost/
-├── imgquality_hevc/     # 图像工具（HEVC，Apple 兼容）
-├── imgquality_av1/      # 图像工具（AV1，最佳压缩）
-├── vidquality_hevc/     # 视频工具（HEVC，Apple 兼容）
-├── vidquality_av1/      # 视频工具（AV1，最佳压缩）
-├── shared_utils/        # 公共：quality_matcher, video_explorer, metadata
-```
-
----
-
-### HEVC vs AV1
-
-| 方面 | HEVC (x265) | AV1 (SVT-AV1) |
-|------|-------------|---------------|
-| 压缩率 | 好 | 更好（约小 20%） |
-| 速度 | 快 | 较慢 |
-| Apple 支持 | 原生 | 软件解码 |
-| 浏览器 | 仅 Safari | Chrome/Firefox/Edge |
-
-**建议**：Apple 设备使用 `*-hevc`，追求最大压缩使用 `*_av1`。
-
----
-
-MIT License
+**Version**: 5.75 | **Updated**: 2025-12
