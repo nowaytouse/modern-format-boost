@@ -196,25 +196,18 @@ Three-level error classification with loud reporting:
 
 All conversion tools automatically preserve metadata:
 - **EXIF/IPTC/XMP**: Via ExifTool (internal metadata)
+- **XMP Sidecar**: Auto-merge `photo.jpg.xmp` or `photo.xmp` to output
 - **macOS**: ACL, xattr, creation time, Date Added
 - **Timestamps**: Access/modification time preserved after conversion
 
 ## XMP Sidecar Merger (Standalone Tool)
 
-Merge XMP sidecar files (from Lightroom/Capture One) back into media:
+Batch merge XMP sidecar files (from Lightroom/Capture One):
 
 ```bash
 xmp-merge /path/to/directory
 xmp-merge --delete-xmp /path/to/directory  # Delete .xmp after merge
 ```
-
-**Matching strategies (priority order):**
-1. Direct: `photo.jpg.xmp` → `photo.jpg`
-2. Same name: `photo.xmp` → `photo.jpg`
-3. Case-insensitive: `PHOTO.xmp` → `photo.jpg`
-4. XMP metadata: Read original filename from XMP tags
-5. DocumentID: Match by UUID
-6. Fuzzy: Handle special characters, unicode
 
 ## macOS App
 
@@ -376,25 +369,18 @@ vidquality-hevc strategy input.mp4
 
 所有转换工具自动保留元数据：
 - **EXIF/IPTC/XMP**：通过ExifTool（内部元数据）
+- **XMP边车**：自动合并 `photo.jpg.xmp` 或 `photo.xmp` 到输出文件
 - **macOS**：ACL、xattr、创建时间、Date Added
 - **时间戳**：转换后保留访问/修改时间
 
 ## XMP边车合并工具（独立工具）
 
-将XMP边车文件（来自Lightroom/Capture One）合并回媒体：
+批量合并XMP边车文件（来自Lightroom/Capture One）：
 
 ```bash
 xmp-merge /path/to/directory
 xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 ```
-
-**匹配策略（优先级顺序）：**
-1. 直接匹配：`photo.jpg.xmp` → `photo.jpg`
-2. 同名匹配：`photo.xmp` → `photo.jpg`
-3. 忽略大小写：`PHOTO.xmp` → `photo.jpg`
-4. XMP元数据：从XMP标签读取原始文件名
-5. DocumentID：通过UUID匹配
-6. 模糊匹配：处理特殊字符、Unicode
 
 ## macOS应用
 
@@ -403,4 +389,4 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ---
 
-**Version**: 5.75 | **Updated**: 2025-12
+**Version**: 5.76 | **Updated**: 2025-12

@@ -153,13 +153,102 @@ pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 /// 🔥 v4.8: 便捷函数 - 复制元数据（静默错误）
+/// 🔥 v5.76: 自动合并XMP边车文件
 /// 
 /// 与 preserve_metadata 相同，但错误时只打印警告而不返回 Result。
 /// 这是各个工具中 copy_metadata 函数的统一实现。
+/// 
+/// 自动检测并合并XMP边车文件：
+/// - photo.jpg.xmp → 合并到输出文件
+/// - photo.xmp → 合并到输出文件
 pub fn copy_metadata(src: &Path, dst: &Path) {
+    // Step 1: 复制源文件的内部元数据
     if let Err(e) = preserve_metadata(src, dst) {
         eprintln!("⚠️ Failed to preserve metadata: {}", e);
     }
+    
+    // Step 2: 🔥 自动合并XMP边车文件
+    merge_xmp_sidecar(src, dst);
+}
+
+/// 🔥 v5.76: 自动合并XMP边车文件到输出文件
+/// 
+/// 检测源文件是否有对应的XMP边车文件，如果有则合并到输出文件。
+/// 支持两种命名格式：
+/// - photo.jpg.xmp (Adobe标准)
+/// - photo.xmp (同名不同扩展名)
+fn merge_xmp_sidecar(src: &Path, dst: &Path) {
+    // 尝试找到XMP边车文件
+    let xmp_path = find_xmp_sidecar(src);
+    
+    if let Some(xmp) = xmp_path {
+        eprintln!("📋 Found XMP sidecar: {}", xmp.display());
+        
+        // 使用XmpMerger合并
+        let config = crate::xmp_merger::XmpMergerConfig {
+            delete_xmp_after_merge: false,  // 不删除XMP，让用户决定
+            overwrite_original: true,
+            preserve_timestamps: true,
+            verbose: false,
+        };
+        
+        let merger = crate::xmp_merger::XmpMerger::new(config);
+        
+        match merger.merge_xmp(&xmp, dst) {
+            Ok(()) => {
+                eprintln!("✅ XMP sidecar merged successfully");
+            }
+            Err(e) => {
+                eprintln!("⚠️ Failed to merge XMP sidecar: {}", e);
+            }
+        }
+    }
+}
+
+/// 查找源文件对应的XMP边车文件
+fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
+    // 策略1: photo.jpg.xmp
+    let xmp_full = src.with_extension(
+        format!("{}.xmp", src.extension()?.to_str()?)
+    );
+    if xmp_full.exists() {
+        return Some(xmp_full);
+    }
+    
+    // 策略2: photo.xmp
+    let xmp_stem = src.with_extension("xmp");
+    if xmp_stem.exists() {
+        return Some(xmp_stem);
+    }
+    
+    // 策略3: 大小写不敏感 (photo.XMP, photo.Xmp)
+    if let Some(parent) = src.parent() {
+        if let Some(stem) = src.file_stem() {
+            let stem_str = stem.to_string_lossy();
+            
+            // 扫描目录查找匹配的XMP文件
+            if let Ok(entries) = std::fs::read_dir(parent) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if let Some(ext) = path.extension() {
+                        if ext.to_string_lossy().to_lowercase() == "xmp" {
+                            if let Some(file_stem) = path.file_stem() {
+                                let file_stem_str = file_stem.to_string_lossy();
+                                // photo.jpg.xmp 或 photo.xmp
+                                if file_stem_str.to_lowercase() == stem_str.to_lowercase()
+                                    || file_stem_str.to_lowercase() == format!("{}.{}", stem_str, src.extension()?.to_str()?).to_lowercase()
+                                {
+                                    return Some(path);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    None
 }
 
 #[cfg(not(target_os = "macos"))]
