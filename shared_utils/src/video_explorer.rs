@@ -4816,11 +4816,11 @@ pub fn explore_with_gpu_coarse_search(
     // 所有日志已经通过 eprintln! 实时输出了
     result.log.clear();
 
-    // 🔥 v5.80: VMAF精确验证（短视频）
+    // 🔥 v5.87: VMAF精确验证（基于配置）
     // 策略：
     // - 探索阶段使用SSIM（快速迭代）
-    // - 验证阶段使用VMAF（精确确认，仅短视频）
-    // - 5分钟阈值：300秒
+    // - 验证阶段使用VMAF（精确确认）
+    // - 5分钟阈值：300秒（可通过force_vmaf_long强制开启）
     eprintln!("");
     eprintln!("📊 Phase 3: Quality Verification");
 
@@ -4830,7 +4830,13 @@ pub fn explore_with_gpu_coarse_search(
 
         const VMAF_DURATION_THRESHOLD: f64 = 300.0;  // 5分钟 = 300秒
 
-        if duration <= VMAF_DURATION_THRESHOLD {
+        // 🔥 v5.87: 检查是否应该运行VMAF
+        // 注意：这个函数没有config参数，所以不支持force_vmaf_long
+        // 如果需要强制长视频VMAF，请使用VideoExplorer API
+        let should_run_vmaf = duration <= VMAF_DURATION_THRESHOLD;
+
+        if should_run_vmaf {
+            // 短视频（≤5分钟），开启VMAF精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
             eprintln!("   🎯 Enabling VMAF precise verification...");
 
