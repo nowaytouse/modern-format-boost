@@ -5041,7 +5041,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.67: 使用颜色输出
     use crate::modern_ui::colors::*;
     
-    eprintln!("{}🔬 CPU Fine-Tune v5.82{} ({:?}) - {}Smart Adaptive + Target Compression{}", 
+    eprintln!("{}🔬 CPU Fine-Tune v5.83{} ({:?}) - {}Smart Adaptive + High Quality Target{}", 
         BRIGHT_CYAN, RESET, encoder, BRIGHT_GREEN, RESET);
     eprintln!("{}📁{} Input: {} ({}) | Duration: {}", 
         CYAN, RESET,
@@ -5164,9 +5164,9 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
             gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
-        eprintln!("{}📍 Phase 2:{} {}Smart Adaptive Search{} (v5.82)", 
+        eprintln!("{}📍 Phase 2:{} {}Smart Adaptive Search{} (v5.83)", 
             BRIGHT_CYAN, RESET, BOLD, RESET);
-        eprintln!("   {}(Target: 50% compression + SSIM ≥ 0.98, max range: -15 CRF){}", DIM, RESET);
+        eprintln!("   {}(Target: 50% compression + SSIM ≥ 0.995, max range: -15 CRF){}", DIM, RESET);
         
         // 🔥 v5.82: 智能自适应步进算法（改进版）
         // 策略：
@@ -5188,9 +5188,10 @@ fn cpu_fine_tune_from_gpu_boundary(
         // 🔥 v5.82: 搜索范围限制（防止过度搜索）
         let search_floor = (gpu_boundary_crf - 15.0).max(min_crf);  // 最多往下搜索 15 CRF
         
-        // 🔥 v5.82: 压缩率目标（达到后停止搜索）
+        // 🔥 v5.83: 压缩率目标（达到后停止搜索）
+        // 提高 SSIM 阈值到 0.995，确保质量不退步
         const TARGET_COMPRESSION_PCT: f64 = -50.0;  // 目标：压缩 50%
-        const TARGET_SSIM_THRESHOLD: f64 = 0.98;    // SSIM >= 0.98 时认为质量足够好
+        const TARGET_SSIM_THRESHOLD: f64 = 0.995;   // SSIM >= 0.995 时认为质量足够好（高标准）
 
         while test_crf >= search_floor && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let key = precision::crf_to_cache_key(test_crf);
