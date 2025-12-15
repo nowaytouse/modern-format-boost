@@ -142,6 +142,7 @@ mod explore_result_tests {
             log: vec![],
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: 0.95,  // 🔥 v5.69
         };
         
         assert!(result.size_change_pct < 0.0); // Compressed
@@ -162,6 +163,7 @@ mod explore_result_tests {
             log: vec![],
             confidence: 0.3,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: 0.95,  // 🔥 v5.69
         };
         
         assert!(result.size_change_pct > 0.0); // Not compressed
