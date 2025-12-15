@@ -429,8 +429,39 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
                 
                 // 🔥 v3.8: 质量验证失败时，保护原文件！
+                // 🔥 v5.70: 修复错误信息 - 区分压缩失败、SSIM 计算失败、SSIM 阈值未达标
                 if !explore_result.quality_passed && (config.match_quality || config.explore_smaller) {
-                    warn!("   ⚠️  Quality validation FAILED: SSIM {:.4} < 0.95", explore_result.ssim.unwrap_or(0.0));
+                    let actual_ssim = explore_result.ssim.unwrap_or(0.0);
+                    let threshold = explore_result.actual_min_ssim;
+                    let compressed = explore_result.output_size < detection.file_size;
+                    
+                    // 🔥 v5.70: 响亮报错 - 准确区分失败原因
+                    let (fail_reason, fail_message) = if !compressed {
+                        // 压缩失败：输出 >= 输入
+                        warn!("   ⚠️  COMPRESSION FAILED: output ({:.2} MB) >= input ({:.2} MB)",
+                            explore_result.output_size as f64 / 1024.0 / 1024.0,
+                            detection.file_size as f64 / 1024.0 / 1024.0);
+                        warn!("   ⚠️  File may already be highly optimized");
+                        (
+                            format!("Compression failed: output >= input"),
+                            format!("Skipped: cannot compress (output {:+.1}%)", explore_result.size_change_pct)
+                        )
+                    } else if explore_result.ssim.is_none() {
+                        // SSIM 计算失败
+                        warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
+                        warn!("   ⚠️  This may indicate codec compatibility issues (VP8/VP9/alpha channel)");
+                        (
+                            format!("SSIM calculation failed"),
+                            format!("Skipped: SSIM calculation failed")
+                        )
+                    } else {
+                        // SSIM 阈值未达标
+                        warn!("   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}", actual_ssim, threshold);
+                        (
+                            format!("Quality validation failed: SSIM {:.4} < {:.4}", actual_ssim, threshold),
+                            format!("Skipped: SSIM {:.4} below threshold {:.4}", actual_ssim, threshold)
+                        )
+                    };
                     warn!("   🛡️  Original file PROTECTED (quality too low to replace)");
                     
                     // 删除低质量的输出文件
@@ -445,7 +476,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         output_path: input.display().to_string(), // 保持原路径
                         strategy: ConversionStrategy {
                             target: TargetVideoFormat::Skip,
-                            reason: format!("Quality validation failed: SSIM {:.4} < 0.95", explore_result.ssim.unwrap_or(0.0)),
+                            reason: fail_reason,
                             command: String::new(),
                             preserve_audio: detection.has_audio,
                             crf: explore_result.optimal_crf,
@@ -455,7 +486,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         output_size: detection.file_size, // 保持原大小
                         size_ratio: 1.0,
                         success: false, // 标记为失败
-                        message: format!("Skipped: SSIM {:.4} below threshold 0.95", explore_result.ssim.unwrap_or(0.0)),
+                        message: fail_message,
                         final_crf: explore_result.optimal_crf,
                         exploration_attempts: explore_result.iterations as u8,
                     });

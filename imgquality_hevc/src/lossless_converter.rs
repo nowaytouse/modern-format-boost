@@ -736,9 +736,18 @@ pub fn convert_to_hevc_mp4_matched(
     }
     
     // 🔥 v3.8: 质量验证失败时，保护原文件！
+    // 🔥 v5.69: 使用实际的 min_ssim 阈值，响亮报错
     if !explore_result.quality_passed {
-        eprintln!("   ⚠️  Quality validation FAILED: SSIM {:.4} < 0.95", 
-            explore_result.ssim.unwrap_or(0.0));
+        let actual_ssim = explore_result.ssim.unwrap_or(0.0);
+        let threshold = explore_result.actual_min_ssim;
+        
+        // 🔥 v5.69: 响亮报错 - 区分 SSIM 计算失败和阈值未达标
+        if explore_result.ssim.is_none() {
+            eprintln!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
+            eprintln!("   ⚠️  This may indicate codec compatibility issues");
+        } else {
+            eprintln!("   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}", actual_ssim, threshold);
+        }
         eprintln!("   🛡️  Original file PROTECTED (quality too low to replace)");
         
         // 删除低质量的输出文件
@@ -755,7 +764,7 @@ pub fn convert_to_hevc_mp4_matched(
             input_size,
             output_size: None,
             size_reduction: None,
-            message: format!("Skipped: SSIM {:.4} below threshold 0.95", explore_result.ssim.unwrap_or(0.0)),
+            message: format!("Skipped: SSIM {:.4} below threshold {:.4}", actual_ssim, threshold),
             skipped: true,
             skip_reason: Some("quality_failed".to_string()),
         });

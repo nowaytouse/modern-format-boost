@@ -6,7 +6,18 @@
 
 ---
 
-### 🔥 Core Features (v5.5)
+### 🔥 Core Features (v5.71)
+
+#### v5.71 Precheck Module Improvements
+| Fix | Description |
+|-----|-------------|
+| **Legacy Codec Handling** | Theora/RealVideo/MJPEG → StronglyRecommended (not skip!) |
+| **Smart FPS Detection** | 4 levels: Normal(1-240), Extended(240-2K), Extreme(2K-10K), Invalid(>10K) |
+| **Codec-Adaptive Thresholds** | Bitrate/BPP thresholds adjusted by codec efficiency |
+| **HDR Detection** | bt2020 color space, 10-bit pixel format detection |
+| **5-Level Recommendations** | StronglyRecommended/Recommended/Optional/NotRecommended/CannotProcess |
+
+#### v5.5 Features
 
 | Feature | Description |
 |---------|-------------|
