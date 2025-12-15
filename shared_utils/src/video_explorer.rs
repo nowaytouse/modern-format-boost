@@ -191,6 +191,8 @@ pub struct ExploreResult {
     pub confidence: f64,
     /// 🔥 v5.57: 置信度分解详情
     pub confidence_detail: ConfidenceBreakdown,
+    /// 🔥 v5.69: 实际使用的 min_ssim 阈值（用于日志显示）
+    pub actual_min_ssim: f64,
 }
 
 /// 质量验证阈值
@@ -598,6 +600,7 @@ impl VideoExplorer {
             log,
             confidence: 0.7,  // 简单模式默认置信度
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
         })
     }
     
@@ -646,6 +649,7 @@ impl VideoExplorer {
             log,
             confidence: 0.6,  // 单次编码置信度较低
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
         })
     }
     
@@ -727,6 +731,7 @@ impl VideoExplorer {
                 log,
                 confidence: 0.7,
                 confidence_detail: ConfidenceBreakdown::default(),
+                actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
             });
         }
 
@@ -788,6 +793,7 @@ impl VideoExplorer {
             log,
             confidence: 0.65,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
         })
     }
     
@@ -925,6 +931,7 @@ impl VideoExplorer {
             log,
             confidence: 0.75,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: min_ssim,  // 🔥 v5.69
         })
     }
     
@@ -1149,6 +1156,7 @@ impl VideoExplorer {
             log,
             confidence: 0.8,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
         })
     }
     
@@ -1363,6 +1371,7 @@ impl VideoExplorer {
                 log,
                 confidence: 0.85,
                 confidence_detail: ConfidenceBreakdown::default(),
+                actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
             });
         }
 
@@ -1395,6 +1404,7 @@ impl VideoExplorer {
                 log,
                 confidence: 0.3,  // 无法压缩，置信度低
                 confidence_detail: ConfidenceBreakdown::default(),
+                actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
             });
         }
 
@@ -1596,6 +1606,7 @@ impl VideoExplorer {
             log,
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
         })
     }
 
@@ -1948,104 +1959,88 @@ impl VideoExplorer {
     /// - 更严格的解析逻辑
     /// - 验证 SSIM 值在有效范围内
     /// - 失败时响亮报错
+    /// - 🔥 v5.69: 增强检测 - 多种滤镜策略 + fallback 机制
     fn calculate_ssim(&self) -> Result<Option<f64>> {
-        use std::io::{BufRead, BufReader};
-        use std::process::Stdio;
-
         eprint!("      📊 Calculating SSIM...");
         use std::io::Write;
         let _ = std::io::stderr().flush();
 
-        // 🔥 v3.2: 使用 scale 滤镜将输入缩放到输出分辨率
-        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim=stats_file=-";
+        // 🔥 v5.69: 多种滤镜策略，按优先级尝试
+        let filters = [
+            // 策略1: 标准 scale + ssim（处理奇数分辨率）
+            "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim",
+            // 策略2: 强制格式转换 + ssim（处理 VP8/VP9 等特殊编解码器）
+            "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim",
+            // 策略3: 简单 ssim（无预处理，最后尝试）
+            "ssim",
+        ];
 
-        let duration_secs = self.get_input_duration().unwrap_or(0.0);
-
-        let mut cmd = Command::new("ffmpeg");
-        cmd.arg("-i").arg(&self.input_path)
-            .arg("-i").arg(&self.output_path)
-            .arg("-lavfi").arg(filter)
-            .arg("-progress").arg("pipe:1")
-            .arg("-stats_period").arg("1")
-            .arg("-f").arg("null")
-            .arg("-")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd.spawn()
-            .context("Failed to spawn ffmpeg for SSIM")?;
-
-        let mut ssim_value: Option<f64> = None;
-
-        // 同时读取 stdout（进度）和 stderr（结果）
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        // 在单独的线程读取进度
-        let progress_handle = if let Some(stdout) = stdout {
-            Some(std::thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                let mut last_time_us: u64 = 0;
-
-                for line in reader.lines().flatten() {
-                    if let Some(val) = line.strip_prefix("out_time_us=") {
-                        if let Ok(time_us) = val.parse::<u64>() {
-                            last_time_us = time_us;
-                        }
-                    } else if line == "progress=continue" || line == "progress=end" {
-                        let current_secs = last_time_us as f64 / 1_000_000.0;
-                        if duration_secs > 0.0 {
-                            let pct = (current_secs / duration_secs * 100.0).min(100.0);
-                            eprint!("\r      📊 Calculating SSIM... {:.0}%   ", pct);
-                        }
-                        let _ = std::io::stderr().flush();
-                    }
+        for (idx, filter) in filters.iter().enumerate() {
+            let result = self.try_ssim_with_filter(filter);
+            
+            match result {
+                Ok(Some(ssim)) if precision::is_valid_ssim(ssim) => {
+                    eprintln!("\r      📊 SSIM: {:.6} (method {})          ", ssim, idx + 1);
+                    return Ok(Some(ssim));
                 }
-            }))
-        } else {
-            None
-        };
-
-        // 读取 stderr 获取 SSIM 结果
-        if let Some(stderr) = stderr {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
-                if let Some(pos) = line.find("All:") {
-                    let value_str = &line[pos + 4..];
-                    let value_str = value_str.trim_start();
-                    let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
-                        .unwrap_or(value_str.len());
-                    if end > 0 {
-                        if let Ok(ssim) = value_str[..end].parse::<f64>() {
-                            if precision::is_valid_ssim(ssim) {
-                                ssim_value = Some(ssim);
-                            }
-                        }
+                Ok(Some(ssim)) => {
+                    // SSIM 值无效，尝试下一个策略
+                    eprintln!("\r      ⚠️  Method {} returned invalid SSIM: {:.6}, trying next...", idx + 1, ssim);
+                }
+                Ok(None) | Err(_) => {
+                    // 当前策略失败，尝试下一个
+                    if idx < filters.len() - 1 {
+                        eprint!("\r      📊 Method {} failed, trying method {}...", idx + 1, idx + 2);
+                        let _ = std::io::stderr().flush();
                     }
                 }
             }
         }
 
-        // 等待进度线程完成
-        if let Some(handle) = progress_handle {
-            let _ = handle.join();
+        // 所有策略都失败
+        eprintln!("\r      ⚠️  SSIM CALCULATION FAILED (all {} methods tried)", filters.len());
+        eprintln!("      ⚠️  Possible causes:");
+        eprintln!("         - Incompatible pixel format");
+        eprintln!("         - Resolution mismatch");
+        eprintln!("         - Corrupted video file");
+        
+        Ok(None)
+    }
+    
+    /// 🔥 v5.69: 使用指定滤镜尝试计算 SSIM
+    fn try_ssim_with_filter(&self, filter: &str) -> Result<Option<f64>> {
+        let output = Command::new("ffmpeg")
+            .arg("-i").arg(&self.input_path)
+            .arg("-i").arg(&self.output_path)
+            .arg("-lavfi").arg(filter)
+            .arg("-f").arg("null")
+            .arg("-")
+            .output()
+            .context("Failed to run ffmpeg for SSIM")?;
+
+        if !output.status.success() {
+            return Ok(None);
         }
 
-        // 等待进程完成
-        let status = child.wait()
-            .context("Failed to wait for ffmpeg SSIM")?;
-
-        if ssim_value.is_some() {
-            eprintln!("\r      📊 SSIM: {:.6}                    ", ssim_value.unwrap());
-        } else {
-            eprintln!("\r      📊 SSIM: N/A                          ");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        // 解析 SSIM 值
+        for line in stderr.lines() {
+            if let Some(pos) = line.find("All:") {
+                let value_str = &line[pos + 4..];
+                let value_str = value_str.trim_start();
+                // 处理括号格式: "All:0.987654 (12.345678)"
+                let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
+                    .unwrap_or(value_str.len());
+                if end > 0 {
+                    if let Ok(ssim) = value_str[..end].parse::<f64>() {
+                        return Ok(Some(ssim));
+                    }
+                }
+            }
         }
-
-        if !status.success() && ssim_value.is_none() {
-            bail!("ffmpeg SSIM calculation failed");
-        }
-
-        Ok(ssim_value)
+        
+        Ok(None)
     }
     
     /// 计算 PSNR（增强版：更严格的解析和验证）
@@ -2815,19 +2810,51 @@ pub mod precision {
 
 /// 预检查模块 - 在探索开始前评估压缩可行性
 pub mod precheck {
-    use anyhow::{Context, Result};
+    use anyhow::{Context, Result, bail};
     use std::path::Path;
     use std::process::Command;
 
     /// 压缩可行性等级
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum Compressibility {
-        /// 高压缩潜力 (bpp > 0.30)
+        /// 极高压缩潜力 - 古老编解码器、极高BPP、GIF等
+        VeryHigh,
+        /// 高压缩潜力 (bpp > 0.30 或古老格式)
         High,
         /// 中等压缩潜力 (0.15 <= bpp <= 0.30)
         Medium,
         /// 低压缩潜力 (bpp < 0.15) - 文件已高度优化
         Low,
+        /// 极低压缩潜力 - 已是目标编解码器（HEVC/AV1）
+        VeryLow,
+    }
+
+    /// 处理建议等级 - 区分"不能处理"、"不建议"、"建议"、"强烈建议"
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum ProcessingRecommendation {
+        /// ✅ 强烈建议处理 - 古老/低效编解码器（Theora、RealVideo、MJPEG等）
+        /// 这些是**最值得升级**的目标！
+        StronglyRecommended {
+            codec: String,
+            reason: String
+        },
+        /// 🟢 建议处理 - 标准H.264等可升级的格式
+        Recommended {
+            reason: String
+        },
+        /// 🟡 可选处理 - 已有一定优化，但仍有提升空间
+        Optional {
+            reason: String
+        },
+        /// 🟠 不建议处理 - 已是目标编解码器（HEVC/AV1），重编码可能质量损失
+        NotRecommended {
+            codec: String,
+            reason: String
+        },
+        /// ❌ 无法处理 - 文件异常、损坏等
+        CannotProcess {
+            reason: String
+        },
     }
 
     /// 视频信息结构
@@ -2837,41 +2864,200 @@ pub mod precheck {
         pub height: u32,
         pub frame_count: u64,
         pub duration: f64,
+        pub fps: f64,
         pub file_size: u64,
+        pub bitrate_kbps: f64,
         pub bpp: f64,
+        pub codec: String,
         pub compressibility: Compressibility,
+        pub recommendation: ProcessingRecommendation,
+        /// 🔥 新增：色彩空间（bt709, bt2020等）
+        pub color_space: Option<String>,
+        /// 🔥 新增：像素格式（yuv420p, yuv420p10le等）
+        pub pix_fmt: Option<String>,
+        /// 🔥 新增：位深度（8, 10, 12）
+        pub bit_depth: Option<u8>,
+        /// 🔥 v5.71: FPS分类（用于报告）
+        pub fps_category: FpsCategory,
+        /// 🔥 v5.71: 是否为HDR内容
+        pub is_hdr: bool,
     }
 
-    /// 获取视频信息（宽、高、帧数、时长）
-    /// 
+    /// 🔥 v5.71: FPS分类枚举
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum FpsCategory {
+        /// 主流正常范围 (1-240 fps)
+        Normal,
+        /// 扩展范围 (240-2000 fps) - 高速摄影、特殊软件
+        Extended,
+        /// 极限范围 (2000-10000 fps) - Live2D、3D软件
+        Extreme,
+        /// 异常 (>10000 fps) - 元数据错误
+        Invalid,
+    }
+
+    impl FpsCategory {
+        /// 从FPS值判断分类
+        pub fn from_fps(fps: f64) -> Self {
+            if fps <= 0.0 || fps > FPS_THRESHOLD_INVALID {
+                FpsCategory::Invalid
+            } else if fps <= FPS_RANGE_NORMAL.1 {
+                FpsCategory::Normal
+            } else if fps <= FPS_RANGE_EXTENDED.1 {
+                FpsCategory::Extended
+            } else if fps <= FPS_RANGE_EXTREME.1 {
+                FpsCategory::Extreme
+            } else {
+                FpsCategory::Invalid
+            }
+        }
+
+        /// 获取分类描述
+        pub fn description(&self) -> &'static str {
+            match self {
+                FpsCategory::Normal => "主流范围 (1-240 fps)",
+                FpsCategory::Extended => "扩展范围 (240-2000 fps) - 高速摄影/特殊软件",
+                FpsCategory::Extreme => "极限范围 (2000-10000 fps) - Live2D/3D软件",
+                FpsCategory::Invalid => "异常 (>10000 fps) - 可能是元数据错误",
+            }
+        }
+
+        /// 是否为有效FPS
+        pub fn is_valid(&self) -> bool {
+            !matches!(self, FpsCategory::Invalid)
+        }
+    }
+
+    /// 🔥 古老/低效编解码器 - 这些是**最值得升级**的目标！
+    /// 不是"跳过"，而是"强烈建议转换"
+    const LEGACY_CODECS_STRONGLY_RECOMMENDED: &[&str] = &[
+        // === 古老但仍在使用的格式（2000-2010年代） ===
+        "theora",                        // Theora（开源视频，WebM前身）
+        "rv30", "rv40", "realvideo",    // RealVideo（曾经的流媒体标准）
+        "vp6", "vp7",                    // VP6/VP7（Flash Video时代）
+        "wmv1", "wmv2", "wmv3",          // Windows Media Video
+        "msmpeg4v1", "msmpeg4v2", "msmpeg4v3", // MS MPEG4（DivX前身）
+
+        // === 极古老格式（90年代） ===
+        "cinepak",                       // Cinepak（CD-ROM时代）
+        "indeo", "iv31", "iv32", "iv41", "iv50",  // Intel Indeo
+        "svq1", "svq3",                  // Sorenson Video（QuickTime）
+        "flv1",                          // Flash Video H.263
+        "msvideo1", "msrle",             // Microsoft Video 1
+        "8bps", "qtrle",                 // QuickTime古老格式
+        "rpza",                          // Apple Video
+
+        // === 低效中间格式 ===
+        "mjpeg", "mjpegb",               // Motion JPEG（每帧独立JPEG，效率极低）
+        "huffyuv",                       // HuffYUV（无损但体积大）
+    ];
+
+    /// 目标编解码器（已经是最终目标，重编码可能质量损失）
+    const OPTIMAL_CODECS: &[&str] = &[
+        "hevc", "h265", "x265", "hvc1",  // HEVC/H.265
+        "av1", "av01", "libaom-av1",     // AV1
+    ];
+
+    /// 🔥 FPS合理性范围定义
+    /// Live2D、某些3D软件可能导出高FPS，这是**正常的**！
+    const FPS_RANGE_NORMAL: (f64, f64) = (1.0, 240.0);      // 主流范围
+    const FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0); // 高速摄影、特殊软件（正常）
+    const FPS_RANGE_EXTREME: (f64, f64) = (2000.0, 10000.0); // 极限但可能（Live2D等）
+    const FPS_THRESHOLD_INVALID: f64 = 10000.0;              // 超过此值视为元数据错误
+
+    /// 获取视频编解码器信息
+    fn get_codec_info(input: &Path) -> Result<String> {
+        let output = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(input)
+            .output()
+            .context("ffprobe执行失败 - 获取codec")?;
+
+        if !output.status.success() {
+            bail!("ffprobe获取codec失败");
+        }
+
+        let codec = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .to_lowercase();
+
+        if codec.is_empty() {
+            bail!("无法检测视频编解码器");
+        }
+
+        Ok(codec)
+    }
+
+    /// 获取视频比特率（kbps）
+    fn get_bitrate(input: &Path) -> Result<f64> {
+        let output = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=bit_rate",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+            ])
+            .arg(input)
+            .output()
+            .context("ffprobe执行失败 - 获取bitrate")?;
+
+        if output.status.success() {
+            let bitrate_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(bitrate_bps) = bitrate_str.trim().parse::<f64>() {
+                return Ok(bitrate_bps / 1000.0); // 转换为kbps
+            }
+        }
+
+        // Fallback: 从文件大小和时长估算
+        Ok(0.0)
+    }
+
+    /// 获取视频信息（宽、高、帧数、时长、FPS）
+    ///
     /// 使用 ffprobe 快速提取视频元数据
     pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         let file_size = std::fs::metadata(input)
             .context("无法读取文件元数据")?
             .len();
 
+        // 🔥 v5.70: 获取编解码器
+        let codec = get_codec_info(input)?;
+
         // 使用 ffprobe 获取视频信息
         let output = Command::new("ffprobe")
             .args([
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,nb_frames,duration",
+                "-show_entries", "stream=width,height,nb_frames,duration,r_frame_rate",
                 "-of", "csv=p=0",
             ])
             .arg(input)
             .output()
-            .context("ffprobe 执行失败")?;
+            .context("ffprobe执行失败")?;
+
+        if !output.status.success() {
+            bail!("ffprobe获取视频信息失败");
+        }
 
         let info_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = info_str.trim().split(',').collect();
 
+        if parts.len() < 4 {
+            bail!("ffprobe输出格式异常: {}", info_str);
+        }
+
         // 解析宽高
         let width: u32 = parts.get(0)
             .and_then(|s| s.parse().ok())
-            .unwrap_or(1920);
+            .context("无法解析视频宽度")?;
         let height: u32 = parts.get(1)
             .and_then(|s| s.parse().ok())
-            .unwrap_or(1080);
+            .context("无法解析视频高度")?;
 
         // 解析帧数（可能为 N/A）
         let frame_count: u64 = parts.get(2)
@@ -2883,12 +3069,36 @@ pub mod precheck {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
 
-        // 如果帧数为 0，尝试从时长估算（假设 30fps）
+        // 解析帧率 (如 "30/1" 或 "30000/1001")
+        let fps: f64 = parts.get(4)
+            .and_then(|s| {
+                let parts: Vec<&str> = s.split('/').collect();
+                if parts.len() == 2 {
+                    let num: f64 = parts[0].parse().ok()?;
+                    let den: f64 = parts[1].parse().ok()?;
+                    Some(num / den)
+                } else {
+                    s.parse().ok()
+                }
+            })
+            .unwrap_or(30.0);
+
+        // 如果帧数为 0，尝试从时长估算
         let frame_count = if frame_count == 0 && duration > 0.0 {
-            (duration * 30.0) as u64
+            (duration * fps) as u64
         } else {
             frame_count.max(1)
         };
+
+        // 🔥 v5.70: 获取比特率
+        let bitrate_kbps = get_bitrate(input).unwrap_or_else(|_| {
+            // Fallback: 从文件大小估算
+            if duration > 0.0 {
+                (file_size as f64 * 8.0) / (duration * 1000.0)
+            } else {
+                0.0
+            }
+        });
 
         // 计算 BPP: (file_size * 8) / (width * height * frame_count)
         let total_pixels = width as u64 * height as u64 * frame_count;
@@ -2898,30 +3108,350 @@ pub mod precheck {
             0.5 // 默认中等
         };
 
-        // 评估压缩可行性
-        let compressibility = if bpp < 0.15 {
-            Compressibility::Low
+        // 🔥 v5.70 Enhanced: 评估压缩可行性（5级分类）
+        // 需要结合codec信息进行更精确的评估
+        use crate::quality_matcher::parse_source_codec;
+        let source_codec_enum = parse_source_codec(&codec);
+
+        let compressibility = if source_codec_enum.is_modern() {
+            // 已是现代编解码器（HEVC/AV1/VP9等）→ 极低压缩潜力
+            Compressibility::VeryLow
+        } else if codec.to_lowercase().contains("theora")
+            || codec.to_lowercase().contains("rv")
+            || codec.to_lowercase().contains("real")
+            || codec.to_lowercase().contains("mjpeg")
+            || codec.to_lowercase().contains("cinepak")
+            || codec.to_lowercase().contains("indeo")
+            || codec.to_lowercase().contains("gif")
+            || bpp > 0.50 {
+            // 古老编解码器或极高BPP → 极高压缩潜力
+            Compressibility::VeryHigh
         } else if bpp > 0.30 {
+            // 高BPP → 高压缩潜力
             Compressibility::High
+        } else if bpp < 0.15 {
+            // 低BPP → 低压缩潜力
+            Compressibility::Low
         } else {
+            // 中等BPP → 中等压缩潜力
             Compressibility::Medium
         };
+
+        // 🔥 v5.70: 智能处理建议评估（支持古老编解码器识别、智能FPS检测）
+        let recommendation = evaluate_processing_recommendation(
+            &codec,
+            width,
+            height,
+            duration,
+            fps,
+            bitrate_kbps,
+            bpp
+        );
+
+        // 🔥 新增：提取色彩空间、像素格式、位深度
+        let (color_space, pix_fmt, bit_depth) = extract_color_info(input);
+
+        // 🔥 v5.71: FPS分类
+        let fps_category = FpsCategory::from_fps(fps);
+
+        // 🔥 v5.71: HDR检测（基于色彩空间和位深度）
+        let is_hdr = color_space.as_ref()
+            .map(|cs| cs.contains("bt2020") || cs.contains("2020"))
+            .unwrap_or(false)
+            || bit_depth.map(|bd| bd >= 10).unwrap_or(false)
+            || pix_fmt.as_ref()
+                .map(|pf| pf.contains("10le") || pf.contains("10be") || pf.contains("p10"))
+                .unwrap_or(false);
 
         Ok(VideoInfo {
             width,
             height,
             frame_count,
             duration,
+            fps,
             file_size,
+            bitrate_kbps,
             bpp,
+            codec,
             compressibility,
+            recommendation,
+            color_space,
+            pix_fmt,
+            bit_depth,
+            fps_category,
+            is_hdr,
         })
     }
 
+    /// 🔥 v5.70 Enhanced: 智能处理建议评估
+    ///
+    /// # 优先级顺序（从高到低）:
+    /// 1. 文件异常检测（分辨率、时长、FPS）→ CannotProcess
+    /// 2. 古老编解码器检测（Theora、RealVideo等）→ StronglyRecommended ⭐
+    /// 3. 已优化编解码器检测（HEVC/AV1）→ NotRecommended
+    /// 4. 编解码器自适应bitrate/BPP阈值 → Optional/Recommended
+    /// 5. 默认情况 → Recommended
+    fn evaluate_processing_recommendation(
+        codec: &str,
+        width: u32,
+        height: u32,
+        duration: f64,
+        fps: f64,
+        bitrate_kbps: f64,
+        bpp: f64,
+    ) -> ProcessingRecommendation {
+        let codec_lower = codec.to_lowercase();
+
+        // ============================================================
+        // 🔥 优先级 1: 文件异常检测（Cannot Process）
+        // ============================================================
+
+        // 1.1 检查分辨率异常（只检查极端情况）
+        if width < 16 || height < 16 {
+            return ProcessingRecommendation::CannotProcess {
+                reason: format!("分辨率过小 {}x{} (< 16px)", width, height)
+            };
+        }
+        if width > 16384 || height > 16384 {
+            return ProcessingRecommendation::CannotProcess {
+                reason: format!("分辨率超大 {}x{} (> 16K)", width, height)
+            };
+        }
+
+        // 1.2 检查时长异常（只检查极短视频）
+        if duration < 0.05 {
+            return ProcessingRecommendation::CannotProcess {
+                reason: format!("时长过短 {:.3}s", duration)
+            };
+        }
+
+        // 1.3 🔥 新增：智能FPS检测（支持1-10000 FPS范围）
+        // 根据FPS范围分类：
+        // - 1-240: 主流正常范围（电影24fps、视频30/60fps、高刷新率120/144/240fps）
+        // - 240-2000: 扩展范围（高速摄影、特殊软件导出）
+        // - 2000-10000: 极限范围（Live2D、3D软件、超高速摄影）
+        // - >10000: 异常（元数据错误）
+        if fps <= 0.0 {
+            return ProcessingRecommendation::CannotProcess {
+                reason: format!("FPS无效 ({:.2})", fps)
+            };
+        }
+        if fps > FPS_THRESHOLD_INVALID {
+            return ProcessingRecommendation::CannotProcess {
+                reason: format!("FPS异常 ({:.0} > {}，可能是元数据错误)", fps, FPS_THRESHOLD_INVALID)
+            };
+        }
+
+        // ============================================================
+        // 🔥 优先级 2: 古老编解码器检测（Strongly Recommended）⭐
+        // ============================================================
+        //
+        // 这些是**最值得升级**的目标！
+        // Theora、RealVideo、VP6/7、WMV、Cinepak、Indeo等
+        //
+        // 🚨 关键修正：不是"跳过"，而是"强烈建议转换"！
+        if LEGACY_CODECS_STRONGLY_RECOMMENDED.iter().any(|&c| codec_lower.contains(c)) {
+            // 识别具体的古老编解码器类别
+            let codec_category = if codec_lower.contains("theora") {
+                "Theora（开源视频，WebM前身）"
+            } else if codec_lower.contains("rv") || codec_lower.contains("real") {
+                "RealVideo（曾经的流媒体标准）"
+            } else if codec_lower.contains("vp6") || codec_lower.contains("vp7") {
+                "VP6/VP7（Flash Video时代）"
+            } else if codec_lower.contains("wmv") {
+                "Windows Media Video"
+            } else if codec_lower.contains("cinepak") {
+                "Cinepak（CD-ROM时代）"
+            } else if codec_lower.contains("indeo") || codec_lower.contains("iv") {
+                "Intel Indeo"
+            } else if codec_lower.contains("svq") {
+                "Sorenson Video（QuickTime）"
+            } else if codec_lower.contains("flv") {
+                "Flash Video H.263"
+            } else if codec_lower.contains("mjpeg") {
+                "Motion JPEG（每帧独立，效率极低）"
+            } else {
+                "古老编解码器"
+            };
+
+            return ProcessingRecommendation::StronglyRecommended {
+                codec: codec.to_string(),
+                reason: format!(
+                    "检测到{}，强烈建议升级到现代编解码器（可获得10-50倍压缩率提升）",
+                    codec_category
+                )
+            };
+        }
+
+        // ============================================================
+        // 🔥 优先级 3: 已优化编解码器检测（Not Recommended）
+        // ============================================================
+        if OPTIMAL_CODECS.iter().any(|&c| codec_lower.contains(c)) {
+            return ProcessingRecommendation::NotRecommended {
+                codec: codec.to_string(),
+                reason: "源文件已使用现代高效编解码器（HEVC或AV1），重新编码可能导致质量损失".to_string()
+            };
+        }
+
+        // ============================================================
+        // 🔥 优先级 4: 编解码器自适应bitrate/BPP阈值
+        // ============================================================
+        //
+        // 根据编解码器效率因子调整阈值：
+        // - H.264: 1.0 (基准) → 1080p需要~2500kbps
+        // - HEVC: 0.65 → 1080p需要~1500kbps
+        // - AV1: 0.5 → 1080p需要~1000kbps
+        // - 古老编解码器: 2.0-3.0 → 需要更高bitrate
+
+        use crate::quality_matcher::parse_source_codec;
+        let source_codec = parse_source_codec(codec);
+        let codec_efficiency = source_codec.efficiency_factor();
+
+        // 计算编解码器自适应的bitrate阈值
+        // 基准：1080p@30fps 下 H.264 需要 2500kbps
+        let resolution_factor = (width * height) as f64 / (1920.0 * 1080.0);
+        let fps_factor = fps / 30.0;
+
+        // 🔥 关键公式：expected_min_bitrate = 基准bitrate × 分辨率因子 × FPS因子 × 编解码器效率因子
+        // 例如：
+        // - H.264 1080p30: 2500 × 1.0 × 1.0 × 1.0 = 2500 kbps
+        // - HEVC 1080p30: 2500 × 1.0 × 1.0 × 0.65 = 1625 kbps
+        // - AV1 1080p30: 2500 × 1.0 × 1.0 × 0.5 = 1250 kbps
+        // - Theora 1080p30: 2500 × 1.0 × 1.0 × 2.5 = 6250 kbps (更高阈值，因为Theora效率低)
+        let base_bitrate_1080p30_h264 = 2500.0; // H.264在1080p30下的合理bitrate
+        let expected_min_bitrate = base_bitrate_1080p30_h264
+            * resolution_factor
+            * fps_factor
+            * codec_efficiency;
+
+        // 🔥 BPP阈值也需要考虑编解码器效率
+        // BPP = bitrate / (width × height × fps)
+        // 对于高效编解码器（AV1、HEVC），较低的BPP仍能保持质量
+        // 对于低效编解码器（Theora、MJPEG），需要更高的BPP
+        let bpp_threshold_very_low = 0.05 / codec_efficiency; // 极低阈值（经过编解码器调整）
+        let bpp_threshold_low = 0.10 / codec_efficiency;      // 低阈值
+
+        // 4.1 极低bitrate + 极低BPP → Optional（已高度压缩，提升空间有限）
+        if bitrate_kbps > 0.0
+            && bitrate_kbps < expected_min_bitrate * 0.5
+            && bpp < bpp_threshold_very_low {
+            return ProcessingRecommendation::Optional {
+                reason: format!(
+                    "文件已高度压缩（bitrate: {:.0} kbps < {:.0} kbps, BPP: {:.4} < {:.4}），\
+                     转换收益有限，但仍可尝试现代编解码器获得边际改善",
+                    bitrate_kbps,
+                    expected_min_bitrate * 0.5,
+                    bpp,
+                    bpp_threshold_very_low
+                )
+            };
+        }
+
+        // 4.2 低bitrate + 低BPP → Recommended（中等压缩，有一定提升空间）
+        if bitrate_kbps > 0.0
+            && bitrate_kbps < expected_min_bitrate
+            && bpp < bpp_threshold_low {
+            return ProcessingRecommendation::Recommended {
+                reason: format!(
+                    "文件已有一定压缩（bitrate: {:.0} kbps），但现代编解码器可进一步优化",
+                    bitrate_kbps
+                )
+            };
+        }
+
+        // ============================================================
+        // 🔥 优先级 5: 默认情况（Recommended）
+        // ============================================================
+        //
+        // 对于所有其他情况（主要是H.264、VP8等标准编解码器），
+        // 建议转换到现代编解码器
+        ProcessingRecommendation::Recommended {
+            reason: format!(
+                "标准编解码器（{}），建议升级到HEVC/AV1以获得更好的压缩率和质量",
+                codec
+            )
+        }
+    }
+
+    /// 🔥 新增：提取色彩空间、像素格式、位深度信息
+    ///
+    /// 使用ffprobe获取详细的色彩信息，用于HDR检测和质量评估
+    fn extract_color_info(input: &Path) -> (Option<String>, Option<String>, Option<u8>) {
+        let output = match Command::new("ffprobe")
+            .args(&[
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_streams",
+                "-select_streams", "v:0",
+                input.to_str().unwrap_or(""),
+            ])
+            .output()
+        {
+            Ok(output) => output,
+            Err(_) => return (None, None, None),
+        };
+
+        if !output.status.success() {
+            return (None, None, None);
+        }
+
+        // 解析JSON获取color_space、pix_fmt、bits_per_raw_sample
+        let json_str = match String::from_utf8(output.stdout) {
+            Ok(s) => s,
+            Err(_) => return (None, None, None),
+        };
+
+        // 简单的JSON解析（避免依赖serde_json）
+        let mut color_space: Option<String> = None;
+        let mut pix_fmt: Option<String> = None;
+        let mut bit_depth: Option<u8> = None;
+
+        for line in json_str.lines() {
+            let line = line.trim();
+
+            // 提取 color_space: "bt709"
+            if line.starts_with("\"color_space\"") {
+                if let Some(value_start) = line.find(": \"") {
+                    let value = &line[value_start + 3..];
+                    if let Some(end) = value.find('"') {
+                        let cs = value[..end].to_string();
+                        if !cs.is_empty() && cs != "unknown" {
+                            color_space = Some(cs);
+                        }
+                    }
+                }
+            }
+
+            // 提取 pix_fmt: "yuv420p"
+            if line.starts_with("\"pix_fmt\"") {
+                if let Some(value_start) = line.find(": \"") {
+                    let value = &line[value_start + 3..];
+                    if let Some(end) = value.find('"') {
+                        pix_fmt = Some(value[..end].to_string());
+                    }
+                }
+            }
+
+            // 提取 bits_per_raw_sample: "8" 或 "10"
+            if line.starts_with("\"bits_per_raw_sample\"") {
+                if let Some(value_start) = line.find(": \"") {
+                    let value = &line[value_start + 3..];
+                    if let Some(end) = value.find('"') {
+                        if let Ok(depth) = value[..end].parse::<u8>() {
+                            bit_depth = Some(depth);
+                        }
+                    }
+                }
+            }
+        }
+
+        (color_space, pix_fmt, bit_depth)
+    }
+
     /// 计算 BPP (bits per pixel)
-    /// 
+    ///
     /// 公式: (file_size × 8) / (width × height × frame_count)
-    /// 
+    ///
     /// BPP 阈值参考:
     /// - < 0.15: 低（文件已高度优化，压缩空间有限）
     /// - 0.15-0.30: 中等（适度压缩潜力）
@@ -2932,41 +3462,142 @@ pub mod precheck {
     }
 
     /// 打印预检查报告
-    /// 
-    /// 在探索开始前输出压缩可行性评估
+    ///
+    /// 🔥 v5.71: 完整的预检查报告，包含处理建议、FPS分类、色彩信息
     pub fn print_precheck_report(info: &VideoInfo) {
         eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 📊 Precheck Report");
+        eprintln!("│ 📊 Precheck Report v5.71");
         eprintln!("├─────────────────────────────────────────────────────");
+        eprintln!("│ 🎬 Codec: {}", info.codec);
         eprintln!("│ 📐 Resolution: {}x{}", info.width, info.height);
-        eprintln!("│ 🎞️  Frames: {} ({:.1}s)", info.frame_count, info.duration);
-        eprintln!("│ 📁 File Size: {:.2} MB", info.file_size as f64 / 1024.0 / 1024.0);
-        eprintln!("│ 📈 BPP: {:.3} bits/pixel", info.bpp);
+        eprintln!("│ 🎞️  Duration: {:.1}s ({} frames)", info.duration, info.frame_count);
         
+        // 🔥 v5.71: FPS分类显示
+        let fps_icon = match info.fps_category {
+            FpsCategory::Normal => "🟢",
+            FpsCategory::Extended => "🟡",
+            FpsCategory::Extreme => "🟠",
+            FpsCategory::Invalid => "🔴",
+        };
+        eprintln!("│ 🎥 FPS: {:.2} {} {}", info.fps, fps_icon, info.fps_category.description());
+        
+        eprintln!("│ 📁 File Size: {:.2} MB", info.file_size as f64 / 1024.0 / 1024.0);
+        eprintln!("│ 📡 Bitrate: {:.0} kbps", info.bitrate_kbps);
+        eprintln!("│ 📈 BPP: {:.4} bits/pixel", info.bpp);
+
+        // 🔥 v5.71: 色彩信息显示
+        if info.color_space.is_some() || info.pix_fmt.is_some() || info.bit_depth.is_some() {
+            eprintln!("├─────────────────────────────────────────────────────");
+            if let Some(ref cs) = info.color_space {
+                let hdr_indicator = if info.is_hdr { " 🌈 HDR" } else { "" };
+                eprintln!("│ 🎨 Color Space: {}{}", cs, hdr_indicator);
+            }
+            if let Some(ref pf) = info.pix_fmt {
+                eprintln!("│ 🖼️  Pixel Format: {}", pf);
+            }
+            if let Some(bd) = info.bit_depth {
+                eprintln!("│ 🔢 Bit Depth: {}-bit", bd);
+            }
+        }
+
+        eprintln!("├─────────────────────────────────────────────────────");
+        
+        // 🔥 v5.71: 压缩潜力显示（5级）
         match info.compressibility {
+            Compressibility::VeryHigh => {
+                eprintln!("│ 🔥 Compression Potential: VERY HIGH");
+                eprintln!("│    → Ancient codec or extremely high BPP");
+                eprintln!("│    → Expected 10-50x compression improvement!");
+            }
             Compressibility::High => {
                 eprintln!("│ ✅ Compression Potential: High");
-                eprintln!("│    → Large compression space, good results expected");
+                eprintln!("│    → Large compression space expected");
             }
             Compressibility::Medium => {
                 eprintln!("│ 🔵 Compression Potential: Medium");
-                eprintln!("│    → Moderate compression potential, normal results expected");
+                eprintln!("│    → Moderate compression potential");
             }
             Compressibility::Low => {
                 eprintln!("│ ⚠️  Compression Potential: Low");
-                eprintln!("│    → File already highly optimized, limited compression space");
-                eprintln!("│    → Suggestion: May need to lower quality expectations");
+                eprintln!("│    → File already optimized");
+            }
+            Compressibility::VeryLow => {
+                eprintln!("│ ⛔ Compression Potential: VERY LOW");
+                eprintln!("│    → Already using modern codec (HEVC/AV1)");
+                eprintln!("│    → Re-encoding may cause quality loss");
             }
         }
+
+        // 🔥 v5.71: 处理建议显示（基于 ProcessingRecommendation）
+        eprintln!("├─────────────────────────────────────────────────────");
+        match &info.recommendation {
+            ProcessingRecommendation::StronglyRecommended { codec, reason } => {
+                eprintln!("│ 🔥 STRONGLY RECOMMENDED: Upgrade to modern codec!");
+                eprintln!("│    → Source: {} (legacy/inefficient)", codec);
+                eprintln!("│    → {}", reason);
+            }
+            ProcessingRecommendation::Recommended { reason } => {
+                eprintln!("│ ✅ RECOMMENDED: Convert to modern codec");
+                eprintln!("│    → {}", reason);
+            }
+            ProcessingRecommendation::Optional { reason } => {
+                eprintln!("│ 🔵 OPTIONAL: Marginal benefit expected");
+                eprintln!("│    → {}", reason);
+            }
+            ProcessingRecommendation::NotRecommended { codec, reason } => {
+                eprintln!("│ ⚠️  NOT RECOMMENDED: Already optimal");
+                eprintln!("│    → Codec: {}", codec);
+                eprintln!("│    → {}", reason);
+            }
+            ProcessingRecommendation::CannotProcess { reason } => {
+                eprintln!("│ ❌ CANNOT PROCESS: File issue detected");
+                eprintln!("│    → {}", reason);
+            }
+        }
+
         eprintln!("└─────────────────────────────────────────────────────");
     }
 
     /// 执行预检查并返回信息
-    /// 
-    /// 这是主入口函数，在 explore_with_gpu_coarse_search 开始时调用
+    ///
+    /// 🔥 v5.71: 修正处理逻辑
+    /// - CannotProcess → 强制跳过（文件异常）
+    /// - NotRecommended → 警告但继续（已是现代编解码器）
+    /// - StronglyRecommended → 强烈建议处理（古老编解码器）⭐
+    /// - Recommended/Optional → 正常处理
     pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
         let info = get_video_info(input)?;
         print_precheck_report(&info);
+
+        // 🔥 v5.71: 根据 ProcessingRecommendation 决定是否继续
+        match &info.recommendation {
+            // ❌ 无法处理：文件异常、损坏等 → 强制跳过
+            ProcessingRecommendation::CannotProcess { reason } => {
+                eprintln!("❌ PRECHECK FAILED: {}", reason);
+                bail!("Precheck failed: {}", reason);
+            }
+            
+            // ⚠️ 不建议处理：已是现代编解码器 → 警告但允许继续
+            ProcessingRecommendation::NotRecommended { codec, reason } => {
+                eprintln!("⚠️  WARNING: {} is already a modern codec", codec);
+                eprintln!("    {}", reason);
+                eprintln!("    (Continuing anyway, but quality loss may occur...)");
+            }
+            
+            // 🔥 强烈建议处理：古老编解码器 → 这是最佳升级目标！
+            ProcessingRecommendation::StronglyRecommended { codec, reason } => {
+                eprintln!("🔥 EXCELLENT TARGET: {} is a legacy codec!", codec);
+                eprintln!("    {}", reason);
+                eprintln!("    (This file will benefit greatly from modern encoding!)");
+            }
+            
+            // ✅ 建议处理 / 🔵 可选处理 → 正常继续
+            ProcessingRecommendation::Recommended { .. } | 
+            ProcessingRecommendation::Optional { .. } => {
+                // 正常处理，无需额外提示
+            }
+        }
+
         Ok(info)
     }
 }
@@ -3781,18 +4412,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("{}🎯{} Goal: {}min(CRF){} where {}output < input{} (Highest SSIM + Must Compress)", 
         YELLOW, RESET, BOLD, RESET, BRIGHT_GREEN, RESET);
     
-    // 🔥 v5.59: 可压缩空间检测 - 根据压缩潜力选择精度
-    let precheck_info = precheck::get_video_info(input).ok();
-    let (step_size, cache_multiplier) = match precheck_info.as_ref().map(|i| i.compressibility) {
-        Some(precheck::Compressibility::High) => {
-            eprintln!("{}📊{} High compression potential → Using 0.25 step (fast mode)", CYAN, RESET);
-            (0.25_f32, 4.0_f32)
-        }
-        Some(precheck::Compressibility::Medium) | Some(precheck::Compressibility::Low) | None => {
-            eprintln!("{}📊{} Medium/Low compression potential → Using 0.1 step (precise mode)", CYAN, RESET);
-            (0.1_f32, 10.0_f32)
-        }
-    };
+    // 🔥 v5.70: 统一使用0.25步长快速搜索 + 最后0.1精细化
+    eprintln!("{}📊{} Using 0.25 step (fast coarse search) + 0.1 fine-tune", CYAN, RESET);
+    let step_size = 0.25_f32;
+    let cache_multiplier = 4.0_f32;
     
     // 🔥 v5.67: 边际效益递减参数
     // 边际效益 = SSIM提升 / 文件大小增加比例
@@ -3835,32 +4458,51 @@ fn cpu_fine_tune_from_gpu_boundary(
         DIM, RESET, BRIGHT_GREEN, RESET);
     eprintln!("");
 
-    // 🔥 v5.67: 快速 SSIM 计算（用于边际效益分析）
+    // 🔥 v5.70: 快速 SSIM 计算（用于边际效益分析）- 使用3种策略fallback机制
     let calculate_ssim_quick = || -> Option<f64> {
-        let ssim_output = std::process::Command::new("ffmpeg")
-            .arg("-i").arg(input)
-            .arg("-i").arg(output)
-            .arg("-lavfi").arg("ssim")
-            .arg("-f").arg("null")
-            .arg("-")
-            .output();
-        
-        match ssim_output {
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                if let Some(line) = stderr.lines().find(|l| l.contains("SSIM") && l.contains("All:")) {
-                    if let Some(all_pos) = line.find("All:") {
-                        let after_all = &line[all_pos + 4..];
-                        if let Some(space_pos) = after_all.find(' ') {
-                            after_all[..space_pos].parse::<f64>().ok()
-                        } else {
-                            after_all.trim().parse::<f64>().ok()
+        // 🔥 v5.70: 多种滤镜策略，按优先级尝试（同 calculate_ssim）
+        let filters = [
+            // 策略1: 标准 scale + ssim（处理奇数分辨率）
+            "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim",
+            // 策略2: 强制格式转换 + ssim（处理 VP8/VP9 等特殊编解码器）
+            "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim",
+            // 策略3: 简单 ssim（无预处理，最后尝试）
+            "ssim",
+        ];
+
+        for filter in &filters {
+            let ssim_output = std::process::Command::new("ffmpeg")
+                .arg("-i").arg(input)
+                .arg("-i").arg(output)
+                .arg("-lavfi").arg(filter)
+                .arg("-f").arg("null")
+                .arg("-")
+                .output();
+
+            if let Ok(out) = ssim_output {
+                if out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    if let Some(line) = stderr.lines().find(|l| l.contains("All:")) {
+                        if let Some(all_pos) = line.find("All:") {
+                            let after_all = &line[all_pos + 4..];
+                            let end = after_all.find(|c: char| !c.is_numeric() && c != '.')
+                                .unwrap_or(after_all.len());
+                            if end > 0 {
+                                if let Ok(ssim) = after_all[..end].parse::<f64>() {
+                                    // 验证 SSIM 值在有效范围内
+                                    if ssim >= 0.0 && ssim <= 1.0 {
+                                        return Some(ssim);
+                                    }
+                                }
+                            }
                         }
-                    } else { None }
-                } else { None }
+                    }
+                }
             }
-            Err(_) => None,
         }
+
+        // 🔥 v5.70: 所有策略都失败，返回 None（不使用默认值！）
+        None
     };
 
     // ═══════════════════════════════════════════════════════════
@@ -3877,57 +4519,89 @@ fn cpu_fine_tune_from_gpu_boundary(
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
         best_ssim_tracked = gpu_ssim;
-        eprintln!("{}✅{} GPU boundary {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} (compresses)", 
+        eprintln!("{}✅{} GPU boundary {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{}{} (compresses)",
             BRIGHT_GREEN, RESET, BRIGHT_CYAN, gpu_boundary_crf, RESET,
-            BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW, gpu_ssim.unwrap_or(0.0), RESET);
+            BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
+            gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
         eprintln!("{}📍 Phase 2:{} {}Search DOWNWARD{} with marginal benefit analysis", 
             BRIGHT_CYAN, RESET, BOLD, RESET);
         eprintln!("   {}(Lower CRF = Higher SSIM, stop when benefit diminishes){}", DIM, RESET);
         
-        // 🔥 v5.67: 向下搜索（边际效益递减算法）
+        // 🔥 v5.70: 向下搜索（边际效益递减算法 - 同时考虑 SSIM 和文件大小）
         let mut test_crf = gpu_boundary_crf - step_size;
         let mut consecutive_failures = 0u32;
-        let mut prev_ssim = gpu_ssim.unwrap_or(0.95);
-        #[allow(unused_variables)]
+        let mut prev_ssim_opt = gpu_ssim;  // 🔥 v5.70: 使用Option<f64>，不用默认值！
         let mut prev_size = gpu_size;
-        
-        while test_crf >= min_crf && iterations < 25 {
+
+        while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let key = (test_crf * cache_multiplier).round() as i32;
             if size_cache.contains_key(&key) {
                 test_crf -= step_size;
                 continue;
             }
-            
+
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
-            let current_ssim = calculate_ssim_quick().unwrap_or(prev_ssim);
+            let current_ssim_opt = calculate_ssim_quick();  // 🔥 v5.70: 保持Option，不强制unwrap
 
             if size < input_size {
                 // ✅ 能压缩
                 consecutive_failures = 0;  // 重置失败计数
-                
-                // 🔥 v5.67: 计算 SSIM 提升
-                let ssim_gain = current_ssim - prev_ssim;
-                
+
                 best_crf = Some(test_crf);
                 best_size = Some(size);
-                best_ssim_tracked = Some(current_ssim);
-                
-                eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}) {}✅{}", 
-                    BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                    BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
-                    DIM, ssim_gain, RESET, BRIGHT_GREEN, RESET);
-                
-                // 🔥 v5.67: SSIM plateau detection (diminishing returns)
-                if ssim_gain < 0.0001 && current_ssim >= 0.99 {
-                    eprintln!("   {}📊{} {}SSIM plateau{} (>= 0.99, gain < 0.0001) → {}STOP{}", 
-                        YELLOW, RESET, BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET);
+                best_ssim_tracked = current_ssim_opt;
+
+                // 🔥 v5.70: 计算边际效益（SSIM 提升 vs 文件大小增加）- 只在SSIM可用时计算
+                let size_increase = size as f64 - prev_size as f64;
+                let size_increase_pct = (size_increase / prev_size as f64) * 100.0;
+
+                // 🔥 v5.70: 检查是否应该停止（基于SSIM或文件大小）
+                let should_stop = match (current_ssim_opt, prev_ssim_opt) {
+                    (Some(current_ssim), Some(prev_ssim)) => {
+                        let ssim_gain = current_ssim - prev_ssim;
+                        let marginal_benefit = if size_increase_pct > 0.1 {
+                            ssim_gain / size_increase_pct * 100.0
+                        } else {
+                            ssim_gain * 1000.0
+                        };
+
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}, {}size {:+.1}%{}, {}MB {:.2}{}) {}✅{}",
+                            BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                            BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
+                            DIM, ssim_gain, RESET, DIM, size_increase_pct, RESET,
+                            DIM, marginal_benefit, RESET, BRIGHT_GREEN, RESET);
+
+                        // 边际效益递减检测
+                        if ssim_gain < 0.0001 && current_ssim >= 0.99 {
+                            eprintln!("   {}📊{} {}SSIM plateau{} (>= 0.99, gain < 0.0001) → {}STOP{}",
+                                YELLOW, RESET, BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET);
+                            true
+                        } else if size_increase_pct > 5.0 && ssim_gain < 0.001 {
+                            eprintln!("   {}📊{} {}Diminishing returns{} (size +{:.1}% but SSIM +{:.4}) → {}STOP{}",
+                                YELLOW, RESET, BRIGHT_YELLOW, RESET, size_increase_pct, ssim_gain, BRIGHT_GREEN, RESET);
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => {
+                        // 🔥 v5.70: SSIM 不可用，只显示文件大小信息
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} ({}size {:+.1}%{}) {}✅{}",
+                            BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                            BRIGHT_GREEN, size_pct, RESET, DIM, RESET,
+                            DIM, size_increase_pct, RESET, BRIGHT_GREEN, RESET);
+                        false  // 无SSIM时不基于SSIM停止
+                    }
+                };
+
+                if should_stop {
                     break;
                 }
-                
-                prev_ssim = current_ssim;
+
+                prev_ssim_opt = current_ssim_opt;
                 prev_size = size;
                 test_crf -= step_size;
             } else {
@@ -3970,7 +4644,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut test_crf = gpu_boundary_crf + step_size;
         let mut found_compress_point = false;
         
-        while test_crf <= max_crf && iterations < 15 {
+        while test_crf <= max_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
@@ -3997,47 +4671,70 @@ fn cpu_fine_tune_from_gpu_boundary(
             best_crf = Some(max_crf);
             best_size = Some(max_size);
         } else {
-            // 🔥 v5.63: 找到压缩点后，向下搜索更高质量
+            // 🔥 v5.70: 找到压缩点后，向下搜索更高质量（边际效益分析）
             eprintln!("");
             eprintln!("📍 Phase 3: Search DOWNWARD with marginal benefit analysis");
-            
+
             let compress_point = best_crf.unwrap();
             let mut test_crf = compress_point - step_size;
             let mut consecutive_failures = 0u32;
-            let mut prev_ssim = best_ssim_tracked.unwrap_or(0.95);
-            #[allow(unused_variables)]
+            let mut prev_ssim_opt = best_ssim_tracked;  // 🔥 v5.70: 使用Option，不用默认值
             let mut prev_size = best_size.unwrap();
-            
-            while test_crf >= min_crf && iterations < 25 {
+
+            while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
                 let key = (test_crf * cache_multiplier).round() as i32;
                 if size_cache.contains_key(&key) {
                     test_crf -= step_size;
                     continue;
                 }
-                
+
                 let size = encode_cached(test_crf, &mut size_cache)?;
                 iterations += 1;
                 let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
-                let current_ssim = calculate_ssim_quick().unwrap_or(prev_ssim);
+                let current_ssim_opt = calculate_ssim_quick();  // 🔥 v5.70: 保持Option
 
                 if size < input_size {
                     consecutive_failures = 0;
-                    let ssim_gain = current_ssim - prev_ssim;
-                    
+
                     best_crf = Some(test_crf);
                     best_size = Some(size);
-                    best_ssim_tracked = Some(current_ssim);
-                    
-                    eprintln!("   ✓ CRF {:.1}: {:+.1}% SSIM {:.4} (Δ{:+.4}) ✅", 
-                        test_crf, size_pct, current_ssim, ssim_gain);
-                    
-                    // 🔥 v5.67: SSIM 平台检测
-                    if ssim_gain < 0.0001 && current_ssim >= 0.99 {
-                        eprintln!("   📊 SSIM plateau → STOP");
+                    best_ssim_tracked = current_ssim_opt;
+
+                    // 🔥 v5.70: 边际效益计算 - 只在SSIM可用时计算
+                    let size_increase = size as f64 - prev_size as f64;
+                    let size_increase_pct = (size_increase / prev_size as f64) * 100.0;
+
+                    let should_stop = match (current_ssim_opt, prev_ssim_opt) {
+                        (Some(current_ssim), Some(prev_ssim)) => {
+                            let ssim_gain = current_ssim - prev_ssim;
+
+                            eprintln!("   ✓ CRF {:.1}: {:+.1}% SSIM {:.4} (Δ{:+.4}, size {:+.1}%) ✅",
+                                test_crf, size_pct, current_ssim, ssim_gain, size_increase_pct);
+
+                            // SSIM 平台检测
+                            if ssim_gain < 0.0001 && current_ssim >= 0.99 {
+                                eprintln!("   📊 SSIM plateau → STOP");
+                                true
+                            } else if size_increase_pct > 5.0 && ssim_gain < 0.001 {
+                                eprintln!("   📊 Diminishing returns (size +{:.1}% but SSIM +{:.4}) → STOP",
+                                    size_increase_pct, ssim_gain);
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        _ => {
+                            eprintln!("   ✓ CRF {:.1}: {:+.1}% SSIM N/A (size {:+.1}%) ✅",
+                                test_crf, size_pct, size_increase_pct);
+                            false
+                        }
+                    };
+
+                    if should_stop {
                         break;
                     }
-                    
-                    prev_ssim = current_ssim;
+
+                    prev_ssim_opt = current_ssim_opt;
                     prev_size = size;
                     test_crf -= step_size;
                 } else {
@@ -4057,49 +4754,73 @@ fn cpu_fine_tune_from_gpu_boundary(
     }
 
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.67: 最终精细化（边际效益算法，仅当步长 > 0.1 时）
+    // 🔥 v5.70: 最终精细化（边际效益算法，仅当步长 > 0.1 时）
     // ═══════════════════════════════════════════════════════════
     if step_size > 0.15 && best_crf.is_some() {
         let boundary_crf = best_crf.unwrap();
         eprintln!("");
         eprintln!("📍 Phase 4: Fine-tune with 0.1 step (marginal benefit)");
-        
+
         // 用 0.1 步长在边界附近精细化
         let fine_step = 0.1_f32;
         let mut test_crf = boundary_crf - fine_step;
         let mut consecutive_failures = 0u32;
-        let mut prev_ssim = best_ssim_tracked.unwrap_or(0.95);
-        
-        while test_crf >= (boundary_crf - 0.5).max(min_crf) && iterations < 30 {
+        let mut prev_ssim_opt = best_ssim_tracked;  // 🔥 v5.70: 使用Option，不用默认值
+        let mut prev_size = best_size.unwrap();
+
+        while test_crf >= (boundary_crf - 0.5).max(min_crf) && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let key = (test_crf * 10.0).round() as i32;
             if size_cache.contains_key(&key) {
                 test_crf -= fine_step;
                 continue;
             }
-            
+
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
-            let current_ssim = calculate_ssim_quick().unwrap_or(prev_ssim);
+            let current_ssim_opt = calculate_ssim_quick();  // 🔥 v5.70: 保持Option
 
             if size < input_size {
                 consecutive_failures = 0;
-                let ssim_gain = current_ssim - prev_ssim;
-                
+
                 best_crf = Some(test_crf);
                 best_size = Some(size);
-                best_ssim_tracked = Some(current_ssim);
-                
-                eprintln!("   ✓ CRF {:.2}: {:+.1}% SSIM {:.4} (Δ{:+.4}) ✅", 
-                    test_crf, size_pct, current_ssim, ssim_gain);
-                
-                // 🔥 v5.67: SSIM 平台检测
-                if ssim_gain < 0.00005 && current_ssim >= 0.99 {
-                    eprintln!("   📊 SSIM plateau (fine) → STOP");
+
+                // 🔥 v5.70: 边际效益计算 - 只在SSIM可用时计算
+                let size_increase = size as f64 - prev_size as f64;
+                let size_increase_pct = (size_increase / prev_size as f64) * 100.0;
+
+                let should_stop = match (current_ssim_opt, prev_ssim_opt) {
+                    (Some(current_ssim), Some(prev_ssim)) => {
+                        let ssim_gain = current_ssim - prev_ssim;
+
+                        eprintln!("   ✓ CRF {:.2}: {:+.1}% SSIM {:.4} (Δ{:+.4}, size {:+.1}%) ✅",
+                            test_crf, size_pct, current_ssim, ssim_gain, size_increase_pct);
+
+                        // 精细化阶段更严格的检测
+                        if ssim_gain < 0.00005 && current_ssim >= 0.99 {
+                            eprintln!("   📊 SSIM plateau (fine) → STOP");
+                            true
+                        } else if size_increase_pct > 2.0 && ssim_gain < 0.0005 {
+                            eprintln!("   📊 Diminishing returns (fine) → STOP");
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    _ => {
+                        eprintln!("   ✓ CRF {:.2}: {:+.1}% SSIM N/A (size {:+.1}%) ✅",
+                            test_crf, size_pct, size_increase_pct);
+                        false
+                    }
+                };
+
+                if should_stop {
                     break;
                 }
-                
-                prev_ssim = current_ssim;
+
+                prev_ssim_opt = current_ssim_opt;
+                prev_size = size;
                 test_crf -= fine_step;
             } else {
                 consecutive_failures += 1;
@@ -4132,31 +4853,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("📍 Final: CRF {:.1} | Size: {} bytes ({:.2} MB)",
         final_crf, final_full_size, final_full_size as f64 / 1024.0 / 1024.0);
 
-    // 计算 SSIM
-    let ssim_output = std::process::Command::new("ffmpeg")
-        .arg("-i").arg(input)
-        .arg("-i").arg(output)
-        .arg("-lavfi").arg("ssim")
-        .arg("-f").arg("null")
-        .arg("-")
-        .output();
-    
-    let ssim = match ssim_output {
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if let Some(line) = stderr.lines().find(|l| l.contains("SSIM") && l.contains("All:")) {
-                if let Some(all_pos) = line.find("All:") {
-                    let after_all = &line[all_pos + 4..];
-                    if let Some(space_pos) = after_all.find(' ') {
-                        after_all[..space_pos].parse::<f64>().ok()
-                    } else {
-                        after_all.trim().parse::<f64>().ok()
-                    }
-                } else { None }
-            } else { None }
-        }
-        Err(_) => None,
-    };
+    // 🔥 v5.69: 增强 SSIM 检测 - 多种滤镜策略
+    let ssim = calculate_ssim_enhanced(input, output);
     
     if let Some(s) = ssim {
         let quality_hint = if s >= 0.99 { "✅ Excellent" } 
@@ -4164,11 +4862,22 @@ fn cpu_fine_tune_from_gpu_boundary(
                           else if s >= 0.95 { "🟡 Good" }
                           else { "🟠 Below threshold" };
         eprintln!("📊 SSIM: {:.6} {}", s, quality_hint);
+    } else {
+        eprintln!("⚠️  SSIM calculation failed after trying all methods");
     }
 
     // 🔥 v5.54: 使用完整视频大小计算结果
     let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
-    let quality_passed = final_full_size < input_size && ssim.unwrap_or(0.0) >= min_ssim;
+    
+    // 🔥 v5.70: 修复 quality_passed 逻辑 - 分离压缩检查和质量检查
+    // - 压缩检查：输出 < 输入
+    // - 质量检查：SSIM >= 阈值（仅当 SSIM 计算成功时）
+    let compressed = final_full_size < input_size;
+    let ssim_ok = match ssim {
+        Some(s) => s >= min_ssim,
+        None => false,  // SSIM 计算失败视为质量检查失败
+    };
+    let quality_passed = compressed && ssim_ok;
 
     // 🔥 v5.63: 计算置信度（全片编码 = 100% 覆盖）
     let ssim_val = ssim.unwrap_or(0.0);
@@ -4226,7 +4935,78 @@ fn cpu_fine_tune_from_gpu_boundary(
         log,
         confidence,
         confidence_detail,
+        actual_min_ssim: min_ssim,  // 🔥 v5.69: 传递实际阈值
     })
+}
+
+/// 🔥 v5.69.4: 增强 SSIM 计算 - 先尝试标准方法，失败时才使用格式转换
+/// 
+/// 策略：标准方法优先，仅在失败时才 fallback 到格式转换
+/// 这样可以保证大多数视频使用最准确的 SSIM 计算方式
+pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
+    use std::process::Command;
+    
+    // 🔥 v5.69.4: 定义滤镜策略（按优先级排序）
+    let filters: &[(&str, &str)] = &[
+        // 策略 1: 标准方法 - 适用于大多数视频
+        ("standard", "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim"),
+        // 策略 2: 格式转换 - 处理 VP8/VP9/AV1/10-bit/alpha 等特殊格式
+        ("format_convert", "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim"),
+        // 策略 3: 简单方法 - 最后的尝试
+        ("simple", "ssim"),
+    ];
+    
+    for (name, filter) in filters {
+        let result = Command::new("ffmpeg")
+            .arg("-i").arg(input)
+            .arg("-i").arg(output)
+            .arg("-lavfi").arg(*filter)
+            .arg("-f").arg("null")
+            .arg("-")
+            .output();
+
+        match result {
+            Ok(out) if out.status.success() => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if let Some(ssim) = parse_ssim_from_output(&stderr) {
+                    if precision::is_valid_ssim(ssim) {
+                        eprintln!("   📊 SSIM calculated using {} method: {:.6}", name, ssim);
+                        return Some(ssim);
+                    }
+                }
+            }
+            Ok(_) => {
+                // 当前策略失败，尝试下一个
+                eprintln!("   ⚠️  SSIM {} method failed, trying next...", name);
+            }
+            Err(e) => {
+                eprintln!("   ⚠️  ffmpeg {} failed: {}", name, e);
+            }
+        }
+    }
+    
+    // 所有策略都失败
+    eprintln!("   ❌ ALL SSIM CALCULATION METHODS FAILED!");
+    None
+}
+
+/// 🔥 v5.69: 从 ffmpeg 输出解析 SSIM 值
+fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
+    for line in stderr.lines() {
+        if line.contains("SSIM") && line.contains("All:") {
+            if let Some(all_pos) = line.find("All:") {
+                let after_all = &line[all_pos + 4..];
+                let after_all = after_all.trim_start();
+                // 处理格式: "All:0.987654 (12.34)" 或 "All:0.987654"
+                let end = after_all.find(|c: char| !c.is_numeric() && c != '.')
+                    .unwrap_or(after_all.len());
+                if end > 0 {
+                    return after_all[..end].parse::<f64>().ok();
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 🔥 v5.1: HEVC GPU+CPU 智能探索
@@ -4811,6 +5591,7 @@ mod tests {
             log: vec!["Test log".to_string()],
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: 0.95,  // 🔥 v5.69
         };
         
         // 验证所有字段都有意义
