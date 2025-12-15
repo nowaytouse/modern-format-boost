@@ -5174,33 +5174,32 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
             gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
-        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Adaptive Dynamic Stepping{} (v5.90)",
+        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Must Overshoot{} (v5.91)",
             BRIGHT_CYAN, RESET, BOLD, RESET);
-        eprintln!("   {}(Adaptive step based on CRF range, overshoot then refine){}", DIM, RESET);
+        eprintln!("   {}(Adaptive step, MUST overshoot to find boundary, then 0.1 refine){}", DIM, RESET);
 
-        // 🔥 v5.90: 自适应动态步进（数学公式驱动）
-        // 核心改进：用数学公式根据搜索范围动态计算步进，而不是硬编码
+        // 🔥 v5.91: 强制过头策略（用户核心要求）
+        // 问题：v5.90在SSIM 0.999就停止，没有超过头，不知道真正边界
         //
-        // 数学模型：
+        // 核心策略：**必须继续搜索直到OVERSHOOT（超过头），才能找到真正边界**
+        //
+        // 数学模型（保持v5.90的自适应步长）：
         // 1. **初始步长 = f(CRF范围)**
         //    - initial_step = (gpu_boundary_crf - min_crf) / 5.0
-        //    - 限制在 [2.0, 10.0] 范围内
-        //    - 示例：范围31.5 → 步长6.3，范围10 → 步长2.0，范围50 → 步长10.0
+        //    - Clamp: [2.0, 10.0]
         //
-        // 2. **步长递减公式**：geometric progression（几何级数）
-        //    - Stage 1: initial_step (2次快速探索)
-        //    - Stage 2: initial_step / 2 (2次接近最优)
-        //    - Stage 3: initial_step / 4 (3次精细搜索)
-        //    - Stage 4: initial_step / 8 (3次微调)
-        //    - Stage 5: 0.1 (剩余次数，最终精确)
+        // 2. **步长递减**：几何级数
+        //    - Stage 1-4: 快速→精细（但不停止）
+        //    - Stage 5: 0.1（精细搜索，可停止）
         //
-        // 3. **过头回退**：
-        //    - 遇到OVERSHOOT时，用0.1步长回退到最佳点
-        //    - 继续用0.1精细搜索
+        // 3. **停止条件**：
+        //    - 大步长（>0.1）：不检查SSIM，必须继续直到OVERSHOOT
+        //    - 小步长（=0.1）：可以在SSIM >= 0.9995时停止
+        //    - OVERSHOOT：立即回退用0.1搜索
         //
-        // 4. **自适应终止**：
-        //    - SSIM >= 0.999（平台期）
-        //    - 或用完所有步长阶段
+        // 4. **保证找到边界**：
+        //    - 不会在SSIM平台期提前停止
+        //    - 必须遇到OVERSHOOT或用0.1搜索完
 
         let crf_range = gpu_boundary_crf - min_crf;
         let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);  // 🔥 动态计算初始步长
@@ -5235,10 +5234,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         eprintln!("   {}📊 GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
             DIM, BRIGHT_YELLOW, gpu_ssim_baseline, RESET);
 
-        // 🔥 v5.89: 边际效益参数
-        const SSIM_PLATEAU_THRESHOLD: f64 = 0.999;  // SSIM 平台期阈值
-        const SSIM_GAIN_THRESHOLD: f64 = 0.0001;    // SSIM 增益阈值（0.01%）
-        const MARGINAL_BENEFIT_MIN: f64 = 0.0005;   // 🔥 降低阈值，更宽容
+        // 🔥 v5.91: 边际效益参数（只在0.1步长时检查）
+        const SSIM_PLATEAU_THRESHOLD: f64 = 0.9995;  // 🔥 提高阈值，只在接近1.0时停止
+        const SSIM_GAIN_THRESHOLD: f64 = 0.00005;    // 🔥 更严格的增益要求
         const MIN_STEP: f32 = 0.1;                   // 最小步长
 
         while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
@@ -5286,13 +5284,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                             DIM, ssim_gain, RESET, DIM, current_step, RESET,
                             gpu_comparison, BRIGHT_GREEN, RESET);
 
-                        // 🔥 v5.89: 只在SSIM平台期停止（>= 0.999且增益极小）
-                        // 移除边际效益停止条件，允许继续搜索直到过头
-                        if current_ssim >= SSIM_PLATEAU_THRESHOLD && ssim_gain < SSIM_GAIN_THRESHOLD {
-                            eprintln!("   {}🎯{} {}SSIM plateau reached{} ({:.4} >= {:.3}, gain {:.5} < {:.4}) → {}STOP{}",
+                        // 🔥 v5.91: 只在0.1步长时检查SSIM平台期
+                        // 大步长时必须继续搜索直到OVERSHOOT！
+                        if current_step <= MIN_STEP && current_ssim >= SSIM_PLATEAU_THRESHOLD && ssim_gain < SSIM_GAIN_THRESHOLD {
+                            eprintln!("   {}🎯{} {}SSIM plateau reached{} ({:.4} >= {:.4}, gain {:.5} < {:.5}) → {}STOP{}",
                                 BRIGHT_GREEN, RESET, BRIGHT_YELLOW, RESET, current_ssim, SSIM_PLATEAU_THRESHOLD, ssim_gain, SSIM_GAIN_THRESHOLD, BRIGHT_GREEN, RESET);
                             true
                         } else {
+                            // 🔥 大步长时不停止，必须继续搜索直到OVERSHOOT
                             false
                         }
                     }
