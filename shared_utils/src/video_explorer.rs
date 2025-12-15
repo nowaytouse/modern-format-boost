@@ -1284,7 +1284,17 @@ impl VideoExplorer {
         log_realtime!("   ═══════════════════════════════════════════════════");
 
         let mut iterations = 0u32;
-        const MAX_ITERATIONS: u32 = 15;
+        // 🔥 v5.75: 动态迭代限制，根据 CRF 范围计算
+        // 公式: log2(range) + 精细调整余量 + 安全边际
+        // 例如: range=30 → log2(30)≈5 + 6(精细) + 4(安全) = 15
+        // 例如: range=10 → log2(10)≈4 + 6(精细) + 4(安全) = 14
+        // 例如: range=50 → log2(50)≈6 + 6(精细) + 4(安全) = 16
+        let crf_range = (self.config.max_crf - self.config.min_crf).max(1.0);
+        let dynamic_max_iterations = ((crf_range as f64).log2().ceil() as u32)
+            .saturating_add(6)  // 精细调整余量
+            .saturating_add(4)  // 安全边际
+            .clamp(10, GLOBAL_MAX_ITERATIONS);  // 最少10次，最多60次
+        let max_iterations = dynamic_max_iterations;
         const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
 
         let mut best_crf: f32;
@@ -1351,7 +1361,7 @@ impl VideoExplorer {
             let mut high = self.config.max_crf;
             let mut prev_ssim = min_ssim;
 
-            while high - low > 1.0 && iterations < MAX_ITERATIONS {
+            while high - low > 1.0 && iterations < max_iterations {
                 let mid = low + (high - low) * PHI;
                 let mid_rounded = (mid * 2.0).round() / 2.0;
 
@@ -1381,13 +1391,13 @@ impl VideoExplorer {
             }
 
             // Phase 3: 精细调整 ±0.5 和 ±0.1
-            if iterations < MAX_ITERATIONS {
+            if iterations < max_iterations {
                 log_realtime!("   📍 Phase 3: Fine-tune around CRF {:.1}", best_crf);
 
                 // 先测试 ±0.5
                 for offset in [-0.5_f32, 0.5] {
                     let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
-                    if iterations >= MAX_ITERATIONS { break; }
+                    if iterations >= max_iterations { break; }
 
                     log_realtime!("   🔄 Testing CRF {:.1}...", crf);
                     let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
@@ -1404,13 +1414,13 @@ impl VideoExplorer {
                 }
 
                 // 🔥 v4.9: 进一步 ±0.1 精细调整（达到 ±0.1 精度）
-                if iterations < MAX_ITERATIONS {
+                if iterations < max_iterations {
                     for offset in [-0.25_f32, 0.25, -0.5, 0.5] {
                         let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
                         // 避免重复测试已缓存的值 - 🔥 v5.73: 统一缓存 Key
                         let key = precision::crf_to_cache_key(crf);
                         if cache.contains_key(&key) { continue; }
-                        if iterations >= MAX_ITERATIONS { break; }
+                        if iterations >= max_iterations { break; }
 
                         log_realtime!("   🔄 Testing CRF {:.1}...", crf);
                         let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
@@ -3102,17 +3112,6 @@ pub mod precision {
             }
         }
 
-        /// 获取缓存键乘数（用于缓存键计算）
-        pub fn cache_multiplier(&self) -> f32 {
-            match self {
-                SearchPhase::GpuCoarse => 1.0,    // key = crf * 1
-                SearchPhase::GpuMedium => 1.0,    // key = crf * 1
-                SearchPhase::GpuFine => 2.0,      // key = crf * 2
-                SearchPhase::GpuUltraFine => 4.0, // key = crf * 4
-                SearchPhase::CpuFinest => 10.0,   // key = crf * 10
-            }
-        }
-
         /// 是否是 GPU 阶段
         pub fn is_gpu(&self) -> bool {
             matches!(self, SearchPhase::GpuCoarse | SearchPhase::GpuMedium | 
@@ -3169,11 +3168,6 @@ pub mod precision {
                 SearchPhase::GpuUltraFine => self.gpu_ultra_fine_step,
                 SearchPhase::CpuFinest => self.cpu_finest_step,
             }
-        }
-
-        /// 计算缓存键
-        pub fn cache_key(&self, crf: f32, phase: SearchPhase) -> i32 {
-            (crf * phase.cache_multiplier()).round() as i32
         }
     }
     
@@ -3745,9 +3739,10 @@ pub mod precheck {
         }
 
         // 1.2 检查时长异常（只检查极短视频）
-        if duration < 0.05 {
+        // 🔥 v5.75: 时长为0可能是元数据读取问题（如WebP动画），改为警告而非阻止
+        if duration < 0.001 {
             return ProcessingRecommendation::CannotProcess {
-                reason: format!("时长过短 {:.3}s", duration)
+                reason: format!("时长读取为 {:.3}s（可能是元数据问题，将尝试转换）", duration)
             };
         }
 
@@ -3992,7 +3987,7 @@ pub mod precheck {
     /// 🔥 v5.71: 完整的预检查报告，包含处理建议、FPS分类、色彩信息
     pub fn print_precheck_report(info: &VideoInfo) {
         eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 📊 Precheck Report v5.71");
+        eprintln!("│ 📊 Precheck Report v5.75");
         eprintln!("├─────────────────────────────────────────────────────");
         eprintln!("│ 🎬 Codec: {}", info.codec);
         eprintln!("│ 📐 Resolution: {}x{}", info.width, info.height);
@@ -4087,7 +4082,10 @@ pub mod precheck {
     /// 执行预检查并返回信息
     ///
     /// 🔥 v5.71: 修正处理逻辑
-    /// - CannotProcess → 强制跳过（文件异常）
+    /// 🔥 v5.75: 预检查改为仅提示和告知，不再干预转换
+    /// 
+    /// 所有情况都只是警告/提示，不会阻止转换：
+    /// - CannotProcess → ⚠️ 警告但继续尝试（可能是元数据问题）
     /// - NotRecommended → 警告但继续（已是现代编解码器）
     /// - StronglyRecommended → 强烈建议处理（古老编解码器）⭐
     /// - Recommended/Optional → 正常处理
@@ -4095,12 +4093,13 @@ pub mod precheck {
         let info = get_video_info(input)?;
         print_precheck_report(&info);
 
-        // 🔥 v5.71: 根据 ProcessingRecommendation 决定是否继续
+        // 🔥 v5.75: 预检查仅提示，不阻止转换
         match &info.recommendation {
-            // ❌ 无法处理：文件异常、损坏等 → 强制跳过
+            // ⚠️ 检测到异常：可能是元数据问题 → 警告但继续尝试
             ProcessingRecommendation::CannotProcess { reason } => {
-                eprintln!("❌ PRECHECK FAILED: {}", reason);
-                bail!("Precheck failed: {}", reason);
+                eprintln!("⚠️  PRECHECK WARNING: {}", reason);
+                eprintln!("    → 可能是元数据读取问题，将继续尝试转换...");
+                eprintln!("    → 如果转换失败，请检查源文件是否损坏");
             }
             
             // ⚠️ 不建议处理：已是现代编解码器 → 警告但允许继续
