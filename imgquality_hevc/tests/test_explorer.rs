@@ -330,6 +330,7 @@ fn test_quality_thresholds_customization() {
         validate_ssim: true,
         validate_psnr: true, // 同时验证两者
         validate_vmaf: false, // 不验证 VMAF
+        ..Default::default()
     };
     
     assert_eq!(thresholds.min_ssim, 0.98);

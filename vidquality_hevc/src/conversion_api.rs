@@ -75,6 +75,12 @@ pub struct ConversionConfig {
     /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
     /// VideoToolbox hardware encoding caps at ~0.95 SSIM
     pub use_gpu: bool,
+    /// 🔥 v5.75: Enable VMAF verification
+    pub validate_vmaf: bool,
+    /// 🔥 v5.75: Minimum VMAF score threshold
+    pub min_vmaf: f64,
+    /// 🔥 v5.75: Force VMAF verification for long videos (>5min)
+    pub force_vmaf_long: bool,
 }
 
 impl Default for ConversionConfig {
@@ -91,6 +97,9 @@ impl Default for ConversionConfig {
             apple_compat: false,
             require_compression: false,
             use_gpu: true,  // 🔥 v4.15: GPU by default
+            validate_vmaf: false,  // 🔥 v5.75: VMAF 默认关闭
+            min_vmaf: 85.0,
+            force_vmaf_long: false,
         }
     }
 }

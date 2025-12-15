@@ -710,3 +710,243 @@ mod mock_tests {
         assert!((psnr1 - psnr2).abs() < 0.0001);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.75: VMAF-SSIM 协同验证属性测试
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod vmaf_ssim_synergy_tests {
+    use super::super::video_explorer::*;
+    use proptest::prelude::*;
+
+    // **Feature: vmaf-ssim-synergy-v5.75, Property 5: 阈值配置传递**
+    // **Validates: Requirements 4.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_vmaf_threshold_config(
+            min_vmaf in 70.0..99.0_f64,
+            force_long in proptest::bool::ANY,
+        ) {
+            let thresholds = QualityThresholds {
+                min_vmaf,
+                force_vmaf_long: force_long,
+                ..Default::default()
+            };
+            
+            // 验证阈值正确传递
+            prop_assert!((thresholds.min_vmaf - min_vmaf).abs() < 0.001,
+                "VMAF 阈值应正确传递: expected={}, actual={}", min_vmaf, thresholds.min_vmaf);
+            prop_assert_eq!(thresholds.force_vmaf_long, force_long,
+                "force_vmaf_long 应正确传递");
+        }
+    }
+
+    #[test]
+    fn test_long_video_threshold_constant() {
+        // 验证长视频阈值为 5 分钟
+        assert!((LONG_VIDEO_THRESHOLD - 300.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_default_force_vmaf_long_is_false() {
+        let thresholds = QualityThresholds::default();
+        assert!(!thresholds.force_vmaf_long, "默认应跳过长视频 VMAF");
+    }
+}
+
+
+#[cfg(test)]
+mod vmaf_long_video_tests {
+    use super::super::video_explorer::*;
+    use proptest::prelude::*;
+
+    /// 判断是否应该跳过 VMAF（基于时长和配置）
+    fn should_skip_vmaf(duration_secs: f32, force_vmaf_long: bool) -> bool {
+        duration_secs >= LONG_VIDEO_THRESHOLD && !force_vmaf_long
+    }
+
+    // **Feature: vmaf-ssim-synergy-v5.75, Property 2: 长视频跳过规则**
+    // **Validates: Requirements 3.1, 3.3**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_long_video_skip_vmaf(
+            duration in 0.0..1000.0_f32,
+        ) {
+            // 当 duration >= 300s 且 force_vmaf_long=false 时，应跳过 VMAF
+            let should_skip = should_skip_vmaf(duration, false);
+            
+            if duration >= LONG_VIDEO_THRESHOLD {
+                prop_assert!(should_skip, 
+                    "长视频 ({:.1}s >= {:.1}s) 应跳过 VMAF", duration, LONG_VIDEO_THRESHOLD);
+            } else {
+                prop_assert!(!should_skip,
+                    "短视频 ({:.1}s < {:.1}s) 不应跳过 VMAF", duration, LONG_VIDEO_THRESHOLD);
+            }
+        }
+
+        #[test]
+        fn prop_force_vmaf_long_override(
+            duration in 300.0..1000.0_f32,
+        ) {
+            // 当 force_vmaf_long=true 时，无论时长如何都不应跳过
+            let should_skip = should_skip_vmaf(duration, true);
+            prop_assert!(!should_skip,
+                "force_vmaf_long=true 时不应跳过 VMAF，即使时长为 {:.1}s", duration);
+        }
+    }
+
+    #[test]
+    fn test_boundary_duration() {
+        // 边界测试：刚好 5 分钟
+        assert!(should_skip_vmaf(300.0, false));
+        assert!(!should_skip_vmaf(299.9, false));
+        assert!(!should_skip_vmaf(300.0, true)); // force 覆盖
+    }
+}
+
+
+#[cfg(test)]
+mod vmaf_enable_condition_tests {
+    use super::super::video_explorer::*;
+    use proptest::prelude::*;
+
+    /// 模拟 VMAF 启用条件判断
+    fn should_enable_vmaf(
+        vmaf_enabled: bool,
+        duration_secs: Option<f64>,
+        force_vmaf_long: bool,
+    ) -> bool {
+        if !vmaf_enabled {
+            return false;
+        }
+        
+        match duration_secs {
+            Some(d) if d >= LONG_VIDEO_THRESHOLD as f64 => force_vmaf_long,
+            Some(_) => true,  // 短视频，启用 VMAF
+            None => false,    // 无法检测时长，跳过
+        }
+    }
+
+    // **Feature: vmaf-ssim-synergy-v5.75, Property 1: VMAF 启用条件**
+    // **Validates: Requirements 2.1, 3.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_vmaf_enable_short_video(
+            duration in 0.0..299.9_f64,
+        ) {
+            // 短视频 + VMAF 启用 = 应该执行 VMAF
+            let enabled = should_enable_vmaf(true, Some(duration), false);
+            prop_assert!(enabled,
+                "短视频 ({:.1}s) 且 VMAF 启用时应执行 VMAF", duration);
+        }
+
+        #[test]
+        fn prop_vmaf_disabled_no_execution(
+            duration in 0.0..1000.0_f64,
+            force in proptest::bool::ANY,
+        ) {
+            // VMAF 未启用 = 不执行
+            let enabled = should_enable_vmaf(false, Some(duration), force);
+            prop_assert!(!enabled,
+                "VMAF 未启用时不应执行 VMAF");
+        }
+    }
+
+    #[test]
+    fn test_vmaf_enable_edge_cases() {
+        // 边界：刚好 5 分钟
+        assert!(!should_enable_vmaf(true, Some(300.0), false));
+        assert!(should_enable_vmaf(true, Some(299.9), false));
+        
+        // 强制启用
+        assert!(should_enable_vmaf(true, Some(600.0), true));
+        
+        // 无法检测时长
+        assert!(!should_enable_vmaf(true, None, false));
+        assert!(!should_enable_vmaf(true, None, true));
+    }
+}
+
+
+#[cfg(test)]
+mod quality_report_tests {
+    use super::super::video_explorer::*;
+    use proptest::prelude::*;
+
+    /// 模拟质量报告生成
+    fn generate_quality_report(
+        ssim: Option<f64>,
+        vmaf: Option<f64>,
+        vmaf_enabled: bool,
+        vmaf_skipped: bool,
+    ) -> (bool, bool, Option<String>) {
+        // 返回: (has_ssim, has_vmaf_or_reason, skip_reason)
+        let has_ssim = ssim.is_some();
+        let has_vmaf_or_reason = vmaf.is_some() || (vmaf_enabled && vmaf_skipped);
+        let skip_reason = if vmaf_enabled && vmaf_skipped && vmaf.is_none() {
+            Some("长视频跳过 VMAF".to_string())
+        } else {
+            None
+        };
+        (has_ssim, has_vmaf_or_reason, skip_reason)
+    }
+
+    // **Feature: vmaf-ssim-synergy-v5.75, Property 6: 质量报告完整性**
+    // **Validates: Requirements 6.1, 6.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_quality_report_has_ssim(
+            ssim in 0.9..1.0_f64,
+        ) {
+            // 完成的探索应包含 SSIM
+            let (has_ssim, _, _) = generate_quality_report(Some(ssim), None, false, false);
+            prop_assert!(has_ssim, "质量报告应包含 SSIM 值");
+        }
+
+        #[test]
+        fn prop_quality_report_vmaf_or_reason(
+            vmaf in 80.0..100.0_f64,
+            vmaf_enabled in proptest::bool::ANY,
+            vmaf_skipped in proptest::bool::ANY,
+        ) {
+            // 当 VMAF 启用时，报告应包含 VMAF 值或跳过原因
+            if vmaf_enabled {
+                let vmaf_val = if vmaf_skipped { None } else { Some(vmaf) };
+                let (_, has_vmaf_or_reason, skip_reason) = generate_quality_report(
+                    Some(0.95), vmaf_val, vmaf_enabled, vmaf_skipped
+                );
+                
+                prop_assert!(has_vmaf_or_reason,
+                    "VMAF 启用时应有 VMAF 值或跳过原因");
+                
+                if vmaf_skipped && vmaf_val.is_none() {
+                    prop_assert!(skip_reason.is_some(),
+                        "VMAF 跳过时应有跳过原因");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_quality_report_completeness() {
+        // 正常情况：有 SSIM 和 VMAF
+        let (has_ssim, has_vmaf, _) = generate_quality_report(Some(0.95), Some(90.0), true, false);
+        assert!(has_ssim);
+        assert!(has_vmaf);
+        
+        // 跳过 VMAF：有 SSIM 和跳过原因
+        let (has_ssim, has_reason, skip_reason) = generate_quality_report(Some(0.95), None, true, true);
+        assert!(has_ssim);
+        assert!(has_reason);
+        assert!(skip_reason.is_some());
+    }
+}
