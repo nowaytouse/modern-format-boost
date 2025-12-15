@@ -1,10 +1,10 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v5.5
+# Modern Format Boost - Drag & Drop Processor v5.70
 # 
-# 🔥 v5.5: 全面改进进度显示
-# - 固定底部进度条
-# - 详细进度参数
-# - 实时 CRF/SSIM 显示
+# 🔥 v5.70: 智能编译系统
+# - 时间戳比对：只在源代码更新时重新编译
+# - 版本号识别：检测版本不匹配
+# - 依赖传播：shared_utils 修改触发全部重编译
 # 
 # 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
 
@@ -141,8 +141,8 @@ select_menu() {
 # 检查工具
 # ═══════════════════════════════════════════════════════════════
 check_tools() {
-    # 🔥 v5.35: 强制重新编译以确保使用最新代码
-    "$PROJECT_ROOT/build_all.sh" || {
+    # 🔥 v5.70: 智能编译 - 只在源代码更新时重新编译
+    "$PROJECT_ROOT/smart_build.sh" || {
         echo -e "${RED}❌ Build failed${NC}"
         exit 1
     }
