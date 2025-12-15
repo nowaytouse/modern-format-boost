@@ -2651,63 +2651,91 @@ pub mod precision {
     /// 🔥 v5.55: 精细搜索步长 (从 0.1 改为 0.25，速度提升 2-3 倍)
     pub const ULTRA_FINE_STEP: f32 = 0.25;
     
-    /// 🔥 v5.72: 最精细搜索步长（用于最终优化）
-    pub const FINEST_STEP: f32 = 0.1;
+    /// 🔥 v5.72: CPU 最终精细化步长（突破 GPU SSIM 天花板）
+    pub const CPU_FINEST_STEP: f32 = 0.1;
 
-    /// 🔥 v5.72: 搜索阶段
+    /// 🔥 v5.72: 搜索阶段 - GPU+CPU 双精细化
+    /// GPU: 4 → 1 → 0.5 → 0.25 (快速，SSIM 上限 ~0.97)
+    /// CPU: 0.1 (慢，突破到 0.98+)
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum SearchPhase {
-        /// 粗搜索：0.5步进，快速定位边界
-        Coarse,
-        /// 中等精度：0.25步进，缩小范围
-        Medium,
-        /// 精细搜索：0.1步进，最终优化
-        Fine,
+        /// GPU 粗搜索：4.0 步进
+        GpuCoarse,
+        /// GPU 中等：1.0 步进
+        GpuMedium,
+        /// GPU 精细：0.5 步进
+        GpuFine,
+        /// GPU 超精细：0.25 步进（GPU 最后阶段）
+        GpuUltraFine,
+        /// CPU 最终精细化：0.1 步进（突破 GPU SSIM 天花板）
+        CpuFinest,
     }
 
     impl SearchPhase {
         /// 获取当前阶段的步进值
         pub fn step_size(&self) -> f32 {
             match self {
-                SearchPhase::Coarse => FINE_STEP,      // 0.5
-                SearchPhase::Medium => ULTRA_FINE_STEP, // 0.25
-                SearchPhase::Fine => FINEST_STEP,       // 0.1
+                SearchPhase::GpuCoarse => 4.0,
+                SearchPhase::GpuMedium => 1.0,
+                SearchPhase::GpuFine => FINE_STEP,        // 0.5
+                SearchPhase::GpuUltraFine => ULTRA_FINE_STEP, // 0.25
+                SearchPhase::CpuFinest => CPU_FINEST_STEP,    // 0.1
             }
         }
 
         /// 获取缓存键乘数（用于缓存键计算）
         pub fn cache_multiplier(&self) -> f32 {
             match self {
-                SearchPhase::Coarse => 2.0,   // key = crf * 2
-                SearchPhase::Medium => 4.0,   // key = crf * 4
-                SearchPhase::Fine => 10.0,    // key = crf * 10
+                SearchPhase::GpuCoarse => 1.0,    // key = crf * 1
+                SearchPhase::GpuMedium => 1.0,    // key = crf * 1
+                SearchPhase::GpuFine => 2.0,      // key = crf * 2
+                SearchPhase::GpuUltraFine => 4.0, // key = crf * 4
+                SearchPhase::CpuFinest => 10.0,   // key = crf * 10
             }
+        }
+
+        /// 是否是 GPU 阶段
+        pub fn is_gpu(&self) -> bool {
+            matches!(self, SearchPhase::GpuCoarse | SearchPhase::GpuMedium | 
+                          SearchPhase::GpuFine | SearchPhase::GpuUltraFine)
         }
 
         /// 获取下一阶段
         pub fn next(&self) -> Option<SearchPhase> {
             match self {
-                SearchPhase::Coarse => Some(SearchPhase::Medium),
-                SearchPhase::Medium => Some(SearchPhase::Fine),
-                SearchPhase::Fine => None,
+                SearchPhase::GpuCoarse => Some(SearchPhase::GpuMedium),
+                SearchPhase::GpuMedium => Some(SearchPhase::GpuFine),
+                SearchPhase::GpuFine => Some(SearchPhase::GpuUltraFine),
+                SearchPhase::GpuUltraFine => Some(SearchPhase::CpuFinest),
+                SearchPhase::CpuFinest => None,
             }
         }
     }
 
-    /// 🔥 v5.72: 三阶段搜索配置
+    /// 🔥 v5.72: GPU+CPU 双精细化搜索配置
+    /// GPU 做粗搜索 (4→1→0.5→0.25)，CPU 只做最终 0.1 精细化
     #[derive(Debug, Clone)]
     pub struct ThreePhaseSearch {
-        pub coarse_step: f32,   // 0.5 - 粗搜索
-        pub medium_step: f32,   // 0.25 - 中等精度
-        pub fine_step: f32,     // 0.1 - 精细调整
+        /// GPU 粗搜索步长
+        pub gpu_coarse_step: f32,     // 4.0
+        /// GPU 中等步长
+        pub gpu_medium_step: f32,     // 1.0
+        /// GPU 精细步长
+        pub gpu_fine_step: f32,       // 0.5
+        /// GPU 超精细步长（GPU 最后阶段）
+        pub gpu_ultra_fine_step: f32, // 0.25
+        /// CPU 最终精细化步长（突破 GPU SSIM 天花板）
+        pub cpu_finest_step: f32,     // 0.1
     }
 
     impl Default for ThreePhaseSearch {
         fn default() -> Self {
             Self {
-                coarse_step: FINE_STEP,       // 0.5
-                medium_step: ULTRA_FINE_STEP, // 0.25
-                fine_step: FINEST_STEP,       // 0.1
+                gpu_coarse_step: 4.0,
+                gpu_medium_step: 1.0,
+                gpu_fine_step: FINE_STEP,           // 0.5
+                gpu_ultra_fine_step: ULTRA_FINE_STEP, // 0.25
+                cpu_finest_step: CPU_FINEST_STEP,     // 0.1
             }
         }
     }
@@ -2716,9 +2744,11 @@ pub mod precision {
         /// 获取指定阶段的步进值
         pub fn step_for_phase(&self, phase: SearchPhase) -> f32 {
             match phase {
-                SearchPhase::Coarse => self.coarse_step,
-                SearchPhase::Medium => self.medium_step,
-                SearchPhase::Fine => self.fine_step,
+                SearchPhase::GpuCoarse => self.gpu_coarse_step,
+                SearchPhase::GpuMedium => self.gpu_medium_step,
+                SearchPhase::GpuFine => self.gpu_fine_step,
+                SearchPhase::GpuUltraFine => self.gpu_ultra_fine_step,
+                SearchPhase::CpuFinest => self.cpu_finest_step,
             }
         }
 
