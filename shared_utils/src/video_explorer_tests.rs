@@ -308,40 +308,59 @@ mod three_phase_search_tests {
 
     // **Feature: video-explorer-robustness-v5.72, Property 7: 三阶段搜索递进**
     // **Validates: Requirements 4.1, 4.2, 4.3, 4.4**
+    // 🔥 v5.72: GPU+CPU 双精细化策略
+    // GPU: 4 → 1 → 0.5 → 0.25 (快速，SSIM 上限 ~0.97)
+    // CPU: 0.1 (慢，突破到 0.98+)
     #[test]
-    fn prop_three_phase_progression() {
-        // 验证三阶段搜索的步进值递减
+    fn prop_gpu_cpu_dual_refinement() {
         let search = ThreePhaseSearch::default();
         
-        // 🔥 核心属性：步进值必须递减 0.5 → 0.25 → 0.1
-        assert!(search.coarse_step > search.medium_step,
-            "Coarse step ({}) should be > medium step ({})", 
-            search.coarse_step, search.medium_step);
-        assert!(search.medium_step > search.fine_step,
-            "Medium step ({}) should be > fine step ({})",
-            search.medium_step, search.fine_step);
+        // 🔥 核心属性：GPU 步进值递减 4 → 1 → 0.5 → 0.25
+        assert!(search.gpu_coarse_step > search.gpu_medium_step,
+            "GPU coarse ({}) > medium ({})", search.gpu_coarse_step, search.gpu_medium_step);
+        assert!(search.gpu_medium_step > search.gpu_fine_step,
+            "GPU medium ({}) > fine ({})", search.gpu_medium_step, search.gpu_fine_step);
+        assert!(search.gpu_fine_step > search.gpu_ultra_fine_step,
+            "GPU fine ({}) > ultra_fine ({})", search.gpu_fine_step, search.gpu_ultra_fine_step);
+        
+        // 🔥 核心属性：CPU 只做最终 0.1 精细化
+        assert!(search.gpu_ultra_fine_step > search.cpu_finest_step,
+            "GPU ultra_fine ({}) > CPU finest ({})", search.gpu_ultra_fine_step, search.cpu_finest_step);
         
         // 验证具体值
-        assert!((search.coarse_step - 0.5).abs() < 0.01, "Coarse step should be 0.5");
-        assert!((search.medium_step - 0.25).abs() < 0.01, "Medium step should be 0.25");
-        assert!((search.fine_step - 0.1).abs() < 0.01, "Fine step should be 0.1");
+        assert!((search.gpu_coarse_step - 4.0).abs() < 0.01, "GPU coarse should be 4.0");
+        assert!((search.gpu_medium_step - 1.0).abs() < 0.01, "GPU medium should be 1.0");
+        assert!((search.gpu_fine_step - 0.5).abs() < 0.01, "GPU fine should be 0.5");
+        assert!((search.gpu_ultra_fine_step - 0.25).abs() < 0.01, "GPU ultra_fine should be 0.25");
+        assert!((search.cpu_finest_step - 0.1).abs() < 0.01, "CPU finest should be 0.1");
     }
 
     #[test]
     fn prop_search_phase_step_sizes() {
         // 验证SearchPhase枚举的步进值
-        assert!((SearchPhase::Coarse.step_size() - 0.5).abs() < 0.01);
-        assert!((SearchPhase::Medium.step_size() - 0.25).abs() < 0.01);
-        assert!((SearchPhase::Fine.step_size() - 0.1).abs() < 0.01);
+        assert!((SearchPhase::GpuCoarse.step_size() - 4.0).abs() < 0.01);
+        assert!((SearchPhase::GpuMedium.step_size() - 1.0).abs() < 0.01);
+        assert!((SearchPhase::GpuFine.step_size() - 0.5).abs() < 0.01);
+        assert!((SearchPhase::GpuUltraFine.step_size() - 0.25).abs() < 0.01);
+        assert!((SearchPhase::CpuFinest.step_size() - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn prop_gpu_vs_cpu_phase() {
+        // 验证 GPU/CPU 阶段分类
+        assert!(SearchPhase::GpuCoarse.is_gpu());
+        assert!(SearchPhase::GpuMedium.is_gpu());
+        assert!(SearchPhase::GpuFine.is_gpu());
+        assert!(SearchPhase::GpuUltraFine.is_gpu());
+        assert!(!SearchPhase::CpuFinest.is_gpu()); // CPU 阶段
     }
 
     #[test]
     fn prop_cache_multiplier_consistency() {
         // 验证缓存键乘数与步进值的一致性
-        // 乘数应该是 1/step_size 的整数倍
         let search = ThreePhaseSearch::default();
         
-        for phase in [SearchPhase::Coarse, SearchPhase::Medium, SearchPhase::Fine] {
+        for phase in [SearchPhase::GpuFine, SearchPhase::GpuUltraFine, SearchPhase::CpuFinest] {
             let step = phase.step_size();
             let multiplier = phase.cache_multiplier();
             
@@ -360,9 +379,11 @@ mod three_phase_search_tests {
 
     #[test]
     fn prop_phase_progression() {
-        // 验证阶段递进
-        assert_eq!(SearchPhase::Coarse.next(), Some(SearchPhase::Medium));
-        assert_eq!(SearchPhase::Medium.next(), Some(SearchPhase::Fine));
-        assert_eq!(SearchPhase::Fine.next(), None);
+        // 验证阶段递进：GPU → GPU → GPU → GPU → CPU
+        assert_eq!(SearchPhase::GpuCoarse.next(), Some(SearchPhase::GpuMedium));
+        assert_eq!(SearchPhase::GpuMedium.next(), Some(SearchPhase::GpuFine));
+        assert_eq!(SearchPhase::GpuFine.next(), Some(SearchPhase::GpuUltraFine));
+        assert_eq!(SearchPhase::GpuUltraFine.next(), Some(SearchPhase::CpuFinest));
+        assert_eq!(SearchPhase::CpuFinest.next(), None);
     }
 }
