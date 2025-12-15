@@ -4624,11 +4624,13 @@ pub fn explore_with_gpu_coarse_search(
                 // GPU 日志通过 gpu_coarse_search 内部的 eprintln! 已经输出
                 
                 if gpu_result.found_boundary {
-                    // 🔥 v5.9: 修正 CRF 映射方向！
-                    // GPU 效率**低于** CPU，相同 CRF 下 GPU 输出更大
-                    // 所以：GPU CRF 11 能压缩 → CPU 需要**更高** CRF（如 12-14）才能压缩
-                    // 之前的代码搞反了方向！
-                    let gpu_crf = gpu_result.gpu_boundary_crf;
+                    // 🔥 v5.80: 优先使用GPU质量天花板CRF，而不是压缩边界CRF
+                    // 理论基础：
+                    // - GPU质量天花板 = GPU编码器无法再提升质量的点（SSIM平台）
+                    // - 压缩边界 = 能压缩的最高CRF点
+                    // - CPU应该从质量天花板开始，向下突破到0.98+ SSIM
+                    let reference_gpu_crf = gpu_result.quality_ceiling_crf.unwrap_or(gpu_result.gpu_boundary_crf);
+                    let gpu_crf = gpu_result.gpu_boundary_crf;  // 保留边界信息用于日志
                     let gpu_size = gpu_result.gpu_best_size.unwrap_or(input_size);
 
                     // 🔥 v5.61: 动态自校准 GPU→CPU 映射
@@ -4642,21 +4644,22 @@ pub fn explore_with_gpu_coarse_search(
                         gpu_encoder_name,
                         sample_duration,
                     ).unwrap_or_else(|_| dynamic_mapping::DynamicCrfMapper::new(input_size));
-                    
+
                     // 使用动态映射计算 CPU 起点
                     let mapping = match encoder {
                         VideoEncoder::Hevc => CrfMapping::hevc(gpu.gpu_type),
                         VideoEncoder::Av1 => CrfMapping::av1(gpu.gpu_type),
                         VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type),
                     };
-                    
+
+                    // 🔥 v5.80: 使用质量天花板CRF进行映射（如果有的话）
                     let (dynamic_cpu_crf, dynamic_confidence) = if dynamic_mapper.calibrated {
                         dynamic_mapper.print_calibration_report();
-                        dynamic_mapper.gpu_to_cpu(gpu_crf, mapping.offset)
+                        dynamic_mapper.gpu_to_cpu(reference_gpu_crf, mapping.offset)
                     } else {
                         // 无动态校准数据，使用静态校准
                         let calibration = calibration::CalibrationPoint::from_gpu_result(
-                            gpu_crf,
+                            reference_gpu_crf,
                             gpu_size,
                             input_size,
                             gpu_result.gpu_best_ssim,
@@ -4665,9 +4668,17 @@ pub fn explore_with_gpu_coarse_search(
                         calibration.print_report(input_size);
                         (calibration.predicted_cpu_crf, calibration.confidence)
                     };
-                    
-                    eprintln!("🎯 Dynamic mapping: GPU {:.1} → CPU {:.1} (confidence {:.0}%)", 
-                        gpu_crf, dynamic_cpu_crf, dynamic_confidence * 100.0);
+
+                    // 🔥 v5.80: 区分显示边界CRF和天花板CRF
+                    if let Some(ceiling_crf) = gpu_result.quality_ceiling_crf {
+                        eprintln!("🎯 Using GPU Quality Ceiling: CRF {:.1} (detected via PSNR plateau)", ceiling_crf);
+                        eprintln!("   (GPU boundary was CRF {:.1}, but quality peaked at {:.1})", gpu_crf, ceiling_crf);
+                        eprintln!("🎯 Dynamic mapping: GPU ceiling {:.1} → CPU {:.1} (confidence {:.0}%)",
+                            ceiling_crf, dynamic_cpu_crf, dynamic_confidence * 100.0);
+                    } else {
+                        eprintln!("🎯 Dynamic mapping: GPU {:.1} → CPU {:.1} (confidence {:.0}%)",
+                            gpu_crf, dynamic_cpu_crf, dynamic_confidence * 100.0);
+                    }
                     eprintln!("");
 
                     // 🔥 v5.61: 使用动态校准后的 CPU 起点
