@@ -5174,35 +5174,52 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
             gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
-        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search with Marginal Benefit{} (v5.87)",
+        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Overshoot & Refine{} (v5.89)",
             BRIGHT_CYAN, RESET, BOLD, RESET);
-        eprintln!("   {}(Adaptive step 5.0→2.0→1.0→0.5→0.25→0.1, marginal benefit analysis){}", DIM, RESET);
+        eprintln!("   {}(Progressive step 5.0→2.0→1.0→0.5→0.1, overshoot then refine){}", DIM, RESET);
 
-        // 🔥 v5.87: 自适应大步长 + 边际效益算法
-        // 策略改进：
-        // 1. 初始使用大步长（5.0）快速探索
-        // 2. 遇到 OVERSHOOT 时，回退并减半步长（5.0→2.5→1.25→0.625→0.3→0.1）
-        // 3. 回退时使用0.1步进（更精确）
-        // 4. 和GPU SSIM对比，计算乘法增益
-        // 5. 边际效益递减时及时停止（SSIM增益/文件增大比例）
+        // 🔥 v5.89: 过头+精细回退算法（用户建议）
+        // 核心策略："超过头再基于此的基础上进行精细处理"
+        //
+        // 问题分析：v5.87只在OVERSHOOT时减小步长，导致如果一直能压缩则永远是大步长
+        //
+        // 新策略：
+        // 1. **递进式步长**：每N次迭代后主动减小步长（不依赖OVERSHOOT）
+        //    - 5.0 (快速探索) → 2.0 (接近最优) → 1.0 (精细搜索) → 0.5 (微调) → 0.1 (最终精确)
+        // 2. **允许适度过头**：继续搜索直到遇到OVERSHOOT（size >= input）或SSIM下降
+        // 3. **精细回退**：过头后用0.1步长回退到最佳点
+        // 4. **边际效益分析**：SSIM增益递减时及时切换到更小步长
+        // 5. **和GPU对比**：显示CPU相对GPU的乘法增益
 
-        let mut current_step = 5.0_f32;  // 🔥 初始大步长5.0
+        // 步长递进计划（基于迭代次数）
+        const STEP_SCHEDULE: [(f32, u32); 5] = [
+            (5.0, 2),  // 前2次：大步长快速探索
+            (2.0, 2),  // 接下来2次：中等步长接近
+            (1.0, 3),  // 接下来3次：小步长精细
+            (0.5, 3),  // 接下来3次：微调
+            (0.1, 99), // 剩余：最精细步长
+        ];
+
+        let mut current_step = STEP_SCHEDULE[0].0;  // 🔥 初始大步长5.0
+        let mut step_index = 0_usize;
+        let mut step_count = 0_u32;  // 当前步长已使用次数
         let mut test_crf = gpu_boundary_crf - current_step;
         let mut prev_ssim_opt = gpu_ssim;
         let mut prev_size = gpu_size;
-        let mut last_good_crf = gpu_boundary_crf;  // 回退点
+        let mut last_good_crf = gpu_boundary_crf;  // 最后一个能压缩的点
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
+        let mut overshoot_detected = false;  // 🔥 v5.89: 过头标志
 
-        // 🔥 v5.87: 和GPU SSIM对比（首次验证）
+        // 🔥 v5.89: 和GPU SSIM对比（首次验证）
         let gpu_ssim_baseline = gpu_ssim.unwrap_or(0.95);
         eprintln!("   {}📊 GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
             DIM, BRIGHT_YELLOW, gpu_ssim_baseline, RESET);
 
-        // 🔥 v5.87: 边际效益参数
+        // 🔥 v5.89: 边际效益参数
         const SSIM_PLATEAU_THRESHOLD: f64 = 0.999;  // SSIM 平台期阈值
         const SSIM_GAIN_THRESHOLD: f64 = 0.0001;    // SSIM 增益阈值（0.01%）
-        const MARGINAL_BENEFIT_MIN: f64 = 0.001;    // 最小边际效益：SSIM增益0.001 / 文件增大1%
+        const MARGINAL_BENEFIT_MIN: f64 = 0.0005;   // 🔥 降低阈值，更宽容
         const MIN_STEP: f32 = 0.1;                   // 最小步长
 
         while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
@@ -5226,20 +5243,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_size = Some(size);
                 best_ssim_tracked = current_ssim_opt;
 
+                // 🔥 v5.89: 显示进度（带GPU对比和步长信息）
                 let should_stop = match (current_ssim_opt, prev_ssim_opt) {
                     (Some(current_ssim), Some(prev_ssim)) => {
                         let ssim_gain = current_ssim - prev_ssim;
                         let size_increase = (size as f64 - prev_size as f64) / prev_size as f64 * 100.0;
                         let size_increase_mb = (size as f64 - prev_size as f64) / 1024.0 / 1024.0;
 
-                        // 🔥 v5.87: 边际效益计算 = SSIM增益 / 文件增大比例
-                        let marginal_benefit = if size_increase.abs() > 0.01 {
-                            ssim_gain / size_increase.abs()
-                        } else {
-                            f64::MAX  // 文件几乎不增大，边际效益极高
-                        };
-
-                        // 🔥 v5.87: 和GPU SSIM对比（乘法增益）
+                        // 和GPU SSIM对比（乘法增益）
                         let ssim_vs_gpu = current_ssim / gpu_ssim_baseline;
                         let gpu_comparison = if ssim_vs_gpu > 1.01 {
                             format!("{}×{:.3} GPU{}", BRIGHT_GREEN, ssim_vs_gpu, RESET)
@@ -5249,33 +5260,27 @@ fn cpu_fine_tune_from_gpu_boundary(
                             format!("{}≈GPU{}", DIM, RESET)
                         };
 
-                        // 显示进度（增强版）
-                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}, size {}{:+.1}%{}, MB {}{:.2}{}) {} {}✅{}",
+                        // 显示进度（增强版 - 显示当前步长）
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}, step {}{:.1}{}) {} {}✅{}",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                             BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
-                            DIM, ssim_gain, RESET, DIM, size_increase, RESET, DIM, size_increase_mb, RESET,
+                            DIM, ssim_gain, RESET, DIM, current_step, RESET,
                             gpu_comparison, BRIGHT_GREEN, RESET);
 
-                        // 🔥 v5.87: 多重停止条件
-                        // 1. SSIM平台期（>= 0.999 且增益 < 0.0001）
+                        // 🔥 v5.89: 只在SSIM平台期停止（>= 0.999且增益极小）
+                        // 移除边际效益停止条件，允许继续搜索直到过头
                         if current_ssim >= SSIM_PLATEAU_THRESHOLD && ssim_gain < SSIM_GAIN_THRESHOLD {
                             eprintln!("   {}🎯{} {}SSIM plateau reached{} ({:.4} >= {:.3}, gain {:.5} < {:.4}) → {}STOP{}",
                                 BRIGHT_GREEN, RESET, BRIGHT_YELLOW, RESET, current_ssim, SSIM_PLATEAU_THRESHOLD, ssim_gain, SSIM_GAIN_THRESHOLD, BRIGHT_GREEN, RESET);
-                            true
-                        }
-                        // 2. 边际效益过低（SSIM提升太小，文件增大太多）
-                        else if marginal_benefit < MARGINAL_BENEFIT_MIN && current_ssim >= 0.98 {
-                            eprintln!("   {}📊{} {}Marginal benefit too low{} (benefit {:.4} < {:.3}, SSIM {:.4}) → {}STOP{}",
-                                YELLOW, RESET, BRIGHT_YELLOW, RESET, marginal_benefit, MARGINAL_BENEFIT_MIN, current_ssim, BRIGHT_GREEN, RESET);
                             true
                         } else {
                             false
                         }
                     }
                     _ => {
-                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} {}✅{}",
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} (step {}{:.1}{}) {}✅{}",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, size_pct, RESET, DIM, RESET, BRIGHT_GREEN, RESET);
+                            BRIGHT_GREEN, size_pct, RESET, DIM, RESET, DIM, current_step, RESET, BRIGHT_GREEN, RESET);
                         false
                     }
                 };
@@ -5284,32 +5289,39 @@ fn cpu_fine_tune_from_gpu_boundary(
                     break;
                 }
 
+                // 🔥 v5.89: 递进式步长切换（不依赖OVERSHOOT）
+                step_count += 1;
+                if step_index < STEP_SCHEDULE.len() - 1 && step_count >= STEP_SCHEDULE[step_index].1 {
+                    // 切换到下一个步长
+                    step_index += 1;
+                    current_step = STEP_SCHEDULE[step_index].0;
+                    step_count = 0;
+                    eprintln!("   {}📊{} {}Step reduced{} to {}{:.1}{} (progressive refinement)",
+                        BRIGHT_CYAN, RESET, BRIGHT_YELLOW, RESET, BRIGHT_CYAN, current_step, RESET);
+                }
+
                 prev_ssim_opt = current_ssim_opt;
                 prev_size = size;
                 test_crf -= current_step;
             } else {
-                // ❌ 不能压缩 - OVERSHOOT！回退并减小步长
+                // ❌ 不能压缩 - OVERSHOOT！用0.1精细回退
+                overshoot_detected = true;
                 eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ OVERSHOOT{} (size {}+{:.1} MB{})",
                     BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     BRIGHT_RED, size_pct, RESET, RED, RESET, RED, (size as f64 - input_size as f64) / 1024.0 / 1024.0, RESET);
 
-                // 🔥 v5.87: 回退策略
+                // 🔥 v5.89: 过头后精细回退策略
                 if current_step > MIN_STEP {
-                    // 减半步长
-                    current_step = current_step / 2.0;
-                    if current_step < MIN_STEP {
-                        current_step = MIN_STEP;
-                    }
-
-                    // 🔥 回退时使用0.1精确步长
-                    let backtrack_step = MIN_STEP;
-                    eprintln!("   {}↩️{} {}Backtrack{} to CRF {:.1} → {}fine-tune with step {:.2}{}",
-                        YELLOW, RESET, BRIGHT_CYAN, RESET, last_good_crf, BRIGHT_CYAN, backtrack_step, RESET);
-                    test_crf = last_good_crf - backtrack_step;
-                    current_step = backtrack_step;  // 🔥 回退后使用0.1步长继续
+                    // 还没用0.1步长，现在用0.1回退到最佳点附近
+                    eprintln!("   {}↩️{} {}Backtrack with {:.1} step{} from CRF {:.1} (last good: {:.1})",
+                        YELLOW, RESET, BRIGHT_CYAN, MIN_STEP, RESET, last_good_crf, last_good_crf);
+                    test_crf = last_good_crf - MIN_STEP;
+                    current_step = MIN_STEP;
+                    step_count = 0;
+                    step_index = STEP_SCHEDULE.len() - 1;  // 切换到0.1步长阶段
                 } else {
-                    // 已经是最小步长，停止搜索
-                    eprintln!("   {}📊{} Minimum step reached → {}STOP{}",
+                    // 已经是0.1步长，无法继续精细化，停止
+                    eprintln!("   {}📊{} Minimum step (0.1) reached → {}STOP{}",
                         YELLOW, RESET, BRIGHT_GREEN, RESET);
                     break;
                 }
