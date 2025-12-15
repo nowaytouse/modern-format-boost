@@ -5041,7 +5041,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.67: 使用颜色输出
     use crate::modern_ui::colors::*;
     
-    eprintln!("{}🔬 CPU Fine-Tune v5.67{} ({:?}) - {}Marginal Benefit + Compression Guarantee{}", 
+    eprintln!("{}🔬 CPU Fine-Tune v5.82{} ({:?}) - {}Smart Adaptive + Target Compression{}", 
         BRIGHT_CYAN, RESET, encoder, BRIGHT_GREEN, RESET);
     eprintln!("{}📁{} Input: {} ({}) | Duration: {}", 
         CYAN, RESET,
@@ -5164,16 +5164,18 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
             gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
-        eprintln!("{}📍 Phase 2:{} {}Adaptive Multiplicative Search{} (v5.81)", 
+        eprintln!("{}📍 Phase 2:{} {}Smart Adaptive Search{} (v5.82)", 
             BRIGHT_CYAN, RESET, BOLD, RESET);
-        eprintln!("   {}(Large jumps → detect overshoot → backtrack → fine-tune){}", DIM, RESET);
+        eprintln!("   {}(Target: 50% compression + SSIM ≥ 0.98, max range: -15 CRF){}", DIM, RESET);
         
-        // 🔥 v5.81: 自适应乘法步进算法
+        // 🔥 v5.82: 智能自适应步进算法（改进版）
         // 策略：
         // 1. 初始使用大步长（2.0 CRF）快速跳跃
-        // 2. 如果连续2次 SSIM 改善很小，使用更激进的乘法（步长 x1.5）
+        // 2. 如果连续2次 SSIM 改善很小（<0.002），使用更激进的乘法（步长 x1.5）
         // 3. 如果发现过头（不能压缩），回退到上一个好点，缩小步长
-        // 4. 只有在接近最优点时（步长 < 0.2）才使用 0.1 精细步进
+        // 4. 🔥 新增：压缩率目标检测 - 当压缩率 >= 50% 且 SSIM >= 0.98 时停止
+        // 5. 🔥 新增：最大搜索范围限制 - 不超过 GPU 边界 -15 CRF
+        // 6. 只有在接近最优点时（步长 < 0.2）才使用 0.1 精细步进
         
         let mut current_step = 2.0_f32;  // 初始大步长
         let mut test_crf = gpu_boundary_crf - current_step;
@@ -5182,8 +5184,15 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut prev_size = gpu_size;
         let mut last_good_crf = gpu_boundary_crf;  // 回退点
         let mut in_fine_tune_mode = false;
+        
+        // 🔥 v5.82: 搜索范围限制（防止过度搜索）
+        let search_floor = (gpu_boundary_crf - 15.0).max(min_crf);  // 最多往下搜索 15 CRF
+        
+        // 🔥 v5.82: 压缩率目标（达到后停止搜索）
+        const TARGET_COMPRESSION_PCT: f64 = -50.0;  // 目标：压缩 50%
+        const TARGET_SSIM_THRESHOLD: f64 = 0.98;    // SSIM >= 0.98 时认为质量足够好
 
-        while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
+        while test_crf >= search_floor && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let key = precision::crf_to_cache_key(test_crf);
             if size_cache.contains_key(&key) {
                 test_crf -= current_step;
@@ -5215,9 +5224,15 @@ fn cpu_fine_tune_from_gpu_boundary(
                             BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
                             DIM, gain, RESET, DIM, step_info, RESET, BRIGHT_GREEN, RESET);
 
+                        // 🔥 v5.82: 压缩率目标检测 - 达到目标后停止
+                        if size_pct <= TARGET_COMPRESSION_PCT && current_ssim >= TARGET_SSIM_THRESHOLD {
+                            eprintln!("   {}🎯{} {}Target reached{} (compression {:.0}% + SSIM {:.4}) → {}STOP{}",
+                                BRIGHT_GREEN, RESET, BRIGHT_YELLOW, RESET, -size_pct, current_ssim, BRIGHT_GREEN, RESET);
+                            (gain, true)
+                        }
                         // 检测 SSIM 平台期
-                        if gain < 0.0001 && current_ssim >= 0.99 {
-                            eprintln!("   {}📊{} {}SSIM plateau{} (>= 0.99) → {}STOP{}",
+                        else if gain < 0.0001 && current_ssim >= 0.99 {
+                            eprintln!("   {}📊{} {}SSIM plateau{} (>= 0.99, gain < 0.0001) → {}STOP{}",
                                 YELLOW, RESET, BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET);
                             (gain, true)
                         } else if gain < 0.002 {
