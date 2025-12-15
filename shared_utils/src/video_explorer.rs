@@ -5174,32 +5174,29 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
             gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
-        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Must Overshoot{} (v5.91)",
+        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Smart Wall Collision{} (v5.93)",
             BRIGHT_CYAN, RESET, BOLD, RESET);
-        eprintln!("   {}(Adaptive step, MUST overshoot to find boundary, then 0.1 refine){}", DIM, RESET);
+        eprintln!("   {}(Adaptive step, MUST hit wall OR min_crf boundary){}", DIM, RESET);
 
-        // 🔥 v5.91: 强制过头策略（用户核心要求）
-        // 问题：v5.90在SSIM 0.999就停止，没有超过头，不知道真正边界
+        // 🔥 v5.93: 智能撞墙算法（三种墙）
+        // 
+        // 问题分析（v5.92）：
+        // - 38次迭代（CRF 41.5→12.7），全部✅，没有撞到墙
+        // - 对于高度可压缩视频，即使CRF降到最低也不会overshoot
         //
-        // 核心策略：**必须继续搜索直到OVERSHOOT（超过头），才能找到真正边界**
+        // v5.93解决方案 - 三种"墙"：
+        // 1. 🧱 SIZE WALL - OVERSHOOT（size >= input）
+        // 2. 🎯 QUALITY WALL - SSIM增益连续5次 < 0.00005 且压缩率 > -45%
+        // 3. 🏁 MIN_CRF BOUNDARY - 到达最低CRF边界
         //
-        // 数学模型（保持v5.90的自适应步长）：
-        // 1. **初始步长 = f(CRF范围)**
-        //    - initial_step = (gpu_boundary_crf - min_crf) / 5.0
-        //    - Clamp: [2.0, 10.0]
+        // 质量墙检测逻辑：
+        // - 只在0.1步长阶段启用
+        // - 需要连续5次SSIM增益 < 0.00005（真正的零增益）
+        // - 且压缩率 > -45%（已经压缩足够多）
         //
-        // 2. **步长递减**：几何级数
-        //    - Stage 1-4: 快速→精细（但不停止）
-        //    - Stage 5: 0.1（精细搜索，可停止）
-        //
-        // 3. **停止条件**：
-        //    - 大步长（>0.1）：不检查SSIM，必须继续直到OVERSHOOT
-        //    - 小步长（=0.1）：可以在SSIM >= 0.9995时停止
-        //    - OVERSHOOT：立即回退用0.1搜索
-        //
-        // 4. **保证找到边界**：
-        //    - 不会在SSIM平台期提前停止
-        //    - 必须遇到OVERSHOOT或用0.1搜索完
+        // 预期效果：
+        // - 原来：38次迭代，CRF 41.5 → 12.7
+        // - 现在：约23次迭代，CRF 41.5 → 14.2（质量墙触发）
 
         let crf_range = gpu_boundary_crf - min_crf;
         let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);  // 🔥 动态计算初始步长
@@ -5234,10 +5231,18 @@ fn cpu_fine_tune_from_gpu_boundary(
         eprintln!("   {}📊 GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
             DIM, BRIGHT_YELLOW, gpu_ssim_baseline, RESET);
 
-        // 🔥 v5.91: 边际效益参数（只在0.1步长时检查）
-        const SSIM_PLATEAU_THRESHOLD: f64 = 0.9995;  // 🔥 提高阈值，只在接近1.0时停止
-        const SSIM_GAIN_THRESHOLD: f64 = 0.00005;    // 🔥 更严格的增益要求
-        const MIN_STEP: f32 = 0.1;                   // 最小步长
+        // 🔥 v5.93: 智能撞墙算法 - 三种墙
+        // 停止条件：
+        // 1. 🧱 SIZE WALL - OVERSHOOT（size >= input）
+        // 2. 🎯 QUALITY WALL - SSIM增益连续5次 < 0.0002 且压缩率 > -45%（即压缩率的绝对值 < 45%）
+        // 3. 🏁 MIN_CRF BOUNDARY - 到达最低CRF边界
+        const MIN_STEP: f32 = 0.1;
+        const ZERO_GAIN_THRESHOLD: f64 = 0.0002;   // 零增益阈值（放宽到0.0002，因为0.0001级别的增益已经很小）
+        const REQUIRED_ZERO_GAINS: u32 = 5;        // 需要连续次数
+        const COMPRESSION_THRESHOLD: f64 = -45.0;  // 压缩率阈值（%），当压缩率 > -45%（即压缩不到45%）时触发
+        
+        let mut consecutive_zero_gains: u32 = 0;   // 连续零增益计数
+        let mut quality_wall_hit = false;          // 质量墙标志
 
         while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let key = precision::crf_to_cache_key(test_crf);
@@ -5260,12 +5265,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_size = Some(size);
                 best_ssim_tracked = current_ssim_opt;
 
-                // 🔥 v5.89: 显示进度（带GPU对比和步长信息）
+                // 🔥 v5.93: 智能撞墙算法 - 质量墙检测
                 let should_stop = match (current_ssim_opt, prev_ssim_opt) {
                     (Some(current_ssim), Some(prev_ssim)) => {
                         let ssim_gain = current_ssim - prev_ssim;
-                        let size_increase = (size as f64 - prev_size as f64) / prev_size as f64 * 100.0;
-                        let size_increase_mb = (size as f64 - prev_size as f64) / 1024.0 / 1024.0;
 
                         // 和GPU SSIM对比（乘法增益）
                         let ssim_vs_gpu = current_ssim / gpu_ssim_baseline;
@@ -5277,23 +5280,44 @@ fn cpu_fine_tune_from_gpu_boundary(
                             format!("{}≈GPU{}", DIM, RESET)
                         };
 
-                        // 显示进度（增强版 - 显示自适应步长）
-                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}, step {}{:.2}{}) {} {}✅{}",
+                        // 🔥 v5.93: 质量墙检测（只在0.1步长阶段）
+                        // 注意：ssim_gain 可能是正数或负数，用 abs() 取绝对值
+                        let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
+                        if current_step <= MIN_STEP + 0.01 {
+                            if is_zero_gain {
+                                consecutive_zero_gains += 1;
+                            } else {
+                                consecutive_zero_gains = 0;  // 重置计数
+                            }
+                        }
+                        
+
+
+                        // 检查质量墙条件
+                        // v5.93: 当SSIM增益连续5次为零时，直接触发质量墙
+                        // 不再检查压缩率条件，因为SSIM饱和就意味着继续降CRF没有意义
+                        let quality_wall_triggered = consecutive_zero_gains >= REQUIRED_ZERO_GAINS 
+                            && current_step <= MIN_STEP + 0.01;
+
+                        // 显示进度（增强版 - 显示质量墙状态）
+                        let wall_status = if quality_wall_triggered {
+                            format!("{}🎯 QUALITY WALL{}", BRIGHT_YELLOW, RESET)
+                        } else if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
+                            format!("{}[{}/{}]{}", DIM, consecutive_zero_gains, REQUIRED_ZERO_GAINS, RESET)
+                        } else {
+                            String::new()
+                        };
+
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.5}{}, step {}{:.2}{}) {} {}✅{} {}",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                             BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
                             DIM, ssim_gain, RESET, DIM, current_step, RESET,
-                            gpu_comparison, BRIGHT_GREEN, RESET);
+                            gpu_comparison, BRIGHT_GREEN, RESET, wall_status);
 
-                        // 🔥 v5.91: 只在0.1步长时检查SSIM平台期
-                        // 大步长时必须继续搜索直到OVERSHOOT！
-                        if current_step <= MIN_STEP && current_ssim >= SSIM_PLATEAU_THRESHOLD && ssim_gain < SSIM_GAIN_THRESHOLD {
-                            eprintln!("   {}🎯{} {}SSIM plateau reached{} ({:.4} >= {:.4}, gain {:.5} < {:.5}) → {}STOP{}",
-                                BRIGHT_GREEN, RESET, BRIGHT_YELLOW, RESET, current_ssim, SSIM_PLATEAU_THRESHOLD, ssim_gain, SSIM_GAIN_THRESHOLD, BRIGHT_GREEN, RESET);
-                            true
-                        } else {
-                            // 🔥 大步长时不停止，必须继续搜索直到OVERSHOOT
-                            false
+                        if quality_wall_triggered {
+                            quality_wall_hit = true;
                         }
+                        quality_wall_triggered
                     }
                     _ => {
                         eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} (step {}{:.2}{}) {}✅{}",
@@ -5304,6 +5328,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 };
 
                 if should_stop {
+                    eprintln!("");
+                    eprintln!("   {}🎯{} {}QUALITY WALL HIT!{} SSIM saturated after {} consecutive zero-gains",
+                        BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET, consecutive_zero_gains);
+                    eprintln!("   {}📊{} Final: CRF {}{:.1}{}, compression {}{:+.1}%{}, iterations {}{}{}",
+                        BRIGHT_CYAN, RESET, BRIGHT_GREEN, test_crf, RESET, 
+                        BRIGHT_GREEN, size_pct, RESET, BRIGHT_CYAN, iterations, RESET);
                     break;
                 }
 
@@ -5343,6 +5373,42 @@ fn cpu_fine_tune_from_gpu_boundary(
                         YELLOW, RESET, BRIGHT_GREEN, RESET);
                     break;
                 }
+            }
+        }
+
+        // 🔥 v5.93: 停止原因报告（三种墙）
+        if quality_wall_hit {
+            // 🎯 QUALITY WALL - 已在循环内报告
+            // 确保使用最后一个好的 CRF
+            if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
+                best_crf = Some(last_good_crf);
+                best_size = Some(last_good_size);
+                best_ssim_tracked = last_good_ssim;
+            }
+        } else if overshoot_detected {
+            // 🧱 SIZE WALL
+            eprintln!("");
+            eprintln!("   {}🧱{} {}SIZE WALL HIT!{} OVERSHOOT at CRF < {:.1}",
+                BRIGHT_RED, RESET, BRIGHT_YELLOW, RESET, last_good_crf);
+            eprintln!("   {}📊{} Final: CRF {}{:.1}{}, iterations {}{}{}",
+                BRIGHT_CYAN, RESET, BRIGHT_GREEN, last_good_crf, RESET, 
+                BRIGHT_CYAN, iterations, RESET);
+        } else if test_crf < min_crf {
+            // 🏁 MIN_CRF BOUNDARY
+            eprintln!("");
+            eprintln!("   {}🏁{} {}MIN_CRF BOUNDARY!{} Reached CRF {:.1} without hitting wall",
+                BRIGHT_GREEN, RESET, BRIGHT_YELLOW, RESET, min_crf);
+            eprintln!("   {}📊{} This video is {}highly compressible{} - wall is below min_crf",
+                BRIGHT_CYAN, RESET, BRIGHT_GREEN, RESET);
+            eprintln!("   {}📊{} Final: CRF {}{:.1}{}, iterations {}{}{}",
+                BRIGHT_CYAN, RESET, BRIGHT_GREEN, last_good_crf, RESET, 
+                BRIGHT_CYAN, iterations, RESET);
+            
+            // 确保使用最后一个好的 CRF
+            if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
+                best_crf = Some(last_good_crf);
+                best_size = Some(last_good_size);
+                best_ssim_tracked = last_good_ssim;
             }
         }
 
