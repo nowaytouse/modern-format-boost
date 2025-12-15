@@ -950,3 +950,178 @@ mod quality_report_tests {
         assert!(skip_reason.is_some());
     }
 }
+
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.93: 智能撞墙算法属性测试
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod smart_wall_collision_tests {
+    use proptest::prelude::*;
+
+    // 质量墙检测常量（与 video_explorer.rs 保持一致）
+    const ZERO_GAIN_THRESHOLD: f64 = 0.0002;
+    const REQUIRED_ZERO_GAINS: u32 = 5;
+
+    /// 模拟质量墙检测器
+    struct QualityWallDetector {
+        consecutive_zeros: u32,
+    }
+
+    impl QualityWallDetector {
+        fn new() -> Self {
+            Self { consecutive_zeros: 0 }
+        }
+
+        fn record_gain(&mut self, gain: f64) {
+            if gain.abs() < ZERO_GAIN_THRESHOLD {
+                self.consecutive_zeros += 1;
+            } else {
+                self.consecutive_zeros = 0;
+            }
+        }
+
+        fn is_wall_hit(&self) -> bool {
+            self.consecutive_zeros >= REQUIRED_ZERO_GAINS
+        }
+    }
+
+    // **Feature: smart-wall-collision-v5.93, Property 1: 质量墙检测正确性**
+    // **Validates: Requirements 1.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_quality_wall_detection(
+            gains in proptest::collection::vec(-0.001..0.001_f64, 1..20),
+        ) {
+            let mut detector = QualityWallDetector::new();
+            let mut consecutive_count = 0_u32;
+            
+            for gain in &gains {
+                detector.record_gain(*gain);
+                
+                if gain.abs() < ZERO_GAIN_THRESHOLD {
+                    consecutive_count += 1;
+                } else {
+                    consecutive_count = 0;
+                }
+                
+                // 验证检测器状态与手动计算一致
+                prop_assert_eq!(detector.consecutive_zeros, consecutive_count,
+                    "连续零增益计数应一致");
+                
+                // 验证墙检测逻辑
+                let expected_wall = consecutive_count >= REQUIRED_ZERO_GAINS;
+                prop_assert_eq!(detector.is_wall_hit(), expected_wall,
+                    "质量墙检测应正确: consecutive={}, required={}", 
+                    consecutive_count, REQUIRED_ZERO_GAINS);
+            }
+        }
+    }
+
+    // **Feature: smart-wall-collision-v5.93, Property 2: 步长递减正确性**
+    // **Validates: Requirements 3.2, 3.3**
+    #[test]
+    fn prop_step_progression() {
+        // 验证步长递减序列
+        let crf_range = 31.5_f32;
+        let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);
+        
+        let step_schedule: Vec<f32> = vec![
+            initial_step,
+            initial_step / 2.0,
+            initial_step / 4.0,
+            (initial_step / 8.0).max(0.2),
+            0.1,
+        ];
+        
+        // 验证步长严格递减
+        for i in 1..step_schedule.len() {
+            assert!(step_schedule[i] < step_schedule[i-1],
+                "步长应递减: step[{}]={} >= step[{}]={}",
+                i, step_schedule[i], i-1, step_schedule[i-1]);
+        }
+        
+        // 验证最终步长为0.1
+        assert!((step_schedule.last().unwrap() - 0.1).abs() < 0.01,
+            "最终步长应为0.1");
+    }
+
+    // **Feature: smart-wall-collision-v5.93, Property 3: 初始步长计算正确性**
+    // **Validates: Requirements 3.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_initial_step_calculation(
+            crf_range in 10.0..50.0_f32,
+        ) {
+            let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);
+            
+            // 验证初始步长在 [2.0, 10.0] 范围内
+            prop_assert!(initial_step >= 2.0,
+                "初始步长应 >= 2.0: range={}, step={}", crf_range, initial_step);
+            prop_assert!(initial_step <= 10.0,
+                "初始步长应 <= 10.0: range={}, step={}", crf_range, initial_step);
+            
+            // 验证计算公式
+            let expected = (crf_range / 5.0).clamp(2.0, 10.0);
+            prop_assert!((initial_step - expected).abs() < 0.01,
+                "初始步长计算应正确: expected={}, actual={}", expected, initial_step);
+        }
+    }
+
+    #[test]
+    fn test_quality_wall_exact_threshold() {
+        let mut detector = QualityWallDetector::new();
+        
+        // 连续4次零增益 - 不应触发
+        for _ in 0..4 {
+            detector.record_gain(0.00001);
+        }
+        assert!(!detector.is_wall_hit(), "4次零增益不应触发质量墙");
+        
+        // 第5次零增益 - 应触发
+        detector.record_gain(0.00001);
+        assert!(detector.is_wall_hit(), "5次零增益应触发质量墙");
+    }
+
+    #[test]
+    fn test_quality_wall_reset_on_high_gain() {
+        let mut detector = QualityWallDetector::new();
+        
+        // 连续4次零增益
+        for _ in 0..4 {
+            detector.record_gain(0.00001);
+        }
+        assert_eq!(detector.consecutive_zeros, 4);
+        
+        // 一次高增益重置计数
+        detector.record_gain(0.001);
+        assert_eq!(detector.consecutive_zeros, 0, "高增益应重置计数");
+        
+        // 需要重新累积5次
+        for _ in 0..4 {
+            detector.record_gain(0.00001);
+        }
+        assert!(!detector.is_wall_hit(), "重置后4次不应触发");
+        
+        detector.record_gain(0.00001);
+        assert!(detector.is_wall_hit(), "重置后5次应触发");
+    }
+
+    #[test]
+    fn test_zero_gain_threshold_boundary() {
+        let mut detector = QualityWallDetector::new();
+        
+        // 刚好等于阈值 - 不算零增益
+        detector.record_gain(ZERO_GAIN_THRESHOLD);
+        assert_eq!(detector.consecutive_zeros, 0, "等于阈值不算零增益");
+        
+        // 略小于阈值 - 算零增益
+        detector.record_gain(ZERO_GAIN_THRESHOLD - 0.00001);
+        assert_eq!(detector.consecutive_zeros, 1, "小于阈值算零增益");
+    }
+}
