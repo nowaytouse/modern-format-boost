@@ -590,20 +590,16 @@ fn auto_convert_single_file(
         // Animated → HEVC MP4 or GIF (based on duration and quality)
         // 🔥 默认使用智能质量匹配：二分搜索 + SSIM 裁判验证
         // 🍎 Apple compat mode: 
+        //   - 把现代动态格式（WebP/AVIF）转换为 Apple 兼容格式
         //   - 长动画(>=3s) 或 高质量 → HEVC MP4
         //   - 短动画(<3s) 且 非高质量 → GIF (Bayer 256色)
+        // 🔥 v5.75: GIF 和其他动态图片一样处理！
+        //   - duration >= 3s → 转换为 HEVC 视频
+        //   - duration < 3s → 跳过（太短不值得转换）
+        //   - GIF 不需要特殊 flag，默认就会转换（只要满足时长条件）
         (format, is_lossless, true) => {
-            // 🔥 v5.1: GIF 处理策略
-            // - 如果用户启用了 --explore --match-quality --compress，尝试转换为 HEVC
-            // - 否则跳过（GIF 已经是 Apple 兼容格式）
-            let should_try_compress_gif = config.explore && config.match_quality && config.compress;
-            if format == "GIF" && !should_try_compress_gif {
-                println!("⏭️ Skipping GIF (already Apple compatible): {}", input.display());
-                println!("   💡 Use --explore --match-quality --compress to try HEVC conversion");
-                return Ok(());
-            }
-            
-            // 🍎 Check if this is a modern animated format that should be skipped
+            // 🍎 Check if this is a modern animated format (NOT including GIF!)
+            // GIF 本身就是 Apple 兼容格式，不属于"现代格式"
             let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
             if is_modern_animated && !is_lossless && !config.apple_compat {
                 println!("⏭️ Skipping modern lossy animated format (avoid generation loss): {}", input.display());

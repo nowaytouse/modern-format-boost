@@ -365,24 +365,36 @@ mod three_phase_search_tests {
     }
 
     #[test]
-    fn prop_cache_multiplier_consistency() {
-        // 验证缓存键乘数与步进值的一致性
-        let search = ThreePhaseSearch::default();
-        
-        for phase in [SearchPhase::GpuFine, SearchPhase::GpuUltraFine, SearchPhase::CpuFinest] {
-            let step = phase.step_size();
-            let multiplier = phase.cache_multiplier();
-            
-            // 验证：step * multiplier 应该产生整数键
-            let test_crf = 18.5_f32;
-            let key = search.cache_key(test_crf, phase);
-            let reconstructed = key as f32 / multiplier;
-            
-            // 重建的CRF应该是step的整数倍
-            let diff = (reconstructed - test_crf).abs();
-            assert!(diff <= step / 2.0,
-                "Phase {:?}: Cache key reconstruction error {} > step/2 ({})",
-                phase, diff, step / 2.0);
+    fn prop_cache_key_unified() {
+        // 🔥 v5.80: 验证统一缓存键机制
+        // 所有CRF都应使用 precision::crf_to_cache_key()（×10）
+
+        // 验证不同精度的CRF能正确映射到缓存键
+        assert_eq!(crf_to_cache_key(18.0), 180);
+        assert_eq!(crf_to_cache_key(18.1), 181);
+        assert_eq!(crf_to_cache_key(18.5), 185);
+        assert_eq!(crf_to_cache_key(18.25), 183);  // 18.25 × 10 = 182.5 → 183
+
+        // 验证缓存键的唯一性（0.1精度）
+        let crfs = vec![18.0, 18.1, 18.2, 18.3, 18.4, 18.5];
+        let keys: Vec<i32> = crfs.iter().map(|&crf| crf_to_cache_key(crf)).collect();
+
+        // 所有键应该不同
+        for i in 0..keys.len() {
+            for j in (i+1)..keys.len() {
+                assert_ne!(keys[i], keys[j],
+                    "CRF {:.1} and {:.1} should have different cache keys",
+                    crfs[i], crfs[j]);
+            }
+        }
+
+        // 验证逆映射
+        for &crf in &crfs {
+            let key = crf_to_cache_key(crf);
+            let reconstructed = cache_key_to_crf(key);
+            assert!((reconstructed - crf).abs() < 0.01,
+                "Cache key round-trip failed: {:.1} → {} → {:.1}",
+                crf, key, reconstructed);
         }
     }
 

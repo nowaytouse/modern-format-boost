@@ -1,5 +1,17 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v5.70
+# Modern Format Boost - Drag & Drop Processor v5.78
+# 
+# 🔥 v5.78: 默认显示详细输出
+# - 移除 >/dev/null 2>&1，显示转换工具的完整输出
+# - 用户可以看到CRF搜索过程、SSIM验证、错误信息等
+# 
+# 🔥 v5.77: 修复子shell循环问题
+# - 使用数组收集文件列表，避免管道子shell问题
+# - 修复进度计数器和循环提前退出
+# 
+# 🔥 v5.76: XMP边车自动合并
+# - 转换工具内置XMP合并，无需独立调用xmp-merge
+# - 支持 photo.jpg.xmp / photo.xmp / 大小写不敏感
 # 
 # 🔥 v5.70: 智能编译系统
 # - 时间戳比对：只在源代码更新时重新编译
@@ -7,6 +19,7 @@
 # - 依赖传播：shared_utils 修改触发全部重编译
 # 
 # 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
+# 默认参数：--explore --match-quality --compress --apple-compat --in-place
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -156,13 +169,116 @@ show_welcome() {
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v5.5                                          ║"
-    echo "  ║     全面改进进度显示 - 固定底部进度条 + 详细参数                         ║"
+    echo "  ║     🚀 Modern Format Boost v5.78                                         ║"
+    echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证                            ║"
     echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BLUE}📋${NC} XMP合并  ${BLUE}🍎${NC} Apple兼容  ${BLUE}🔄${NC} 断点续传  ${BLUE}🎯${NC} v4.13算法  ${MAGENTA}📊${NC} 实时进度"
+    echo -e "  ${BLUE}📋${NC} XMP自动合并  ${BLUE}🍎${NC} Apple兼容  ${BLUE}🔄${NC} 断点续传  ${BLUE}🎯${NC} SSIM验证  ${MAGENTA}📊${NC} 实时进度"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 创建目录结构（保持原始层级）
+# ═══════════════════════════════════════════════════════════════
+create_directory_structure() {
+    local source_dir="$1"
+    local target_dir="$2"
+    
+    # 创建根目录
+    mkdir -p "$target_dir"
+    
+    # 递归复制目录结构（只复制目录，不复制文件）
+    find "$source_dir" -type d -print0 | while IFS= read -r -d '' dir; do
+        # 计算相对路径
+        local rel_path="${dir#$source_dir}"
+        rel_path="${rel_path#/}"  # 移除开头的斜杠
+        
+        # 在目标目录中创建对应的子目录
+        if [[ -n "$rel_path" ]]; then
+            mkdir -p "$target_dir/$rel_path"
+        fi
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 保持目录结构的图像处理
+# 🔥 v5.77: 修复子shell问题，使用数组而非管道
+# ═══════════════════════════════════════════════════════════════
+process_images_with_structure() {
+    # 🔥 关键：使用数组收集文件，避免子shell问题
+    local -a files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(find "$TARGET_DIR" -type f \( \
+        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" \
+        -o -iname "*.bmp" -o -iname "*.tiff" -o -iname "*.webp" -o -iname "*.heic" \
+    \) -print0)
+    
+    local total=${#files[@]}
+    local current=0
+    
+    for file in "${files[@]}"; do
+        ((current++))
+        
+        # 计算相对路径
+        local rel_path="${file#$TARGET_DIR}"
+        rel_path="${rel_path#/}"
+        
+        # 计算输出目录（保持目录结构）
+        local output_file="$OUTPUT_DIR/$rel_path"
+        local out_dir
+        out_dir="$(dirname "$output_file")"
+        mkdir -p "$out_dir"
+        
+        # 显示进度
+        print_progress_box "图像" "$current" "$total" "$(basename "$file")" ""
+        
+        # 执行转换（显示详细输出）
+        "$IMGQUALITY_HEVC" auto "$file" --explore --match-quality --compress --apple-compat --output "$out_dir" </dev/null || true
+    done
+    
+    echo ""
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 保持目录结构的视频处理
+# 🔥 v5.77: 修复子shell问题，使用数组而非管道
+# ═══════════════════════════════════════════════════════════════
+process_videos_with_structure() {
+    # 🔥 关键：使用数组收集文件，避免子shell问题
+    local -a files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(find "$TARGET_DIR" -type f \( \
+        -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
+        -o -iname "*.webm" -o -iname "*.m4v" \
+    \) -print0)
+    
+    local total=${#files[@]}
+    local current=0
+    
+    for file in "${files[@]}"; do
+        ((current++))
+        
+        # 计算相对路径
+        local rel_path="${file#$TARGET_DIR}"
+        rel_path="${rel_path#/}"
+        
+        # 计算输出目录（保持目录结构）
+        local output_file="$OUTPUT_DIR/$rel_path"
+        local out_dir
+        out_dir="$(dirname "$output_file")"
+        mkdir -p "$out_dir"
+        
+        # 显示进度
+        print_progress_box "视频" "$current" "$total" "$(basename "$file")" ""
+        
+        # 执行转换（显示详细输出）
+        "$VIDQUALITY_HEVC" auto "$file" --explore --match-quality true --compress --apple-compat --output "$out_dir" </dev/null || true
+    done
+    
     echo ""
 }
 
@@ -184,8 +300,12 @@ select_mode() {
         local base_name
         base_name=$(basename "$TARGET_DIR")
         OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_converted"
-        mkdir -p "$OUTPUT_DIR"
-        echo -e "${GREEN}✅ 已选择：输出到相邻目录${NC}"
+        
+        # 🔥 v5.76: 创建输出目录并复制原始目录结构
+        echo -e "${CYAN}📁 创建输出目录结构...${NC}"
+        create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
+        
+        echo -e "${GREEN}✅ 已选择：输出到相邻目录（保持原始结构）${NC}"
         echo -e "   ${DIM}→ $OUTPUT_DIR${NC}"
     fi
     echo ""
@@ -263,13 +383,15 @@ count_files() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# XMP 合并
+# XMP 合并 (v5.76: 已整合到转换工具中，此函数仅用于独立合并)
+# 🔥 注意：imgquality-hevc/vidquality-hevc 的 copy_metadata() 已自动合并XMP
+# 此函数现在只在用户明确需要独立合并时使用
 # ═══════════════════════════════════════════════════════════════
 merge_xmp_files() {
-    [[ $XMP_COUNT -eq 0 ]] && return 0
-    command -v exiftool &>/dev/null || { echo -e "${YELLOW}⚠️ ExifTool 未安装${NC}"; return 0; }
-    echo -e "${CYAN}📋 合并 XMP 元数据...${NC}"
-    "$XMP_MERGER" --delete-xmp "$TARGET_DIR" || true
+    # 🔥 v5.76: 转换工具已自动合并XMP，跳过独立合并避免重复
+    # 如果用户只想合并XMP而不转换，可以直接运行 xmp-merge 命令
+    [[ $XMP_COUNT -gt 0 ]] && echo -e "${DIM}📋 XMP边车将在转换时自动合并${NC}"
+    return 0
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -285,36 +407,31 @@ process_images() {
     echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
     echo ""
 
-    # 🔥 v5.35: 使用 --explore --match-quality --compress 组合
-    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat)
-    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
-
-    # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
-    # 关键洞察：需要在多个层面完全阻止键盘输入
-
-    # 保存原始终端设置
-    local original_stty
-    original_stty=$(stty -g 2>/dev/null) || original_stty=""
-
-    # 1️⃣ 文件描述符级别：关闭所有输入源
-    exec 0</dev/null          # stdin 重定向到 /dev/null（完全禁止输入）
-
-    # 2️⃣ 终端级别：完全禁用所有输入模式
-    if [[ -t 1 ]]; then
-        # 禁用：echo, canonical, 信号处理, 特殊字符, newline转换, 流控制
-        stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
-        # 设置最小读取字节数为0（非阻塞）
-        stty min 0 time 0 2>/dev/null || true
-    fi
-
-    # 3️⃣ 环境级别：告诉程序禁用交互
-    TERM=dumb LANG=C LC_ALL=C "$IMGQUALITY_HEVC" "${args[@]}" || true
-
-    # 恢复原始终端设置
-    if [[ -n "$original_stty" ]]; then
-        stty "$original_stty" 2>/dev/null || true
+    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
+        # 原地转换模式
+        local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat --in-place)
+        
+        # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
+        local original_stty
+        original_stty=$(stty -g 2>/dev/null) || original_stty=""
+        exec 0</dev/null
+        if [[ -t 1 ]]; then
+            stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
+            stty min 0 time 0 2>/dev/null || true
+        fi
+        
+        # 执行转换
+        TERM=dumb LANG=C LC_ALL=C "$IMGQUALITY_HEVC" "${args[@]}" || true
+        
+        # 恢复原始终端设置
+        if [[ -n "$original_stty" ]]; then
+            stty "$original_stty" 2>/dev/null || true
+        else
+            stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+        fi
     else
-        stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+        # 相邻目录模式：逐个处理文件以保持目录结构
+        process_images_with_structure
     fi
 }
 
@@ -331,36 +448,31 @@ process_videos() {
     echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
     echo ""
 
-    # 🔥 v5.5: 使用 --explore --match-quality --compress 组合
-    local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat)
-    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place) || args+=(--output "$OUTPUT_DIR")
-
-    # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
-    # 关键洞察：需要在多个层面完全阻止键盘输入
-
-    # 保存原始终端设置
-    local original_stty
-    original_stty=$(stty -g 2>/dev/null) || original_stty=""
-
-    # 1️⃣ 文件描述符级别：关闭所有输入源
-    exec 0</dev/null          # stdin 重定向到 /dev/null（完全禁止输入）
-
-    # 2️⃣ 终端级别：完全禁用所有输入模式
-    if [[ -t 1 ]]; then
-        # 禁用：echo, canonical, 信号处理, 特殊字符, newline转换, 流控制
-        stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
-        # 设置最小读取字节数为0（非阻塞）
-        stty min 0 time 0 2>/dev/null || true
-    fi
-
-    # 3️⃣ 环境级别：告诉程序禁用交互
-    TERM=dumb LANG=C LC_ALL=C "$VIDQUALITY_HEVC" "${args[@]}" || true
-
-    # 恢复原始终端设置
-    if [[ -n "$original_stty" ]]; then
-        stty "$original_stty" 2>/dev/null || true
+    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
+        # 原地转换模式
+        local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat --in-place)
+        
+        # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
+        local original_stty
+        original_stty=$(stty -g 2>/dev/null) || original_stty=""
+        exec 0</dev/null
+        if [[ -t 1 ]]; then
+            stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
+            stty min 0 time 0 2>/dev/null || true
+        fi
+        
+        # 执行转换
+        TERM=dumb LANG=C LC_ALL=C "$VIDQUALITY_HEVC" "${args[@]}" || true
+        
+        # 恢复原始终端设置
+        if [[ -n "$original_stty" ]]; then
+            stty "$original_stty" 2>/dev/null || true
+        else
+            stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+        fi
     else
-        stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+        # 相邻目录模式：逐个处理文件以保持目录结构
+        process_videos_with_structure
     fi
 }
 

@@ -194,13 +194,20 @@ Three-level error classification with loud reporting:
 
 ## Metadata Preservation
 
-All conversion tools automatically preserve metadata:
+All 4 conversion tools automatically preserve metadata via `shared_utils::copy_metadata`:
 - **EXIF/IPTC/XMP**: Via ExifTool (internal metadata)
-- **XMP Sidecar**: Auto-merge `photo.jpg.xmp` or `photo.xmp` to output
+- **XMP Sidecar (v5.76)**: Auto-detect and merge `photo.jpg.xmp` or `photo.xmp` to output
 - **macOS**: ACL, xattr, creation time, Date Added
 - **Timestamps**: Access/modification time preserved after conversion
 
-## XMP Sidecar Merger (Standalone Tool)
+### XMP Sidecar Auto-Merge (v5.76)
+
+During conversion, tools automatically detect XMP sidecar files:
+1. `photo.jpg.xmp` (Adobe standard)
+2. `photo.xmp` (same stem)
+3. Case-insensitive matching (`photo.XMP`, `photo.Xmp`)
+
+### XMP Sidecar Merger (Standalone Tool)
 
 Batch merge XMP sidecar files (from Lightroom/Capture One):
 
@@ -367,13 +374,20 @@ vidquality-hevc strategy input.mp4
 
 ## 元数据保留
 
-所有转换工具自动保留元数据：
+所有4个转换工具通过 `shared_utils::copy_metadata` 自动保留元数据：
 - **EXIF/IPTC/XMP**：通过ExifTool（内部元数据）
-- **XMP边车**：自动合并 `photo.jpg.xmp` 或 `photo.xmp` 到输出文件
+- **XMP边车 (v5.76)**：自动检测并合并 `photo.jpg.xmp` 或 `photo.xmp` 到输出文件
 - **macOS**：ACL、xattr、创建时间、Date Added
 - **时间戳**：转换后保留访问/修改时间
 
-## XMP边车合并工具（独立工具）
+### XMP边车自动合并 (v5.76)
+
+转换时自动检测XMP边车文件：
+1. `photo.jpg.xmp`（Adobe标准）
+2. `photo.xmp`（同名）
+3. 大小写不敏感（`photo.XMP`、`photo.Xmp`）
+
+### XMP边车合并工具（独立工具）
 
 批量合并XMP边车文件（来自Lightroom/Capture One）：
 
