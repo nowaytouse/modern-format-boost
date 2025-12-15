@@ -2471,19 +2471,35 @@ pub fn gpu_coarse_search_with_log(
         }
     }
     
-    // 确定最终结果
-    let (final_boundary, found, fine_tuned) = if let Some(b) = best_crf {
+    // 🔥 v5.80: 区分"最后测试点"和"压缩边界"
+    // - last_tested_crf: 最后测试成功的CRF（用于日志）
+    // - gpu_boundary_crf: 能压缩的最低CRF（质量最高且能压缩）
+    let (last_tested_crf, found, fine_tuned) = if let Some(b) = best_crf {
         (b, true, iterations > 8)  // 超过 8 次迭代说明进行了精细化
     } else {
         (config.max_crf, false, false)
     };
 
+    // 🔥 v5.80: 检测质量天花板（PSNR平台）
+    // 策略：
+    // 1. 优先使用Stage 3检测到的PSNR天花板
+    // 2. 如果未检测到，返回None（说明GPU未达到质量天花板）
+    let quality_ceiling_info = if ceiling_detector.ceiling_detected {
+        ceiling_detector.get_ceiling()
+    } else {
+        None
+    };
+
+    let (quality_ceiling_crf, _quality_ceiling_psnr) = quality_ceiling_info
+        .map(|(crf, psnr)| (Some(crf), if psnr > 0.0 { Some(psnr) } else { None }))
+        .unwrap_or((None, None));
+
     // 🔥 v5.50: Stage 3 已经计算了 SSIM，直接使用
     // 🔥 v5.80: 同时计算PSNR和SSIM，建立PSNR-SSIM映射
     // 重新计算最终点的 SSIM 和 PSNR
     let (gpu_ssim, gpu_psnr) = if found {
-        log_msg!("   📍 Final quality validation at CRF {:.1}", final_boundary);
-        match encode_gpu(final_boundary) {
+        log_msg!("   📍 Final quality validation at CRF {:.1}", last_tested_crf);
+        match encode_gpu(last_tested_crf) {
             Ok(_) => {
                 // 🔥 v5.80: 并行计算SSIM和PSNR
                 let ssim_output = Command::new("ffmpeg")
@@ -2539,9 +2555,25 @@ pub fn gpu_coarse_search_with_log(
         (None, None)
     };
     
+    // 🔥 v5.80: 确定GPU压缩边界（能压缩的最低CRF，质量最高）
+    // 关键逻辑：
+    // - 如果检测到天花板 → 边界 = 天花板CRF（再往下是虚胖，质量不再提升）
+    // - 如果未检测到天花板 → 边界 = 最后测试成功的CRF
+    let gpu_boundary_crf = if let Some(ceiling_crf) = quality_ceiling_info.map(|(crf, _)| crf) {
+        log_msg!("   🎯 GPU Quality Ceiling Detected!");
+        log_msg!("      └─ Ceiling CRF: {:.1} (PSNR plateau)", ceiling_crf);
+        log_msg!("      └─ Last tested CRF: {:.1}", last_tested_crf);
+        if ceiling_crf != last_tested_crf {
+            log_msg!("      └─ Boundary = Ceiling (lower CRFs are bloated, no quality gain)");
+        }
+        ceiling_crf  // 边界 = 天花板（防止虚胖）
+    } else {
+        last_tested_crf  // 未检测到天花板，使用最后测试点
+    };
+
     log_msg!("   ═══════════════════════════════════════════════════");
     if found {
-        log_msg!("   📊 GPU Best CRF: {:.1}", final_boundary);
+        log_msg!("   📊 GPU Boundary CRF: {:.1} (highest quality that compresses)", gpu_boundary_crf);
         if let Some(size) = best_size {
             let ratio = size as f64 / sample_input_size as f64 * 100.0;
             log_msg!("   📊 GPU Best Size: {:.1}% of input", ratio);
@@ -2567,7 +2599,7 @@ pub fn gpu_coarse_search_with_log(
             "av1" => CrfMapping::av1(gpu.gpu_type),
             _ => CrfMapping::hevc(gpu.gpu_type),
         };
-        let (cpu_center, cpu_low, cpu_high) = mapping.gpu_to_cpu_range(final_boundary, config.min_crf, config.max_crf);
+        let (cpu_center, cpu_low, cpu_high) = mapping.gpu_to_cpu_range(gpu_boundary_crf, config.min_crf, config.max_crf);
         log_msg!("   📊 CPU Search Range: [{:.1}, {:.1}] (center: {:.1})", cpu_low, cpu_high, cpu_center);
     } else {
         log_msg!("   ⚠️ No compression boundary found (file may be already compressed)");
@@ -2577,40 +2609,8 @@ pub fn gpu_coarse_search_with_log(
     // 清理临时文件
     let _ = std::fs::remove_file(output);
 
-    // 🔥 v5.80: 使用实时检测的质量天花板
-    // 策略：
-    // 1. 优先使用Stage 3检测到的PSNR天花板
-    // 2. 如果未检测到，使用最终边界点（后向兼容）
-    let quality_ceiling_info = if ceiling_detector.ceiling_detected {
-        ceiling_detector.get_ceiling()
-    } else if found && gpu_ssim.is_some() {
-        // 降级：使用最终边界作为天花板（但没有PSNR数据）
-        Some((final_boundary, 0.0))  // 0.0表示没有PSNR数据
-    } else {
-        None
-    };
-
-    let (quality_ceiling_crf, quality_ceiling_psnr) = quality_ceiling_info
-        .map(|(crf, psnr)| (Some(crf), if psnr > 0.0 { Some(psnr) } else { None }))
-        .unwrap_or((None, None));
-
-    // 如果检测到天花板，在日志中强调
-    if let Some(ceiling_crf) = quality_ceiling_crf {
-        log_msg!("   ═══════════════════════════════════════════════════");
-        log_msg!("   🎯 GPU Quality Ceiling Detected:");
-        log_msg!("      CRF: {:.1}", ceiling_crf);
-        if let Some(psnr) = quality_ceiling_psnr {
-            log_msg!("      PSNR: {:.2}dB", psnr);
-        }
-        if let Some(ssim) = gpu_ssim {
-            log_msg!("      SSIM: {:.6}", ssim);
-        }
-        log_msg!("      Note: GPU encoder reached quality limit");
-        log_msg!("      CPU can potentially break through this ceiling");
-    }
-
     Ok(GpuCoarseResult {
-        gpu_boundary_crf: final_boundary,
+        gpu_boundary_crf,  // 🔥 v5.80: 能压缩的最低CRF（质量最高且能压缩）
         gpu_best_size: best_size,
         gpu_best_ssim: gpu_ssim,
         gpu_type: gpu.gpu_type,
@@ -2620,7 +2620,7 @@ pub fn gpu_coarse_search_with_log(
         fine_tuned,
         log,
         sample_input_size,
-        quality_ceiling_crf,
+        quality_ceiling_crf,  // 🔥 v5.80: 检测到的质量天花板（可能为None）
         quality_ceiling_ssim: gpu_ssim,  // 使用SSIM作为天花板质量指标
     })
 }
