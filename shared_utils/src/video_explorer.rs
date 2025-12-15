@@ -65,6 +65,48 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v5.73: 线程数配置常量 - 避免硬编码 clamp(1, 4)
+// ═══════════════════════════════════════════════════════════════
+
+/// 最小编码线程数
+pub const MIN_ENCODE_THREADS: usize = 1;
+
+/// 默认最大编码线程数（保守值，适合桌面用户）
+/// 对于服务器环境，可通过 `calculate_max_threads()` 动态计算
+pub const DEFAULT_MAX_ENCODE_THREADS: usize = 4;
+
+/// 服务器环境最大编码线程数（64 核服务器）
+pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
+
+/// 🔥 v5.73: 根据 CPU 核心数和分辨率动态计算最大线程数
+/// 
+/// # Arguments
+/// * `cpu_count` - CPU 核心数
+/// * `resolution_pixels` - 视频分辨率（宽 × 高），None 表示使用默认值
+/// 
+/// # Returns
+/// 推荐的最大线程数
+/// 
+/// # Logic
+/// - 低分辨率 (< 720p): 最多 4 线程
+/// - 中分辨率 (720p-1080p): 最多 8 线程
+/// - 高分辨率 (> 1080p): 最多 16 线程
+/// - 始终不超过 CPU 核心数的一半
+pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -> usize {
+    let half_cpus = cpu_count / 2;
+    
+    let resolution_limit = match resolution_pixels {
+        Some(pixels) if pixels < 1280 * 720 => 4,      // < 720p
+        Some(pixels) if pixels < 1920 * 1080 => 8,     // 720p - 1080p
+        Some(pixels) if pixels < 3840 * 2160 => 12,    // 1080p - 4K
+        Some(_) => SERVER_MAX_ENCODE_THREADS,          // >= 4K
+        None => DEFAULT_MAX_ENCODE_THREADS,            // 默认保守值
+    };
+    
+    half_cpus.clamp(MIN_ENCODE_THREADS, resolution_limit)
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 探索模式枚举
 // ═══════════════════════════════════════════════════════════════
 
@@ -135,13 +177,26 @@ pub struct ConfidenceBreakdown {
     pub ssim_confidence: f64,
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.73: 置信度权重常量 - 避免硬编码魔术数
+// ═══════════════════════════════════════════════════════════════
+
+/// 采样覆盖度权重 (30%)
+pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
+/// 预测准确度权重 (30%)
+pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
+/// 安全边界权重 (20%)
+pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
+/// SSIM 可靠性权重 (20%)
+pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
+
 impl ConfidenceBreakdown {
     /// 计算加权平均置信度
     pub fn overall(&self) -> f64 {
-        (self.sampling_coverage * 0.3
-            + self.prediction_accuracy * 0.3
-            + self.margin_safety * 0.2
-            + self.ssim_confidence * 0.2)
+        (self.sampling_coverage * CONFIDENCE_WEIGHT_SAMPLING
+            + self.prediction_accuracy * CONFIDENCE_WEIGHT_PREDICTION
+            + self.margin_safety * CONFIDENCE_WEIGHT_MARGIN
+            + self.ssim_confidence * CONFIDENCE_WEIGHT_SSIM)
             .min(1.0)
     }
 
@@ -389,6 +444,62 @@ pub enum VideoEncoder {
     H264,
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.74: 编码器 Preset 配置 - 确保探索与最终压制一致
+// ═══════════════════════════════════════════════════════════════
+
+/// 编码器 Preset（速度/质量权衡）
+/// 
+/// 🔥 重要：探索模式必须使用与最终压制相同的 preset！
+/// 否则探索出的 CRF 在最终压制时会产生不同的文件大小。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncoderPreset {
+    /// 最快（质量最低，仅用于测试）
+    Ultrafast,
+    /// 快速（适合实时编码）
+    Fast,
+    /// 中等（默认，平衡速度和质量）
+    Medium,
+    /// 慢速（更好的压缩率）
+    Slow,
+    /// 非常慢（最佳压缩率，推荐用于最终输出）
+    Slower,
+    /// 极慢（极致压缩，耗时很长）
+    Veryslow,
+}
+
+impl Default for EncoderPreset {
+    fn default() -> Self {
+        EncoderPreset::Medium
+    }
+}
+
+impl EncoderPreset {
+    /// 获取 x265/x264 preset 字符串
+    pub fn x26x_name(&self) -> &'static str {
+        match self {
+            EncoderPreset::Ultrafast => "ultrafast",
+            EncoderPreset::Fast => "fast",
+            EncoderPreset::Medium => "medium",
+            EncoderPreset::Slow => "slow",
+            EncoderPreset::Slower => "slower",
+            EncoderPreset::Veryslow => "veryslow",
+        }
+    }
+    
+    /// 获取 SVT-AV1 preset 数字 (0-13, 0=最慢最好, 13=最快最差)
+    pub fn svtav1_preset(&self) -> u8 {
+        match self {
+            EncoderPreset::Ultrafast => 12,
+            EncoderPreset::Fast => 8,
+            EncoderPreset::Medium => 6,
+            EncoderPreset::Slow => 4,
+            EncoderPreset::Slower => 2,
+            EncoderPreset::Veryslow => 0,
+        }
+    }
+}
+
 impl VideoEncoder {
     /// 获取 ffmpeg 编码器名称
     pub fn ffmpeg_name(&self) -> &'static str {
@@ -408,21 +519,159 @@ impl VideoEncoder {
         }
     }
     
-    /// 获取额外的编码器参数
+    /// 获取额外的编码器参数（使用默认 preset）
     pub fn extra_args(&self, max_threads: usize) -> Vec<String> {
+        self.extra_args_with_preset(max_threads, EncoderPreset::default())
+    }
+    
+    /// 🔥 v5.74: 获取额外的编码器参数（指定 preset）
+    /// 
+    /// # Arguments
+    /// * `max_threads` - 最大线程数
+    /// * `preset` - 编码器 preset
+    /// 
+    /// # 重要
+    /// 探索模式和最终压制必须使用相同的 preset！
+    pub fn extra_args_with_preset(&self, max_threads: usize, preset: EncoderPreset) -> Vec<String> {
         match self {
             VideoEncoder::Hevc => vec![
+                "-preset".to_string(), preset.x26x_name().to_string(),
                 "-tag:v".to_string(), "hvc1".to_string(),
                 "-x265-params".to_string(), 
                 format!("log-level=error:pools={}", max_threads),
             ],
             VideoEncoder::Av1 => vec![
                 "-svtav1-params".to_string(),
-                format!("tune=0:film-grain=0"),
+                format!("tune=0:film-grain=0:preset={}:lp={}", preset.svtav1_preset(), max_threads),
             ],
             VideoEncoder::H264 => vec![
+                "-preset".to_string(), preset.x26x_name().to_string(),
                 "-profile:v".to_string(), "high".to_string(),
             ],
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.74: 透明度报告 - 每次迭代的详细指标
+// ═══════════════════════════════════════════════════════════════
+
+/// 单次迭代的详细指标（用于透明度报告）
+#[derive(Debug, Clone)]
+pub struct IterationMetrics {
+    /// 迭代序号
+    pub iteration: u32,
+    /// 搜索阶段
+    pub phase: String,
+    /// 测试的 CRF 值
+    pub crf: f32,
+    /// 输出文件大小（字节）
+    pub output_size: u64,
+    /// 相对于输入的大小变化百分比
+    pub size_change_pct: f64,
+    /// SSIM 分数（如果计算了）
+    pub ssim: Option<f64>,
+    /// PSNR 分数（如果计算了）
+    pub psnr: Option<f64>,
+    /// 是否能压缩（output < input）
+    pub can_compress: bool,
+    /// 是否通过质量阈值
+    pub quality_passed: Option<bool>,
+    /// 决策说明
+    pub decision: String,
+}
+
+impl IterationMetrics {
+    /// 打印单行透明度报告
+    pub fn print_line(&self) {
+        let ssim_str = self.ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "----".to_string());
+        let psnr_str = self.psnr.map(|p| format!("{:.1}", p)).unwrap_or_else(|| "----".to_string());
+        let compress_icon = if self.can_compress { "✅" } else { "❌" };
+        let quality_icon = match self.quality_passed {
+            Some(true) => "✅",
+            Some(false) => "⚠️",
+            None => "--",
+        };
+        
+        eprintln!("│ {:>2} │ {:>12} │ CRF {:>5.1} │ {:>+6.1}% {} │ SSIM {} {} │ PSNR {} │ {}",
+            self.iteration,
+            self.phase,
+            self.crf,
+            self.size_change_pct,
+            compress_icon,
+            ssim_str,
+            quality_icon,
+            psnr_str,
+            self.decision
+        );
+    }
+}
+
+/// 透明度报告 - 完整的搜索过程记录
+#[derive(Debug, Clone, Default)]
+pub struct TransparencyReport {
+    /// 所有迭代的详细指标
+    pub iterations: Vec<IterationMetrics>,
+    /// 搜索开始时间
+    pub start_time: Option<std::time::Instant>,
+    /// 输入文件大小
+    pub input_size: u64,
+    /// 最终选择的 CRF
+    pub final_crf: Option<f32>,
+    /// 最终 SSIM
+    pub final_ssim: Option<f64>,
+    /// 最终 PSNR
+    pub final_psnr: Option<f64>,
+}
+
+impl TransparencyReport {
+    /// 创建新的透明度报告
+    pub fn new(input_size: u64) -> Self {
+        Self {
+            iterations: Vec::new(),
+            start_time: Some(std::time::Instant::now()),
+            input_size,
+            final_crf: None,
+            final_ssim: None,
+            final_psnr: None,
+        }
+    }
+    
+    /// 添加迭代记录
+    pub fn add_iteration(&mut self, metrics: IterationMetrics) {
+        metrics.print_line();
+        self.iterations.push(metrics);
+    }
+    
+    /// 打印报告头部
+    pub fn print_header(&self) {
+        eprintln!("┌────────────────────────────────────────────────────────────────────────────────────────────┐");
+        eprintln!("│ 📊 Transparency Report - CRF Search Process                                               │");
+        eprintln!("├────┬──────────────┬───────────┬─────────────┬─────────────┬──────────┬────────────────────┤");
+        eprintln!("│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │ PSNR     │ Decision           │");
+        eprintln!("├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤");
+    }
+    
+    /// 打印报告尾部和总结
+    pub fn print_summary(&self) {
+        eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
+        
+        let elapsed = self.start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        let total_iterations = self.iterations.len();
+        
+        eprintln!("");
+        eprintln!("📈 Summary:");
+        eprintln!("   • Total iterations: {}", total_iterations);
+        eprintln!("   • Time elapsed: {:.1}s", elapsed);
+        
+        if let Some(crf) = self.final_crf {
+            eprintln!("   • Final CRF: {:.1}", crf);
+        }
+        if let Some(ssim) = self.final_ssim {
+            eprintln!("   • Final SSIM: {:.4}", ssim);
+        }
+        if let Some(psnr) = self.final_psnr {
+            eprintln!("   • Final PSNR: {:.1} dB", psnr);
         }
     }
 }
@@ -671,9 +920,9 @@ impl VideoExplorer {
         let start_time = std::time::Instant::now();
         let mut _best_crf_so_far: f32 = 0.0;
         
-        // 带缓存的编码
+        // 带缓存的编码 - 🔥 v5.73: 使用统一的 crf_to_cache_key()
         let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>, explorer: &VideoExplorer| -> Result<u64> {
-            let key = (crf * 4.0).round() as i32;
+            let key = precision::crf_to_cache_key(crf);
             if let Some(&size) = cache.get(&key) {
                 return Ok(size);
             }
@@ -854,7 +1103,7 @@ impl VideoExplorer {
             let size = self.encode(mid as f32)?;
             iterations += 1;
 
-            let key = (mid * 10.0).round() as i32;
+            let key = precision::crf_to_cache_key(mid as f32);  // 🔥 v5.73: 统一缓存 Key
             cache.insert(key, (size, None));
 
             if size < self.input_size {
@@ -872,7 +1121,7 @@ impl VideoExplorer {
             log_realtime!("   📍 Phase 2: Validate quality at CRF {:.1}", boundary);
 
             // 直接在边界点验证质量（边界点是最低能压缩的 CRF = 最高质量）
-            let key = (boundary * 10.0).round() as i32;
+            let key = precision::crf_to_cache_key(boundary);  // 🔥 v5.73: 统一缓存 Key
             let size = if let Some(&(s, _)) = cache.get(&key) {
                 s
             } else {
@@ -982,11 +1231,12 @@ impl VideoExplorer {
         let mut best_ssim: f64;
 
         // 🔥 v4.9: 带缓存和跟踪的编码函数
+        // 🔥 v5.73: 使用统一的 crf_to_cache_key()
         let encode_cached = |crf: f32,
                             cache: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
                             last_key: &mut i32,
                             explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
-            let key = (crf * 4.0).round() as i32;
+            let key = precision::crf_to_cache_key(crf);
             if let Some(&cached) = cache.get(&key) {
                 return Ok(cached);
             }
@@ -1095,8 +1345,8 @@ impl VideoExplorer {
                 if iterations < MAX_ITERATIONS {
                     for offset in [-0.25_f32, 0.25, -0.5, 0.5] {
                         let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
-                        // 避免重复测试已缓存的值
-                        let key = (crf * 4.0).round() as i32;
+                        // 避免重复测试已缓存的值 - 🔥 v5.73: 统一缓存 Key
+                        let key = precision::crf_to_cache_key(crf);
                         if cache.contains_key(&key) { continue; }
                         if iterations >= MAX_ITERATIONS { break; }
 
@@ -1118,7 +1368,8 @@ impl VideoExplorer {
         }
 
         // 🔥 v4.9: 智能最终编码 - 只有必要时才重新编码
-        let best_key = (best_crf * 4.0).round() as i32;
+        // 🔥 v5.73: 使用统一的 crf_to_cache_key()
+        let best_key = precision::crf_to_cache_key(best_crf);
         let (final_size, final_quality) = if last_encoded_key == best_key {
             // 最后一次编码就是 best_crf，直接使用缓存
             log_realtime!("   ✨ Output already at best CRF {:.1} (no re-encoding needed)", best_crf);
@@ -1236,13 +1487,13 @@ impl VideoExplorer {
             }};
         }
 
-        // 🔥 v5.31: 优化缓存精度 (CRF*100) - 支持0.01精度
+        // 🔥 v5.73: 统一缓存精度 - 使用 crf_to_cache_key()
         // 仅编码（不计算SSIM）
         let encode_size_only = |crf: f32,
                                size_cache: &mut std::collections::HashMap<i32, u64>,
                                last_key: &mut i32,
                                explorer: &VideoExplorer| -> Result<u64> {
-            let key = (crf * 4.0).round() as i32;  // 🔥 提升精度：10 → 100
+            let key = precision::crf_to_cache_key(crf);
             if let Some(&size) = size_cache.get(&key) {
                 return Ok(size);
             }
@@ -1256,7 +1507,7 @@ impl VideoExplorer {
         let validate_ssim = |crf: f32,
                             quality_cache: &mut std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)>,
                             explorer: &VideoExplorer| -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
-            let key = (crf * 4.0).round() as i32;  // 🔥 提升精度：10 → 100
+            let key = precision::crf_to_cache_key(crf);
             if let Some(&quality) = quality_cache.get(&key) {
                 return Ok(quality);
             }
@@ -1315,7 +1566,7 @@ impl VideoExplorer {
                 if fine_crf < ABSOLUTE_MIN_CRF { break; }
                 if iterations >= STAGE_B2_MAX_ITERATIONS { break; }
 
-                let key = (fine_crf * 4.0).round() as i32;  // 🔥 v5.31: 精度修正
+                let key = precision::crf_to_cache_key(fine_crf);  // 🔥 v5.73: 统一缓存 Key
                 if size_cache.contains_key(&key) { continue; }
 
                 let size = encode_size_only(fine_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1333,7 +1584,7 @@ impl VideoExplorer {
             progress_done!();
 
             // 确保输出文件是 best_crf 的版本
-            let best_key = (best_crf * 4.0).round() as i32;  // 🔥 v5.31: 精度修正
+            let best_key = precision::crf_to_cache_key(best_crf);  // 🔥 v5.73: 统一缓存 Key
             if last_encoded_key != best_key {
                 progress_line!("│ 重新编码到最佳 CRF {:.1}... │", best_crf);
                 let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1491,7 +1742,7 @@ impl VideoExplorer {
             if test_crf < self.config.min_crf { continue; }
             if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
             
-            let key = (test_crf * 4.0).round() as i32;
+            let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
             if size_cache.contains_key(&key) { continue; }
 
             let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1527,7 +1778,7 @@ impl VideoExplorer {
                 if test_crf > self.config.max_crf { continue; }
                 if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
                 
-                let key = (test_crf * 4.0).round() as i32;
+                let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
                 if size_cache.contains_key(&key) { continue; }
 
                 let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -1565,7 +1816,7 @@ impl VideoExplorer {
         log_header!("   📍 Stage C: SSIM 验证");
 
         // 确保输出文件是 boundary_crf 的版本
-        let boundary_key = (boundary_crf * 4.0).round() as i32;
+        let boundary_key = precision::crf_to_cache_key(boundary_crf);  // 🔥 v5.73: 统一缓存 Key
         if last_encoded_key != boundary_key {
             progress_line!("│ 重新编码到 CRF {:.1}... │", boundary_crf);
             let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_key, self)?;
@@ -2653,6 +2904,40 @@ pub mod precision {
     
     /// 🔥 v5.72: CPU 最终精细化步长（突破 GPU SSIM 天花板）
     pub const CPU_FINEST_STEP: f32 = 0.1;
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v5.73: 统一缓存 Key 精度 - 解决 * 4.0 和 * 10.0 混用问题
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 缓存 Key 乘数：统一使用 10.0，支持 0.1 精度的 CRF 调整
+    /// 
+    /// 🔥 重要：整个模块必须使用此常量，禁止硬编码 * 4.0 或 * 10.0
+    /// - CRF 20.0 → key 200
+    /// - CRF 20.1 → key 201
+    /// - CRF 20.5 → key 205
+    pub const CACHE_KEY_MULTIPLIER: f32 = 10.0;
+    
+    /// 🔥 v5.73: 统一的 CRF 到缓存 Key 转换函数
+    /// 
+    /// 使用此函数替代所有 `(crf * X.0).round() as i32` 的硬编码
+    /// 
+    /// # Example
+    /// ```
+    /// use shared_utils::video_explorer::precision::crf_to_cache_key;
+    /// assert_eq!(crf_to_cache_key(20.0), 200);
+    /// assert_eq!(crf_to_cache_key(20.1), 201);
+    /// assert_eq!(crf_to_cache_key(20.5), 205);
+    /// ```
+    #[inline]
+    pub fn crf_to_cache_key(crf: f32) -> i32 {
+        (crf * CACHE_KEY_MULTIPLIER).round() as i32
+    }
+    
+    /// 🔥 v5.73: 缓存 Key 到 CRF 的反向转换
+    #[inline]
+    pub fn cache_key_to_crf(key: i32) -> f32 {
+        key as f32 / CACHE_KEY_MULTIPLIER
+    }
 
     /// 🔥 v5.72: 搜索阶段 - GPU+CPU 双精细化
     /// GPU: 4 → 1 → 0.5 → 0.25 (快速，SSIM 上限 ~0.97)
@@ -4522,7 +4807,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.70: 统一使用0.25步长快速搜索 + 最后0.1精细化
     eprintln!("{}📊{} Using 0.25 step (fast coarse search) + 0.1 fine-tune", CYAN, RESET);
     let step_size = 0.25_f32;
-    let cache_multiplier = 4.0_f32;
+    // 🔥 v5.73: 缓存 Key 现在统一使用 precision::crf_to_cache_key()
     
     // 🔥 v5.67: 边际效益递减参数
     // 边际效益 = SSIM提升 / 文件大小增加比例
@@ -4536,8 +4821,9 @@ fn cpu_fine_tune_from_gpu_boundary(
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
     
     // 🔥 v5.60: 带缓存的全片编码 + 进度条更新
+    // 🔥 v5.73: 使用统一的 crf_to_cache_key()
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
-        let key = (crf * cache_multiplier).round() as i32;
+        let key = precision::crf_to_cache_key(crf);
         if let Some(&size) = cache.get(&key) {
             cpu_progress.inc_iteration(crf, size, None);
             return Ok(size);
@@ -4642,7 +4928,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut prev_size = gpu_size;
 
         while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
-            let key = (test_crf * cache_multiplier).round() as i32;
+            let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
             if size_cache.contains_key(&key) {
                 test_crf -= step_size;
                 continue;
@@ -4789,7 +5075,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut prev_size = best_size.unwrap();
 
             while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
-                let key = (test_crf * cache_multiplier).round() as i32;
+                let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
                 if size_cache.contains_key(&key) {
                     test_crf -= step_size;
                     continue;
@@ -4876,7 +5162,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut prev_size = best_size.unwrap();
 
         while test_crf >= (boundary_crf - 0.5).max(min_crf) && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
-            let key = (test_crf * 10.0).round() as i32;
+            let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
             if size_cache.contains_key(&key) {
                 test_crf -= fine_step;
                 continue;
@@ -6070,42 +6356,42 @@ mod tests {
         // 而不是无限降低 CRF
     }
     
-    /// 🔥 v5.55 测试：缓存机制 - 0.25 精度（速度优化）
+    /// 🔥 v5.73 测试：缓存机制 - 统一使用 crf_to_cache_key()
     #[test]
     fn test_v4_crf_cache_mechanism() {
-        // 模拟缓存机制：0.25 精度的 key (crf * 4.0)
+        // 🔥 v5.73: 使用统一的 crf_to_cache_key() 函数
+        // 精度：0.1 (crf * 10.0)
         let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
         
         // 测试 CRF 值到 key 的转换
-        // CRF 20.0 → key 80, CRF 20.25 → key 81, CRF 20.5 → key 82
-        let crf_to_key = |crf: f32| -> i32 { (crf * 4.0).round() as i32 };
+        // CRF 20.0 → key 200, CRF 20.1 → key 201, CRF 20.5 → key 205
         
         // 插入测试数据
-        cache.insert(crf_to_key(20.0), 0.9850);   // key = 80
-        cache.insert(crf_to_key(20.25), 0.9855);  // key = 81
-        cache.insert(crf_to_key(20.5), 0.9860);   // key = 82
+        cache.insert(precision::crf_to_cache_key(20.0), 0.9850);   // key = 200
+        cache.insert(precision::crf_to_cache_key(20.1), 0.9855);   // key = 201
+        cache.insert(precision::crf_to_cache_key(20.5), 0.9860);   // key = 205
         
         // 验证缓存命中
-        assert!(cache.contains_key(&crf_to_key(20.0)));
-        assert!(cache.contains_key(&crf_to_key(20.25)));
-        assert!(cache.contains_key(&crf_to_key(20.5)));
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.0)));
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.1)));
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.5)));
         
         // 验证四舍五入后的缓存命中
-        // 20.1 四舍五入到 80 (20.0)，应该命中
-        assert!(cache.contains_key(&crf_to_key(20.1)), "20.1 should round to 80 and hit cache");
-        // 20.3 四舍五入到 81 (20.25)，应该命中
-        assert!(cache.contains_key(&crf_to_key(20.3)), "20.3 should round to 81 and hit cache");
+        // 20.05 四舍五入到 201 (20.1)，应该命中
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.05)), "20.05 should round to 201 and hit cache");
+        // 20.45 四舍五入到 205 (20.5)，应该命中
+        assert!(cache.contains_key(&precision::crf_to_cache_key(20.45)), "20.45 should round to 205 and hit cache");
         
         // 验证缓存未命中 - 未插入的值
-        assert!(!cache.contains_key(&crf_to_key(20.75))); // key 83 未插入
-        assert!(!cache.contains_key(&crf_to_key(19.75))); // key 79 未插入
+        assert!(!cache.contains_key(&precision::crf_to_cache_key(20.75))); // key 208 未插入
+        assert!(!cache.contains_key(&precision::crf_to_cache_key(19.75))); // key 198 未插入
         
-        // 验证 key 计算正确性
-        assert_eq!(crf_to_key(20.0), 80);   // 20.0 * 4 = 80
-        assert_eq!(crf_to_key(20.25), 81);  // 20.25 * 4 = 81
-        assert_eq!(crf_to_key(20.5), 82);   // 20.5 * 4 = 82
-        assert_eq!(crf_to_key(20.1), 80);   // 20.1 * 4 = 80.4 → 80
-        assert_eq!(crf_to_key(20.15), 81);  // 20.15 * 4 = 80.6 → 81
+        // 🔥 v5.73: 验证统一的 key 计算正确性 (crf * 10.0)
+        assert_eq!(precision::crf_to_cache_key(20.0), 200);   // 20.0 * 10 = 200
+        assert_eq!(precision::crf_to_cache_key(20.1), 201);   // 20.1 * 10 = 201
+        assert_eq!(precision::crf_to_cache_key(20.5), 205);   // 20.5 * 10 = 205
+        assert_eq!(precision::crf_to_cache_key(20.05), 201);  // 20.05 * 10 = 200.5 → 201
+        assert_eq!(precision::crf_to_cache_key(20.15), 202);  // 20.15 * 10 = 201.5 → 202
     }
     
     /// 🔥 v4.0 测试：迭代次数无上限（耗时不是问题）

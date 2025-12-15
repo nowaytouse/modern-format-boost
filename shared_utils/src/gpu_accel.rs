@@ -1708,9 +1708,9 @@ pub fn gpu_coarse_search_with_log(
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
     
-    // 带缓存的编码函数
+    // 带缓存的编码函数 - 🔥 v5.73: 使用统一的缓存 Key 精度
     let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> anyhow::Result<u64> {
-        let key = (crf * 10.0).round() as i32;
+        let key = crate::video_explorer::precision::crf_to_cache_key(crf);
         if let Some(&size) = cache.get(&key) {
             return Ok(size);
         }
@@ -1788,7 +1788,7 @@ pub fn gpu_coarse_search_with_log(
         log_msg!("   🔄 Testing CRF {:.0} (anchor point)...", test_crf);
         let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
-            let key = (test_crf * 10.0).round() as i32;
+            let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
             size_cache.insert(key, *size);
             iterations += 1;
             size_history.push((test_crf, *size));
@@ -1800,11 +1800,11 @@ pub fn gpu_coarse_search_with_log(
         encode_parallel(&probe_crfs)
     };
     
-    // 处理并行结果（非跳过模式时）
+    // 处理并行结果（非跳过模式时）- 🔥 v5.73: 统一缓存 Key
     if !skip_parallel {
         for (crf, result) in &probe_results {
             if let Ok(size) = result {
-                let key = (*crf * 10.0).round() as i32;
+                let key = crate::video_explorer::precision::crf_to_cache_key(*crf);
                 size_cache.insert(key, *size);
                 iterations += 1;
                 size_history.push((*crf, *size));
@@ -1887,7 +1887,7 @@ pub fn gpu_coarse_search_with_log(
             let mut last_compressible_size = best_size.unwrap_or(0);
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
-                let key = (test_crf * 10.0).round() as i32;
+                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
                 if size_cache.contains_key(&key) {
                     let cached_size = *size_cache.get(&key).unwrap();
                     if cached_size < sample_input_size {
@@ -1944,7 +1944,7 @@ pub fn gpu_coarse_search_with_log(
             let mut test_crf = boundary_high - 2.0;
 
             while test_crf >= config.min_crf && iterations < max_iterations_limit {
-                let key = (test_crf * 10.0).round() as i32;
+                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
                 if size_cache.contains_key(&key) {
                     let cached_size = *size_cache.get(&key).unwrap();
                     if cached_size < sample_input_size {
@@ -2014,7 +2014,7 @@ pub fn gpu_coarse_search_with_log(
             let mid = lo + (hi - lo) / 2;
             let test_crf = mid as f32;
             
-            let key = (test_crf * 10.0).round() as i32;
+            let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
             if size_cache.contains_key(&key) {
                 let cached_size = *size_cache.get(&key).unwrap();
                 if cached_size < sample_input_size {
@@ -2085,8 +2085,8 @@ pub fn gpu_coarse_search_with_log(
                     break;
                 }
 
-                // 检查缓存
-                let key = (test_crf * 10.0).round() as i32;
+                // 检查缓存 - 🔥 v5.73: 统一缓存 Key
+                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);
                 let result = if size_cache.contains_key(&key) {
                     let cached_size = *size_cache.get(&key).unwrap();
                     log_msg!("   📦 Cache hit: CRF {:.1}", test_crf);
