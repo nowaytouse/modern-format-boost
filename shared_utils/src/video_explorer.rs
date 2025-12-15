@@ -265,7 +265,12 @@ pub struct QualityThresholds {
     pub validate_psnr: bool,
     /// 是否启用 VMAF 验证（较慢但更准确）
     pub validate_vmaf: bool,
+    /// 🔥 v5.75: 强制长视频也验证 VMAF（默认 false，>5分钟视频跳过 VMAF）
+    pub force_vmaf_long: bool,
 }
+
+/// 🔥 v5.75: 长视频阈值（秒）- 超过此时长默认跳过 VMAF
+pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
 impl Default for QualityThresholds {
     fn default() -> Self {
@@ -276,6 +281,7 @@ impl Default for QualityThresholds {
             validate_ssim: true,
             validate_psnr: false,
             validate_vmaf: false, // 默认关闭，因为较慢
+            force_vmaf_long: false, // 🔥 v5.75: 默认跳过长视频 VMAF
         }
     }
 }
@@ -364,6 +370,7 @@ impl ExploreConfig {
                 validate_ssim: true,
                 validate_psnr: false, // 简化，只用 SSIM
                 validate_vmaf: false,
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -385,6 +392,7 @@ impl ExploreConfig {
                 validate_ssim: true,
                 validate_psnr: false,
                 validate_vmaf: false,
+                ..Default::default()
             },
             ..Default::default()
         }
@@ -2252,6 +2260,7 @@ impl VideoExplorer {
     /// 验证输出质量
     /// 
     /// 🔥 v3.3: 支持 SSIM/PSNR/VMAF 三重验证
+    /// 🔥 v5.75: 添加长视频 VMAF 跳过逻辑
     fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
         let ssim = if self.config.quality_thresholds.validate_ssim {
             self.calculate_ssim()?
@@ -2265,8 +2274,28 @@ impl VideoExplorer {
             None
         };
         
+        // 🔥 v5.75: VMAF 验证 - 考虑长视频跳过逻辑
         let vmaf = if self.config.quality_thresholds.validate_vmaf {
-            self.calculate_vmaf()?
+            // 检测视频时长
+            let duration = get_video_duration(&self.input_path);
+            let should_skip = match duration {
+                Some(d) => d >= LONG_VIDEO_THRESHOLD as f64 && !self.config.quality_thresholds.force_vmaf_long,
+                None => {
+                    // 无法检测时长，响亮报错，默认跳过
+                    eprintln!("   ⚠️ 无法检测视频时长，跳过 VMAF 验证");
+                    true
+                }
+            };
+            
+            if should_skip {
+                if let Some(d) = duration {
+                    eprintln!("   ⏭️ 长视频 ({:.1}min > 5min) - 跳过 VMAF 验证", d / 60.0);
+                    eprintln!("   💡 使用 --force-vmaf-long 强制启用");
+                }
+                None
+            } else {
+                self.calculate_vmaf()?
+            }
         } else {
             None
         };
@@ -4808,7 +4837,8 @@ pub fn explore_with_gpu_coarse_search(
             if let Some(vmaf) = calculate_vmaf(input, output) {
                 eprintln!("   ═══════════════════════════════════════════════════");
                 eprintln!("   📊 Final Quality Scores:");
-                eprintln!("      SSIM: {:.6} (exploration metric)", result.ssim);
+                let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
+                eprintln!("      SSIM: {} (exploration metric)", ssim_str);
                 eprintln!("      VMAF: {:.2} (verification metric)", vmaf);
 
                 // VMAF分数解读
@@ -4824,9 +4854,10 @@ pub fn explore_with_gpu_coarse_search(
                 eprintln!("      Grade: {}", vmaf_grade);
 
                 // SSIM vs VMAF 映射关系展示
-                let ssim_vmaf_correlation = if vmaf >= 90.0 && result.ssim >= 0.98 {
+                let ssim_val = result.ssim.unwrap_or(0.0);
+                let ssim_vmaf_correlation = if vmaf >= 90.0 && ssim_val >= 0.98 {
                     "✅ Excellent correlation"
-                } else if vmaf >= 85.0 && result.ssim >= 0.95 {
+                } else if vmaf >= 85.0 && ssim_val >= 0.95 {
                     "✅ Good correlation"
                 } else {
                     "⚠️  Divergence detected"
@@ -4845,12 +4876,14 @@ pub fn explore_with_gpu_coarse_search(
                 eprintln!("   ℹ️  Falling back to SSIM verification only");
             }
         } else {
+            let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
             eprintln!("   ⏭️  Long video (>{:.0}min) - skipping VMAF (too slow)", VMAF_DURATION_THRESHOLD / 60.0);
-            eprintln!("   ℹ️  Using SSIM verification only: {:.6}", result.ssim);
+            eprintln!("   ℹ️  Using SSIM verification only: {}", ssim_str);
         }
     } else {
+        let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
         eprintln!("   ⚠️  Could not determine video duration");
-        eprintln!("   ℹ️  Using SSIM verification only: {:.6}", result.ssim);
+        eprintln!("   ℹ️  Using SSIM verification only: {}", ssim_str);
     }
 
     eprintln!("");
@@ -6080,6 +6113,7 @@ mod tests {
             validate_ssim: true,
             validate_psnr: false,
             validate_vmaf: false,
+            ..Default::default()
         };
         
         // 模拟 check_quality_passed 逻辑
@@ -6118,6 +6152,7 @@ mod tests {
             validate_ssim: true,
             validate_psnr: true,
             validate_vmaf: false,
+            ..Default::default()
         };
         
         let check = |ssim: Option<f64>, psnr: Option<f64>| -> bool {
@@ -6247,6 +6282,7 @@ mod tests {
             validate_ssim: true,
             validate_psnr: false,
             validate_vmaf: true, // 启用 VMAF
+            ..Default::default()
         };
         
         // 模拟 check_quality_passed 逻辑（包含 VMAF）

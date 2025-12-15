@@ -67,6 +67,17 @@ enum Commands {
         /// VideoToolbox hardware encoding caps at ~0.95 SSIM. Use --cpu to achieve 0.98+ SSIM
         #[arg(long, default_value_t = false)]
         cpu: bool,
+        /// 🔥 v5.75: Enable VMAF verification (slower but more accurate)
+        /// VMAF is Netflix's perceptual quality metric (0-100)
+        #[arg(long, default_value_t = false)]
+        vmaf: bool,
+        /// 🔥 v5.75: Minimum VMAF score threshold (default: 85.0)
+        #[arg(long, default_value_t = 85.0)]
+        vmaf_threshold: f64,
+        /// 🔥 v5.75: Force VMAF verification even for long videos (>5min)
+        /// By default, VMAF is skipped for long videos to avoid slow processing
+        #[arg(long, default_value_t = false)]
+        force_vmaf_long: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -113,7 +124,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, cpu } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, cpu, vmaf, vmaf_threshold, force_vmaf_long } => {
             // 🔥 v5.1: Validate flag combinations for consistency
             if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
                 eprintln!("{}", e);
@@ -132,6 +143,10 @@ fn main() -> anyhow::Result<()> {
                 apple_compat,
                 require_compression: compress,
                 use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
+                // 🔥 v5.75: VMAF 验证参数
+                validate_vmaf: vmaf,
+                min_vmaf: vmaf_threshold,
+                force_vmaf_long,
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -158,6 +173,12 @@ fn main() -> anyhow::Result<()> {
             }
             if cpu {
                 info!("   🖥️  CPU Encoding: ENABLED (libx265 for SSIM ≥0.98)");
+            }
+            if vmaf {
+                info!("   📊 VMAF Verification: ENABLED (threshold: {:.1})", vmaf_threshold);
+                if force_vmaf_long {
+                    info!("   ⚠️  Force VMAF for long videos: ENABLED");
+                }
             }
             info!("");
             
