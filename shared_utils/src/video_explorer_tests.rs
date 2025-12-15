@@ -273,16 +273,25 @@ mod edge_case_tests {
 
 #[cfg(test)]
 mod precision_tests {
+    use super::super::video_explorer::precision::{crf_to_cache_key, cache_key_to_crf, CACHE_KEY_MULTIPLIER};
+    
     #[test]
     fn test_crf_key_generation() {
-        // 测试 CRF 缓存键生成
-        let crf = 20.5_f32;
-        let key = (crf * 10.0).round() as i32;
-        assert_eq!(key, 205);
+        // 🔥 v5.73: 测试统一的 crf_to_cache_key() 函数
+        assert_eq!(crf_to_cache_key(20.0), 200);
+        assert_eq!(crf_to_cache_key(20.1), 201);
+        assert_eq!(crf_to_cache_key(20.5), 205);
         
         let crf2 = 20.55_f32;
-        let key2 = (crf2 * 10.0).round() as i32;
+        let key2 = crf_to_cache_key(crf2);
         assert_eq!(key2, 206); // 四舍五入
+        
+        // 测试反向转换
+        assert!((cache_key_to_crf(200) - 20.0).abs() < 0.01);
+        assert!((cache_key_to_crf(205) - 20.5).abs() < 0.01);
+        
+        // 验证乘数常量
+        assert_eq!(CACHE_KEY_MULTIPLIER, 10.0);
     }
     
     #[test]
