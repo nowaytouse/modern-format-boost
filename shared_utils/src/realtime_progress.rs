@@ -405,3 +405,162 @@ mod tests {
         progress.finish(22.0, 800, Some(0.98));
     }
 }
+
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.72: 增强进度状态 - 更详细的透明度
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v5.72: 详细进度状态 - 用于实时透明度
+#[derive(Debug, Clone)]
+pub struct DetailedProgressState {
+    /// 当前阶段名称
+    pub phase: String,
+    /// 当前CRF值
+    pub current_crf: f32,
+    /// 当前SSIM值（如果已计算）
+    pub current_ssim: Option<f64>,
+    /// 文件大小变化百分比
+    pub size_change_pct: f64,
+    /// 当前迭代次数
+    pub iteration: u32,
+    /// 预估总迭代次数
+    pub total_iterations: u32,
+    /// 预估剩余时间（秒）
+    pub eta_seconds: Option<f64>,
+    /// SSIM趋势（最近3次的变化）
+    pub ssim_trend: Vec<f64>,
+    /// 文件大小趋势（最近3次的变化）
+    pub size_trend: Vec<f64>,
+}
+
+impl DetailedProgressState {
+    /// 创建新的进度状态
+    pub fn new(phase: &str) -> Self {
+        Self {
+            phase: phase.to_string(),
+            current_crf: 0.0,
+            current_ssim: None,
+            size_change_pct: 0.0,
+            iteration: 0,
+            total_iterations: 0,
+            eta_seconds: None,
+            ssim_trend: Vec::new(),
+            size_trend: Vec::new(),
+        }
+    }
+
+    /// 更新CRF和大小
+    pub fn update_crf(&mut self, crf: f32, size_pct: f64) {
+        self.current_crf = crf;
+        self.size_change_pct = size_pct;
+        self.size_trend.push(size_pct);
+        if self.size_trend.len() > 3 {
+            self.size_trend.remove(0);
+        }
+    }
+
+    /// 更新SSIM
+    pub fn update_ssim(&mut self, ssim: f64) {
+        self.current_ssim = Some(ssim);
+        self.ssim_trend.push(ssim);
+        if self.ssim_trend.len() > 3 {
+            self.ssim_trend.remove(0);
+        }
+    }
+
+    /// 更新迭代进度
+    pub fn update_iteration(&mut self, current: u32, total: u32, elapsed_secs: f64) {
+        self.iteration = current;
+        self.total_iterations = total;
+        if current > 0 {
+            let avg_time_per_iter = elapsed_secs / current as f64;
+            let remaining = total.saturating_sub(current) as f64;
+            self.eta_seconds = Some(avg_time_per_iter * remaining);
+        }
+    }
+
+    /// 切换阶段
+    pub fn set_phase(&mut self, phase: &str) {
+        self.phase = phase.to_string();
+        // 清空趋势数据
+        self.ssim_trend.clear();
+        self.size_trend.clear();
+    }
+
+    /// 格式化为显示字符串
+    pub fn format_display(&self) -> String {
+        let ssim_str = self.current_ssim
+            .map(|s| format!("{:.4}", s))
+            .unwrap_or_else(|| "---".to_string());
+        
+        let eta_str = self.eta_seconds
+            .map(|e| format!("{:.0}s", e))
+            .unwrap_or_else(|| "---".to_string());
+        
+        let trend_indicator = if self.ssim_trend.len() >= 2 {
+            let last = self.ssim_trend.last().unwrap();
+            let prev = self.ssim_trend[self.ssim_trend.len() - 2];
+            if *last > prev { "↑" } else if *last < prev { "↓" } else { "→" }
+        } else {
+            "→"
+        };
+
+        format!(
+            "[{}] CRF {:.1} | SSIM {} {} | Size {:+.1}% | {}/{} | ETA {}",
+            self.phase,
+            self.current_crf,
+            ssim_str,
+            trend_indicator,
+            self.size_change_pct,
+            self.iteration,
+            self.total_iterations,
+            eta_str
+        )
+    }
+
+    /// 打印阶段切换信息
+    pub fn print_phase_change(&self) {
+        eprintln!("┌─────────────────────────────────────────────────────");
+        eprintln!("│ 📍 Phase: {}", self.phase);
+        eprintln!("└─────────────────────────────────────────────────────");
+    }
+}
+
+#[cfg(test)]
+mod detailed_progress_tests {
+    use super::*;
+
+    #[test]
+    fn test_progress_state_creation() {
+        let state = DetailedProgressState::new("GPU Coarse");
+        assert_eq!(state.phase, "GPU Coarse");
+        assert_eq!(state.iteration, 0);
+    }
+
+    #[test]
+    fn test_progress_state_update() {
+        let mut state = DetailedProgressState::new("CPU Fine");
+        state.update_crf(18.5, -15.3);
+        state.update_ssim(0.9523);
+        state.update_iteration(5, 20, 10.0);
+        
+        assert!((state.current_crf - 18.5).abs() < 0.01);
+        assert_eq!(state.current_ssim, Some(0.9523));
+        assert_eq!(state.iteration, 5);
+        assert!(state.eta_seconds.is_some());
+    }
+
+    #[test]
+    fn test_progress_state_format() {
+        let mut state = DetailedProgressState::new("Test");
+        state.update_crf(20.0, -10.0);
+        state.update_ssim(0.95);
+        state.update_iteration(3, 10, 6.0);
+        
+        let display = state.format_display();
+        assert!(display.contains("Test"));
+        assert!(display.contains("20.0"));
+        assert!(display.contains("0.9500"));
+    }
+}

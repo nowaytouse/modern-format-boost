@@ -37,6 +37,8 @@ pub mod flag_validator;
 pub mod gpu_accel;
 pub mod modern_ui;
 pub mod realtime_progress;
+pub mod lru_cache;
+pub mod error_handler;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -111,6 +113,8 @@ pub use video_explorer::{
     explore_av1_compress_only, explore_av1_compress_with_quality,
     // Precision module (精确度规范)
     precision,
+    // 🔥 v5.72: 三阶段搜索
+    precision::SearchPhase, precision::ThreePhaseSearch,
 };
 
 // 🔥 v5.0: GPU 控制变体 (deprecated, GPU is now automatic)
@@ -181,4 +185,12 @@ pub use realtime_progress::{
     SimpleIterationProgress,
     // v5.31: 旧的基于CRF范围的进度条（已弃用但保留兼容）
     RealtimeExploreProgress, RealtimeSpinner,
+    // 🔥 v5.72: 详细进度状态
+    DetailedProgressState,
 };
+
+// 🔥 v5.72: LRU缓存模块
+pub use lru_cache::{LruCache, CacheEntry, SerializableCache};
+
+// 🔥 v5.72: 统一错误处理模块
+pub use error_handler::{ErrorCategory, ErrorAction, handle_error};

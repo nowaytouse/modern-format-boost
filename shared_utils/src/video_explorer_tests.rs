@@ -296,3 +296,73 @@ mod precision_tests {
         assert!((pct - (-20.0)).abs() < 0.1);
     }
 }
+
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.72: 三阶段搜索属性测试
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod three_phase_search_tests {
+    use super::super::video_explorer::precision::*;
+
+    // **Feature: video-explorer-robustness-v5.72, Property 7: 三阶段搜索递进**
+    // **Validates: Requirements 4.1, 4.2, 4.3, 4.4**
+    #[test]
+    fn prop_three_phase_progression() {
+        // 验证三阶段搜索的步进值递减
+        let search = ThreePhaseSearch::default();
+        
+        // 🔥 核心属性：步进值必须递减 0.5 → 0.25 → 0.1
+        assert!(search.coarse_step > search.medium_step,
+            "Coarse step ({}) should be > medium step ({})", 
+            search.coarse_step, search.medium_step);
+        assert!(search.medium_step > search.fine_step,
+            "Medium step ({}) should be > fine step ({})",
+            search.medium_step, search.fine_step);
+        
+        // 验证具体值
+        assert!((search.coarse_step - 0.5).abs() < 0.01, "Coarse step should be 0.5");
+        assert!((search.medium_step - 0.25).abs() < 0.01, "Medium step should be 0.25");
+        assert!((search.fine_step - 0.1).abs() < 0.01, "Fine step should be 0.1");
+    }
+
+    #[test]
+    fn prop_search_phase_step_sizes() {
+        // 验证SearchPhase枚举的步进值
+        assert!((SearchPhase::Coarse.step_size() - 0.5).abs() < 0.01);
+        assert!((SearchPhase::Medium.step_size() - 0.25).abs() < 0.01);
+        assert!((SearchPhase::Fine.step_size() - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn prop_cache_multiplier_consistency() {
+        // 验证缓存键乘数与步进值的一致性
+        // 乘数应该是 1/step_size 的整数倍
+        let search = ThreePhaseSearch::default();
+        
+        for phase in [SearchPhase::Coarse, SearchPhase::Medium, SearchPhase::Fine] {
+            let step = phase.step_size();
+            let multiplier = phase.cache_multiplier();
+            
+            // 验证：step * multiplier 应该产生整数键
+            let test_crf = 18.5_f32;
+            let key = search.cache_key(test_crf, phase);
+            let reconstructed = key as f32 / multiplier;
+            
+            // 重建的CRF应该是step的整数倍
+            let diff = (reconstructed - test_crf).abs();
+            assert!(diff <= step / 2.0,
+                "Phase {:?}: Cache key reconstruction error {} > step/2 ({})",
+                phase, diff, step / 2.0);
+        }
+    }
+
+    #[test]
+    fn prop_phase_progression() {
+        // 验证阶段递进
+        assert_eq!(SearchPhase::Coarse.next(), Some(SearchPhase::Medium));
+        assert_eq!(SearchPhase::Medium.next(), Some(SearchPhase::Fine));
+        assert_eq!(SearchPhase::Fine.next(), None);
+    }
+}
