@@ -5174,35 +5174,54 @@ fn cpu_fine_tune_from_gpu_boundary(
             BRIGHT_GREEN, gpu_pct, RESET, BRIGHT_YELLOW,
             gpu_ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()), RESET);
         eprintln!("");
-        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Overshoot & Refine{} (v5.89)",
+        eprintln!("{}📍 Phase 2:{} {}Maximum SSIM Search - Adaptive Dynamic Stepping{} (v5.90)",
             BRIGHT_CYAN, RESET, BOLD, RESET);
-        eprintln!("   {}(Progressive step 5.0→2.0→1.0→0.5→0.1, overshoot then refine){}", DIM, RESET);
+        eprintln!("   {}(Adaptive step based on CRF range, overshoot then refine){}", DIM, RESET);
 
-        // 🔥 v5.89: 过头+精细回退算法（用户建议）
-        // 核心策略："超过头再基于此的基础上进行精细处理"
+        // 🔥 v5.90: 自适应动态步进（数学公式驱动）
+        // 核心改进：用数学公式根据搜索范围动态计算步进，而不是硬编码
         //
-        // 问题分析：v5.87只在OVERSHOOT时减小步长，导致如果一直能压缩则永远是大步长
+        // 数学模型：
+        // 1. **初始步长 = f(CRF范围)**
+        //    - initial_step = (gpu_boundary_crf - min_crf) / 5.0
+        //    - 限制在 [2.0, 10.0] 范围内
+        //    - 示例：范围31.5 → 步长6.3，范围10 → 步长2.0，范围50 → 步长10.0
         //
-        // 新策略：
-        // 1. **递进式步长**：每N次迭代后主动减小步长（不依赖OVERSHOOT）
-        //    - 5.0 (快速探索) → 2.0 (接近最优) → 1.0 (精细搜索) → 0.5 (微调) → 0.1 (最终精确)
-        // 2. **允许适度过头**：继续搜索直到遇到OVERSHOOT（size >= input）或SSIM下降
-        // 3. **精细回退**：过头后用0.1步长回退到最佳点
-        // 4. **边际效益分析**：SSIM增益递减时及时切换到更小步长
-        // 5. **和GPU对比**：显示CPU相对GPU的乘法增益
+        // 2. **步长递减公式**：geometric progression（几何级数）
+        //    - Stage 1: initial_step (2次快速探索)
+        //    - Stage 2: initial_step / 2 (2次接近最优)
+        //    - Stage 3: initial_step / 4 (3次精细搜索)
+        //    - Stage 4: initial_step / 8 (3次微调)
+        //    - Stage 5: 0.1 (剩余次数，最终精确)
+        //
+        // 3. **过头回退**：
+        //    - 遇到OVERSHOOT时，用0.1步长回退到最佳点
+        //    - 继续用0.1精细搜索
+        //
+        // 4. **自适应终止**：
+        //    - SSIM >= 0.999（平台期）
+        //    - 或用完所有步长阶段
 
-        // 步长递进计划（基于迭代次数）
-        const STEP_SCHEDULE: [(f32, u32); 5] = [
-            (5.0, 2),  // 前2次：大步长快速探索
-            (2.0, 2),  // 接下来2次：中等步长接近
-            (1.0, 3),  // 接下来3次：小步长精细
-            (0.5, 3),  // 接下来3次：微调
-            (0.1, 99), // 剩余：最精细步长
+        let crf_range = gpu_boundary_crf - min_crf;
+        let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);  // 🔥 动态计算初始步长
+
+        // 动态生成步长计划
+        let step_schedule: Vec<(f32, u32)> = vec![
+            (initial_step, 2),              // Stage 1: 快速探索
+            (initial_step / 2.0, 2),        // Stage 2: 接近最优
+            (initial_step / 4.0, 3),        // Stage 3: 精细搜索
+            ((initial_step / 8.0).max(0.2), 3),  // Stage 4: 微调（最小0.2）
+            (0.1, 99),                      // Stage 5: 最终精确
         ];
 
-        let mut current_step = STEP_SCHEDULE[0].0;  // 🔥 初始大步长5.0
+        eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (adaptive formula){}",
+            DIM, crf_range, BRIGHT_CYAN, initial_step, RESET, RESET);
+        eprintln!("   {}📊 Step progression: {:.1} → {:.1} → {:.1} → {:.2} → 0.1{}",
+            DIM, initial_step, initial_step/2.0, initial_step/4.0, (initial_step/8.0).max(0.2), RESET);
+
+        let mut current_step = step_schedule[0].0;
         let mut step_index = 0_usize;
-        let mut step_count = 0_u32;  // 当前步长已使用次数
+        let mut step_count = 0_u32;
         let mut test_crf = gpu_boundary_crf - current_step;
         let mut prev_ssim_opt = gpu_ssim;
         let mut prev_size = gpu_size;
@@ -5260,8 +5279,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                             format!("{}≈GPU{}", DIM, RESET)
                         };
 
-                        // 显示进度（增强版 - 显示当前步长）
-                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}, step {}{:.1}{}) {} {}✅{}",
+                        // 显示进度（增强版 - 显示自适应步长）
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.4}{}, step {}{:.2}{}) {} {}✅{}",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                             BRIGHT_GREEN, size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
                             DIM, ssim_gain, RESET, DIM, current_step, RESET,
@@ -5278,7 +5297,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         }
                     }
                     _ => {
-                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} (step {}{:.1}{}) {}✅{}",
+                        eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} (step {}{:.2}{}) {}✅{}",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                             BRIGHT_GREEN, size_pct, RESET, DIM, RESET, DIM, current_step, RESET, BRIGHT_GREEN, RESET);
                         false
@@ -5289,14 +5308,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                     break;
                 }
 
-                // 🔥 v5.89: 递进式步长切换（不依赖OVERSHOOT）
+                // 🔥 v5.90: 递进式步长切换（不依赖OVERSHOOT）
                 step_count += 1;
-                if step_index < STEP_SCHEDULE.len() - 1 && step_count >= STEP_SCHEDULE[step_index].1 {
+                if step_index < step_schedule.len() - 1 && step_count >= step_schedule[step_index].1 {
                     // 切换到下一个步长
                     step_index += 1;
-                    current_step = STEP_SCHEDULE[step_index].0;
+                    current_step = step_schedule[step_index].0;
                     step_count = 0;
-                    eprintln!("   {}📊{} {}Step reduced{} to {}{:.1}{} (progressive refinement)",
+                    eprintln!("   {}📊{} {}Step reduced{} to {}{:.2}{} (adaptive progression)",
                         BRIGHT_CYAN, RESET, BRIGHT_YELLOW, RESET, BRIGHT_CYAN, current_step, RESET);
                 }
 
@@ -5310,15 +5329,15 @@ fn cpu_fine_tune_from_gpu_boundary(
                     BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     BRIGHT_RED, size_pct, RESET, RED, RESET, RED, (size as f64 - input_size as f64) / 1024.0 / 1024.0, RESET);
 
-                // 🔥 v5.89: 过头后精细回退策略
+                // 🔥 v5.90: 过头后精细回退策略
                 if current_step > MIN_STEP {
                     // 还没用0.1步长，现在用0.1回退到最佳点附近
-                    eprintln!("   {}↩️{} {}Backtrack with {:.1} step{} from CRF {:.1} (last good: {:.1})",
-                        YELLOW, RESET, BRIGHT_CYAN, MIN_STEP, RESET, last_good_crf, last_good_crf);
+                    eprintln!("   {}↩️{} {}Backtrack with 0.1 step{} from last good CRF {:.1}",
+                        YELLOW, RESET, BRIGHT_CYAN, RESET, last_good_crf);
                     test_crf = last_good_crf - MIN_STEP;
                     current_step = MIN_STEP;
                     step_count = 0;
-                    step_index = STEP_SCHEDULE.len() - 1;  // 切换到0.1步长阶段
+                    step_index = step_schedule.len() - 1;  // 切换到0.1步长阶段
                 } else {
                     // 已经是0.1步长，无法继续精细化，停止
                     eprintln!("   {}📊{} Minimum step (0.1) reached → {}STOP{}",
