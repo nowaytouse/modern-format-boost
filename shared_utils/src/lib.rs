@@ -39,6 +39,7 @@ pub mod modern_ui;
 pub mod realtime_progress;
 pub mod lru_cache;
 pub mod error_handler;
+pub mod ssim_mapping;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -99,6 +100,10 @@ pub use video_explorer::{
     ExploreResult, ExploreConfig, QualityThresholds, VideoEncoder, VideoExplorer,
     // Explore mode enum
     ExploreMode,
+    // 🔥 v5.74: 透明度报告类型
+    SsimSource, IterationMetrics, TransparencyReport,
+    // 🔥 v5.74: Preset 配置
+    EncoderPreset,
     // New API: mode-specific functions
     explore_size_only, explore_quality_match, explore_precise_quality_match,
     // 🔥 v4.5: 精确质量匹配 + 压缩
@@ -194,3 +199,6 @@ pub use lru_cache::{LruCache, CacheEntry, SerializableCache};
 
 // 🔥 v5.72: 统一错误处理模块
 pub use error_handler::{ErrorCategory, ErrorAction, handle_error};
+
+// 🔥 v5.74: PSNR→SSIM 动态映射模块
+pub use ssim_mapping::{PsnrSsimMapping, MappingPoint};

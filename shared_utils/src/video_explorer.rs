@@ -557,6 +557,17 @@ impl VideoEncoder {
 // ═══════════════════════════════════════════════════════════════
 
 /// 单次迭代的详细指标（用于透明度报告）
+/// 🔥 v5.74: SSIM 数据来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SsimSource {
+    /// 实际计算的 SSIM
+    Actual,
+    /// 从 PSNR→SSIM 映射预测的 SSIM
+    Predicted,
+    /// 未计算
+    None,
+}
+
 #[derive(Debug, Clone)]
 pub struct IterationMetrics {
     /// 迭代序号
@@ -571,6 +582,8 @@ pub struct IterationMetrics {
     pub size_change_pct: f64,
     /// SSIM 分数（如果计算了）
     pub ssim: Option<f64>,
+    /// 🔥 v5.74: SSIM 数据来源
+    pub ssim_source: SsimSource,
     /// PSNR 分数（如果计算了）
     pub psnr: Option<f64>,
     /// 是否能压缩（output < input）
@@ -583,8 +596,14 @@ pub struct IterationMetrics {
 
 impl IterationMetrics {
     /// 打印单行透明度报告
+    /// 🔥 v5.74: 预测的 SSIM 用 "~" 前缀标注
     pub fn print_line(&self) {
-        let ssim_str = self.ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "----".to_string());
+        // SSIM 显示：预测值用 "~" 前缀
+        let ssim_str = match (self.ssim, self.ssim_source) {
+            (Some(s), SsimSource::Predicted) => format!("~{:.4}", s),
+            (Some(s), _) => format!("{:.4}", s),
+            (None, _) => "----".to_string(),
+        };
         let psnr_str = self.psnr.map(|p| format!("{:.1}", p)).unwrap_or_else(|| "----".to_string());
         let compress_icon = if self.can_compress { "✅" } else { "❌" };
         let quality_icon = match self.quality_passed {
@@ -691,6 +710,8 @@ pub struct VideoExplorer {
     max_threads: usize,
     /// 🔥 v4.9: GPU 加速选项
     use_gpu: bool,
+    /// 🔥 v5.74: 编码器 preset（探索和最终编码必须一致）
+    preset: EncoderPreset,
 }
 
 impl VideoExplorer {
@@ -732,6 +753,7 @@ impl VideoExplorer {
             vf_args,
             max_threads,
             use_gpu,
+            preset: EncoderPreset::default(),
         })
     }
 
@@ -759,6 +781,46 @@ impl VideoExplorer {
             vf_args,
             max_threads,
             use_gpu,
+            preset: EncoderPreset::default(),
+        })
+    }
+
+    /// 🔥 v5.74: 创建新的探索器（带 preset 参数）
+    /// 
+    /// # 重要
+    /// 探索模式和最终压制必须使用相同的 preset！
+    /// 否则探索出的 CRF 在最终压制时会产生不同的文件大小。
+    pub fn new_with_preset(
+        input: &Path,
+        output: &Path,
+        encoder: VideoEncoder,
+        vf_args: Vec<String>,
+        config: ExploreConfig,
+        preset: EncoderPreset,
+    ) -> Result<Self> {
+        let input_size = fs::metadata(input)
+            .context("Failed to read input file metadata")?
+            .len();
+
+        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+
+        let gpu = crate::gpu_accel::GpuAccel::detect();
+        let use_gpu = gpu.is_available() && match encoder {
+            VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
+            VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
+            VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
+        };
+
+        Ok(Self {
+            config,
+            encoder,
+            input_path: input.to_path_buf(),
+            output_path: output.to_path_buf(),
+            input_size,
+            vf_args,
+            max_threads,
+            use_gpu,
+            preset,
         })
     }
 
@@ -2033,9 +2095,9 @@ impl VideoExplorer {
             cmd.arg(*arg);
         }
 
-        // CPU 编码的 preset（GPU 编码通常不需要）
+        // 🔥 v5.74: CPU 编码使用配置的 preset（确保探索与最终编码一致）
         if !self.use_gpu || extra_args.is_empty() {
-            cmd.arg("-preset").arg("medium");
+            cmd.arg("-preset").arg(self.preset.x26x_name());
         }
 
         // 进度输出
@@ -2200,6 +2262,78 @@ impl VideoExplorer {
         };
         
         Ok((ssim, psnr, vmaf))
+    }
+    
+    /// 🔥 v5.74: 同时计算 SSIM 和 PSNR（单次 ffmpeg 调用，更高效）
+    /// 
+    /// 用于透明度报告，同时获取两个指标
+    pub fn calculate_ssim_and_psnr(&self) -> Result<(Option<f64>, Option<f64>)> {
+        eprint!("      📊 Calculating SSIM+PSNR...");
+        use std::io::Write;
+        let _ = std::io::stderr().flush();
+
+        // 使用 split 滤镜同时计算 SSIM 和 PSNR
+        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
+                      [ref][1:v]ssim;[ref][1:v]psnr";
+        
+        let output = Command::new("ffmpeg")
+            .arg("-i").arg(&self.input_path)
+            .arg("-i").arg(&self.output_path)
+            .arg("-lavfi").arg(filter)
+            .arg("-f").arg("null")
+            .arg("-")
+            .output();
+        
+        match output {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let mut ssim: Option<f64> = None;
+                let mut psnr: Option<f64> = None;
+                
+                for line in stderr.lines() {
+                    // 解析 SSIM: "SSIM All:0.987654"
+                    if let Some(pos) = line.find("SSIM All:") {
+                        let value_str = &line[pos + 9..];
+                        let end = value_str.find(|c: char| !c.is_numeric() && c != '.')
+                            .unwrap_or(value_str.len());
+                        if end > 0 {
+                            if let Ok(s) = value_str[..end].parse::<f64>() {
+                                if precision::is_valid_ssim(s) {
+                                    ssim = Some(s);
+                                }
+                            }
+                        }
+                    }
+                    // 解析 PSNR: "average:XX.XX"
+                    if let Some(pos) = line.find("average:") {
+                        let value_str = &line[pos + 8..].trim_start();
+                        if value_str.starts_with("inf") {
+                            psnr = Some(f64::INFINITY);
+                        } else {
+                            let end = value_str.find(|c: char| !c.is_numeric() && c != '.' && c != '-')
+                                .unwrap_or(value_str.len());
+                            if end > 0 {
+                                if let Ok(p) = value_str[..end].parse::<f64>() {
+                                    if precision::is_valid_psnr(p) {
+                                        psnr = Some(p);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                let ssim_str = ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string());
+                let psnr_str = psnr.map(|p| format!("{:.1}", p)).unwrap_or_else(|| "N/A".to_string());
+                eprintln!("\r      📊 SSIM: {} | PSNR: {} dB          ", ssim_str, psnr_str);
+                
+                Ok((ssim, psnr))
+            }
+            Err(e) => {
+                eprintln!("\r      ⚠️  SSIM+PSNR calculation failed: {}          ", e);
+                Ok((None, None))
+            }
+        }
     }
     
     /// 计算 SSIM（增强版：更严格的解析和验证）
