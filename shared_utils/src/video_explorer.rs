@@ -4785,7 +4785,76 @@ pub fn explore_with_gpu_coarse_search(
     // 🔥 v5.1.4: 清空日志，避免 conversion_api.rs 重复打印
     // 所有日志已经通过 eprintln! 实时输出了
     result.log.clear();
-    
+
+    // 🔥 v5.80: VMAF精确验证（短视频）
+    // 策略：
+    // - 探索阶段使用SSIM（快速迭代）
+    // - 验证阶段使用VMAF（精确确认，仅短视频）
+    // - 5分钟阈值：300秒
+    eprintln!("");
+    eprintln!("📊 Phase 3: Quality Verification");
+
+    // 获取视频时长
+    if let Some(duration) = get_video_duration(input) {
+        eprintln!("   📹 Video duration: {:.1}s ({:.1} min)", duration, duration / 60.0);
+
+        const VMAF_DURATION_THRESHOLD: f64 = 300.0;  // 5分钟 = 300秒
+
+        if duration <= VMAF_DURATION_THRESHOLD {
+            eprintln!("   ✅ Short video detected (≤5min)");
+            eprintln!("   🎯 Enabling VMAF precise verification...");
+
+            // 计算VMAF分数
+            if let Some(vmaf) = calculate_vmaf(input, output) {
+                eprintln!("   ═══════════════════════════════════════════════════");
+                eprintln!("   📊 Final Quality Scores:");
+                eprintln!("      SSIM: {:.6} (exploration metric)", result.ssim);
+                eprintln!("      VMAF: {:.2} (verification metric)", vmaf);
+
+                // VMAF分数解读
+                let vmaf_grade = if vmaf >= 95.0 {
+                    "🟢 Excellent (near transparent)"
+                } else if vmaf >= 90.0 {
+                    "🟡 Very Good (imperceptible diff)"
+                } else if vmaf >= 85.0 {
+                    "🟠 Good (minor artifacts)"
+                } else {
+                    "🔴 Fair (noticeable artifacts)"
+                };
+                eprintln!("      Grade: {}", vmaf_grade);
+
+                // SSIM vs VMAF 映射关系展示
+                let ssim_vmaf_correlation = if vmaf >= 90.0 && result.ssim >= 0.98 {
+                    "✅ Excellent correlation"
+                } else if vmaf >= 85.0 && result.ssim >= 0.95 {
+                    "✅ Good correlation"
+                } else {
+                    "⚠️  Divergence detected"
+                };
+                eprintln!("      SSIM-VMAF: {}", ssim_vmaf_correlation);
+
+                // 如果VMAF显著低于预期，给出建议
+                if vmaf < 85.0 {
+                    eprintln!("   ⚠️  VMAF lower than expected!");
+                    eprintln!("      Suggestion: Try lowering CRF by 1-2 for better quality");
+                } else if vmaf >= 95.0 {
+                    eprintln!("   ✅ Excellent quality confirmed by VMAF");
+                }
+            } else {
+                eprintln!("   ⚠️  VMAF calculation failed (libvmaf not available?)");
+                eprintln!("   ℹ️  Falling back to SSIM verification only");
+            }
+        } else {
+            eprintln!("   ⏭️  Long video (>{:.0}min) - skipping VMAF (too slow)", VMAF_DURATION_THRESHOLD / 60.0);
+            eprintln!("   ℹ️  Using SSIM verification only: {:.6}", result.ssim);
+        }
+    } else {
+        eprintln!("   ⚠️  Could not determine video duration");
+        eprintln!("   ℹ️  Using SSIM verification only: {:.6}", result.ssim);
+    }
+
+    eprintln!("");
+
     // 打印 CRF 映射信息
     if gpu.is_available() && has_gpu_encoder {
         let mapping = match encoder {
@@ -5545,6 +5614,137 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
         }
     }
     None
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.80: VMAF精确验证 - 用于短视频的最终质量确认
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v5.80: 计算VMAF分数（Netflix视频质量指标）
+///
+/// ## 使用场景
+/// - **短视频**（≤5分钟）：作为最终验证指标
+/// - **长视频**：跳过（计算时间过长）
+///
+/// ## 策略
+/// - 探索阶段：使用SSIM快速迭代
+/// - 验证阶段：使用VMAF精确确认（短视频）
+///
+/// ## VMAF vs SSIM
+/// - **VMAF**：更接近人眼感知，Netflix标准
+/// - **SSIM**：计算快速，广泛使用
+/// - **关系**：VMAF ≈ f(SSIM)，存在映射关系
+///
+/// ## 返回值
+/// - `Some(score)`: VMAF分数（0-100，越高越好）
+/// - `None`: 计算失败或不支持
+pub fn calculate_vmaf(input: &Path, output: &Path) -> Option<f64> {
+    use std::process::Command;
+
+    eprintln!("   📊 Calculating VMAF (precise video quality metric)...");
+
+    // 🔥 尝试libvmaf滤镜（需要ffmpeg编译时包含libvmaf）
+    let result = Command::new("ffmpeg")
+        .arg("-i").arg(input)
+        .arg("-i").arg(output)
+        .arg("-lavfi").arg("libvmaf=log_fmt=json:log_path=/dev/stdout")
+        .arg("-f").arg("null")
+        .arg("-")
+        .output();
+
+    match result {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+
+            // 尝试从stdout解析（JSON格式）
+            if let Some(vmaf) = parse_vmaf_from_json(&stdout) {
+                eprintln!("   📊 VMAF score: {:.2}", vmaf);
+                return Some(vmaf);
+            }
+
+            // fallback: 尝试从stderr解析（旧版格式）
+            if let Some(vmaf) = parse_vmaf_from_legacy(&stderr) {
+                eprintln!("   📊 VMAF score: {:.2}", vmaf);
+                return Some(vmaf);
+            }
+
+            eprintln!("   ⚠️  VMAF calculated but failed to parse score");
+        }
+        Ok(_) => {
+            eprintln!("   ⚠️  VMAF calculation failed (libvmaf not available?)");
+        }
+        Err(e) => {
+            eprintln!("   ⚠️  ffmpeg VMAF failed: {}", e);
+        }
+    }
+
+    None
+}
+
+/// 从JSON输出解析VMAF分数
+fn parse_vmaf_from_json(stdout: &str) -> Option<f64> {
+    // VMAF JSON格式示例：
+    // {"version":"...", "vmaf": {"min": 85.2, "max": 98.5, "mean": 92.3, ...}}
+
+    // 简单解析：查找 "mean": 后的数字
+    for line in stdout.lines() {
+        if line.contains("\"mean\"") {
+            if let Some(mean_pos) = line.find("\"mean\"") {
+                let after_mean = &line[mean_pos + 6..];  // skip "mean"
+                if let Some(colon_pos) = after_mean.find(':') {
+                    let after_colon = &after_mean[colon_pos + 1..].trim_start();
+                    // 提取数字（可能后面跟逗号或括号）
+                    let end = after_colon.find(|c: char| !c.is_numeric() && c != '.')
+                        .unwrap_or(after_colon.len());
+                    if end > 0 {
+                        return after_colon[..end].parse::<f64>().ok();
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 从旧版stderr输出解析VMAF分数
+fn parse_vmaf_from_legacy(stderr: &str) -> Option<f64> {
+    // 旧版格式示例：
+    // [libvmaf @ 0x...] VMAF score: 92.345678
+
+    for line in stderr.lines() {
+        if line.contains("VMAF") && line.contains("score:") {
+            if let Some(score_pos) = line.find("score:") {
+                let after_score = &line[score_pos + 6..].trim_start();
+                let end = after_score.find(|c: char| !c.is_numeric() && c != '.')
+                    .unwrap_or(after_score.len());
+                if end > 0 {
+                    return after_score[..end].parse::<f64>().ok();
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 🔥 v5.80: 获取视频时长（秒）
+///
+/// 用于判断是否启用VMAF验证
+pub fn get_video_duration(input: &Path) -> Option<f64> {
+    use std::process::Command;
+
+    let output = Command::new("ffprobe")
+        .args(["-v", "error"])
+        .args(["-show_entries", "format=duration"])
+        .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+        .arg(input)
+        .output()
+        .ok()?;
+
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()
 }
 
 /// 🔥 v5.1: HEVC GPU+CPU 智能探索
