@@ -205,6 +205,260 @@ impl Drop for CoarseProgressBar {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v5.88: 详细粗进度条 - 视频探索专用
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v5.88: 详细粗进度条 - 为视频探索设计
+///
+/// 相比基础CoarseProgressBar，增加了详细信息显示：
+/// - CRF值
+/// - SSIM值
+/// - 文件大小变化
+/// - 最佳CRF记录
+///
+/// 保持CoarseProgressBar的所有优点：
+/// - 原生ANSI序列，不依赖indicatif
+/// - 固定在当前行，不刷屏
+/// - 不受按键污染
+/// - 持续刷新
+pub struct DetailedCoarseProgressBar {
+    prefix: String,
+    total_iterations: u64,
+    current_iteration: AtomicU64,
+    input_size: u64,
+    // 状态信息
+    current_crf: AtomicU64,         // f32 as bits
+    current_size: AtomicU64,
+    current_ssim: AtomicU64,        // f64 as bits
+    best_crf: AtomicU64,            // f32 as bits
+    // 时间和刷新控制
+    start_time: Instant,
+    last_render: Arc<Mutex<Instant>>,
+    is_finished: AtomicBool,
+}
+
+impl DetailedCoarseProgressBar {
+    /// 创建新的详细粗进度条
+    pub fn new(prefix: &str, input_size: u64, total_iterations: u64) -> Self {
+        // 隐藏光标
+        eprint!("\x1b[?25l");
+        let _ = io::stderr().flush();
+
+        Self {
+            prefix: prefix.to_string(),
+            total_iterations,
+            current_iteration: AtomicU64::new(0),
+            input_size,
+            current_crf: AtomicU64::new(0),
+            current_size: AtomicU64::new(0),
+            current_ssim: AtomicU64::new(0),
+            best_crf: AtomicU64::new(0),
+            start_time: Instant::now(),
+            last_render: Arc::new(Mutex::new(Instant::now())),
+            is_finished: AtomicBool::new(false),
+        }
+    }
+
+    /// 更新单次迭代 - 核心方法
+    ///
+    /// 每次编码完成后调用一次，立即更新进度
+    pub fn inc_iteration(&self, crf: f32, size: u64, ssim: Option<f64>) {
+        // 递增迭代次数
+        let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
+
+        // 原子更新状态
+        self.current_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
+        self.current_size.store(size, Ordering::Relaxed);
+        if let Some(s) = ssim {
+            self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
+        }
+
+        // 更新最佳 CRF
+        if size < self.input_size {
+            self.best_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
+        }
+
+        // 🔥 立即渲染（持续刷新）
+        self.render(iter, crf, size, ssim);
+    }
+
+    /// 渲染进度条
+    fn render(&self, iter: u64, crf: f32, size: u64, ssim: Option<f64>) {
+        if self.is_finished.load(Ordering::Relaxed) {
+            return;
+        }
+
+        // 🔥 限流：每 100ms 渲染一次（10Hz持续刷新）
+        if let Ok(mut last) = self.last_render.try_lock() {
+            if last.elapsed() < Duration::from_millis(100) {
+                return;
+            }
+            *last = Instant::now();
+        } else {
+            return;
+        }
+
+        let total = self.total_iterations.max(1);
+        let percent = (iter as f64 / total as f64 * 100.0).min(100.0);
+        let elapsed = self.start_time.elapsed();
+
+        // 构建进度条
+        let bar_width: usize = progress_style::BAR_WIDTH;
+        let filled = ((percent / 100.0) * bar_width as f64) as usize;
+        let empty = bar_width.saturating_sub(filled);
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+
+        // 计算大小变化
+        let size_pct = if self.input_size > 0 {
+            ((size as f64 / self.input_size as f64) - 1.0) * 100.0
+        } else {
+            0.0
+        };
+
+        // 图标
+        let icon = if size < self.input_size { "💾" } else { "📈" };
+
+        // SSIM字符串
+        let ssim_str = if let Some(s) = ssim {
+            format!("SSIM {:.4}", s)
+        } else {
+            String::new()
+        };
+
+        // 最佳CRF
+        let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed) as u32);
+        let best_str = if best_crf > 0.0 {
+            format!("Best: {:.1}", best_crf)
+        } else {
+            String::new()
+        };
+
+        // 🔥 使用 ANSI 颜色和固定行渲染
+        let color = "\x1b[32m";  // 绿色
+        eprint!(
+            "\r\x1b[K{}{} {}{}{}{}▏ {:.1}% • CRF {:.1} | {:+.1}% {} | {} | {} | {}/{} • ⏱️ {:.1}s\x1b[0m",
+            color,
+            self.prefix,
+            progress_style::BAR_LEFT,
+            color,
+            bar,
+            color,
+            percent,
+            crf,
+            size_pct,
+            icon,
+            ssim_str,
+            best_str,
+            iter,
+            total,
+            elapsed.as_secs_f64()
+        );
+        let _ = io::stderr().flush();
+    }
+
+    /// 暂停进度条，输出日志到上方
+    pub fn println(&self, msg: &str) {
+        if self.is_finished.load(Ordering::Relaxed) {
+            eprintln!("{}", msg);
+            return;
+        }
+
+        // 1. 清除当前进度条行
+        eprint!("\r\x1b[K");
+        let _ = io::stderr().flush();
+
+        // 2. 输出日志
+        eprintln!("{}", msg);
+
+        // 3. 重新渲染进度条（使用当前状态）
+        let iter = self.current_iteration.load(Ordering::Relaxed);
+        let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
+        let size = self.current_size.load(Ordering::Relaxed);
+        let ssim_bits = self.current_ssim.load(Ordering::Relaxed);
+        let ssim = if ssim_bits != 0 {
+            Some(f64::from_bits(ssim_bits))
+        } else {
+            None
+        };
+
+        // 强制渲染（绕过限流）
+        if let Ok(mut last) = self.last_render.lock() {
+            *last = Instant::now() - Duration::from_secs(1);  // 强制过期
+        }
+        self.render(iter, crf, size, ssim);
+    }
+
+    /// 完成进度条
+    pub fn finish(&self, final_crf: f32, final_size: u64, final_ssim: Option<f64>) {
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        let elapsed = self.start_time.elapsed();
+
+        // 计算最终结果
+        let size_pct = if self.input_size > 0 {
+            ((final_size as f64 / self.input_size as f64) - 1.0) * 100.0
+        } else {
+            0.0
+        };
+
+        let ssim_str = final_ssim
+            .map(|s| format!("SSIM {:.4}", s))
+            .unwrap_or_default();
+
+        let icon = if size_pct < 0.0 { "✅" } else { "⚠️" };
+        let iter = self.current_iteration.load(Ordering::Relaxed);
+
+        // 完整进度条
+        let bar_width: usize = progress_style::BAR_WIDTH;
+        let bar = "█".repeat(bar_width);
+        let color = "\x1b[32m";
+
+        eprint!(
+            "\r\x1b[K{}{} {}{}{}{}▏ ✅ 100% • CRF {:.1} • {:+.1}% {} • {} • {} iterations • ⏱️ {:.1}s\x1b[0m\n",
+            color,
+            self.prefix,
+            progress_style::BAR_LEFT,
+            color,
+            bar,
+            color,
+            final_crf,
+            size_pct,
+            icon,
+            ssim_str,
+            iter,
+            elapsed.as_secs_f64()
+        );
+
+        // 恢复光标
+        eprint!("\x1b[?25h");
+        let _ = io::stderr().flush();
+    }
+
+    /// 失败结束
+    pub fn fail(&self, error: &str) {
+        if self.is_finished.swap(true, Ordering::Relaxed) {
+            return;
+        }
+
+        eprint!("\r\x1b[K❌ {} {}\n", self.prefix, error);
+        eprint!("\x1b[?25h");  // 恢复光标
+        let _ = io::stderr().flush();
+    }
+}
+
+impl Drop for DetailedCoarseProgressBar {
+    fn drop(&mut self) {
+        if !self.is_finished.load(Ordering::Relaxed) {
+            eprint!("\r\x1b[K");
+            eprint!("\x1b[?25h");  // 恢复光标
+            let _ = io::stderr().flush();
+        }
+    }
+}
+
 /// 简化的 ETA 格式化
 fn format_eta_simple(seconds: u64) -> String {
     if seconds > 86400 {

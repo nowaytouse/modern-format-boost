@@ -4617,9 +4617,10 @@ pub fn explore_with_gpu_coarse_search(
             max_iterations: crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS,  // 🔥 v5.52: 使用保底上限 500
         };
 
-        // 🔥 v5.34: GPU 阶段使用新的基于迭代计数的进度条（修复跳跃问题）
+        // 🔥 v5.88: GPU 阶段使用详细粗进度条（原生ANSI，不依赖indicatif）
+        // 保持CoarseProgressBar的优点：固定行、不刷屏、不受按键污染、持续刷新
         // 🔥 v5.45: 使用采样输入大小来正确计算压缩率
-        let gpu_progress = crate::SimpleIterationProgress::new(
+        let gpu_progress = crate::DetailedCoarseProgressBar::new(
             "🔍 GPU Search", gpu_sample_input_size,
             gpu_config.max_iterations as u64
         );
@@ -4629,9 +4630,9 @@ pub fn explore_with_gpu_coarse_search(
             gpu_progress.inc_iteration(crf, size, None);
         };
 
-        // Log callback - 使用 suspend 输出日志，不干扰进度条
+        // 🔥 v5.88: Log callback - 使用 println 输出日志，不干扰进度条
         let log_callback = |msg: &str| {
-            gpu_progress.bar.suspend(|| eprintln!("{}", msg));
+            gpu_progress.println(msg);
         };
 
         let gpu_result = crate::gpu_accel::gpu_coarse_search_with_log(
@@ -4955,8 +4956,10 @@ fn cpu_fine_tune_from_gpu_boundary(
             .unwrap_or(60.0)  // 默认 60 秒
     };
 
-    // 🔥 v5.60: CPU 进度条使用真实输入大小（全片编码）
-    let cpu_progress = crate::SimpleIterationProgress::new(
+    // 🔥 v5.88: CPU 阶段使用详细粗进度条（原生ANSI，不依赖indicatif）
+    // 保持CoarseProgressBar的优点：固定行、不刷屏、不受按键污染、持续刷新
+    // 🔥 v5.60: 使用真实输入大小（全片编码）
+    let cpu_progress = crate::DetailedCoarseProgressBar::new(
         "🔬 CPU Fine-Tune",
         input_size,  // 🔥 v5.60: 使用真实输入大小
         15  // 🔥 v5.60: GPU 已定位范围，CPU 迭代次数少（5-15次）
@@ -4966,7 +4969,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
-            cpu_progress.bar.suspend(|| eprintln!("{}", msg));
+            cpu_progress.println(&msg);
             log.push(msg);
         }};
     }

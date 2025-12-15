@@ -44,6 +44,8 @@ pub mod ssim_mapping;
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
     CoarseProgressBar,
+    // 🔥 v5.88: 详细粗进度条（视频探索专用）
+    DetailedCoarseProgressBar,
     // 🔥 v5.5: 新增固定底部进度条
     FixedBottomProgress, ProgressStats, ExploreProgress, ExploreLogger,
     GlobalProgressManager,
