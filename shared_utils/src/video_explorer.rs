@@ -2651,6 +2651,83 @@ pub mod precision {
     /// 🔥 v5.55: 精细搜索步长 (从 0.1 改为 0.25，速度提升 2-3 倍)
     pub const ULTRA_FINE_STEP: f32 = 0.25;
     
+    /// 🔥 v5.72: 最精细搜索步长（用于最终优化）
+    pub const FINEST_STEP: f32 = 0.1;
+
+    /// 🔥 v5.72: 搜索阶段
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SearchPhase {
+        /// 粗搜索：0.5步进，快速定位边界
+        Coarse,
+        /// 中等精度：0.25步进，缩小范围
+        Medium,
+        /// 精细搜索：0.1步进，最终优化
+        Fine,
+    }
+
+    impl SearchPhase {
+        /// 获取当前阶段的步进值
+        pub fn step_size(&self) -> f32 {
+            match self {
+                SearchPhase::Coarse => FINE_STEP,      // 0.5
+                SearchPhase::Medium => ULTRA_FINE_STEP, // 0.25
+                SearchPhase::Fine => FINEST_STEP,       // 0.1
+            }
+        }
+
+        /// 获取缓存键乘数（用于缓存键计算）
+        pub fn cache_multiplier(&self) -> f32 {
+            match self {
+                SearchPhase::Coarse => 2.0,   // key = crf * 2
+                SearchPhase::Medium => 4.0,   // key = crf * 4
+                SearchPhase::Fine => 10.0,    // key = crf * 10
+            }
+        }
+
+        /// 获取下一阶段
+        pub fn next(&self) -> Option<SearchPhase> {
+            match self {
+                SearchPhase::Coarse => Some(SearchPhase::Medium),
+                SearchPhase::Medium => Some(SearchPhase::Fine),
+                SearchPhase::Fine => None,
+            }
+        }
+    }
+
+    /// 🔥 v5.72: 三阶段搜索配置
+    #[derive(Debug, Clone)]
+    pub struct ThreePhaseSearch {
+        pub coarse_step: f32,   // 0.5 - 粗搜索
+        pub medium_step: f32,   // 0.25 - 中等精度
+        pub fine_step: f32,     // 0.1 - 精细调整
+    }
+
+    impl Default for ThreePhaseSearch {
+        fn default() -> Self {
+            Self {
+                coarse_step: FINE_STEP,       // 0.5
+                medium_step: ULTRA_FINE_STEP, // 0.25
+                fine_step: FINEST_STEP,       // 0.1
+            }
+        }
+    }
+
+    impl ThreePhaseSearch {
+        /// 获取指定阶段的步进值
+        pub fn step_for_phase(&self, phase: SearchPhase) -> f32 {
+            match phase {
+                SearchPhase::Coarse => self.coarse_step,
+                SearchPhase::Medium => self.medium_step,
+                SearchPhase::Fine => self.fine_step,
+            }
+        }
+
+        /// 计算缓存键
+        pub fn cache_key(&self, crf: f32, phase: SearchPhase) -> i32 {
+            (crf * phase.cache_multiplier()).round() as i32
+        }
+    }
+    
     /// SSIM 显示精度：4 位小数
     pub const SSIM_DISPLAY_PRECISION: u32 = 4;
     
