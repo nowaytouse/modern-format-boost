@@ -27,6 +27,9 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::io::Read;
 
+// 🔥 v6.5: 使用统一的 CrfCache 替代 HashMap
+use crate::explore_strategy::CrfCache;
+
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.3: 全局常量 - 避免硬编码
 // ═══════════════════════════════════════════════════════════════
@@ -1982,19 +1985,18 @@ pub fn gpu_coarse_search_with_log(
         handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (0.0, Err(anyhow::anyhow!("thread panic"))))).collect()
     };
 
-    // 缓存已测试的 CRF 结果
-    let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
+    // 🔥 v6.5: 使用 CrfCache 替代 HashMap
+    let mut size_cache: CrfCache<u64> = CrfCache::new();
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
     
-    // 带缓存的编码函数 - 🔥 v5.73: 使用统一的缓存 Key 精度
-    let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> anyhow::Result<u64> {
-        let key = crate::video_explorer::precision::crf_to_cache_key(crf);
-        if let Some(&size) = cache.get(&key) {
+    // 🔥 v6.5: 使用 CrfCache（直接用 crf 作为 key）
+    let encode_cached = |crf: f32, cache: &mut CrfCache<u64>| -> anyhow::Result<u64> {
+        if let Some(&size) = cache.get(crf) {
             return Ok(size);
         }
         let size = encode_gpu(crf)?;
-        cache.insert(key, size);
+        cache.insert(crf, size);
         Ok(size)
     };
     
@@ -2067,8 +2069,8 @@ pub fn gpu_coarse_search_with_log(
         log_msg!("   🔄 Testing CRF {:.0} (anchor point)...", test_crf);
         let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
-            let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
-            size_cache.insert(key, *size);
+            // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+            size_cache.insert(test_crf, *size);
             iterations += 1;
             size_history.push((test_crf, *size));
             if let Some(cb) = progress_cb { cb(test_crf, *size); }
@@ -2079,12 +2081,11 @@ pub fn gpu_coarse_search_with_log(
         encode_parallel(&probe_crfs)
     };
     
-    // 处理并行结果（非跳过模式时）- 🔥 v5.73: 统一缓存 Key
+    // 🔥 v6.5: CrfCache 直接用 crf 作为 key
     if !skip_parallel {
         for (crf, result) in &probe_results {
             if let Ok(size) = result {
-                let key = crate::video_explorer::precision::crf_to_cache_key(*crf);
-                size_cache.insert(key, *size);
+                size_cache.insert(*crf, *size);
                 iterations += 1;
                 size_history.push((*crf, *size));
                 if let Some(cb) = progress_cb { cb(*crf, *size); }
@@ -2178,17 +2179,16 @@ pub fn gpu_coarse_search_with_log(
             let mut last_compressible_size = best_size.unwrap_or(0);
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
-                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);
-                
-                let size_result = if size_cache.contains_key(&key) {
-                    Ok(*size_cache.get(&key).unwrap())
+                // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+                let size_result = if size_cache.contains_key(test_crf) {
+                    Ok(*size_cache.get(test_crf).unwrap())
                 } else {
                     encode_cached(test_crf, &mut size_cache)
                 };
                 
                 match size_result {
                     Ok(size) => {
-                        if !size_cache.contains_key(&key) {
+                        if !size_cache.contains_key(test_crf) {
                             iterations += 1;
                             if let Some(cb) = progress_cb { cb(test_crf, size); }
                         }
@@ -2255,17 +2255,16 @@ pub fn gpu_coarse_search_with_log(
             let mut last_fail_crf = boundary_high;
 
             while test_crf >= config.min_crf && iterations < max_iterations_limit {
-                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);
-                
-                let size_result = if size_cache.contains_key(&key) {
-                    Ok(*size_cache.get(&key).unwrap())
+                // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+                let size_result = if size_cache.contains_key(test_crf) {
+                    Ok(*size_cache.get(test_crf).unwrap())
                 } else {
                     encode_cached(test_crf, &mut size_cache)
                 };
 
                 match size_result {
                     Ok(size) => {
-                        if !size_cache.contains_key(&key) {
+                        if !size_cache.contains_key(test_crf) {
                             iterations += 1;
                             if let Some(cb) = progress_cb { cb(test_crf, size); }
                         }
@@ -2334,9 +2333,9 @@ pub fn gpu_coarse_search_with_log(
             let mid = lo + (hi - lo) / 2;
             let test_crf = mid as f32;
             
-            let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
-            if size_cache.contains_key(&key) {
-                let cached_size = *size_cache.get(&key).unwrap();
+            // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+            if size_cache.contains_key(test_crf) {
+                let cached_size = *size_cache.get(test_crf).unwrap();
                 if cached_size < sample_input_size {
                     hi = mid;
                     best_crf = Some(test_crf);
@@ -2413,10 +2412,9 @@ pub fn gpu_coarse_search_with_log(
                     break;
                 }
 
-                // 检查缓存 - 🔥 v5.73: 统一缓存 Key
-                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);
-                let result = if size_cache.contains_key(&key) {
-                    let cached_size = *size_cache.get(&key).unwrap();
+                // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+                let result = if size_cache.contains_key(test_crf) {
+                    let cached_size = *size_cache.get(test_crf).unwrap();
                     log_msg!("   📦 Cache hit: CRF {:.1}", test_crf);
                     Ok(cached_size)
                 } else {
