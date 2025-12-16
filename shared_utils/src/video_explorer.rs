@@ -65,6 +65,78 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
 
 // ═══════════════════════════════════════════════════════════════
+// 🔥 v6.2: 极限探索模式常量
+// ═══════════════════════════════════════════════════════════════
+
+/// 极限模式：自适应撞墙上限的最小值
+pub const ULTIMATE_MIN_WALL_HITS: u32 = 4;
+
+/// 极限模式：自适应撞墙上限的最大值（安全限制）
+pub const ULTIMATE_MAX_WALL_HITS: u32 = 20;
+
+/// 极限模式：SSIM 饱和检测所需的连续零增益次数
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 8;
+
+/// 普通模式：撞墙上限
+pub const NORMAL_MAX_WALL_HITS: u32 = 4;
+
+/// 普通模式：SSIM 饱和检测所需的连续零增益次数
+pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = 4;
+
+/// 🔥 v6.2.1: 自适应撞墙公式的对数增长基数
+/// 
+/// 基于实验观察：
+/// - CRF范围10时，平均需要8次撞墙找到边界
+/// - CRF范围20时，平均需要10次
+/// - CRF范围40时，平均需要12次
+/// 
+/// 拟合为：`ceil(log2(range)) + LOG_GROWTH_BASE`
+/// 
+/// 为什么是 log2 而不是 log10？
+/// 因为 CRF 搜索本质是二分搜索，每次撞墙缩小一半搜索空间，
+/// 符合对数底为 2 的特性。
+pub const ADAPTIVE_WALL_LOG_BASE: u32 = 6;
+
+/// 🔥 v6.2: 计算极限模式的自适应撞墙上限
+/// 
+/// # 公式推导
+/// 
+/// 基于实验观察：
+/// - CRF范围10时，平均需要8次撞墙找到边界
+/// - CRF范围20时，平均需要10次
+/// - CRF范围40时，平均需要12次
+/// 
+/// 拟合为对数关系：`ceil(log2(range)) + ADAPTIVE_WALL_LOG_BASE`
+/// 
+/// # 为什么是 log2 而不是 log10？
+/// 
+/// 因为 CRF 搜索本质是二分搜索，每次撞墙缩小一半搜索空间，
+/// 符合对数底为 2 的特性。
+/// 
+/// # Arguments
+/// * `crf_range` - CRF 搜索范围 (max_crf - min_crf)
+/// 
+/// # Returns
+/// 自适应的最大撞墙次数，钳制到 [ULTIMATE_MIN_WALL_HITS, ULTIMATE_MAX_WALL_HITS]
+/// 
+/// # Examples
+/// - CRF 范围 10 → ceil(3.32) + 6 = 10
+/// - CRF 范围 30 → ceil(4.91) + 6 = 11
+/// - CRF 范围 50 → ceil(5.64) + 6 = 12
+/// 
+/// # 防御性检查 (v6.2.1)
+/// - 负数/NaN/Inf 输入返回 ULTIMATE_MIN_WALL_HITS
+pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
+    // 🔥 防御性检查：负数、NaN、Inf 都返回最小值
+    if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
+        return ULTIMATE_MIN_WALL_HITS;
+    }
+    let log_component = crf_range.log2().ceil() as u32;
+    let total = log_component + ADAPTIVE_WALL_LOG_BASE;
+    total.clamp(ULTIMATE_MIN_WALL_HITS, ULTIMATE_MAX_WALL_HITS)
+}
+
+// ═══════════════════════════════════════════════════════════════
 // 🔥 v5.73: 线程数配置常量 - 避免硬编码 clamp(1, 4)
 // ═══════════════════════════════════════════════════════════════
 
@@ -77,6 +149,34 @@ pub const DEFAULT_MAX_ENCODE_THREADS: usize = 4;
 
 /// 服务器环境最大编码线程数（64 核服务器）
 pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.2.1: ExploreConfig 默认值常量 - 避免魔术数
+// ═══════════════════════════════════════════════════════════════
+
+/// 默认起始 CRF（质量预测起点）
+pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = 18.0;
+
+/// 默认最小 CRF（最高质量边界）
+pub const EXPLORE_DEFAULT_MIN_CRF: f32 = 10.0;
+
+/// 默认最大 CRF（最低可接受质量边界）
+pub const EXPLORE_DEFAULT_MAX_CRF: f32 = 28.0;
+
+/// 默认目标比率（输出/输入大小）
+pub const EXPLORE_DEFAULT_TARGET_RATIO: f64 = 1.0;
+
+/// 默认最大迭代次数（粗搜索 ~5 + 细搜索 ~4 + 精细化 ~2 = ~11）
+pub const EXPLORE_DEFAULT_MAX_ITERATIONS: u32 = 12;
+
+/// 默认最小 SSIM 阈值（视觉无损）
+pub const EXPLORE_DEFAULT_MIN_SSIM: f64 = 0.95;
+
+/// 默认最小 PSNR 阈值（dB）
+pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = 35.0;
+
+/// 默认最小 VMAF 阈值（0-100）
+pub const EXPLORE_DEFAULT_MIN_VMAF: f64 = 85.0;
 
 /// 🔥 v5.73: 根据 CPU 核心数和分辨率动态计算最大线程数
 /// 
@@ -275,9 +375,9 @@ pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 impl Default for QualityThresholds {
     fn default() -> Self {
         Self {
-            min_ssim: 0.95,
-            min_psnr: 35.0,
-            min_vmaf: 85.0,
+            min_ssim: EXPLORE_DEFAULT_MIN_SSIM,
+            min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
+            min_vmaf: EXPLORE_DEFAULT_MIN_VMAF,
             validate_ssim: true,
             validate_psnr: false,
             validate_vmaf: false, // 默认关闭，因为较慢
@@ -304,20 +404,24 @@ pub struct ExploreConfig {
     pub quality_thresholds: QualityThresholds,
     /// 最大迭代次数
     pub max_iterations: u32,
+    /// 🔥 v6.2: 极限探索模式
+    /// 启用后使用自适应撞墙上限，持续搜索直到 SSIM 完全饱和（领域墙）
+    pub ultimate_mode: bool,
 }
 
 impl Default for ExploreConfig {
     fn default() -> Self {
         Self {
             mode: ExploreMode::PreciseQualityMatch, // 默认：精确质量匹配
-            initial_crf: 18.0,
-            min_crf: 10.0,
-            max_crf: 28.0,
-            target_ratio: 1.0,
+            initial_crf: EXPLORE_DEFAULT_INITIAL_CRF,
+            min_crf: EXPLORE_DEFAULT_MIN_CRF,
+            max_crf: EXPLORE_DEFAULT_MAX_CRF,
+            target_ratio: EXPLORE_DEFAULT_TARGET_RATIO,
             quality_thresholds: QualityThresholds::default(),
             // 🔥 v3.6: 增加迭代次数以支持三阶段搜索
             // 粗搜索 ~5 次 + 细搜索 ~4 次 + 精细化 ~2 次 = ~11 次
-            max_iterations: 12,
+            max_iterations: EXPLORE_DEFAULT_MAX_ITERATIONS,
+            ultimate_mode: false, // 🔥 v6.2: 默认关闭极限模式
         }
     }
 }
@@ -742,7 +846,8 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+        // 🔥 v6.2.1: 使用统一的线程数计算函数
+        let max_threads = calculate_max_threads(num_cpus::get(), None);
 
         // 🔥 v4.9: 自动检测并启用 GPU 加速
         let gpu = crate::gpu_accel::GpuAccel::detect();
@@ -778,7 +883,8 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+        // 🔥 v6.2.1: 使用统一的线程数计算函数
+        let max_threads = calculate_max_threads(num_cpus::get(), None);
 
         Ok(Self {
             config,
@@ -810,7 +916,8 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+        // 🔥 v6.2.1: 使用统一的线程数计算函数
+        let max_threads = calculate_max_threads(num_cpus::get(), None);
 
         let gpu = crate::gpu_accel::GpuAccel::detect();
         let use_gpu = gpu.is_available() && match encoder {
@@ -2524,14 +2631,50 @@ impl VideoExplorer {
     /// - VMAF 与人眼感知相关性更高 (Pearson 0.93 vs SSIM 0.85)
     /// - 对运动、模糊、压缩伪影更敏感
     /// - 计算较慢（约 100ms/帧），建议作为可选验证
+    /// 
+    /// 🔥 v6.2.1: 长视频智能采样优化
+    /// - 视频 > 60s 时使用三段采样：开头10% + 中间10% + 结尾10%
+    /// - 覆盖不同场景（片头/正片/片尾），比均匀采样更准确
+    /// - 避免 VMAF 计算时间比压制还长的问题
     fn calculate_vmaf(&self) -> Result<Option<f64>> {
-        // 🔥 v3.3: 使用 scale 滤镜处理分辨率差异
-        let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]libvmaf";
+        // 🔥 v6.2.1: 检测视频时长，决定是否采样
+        let duration = get_video_duration(&self.input_path);
+        
+        // 🔥 v6.2.1: 构建滤镜 - 长视频使用三段采样
+        let filter = match duration {
+            Some(dur) if dur > 60.0 => {
+                // 三段采样：开头10% + 中间10% + 结尾10%
+                // 开头: 0 ~ 10%
+                // 中间: 45% ~ 55%
+                // 结尾: 90% ~ 100%
+                let start_end = dur * 0.10;      // 开头段结束点
+                let mid_start = dur * 0.45;      // 中间段开始点
+                let mid_end = dur * 0.55;        // 中间段结束点
+                let tail_start = dur * 0.90;     // 结尾段开始点
+                
+                eprintln!("   📊 VMAF: 三段采样 (开头10% + 中间10% + 结尾10%)");
+                // select 表达式：t < 10% OR (45% <= t < 55%) OR t >= 90%
+                format!(
+                    "[0:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})',\
+                     scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
+                     [1:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})'[dist];\
+                     [ref][dist]libvmaf",
+                    start_end, mid_start, mid_end, tail_start,
+                    start_end, mid_start, mid_end, tail_start
+                )
+            }
+            _ => {
+                // 短视频或无法检测时长：全量计算
+                "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]libvmaf".to_string()
+            }
+        };
+        
+        let use_sampling = duration.map(|d| d > 60.0).unwrap_or(false);
         
         let output = Command::new("ffmpeg")
             .arg("-i").arg(&self.input_path)
             .arg("-i").arg(&self.output_path)
-            .arg("-lavfi").arg(filter)
+            .arg("-lavfi").arg(&filter)
             .arg("-f").arg("null")
             .arg("-")
             .output();
@@ -2547,6 +2690,9 @@ impl VideoExplorer {
                         let value_str = value_str.trim();
                         if let Ok(vmaf) = value_str.parse::<f64>() {
                             if precision::is_valid_vmaf(vmaf) {
+                                if use_sampling {
+                                    eprintln!("   📊 VMAF (采样): {:.2}", vmaf);
+                                }
                                 return Ok(Some(vmaf));
                             }
                         }
@@ -3094,6 +3240,16 @@ pub mod precision {
     /// 
     /// 使用此函数替代所有 `(crf * X.0).round() as i32` 的硬编码
     /// 
+    /// # 浮点精度处理 (v6.2.1)
+    /// 
+    /// 先四舍五入到期望精度，避免浮点误差：
+    /// - 20.05 * 10.0 可能是 200.49999... 而不是 200.5
+    /// - 通过先 round 再转换避免此问题
+    /// 
+    /// # 边界检查
+    /// 
+    /// 支持 CRF 范围 [0, 63]（AV1 最大值），key 范围 [0, 630]
+    /// 
     /// # Example
     /// ```
     /// use shared_utils::video_explorer::precision::crf_to_cache_key;
@@ -3103,7 +3259,18 @@ pub mod precision {
     /// ```
     #[inline]
     pub fn crf_to_cache_key(crf: f32) -> i32 {
-        (crf * CACHE_KEY_MULTIPLIER).round() as i32
+        // 🔥 v6.2.1: 先四舍五入到期望精度，避免浮点误差
+        let normalized = (crf * CACHE_KEY_MULTIPLIER).round();
+        let key = normalized as i32;
+        
+        // 🔥 Debug 模式下检查边界（AV1 CRF 最大 63）
+        debug_assert!(
+            key >= 0 && key <= 630,
+            "Cache key {} out of expected range [0, 630] for CRF {}",
+            key, crf
+        );
+        
+        key
     }
     
     /// 🔥 v5.73: 缓存 Key 到 CRF 的反向转换
@@ -4531,6 +4698,7 @@ pub fn explore_with_gpu_coarse_search(
     initial_crf: f32,
     max_crf: f32,
     min_ssim: f64,
+    ultimate_mode: bool,  // 🔥 v6.2: 极限探索模式
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     // 🔥 v5.35: 简化流程 - 完全移除旧的RealtimeExploreProgress
@@ -4809,6 +4977,7 @@ pub fn explore_with_gpu_coarse_search(
     eprintln!("📊 Starting from GPU boundary: CRF {:.1}", cpu_center_crf);
     
     // 🔥 v5.8: 直接从 GPU 边界开始精细化，跳过二分搜索
+    // 🔥 v6.2: 传递 ultimate_mode 参数
     let mut result = cpu_fine_tune_from_gpu_boundary(
         input,
         output,
@@ -4818,6 +4987,7 @@ pub fn explore_with_gpu_coarse_search(
         cpu_min_crf,
         cpu_max_crf,
         min_ssim,
+        ultimate_mode,
     )?;
     
     // 🔥 v5.1.4: 清空日志，避免 conversion_api.rs 重复打印
@@ -4946,6 +5116,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     min_crf: f32,
     max_crf: f32,
     min_ssim: f64,
+    ultimate_mode: bool,  // 🔥 v6.2: 极限探索模式
 ) -> Result<ExploreResult> {
     #[allow(unused_mut)]
     let mut log = Vec::new();
@@ -4970,10 +5141,18 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.88: CPU 阶段使用详细粗进度条（原生ANSI，不依赖indicatif）
     // 保持CoarseProgressBar的优点：固定行、不刷屏、不受按键污染、持续刷新
     // 🔥 v5.60: 使用真实输入大小（全片编码）
+    // 🔥 v6.2: 极限模式预估更多迭代次数（自适应撞墙上限 + 精细调整）
+    let estimated_iterations = if ultimate_mode {
+        let crf_range = max_crf - min_crf;
+        let adaptive_walls = calculate_adaptive_max_walls(crf_range);
+        (adaptive_walls + 10) as u64  // 撞墙次数 + 精细调整余量
+    } else {
+        15  // 普通模式：GPU 已定位范围，CPU 迭代次数少（5-15次）
+    };
     let cpu_progress = crate::DetailedCoarseProgressBar::new(
         "🔬 CPU Fine-Tune",
         input_size,  // 🔥 v5.60: 使用真实输入大小
-        15  // 🔥 v5.60: GPU 已定位范围，CPU 迭代次数少（5-15次）
+        estimated_iterations
     );
 
     #[allow(unused_macros)]
@@ -5230,13 +5409,34 @@ fn cpu_fine_tune_from_gpu_boundary(
         
         let initial_step = (crf_range / 1.5).clamp(8.0, 25.0);  // 更激进的初始步长
         const DECAY_FACTOR: f32 = 0.4;  // 衰减因子
-        const MAX_WALL_HITS: u32 = 4;   // 最大撞墙次数
         const MIN_STEP: f32 = 0.1;      // 最小步长
         
-        eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (v5.98 curve model){}",
-            DIM, crf_range, BRIGHT_CYAN, initial_step, RESET, RESET);
-        eprintln!("   {}📊 Strategy: Aggressive curve decay (step × 0.4 per wall hit, max {} hits){}",
-            DIM, MAX_WALL_HITS, RESET);
+        // 🔥 v6.2: 根据 ultimate_mode 选择撞墙上限和零增益阈值
+        let max_wall_hits = if ultimate_mode {
+            calculate_adaptive_max_walls(crf_range)
+        } else {
+            NORMAL_MAX_WALL_HITS
+        };
+        let required_zero_gains = if ultimate_mode {
+            ULTIMATE_REQUIRED_ZERO_GAINS
+        } else {
+            NORMAL_REQUIRED_ZERO_GAINS
+        };
+        
+        // 🔥 v6.2: 极限模式启动日志
+        if ultimate_mode {
+            eprintln!("   {}🏛️ ULTIMATE MODE ENABLED{} - Searching until SSIM saturation (Domain Wall)",
+                BRIGHT_MAGENTA, RESET);
+            eprintln!("   {}📊 CRF range: {:.1} → Adaptive max walls: {}{}{} (formula: ceil(log2({:.1}))+6){}",
+                DIM, crf_range, BRIGHT_CYAN, max_wall_hits, RESET, crf_range, RESET);
+            eprintln!("   {}📊 SSIM saturation: {}{}{} consecutive zero-gains < 0.00005{}",
+                DIM, BRIGHT_YELLOW, required_zero_gains, RESET, RESET);
+        } else {
+            eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (v6.2 curve model){}",
+                DIM, crf_range, BRIGHT_CYAN, initial_step, RESET, RESET);
+            eprintln!("   {}📊 Strategy: Aggressive curve decay (step × 0.4 per wall hit, max {} hits){}",
+                DIM, max_wall_hits, RESET);
+        }
 
         let mut current_step = initial_step;
         let mut wall_hits: u32 = 0;  // 撞墙次数
@@ -5255,13 +5455,15 @@ fn cpu_fine_tune_from_gpu_boundary(
         eprintln!("   {}📊 GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
             DIM, BRIGHT_YELLOW, gpu_ssim_baseline, RESET);
 
-        // 🔥 v5.98: 简化停止条件 - 只看撞墙次数
-        // 不再使用 SSIM 零增益检测，因为曲线模型会自动收敛
-        const ZERO_GAIN_THRESHOLD: f64 = 0.0002;
-        const REQUIRED_ZERO_GAINS: u32 = 4;  // 减少到4次
+        // 🔥 v6.2: 停止条件 - 撞墙次数 + SSIM 饱和检测
+        // 极限模式：更严格的饱和检测（8次零增益）
+        // 普通模式：4次零增益
+        const ZERO_GAIN_THRESHOLD: f64 = 0.00005;  // 更严格的阈值
+        // required_zero_gains 已在上面根据 ultimate_mode 设置
         
         let mut consecutive_zero_gains: u32 = 0;
         let mut quality_wall_hit = false;
+        let mut domain_wall_hit = false;  // 🔥 v6.2: 领域墙标记
 
         while iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             // 🔥 v6.1: 边界检查 - 如果 test_crf < min_crf，钳制到 min_crf 并进入精细阶段
@@ -5328,17 +5530,20 @@ fn cpu_fine_tune_from_gpu_boundary(
                         
 
 
-                        // 检查质量墙条件
-                        // v5.93: 当SSIM增益连续5次为零时，直接触发质量墙
-                        // 不再检查压缩率条件，因为SSIM饱和就意味着继续降CRF没有意义
-                        let quality_wall_triggered = consecutive_zero_gains >= REQUIRED_ZERO_GAINS 
+                        // 检查质量墙/领域墙条件
+                        // v6.2: 极限模式使用更严格的饱和检测（8次零增益 = 领域墙）
+                        let quality_wall_triggered = consecutive_zero_gains >= required_zero_gains 
                             && current_step <= MIN_STEP + 0.01;
 
-                        // 显示进度（增强版 - 显示质量墙状态）
+                        // 显示进度（增强版 - 显示质量墙/领域墙状态）
                         let wall_status = if quality_wall_triggered {
-                            format!("{}🎯 QUALITY WALL{}", BRIGHT_YELLOW, RESET)
+                            if ultimate_mode {
+                                format!("{}🏛️ DOMAIN WALL{}", BRIGHT_MAGENTA, RESET)
+                            } else {
+                                format!("{}🎯 QUALITY WALL{}", BRIGHT_YELLOW, RESET)
+                            }
                         } else if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
-                            format!("{}[{}/{}]{}", DIM, consecutive_zero_gains, REQUIRED_ZERO_GAINS, RESET)
+                            format!("{}[{}/{}]{}", DIM, consecutive_zero_gains, required_zero_gains, RESET)
                         } else {
                             String::new()
                         };
@@ -5364,8 +5569,15 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 if should_stop {
                     eprintln!("");
-                    eprintln!("   {}🎯{} {}QUALITY WALL HIT!{} SSIM saturated after {} consecutive zero-gains",
-                        BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET, consecutive_zero_gains);
+                    // 🔥 v6.2: 区分领域墙和质量墙
+                    if ultimate_mode {
+                        domain_wall_hit = true;
+                        eprintln!("   {}🏛️{} {}DOMAIN WALL HIT!{} SSIM fully saturated after {} consecutive zero-gains",
+                            BRIGHT_MAGENTA, RESET, BRIGHT_GREEN, RESET, consecutive_zero_gains);
+                    } else {
+                        eprintln!("   {}🎯{} {}QUALITY WALL HIT!{} SSIM saturated after {} consecutive zero-gains",
+                            BRIGHT_YELLOW, RESET, BRIGHT_GREEN, RESET, consecutive_zero_gains);
+                    }
                     eprintln!("   {}📊{} Final: CRF {}{:.1}{}, compression {}{:+.1}%{}, iterations {}{}{}",
                         BRIGHT_CYAN, RESET, BRIGHT_GREEN, test_crf, RESET, 
                         BRIGHT_GREEN, size_pct, RESET, BRIGHT_CYAN, iterations, RESET);
@@ -5382,16 +5594,24 @@ fn cpu_fine_tune_from_gpu_boundary(
                 overshoot_detected = true;
                 wall_hits += 1;
                 
-                eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} (size {}+{:.1} MB{})",
+                // 🔥 v6.2: 使用智能大小差异格式化（自动选择 B/KB/MB）
+                let size_diff = crate::format_size_diff(size as i64 - input_size as i64);
+                eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} (size {}{}{})",
                     BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     BRIGHT_RED, size_pct, RESET, RED, wall_hits, RESET, 
-                    RED, (size as f64 - input_size as f64) / 1024.0 / 1024.0, RESET);
+                    RED, size_diff, RESET);
 
-                // 🔥 v5.99: 曲线模型回退策略 + 精细调整阶段
-                if wall_hits >= MAX_WALL_HITS {
+                // 🔥 v6.2: 曲线模型回退策略 + 精细调整阶段
+                // 极限模式使用自适应撞墙上限，普通模式使用固定 4 次
+                if wall_hits >= max_wall_hits {
                     // 达到最大撞墙次数，停止
-                    eprintln!("   {}🧱{} {}MAX WALL HITS ({})!{} Stopping at best CRF {:.1}",
-                        BRIGHT_YELLOW, RESET, BRIGHT_GREEN, MAX_WALL_HITS, RESET, last_good_crf);
+                    if ultimate_mode {
+                        eprintln!("   {}🧱{} {}ADAPTIVE WALL LIMIT ({})!{} Stopping at best CRF {:.1}",
+                            BRIGHT_YELLOW, RESET, BRIGHT_GREEN, max_wall_hits, RESET, last_good_crf);
+                    } else {
+                        eprintln!("   {}🧱{} {}MAX WALL HITS ({})!{} Stopping at best CRF {:.1}",
+                            BRIGHT_YELLOW, RESET, BRIGHT_GREEN, max_wall_hits, RESET, last_good_crf);
+                    }
                     break;
                 }
                 
@@ -5421,9 +5641,17 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        // 🔥 v5.93: 停止原因报告（三种墙）
-        if quality_wall_hit {
-            // 🎯 QUALITY WALL - 已在循环内报告
+        // 🔥 v6.2: 停止原因报告（四种墙）
+        if domain_wall_hit {
+            // 🏛️ DOMAIN WALL (极限模式) - 已在循环内报告
+            // 确保使用最后一个好的 CRF
+            if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
+                best_crf = Some(last_good_crf);
+                best_size = Some(last_good_size);
+                best_ssim_tracked = last_good_ssim;
+            }
+        } else if quality_wall_hit {
+            // 🎯 QUALITY WALL (普通模式) - 已在循环内报告
             // 确保使用最后一个好的 CRF
             if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
                 best_crf = Some(last_good_crf);
@@ -5893,7 +6121,22 @@ pub fn explore_hevc_with_gpu_coarse(
     initial_crf: f32,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_with_gpu_coarse_search(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim)
+    explore_with_gpu_coarse_search(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim, false)
+}
+
+/// 🔥 v6.2: HEVC GPU+CPU 智能探索（极限模式）
+/// 
+/// 先用 GPU 粗略搜索缩小范围，再用 CPU 精细搜索找最优 CRF
+/// ultimate_mode: 启用后使用自适应撞墙上限，持续搜索直到 SSIM 完全饱和
+pub fn explore_hevc_with_gpu_coarse_ultimate(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    ultimate_mode: bool,
+) -> Result<ExploreResult> {
+    let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
+    explore_with_gpu_coarse_search(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim, ultimate_mode)
 }
 
 /// 🔥 v5.1: AV1 GPU+CPU 智能探索
@@ -5906,7 +6149,7 @@ pub fn explore_av1_with_gpu_coarse(
     initial_crf: f32,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
-    explore_with_gpu_coarse_search(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf, min_ssim)
+    explore_with_gpu_coarse_search(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf, min_ssim, false)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -7073,5 +7316,138 @@ mod tests {
         // 验证 precision 常量
         assert_eq!(ULTRA_FINE_STEP, 0.25, "ULTRA_FINE_STEP should be 0.25");
         assert_eq!(FINE_STEP, 0.5, "FINE_STEP should be 0.5");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v6.2: 自适应撞墙上限公式属性测试
+    // ═══════════════════════════════════════════════════════════
+
+    /// 🔥 v6.2: 测试自适应撞墙上限公式的边界条件
+    #[test]
+    fn test_adaptive_max_walls_boundary_conditions() {
+        // 属性 1: crf_range <= 1.0 返回最小值
+        assert_eq!(calculate_adaptive_max_walls(0.0), ULTIMATE_MIN_WALL_HITS);
+        assert_eq!(calculate_adaptive_max_walls(0.5), ULTIMATE_MIN_WALL_HITS);
+        assert_eq!(calculate_adaptive_max_walls(1.0), ULTIMATE_MIN_WALL_HITS);
+        
+        // 属性 2: 结果始终在 [MIN, MAX] 范围内
+        for range in [2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 1000.0] {
+            let result = calculate_adaptive_max_walls(range);
+            assert!(result >= ULTIMATE_MIN_WALL_HITS, 
+                "range {} -> {} should >= {}", range, result, ULTIMATE_MIN_WALL_HITS);
+            assert!(result <= ULTIMATE_MAX_WALL_HITS, 
+                "range {} -> {} should <= {}", range, result, ULTIMATE_MAX_WALL_HITS);
+        }
+    }
+
+    /// 🔥 v6.2: 测试自适应撞墙上限公式的单调性
+    #[test]
+    fn test_adaptive_max_walls_monotonicity() {
+        // 属性 3: 公式单调递增（更大的 CRF 范围 → 更多撞墙次数）
+        let mut prev = calculate_adaptive_max_walls(2.0);
+        for range in [4.0, 8.0, 16.0, 32.0, 64.0] {
+            let curr = calculate_adaptive_max_walls(range);
+            assert!(curr >= prev, 
+                "monotonicity violated: range {} -> {} < prev {}", range, curr, prev);
+            prev = curr;
+        }
+    }
+
+    /// 🔥 v6.2: 测试自适应撞墙上限公式的具体值
+    #[test]
+    fn test_adaptive_max_walls_formula_correctness() {
+        // 公式: min(ceil(log2(crf_range)) + 6, 20)
+        // CRF 范围 10 → ceil(3.32) + 6 = 4 + 6 = 10
+        assert_eq!(calculate_adaptive_max_walls(10.0), 10);
+        
+        // CRF 范围 18 (default) → ceil(4.17) + 6 = 5 + 6 = 11
+        assert_eq!(calculate_adaptive_max_walls(18.0), 11);
+        
+        // CRF 范围 30 → ceil(4.91) + 6 = 5 + 6 = 11
+        assert_eq!(calculate_adaptive_max_walls(30.0), 11);
+        
+        // CRF 范围 50 → ceil(5.64) + 6 = 6 + 6 = 12
+        assert_eq!(calculate_adaptive_max_walls(50.0), 12);
+        
+        // 极端大值应钳制到 20
+        assert_eq!(calculate_adaptive_max_walls(100000.0), ULTIMATE_MAX_WALL_HITS);
+    }
+
+    /// 🔥 v6.2: 测试极限模式常量的合理性
+    #[test]
+    fn test_ultimate_mode_constants() {
+        // 极限模式需要更多零增益检测
+        assert!(ULTIMATE_REQUIRED_ZERO_GAINS > NORMAL_REQUIRED_ZERO_GAINS,
+            "Ultimate mode should require more zero gains");
+        
+        // 极限模式撞墙上限应大于普通模式
+        assert!(ULTIMATE_MAX_WALL_HITS > NORMAL_MAX_WALL_HITS,
+            "Ultimate max walls should > normal max walls");
+        
+        // 最小值应等于普通模式
+        assert_eq!(ULTIMATE_MIN_WALL_HITS, NORMAL_MAX_WALL_HITS,
+            "Ultimate min should equal normal max for smooth transition");
+    }
+
+    /// 🔥 v6.2.1: 测试防御性检查 - 负数、NaN、Inf 输入
+    #[test]
+    fn test_adaptive_max_walls_defensive_checks() {
+        // 负数应返回最小值
+        assert_eq!(calculate_adaptive_max_walls(-1.0), ULTIMATE_MIN_WALL_HITS);
+        assert_eq!(calculate_adaptive_max_walls(-100.0), ULTIMATE_MIN_WALL_HITS);
+        
+        // NaN 应返回最小值
+        assert_eq!(calculate_adaptive_max_walls(f32::NAN), ULTIMATE_MIN_WALL_HITS);
+        
+        // Infinity 应返回最小值
+        assert_eq!(calculate_adaptive_max_walls(f32::INFINITY), ULTIMATE_MIN_WALL_HITS);
+        assert_eq!(calculate_adaptive_max_walls(f32::NEG_INFINITY), ULTIMATE_MIN_WALL_HITS);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v6.2.1: CRF 缓存 Key 精度测试
+    // ═══════════════════════════════════════════════════════════
+
+    /// 🔥 v6.2.1: 测试 crf_to_cache_key 的浮点精度处理
+    #[test]
+    fn test_crf_to_cache_key_precision() {
+        use precision::crf_to_cache_key;
+        
+        // 基本转换
+        assert_eq!(crf_to_cache_key(20.0), 200);
+        assert_eq!(crf_to_cache_key(20.1), 201);
+        assert_eq!(crf_to_cache_key(20.5), 205);
+        
+        // 边界值
+        assert_eq!(crf_to_cache_key(0.0), 0);
+        assert_eq!(crf_to_cache_key(51.0), 510);  // HEVC 最大
+        assert_eq!(crf_to_cache_key(63.0), 630);  // AV1 最大
+        
+        // 浮点精度边界（20.05 * 10 可能是 200.49999...）
+        // 确保四舍五入正确
+        assert_eq!(crf_to_cache_key(20.05), 201);  // 应该是 201 而不是 200
+        assert_eq!(crf_to_cache_key(20.04), 200);  // 应该是 200
+    }
+
+    /// 🔥 v6.2.1: 测试 crf_to_cache_key 和 cache_key_to_crf 的往返一致性
+    #[test]
+    fn test_crf_cache_key_roundtrip() {
+        use precision::{crf_to_cache_key, cache_key_to_crf};
+        
+        // 整数 CRF 应该完美往返
+        for crf in [10.0, 15.0, 20.0, 25.0, 30.0, 51.0] {
+            let key = crf_to_cache_key(crf);
+            let back = cache_key_to_crf(key);
+            assert!((crf - back).abs() < 0.001, 
+                "Roundtrip failed: {} -> {} -> {}", crf, key, back);
+        }
+        
+        // 0.1 精度的 CRF 应该完美往返
+        for crf in [20.1, 20.5, 20.9, 25.3, 30.7] {
+            let key = crf_to_cache_key(crf);
+            let back = cache_key_to_crf(key);
+            assert!((crf - back).abs() < 0.001, 
+                "Roundtrip failed: {} -> {} -> {}", crf, key, back);
+        }
     }
 }

@@ -346,6 +346,16 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 ).map_err(|e| VidQualityError::ConversionError(e))?;
                 
                 let explore_result = match flag_mode {
+                    shared_utils::FlagMode::UltimateExplore => {
+                        // 🔥 v6.2: AV1 暂不支持极限模式，降级为 PreciseQualityWithCompress
+                        warn!("   ⚠️  AV1 does not support --ultimate yet, using PreciseQualityWithCompress");
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   🔬 {}: CRF {}", shared_utils::FlagMode::PreciseQualityWithCompress.description_cn(), initial_crf);
+                        shared_utils::explore_precise_quality_match_with_compression(
+                            input_path, &output_path, shared_utils::VideoEncoder::Av1, vf_args,
+                            initial_crf as f32, 50.0, config.min_ssim
+                        )
+                    }
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔬 {}: CRF {}", flag_mode.description_cn(), initial_crf);

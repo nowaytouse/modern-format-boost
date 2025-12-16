@@ -651,6 +651,14 @@ pub fn convert_to_av1_mp4_matched(
     eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
     
     let explore_result = match flag_mode {
+        shared_utils::FlagMode::UltimateExplore => {
+            // 🔥 v6.2: AV1 暂不支持极限模式，降级为 PreciseQualityWithCompress
+            eprintln!("   ⚠️  AV1 does not support --ultimate yet, using PreciseQualityWithCompress");
+            shared_utils::explore_precise_quality_match_with_compression(
+                input, &output, shared_utils::VideoEncoder::Av1, vf_args,
+                initial_crf, 50.0, 0.91
+            )
+        }
         shared_utils::FlagMode::PreciseQualityWithCompress => {
             shared_utils::explore_precise_quality_match_with_compression(
                 input, &output, shared_utils::VideoEncoder::Av1, vf_args,
