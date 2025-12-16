@@ -43,6 +43,10 @@ pub mod ssim_mapping;
 pub mod explore_strategy;
 // 🔥 v6.4.7: FFmpeg 进程管理模块（防死锁）
 pub mod ffmpeg_process;
+// 🔥 v6.4.9: 代码质量模块
+pub mod float_compare;
+pub mod path_validator;
+pub mod crf_constants;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -231,4 +235,30 @@ pub use explore_strategy::{
 pub use ffmpeg_process::{
     FfmpegProcess, FfmpegProgressParser,
     format_ffmpeg_error, is_recoverable_error,
+};
+
+// 🔥 v6.4.9: 代码质量模块
+pub use float_compare::{
+    F64_EPSILON, F32_EPSILON,
+    approx_eq_f64, approx_eq_f32, approx_zero_f64, approx_zero_f32,
+    approx_le_f64, approx_ge_f64,
+};
+
+pub use path_validator::{
+    PathValidationError, validate_path, validate_paths,
+};
+
+pub use crf_constants::{
+    // HEVC
+    HEVC_CRF_MIN, HEVC_CRF_MAX, HEVC_CRF_DEFAULT, HEVC_CRF_VISUALLY_LOSSLESS, HEVC_CRF_PRACTICAL_MAX,
+    // AV1
+    AV1_CRF_MIN, AV1_CRF_MAX, AV1_CRF_DEFAULT, AV1_CRF_VISUALLY_LOSSLESS, AV1_CRF_PRACTICAL_MAX,
+    // VP9
+    VP9_CRF_MIN, VP9_CRF_MAX, VP9_CRF_DEFAULT,
+    // x264
+    X264_CRF_MIN, X264_CRF_MAX, X264_CRF_DEFAULT,
+    // Cache
+    CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID,
+    // Iterations
+    NORMAL_MAX_ITERATIONS, EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS,
 };
