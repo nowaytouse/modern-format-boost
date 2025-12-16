@@ -51,9 +51,34 @@ enum Commands {
         #[arg(long)]
         lossless: bool,
         /// Match input video quality level (auto-calculate CRF based on input bitrate)
-        /// Enabled by default for video processing
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        /// Use --match-quality true to enable, --match-quality false to disable
+        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         match_quality: bool,
+        /// 🍎 Apple compatibility mode: Convert non-Apple-compatible modern codecs (AV1, VP9) to HEVC
+        /// When enabled, AV1/VP9/VVC/AV2 videos will be converted to HEVC for Apple device compatibility
+        /// Only HEVC videos will be skipped (already Apple compatible)
+        #[arg(long, default_value_t = false)]
+        apple_compat: bool,
+        /// 🔥 Require compression: output must be smaller than input
+        /// Use with --explore --match-quality for precise quality match + guaranteed compression
+        #[arg(long, default_value_t = false)]
+        compress: bool,
+        /// 🔥 v5.75: Enable VMAF verification (slower but more accurate)
+        /// VMAF is Netflix's perceptual quality metric (0-100)
+        #[arg(long, default_value_t = false)]
+        vmaf: bool,
+        /// 🔥 v5.75: Minimum VMAF score threshold (default: 85.0)
+        #[arg(long, default_value_t = 85.0)]
+        vmaf_threshold: f64,
+        /// 🔥 v5.75: Force VMAF verification even for long videos (>5min)
+        /// By default, VMAF is skipped for long videos to avoid slow processing
+        #[arg(long, default_value_t = false)]
+        force_vmaf_long: bool,
+        /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
+        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
+        /// ⚠️ MUST be used with --explore --match-quality --compress
+        #[arg(long, default_value_t = false)]
+        ultimate: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -100,7 +125,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, vmaf, vmaf_threshold, force_vmaf_long, ultimate } => {
+            // 🔥 v6.2: Validate flag combinations with ultimate support
+            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 force,
@@ -110,6 +141,14 @@ fn main() -> anyhow::Result<()> {
                 use_lossless: lossless,
                 match_quality,
                 in_place,
+                apple_compat,
+                require_compression: compress,
+                use_gpu: true,  // 🔥 v6.2: Always use GPU for coarse search, CPU for fine search
+                // 🔥 v5.75: VMAF 验证参数
+                validate_vmaf: vmaf,
+                min_vmaf: vmaf_threshold,
+                force_vmaf_long,
+                ultimate_mode: ultimate,  // 🔥 v6.2: 极限探索模式
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -128,8 +167,20 @@ fn main() -> anyhow::Result<()> {
             if match_quality {
                 info!("   🎯 Match Quality: ENABLED");
             }
+            if apple_compat {
+                info!("   🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)");
+            }
             if recursive {
                 info!("   📂 Recursive: ENABLED");
+            }
+            if ultimate {
+                info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+            }
+            if vmaf {
+                info!("   📊 VMAF Verification: ENABLED (threshold: {:.1})", vmaf_threshold);
+                if force_vmaf_long {
+                    info!("   ⚠️  Force VMAF for long videos: ENABLED");
+                }
             }
             info!("");
             
@@ -201,8 +252,17 @@ fn main() -> anyhow::Result<()> {
                             }
                         }
                         Err(e) => {
-                            info!("❌ {} failed: {}", file.display(), e);
-                            batch_result.fail(file.clone(), e.to_string());
+                            // 🔥 修复：将"Output exists"错误视为跳过而非失败
+                            let error_msg = e.to_string();
+                            if error_msg.contains("Output exists:") {
+                                info!("⏭️ {} → SKIP (output exists)", 
+                                    file.file_name().unwrap_or_default().to_string_lossy()
+                                );
+                                batch_result.skip();
+                            } else {
+                                info!("❌ {} failed: {}", file.display(), e);
+                                batch_result.fail(file.clone(), e.to_string());
+                            }
                         }
                     }
                 }

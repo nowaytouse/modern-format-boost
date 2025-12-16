@@ -309,6 +309,9 @@ fn test_explore_result_fields() {
         iterations: 5,
         quality_passed: true,
         log: vec!["Test log".to_string()],
+        confidence: 0.85,
+        confidence_detail: shared_utils::ConfidenceBreakdown::default(),
+        actual_min_ssim: 0.95,  // 🔥 v5.69
     };
     
     assert!((result.optimal_crf - 22.0).abs() < 0.01);
@@ -327,6 +330,7 @@ fn test_quality_thresholds_customization() {
         validate_ssim: true,
         validate_psnr: true, // 同时验证两者
         validate_vmaf: false, // 不验证 VMAF
+        ..Default::default()
     };
     
     assert_eq!(thresholds.min_ssim, 0.98);

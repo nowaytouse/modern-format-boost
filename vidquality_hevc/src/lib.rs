@@ -24,7 +24,7 @@ use thiserror::Error;
 // Re-exports
 pub use detection_api::{detect_video, VideoDetectionResult, DetectedCodec, CompressionType, ColorSpace};
 pub use conversion_api::{
-    simple_convert, auto_convert, determine_strategy, ConversionConfig, ConversionStrategy, ConversionOutput, TargetVideoFormat
+    simple_convert, auto_convert, determine_strategy, determine_strategy_with_apple_compat, ConversionConfig, ConversionStrategy, ConversionOutput, TargetVideoFormat
 };
 pub use ffprobe::{probe_video, FFprobeResult};
 
