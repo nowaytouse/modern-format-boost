@@ -4977,8 +4977,8 @@ pub fn explore_with_gpu_coarse_search(
         eprintln!("");
         eprintln!("📍 Phase 1: GPU Coarse Search");
 
-        // 创建临时输出文件用于 GPU 搜索
-        let temp_output = output.with_extension("gpu_temp.mp4");
+        // 🔥 v6.4.7: 从输出路径派生临时文件扩展名（修复 MKV 兼容性）
+        let temp_output = output.with_extension(crate::gpu_accel::derive_gpu_temp_extension(output));
         
         // 🔥 v5.61: 获取 GPU 编码器名称用于动态校准
         let gpu_encoder_name = match encoder {
