@@ -781,8 +781,7 @@ fn auto_convert_directory(
                     // 检查可能的输出文件
                     let possible_outputs = [
                         out_dir.join(format!("{}.jxl", stem)),
-                        // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式）
-                        out_dir.join(format!("{}.mov", stem)),
+                        out_dir.join(format!("{}.mp4", stem)),
                         out_dir.join(format!("{}.mkv", stem)),
                     ];
                     
