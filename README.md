@@ -413,6 +413,16 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ## Version History / 版本历史
 
+### v6.6.0 (2025-12) - Complete Cache Unification / 完整缓存统一
+- 🔄 **Complex type migration**: All HashMap caches migrated to CrfCache (including tuple types)
+- ⚡ **Removed all crf_to_cache_key()**: Direct f32 CRF keys everywhere
+- 🧹 **Type modernization**: `last_encoded_key: i32` → `last_encoded_crf: Option<f32>`
+
+### v6.6.0 (2025-12) - 完整缓存统一
+- 🔄 **复杂类型迁移**：所有 HashMap 缓存迁移到 CrfCache（包括元组类型）
+- ⚡ **移除所有 crf_to_cache_key()**：全部使用 f32 CRF 作为 key
+- 🧹 **类型现代化**：`last_encoded_key: i32` → `last_encoded_crf: Option<f32>`
+
 ### v6.5.0 (2025-12) - Unified Cache Refactor / 统一缓存重构
 - 🔄 **CrfCache migration**: Replaced HashMap<i32, u64> with CrfCache<u64> in video_explorer.rs and gpu_accel.rs
 - ⚡ **Simplified API**: Direct f32 CRF keys, removed crf_to_cache_key() conversions
