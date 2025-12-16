@@ -7,6 +7,19 @@
 //! 2. 统一的 ExploreContext 提供共享状态和工具方法
 //! 3. 统一的 SSIM 计算逻辑（带缓存和回退）
 //! 4. 统一的进度显示接口
+//!
+//! ## 🔥 v6.4.4: 辅助方法重构
+//! 添加 `build_result()`, `binary_search_compress()`, `log_final_result()` 等辅助方法，
+//! 减少 6 个 Strategy 实现中约 40% 的重复代码。
+//!
+//! ## 使用示例
+//! ```ignore
+//! use shared_utils::explore_strategy::{create_strategy, ExploreContext};
+//! 
+//! let strategy = create_strategy(ExploreMode::CompressOnly);
+//! let mut ctx = ExploreContext::new(...);
+//! let result = strategy.explore(&mut ctx)?;
+//! ```
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -22,8 +35,38 @@ use crate::video_explorer::{
 // ═══════════════════════════════════════════════════════════════
 
 /// 探索策略 Trait - 所有探索模式必须实现此接口
+/// 
+/// # 实现指南
+/// 
+/// 每个 Strategy 实现应：
+/// 1. 调用 `ctx.progress_start()` 开始进度显示
+/// 2. 使用 `ctx.encode()` 和 `ctx.calculate_ssim()` 进行编码和质量计算
+/// 3. 使用 `ctx.build_result()` 构建统一格式的结果
+/// 4. 调用 `ctx.progress_done()` 结束进度显示
+/// 
+/// # 示例
+/// 
+/// ```ignore
+/// impl ExploreStrategy for MyStrategy {
+///     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
+///         ctx.progress_start("🔍 My Strategy");
+///         let size = ctx.encode(20.0)?;
+///         let ssim = ctx.calculate_ssim(20.0).ok();
+///         ctx.progress_done();
+///         Ok(ctx.build_result(20.0, size, ssim, 1, true))
+///     }
+///     fn name(&self) -> &'static str { "MyStrategy" }
+///     fn description(&self) -> &'static str { "My custom strategy" }
+/// }
+/// ```
 pub trait ExploreStrategy: Send + Sync {
     /// 执行探索，返回探索结果
+    /// 
+    /// # Errors
+    /// 
+    /// 返回 `Err` 如果：
+    /// - 编码失败（ffmpeg 错误）
+    /// - 文件 I/O 错误
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult>;
     
     /// 获取策略名称（用于日志和调试）
@@ -38,6 +81,23 @@ pub trait ExploreStrategy: Send + Sync {
 // ═══════════════════════════════════════════════════════════════
 
 /// SSIM 计算结果（带来源追踪）
+/// 
+/// 用于区分实际计算的 SSIM 和从 PSNR 映射预测的 SSIM。
+/// 预测的 SSIM 在日志中会用 `~` 前缀标注。
+/// 
+/// # 示例
+/// 
+/// ```
+/// use shared_utils::explore_strategy::SsimResult;
+/// 
+/// // 实际计算的 SSIM
+/// let actual = SsimResult::actual(0.98, Some(45.0));
+/// assert!(actual.is_actual());
+/// 
+/// // 从 PSNR 预测的 SSIM
+/// let predicted = SsimResult::predicted(0.95, 40.0);
+/// assert!(predicted.is_predicted());
+/// ```
 #[derive(Debug, Clone)]
 pub struct SsimResult {
     /// SSIM 值 (0.0 - 1.0)
@@ -50,13 +110,33 @@ pub struct SsimResult {
 
 impl SsimResult {
     /// 创建实际计算的 SSIM 结果
+    /// 
+    /// # Arguments
+    /// * `value` - SSIM 值 (0.0 - 1.0)
+    /// * `psnr` - 可选的 PSNR 值
     pub fn actual(value: f64, psnr: Option<f64>) -> Self {
         Self { value, source: SsimSource::Actual, psnr }
     }
     
     /// 创建预测的 SSIM 结果（从 PSNR 映射）
+    /// 
+    /// # Arguments
+    /// * `value` - 预测的 SSIM 值 (0.0 - 1.0)
+    /// * `psnr` - 用于预测的 PSNR 值
     pub fn predicted(value: f64, psnr: f64) -> Self {
         Self { value, source: SsimSource::Predicted, psnr: Some(psnr) }
+    }
+    
+    /// 检查是否为实际计算的 SSIM
+    #[inline]
+    pub fn is_actual(&self) -> bool {
+        matches!(self.source, SsimSource::Actual)
+    }
+    
+    /// 检查是否为预测的 SSIM
+    #[inline]
+    pub fn is_predicted(&self) -> bool {
+        matches!(self.source, SsimSource::Predicted)
     }
 }
 
@@ -218,13 +298,177 @@ impl ExploreContext {
     }
     
     /// 计算大小变化百分比
+    /// 
+    /// # Returns
+    /// 负数表示压缩，正数表示膨胀
+    /// 
+    /// # Example
+    /// - 输入 1MB，输出 800KB → -20.0%
+    /// - 输入 1MB，输出 1.2MB → +20.0%
+    #[inline]
     pub fn size_change_pct(&self, output_size: u64) -> f64 {
         ((output_size as f64 / self.input_size as f64) - 1.0) * 100.0
     }
     
     /// 检查是否能压缩（输出 < 输入）
+    #[inline]
     pub fn can_compress(&self, output_size: u64) -> bool {
         output_size < self.input_size
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v6.4.4: 辅助方法 - 减少 Strategy 重复代码
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 构建统一格式的探索结果
+    /// 
+    /// 🔥 v6.4.4: 减少 6 个 Strategy 中重复的结果构建代码
+    /// 
+    /// # Arguments
+    /// * `crf` - 最优 CRF 值
+    /// * `size` - 输出文件大小
+    /// * `ssim_result` - SSIM 计算结果（可选）
+    /// * `iterations` - 迭代次数
+    /// * `quality_passed` - 是否通过质量验证
+    /// * `confidence` - 置信度 (0.0 - 1.0)
+    pub fn build_result(
+        &self,
+        crf: f32,
+        size: u64,
+        ssim_result: Option<SsimResult>,
+        iterations: u32,
+        quality_passed: bool,
+        confidence: f64,
+    ) -> ExploreResult {
+        use crate::video_explorer::ConfidenceBreakdown;
+        
+        let size_change_pct = self.size_change_pct(size);
+        let ssim = ssim_result.as_ref().map(|r| r.value);
+        let psnr = ssim_result.and_then(|r| r.psnr);
+        
+        ExploreResult {
+            optimal_crf: crf,
+            output_size: size,
+            size_change_pct,
+            ssim,
+            psnr,
+            vmaf: None,
+            iterations,
+            quality_passed,
+            log: self.log.clone(),
+            confidence,
+            confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: self.config.quality_thresholds.min_ssim,
+        }
+    }
+    
+    /// 二分搜索找到能压缩的 CRF
+    /// 
+    /// 🔥 v6.4.4: 统一的二分搜索逻辑，减少重复代码
+    /// 
+    /// # Arguments
+    /// * `low` - 搜索下界（低 CRF = 高质量）
+    /// * `high` - 搜索上界（高 CRF = 低质量）
+    /// * `max_iter` - 最大迭代次数
+    /// 
+    /// # Returns
+    /// `(best_crf, best_size, iterations)` - 最优 CRF、对应大小、实际迭代次数
+    pub fn binary_search_compress(
+        &mut self,
+        low: f32,
+        high: f32,
+        max_iter: u32,
+    ) -> Result<(f32, u64, u32)> {
+        let mut low = low;
+        let mut high = high;
+        let mut best_crf = high;
+        let mut best_size = u64::MAX;
+        let mut iterations = 0u32;
+        
+        while high - low > 0.5 && iterations < max_iter {
+            let mid = (low + high) / 2.0;
+            self.progress_update(&format!("Binary search CRF {:.1}...", mid));
+            let size = self.encode(mid)?;
+            iterations += 1;
+            
+            if size < self.input_size {
+                best_crf = mid;
+                best_size = size;
+                high = mid;
+            } else {
+                low = mid;
+            }
+        }
+        
+        Ok((best_crf, best_size, iterations))
+    }
+    
+    /// 二分搜索找到最高 SSIM 的 CRF
+    /// 
+    /// 🔥 v6.4.4: 统一的质量搜索逻辑
+    /// 
+    /// # Arguments
+    /// * `low` - 搜索下界
+    /// * `high` - 搜索上界
+    /// * `max_iter` - 最大迭代次数
+    /// 
+    /// # Returns
+    /// `(best_crf, best_size, best_ssim, iterations)`
+    pub fn binary_search_quality(
+        &mut self,
+        low: f32,
+        high: f32,
+        max_iter: u32,
+    ) -> Result<(f32, u64, f64, u32)> {
+        let mut low = low;
+        let mut high = high;
+        let mut best_crf = self.config.initial_crf;
+        let mut best_ssim = 0.0f64;
+        let mut iterations = 0u32;
+        
+        // 先测试初始 CRF
+        self.progress_update(&format!("Test CRF {:.1}...", self.config.initial_crf));
+        let mut best_size = self.encode(self.config.initial_crf)?;
+        if let Ok(result) = self.calculate_ssim(self.config.initial_crf) {
+            best_ssim = result.value;
+        }
+        iterations += 1;
+        
+        // 二分搜索优化
+        while high - low > 1.0 && iterations < max_iter {
+            let mid = (low + high) / 2.0;
+            self.progress_update(&format!("Binary search CRF {:.1}...", mid));
+            let size = self.encode(mid)?;
+            iterations += 1;
+            
+            if let Ok(result) = self.calculate_ssim(mid) {
+                if result.value > best_ssim {
+                    best_ssim = result.value;
+                    best_crf = mid;
+                    best_size = size;
+                }
+                // 低 CRF = 高质量，如果 SSIM 已经很高，往高 CRF 搜索
+                if result.value >= 0.99 {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            } else {
+                high = mid;
+            }
+        }
+        
+        Ok((best_crf, best_size, best_ssim, iterations))
+    }
+    
+    /// 记录最终结果日志
+    /// 
+    /// 🔥 v6.4.4: 统一的结果日志格式
+    pub fn log_final_result(&mut self, crf: f32, ssim: Option<f64>, size_change_pct: f64) {
+        match ssim {
+            Some(s) => self.log(format!("📊 RESULT: CRF {:.1}, SSIM {:.4}, {:+.1}%", crf, s, size_change_pct)),
+            None => self.log(format!("📊 RESULT: CRF {:.1}, {:+.1}%", crf, size_change_pct)),
+        }
     }
     
     // ═══════════════════════════════════════════════════════════════
@@ -426,64 +670,44 @@ pub fn strategy_name(mode: ExploreMode) -> &'static str {
 // ═══════════════════════════════════════════════════════════════
 
 /// SizeOnly 策略 - 仅探索更小的文件大小
+/// 
+/// 使用最高 CRF 值编码，不验证 SSIM 质量。
+/// 适用于只关心文件大小的场景。
 pub struct SizeOnlyStrategy;
 
 impl ExploreStrategy for SizeOnlyStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        use crate::video_explorer::ConfidenceBreakdown;
-        
         ctx.log(format!("🔍 Size-Only Explore ({:?})", ctx.encoder));
         ctx.progress_start("🔍 Size Explore");
         
         // 测试 max_crf（最高 CRF = 最小文件）
         ctx.progress_update(&format!("Test CRF {:.1}...", ctx.config.max_crf));
         let max_size = ctx.encode(ctx.config.max_crf)?;
-        
-        let (best_crf, best_size, quality_passed) = if max_size < ctx.input_size {
-            (ctx.config.max_crf, max_size, true)
-        } else {
-            (ctx.config.max_crf, max_size, false)
-        };
+        let quality_passed = max_size < ctx.input_size;
         
         // 计算 SSIM（仅供参考）
         ctx.progress_update("Calculate SSIM...");
-        let ssim_result = ctx.calculate_ssim(best_crf).ok();
-        let ssim = ssim_result.as_ref().map(|r| r.value);
+        let ssim_result = ctx.calculate_ssim(ctx.config.max_crf).ok();
         
         ctx.progress_done();
+        ctx.log_final_result(ctx.config.max_crf, ssim_result.as_ref().map(|r| r.value), ctx.size_change_pct(max_size));
         
-        let size_change_pct = ctx.size_change_pct(best_size);
-        ctx.log(format!("📊 RESULT: CRF {:.1}, {:+.1}%", best_crf, size_change_pct));
-        
-        Ok(ExploreResult {
-            optimal_crf: best_crf,
-            output_size: best_size,
-            size_change_pct,
-            ssim,
-            psnr: ssim_result.and_then(|r| r.psnr),
-            vmaf: None,
-            iterations: 1,
-            quality_passed,
-            log: ctx.log.clone(),
-            confidence: 0.7,
-            confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-        })
+        // 🔥 v6.4.4: 使用 build_result 减少重复代码
+        Ok(ctx.build_result(ctx.config.max_crf, max_size, ssim_result, 1, quality_passed, 0.7))
     }
     
     fn name(&self) -> &'static str { "SizeOnly" }
-    fn description(&self) -> &'static str { 
-        "寻找更小的文件大小（不验证质量）" 
-    }
+    fn description(&self) -> &'static str { "寻找更小的文件大小（不验证质量）" }
 }
 
 /// QualityMatch 策略 - 仅匹配输入质量
+/// 
+/// 使用算法预测的 CRF 值进行单次编码，然后验证 SSIM。
+/// 适用于快速匹配质量的场景。
 pub struct QualityMatchStrategy;
 
 impl ExploreStrategy for QualityMatchStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        use crate::video_explorer::ConfidenceBreakdown;
-        
         ctx.log(format!("🎯 Quality-Match Mode ({:?})", ctx.encoder));
         ctx.log(format!("   Predicted CRF: {}", ctx.config.initial_crf));
         ctx.progress_start("🎯 Quality Match");
@@ -495,153 +719,74 @@ impl ExploreStrategy for QualityMatchStrategy {
         // 计算 SSIM
         ctx.progress_update("Calculate SSIM...");
         let ssim_result = ctx.calculate_ssim(ctx.config.initial_crf).ok();
-        let ssim = ssim_result.as_ref().map(|r| r.value);
-        let psnr = ssim_result.and_then(|r| r.psnr);
+        let quality_passed = ssim_result.as_ref()
+            .map(|r| r.value >= ctx.config.quality_thresholds.min_ssim)
+            .unwrap_or(false);
         
         ctx.progress_done();
+        ctx.log_final_result(ctx.config.initial_crf, ssim_result.as_ref().map(|r| r.value), ctx.size_change_pct(output_size));
         
-        let size_change_pct = ctx.size_change_pct(output_size);
-        let quality_passed = ssim.map(|s| s >= ctx.config.quality_thresholds.min_ssim).unwrap_or(false);
-        
-        ctx.log(format!("📊 RESULT: CRF {:.1}, SSIM {:.4}, {:+.1}%", 
-            ctx.config.initial_crf, ssim.unwrap_or(0.0), size_change_pct));
-        
-        Ok(ExploreResult {
-            optimal_crf: ctx.config.initial_crf,
-            output_size,
-            size_change_pct,
-            ssim,
-            psnr,
-            vmaf: None,
-            iterations: 1,
-            quality_passed,
-            log: ctx.log.clone(),
-            confidence: 0.6,
-            confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-        })
+        // 🔥 v6.4.4: 使用 build_result 减少重复代码
+        Ok(ctx.build_result(ctx.config.initial_crf, output_size, ssim_result, 1, quality_passed, 0.6))
     }
     
     fn name(&self) -> &'static str { "QualityMatch" }
-    fn description(&self) -> &'static str { 
-        "使用算法预测的 CRF，单次编码 + SSIM 验证" 
-    }
+    fn description(&self) -> &'static str { "使用算法预测的 CRF，单次编码 + SSIM 验证" }
 }
 
 /// PreciseQualityMatch 策略 - 精确质量匹配
+/// 
+/// 使用二分搜索找到最高 SSIM 的 CRF 值。
+/// 不关心文件大小，只关心质量。
 pub struct PreciseQualityMatchStrategy;
 
 impl ExploreStrategy for PreciseQualityMatchStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        use crate::video_explorer::ConfidenceBreakdown;
-        
         ctx.log(format!("🎯 Precise Quality Match ({:?})", ctx.encoder));
         ctx.progress_start("🎯 Precise Quality");
         
-        // 二分搜索找最高 SSIM
-        let mut low = ctx.config.min_crf;
-        let mut high = ctx.config.max_crf;
-        let mut best_crf = ctx.config.initial_crf;
-        let mut best_ssim = 0.0;
-        let mut best_size: u64;
-        let mut iterations = 0u32;
-        
-        // 先测试初始 CRF
-        ctx.progress_update(&format!("Test CRF {:.1}...", ctx.config.initial_crf));
-        best_size = ctx.encode(ctx.config.initial_crf)?;
-        if let Ok(result) = ctx.calculate_ssim(ctx.config.initial_crf) {
-            best_ssim = result.value;
-        }
-        iterations += 1;
-        
-        // 二分搜索优化
-        while high - low > 1.0 && iterations < ctx.config.max_iterations {
-            let mid = (low + high) / 2.0;
-            ctx.progress_update(&format!("Binary search CRF {:.1}...", mid));
-            let size = ctx.encode(mid)?;
-            iterations += 1;
-            
-            if let Ok(result) = ctx.calculate_ssim(mid) {
-                if result.value > best_ssim {
-                    best_ssim = result.value;
-                    best_crf = mid;
-                    best_size = size;
-                }
-                // 低 CRF = 高质量，如果 SSIM 已经很高，往高 CRF 搜索
-                if result.value >= 0.99 {
-                    low = mid;
-                } else {
-                    high = mid;
-                }
-            } else {
-                high = mid;
-            }
-        }
+        // 🔥 v6.4.4: 使用 binary_search_quality 减少重复代码
+        let (best_crf, best_size, best_ssim, iterations) = ctx.binary_search_quality(
+            ctx.config.min_crf,
+            ctx.config.max_crf,
+            ctx.config.max_iterations,
+        )?;
         
         ctx.progress_done();
         
-        let size_change_pct = ctx.size_change_pct(best_size);
         let quality_passed = best_ssim >= ctx.config.quality_thresholds.min_ssim;
-        ctx.log(format!("📊 RESULT: CRF {:.1}, SSIM {:.4}, {:+.1}%", best_crf, best_ssim, size_change_pct));
+        ctx.log_final_result(best_crf, Some(best_ssim), ctx.size_change_pct(best_size));
         
-        Ok(ExploreResult {
-            optimal_crf: best_crf,
-            output_size: best_size,
-            size_change_pct,
-            ssim: Some(best_ssim),
-            psnr: None,
-            vmaf: None,
-            iterations,
-            quality_passed,
-            log: ctx.log.clone(),
-            confidence: 0.85,
-            confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-        })
+        Ok(ctx.build_result(best_crf, best_size, Some(SsimResult::actual(best_ssim, None)), iterations, quality_passed, 0.85))
     }
     
     fn name(&self) -> &'static str { "PreciseQualityMatch" }
-    fn description(&self) -> &'static str { 
-        "二分搜索 + SSIM 裁判验证，找到最高 SSIM" 
-    }
+    fn description(&self) -> &'static str { "二分搜索 + SSIM 裁判验证，找到最高 SSIM" }
 }
 
 /// PreciseQualityMatchWithCompression 策略 - 精确质量匹配 + 压缩
+/// 
+/// 先找到压缩边界，然后在压缩范围内找最高 SSIM。
+/// 如果无法同时满足，优先保证压缩。
 pub struct PreciseQualityMatchWithCompressionStrategy;
 
 impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        use crate::video_explorer::ConfidenceBreakdown;
-        
         ctx.log(format!("🎯💾 Precise Quality + Compress ({:?})", ctx.encoder));
         ctx.progress_start("🎯💾 Quality+Compress");
         
-        // 先找压缩边界
-        let mut compress_boundary = ctx.config.max_crf;
-        let mut iterations = 0u32;
-        
-        // 二分搜索找压缩边界
-        let mut low = ctx.config.min_crf;
-        let mut high = ctx.config.max_crf;
-        
-        while high - low > 1.0 && iterations < ctx.config.max_iterations / 2 {
-            let mid = (low + high) / 2.0;
-            ctx.progress_update(&format!("Find compress boundary CRF {:.1}...", mid));
-            let size = ctx.encode(mid)?;
-            iterations += 1;
-            
-            if size < ctx.input_size {
-                compress_boundary = mid;
-                high = mid;
-            } else {
-                low = mid;
-            }
-        }
+        // 🔥 v6.4.4: 使用 binary_search_compress 找压缩边界
+        let (compress_boundary, _, boundary_iter) = ctx.binary_search_compress(
+            ctx.config.min_crf,
+            ctx.config.max_crf,
+            ctx.config.max_iterations / 2,
+        )?;
         
         // 在压缩范围内找最高 SSIM
         let mut best_crf = compress_boundary;
         let mut best_ssim = 0.0;
         let mut best_size = ctx.get_cached_size(compress_boundary).unwrap_or(0);
+        let mut iterations = boundary_iter;
         
         // 从压缩边界向低 CRF 搜索（更高质量）
         let search_low = (compress_boundary - 5.0).max(ctx.config.min_crf);
@@ -668,39 +813,24 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         
         ctx.progress_done();
         
-        let size_change_pct = ctx.size_change_pct(best_size);
         let quality_passed = best_size < ctx.input_size && best_ssim >= ctx.config.quality_thresholds.min_ssim;
-        ctx.log(format!("📊 RESULT: CRF {:.1}, SSIM {:.4}, {:+.1}%", best_crf, best_ssim, size_change_pct));
+        ctx.log_final_result(best_crf, Some(best_ssim), ctx.size_change_pct(best_size));
         
-        Ok(ExploreResult {
-            optimal_crf: best_crf,
-            output_size: best_size,
-            size_change_pct,
-            ssim: Some(best_ssim),
-            psnr: None,
-            vmaf: None,
-            iterations,
-            quality_passed,
-            log: ctx.log.clone(),
-            confidence: 0.85,
-            confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-        })
+        Ok(ctx.build_result(best_crf, best_size, Some(SsimResult::actual(best_ssim, None)), iterations, quality_passed, 0.85))
     }
     
     fn name(&self) -> &'static str { "PreciseQualityMatchWithCompression" }
-    fn description(&self) -> &'static str { 
-        "找到最高 SSIM 且输出 < 输入" 
-    }
+    fn description(&self) -> &'static str { "找到最高 SSIM 且输出 < 输入" }
 }
 
 /// CompressOnly 策略 - 仅压缩
+/// 
+/// 确保输出文件小于输入文件，不验证 SSIM 质量。
+/// 与 SizeOnly 不同：SizeOnly 寻找最小输出，CompressOnly 只要更小即可。
 pub struct CompressOnlyStrategy;
 
 impl ExploreStrategy for CompressOnlyStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        use crate::video_explorer::ConfidenceBreakdown;
-        
         ctx.log(format!("💾 Compress-Only Mode ({:?})", ctx.encoder));
         ctx.progress_start("💾 Compress Only");
         
@@ -711,148 +841,70 @@ impl ExploreStrategy for CompressOnlyStrategy {
         if initial_size < ctx.input_size {
             // 能压缩，直接返回
             ctx.progress_done();
-            let size_change_pct = ctx.size_change_pct(initial_size);
-            ctx.log(format!("📊 RESULT: CRF {:.1}, {:+.1}%", ctx.config.initial_crf, size_change_pct));
-            
-            return Ok(ExploreResult {
-                optimal_crf: ctx.config.initial_crf,
-                output_size: initial_size,
-                size_change_pct,
-                ssim: None,
-                psnr: None,
-                vmaf: None,
-                iterations: 1,
-                quality_passed: true,
-                log: ctx.log.clone(),
-                confidence: 0.8,
-                confidence_detail: ConfidenceBreakdown::default(),
-                actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-            });
+            ctx.log_final_result(ctx.config.initial_crf, None, ctx.size_change_pct(initial_size));
+            return Ok(ctx.build_result(ctx.config.initial_crf, initial_size, None, 1, true, 0.8));
         }
         
-        // 二分搜索找能压缩的 CRF
-        let mut low = ctx.config.initial_crf;
-        let mut high = ctx.config.max_crf;
-        let mut best_crf = ctx.config.max_crf;
-        let mut best_size = initial_size;
-        let mut iterations = 1u32;
-        
-        while high - low > 0.5 && iterations < ctx.config.max_iterations {
-            let mid = (low + high) / 2.0;
-            ctx.progress_update(&format!("Binary search CRF {:.1}...", mid));
-            let size = ctx.encode(mid)?;
-            iterations += 1;
-            
-            if size < ctx.input_size {
-                best_crf = mid;
-                best_size = size;
-                high = mid;
-            } else {
-                low = mid;
-            }
-        }
+        // 🔥 v6.4.4: 使用 binary_search_compress 减少重复代码
+        let (best_crf, best_size, search_iter) = ctx.binary_search_compress(
+            ctx.config.initial_crf,
+            ctx.config.max_crf,
+            ctx.config.max_iterations - 1,
+        )?;
+        let iterations = search_iter + 1; // +1 for initial test
         
         ctx.progress_done();
-        let size_change_pct = ctx.size_change_pct(best_size);
         let quality_passed = best_size < ctx.input_size;
-        ctx.log(format!("📊 RESULT: CRF {:.1}, {:+.1}%", best_crf, size_change_pct));
+        ctx.log_final_result(best_crf, None, ctx.size_change_pct(best_size));
         
-        Ok(ExploreResult {
-            optimal_crf: best_crf,
-            output_size: best_size,
-            size_change_pct,
-            ssim: None,
-            psnr: None,
-            vmaf: None,
-            iterations,
-            quality_passed,
-            log: ctx.log.clone(),
-            confidence: 0.75,
-            confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-        })
+        Ok(ctx.build_result(best_crf, best_size, None, iterations, quality_passed, 0.75))
     }
     
     fn name(&self) -> &'static str { "CompressOnly" }
-    fn description(&self) -> &'static str { 
-        "确保输出 < 输入（不验证质量）" 
-    }
+    fn description(&self) -> &'static str { "确保输出 < 输入（不验证质量）" }
 }
 
 /// CompressWithQuality 策略 - 压缩 + 粗略质量验证
+/// 
+/// 确保输出文件小于输入文件，并进行粗略 SSIM 验证。
+/// 与 PreciseQualityMatchWithCompression 不同：不追求最高 SSIM，只要通过阈值即可。
 pub struct CompressWithQualityStrategy;
 
 impl ExploreStrategy for CompressWithQualityStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        use crate::video_explorer::ConfidenceBreakdown;
-        
         ctx.log(format!("💾🎯 Compress+Quality Mode ({:?})", ctx.encoder));
         ctx.progress_start("💾🎯 Compress+Quality");
         
-        // 先用 CompressOnly 找到能压缩的 CRF
+        // 先测试 initial_crf
         ctx.progress_update(&format!("Test CRF {:.1}...", ctx.config.initial_crf));
         let initial_size = ctx.encode(ctx.config.initial_crf)?;
-        let mut iterations = 1u32;
         
-        let (best_crf, best_size) = if initial_size < ctx.input_size {
-            (ctx.config.initial_crf, initial_size)
+        let (best_crf, best_size, iterations) = if initial_size < ctx.input_size {
+            (ctx.config.initial_crf, initial_size, 1u32)
         } else {
-            // 二分搜索
-            let mut low = ctx.config.initial_crf;
-            let mut high = ctx.config.max_crf;
-            let mut best = (ctx.config.max_crf, initial_size);
-            
-            while high - low > 0.5 && iterations < ctx.config.max_iterations {
-                let mid = (low + high) / 2.0;
-                ctx.progress_update(&format!("Binary search CRF {:.1}...", mid));
-                let size = ctx.encode(mid)?;
-                iterations += 1;
-                
-                if size < ctx.input_size {
-                    best = (mid, size);
-                    high = mid;
-                } else {
-                    low = mid;
-                }
-            }
-            best
+            // 🔥 v6.4.4: 使用 binary_search_compress 减少重复代码
+            let (crf, size, iter) = ctx.binary_search_compress(
+                ctx.config.initial_crf,
+                ctx.config.max_crf,
+                ctx.config.max_iterations - 1,
+            )?;
+            (crf, size, iter + 1)
         };
         
         // 计算 SSIM 验证质量
         ctx.progress_update("Calculate SSIM...");
         let ssim_result = ctx.calculate_ssim(best_crf).ok();
-        let ssim = ssim_result.as_ref().map(|r| r.value);
-        let psnr = ssim_result.and_then(|r| r.psnr);
+        let quality_passed = best_size < ctx.input_size && 
+            ssim_result.as_ref().map(|r| r.value >= ctx.config.quality_thresholds.min_ssim).unwrap_or(false);
         
         ctx.progress_done();
+        ctx.log_final_result(best_crf, ssim_result.as_ref().map(|r| r.value), ctx.size_change_pct(best_size));
         
-        let size_change_pct = ctx.size_change_pct(best_size);
-        let quality_passed = best_size < ctx.input_size && 
-            ssim.map(|s| s >= ctx.config.quality_thresholds.min_ssim).unwrap_or(false);
-        
-        ctx.log(format!("📊 RESULT: CRF {:.1}, SSIM {:.4}, {:+.1}%", 
-            best_crf, ssim.unwrap_or(0.0), size_change_pct));
-        
-        Ok(ExploreResult {
-            optimal_crf: best_crf,
-            output_size: best_size,
-            size_change_pct,
-            ssim,
-            psnr,
-            vmaf: None,
-            iterations,
-            quality_passed,
-            log: ctx.log.clone(),
-            confidence: 0.75,
-            confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: ctx.config.quality_thresholds.min_ssim,
-        })
+        Ok(ctx.build_result(best_crf, best_size, ssim_result, iterations, quality_passed, 0.75))
     }
     
     fn name(&self) -> &'static str { "CompressWithQuality" }
-    fn description(&self) -> &'static str { 
-        "确保输出 < 输入 + 粗略 SSIM 验证" 
-    }
+    fn description(&self) -> &'static str { "确保输出 < 输入 + 粗略 SSIM 验证" }
 }
 
 // ═══════════════════════════════════════════════════════════════

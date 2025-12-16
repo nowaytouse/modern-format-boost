@@ -107,6 +107,11 @@ pub use video_explorer::{
     SsimSource, IterationMetrics, TransparencyReport,
     // 🔥 v5.74: Preset 配置
     EncoderPreset,
+    // 🔥 v6.4.3: 动态元数据余量（百分比 + 最小值策略）
+    calculate_metadata_margin, compression_target_size, can_compress_with_metadata,
+    verify_compression_precise, verify_compression_simple, detect_metadata_size, pure_video_size,
+    CompressionVerifyStrategy,
+    METADATA_MARGIN_MIN, METADATA_MARGIN_MAX, METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
     // New API: mode-specific functions
     explore_size_only, explore_quality_match, explore_precise_quality_match,
     // 🔥 v4.5: 精确质量匹配 + 压缩

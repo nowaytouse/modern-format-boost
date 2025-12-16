@@ -413,6 +413,30 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ## Version History / 版本历史
 
+### v6.4.4 (2025-12) - Code Quality Improvements / 代码质量改进
+- 🔧 **Strategy helper methods**: `build_result()`, `binary_search_compress()`, `binary_search_quality()`, `log_final_result()` reduce ~40% duplicate code
+- 🔧 **Enhanced documentation**: Rustdoc comments with examples for public APIs
+- 🔧 **Boundary tests**: Edge cases for metadata margin (0, u64::MAX, threshold boundaries)
+- 🔧 **SsimResult helpers**: `is_actual()`, `is_predicted()` methods
+
+### v6.4.4 (2025-12) - 代码质量改进
+- 🔧 **Strategy 辅助方法**：`build_result()`, `binary_search_compress()`, `binary_search_quality()`, `log_final_result()` 减少约 40% 重复代码
+- 🔧 **增强文档注释**：公开 API 添加 Rustdoc 注释和示例
+- 🔧 **边界测试**：元数据余量边界测试（0, u64::MAX, 阈值边界）
+- 🔧 **SsimResult 辅助方法**：`is_actual()`, `is_predicted()` 方法
+
+### v6.4.3 (2025-12) - Dynamic Metadata Margin / 动态元数据余量
+- 🔥 **Percentage + min/max strategy**: `max(input × 0.5%, 2KB).min(100KB)`
+- 🔥 **Small file threshold**: 10MB (was 100KB)
+- 🔥 **CompressionVerifyStrategy enum**: Consistent comparison logic
+- 🔥 **verify_compression_precise()**: Returns 3-tuple with strategy info
+
+### v6.4.3 (2025-12) - 动态元数据余量
+- 🔥 **百分比 + 最小/最大策略**：`max(input × 0.5%, 2KB).min(100KB)`
+- 🔥 **小文件阈值**：10MB（原为 100KB）
+- 🔥 **CompressionVerifyStrategy 枚举**：统一的比较逻辑
+- 🔥 **verify_compression_precise()**：返回 3 元组包含策略信息
+
 ### v6.2 (2025-12) - Ultimate Explore Mode / 极限探索模式
 - 🔥 **`--ultimate` flag**: Search until SSIM fully saturates (Domain Wall)
 - 🔥 **Adaptive wall limit**: `min(ceil(log2(crf_range)) + 6, 20)` based on CRF range
@@ -429,4 +453,4 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ---
 
-**Version**: 6.2 | **Updated**: 2025-12-16
+**Version**: 6.4.4 | **Updated**: 2025-12-16
