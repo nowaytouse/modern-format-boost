@@ -5212,21 +5212,24 @@ fn cpu_fine_tune_from_gpu_boundary(
         // - 现在：约23次迭代，CRF 41.5 → 14.2（质量墙触发）
 
         let crf_range = gpu_boundary_crf - min_crf;
-        let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);  // 🔥 动态计算初始步长
+        // 🔥 v5.97: 超激进初始步长 - 从 /3.0 改为 /2.0，一步跨越大半范围
+        let initial_step = (crf_range / 2.0).clamp(5.0, 20.0);
 
-        // 动态生成步长计划
+        // 🔥 v5.97: 超激进步长计划 - 早期阶段大跨步，快速逼近墙
+        // 策略：用2-3次大步快速接近墙，然后用0.5/0.1精细定位
+        // 预期：从 CRF 41.5 → 撞墙只需 3-4 次大步 + 5-6 次精细
         let step_schedule: Vec<(f32, u32)> = vec![
-            (initial_step, 2),              // Stage 1: 快速探索
-            (initial_step / 2.0, 2),        // Stage 2: 接近最优
-            (initial_step / 4.0, 3),        // Stage 3: 精细搜索
-            ((initial_step / 8.0).max(0.2), 3),  // Stage 4: 微调（最小0.2）
-            (0.1, 99),                      // Stage 5: 最终精确
+            (initial_step, 1),              // Stage 1: 超大跳跃（1次，跨越50%范围）
+            ((initial_step / 2.0).max(2.0), 1),  // Stage 2: 大步（1次，跨越25%范围）
+            (1.0, 2),                       // Stage 3: 中步（2次）
+            (0.5, 2),                       // Stage 4: 精细搜索（2次）
+            (0.1, 99),                      // Stage 5: 最终精确（直到撞墙）
         ];
 
-        eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (adaptive formula){}",
+        eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (v5.97 ultra-aggressive){}",
             DIM, crf_range, BRIGHT_CYAN, initial_step, RESET, RESET);
-        eprintln!("   {}📊 Step progression: {:.1} → {:.1} → {:.1} → {:.2} → 0.1{}",
-            DIM, initial_step, initial_step/2.0, initial_step/4.0, (initial_step/8.0).max(0.2), RESET);
+        eprintln!("   {}📊 Step progression: {:.1} → {:.1} → 1.0 → 0.5 → 0.1 (rapid wall collision){}",
+            DIM, initial_step, (initial_step/2.0).max(2.0), RESET);
 
         let mut current_step = step_schedule[0].0;
         let mut step_index = 0_usize;
