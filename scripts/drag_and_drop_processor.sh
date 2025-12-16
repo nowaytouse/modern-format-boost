@@ -1,6 +1,7 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.0
+# Modern Format Boost - Drag & Drop Processor v6.1
 # 
+# 🔥 v6.1: 边界精细调整 - 到达min_crf边界时自动切换到0.1精细阶段
 # 🔥 v6.0: GPU曲线模型策略 - GPU阶段也使用激进撞墙+精细回退
 # 🔥 v5.99: CPU曲线模型 + 精细调整阶段 - 当曲线步长<1.0时切换到0.1精细搜索
 # 🔥 v5.98: 曲线模型超激进策略 - 全程激进，4次撞墙即停

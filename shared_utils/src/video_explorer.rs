@@ -5263,7 +5263,23 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut consecutive_zero_gains: u32 = 0;
         let mut quality_wall_hit = false;
 
-        while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
+        while iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
+            // 🔥 v6.1: 边界检查 - 如果 test_crf < min_crf，钳制到 min_crf 并进入精细阶段
+            if test_crf < min_crf {
+                if current_step > MIN_STEP + 0.01 {
+                    // 还没进入精细阶段，切换到精细步长从 last_good_crf 继续
+                    eprintln!("   {}📍{} Reached min_crf boundary, switching to fine tuning from CRF {:.1}",
+                        BRIGHT_CYAN, RESET, last_good_crf);
+                    current_step = MIN_STEP;
+                    test_crf = last_good_crf - current_step;
+                    if test_crf < min_crf {
+                        break;  // 真的到边界了
+                    }
+                } else {
+                    break;  // 已经在精细阶段，到边界了
+                }
+            }
+            
             let key = precision::crf_to_cache_key(test_crf);
             if size_cache.contains_key(&key) {
                 test_crf -= current_step;
