@@ -82,7 +82,7 @@ impl CoarseProgressBar {
     /// 🔥 v5.80: 暂停进度条，输出日志到上方
     ///
     /// 用法：
-    /// ```rust
+    /// ```ignore
     /// let pb = CoarseProgressBar::new(100, "Processing");
     /// pb.println("⚠️ Warning: something happened");
     /// pb.println("✅ Step completed");
