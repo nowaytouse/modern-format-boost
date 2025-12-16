@@ -1,6 +1,7 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v5.97
+# Modern Format Boost - Drag & Drop Processor v5.98
 # 
+# 🔥 v5.98: 曲线模型超激进策略 - 全程激进，4次撞墙即停
 # 🔥 v5.97: 超激进CPU步进策略 - 早期大跨步，快速撞墙
 # 🔥 v5.96: 更激进的CPU步进策略 - 更快触墙，减少迭代次数
 # 🔥 v5.95: 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)，让算法真正撞墙
@@ -173,7 +174,7 @@ show_welcome() {
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v5.97                                         ║"
+    echo "  ║     🚀 Modern Format Boost v5.98                                         ║"
     echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证                            ║"
     echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
