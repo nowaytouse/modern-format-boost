@@ -110,10 +110,11 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         apple_compat: bool,
 
-        /// 🔥 v4.15: Force CPU encoding (libx265) instead of GPU
-        /// VideoToolbox hardware encoding caps at ~0.95 SSIM. Use --cpu to achieve 0.98+ SSIM
+        /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
+        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
+        /// ⚠️ MUST be used with --explore --match-quality --compress
         #[arg(long, default_value_t = false)]
-        cpu: bool,
+        ultimate: bool,
     },
 
     /// Verify conversion quality
@@ -191,13 +192,13 @@ fn main() -> anyhow::Result<()> {
             match_quality,
             compress,
             apple_compat,
-            cpu,
+            ultimate,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
             
-            // 🔥 v4.6: 使用模块化的 flag 验证器
-            if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
+            // 🔥 v6.2: 使用模块化的 flag 验证器（含 ultimate 支持）
+            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate) {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
@@ -207,7 +208,7 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("   Smart quality matching: DISABLED");
             } else {
                 // 显示探索模式信息
-                let flag_mode = shared_utils::validate_flags_result(explore, match_quality, compress).unwrap();
+                let flag_mode = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate).unwrap();
                 eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
@@ -216,6 +217,9 @@ fn main() -> anyhow::Result<()> {
             }
             if in_place {
                 eprintln!("🔄 In-place mode: ENABLED (original files will be deleted after conversion)");
+            }
+            if ultimate {
+                eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             let config = AutoConvertConfig {
                 output_dir: output.clone(),
@@ -227,11 +231,9 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 compress,
                 apple_compat,
-                use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
+                use_gpu: true,  // 🔥 v6.2: Always use GPU for coarse search
+                ultimate,  // 🔥 v6.2: 极限探索模式
             };
-            if cpu {
-                eprintln!("🖥️  CPU Encoding: ENABLED (libx265 for SSIM ≥0.98)");
-            }
 
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -525,6 +527,8 @@ struct AutoConvertConfig {
     apple_compat: bool,
     /// 🔥 v4.15: Use GPU acceleration (default: true)
     use_gpu: bool,
+    /// 🔥 v6.2: 极限探索模式
+    ultimate: bool,
 }
 
 /// Smart auto-convert a single file based on format detection
@@ -555,7 +559,8 @@ fn auto_convert_single_file(
         match_quality: config.match_quality,
         compress: config.compress,
         apple_compat: config.apple_compat,
-        use_gpu: config.use_gpu,  // 🔥 v4.15: Pass GPU control
+        use_gpu: config.use_gpu,
+        ultimate: config.ultimate,  // 🔥 v6.2: 极限探索模式
     };
     
     // Smart conversion based on format and lossless status

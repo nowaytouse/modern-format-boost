@@ -82,7 +82,7 @@ vidquality-hevc simple input.mp4
 vidquality-hevc strategy input.mp4
 ```
 
-### Flag Combinations (6 Valid Modes)
+### Flag Combinations (7 Valid Modes)
 
 | Flags | Mode | Behavior |
 |-------|------|----------|
@@ -93,8 +93,11 @@ vidquality-hevc strategy input.mp4
 | `--compress --match-quality` | Compress+Quality | output < input + SSIM check |
 | `--explore --match-quality` | Precise | Binary search + SSIM validation |
 | `--explore --match-quality --compress` | Full | Precise quality + must compress |
+| `--explore --match-quality --compress --ultimate` | 🔥 Ultimate | Search until SSIM saturates (Domain Wall) |
 
-**Invalid:** `--explore --compress` (conflicting goals)
+**Invalid combinations:**
+- `--explore --compress` (conflicting goals)
+- `--ultimate` alone or with incomplete flag combinations
 
 ### All Options
 
@@ -105,8 +108,9 @@ vidquality-hevc strategy input.mp4
 --delete-original      Delete original after conversion
 --in-place             Convert and delete original (replace)
 --lossless             Mathematical lossless (very slow)
---cpu                  Force CPU encoding (higher SSIM ceiling)
 --apple-compat         Convert AV1/VP9 → HEVC for Apple devices
+--ultimate             🔥 v6.2: Ultimate explore mode (SSIM saturation)
+                       Must use with --explore --match-quality --compress
 ```
 
 ## Architecture
@@ -308,7 +312,7 @@ vidquality-hevc simple input.mp4
 vidquality-hevc strategy input.mp4
 ```
 
-### 参数组合（6种有效模式）
+### 参数组合（7种有效模式）
 
 | 参数 | 模式 | 行为 |
 |------|------|------|
@@ -319,8 +323,11 @@ vidquality-hevc strategy input.mp4
 | `--compress --match-quality` | 压缩+质量 | 输出 < 输入 + SSIM检查 |
 | `--explore --match-quality` | 精确 | 二分搜索 + SSIM验证 |
 | `--explore --match-quality --compress` | 完整 | 精确质量 + 必须压缩 |
+| `--explore --match-quality --compress --ultimate` | 🔥 极限 | 持续搜索直到SSIM饱和（领域墙）|
 
-**无效组合：** `--explore --compress`（目标冲突）
+**无效组合：**
+- `--explore --compress`（目标冲突）
+- `--ultimate` 单独使用或与不完整组合搭配
 
 ### 所有选项
 
@@ -331,8 +338,9 @@ vidquality-hevc strategy input.mp4
 --delete-original      转换后删除原文件
 --in-place             原地转换（替换原文件）
 --lossless             数学无损（非常慢）
---cpu                  强制CPU编码（更高SSIM上限）
 --apple-compat         AV1/VP9 → HEVC（Apple设备兼容）
+--ultimate             🔥 v6.2: 极限探索模式（SSIM饱和）
+                       必须与 --explore --match-quality --compress 组合使用
 ```
 
 ## 质量验证系统
@@ -403,4 +411,22 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ---
 
-**Version**: 5.76 | **Updated**: 2025-12
+## Version History / 版本历史
+
+### v6.2 (2025-12) - Ultimate Explore Mode / 极限探索模式
+- 🔥 **`--ultimate` flag**: Search until SSIM fully saturates (Domain Wall)
+- 🔥 **Adaptive wall limit**: `min(ceil(log2(crf_range)) + 6, 20)` based on CRF range
+- 🔥 **8 consecutive zero-gains** for SSIM saturation detection (vs 4 in normal mode)
+- 🔥 **Smart size diff display**: Auto-select B/KB/MB unit for small files
+- 🔥 **Removed `--cpu` flag**: GPU coarse + CPU fine search is now default behavior
+
+### v6.2 (2025-12) - 极限探索模式
+- 🔥 **`--ultimate` 参数**：持续搜索直到 SSIM 完全饱和（领域墙）
+- 🔥 **自适应撞墙上限**：基于 CRF 范围计算 `min(ceil(log2(crf_range)) + 6, 20)`
+- 🔥 **8 次连续零增益** 用于 SSIM 饱和检测（普通模式为 4 次）
+- 🔥 **智能大小差异显示**：小文件自动选择 B/KB/MB 单位
+- 🔥 **移除 `--cpu` 参数**：GPU 粗搜索 + CPU 精细搜索现为默认行为
+
+---
+
+**Version**: 6.2 | **Updated**: 2025-12-16

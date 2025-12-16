@@ -1,6 +1,8 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.1
+# Modern Format Boost - Drag & Drop Processor v6.2
 # 
+# 🔥 v6.2: 极限探索模式 - --ultimate flag 持续搜索直到 SSIM 完全饱和
+#          删除 --cpu flag（已无实际作用），完善 flag 组合验证
 # 🔥 v6.1: 边界精细调整 - 到达min_crf边界时自动切换到0.1精细阶段
 # 🔥 v6.0: GPU曲线模型策略 - GPU阶段也使用激进撞墙+精细回退
 # 🔥 v5.99: CPU曲线模型 + 精细调整阶段 - 当曲线步长<1.0时切换到0.1精细搜索

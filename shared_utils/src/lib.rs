@@ -153,8 +153,11 @@ pub use xmp_merger::{
 };
 
 // 🔥 v4.6: Flag 组合验证器
+// 🔥 v6.2: 添加 ultimate 支持
 pub use flag_validator::{
-    FlagMode, FlagValidation, validate_flags, validate_flags_result, print_flag_help,
+    FlagMode, FlagValidation, validate_flags, validate_flags_result, 
+    validate_flags_with_ultimate, validate_flags_result_with_ultimate,
+    print_flag_help,
 };
 
 // 🔥 v4.9: GPU 加速模块
@@ -173,6 +176,7 @@ pub use gpu_accel::{
 pub use video_explorer::{
     explore_with_gpu_coarse_search,
     explore_hevc_with_gpu_coarse,
+    explore_hevc_with_gpu_coarse_ultimate,  // 🔥 v6.2: 极限探索模式
     explore_av1_with_gpu_coarse,
 };
 
@@ -183,7 +187,7 @@ pub use modern_ui::{
     ExploreProgressState,
     print_result_box, print_stage, print_substage,
     print_success, print_warning, print_error, print_info,
-    format_size, format_size_change,
+    format_size, format_size_change, format_size_diff,
     spinner_frame, spinner_dots,
 };
 

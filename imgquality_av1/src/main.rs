@@ -517,6 +517,7 @@ fn auto_convert_single_file(
         compress: config.compress,
         apple_compat: false,  // imgquality_av1 不需要 Apple 兼容模式
         use_gpu: config.use_gpu,  // 🔥 v4.15: Pass GPU control
+        ultimate: false,  // 🔥 v6.2: AV1 暂不支持极限模式
     };
     
     // Smart conversion based on format and lossless status

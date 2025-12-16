@@ -233,6 +233,10 @@ pub struct ConvertOptions {
     /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
     /// VideoToolbox hardware encoding caps at ~0.95 SSIM
     pub use_gpu: bool,
+    /// 🔥 v6.2: 极限探索模式
+    /// 持续搜索直到 SSIM 完全饱和（领域墙）
+    /// 只能与 --explore --match-quality --compress 组合使用
+    pub ultimate: bool,
 }
 
 impl Default for ConvertOptions {
@@ -247,6 +251,7 @@ impl Default for ConvertOptions {
             apple_compat: false,
             compress: false,
             use_gpu: true,  // 🔥 v4.15: GPU by default
+            ultimate: false,  // 🔥 v6.2: 默认关闭极限模式
         }
     }
 }
@@ -258,11 +263,13 @@ impl ConvertOptions {
         self.delete_original || self.in_place
     }
     
-    /// 🔥 v4.6: 获取 flag 模式（使用模块化验证器）
+    /// 🔥 v6.2: 获取 flag 模式（使用模块化验证器，含 ultimate 支持）
     /// 
     /// 返回 Result，无效组合会返回错误信息
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
-        crate::flag_validator::validate_flags_result(self.explore, self.match_quality, self.compress)
+        crate::flag_validator::validate_flags_result_with_ultimate(
+            self.explore, self.match_quality, self.compress, self.ultimate
+        )
     }
     
     /// 获取探索模式（兼容旧 API）
@@ -273,6 +280,8 @@ impl ConvertOptions {
         // 使用 flag_mode 但映射到旧的 ExploreMode
         match self.flag_mode() {
             Ok(mode) => match mode {
+                crate::flag_validator::FlagMode::UltimateExplore =>
+                    crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
                 crate::flag_validator::FlagMode::PreciseQualityWithCompress => 
                     crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
                 crate::flag_validator::FlagMode::PreciseQuality => 

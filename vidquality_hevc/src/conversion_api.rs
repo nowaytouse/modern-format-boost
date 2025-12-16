@@ -81,6 +81,8 @@ pub struct ConversionConfig {
     pub min_vmaf: f64,
     /// 🔥 v5.75: Force VMAF verification for long videos (>5min)
     pub force_vmaf_long: bool,
+    /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates
+    pub ultimate_mode: bool,
 }
 
 impl Default for ConversionConfig {
@@ -100,6 +102,7 @@ impl Default for ConversionConfig {
             validate_vmaf: false,  // 🔥 v5.75: VMAF 默认关闭
             min_vmaf: 85.0,
             force_vmaf_long: false,
+            ultimate_mode: false,  // 🔥 v6.2: 默认关闭极限模式
         }
     }
 }
@@ -343,11 +346,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
                 let input_path = Path::new(&detection.file_path);
 
-                // 🔥 v4.6: 使用模块化的 flag 验证器
-                let flag_mode = shared_utils::validate_flags_result(
+                // 🔥 v6.2: 使用模块化的 flag 验证器（含 ultimate 支持）
+                let flag_mode = shared_utils::validate_flags_result_with_ultimate(
                     config.explore_smaller,
                     config.match_quality,
-                    config.require_compression
+                    config.require_compression,
+                    config.ultimate_mode
                 ).map_err(|e| VidQualityError::ConversionError(e))?;
 
                 // 🔥 v4.15: 使用 GPU 控制变体支持 --cpu 模式
@@ -357,6 +361,14 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
 
                 let explore_result = match flag_mode {
+                    shared_utils::FlagMode::UltimateExplore => {
+                        // 🔥 v6.2: 极限探索模式 - 持续搜索直到 SSIM 饱和
+                        let initial_crf = calculate_matched_crf(&detection);
+                        info!("   🔥 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
+                        shared_utils::explore_hevc_with_gpu_coarse_ultimate(
+                            input_path, &output_path, vf_args, initial_crf, true
+                        )
+                    }
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
                         // 模式 6: --explore --match-quality --compress
                         // 🔥 v5.1: 使用 GPU 粗略搜索 + CPU 精细搜索智能化处理

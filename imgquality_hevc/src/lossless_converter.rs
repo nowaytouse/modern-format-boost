@@ -668,6 +668,12 @@ pub fn convert_to_hevc_mp4_matched(
     );
 
     let explore_result = match flag_mode {
+        shared_utils::FlagMode::UltimateExplore => {
+            // 🔥 v6.2: 极限探索模式 - 持续搜索直到 SSIM 饱和
+            shared_utils::explore_hevc_with_gpu_coarse_ultimate(
+                input, &output, vf_args, initial_crf, true
+            )
+        }
         shared_utils::FlagMode::PreciseQualityWithCompress => {
             // 🔥 v5.1: 使用 GPU 粗略搜索 + CPU 精细搜索智能化处理
             shared_utils::explore_hevc_with_gpu_coarse(
