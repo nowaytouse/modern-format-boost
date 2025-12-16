@@ -180,21 +180,27 @@ impl Default for ProgressConfig {
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.7: CrfCache - 高性能 CRF 缓存（精度升级）
+// 🔥 v6.4.9: 使用 crf_constants 模块的统一常量
 // ═══════════════════════════════════════════════════════════════
+
+use crate::crf_constants::{
+    CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID,
+    EMERGENCY_MAX_ITERATIONS,
+};
 
 /// CRF 缓存数组大小
 /// 🔥 v6.4.7: 升级精度从 0.1 到 0.025
-/// CRF 范围: 0.0-63.0, 精度 0.025, 共 2560 个槽位
-const CRF_CACHE_SIZE: usize = 2560;
+/// 🔥 v6.4.9: 使用整数键计算，避免浮点精度问题
+/// CRF 范围: 0.0-63.99, 精度 0.01, 共 6400 个槽位
+const CRF_CACHE_SIZE: usize = 6400;
 
-/// CRF 缓存键乘数
-/// 🔥 v6.4.7: 从 10.0 升级到 40.0，支持 0.025 步进
+/// CRF 缓存键乘数（从 crf_constants 导入）
+/// 🔥 v6.4.9: 升级到 100.0，使用整数键避免浮点精度问题
 /// 
-/// 计算公式: idx = (crf * CRF_CACHE_MULTIPLIER) as usize
-/// - 0.025 步进: 0.025 * 40 = 1 (不同键)
-/// - 0.25 步进: 0.25 * 40 = 10 (不同键)
-/// - 0.5 步进: 0.5 * 40 = 20 (不同键)
-const CRF_CACHE_MULTIPLIER: f32 = 40.0;
+/// 计算公式: idx = (crf * 100).round() as usize
+/// - 23.025 * 100 = 2302 (整数键，无精度损失)
+/// - 23.024 * 100 = 2302 (故意合并相近值)
+const CRF_CACHE_MULTIPLIER: f32 = CRF_CACHE_KEY_MULTIPLIER;
 
 /// 高性能 CRF 缓存 - 使用数组实现 O(1) 查找
 /// 
@@ -250,19 +256,30 @@ impl<T> CrfCache<T> {
         }
     }
     
-    /// 将 CRF 值转换为数组索引
+    /// 将 CRF 值转换为整数索引
     /// 
-    /// 🔥 v6.4.7: 使用 CRF_CACHE_MULTIPLIER (40.0) 支持 0.025 精度
+    /// 🔥 v6.4.9: 使用整数键避免浮点精度问题
+    /// 计算: (crf * 100).round() as usize
     /// 
-    /// 如果 CRF 超出范围 [0.0, 63.9]，返回 None（不 panic）
+    /// 如果 CRF 超出范围 [0.0, 63.99]，返回 None 并打印警告
     #[inline]
     pub fn key(crf: f32) -> Option<usize> {
         // 🔥 v6.4.5: 防御性检查，负数和超大值都返回 None
-        if crf < 0.0 || crf.is_nan() || crf.is_infinite() {
+        if crf < 0.0 {
+            eprintln!("⚠️ CRF_CACHE: Negative CRF {} rejected", crf);
             return None;
         }
-        // 🔥 v6.4.7: 使用 CRF_CACHE_MULTIPLIER 替代硬编码 10.0
-        let idx = (crf * CRF_CACHE_MULTIPLIER) as usize;
+        if crf.is_nan() || crf.is_infinite() {
+            eprintln!("⚠️ CRF_CACHE: Invalid CRF (NaN/Inf) rejected");
+            return None;
+        }
+        if crf > CRF_CACHE_MAX_VALID {
+            eprintln!("⚠️ CRF_CACHE: CRF {} exceeds max valid {} - rejected", crf, CRF_CACHE_MAX_VALID);
+            return None;
+        }
+        // 🔥 v6.4.9: 使用 round() 避免浮点精度问题
+        // 23.025 * 100 = 2302.5 -> round() -> 2302
+        let idx = (crf * CRF_CACHE_MULTIPLIER).round() as usize;
         if idx < CRF_CACHE_SIZE { Some(idx) } else { None }
     }
     
@@ -1307,16 +1324,17 @@ mod prop_tests {
             prop_assert_eq!(cached, Some(size));
         }
         
-        /// **Feature: code-quality-v6.4.7, Property 1: CRF 缓存键唯一性**
-        /// *对于任意*两个不同的 CRF 值（差异 >= 0.025），它们应映射到不同的缓存键
-        /// **Validates: Requirements 1.1, 1.2**
+        /// **Feature: code-quality-v6.4.9, Property 2: CRF 整数键唯一性**
+        /// *对于任意*两个不同的 CRF 值（差异 >= 0.01），它们应映射到不同的缓存键
+        /// 🔥 v6.4.9: 升级到 0.01 精度（乘数 100.0）
+        /// **Validates: Requirements 1.2**
         #[test]
         fn prop_crf_cache_key_uniqueness(
             crf1 in 0.0f32..63.0f32,
             crf2 in 0.0f32..63.0f32
         ) {
-            // 如果两个 CRF 值差异 >= 0.025，它们应该映射到不同的键
-            if (crf1 - crf2).abs() >= 0.025 {
+            // 🔥 v6.4.9: 如果两个 CRF 值差异 >= 0.01，它们应该映射到不同的键
+            if (crf1 - crf2).abs() >= 0.01 {
                 let key1 = CrfCache::<u64>::key(crf1);
                 let key2 = CrfCache::<u64>::key(crf2);
                 prop_assert_ne!(key1, key2, 

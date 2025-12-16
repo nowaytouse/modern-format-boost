@@ -2825,6 +2825,97 @@ mod tests {
         let ext = super::derive_gpu_temp_extension(&output);
         assert_eq!(ext, "gpu_temp.mp4", "Should default to mp4 when no extension");
     }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v6.4.9: VideoToolbox CRF 映射边界测试
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// **Feature: code-quality-v6.4.9, Requirement 5.1**
+    /// CRF=0 应映射到 q:v=100（最高质量）
+    #[test]
+    fn test_videotoolbox_crf_mapping_crf_0() {
+        let encoder = GpuEncoder {
+            gpu_type: GpuType::Apple,
+            name: "hevc_videotoolbox",
+            codec: "hevc",
+            supports_crf: true,
+            crf_param: "q:v",
+            crf_range: (1, 100),
+            extra_args: vec![],
+        };
+        
+        let args = encoder.get_crf_args(0.0);
+        assert_eq!(args, vec!["-q:v", "100"], "CRF 0 should map to q:v 100");
+    }
+    
+    /// **Feature: code-quality-v6.4.9, Requirement 5.2**
+    /// CRF=51 应映射到有效的 clamp 值（不为负数）
+    #[test]
+    fn test_videotoolbox_crf_mapping_crf_51() {
+        let encoder = GpuEncoder {
+            gpu_type: GpuType::Apple,
+            name: "hevc_videotoolbox",
+            codec: "hevc",
+            supports_crf: true,
+            crf_param: "q:v",
+            crf_range: (1, 100),
+            extra_args: vec![],
+        };
+        
+        let args = encoder.get_crf_args(51.0);
+        // 100 - 51*2 = -2, clamp to 1
+        assert_eq!(args, vec!["-q:v", "1"], "CRF 51 should clamp to q:v 1 (not negative)");
+    }
+    
+    /// **Feature: code-quality-v6.4.9, Requirement 5.3**
+    /// 测试 CRF 1, 25, 50 的映射
+    #[test]
+    fn test_videotoolbox_crf_mapping_various() {
+        let encoder = GpuEncoder {
+            gpu_type: GpuType::Apple,
+            name: "hevc_videotoolbox",
+            codec: "hevc",
+            supports_crf: true,
+            crf_param: "q:v",
+            crf_range: (1, 100),
+            extra_args: vec![],
+        };
+        
+        // CRF 1 -> q:v = 100 - 1*2 = 98
+        let args = encoder.get_crf_args(1.0);
+        assert_eq!(args, vec!["-q:v", "98"], "CRF 1 should map to q:v 98");
+        
+        // CRF 25 -> q:v = 100 - 25*2 = 50
+        let args = encoder.get_crf_args(25.0);
+        assert_eq!(args, vec!["-q:v", "50"], "CRF 25 should map to q:v 50");
+        
+        // CRF 50 -> q:v = 100 - 50*2 = 0, clamp to 1
+        let args = encoder.get_crf_args(50.0);
+        assert_eq!(args, vec!["-q:v", "1"], "CRF 50 should clamp to q:v 1");
+    }
+    
+    /// **Feature: code-quality-v6.4.9**
+    /// 验证映射公式不会产生负数或超过 100 的值
+    #[test]
+    fn test_videotoolbox_crf_mapping_no_overflow() {
+        let encoder = GpuEncoder {
+            gpu_type: GpuType::Apple,
+            name: "hevc_videotoolbox",
+            codec: "hevc",
+            supports_crf: true,
+            crf_param: "q:v",
+            crf_range: (1, 100),
+            extra_args: vec![],
+        };
+        
+        // 测试极端值
+        for crf in [0.0, 0.5, 1.0, 10.0, 20.0, 30.0, 40.0, 50.0, 51.0, 60.0, 100.0] {
+            let args = encoder.get_crf_args(crf);
+            let qv: f32 = args[1].parse().unwrap();
+            assert!(qv >= 1.0, "q:v should be >= 1, got {} for CRF {}", qv, crf);
+            assert!(qv <= 100.0, "q:v should be <= 100, got {} for CRF {}", qv, crf);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
