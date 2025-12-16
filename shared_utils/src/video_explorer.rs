@@ -18,6 +18,9 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+// 🔥 v6.5: 使用统一的 CrfCache 替代 HashMap
+use crate::explore_strategy::CrfCache;
+
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.5: 进度条辅助宏 - 固定底部显示
 // ═══════════════════════════════════════════════════════════════
@@ -1272,21 +1275,19 @@ impl VideoExplorer {
     /// 3. 使用缓存避免重复编码
     fn explore_compress_only(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
-        let mut cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
-
-
+        // 🔥 v6.5: 使用 CrfCache 替代 HashMap
+        let mut cache: CrfCache<u64> = CrfCache::new();
 
         let start_time = std::time::Instant::now();
         let mut _best_crf_so_far: f32 = 0.0;
         
-        // 带缓存的编码 - 🔥 v5.73: 使用统一的 crf_to_cache_key()
-        let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>, explorer: &VideoExplorer| -> Result<u64> {
-            let key = precision::crf_to_cache_key(crf);
-            if let Some(&size) = cache.get(&key) {
+        // 🔥 v6.5: 使用 CrfCache（直接用 crf 作为 key）
+        let encode_cached = |crf: f32, cache: &mut CrfCache<u64>, explorer: &VideoExplorer| -> Result<u64> {
+            if let Some(&size) = cache.get(crf) {
                 return Ok(size);
             }
             let size = explorer.encode(crf)?;
-            cache.insert(key, size);
+            cache.insert(crf, size);
             Ok(size)
         };
 
@@ -5503,18 +5504,17 @@ fn cpu_fine_tune_from_gpu_boundary(
     const MAX_SIZE_OVERSHOOT_PCT: f64 = 5.0;  // Allow up to 5% size overshoot to continue exploring (预留)
     
     let mut iterations = 0u32;
-    let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
+    // 🔥 v6.5: 使用 CrfCache 替代 HashMap
+    let mut size_cache: CrfCache<u64> = CrfCache::new();
     
-    // 🔥 v5.60: 带缓存的全片编码 + 进度条更新
-    // 🔥 v5.73: 使用统一的 crf_to_cache_key()
-    let encode_cached = |crf: f32, cache: &mut std::collections::HashMap<i32, u64>| -> Result<u64> {
-        let key = precision::crf_to_cache_key(crf);
-        if let Some(&size) = cache.get(&key) {
+    // 🔥 v6.5: 使用 CrfCache（直接用 crf 作为 key）
+    let encode_cached = |crf: f32, cache: &mut CrfCache<u64>| -> Result<u64> {
+        if let Some(&size) = cache.get(crf) {
             cpu_progress.inc_iteration(crf, size, None);
             return Ok(size);
         }
         let size = encode_full(crf)?;  // 🔥 v5.60: 使用全片编码
-        cache.insert(key, size);
+        cache.insert(crf, size);
         cpu_progress.inc_iteration(crf, size, None);
         Ok(size)
     };
@@ -5725,8 +5725,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 }
             }
             
-            let key = precision::crf_to_cache_key(test_crf);
-            if size_cache.contains_key(&key) {
+            // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+            if size_cache.contains_key(test_crf) {
                 test_crf -= current_step;
                 continue;
             }
@@ -5979,8 +5979,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut prev_size = best_size.unwrap();
 
             while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
-                let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
-                if size_cache.contains_key(&key) {
+                // 🔥 v6.5: CrfCache 直接用 crf 作为 key
+                if size_cache.contains_key(test_crf) {
                     test_crf -= step_size;
                     continue;
                 }
