@@ -179,24 +179,41 @@ impl Default for ProgressConfig {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 🔥 v6.4.5: CrfCache - 高性能 CRF 缓存
+// 🔥 v6.4.7: CrfCache - 高性能 CRF 缓存（精度升级）
 // ═══════════════════════════════════════════════════════════════
 
 /// CRF 缓存数组大小
-/// CRF 范围: 0.0-63.0, 精度 0.1, 共 640 个槽位
-const CRF_CACHE_SIZE: usize = 640;
+/// 🔥 v6.4.7: 升级精度从 0.1 到 0.025
+/// CRF 范围: 0.0-63.0, 精度 0.025, 共 2560 个槽位
+const CRF_CACHE_SIZE: usize = 2560;
+
+/// CRF 缓存键乘数
+/// 🔥 v6.4.7: 从 10.0 升级到 40.0，支持 0.025 步进
+/// 
+/// 计算公式: idx = (crf * CRF_CACHE_MULTIPLIER) as usize
+/// - 0.025 步进: 0.025 * 40 = 1 (不同键)
+/// - 0.25 步进: 0.25 * 40 = 10 (不同键)
+/// - 0.5 步进: 0.5 * 40 = 20 (不同键)
+const CRF_CACHE_MULTIPLIER: f32 = 40.0;
 
 /// 高性能 CRF 缓存 - 使用数组实现 O(1) 查找
 /// 
 /// 🔥 v6.4.5: 替代 HashMap<i32, T>，提升约 30% 查询性能
+/// 🔥 v6.4.7: 精度升级到 0.025，支持未来更细粒度的 CRF 步进
 /// 
 /// # 设计原理
 /// 
-/// CRF 值范围固定 (0.0-63.0)，精度 0.1，共 640 个可能值。
+/// CRF 值范围固定 (0.0-63.0)，精度 0.025，共 2560 个可能值。
 /// 使用固定大小数组比 HashMap 更高效：
 /// - O(1) 查找，无哈希计算开销
 /// - 更好的缓存局部性
 /// - 无动态内存分配
+/// 
+/// # 向后兼容性
+/// 
+/// 0.5 步进的 CRF 值（如 20.0, 20.5）在新精度下仍然正确映射：
+/// - 20.0 * 40 = 800
+/// - 20.5 * 40 = 820
 /// 
 /// # 示例
 /// 
@@ -206,6 +223,11 @@ const CRF_CACHE_SIZE: usize = 640;
 /// let mut cache: CrfCache<u64> = CrfCache::new();
 /// cache.insert(23.5, 1000000);
 /// assert_eq!(cache.get(23.5), Some(&1000000));
+/// 
+/// // 0.25 步进也能正确区分
+/// cache.insert(23.25, 2000000);
+/// assert_eq!(cache.get(23.25), Some(&2000000));
+/// assert_eq!(cache.get(23.5), Some(&1000000)); // 不会碰撞
 /// ```
 #[derive(Clone)]
 pub struct CrfCache<T> {
@@ -230,14 +252,17 @@ impl<T> CrfCache<T> {
     
     /// 将 CRF 值转换为数组索引
     /// 
+    /// 🔥 v6.4.7: 使用 CRF_CACHE_MULTIPLIER (40.0) 支持 0.025 精度
+    /// 
     /// 如果 CRF 超出范围 [0.0, 63.9]，返回 None（不 panic）
     #[inline]
-    fn key(crf: f32) -> Option<usize> {
+    pub fn key(crf: f32) -> Option<usize> {
         // 🔥 v6.4.5: 防御性检查，负数和超大值都返回 None
         if crf < 0.0 || crf.is_nan() || crf.is_infinite() {
             return None;
         }
-        let idx = (crf * 10.0) as usize;
+        // 🔥 v6.4.7: 使用 CRF_CACHE_MULTIPLIER 替代硬编码 10.0
+        let idx = (crf * CRF_CACHE_MULTIPLIER) as usize;
         if idx < CRF_CACHE_SIZE { Some(idx) } else { None }
     }
     
@@ -1282,6 +1307,47 @@ mod prop_tests {
             prop_assert_eq!(cached, Some(size));
         }
         
+        /// **Feature: code-quality-v6.4.7, Property 1: CRF 缓存键唯一性**
+        /// *对于任意*两个不同的 CRF 值（差异 >= 0.025），它们应映射到不同的缓存键
+        /// **Validates: Requirements 1.1, 1.2**
+        #[test]
+        fn prop_crf_cache_key_uniqueness(
+            crf1 in 0.0f32..63.0f32,
+            crf2 in 0.0f32..63.0f32
+        ) {
+            // 如果两个 CRF 值差异 >= 0.025，它们应该映射到不同的键
+            if (crf1 - crf2).abs() >= 0.025 {
+                let key1 = CrfCache::<u64>::key(crf1);
+                let key2 = CrfCache::<u64>::key(crf2);
+                prop_assert_ne!(key1, key2, 
+                    "CRF {} and {} (diff {:.4}) should map to different keys, but both got {:?}",
+                    crf1, crf2, (crf1 - crf2).abs(), key1);
+            }
+        }
+        
+        /// **Feature: code-quality-v6.4.7, Property 1b: 0.25 步进键唯一性**
+        /// 验证 0.25 步进的 CRF 值不会碰撞
+        /// **Validates: Requirements 1.1, 1.2**
+        #[test]
+        fn prop_crf_cache_025_step_uniqueness(
+            base in 10.0f32..50.0f32
+        ) {
+            // 测试 base, base+0.25, base+0.5, base+0.75 都映射到不同的键
+            let crf_values = [base, base + 0.25, base + 0.5, base + 0.75];
+            let keys: Vec<_> = crf_values.iter()
+                .map(|&crf| CrfCache::<u64>::key(crf))
+                .collect();
+            
+            // 所有键都应该不同
+            for i in 0..keys.len() {
+                for j in (i+1)..keys.len() {
+                    prop_assert_ne!(keys[i], keys[j],
+                        "CRF {} and {} should have different keys, but both got {:?}",
+                        crf_values[i], crf_values[j], keys[i]);
+                }
+            }
+        }
+        
         /// **Feature: code-quality-v6.4.5, Property 1: CrfCache 等价性**
         /// *对于任意* CRF 值和缓存值，CrfCache 的行为应与 HashMap 完全一致
         /// **Validates: Requirements 2.1, 2.2, 2.3**
@@ -1298,9 +1364,9 @@ mod prop_tests {
             let cache_result = cache.get(crf).copied();
             let cache_contains = cache.contains_key(crf);
             
-            // HashMap 参考实现
+            // HashMap 参考实现（使用新的乘数 40.0）
             let mut hashmap: HashMap<i32, u64> = HashMap::new();
-            let key = (crf * 10.0) as i32;
+            let key = (crf * 40.0) as i32;  // 🔥 v6.4.7: 更新为 40.0
             hashmap.insert(key, value);
             let hashmap_result = hashmap.get(&key).copied();
             let hashmap_contains = hashmap.contains_key(&key);
@@ -1310,6 +1376,38 @@ mod prop_tests {
                 "CrfCache and HashMap should return same value for CRF {}", crf);
             prop_assert_eq!(cache_contains, hashmap_contains,
                 "CrfCache and HashMap should have same contains_key for CRF {}", crf);
+        }
+        
+        /// **Feature: code-quality-v6.4.7, Property 2: CRF 缓存向后兼容**
+        /// *对于任意* 0.5 步进的 CRF 值，升级后的缓存应返回与升级前相同的结果
+        /// **Validates: Requirements 1.3**
+        #[test]
+        fn prop_crf_cache_backward_compatible(
+            base in 10u32..50u32,
+            value in 0u64..1000000u64
+        ) {
+            // 测试 0.5 步进的 CRF 值（旧版本支持的精度）
+            let crf_05_step = base as f32 + 0.5;
+            let crf_whole = base as f32;
+            
+            let mut cache: CrfCache<u64> = CrfCache::new();
+            
+            // 插入 0.5 步进值
+            cache.insert(crf_05_step, value);
+            cache.insert(crf_whole, value + 1);
+            
+            // 验证能正确获取
+            prop_assert_eq!(cache.get(crf_05_step), Some(&value),
+                "Should retrieve value for CRF {}", crf_05_step);
+            prop_assert_eq!(cache.get(crf_whole), Some(&(value + 1)),
+                "Should retrieve value for CRF {}", crf_whole);
+            
+            // 验证 0.5 步进值不会与整数值碰撞
+            prop_assert_ne!(
+                CrfCache::<u64>::key(crf_05_step),
+                CrfCache::<u64>::key(crf_whole),
+                "CRF {} and {} should have different keys", crf_05_step, crf_whole
+            );
         }
         
         /// **Feature: code-quality-v6.4.5, Property 2: CrfCache 边界安全**
