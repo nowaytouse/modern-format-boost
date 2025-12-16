@@ -67,6 +67,11 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 /// 🔥 v5.25: 全局迭代底线（防止无限循环）
 pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
 
+/// 🔥 v6.4.9: 紧急保底迭代限制（绝对上限）
+/// 即使动态计算的迭代次数更高，也不会超过此值
+/// 防止极端情况下的无限循环
+pub const EMERGENCY_MAX_ITERATIONS: u32 = 500;
+
 /// 🔥 v6.4.2: 小文件阈值（字节）
 /// 🔥 v6.4.3: 小文件阈值（字节）
 /// 小于此值的文件需要精确元数据检测
@@ -1000,6 +1005,12 @@ impl VideoExplorer {
         vf_args: Vec<String>,
         config: ExploreConfig,
     ) -> Result<Self> {
+        // 🔥 v6.4.9: 路径安全验证（防止命令注入）
+        crate::path_validator::validate_path(input)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        crate::path_validator::validate_path(output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        
         let input_size = fs::metadata(input)
             .context("Failed to read input file metadata")?
             .len();
@@ -1037,6 +1048,12 @@ impl VideoExplorer {
         config: ExploreConfig,
         use_gpu: bool,
     ) -> Result<Self> {
+        // 🔥 v6.4.9: 路径安全验证
+        crate::path_validator::validate_path(input)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        crate::path_validator::validate_path(output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        
         let input_size = fs::metadata(input)
             .context("Failed to read input file metadata")?
             .len();
@@ -1070,6 +1087,12 @@ impl VideoExplorer {
         config: ExploreConfig,
         preset: EncoderPreset,
     ) -> Result<Self> {
+        // 🔥 v6.4.9: 路径安全验证
+        crate::path_validator::validate_path(input)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        crate::path_validator::validate_path(output)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        
         let input_size = fs::metadata(input)
             .context("Failed to read input file metadata")?
             .len();
@@ -1663,6 +1686,13 @@ impl VideoExplorer {
             let mut prev_ssim = min_ssim;
 
             while high - low > 1.0 && iterations < max_iterations {
+                // 🔥 v6.4.9: 紧急保底检查
+                if iterations >= EMERGENCY_MAX_ITERATIONS {
+                    eprintln!("   ⚠️ EMERGENCY LIMIT: Reached {} iterations, stopping search!", EMERGENCY_MAX_ITERATIONS);
+                    eprintln!("   ⚠️ Using best result found so far: CRF {:.1}", best_crf);
+                    break;
+                }
+                
                 let mid = low + (high - low) * PHI;
                 let mid_rounded = (mid * 2.0).round() / 2.0;
 
