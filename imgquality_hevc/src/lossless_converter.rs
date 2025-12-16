@@ -404,7 +404,8 @@ pub fn convert_to_avif(input: &Path, quality: Option<u8>, options: &ConvertOptio
     }
 }
 
-/// Convert animated lossless to HEVC MP4 (CRF 0 visually lossless, 与 AV1 CRF 0 对应)
+/// Convert animated lossless to HEVC MP4/MOV (CRF 0 visually lossless, 与 AV1 CRF 0 对应)
+/// 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式
 pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     // Anti-duplicate check
     if !options.force && is_already_processed(input) {
@@ -422,7 +423,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    // 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
+    let ext = if options.apple_compat { "mov" } else { "mp4" };
+    let output = get_output_path(input, ext, &options.output_dir)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -597,9 +600,10 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
     }
 }
 
-/// Convert animated to HEVC MP4 with quality-matched CRF
+/// Convert animated to HEVC MP4/MOV with quality-matched CRF
 /// 
 /// 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
+/// 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式
 /// 
 /// 探索模式由 options.explore 和 options.match_quality 决定：
 /// - explore=true, match_quality=true: 精确质量匹配（二分搜索 + SSIM 验证）
@@ -627,7 +631,9 @@ pub fn convert_to_hevc_mp4_matched(
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    // 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式
+    let ext = if options.apple_compat { "mov" } else { "mp4" };
+    let output = get_output_path(input, ext, &options.output_dir)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
