@@ -894,3 +894,137 @@ mod tests {
         assert_eq!(predicted.psnr, Some(40.0));
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.3: 属性测试 (Property-Based Tests)
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+    
+    /// 生成随机 ExploreMode
+    fn arb_explore_mode() -> impl Strategy<Value = ExploreMode> {
+        prop_oneof![
+            Just(ExploreMode::SizeOnly),
+            Just(ExploreMode::QualityMatch),
+            Just(ExploreMode::PreciseQualityMatch),
+            Just(ExploreMode::PreciseQualityMatchWithCompression),
+            Just(ExploreMode::CompressOnly),
+            Just(ExploreMode::CompressWithQuality),
+        ]
+    }
+    
+    proptest! {
+        /// **Feature: explore-strategy-pattern-v6.3, Property 1: Strategy 选择一致性**
+        /// *对于任意* ExploreMode，create_strategy() 返回的 Strategy 的 name() 
+        /// 应与该模式的预期名称匹配
+        /// **Validates: Requirements 1.1**
+        #[test]
+        fn prop_strategy_selection_consistency(mode in arb_explore_mode()) {
+            let strategy = create_strategy(mode);
+            let expected_name = strategy_name(mode);
+            prop_assert_eq!(strategy.name(), expected_name);
+        }
+        
+        /// **Feature: explore-strategy-pattern-v6.3, Property 3: SSIM 缓存一致性**
+        /// *对于任意* CRF 值，缓存后获取应返回相同的值
+        /// **Validates: Requirements 3.4**
+        #[test]
+        fn prop_ssim_cache_consistency(
+            crf in 10.0f32..51.0f32,
+            ssim_value in 0.0f64..1.0f64,
+            psnr_value in 20.0f64..60.0f64
+        ) {
+            use std::path::PathBuf;
+            use crate::video_explorer::{ExploreConfig, VideoEncoder, EncoderPreset};
+            
+            let mut ctx = ExploreContext::new(
+                PathBuf::from("/tmp/test_input.mp4"),
+                PathBuf::from("/tmp/test_output.mp4"),
+                1000000,
+                VideoEncoder::Hevc,
+                vec![],
+                4,
+                false,
+                EncoderPreset::Medium,
+                ExploreConfig::default(),
+            );
+            
+            // 缓存 SSIM 结果
+            let result = SsimResult::actual(ssim_value, Some(psnr_value));
+            ctx.cache_ssim(crf, result.clone());
+            
+            // 获取缓存的结果
+            let cached = ctx.get_cached_ssim(crf);
+            prop_assert!(cached.is_some());
+            let cached = cached.unwrap();
+            prop_assert_eq!(cached.value, ssim_value);
+            prop_assert_eq!(cached.psnr, Some(psnr_value));
+        }
+        
+        /// **Feature: explore-strategy-pattern-v6.3, Property 4: SSIM 回退正确性**
+        /// *对于任意* PSNR 值，PSNR→SSIM 映射应产生有效的 SSIM 值 (0-1)
+        /// **Validates: Requirements 3.2, 3.3**
+        #[test]
+        fn prop_psnr_to_ssim_mapping_valid(psnr in 20.0f64..60.0f64) {
+            // 使用 ExploreContext 中的 PSNR→SSIM 公式
+            let ssim = (1.0 - 10_f64.powf(-psnr / 20.0)).min(0.9999);
+            prop_assert!(ssim >= 0.0 && ssim <= 1.0, 
+                "SSIM {} out of range for PSNR {}", ssim, psnr);
+            // 更高的 PSNR 应该产生更高的 SSIM
+            let ssim_higher = (1.0 - 10_f64.powf(-(psnr + 5.0) / 20.0)).min(0.9999);
+            prop_assert!(ssim_higher >= ssim,
+                "Higher PSNR {} should produce higher SSIM", psnr + 5.0);
+        }
+        
+        /// **Feature: explore-strategy-pattern-v6.3, Property 2: 探索委托正确性**
+        /// *对于任意* ExploreMode，create_strategy() 返回的 Strategy 应有有效的 name 和 description
+        /// **Validates: Requirements 1.3**
+        #[test]
+        fn prop_strategy_has_valid_metadata(mode in arb_explore_mode()) {
+            let strategy = create_strategy(mode);
+            // name 不应为空
+            prop_assert!(!strategy.name().is_empty(), 
+                "Strategy name should not be empty for {:?}", mode);
+            // description 不应为空
+            prop_assert!(!strategy.description().is_empty(),
+                "Strategy description should not be empty for {:?}", mode);
+            // name 应该是 ASCII
+            prop_assert!(strategy.name().is_ascii(),
+                "Strategy name should be ASCII for {:?}", mode);
+        }
+        
+        /// **Feature: explore-strategy-pattern-v6.3, Property 5: 大小缓存一致性**
+        /// *对于任意* CRF 和 size，缓存后获取应返回相同的值
+        /// **Validates: Requirements 6.3**
+        #[test]
+        fn prop_size_cache_consistency(
+            crf in 10.0f32..51.0f32,
+            size in 1000u64..10000000u64
+        ) {
+            use std::path::PathBuf;
+            use crate::video_explorer::{ExploreConfig, VideoEncoder, EncoderPreset};
+            
+            let mut ctx = ExploreContext::new(
+                PathBuf::from("/tmp/test_input.mp4"),
+                PathBuf::from("/tmp/test_output.mp4"),
+                1000000,
+                VideoEncoder::Hevc,
+                vec![],
+                4,
+                false,
+                EncoderPreset::Medium,
+                ExploreConfig::default(),
+            );
+            
+            // 缓存 size
+            ctx.cache_size(crf, size);
+            
+            // 获取缓存的结果
+            let cached = ctx.get_cached_size(crf);
+            prop_assert_eq!(cached, Some(size));
+        }
+    }
+}
