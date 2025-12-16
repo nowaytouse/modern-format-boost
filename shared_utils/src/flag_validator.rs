@@ -1,6 +1,7 @@
 //! Flag 组合验证器 - 统一的 flag 组合验证逻辑
 //!
 //! 🔥 v4.6: 模块化设计，避免四个工具重复代码
+//! 🔥 v6.2: 添加 --ultimate flag 验证
 //!
 //! ## 有效组合
 //! 1. `--compress` 单独：只要输出 < 输入（哪怕 1KB）
@@ -9,9 +10,11 @@
 //! 4. `--compress --match-quality`：输出 < 输入 + 粗略 SSIM 验证
 //! 5. `--explore --match-quality`：精确质量匹配（最高 SSIM，不在乎大小）
 //! 6. `--explore --match-quality --compress`：精确质量匹配 + 必须压缩
+//! 7. `--explore --match-quality --compress --ultimate`：极限探索模式（SSIM 饱和）
 //!
 //! ## 无效组合（响亮报错）
 //! - `--explore --compress`（没有 `--match-quality`）
+//! - `--ultimate` 单独使用或与其他非完整组合
 
 use std::fmt;
 
@@ -32,6 +35,9 @@ pub enum FlagMode {
     PreciseQuality,
     /// `--explore --match-quality --compress`：精确质量匹配 + 必须压缩
     PreciseQualityWithCompress,
+    /// 🔥 v6.2: `--explore --match-quality --compress --ultimate`：极限探索模式
+    /// 持续搜索直到 SSIM 完全饱和（领域墙）
+    UltimateExplore,
 }
 
 impl fmt::Display for FlagMode {
@@ -44,6 +50,7 @@ impl fmt::Display for FlagMode {
             FlagMode::CompressWithQuality => write!(f, "--compress --match-quality"),
             FlagMode::PreciseQuality => write!(f, "--explore --match-quality"),
             FlagMode::PreciseQualityWithCompress => write!(f, "--explore --match-quality --compress"),
+            FlagMode::UltimateExplore => write!(f, "--explore --match-quality --compress --ultimate"),
         }
     }
 }
@@ -59,6 +66,7 @@ impl FlagMode {
             FlagMode::CompressWithQuality => "压缩 + 粗略质量验证",
             FlagMode::PreciseQuality => "精确质量匹配（最高 SSIM）",
             FlagMode::PreciseQualityWithCompress => "精确质量匹配 + 必须压缩",
+            FlagMode::UltimateExplore => "🔥 极限探索（SSIM 饱和）",
         }
     }
     
@@ -72,7 +80,13 @@ impl FlagMode {
             FlagMode::CompressWithQuality => "Compress + basic SSIM validation",
             FlagMode::PreciseQuality => "Precise quality match (highest SSIM)",
             FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
+            FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation)",
         }
+    }
+    
+    /// 🔥 v6.2: 是否为极限探索模式
+    pub fn is_ultimate(&self) -> bool {
+        matches!(self, FlagMode::UltimateExplore)
     }
 }
 
@@ -85,7 +99,7 @@ pub enum FlagValidation {
     Invalid(String),
 }
 
-/// 验证 flag 组合
+/// 验证 flag 组合（不含 ultimate）
 ///
 /// # Arguments
 /// * `explore` - `--explore` flag
@@ -106,6 +120,40 @@ pub enum FlagValidation {
 /// }
 /// ```
 pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
+    validate_flags_with_ultimate(explore, match_quality, compress, false)
+}
+
+/// 🔥 v6.2: 验证 flag 组合（含 ultimate）
+///
+/// # Arguments
+/// * `explore` - `--explore` flag
+/// * `match_quality` - `--match-quality` flag
+/// * `compress` - `--compress` flag
+/// * `ultimate` - `--ultimate` flag
+///
+/// # Returns
+/// * `FlagValidation::Valid(mode)` - 有效组合及其模式
+/// * `FlagValidation::Invalid(error)` - 无效组合及错误信息
+///
+/// # 🔥 --ultimate 使用规则
+/// `--ultimate` 只能与 `--explore --match-quality --compress` 组合使用！
+/// 其他任何组合都会响亮报错。
+pub fn validate_flags_with_ultimate(explore: bool, match_quality: bool, compress: bool, ultimate: bool) -> FlagValidation {
+    // 🔥 v6.2: --ultimate 只能与 --explore --match-quality --compress 组合
+    if ultimate {
+        if explore && match_quality && compress {
+            return FlagValidation::Valid(FlagMode::UltimateExplore);
+        } else {
+            return FlagValidation::Invalid(
+                "❌ 无效的 flag 组合: --ultimate 只能与 --explore --match-quality --compress 组合使用！\n\
+                 💡 --ultimate 是极限探索模式，持续搜索直到 SSIM 完全饱和\n\
+                 💡 正确用法:\n\
+                    • --explore --match-quality --compress --ultimate\n\
+                 💡 --ultimate 不能单独使用，也不能与其他不完整组合搭配".to_string()
+            );
+        }
+    }
+    
     match (explore, match_quality, compress) {
         // 无效组合：--explore --compress（没有 --match-quality）
         (true, false, true) => FlagValidation::Invalid(
@@ -140,11 +188,21 @@ pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> Fla
     }
 }
 
-/// 验证 flag 组合并返回 Result
+/// 验证 flag 组合并返回 Result（不含 ultimate）
 ///
 /// 便捷函数，直接返回 Result 类型，方便在 ? 操作符中使用
 pub fn validate_flags_result(explore: bool, match_quality: bool, compress: bool) -> Result<FlagMode, String> {
     match validate_flags(explore, match_quality, compress) {
+        FlagValidation::Valid(mode) => Ok(mode),
+        FlagValidation::Invalid(err) => Err(err),
+    }
+}
+
+/// 🔥 v6.2: 验证 flag 组合并返回 Result（含 ultimate）
+///
+/// 便捷函数，直接返回 Result 类型，方便在 ? 操作符中使用
+pub fn validate_flags_result_with_ultimate(explore: bool, match_quality: bool, compress: bool, ultimate: bool) -> Result<FlagMode, String> {
+    match validate_flags_with_ultimate(explore, match_quality, compress, ultimate) {
         FlagValidation::Valid(mode) => Ok(mode),
         FlagValidation::Invalid(err) => Err(err),
     }
@@ -162,9 +220,12 @@ pub fn print_flag_help() {
     eprintln!("                           Precise quality match (highest SSIM, ignore size)");
     eprintln!("   --explore --match-quality --compress");
     eprintln!("                           Precise quality match + must compress");
+    eprintln!("   --explore --match-quality --compress --ultimate");
+    eprintln!("                           🔥 Ultimate explore (search until SSIM saturates)");
     eprintln!("");
     eprintln!("❌ Invalid combinations:");
     eprintln!("   --explore --compress    Conflicting goals, please add --match-quality");
+    eprintln!("   --ultimate alone        Must use with --explore --match-quality --compress");
 }
 
 #[cfg(test)]
@@ -446,5 +507,60 @@ mod tests {
             }
         }
         assert_eq!(invalid_count, 1, "应该只有一种无效组合");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v6.2: Ultimate 模式测试
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_ultimate_valid_combination() {
+        // --ultimate 只能与 --explore --match-quality --compress 组合
+        let result = validate_flags_result_with_ultimate(true, true, true, true);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), FlagMode::UltimateExplore);
+    }
+
+    #[test]
+    fn test_ultimate_invalid_alone() {
+        // --ultimate 单独使用无效
+        let result = validate_flags_result_with_ultimate(false, false, false, true);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--ultimate"));
+    }
+
+    #[test]
+    fn test_ultimate_invalid_partial_combination() {
+        // --ultimate 与不完整组合无效
+        // --explore --ultimate (缺少 --match-quality --compress)
+        assert!(validate_flags_result_with_ultimate(true, false, false, true).is_err());
+        // --match-quality --ultimate (缺少 --explore --compress)
+        assert!(validate_flags_result_with_ultimate(false, true, false, true).is_err());
+        // --compress --ultimate (缺少 --explore --match-quality)
+        assert!(validate_flags_result_with_ultimate(false, false, true, true).is_err());
+        // --explore --match-quality --ultimate (缺少 --compress)
+        assert!(validate_flags_result_with_ultimate(true, true, false, true).is_err());
+        // --explore --compress --ultimate (缺少 --match-quality)
+        assert!(validate_flags_result_with_ultimate(true, false, true, true).is_err());
+        // --match-quality --compress --ultimate (缺少 --explore)
+        assert!(validate_flags_result_with_ultimate(false, true, true, true).is_err());
+    }
+
+    #[test]
+    fn test_ultimate_mode_display() {
+        assert_eq!(format!("{}", FlagMode::UltimateExplore), "--explore --match-quality --compress --ultimate");
+    }
+
+    #[test]
+    fn test_ultimate_mode_description() {
+        assert!(FlagMode::UltimateExplore.description_cn().contains("极限"));
+        assert!(FlagMode::UltimateExplore.description_en().to_lowercase().contains("ultimate"));
+    }
+
+    #[test]
+    fn test_ultimate_is_ultimate() {
+        assert!(FlagMode::UltimateExplore.is_ultimate());
+        assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
+        assert!(!FlagMode::Default.is_ultimate());
     }
 }

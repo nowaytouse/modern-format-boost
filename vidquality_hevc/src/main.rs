@@ -63,10 +63,6 @@ enum Commands {
         /// Use with --explore --match-quality for precise quality match + guaranteed compression
         #[arg(long, default_value_t = false)]
         compress: bool,
-        /// 🔥 v4.15: Force CPU encoding (libx265) instead of GPU
-        /// VideoToolbox hardware encoding caps at ~0.95 SSIM. Use --cpu to achieve 0.98+ SSIM
-        #[arg(long, default_value_t = false)]
-        cpu: bool,
         /// 🔥 v5.75: Enable VMAF verification (slower but more accurate)
         /// VMAF is Netflix's perceptual quality metric (0-100)
         #[arg(long, default_value_t = false)]
@@ -78,6 +74,11 @@ enum Commands {
         /// By default, VMAF is skipped for long videos to avoid slow processing
         #[arg(long, default_value_t = false)]
         force_vmaf_long: bool,
+        /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
+        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
+        /// ⚠️ MUST be used with --explore --match-quality --compress
+        #[arg(long, default_value_t = false)]
+        ultimate: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -124,9 +125,9 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, cpu, vmaf, vmaf_threshold, force_vmaf_long } => {
-            // 🔥 v5.1: Validate flag combinations for consistency
-            if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, vmaf, vmaf_threshold, force_vmaf_long, ultimate } => {
+            // 🔥 v6.2: Validate flag combinations with ultimate support
+            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate) {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
@@ -142,11 +143,12 @@ fn main() -> anyhow::Result<()> {
                 in_place,
                 apple_compat,
                 require_compression: compress,
-                use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
+                use_gpu: true,  // 🔥 v6.2: Always use GPU for coarse search, CPU for fine search
                 // 🔥 v5.75: VMAF 验证参数
                 validate_vmaf: vmaf,
                 min_vmaf: vmaf_threshold,
                 force_vmaf_long,
+                ultimate_mode: ultimate,  // 🔥 v6.2: 极限探索模式
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -171,8 +173,8 @@ fn main() -> anyhow::Result<()> {
             if recursive {
                 info!("   📂 Recursive: ENABLED");
             }
-            if cpu {
-                info!("   🖥️  CPU Encoding: ENABLED (libx265 for SSIM ≥0.98)");
+            if ultimate {
+                info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if vmaf {
                 info!("   📊 VMAF Verification: ENABLED (threshold: {:.1})", vmaf_threshold);
