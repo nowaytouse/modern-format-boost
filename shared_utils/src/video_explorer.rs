@@ -5371,7 +5371,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     BRIGHT_RED, size_pct, RESET, RED, wall_hits, RESET, 
                     RED, (size as f64 - input_size as f64) / 1024.0 / 1024.0, RESET);
 
-                // 🔥 v5.98: 曲线模型回退策略
+                // 🔥 v5.99: 曲线模型回退策略 + 精细调整阶段
                 if wall_hits >= MAX_WALL_HITS {
                     // 达到最大撞墙次数，停止
                     eprintln!("   {}🧱{} {}MAX WALL HITS ({})!{} Stopping at best CRF {:.1}",
@@ -5380,10 +5380,24 @@ fn cpu_fine_tune_from_gpu_boundary(
                 }
                 
                 // 计算新步长：使用曲线衰减
-                let new_step = (initial_step * DECAY_FACTOR.powi(wall_hits as i32)).max(MIN_STEP);
-                eprintln!("   {}↩️{} {}Curve backtrack{}: step {:.2} → {:.2} (decay {}×{:.1}^{}){}",
-                    YELLOW, RESET, BRIGHT_CYAN, RESET, current_step, new_step, 
-                    DIM, DECAY_FACTOR, wall_hits, RESET);
+                let curve_step = initial_step * DECAY_FACTOR.powi(wall_hits as i32);
+                
+                // 🔥 v5.99: 当曲线步长 < 1.0 时，切换到 0.1 精细调整阶段
+                // 这样可以在撞墙附近进行精细搜索，找到最优 CRF
+                let new_step = if curve_step < 1.0 {
+                    MIN_STEP  // 进入精细调整阶段
+                } else {
+                    curve_step
+                };
+                
+                let phase_info = if new_step <= MIN_STEP + 0.01 {
+                    format!("{}→ FINE TUNING{}", BRIGHT_GREEN, RESET)
+                } else {
+                    format!("decay {}×{:.1}^{}{}", DIM, DECAY_FACTOR, wall_hits, RESET)
+                };
+                
+                eprintln!("   {}↩️{} {}Curve backtrack{}: step {:.2} → {:.2} ({})",
+                    YELLOW, RESET, BRIGHT_CYAN, RESET, current_step, new_step, phase_info);
                 
                 current_step = new_step;
                 // 从最后一个好的点继续，用新的更小步长
