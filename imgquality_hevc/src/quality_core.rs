@@ -201,9 +201,10 @@ pub fn generate_recommendation(
                 command: Some(format!("avifenc -s 4 -j all '{}' '{}'", file_path, output)),
             }
         }
-        // Animated lossless → HEVC MP4 (CRF 0 视觉无损)
+        // Animated lossless → HEVC MOV (CRF 0 视觉无损)
+        // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式）
         (true, true) => {
-            let output = format!("{}/{}.mp4", output_dir, output_base);
+            let output = format!("{}/{}.mov", output_dir, output_base);
             ConversionRecommendation {
                 should_convert: true,
                 target_format: Some("HEVC MP4".to_string()),
