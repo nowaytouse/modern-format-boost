@@ -413,6 +413,16 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ## Version History / 版本历史
 
+### v6.5.0 (2025-12) - Unified Cache Refactor / 统一缓存重构
+- 🔄 **CrfCache migration**: Replaced HashMap<i32, u64> with CrfCache<u64> in video_explorer.rs and gpu_accel.rs
+- ⚡ **Simplified API**: Direct f32 CRF keys, removed crf_to_cache_key() conversions
+- 🧹 **Code consistency**: Unified cache implementation across all explore functions
+
+### v6.5.0 (2025-12) - 统一缓存重构
+- 🔄 **CrfCache 迁移**：video_explorer.rs 和 gpu_accel.rs 中的 HashMap<i32, u64> 替换为 CrfCache<u64>
+- ⚡ **简化 API**：直接使用 f32 CRF 作为 key，移除 crf_to_cache_key() 转换
+- 🧹 **代码一致性**：所有探索函数统一使用 CrfCache 实现
+
 ### v6.4.6 (2025-12) - Technical Debt Cleanup / 技术债务清理
 - 🗑️ **Removed deprecated constants**: `DEFAULT_METADATA_MARGIN`, `METADATA_OVERHEAD_BYTES`
 - 📝 **Magic numbers documented**: Added comments explaining threshold values and their origins
