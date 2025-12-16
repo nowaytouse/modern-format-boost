@@ -413,6 +413,16 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ## Version History / 版本历史
 
+### v6.4.6 (2025-12) - Technical Debt Cleanup / 技术债务清理
+- 🗑️ **Removed deprecated constants**: `DEFAULT_METADATA_MARGIN`, `METADATA_OVERHEAD_BYTES`
+- 📝 **Magic numbers documented**: Added comments explaining threshold values and their origins
+- 🛡️ **Division by zero protection**: Added guards for `size_change_pct()` and `calc_change_pct()`
+
+### v6.4.6 (2025-12) - 技术债务清理
+- 🗑️ **删除已弃用常量**：`DEFAULT_METADATA_MARGIN`, `METADATA_OVERHEAD_BYTES`
+- 📝 **Magic Numbers 文档化**：添加阈值来源说明注释
+- 🛡️ **除零保护**：为 `size_change_pct()` 和 `calc_change_pct()` 添加防护
+
 ### v6.4.5 (2025-12) - Performance & Error Handling / 性能与错误处理
 - ⚡ **CrfCache array optimization**: O(1) lookup replacing HashMap, ~30% faster cache access
 - 🔧 **calculate_ssim_logged()**: Consistent error logging for SSIM failures
@@ -465,4 +475,4 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ---
 
-**Version**: 6.4.5 | **Updated**: 2025-12-16
+**Version**: 6.4.6 | **Updated**: 2025-12-16
