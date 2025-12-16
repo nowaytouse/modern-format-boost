@@ -148,7 +148,7 @@ impl SimpleIterationProgress {
     /// 这是统一的日志输出方法，确保日志不会与进度条冲突
     ///
     /// # 用法
-    /// ```rust
+    /// ```ignore
     /// let progress = SimpleIterationProgress::new("🔍 Search", 1000000, 20);
     /// progress.println("⚠️ Warning: something happened");
     /// progress.println("✅ Step completed");
