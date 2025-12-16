@@ -412,8 +412,16 @@ impl ExploreContext {
     /// # Example
     /// - 输入 1MB，输出 800KB → -20.0%
     /// - 输入 1MB，输出 1.2MB → +20.0%
+    /// 计算大小变化百分比
+    /// 
+    /// # Returns
+    /// 负数表示压缩，正数表示膨胀
+    /// 如果 input_size 为 0，返回 0.0（防御性编程）
     #[inline]
     pub fn size_change_pct(&self, output_size: u64) -> f64 {
+        if self.input_size == 0 {
+            return 0.0;
+        }
         ((output_size as f64 / self.input_size as f64) - 1.0) * 100.0
     }
     
