@@ -422,7 +422,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
+    let output = get_output_path(input, "mov", &options.output_dir)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -627,7 +628,8 @@ pub fn convert_to_hevc_mp4_matched(
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
+    let output = get_output_path(input, "mov", &options.output_dir)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {

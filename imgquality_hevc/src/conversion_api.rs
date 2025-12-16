@@ -104,10 +104,11 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
             }
         }
         
-        // Animated lossless (GIF, APNG, animated WebP lossless) -> HEVC MP4 CRF 0 (visually lossless)
+        // Animated lossless (GIF, APNG, animated WebP lossless) -> HEVC MOV CRF 0 (visually lossless)
+        // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("mp4");
+            let output_path = Path::new(input_path).with_extension("mov");
             let fps = detection.fps.unwrap_or(10.0);
             ConversionStrategy {
                 target: TargetFormat::HEVCMP4,
@@ -177,7 +178,8 @@ pub fn execute_conversion(
     let extension = match strategy.target {
         TargetFormat::JXL => "jxl",
         TargetFormat::AVIF => "avif",
-        TargetFormat::HEVCMP4 => "mp4",
+        // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式）
+        TargetFormat::HEVCMP4 => "mov",
         TargetFormat::NoConversion => return Err(ImgQualityError::ConversionError("No conversion".to_string())),
     };
     
@@ -427,7 +429,8 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
     // Determine output path
     let (extension, is_animated) = match detection.image_type {
         ImageType::Static => ("jxl", false),
-        ImageType::Animated => ("mp4", true),
+        // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式）
+        ImageType::Animated => ("mov", true),
     };
     
     let file_stem = input_path.file_stem()
