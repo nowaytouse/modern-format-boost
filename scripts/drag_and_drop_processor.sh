@@ -1,6 +1,7 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v5.94
+# Modern Format Boost - Drag & Drop Processor v5.95
 # 
+# 🔥 v5.95: 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)，让算法真正撞墙
 # 🔥 v5.94: 修复VMAF质量评级阈值 + 清理编译警告
 # 🔥 v5.78: 默认显示详细输出
 # - 移除 >/dev/null 2>&1，显示转换工具的完整输出
