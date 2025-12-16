@@ -519,8 +519,95 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::Skip => unreachable!(),
     };
     
+    // 🔥 v6.4.2: 记录元数据复制前的大小
+    let pre_metadata_size = output_size;
+    
     shared_utils::copy_metadata(input, &output_path);
     
+    // 🔥 v6.4.2: 元数据复制后重新读取实际文件大小
+    let actual_output_size = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(output_size);
+    
+    // 🔥 v6.4.2: 精确检测元数据大小
+    let metadata_delta = shared_utils::video_explorer::detect_metadata_size(
+        pre_metadata_size, actual_output_size
+    );
+    
+    // 🔥 v6.4.2: 小文件显示详细元数据信息
+    let is_small_file = detection.file_size < shared_utils::video_explorer::SMALL_FILE_THRESHOLD;
+    if metadata_delta > 0 {
+        if is_small_file {
+            info!("   📋 Metadata (small file): +{} bytes (video: {}, total: {})", 
+                metadata_delta, pre_metadata_size, actual_output_size);
+        } else {
+            info!("   📋 Metadata: +{} bytes", metadata_delta);
+        }
+    }
+    
+    // 🔥 v6.4.3: 精确压缩验证（统一逻辑）
+    // 小文件 (<10MB): 对比纯视频数据大小（去除元数据）
+    // 大文件 (>=10MB): 直接对比总大小
+    let (can_compress, compare_size, verify_strategy) = shared_utils::video_explorer::verify_compression_precise(
+        actual_output_size, detection.file_size, metadata_delta
+    );
+    let is_pure_video_strategy = verify_strategy == shared_utils::video_explorer::CompressionVerifyStrategy::PureVideo;
+    
+    if config.require_compression && !can_compress {
+        if is_pure_video_strategy {
+            // 纯视频数据对比策略
+            warn!("   ⚠️  COMPRESSION FAILED (pure video comparison):");
+            warn!("   ⚠️  Pure video: {} bytes >= input: {} bytes",
+                compare_size, detection.file_size);
+            warn!("   ⚠️  Metadata: {} bytes (excluded)", metadata_delta);
+        } else {
+            // 总大小对比策略
+            warn!("   ⚠️  COMPRESSION FAILED: {} bytes >= {} bytes",
+                actual_output_size, detection.file_size);
+            if metadata_delta > 0 {
+                warn!("   ⚠️  Metadata: +{} bytes", metadata_delta);
+            }
+        }
+        warn!("   🛡️  Original file PROTECTED");
+        
+        // 删除无法压缩的输出文件
+        if output_path.exists() {
+            let _ = std::fs::remove_file(&output_path);
+            info!("   🗑️  Output deleted (cannot compress)");
+        }
+        
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            strategy: ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: if is_small_file {
+                    format!("Compression failed: pure video {} >= input {}", compare_size, detection.file_size)
+                } else {
+                    format!("Compression failed: {} >= {}", actual_output_size, detection.file_size)
+                },
+                command: String::new(),
+                preserve_audio: detection.has_audio,
+                crf: final_crf,
+                lossless: false,
+            },
+            input_size: detection.file_size,
+            output_size: detection.file_size,
+            size_ratio: 1.0,
+            success: false,
+            message: if is_pure_video_strategy {
+                format!("Skipped: pure video {} >= input (metadata {} excluded)", 
+                    compare_size, metadata_delta)
+            } else {
+                format!("Skipped: output {} >= input", actual_output_size)
+            },
+            final_crf,
+            exploration_attempts: attempts,
+        });
+    }
+    
+    // 使用实际文件大小计算比率
+    let output_size = actual_output_size;
     let size_ratio = output_size as f64 / detection.file_size as f64;
     
     // 🔥 Safe delete with integrity check (断电保护)
