@@ -5212,56 +5212,56 @@ fn cpu_fine_tune_from_gpu_boundary(
         // - 现在：约23次迭代，CRF 41.5 → 14.2（质量墙触发）
 
         let crf_range = gpu_boundary_crf - min_crf;
-        // 🔥 v5.97: 超激进初始步长 - 从 /3.0 改为 /2.0，一步跨越大半范围
-        let initial_step = (crf_range / 2.0).clamp(5.0, 20.0);
-
-        // 🔥 v5.97: 超激进步长计划 - 早期阶段大跨步，快速逼近墙
-        // 策略：用2-3次大步快速接近墙，然后用0.5/0.1精细定位
-        // 预期：从 CRF 41.5 → 撞墙只需 3-4 次大步 + 5-6 次精细
-        let step_schedule: Vec<(f32, u32)> = vec![
-            (initial_step, 1),              // Stage 1: 超大跳跃（1次，跨越50%范围）
-            ((initial_step / 2.0).max(2.0), 1),  // Stage 2: 大步（1次，跨越25%范围）
-            (1.0, 2),                       // Stage 3: 中步（2次）
-            (0.5, 2),                       // Stage 4: 精细搜索（2次）
-            (0.1, 99),                      // Stage 5: 最终精确（直到撞墙）
-        ];
-
-        eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (v5.97 ultra-aggressive){}",
+        
+        // 🔥 v5.98: 曲线模型超激进策略 - 全程激进试图突破墙
+        // 
+        // 核心思想：
+        // 1. 使用指数衰减曲线计算步长：step = base * decay^(wall_hits)
+        // 2. 每次撞墙后步长衰减，但仍保持激进
+        // 3. 只需 4 次撞墙即停止（而不是等 SSIM 饱和）
+        // 4. 回退时也使用曲线模型，保守但不过于保守
+        //
+        // 曲线公式：step(n) = initial_step * 0.4^n
+        // n=0: 100% (初始大步)
+        // n=1: 40%  (第一次撞墙后)
+        // n=2: 16%  (第二次撞墙后)
+        // n=3: 6.4% (第三次撞墙后)
+        // n=4: STOP
+        
+        let initial_step = (crf_range / 1.5).clamp(8.0, 25.0);  // 更激进的初始步长
+        const DECAY_FACTOR: f32 = 0.4;  // 衰减因子
+        const MAX_WALL_HITS: u32 = 4;   // 最大撞墙次数
+        const MIN_STEP: f32 = 0.1;      // 最小步长
+        
+        eprintln!("   {}📊 CRF range: {:.1} → Initial step: {}{:.1}{} (v5.98 curve model){}",
             DIM, crf_range, BRIGHT_CYAN, initial_step, RESET, RESET);
-        eprintln!("   {}📊 Step progression: {:.1} → {:.1} → 1.0 → 0.5 → 0.1 (rapid wall collision){}",
-            DIM, initial_step, (initial_step/2.0).max(2.0), RESET);
+        eprintln!("   {}📊 Strategy: Aggressive curve decay (step × 0.4 per wall hit, max {} hits){}",
+            DIM, MAX_WALL_HITS, RESET);
 
-        let mut current_step = step_schedule[0].0;
-        let mut step_index = 0_usize;
-        let mut step_count = 0_u32;
+        let mut current_step = initial_step;
+        let mut wall_hits: u32 = 0;  // 撞墙次数
         let mut test_crf = gpu_boundary_crf - current_step;
         #[allow(unused_assignments)]
         let mut prev_ssim_opt = gpu_ssim;
         #[allow(unused_variables, unused_assignments)]
-        let mut _prev_size = gpu_size;  // 用于未来的边际效益计算
-        let mut last_good_crf = gpu_boundary_crf;  // 最后一个能压缩的点
+        let mut _prev_size = gpu_size;
+        let mut last_good_crf = gpu_boundary_crf;
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
-        let mut overshoot_detected = false;  // 🔥 v5.89: 过头标志
+        #[allow(unused_assignments)]
+        let mut overshoot_detected = false;
 
-        // 🔥 v5.89: 和GPU SSIM对比（首次验证）
         let gpu_ssim_baseline = gpu_ssim.unwrap_or(0.95);
         eprintln!("   {}📊 GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
             DIM, BRIGHT_YELLOW, gpu_ssim_baseline, RESET);
 
-        // 🔥 v5.93: 智能撞墙算法 - 三种墙
-        // 停止条件：
-        // 1. 🧱 SIZE WALL - OVERSHOOT（size >= input）
-        // 2. 🎯 QUALITY WALL - SSIM增益连续5次 < 0.0002 且压缩率 > -45%（即压缩率的绝对值 < 45%）
-        // 3. 🏁 MIN_CRF BOUNDARY - 到达最低CRF边界
-        const MIN_STEP: f32 = 0.1;
-        const ZERO_GAIN_THRESHOLD: f64 = 0.0002;   // 零增益阈值（放宽到0.0002，因为0.0001级别的增益已经很小）
-        const REQUIRED_ZERO_GAINS: u32 = 5;        // 需要连续次数
-        #[allow(dead_code)]
-        const COMPRESSION_THRESHOLD: f64 = -45.0;  // 压缩率阈值（%），当压缩率 > -45%（即压缩不到45%）时触发（预留）
+        // 🔥 v5.98: 简化停止条件 - 只看撞墙次数
+        // 不再使用 SSIM 零增益检测，因为曲线模型会自动收敛
+        const ZERO_GAIN_THRESHOLD: f64 = 0.0002;
+        const REQUIRED_ZERO_GAINS: u32 = 4;  // 减少到4次
         
-        let mut consecutive_zero_gains: u32 = 0;   // 连续零增益计数
-        let mut quality_wall_hit = false;          // 质量墙标志
+        let mut consecutive_zero_gains: u32 = 0;
+        let mut quality_wall_hit = false;
 
         while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
             let key = precision::crf_to_cache_key(test_crf);
@@ -5356,42 +5356,38 @@ fn cpu_fine_tune_from_gpu_boundary(
                     break;
                 }
 
-                // 🔥 v5.90: 递进式步长切换（不依赖OVERSHOOT）
-                step_count += 1;
-                if step_index < step_schedule.len() - 1 && step_count >= step_schedule[step_index].1 {
-                    // 切换到下一个步长
-                    step_index += 1;
-                    current_step = step_schedule[step_index].0;
-                    step_count = 0;
-                    eprintln!("   {}📊{} {}Step reduced{} to {}{:.2}{} (adaptive progression)",
-                        BRIGHT_CYAN, RESET, BRIGHT_YELLOW, RESET, BRIGHT_CYAN, current_step, RESET);
-                }
-
+                // 🔥 v5.98: 曲线模型 - 成功时保持当前步长继续激进前进
+                // 不主动减小步长，让撞墙来决定何时减速
                 prev_ssim_opt = current_ssim_opt;
                 _prev_size = size;
                 test_crf -= current_step;
             } else {
-                // ❌ 不能压缩 - OVERSHOOT！用0.1精细回退
+                // ❌ 不能压缩 - OVERSHOOT！
                 overshoot_detected = true;
-                eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ OVERSHOOT{} (size {}+{:.1} MB{})",
+                wall_hits += 1;
+                
+                eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} (size {}+{:.1} MB{})",
                     BRIGHT_RED, RESET, CYAN, test_crf, RESET,
-                    BRIGHT_RED, size_pct, RESET, RED, RESET, RED, (size as f64 - input_size as f64) / 1024.0 / 1024.0, RESET);
+                    BRIGHT_RED, size_pct, RESET, RED, wall_hits, RESET, 
+                    RED, (size as f64 - input_size as f64) / 1024.0 / 1024.0, RESET);
 
-                // 🔥 v5.90: 过头后精细回退策略
-                if current_step > MIN_STEP {
-                    // 还没用0.1步长，现在用0.1回退到最佳点附近
-                    eprintln!("   {}↩️{} {}Backtrack with 0.1 step{} from last good CRF {:.1}",
-                        YELLOW, RESET, BRIGHT_CYAN, RESET, last_good_crf);
-                    test_crf = last_good_crf - MIN_STEP;
-                    current_step = MIN_STEP;
-                    step_count = 0;
-                    step_index = step_schedule.len() - 1;  // 切换到0.1步长阶段
-                } else {
-                    // 已经是0.1步长，无法继续精细化，停止
-                    eprintln!("   {}📊{} Minimum step (0.1) reached → {}STOP{}",
-                        YELLOW, RESET, BRIGHT_GREEN, RESET);
+                // 🔥 v5.98: 曲线模型回退策略
+                if wall_hits >= MAX_WALL_HITS {
+                    // 达到最大撞墙次数，停止
+                    eprintln!("   {}🧱{} {}MAX WALL HITS ({})!{} Stopping at best CRF {:.1}",
+                        BRIGHT_YELLOW, RESET, BRIGHT_GREEN, MAX_WALL_HITS, RESET, last_good_crf);
                     break;
                 }
+                
+                // 计算新步长：使用曲线衰减
+                let new_step = (initial_step * DECAY_FACTOR.powi(wall_hits as i32)).max(MIN_STEP);
+                eprintln!("   {}↩️{} {}Curve backtrack{}: step {:.2} → {:.2} (decay {}×{:.1}^{}){}",
+                    YELLOW, RESET, BRIGHT_CYAN, RESET, current_step, new_step, 
+                    DIM, DECAY_FACTOR, wall_hits, RESET);
+                
+                current_step = new_step;
+                // 从最后一个好的点继续，用新的更小步长
+                test_crf = last_good_crf - current_step;
             }
         }
 
