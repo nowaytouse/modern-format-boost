@@ -779,9 +779,11 @@ fn auto_convert_directory(
                     let out_dir = config.output_dir.as_ref().unwrap_or(&parent_dir);
                     
                     // 检查可能的输出文件
+                    // 🔥 v6.4.8: 添加 MOV 格式（苹果兼容模式）
                     let possible_outputs = [
                         out_dir.join(format!("{}.jxl", stem)),
                         out_dir.join(format!("{}.mp4", stem)),
+                        out_dir.join(format!("{}.mov", stem)),
                         out_dir.join(format!("{}.mkv", stem)),
                     ];
                     
