@@ -4849,12 +4849,15 @@ pub fn explore_with_gpu_coarse_search(
                 eprintln!("      SSIM: {} (exploration metric)", ssim_str);
                 eprintln!("      VMAF: {:.2} (verification metric)", vmaf);
 
-                // VMAF分数解读
-                let vmaf_grade = if vmaf >= 95.0 {
+                // 🔥 v5.94: VMAF分数解读 - 支持0-1和0-100两种范围
+                // ffmpeg libvmaf 可能返回 0-100 或 0-1 范围，需要自动检测
+                let vmaf_normalized = if vmaf > 1.0 { vmaf / 100.0 } else { vmaf };
+                
+                let vmaf_grade = if vmaf_normalized >= 0.95 {
                     "🟢 Excellent (near transparent)"
-                } else if vmaf >= 90.0 {
+                } else if vmaf_normalized >= 0.90 {
                     "🟡 Very Good (imperceptible diff)"
-                } else if vmaf >= 85.0 {
+                } else if vmaf_normalized >= 0.85 {
                     "🟠 Good (minor artifacts)"
                 } else {
                     "🔴 Fair (noticeable artifacts)"
@@ -4863,9 +4866,9 @@ pub fn explore_with_gpu_coarse_search(
 
                 // SSIM vs VMAF 映射关系展示
                 let ssim_val = result.ssim.unwrap_or(0.0);
-                let ssim_vmaf_correlation = if vmaf >= 90.0 && ssim_val >= 0.98 {
+                let ssim_vmaf_correlation = if vmaf_normalized >= 0.90 && ssim_val >= 0.98 {
                     "✅ Excellent correlation"
-                } else if vmaf >= 85.0 && ssim_val >= 0.95 {
+                } else if vmaf_normalized >= 0.85 && ssim_val >= 0.95 {
                     "✅ Good correlation"
                 } else {
                     "⚠️  Divergence detected"
@@ -4873,10 +4876,10 @@ pub fn explore_with_gpu_coarse_search(
                 eprintln!("      SSIM-VMAF: {}", ssim_vmaf_correlation);
 
                 // 如果VMAF显著低于预期，给出建议
-                if vmaf < 85.0 {
+                if vmaf_normalized < 0.85 {
                     eprintln!("   ⚠️  VMAF lower than expected!");
                     eprintln!("      Suggestion: Try lowering CRF by 1-2 for better quality");
-                } else if vmaf >= 95.0 {
+                } else if vmaf_normalized >= 0.95 {
                     eprintln!("   ✅ Excellent quality confirmed by VMAF");
                 }
             } else {
@@ -4926,6 +4929,7 @@ pub fn explore_with_gpu_coarse_search(
 /// 3. 当边际效益 < 阈值时停止（收益递减）
 /// 4. 压缩保证作为硬约束（size >= input 的点直接舍弃）
 /// 5. 允许"跨越"不能压缩的点继续探索（可能后面有更好的点）
+#[allow(unused_assignments)]  // best_ssim_tracked 和 prev_size 用于边际效益计算
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
     output: &Path,
@@ -5072,7 +5076,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     #[allow(dead_code)]
     const MARGINAL_BENEFIT_THRESHOLD: f64 = 0.001;  // SSIM 提升 0.001 / 文件增大 1%（预留）
     const MAX_CONSECUTIVE_FAILURES: u32 = 3;  // Give up after 3 consecutive compression failures
-    const MAX_SIZE_OVERSHOOT_PCT: f64 = 5.0;  // Allow up to 5% size overshoot to continue exploring
+    #[allow(dead_code)]
+    const MAX_SIZE_OVERSHOOT_PCT: f64 = 5.0;  // Allow up to 5% size overshoot to continue exploring (预留)
     
     let mut iterations = 0u32;
     let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
@@ -5099,7 +5104,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
-    let mut best_ssim_tracked: Option<f64> = None;  // 🔥 v5.67: 跟踪 SSIM
+    let mut best_ssim_tracked: Option<f64> = None;  // 🔥 v5.67: 跟踪 SSIM (用于边际效益计算)
 
     eprintln!("{}📍{} Step: {}{:.2}{} | GPU boundary: {}CRF {:.1}{}", 
         DIM, RESET, BRIGHT_CYAN, step_size, RESET, BRIGHT_YELLOW, gpu_boundary_crf, RESET);
@@ -5220,7 +5225,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut step_count = 0_u32;
         let mut test_crf = gpu_boundary_crf - current_step;
         let mut prev_ssim_opt = gpu_ssim;
-        let mut prev_size = gpu_size;
+        let mut _prev_size = gpu_size;  // 用于未来的边际效益计算
         let mut last_good_crf = gpu_boundary_crf;  // 最后一个能压缩的点
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
@@ -5239,7 +5244,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         const MIN_STEP: f32 = 0.1;
         const ZERO_GAIN_THRESHOLD: f64 = 0.0002;   // 零增益阈值（放宽到0.0002，因为0.0001级别的增益已经很小）
         const REQUIRED_ZERO_GAINS: u32 = 5;        // 需要连续次数
-        const COMPRESSION_THRESHOLD: f64 = -45.0;  // 压缩率阈值（%），当压缩率 > -45%（即压缩不到45%）时触发
+        #[allow(dead_code)]
+        const COMPRESSION_THRESHOLD: f64 = -45.0;  // 压缩率阈值（%），当压缩率 > -45%（即压缩不到45%）时触发（预留）
         
         let mut consecutive_zero_gains: u32 = 0;   // 连续零增益计数
         let mut quality_wall_hit = false;          // 质量墙标志
@@ -5349,7 +5355,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 }
 
                 prev_ssim_opt = current_ssim_opt;
-                prev_size = size;
+                _prev_size = size;
                 test_crf -= current_step;
             } else {
                 // ❌ 不能压缩 - OVERSHOOT！用0.1精细回退

@@ -1337,7 +1337,8 @@ impl QualityCeilingDetector {
         }
     }
 
-    /// 获取最后一个采样点的质量值
+    /// 获取最后一个采样点的质量值（预留接口）
+    #[allow(dead_code)]
     fn get_last_quality(&self) -> Option<f64> {
         self.samples.last().map(|(_, q)| *q)
     }
