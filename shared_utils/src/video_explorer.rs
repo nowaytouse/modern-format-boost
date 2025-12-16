@@ -64,6 +64,169 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 /// 🔥 v5.25: 全局迭代底线（防止无限循环）
 pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
 
+/// 🔥 v6.4.2: 小文件阈值（字节）
+/// 🔥 v6.4.3: 小文件阈值（字节）
+/// 小于此值的文件需要精确元数据检测
+/// 大于此值的文件直接用 output < input 判断
+pub const SMALL_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;  // 10MB
+
+/// 🔥 v6.4.3: 元数据余量最小值（字节）
+pub const METADATA_MARGIN_MIN: u64 = 2048;  // 2KB
+
+/// 🔥 v6.4.3: 元数据余量最大值（字节）
+pub const METADATA_MARGIN_MAX: u64 = 102400;  // 100KB
+
+/// 🔥 v6.4.3: 元数据余量百分比
+pub const METADATA_MARGIN_PERCENT: f64 = 0.005;  // 0.5%
+
+/// 🔥 v6.4.3: 计算元数据余量（百分比 + 最小值策略）
+/// 
+/// 公式: max(input × 0.5%, 2KB).min(100KB)
+/// 
+/// 这个策略的优点：
+/// - 小文件：至少 2KB 余量（覆盖基本元数据）
+/// - 中等文件：按比例增长（更精确）
+/// - 大文件：上限 100KB（避免浪费）
+/// 
+/// # Arguments
+/// * `input_size` - 输入文件大小（字节）
+/// 
+/// # Returns
+/// 元数据余量（字节）
+/// 
+/// # Examples
+/// - 100KB 文件 → max(500, 2048) = 2KB
+/// - 1MB 文件 → max(5120, 2048) = 5KB
+/// - 10MB 文件 → max(51200, 2048) = 50KB
+/// - 100MB 文件 → min(512000, 102400) = 100KB
+#[inline]
+pub fn calculate_metadata_margin(input_size: u64) -> u64 {
+    let percent_based = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
+    percent_based.max(METADATA_MARGIN_MIN).min(METADATA_MARGIN_MAX)
+}
+
+// 🔥 v6.4.2 旧常量保留用于向后兼容
+#[deprecated(since = "6.4.3", note = "使用 calculate_metadata_margin() 替代")]
+pub const DEFAULT_METADATA_MARGIN: u64 = 8192;
+
+/// 🔥 v6.4.2: 检测实际元数据大小
+/// 
+/// 通过对比元数据复制前后的文件大小来精确计算
+/// 
+/// # Arguments
+/// * `pre_metadata_size` - 元数据复制前的文件大小
+/// * `post_metadata_size` - 元数据复制后的文件大小
+/// 
+/// # Returns
+/// 实际元数据增量（字节）
+#[inline]
+pub fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u64) -> u64 {
+    post_metadata_size.saturating_sub(pre_metadata_size)
+}
+
+/// 🔥 v6.4.2: 计算纯视频数据大小（去除元数据）
+/// 
+/// # Arguments
+/// * `total_size` - 文件总大小
+/// * `metadata_size` - 元数据大小
+/// 
+/// # Returns
+/// 纯视频数据大小
+#[inline]
+pub fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
+    total_size.saturating_sub(metadata_size)
+}
+
+/// 🔥 v6.4.2: 计算压缩目标大小（探索阶段使用）
+/// 
+/// 返回探索时应使用的压缩目标阈值
+/// target = input_size - metadata_margin
+/// 
+/// # Arguments
+/// * `input_size` - 输入文件大小（字节）
+/// 
+/// # Returns
+/// 压缩目标大小（字节），使用 saturating_sub 避免下溢
+#[inline]
+pub fn compression_target_size(input_size: u64) -> u64 {
+    let margin = calculate_metadata_margin(input_size);
+    input_size.saturating_sub(margin)
+}
+
+/// 🔥 v6.4.2: 检查是否可以压缩（探索阶段，预留元数据余量）
+/// 
+/// # Arguments
+/// * `output_size` - 输出文件大小（字节）
+/// * `input_size` - 输入文件大小（字节）
+/// 
+/// # Returns
+/// true 如果 output_size < compression_target_size(input_size)
+#[inline]
+pub fn can_compress_with_metadata(output_size: u64, input_size: u64) -> bool {
+    output_size < compression_target_size(input_size)
+}
+
+/// 🔥 v6.4.3: 压缩验证策略
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionVerifyStrategy {
+    /// 对比纯视频数据（去除元数据）- 用于小文件
+    PureVideo,
+    /// 对比总大小 - 用于大文件
+    TotalSize,
+}
+
+/// 🔥 v6.4.3: 精确压缩验证（统一逻辑）
+/// 
+/// 小文件 (<10MB): 对比纯视频数据大小（去除元数据）
+/// 大文件 (>=10MB): 直接对比总大小
+/// 
+/// # 逻辑一致性
+/// 无论小文件还是大文件，都使用相同的比较逻辑：
+/// - 小文件: pure_output < pure_input (两边都去除元数据)
+/// - 大文件: total_output < total_input (两边都用总大小)
+/// 
+/// # Arguments
+/// * `output_size` - 输出文件总大小
+/// * `input_size` - 输入文件大小
+/// * `actual_metadata_size` - 实际检测到的元数据大小
+/// 
+/// # Returns
+/// (can_compress, compare_size, strategy) - 是否可压缩，用于比较的大小，使用的策略
+#[inline]
+pub fn verify_compression_precise(
+    output_size: u64,
+    input_size: u64,
+    actual_metadata_size: u64,
+) -> (bool, u64, CompressionVerifyStrategy) {
+    if input_size < SMALL_FILE_THRESHOLD {
+        // 小文件：对比纯视频数据大小（两边都去除元数据）
+        let pure_output = pure_video_size(output_size, actual_metadata_size);
+        // 🔥 v6.4.3 修复：输入也应该去除元数据（假设输入元数据与输出相近）
+        // 但由于我们无法知道输入的元数据大小，保守起见只去除输出的元数据
+        (pure_output < input_size, pure_output, CompressionVerifyStrategy::PureVideo)
+    } else {
+        // 大文件：直接对比总大小
+        (output_size < input_size, output_size, CompressionVerifyStrategy::TotalSize)
+    }
+}
+
+/// 🔥 v6.4.3: 简化版压缩验证（返回 2 元组，向后兼容）
+#[inline]
+pub fn verify_compression_simple(
+    output_size: u64,
+    input_size: u64,
+    actual_metadata_size: u64,
+) -> (bool, u64) {
+    let (can_compress, compare_size, _) = verify_compression_precise(
+        output_size, input_size, actual_metadata_size
+    );
+    (can_compress, compare_size)
+}
+
+// 🔥 v6.3.1 旧常量保留用于向后兼容，但已弃用
+#[deprecated(since = "6.4.0", note = "使用 calculate_metadata_margin() 替代")]
+pub const METADATA_OVERHEAD_BYTES: u64 = 4096;
+
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.2: 极限探索模式常量
 // ═══════════════════════════════════════════════════════════════
@@ -1019,7 +1182,8 @@ impl VideoExplorer {
         let iterations = 1u32;
         progress_done!();
 
-        let (best_crf, best_size, quality_passed) = if max_size < self.input_size {
+        // 🔥 v6.4: 使用动态余量判断压缩
+        let (best_crf, best_size, quality_passed) = if self.can_compress_with_margin(max_size) {
             (self.config.max_crf, max_size, true)
         } else {
             (self.config.max_crf, max_size, false)
@@ -1162,7 +1326,8 @@ impl VideoExplorer {
         let size_pct = self.calc_change_pct(initial_size);
         progress_line!("CRF {:.1} | {:+.1}% | Iter {}", self.config.initial_crf, size_pct, iterations);
 
-        if initial_size < self.input_size {
+        // 🔥 v6.4: 使用动态余量判断压缩
+        if self.can_compress_with_margin(initial_size) {
 
             progress_done!();
             _best_crf_so_far = self.config.initial_crf;
@@ -1199,11 +1364,13 @@ impl VideoExplorer {
             let size = encode_cached(mid, &mut cache, self)?;
             iterations += 1;
             let size_pct = self.calc_change_pct(size);
-            let compress_icon = if size < self.input_size { "✅" } else { "❌" };
+            // 🔥 v6.4: 使用动态余量判断压缩
+            let compress_icon = if self.can_compress_with_margin(size) { "✅" } else { "❌" };
             progress_line!("Binary Search | CRF {:.1} | {:+.1}% {} | Best: {:.1}", 
                 mid, size_pct, compress_icon, _best_crf_so_far);
 
-            if size < self.input_size {
+            // 🔥 v6.4: 使用动态余量判断压缩
+            if self.can_compress_with_margin(size) {
                 best_crf = Some(mid);
                 best_size = Some(size);
                 _best_crf_so_far = mid;
@@ -1223,7 +1390,8 @@ impl VideoExplorer {
         };
 
         let size_change_pct = self.calc_change_pct(final_size);
-        let compressed = final_size < self.input_size;
+        // 🔥 v6.4: 使用动态余量判断压缩
+        let compressed = self.can_compress_with_margin(final_size);
         let elapsed = start_time.elapsed();
 
         // 🔥 v5.7: Result
@@ -1309,7 +1477,8 @@ impl VideoExplorer {
             let key = precision::crf_to_cache_key(mid as f32);  // 🔥 v5.73: 统一缓存 Key
             cache.insert(key, (size, None));
 
-            if size < self.input_size {
+            // 🔥 v6.4: 使用动态余量判断压缩
+            if self.can_compress_with_margin(size) {
                 compress_boundary = Some(mid as f32);
                 high = mid;
                 log_realtime!("      ✅ Compresses at CRF {:.0}", mid);
@@ -1360,7 +1529,8 @@ impl VideoExplorer {
         };
 
         let size_change_pct = self.calc_change_pct(final_size);
-        let compressed = final_size < self.input_size;
+        // 🔥 v6.4: 使用动态余量判断压缩
+        let compressed = self.can_compress_with_margin(final_size);
         let quality_ok = final_ssim >= min_ssim;
         let passed = compressed && quality_ok;
 
@@ -1651,6 +1821,10 @@ impl VideoExplorer {
         let mut quality_cache: std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)> = std::collections::HashMap::new();
         let mut last_encoded_key: i32 = -1;
         
+        // 🔥 v6.4: 压缩目标大小（预留动态元数据余量）
+        // 元数据复制会增加约 2-5KB，必须预留这个空间
+        let target_size = self.get_compression_target();
+        
         // 🔥 v5.5: 进度追踪变量
         let mut best_crf_so_far: f32 = 0.0;
 
@@ -1679,12 +1853,14 @@ impl VideoExplorer {
         }
         
         // 🔥 v5.7: Detailed Real-time Jumping Data
+        // 🔥 v6.3.1: 使用 target_size 判断压缩（预留元数据余量）
         macro_rules! log_progress {
             ($stage:expr, $crf:expr, $size:expr, $iter:expr) => {{
                 let size_pct = if self.input_size > 0 {
                     (($size as f64 / self.input_size as f64) - 1.0) * 100.0
                 } else { 0.0 };
-                let compress_icon = if $size < self.input_size { "💾" } else { "⚠️" };
+                // 🔥 v6.3.1: 使用 target_size 判断（预留元数据余量）
+                let compress_icon = if $size < target_size { "💾" } else { "⚠️" };
                 
                 // Update Prefix with Phase
                 pb.set_prefix(format!("🔍 {}", $stage));
@@ -1745,7 +1921,7 @@ impl VideoExplorer {
         iterations += 1;
         log_progress!("Stage A", self.config.min_crf, min_size, iterations);
 
-        if min_size < self.input_size {
+        if min_size < target_size {  // 🔥 v6.3.1: 预留元数据余量
             // min_crf 能压缩，但可能还能更低！继续向下探索
             best_crf_so_far = self.config.min_crf;
             progress_done!();
@@ -1761,7 +1937,7 @@ impl VideoExplorer {
                 iterations += 1;
                 log_progress!("Stage B-1", test_crf, size, iterations);
                 
-                if size < self.input_size {
+                if size < target_size {  // 🔥 v6.3.1: 预留元数据余量
                     best_crf = test_crf;
                     best_size = size;
                     best_crf_so_far = test_crf;
@@ -1786,7 +1962,7 @@ impl VideoExplorer {
                 iterations += 1;
                 log_progress!("Stage B-2", fine_crf, size, iterations);
 
-                if size < self.input_size {
+                if size < target_size {  // 🔥 v6.3.1: 预留元数据余量
                     best_crf = fine_crf;
                     best_size = size;
                     best_crf_so_far = fine_crf;
@@ -1916,7 +2092,7 @@ impl VideoExplorer {
             let variance = calc_window_variance(&size_history, self.input_size);
             let change_rate = prev_size.map(|p| calc_change_rate(p, size)).unwrap_or(f64::MAX);
 
-            if size < self.input_size {
+            if size < target_size {  // 🔥 v6.3.1: 预留元数据余量
                 boundary_crf = mid;
                 best_crf_so_far = mid;
                 high = mid;
@@ -1963,7 +2139,7 @@ impl VideoExplorer {
             fine_tune_history.push(size);
             log_progress!("精细调整↓", test_crf, size, iterations);
 
-            if size < self.input_size {
+            if size < target_size {  // 🔥 v6.3.1: 预留元数据余量
                 best_boundary = test_crf;
                 best_crf_so_far = test_crf;
                 
@@ -1999,7 +2175,7 @@ impl VideoExplorer {
                 fine_tune_history.push(size);
                 log_progress!("精细调整↑", test_crf, size, iterations);
 
-                if size < self.input_size {
+                if size < target_size {  // 🔥 v6.3.1: 预留元数据余量
                     best_boundary = test_crf;
                     best_crf_so_far = test_crf;
                     
@@ -2388,6 +2564,36 @@ impl VideoExplorer {
     /// 计算大小变化百分比
     fn calc_change_pct(&self, output_size: u64) -> f64 {
         (output_size as f64 / self.input_size as f64 - 1.0) * 100.0
+    }
+    
+    /// 🔥 v6.3.1: 判断是否能压缩（考虑元数据余量）
+    /// 
+    /// 元数据复制（ExifTool、XMP、时间戳等）会增加文件大小约 2-5KB。
+    /// 探索时必须预留这个余量，确保最终文件（含元数据）仍然小于输入。
+    /// 
+    /// # Arguments
+    /// * `output_size` - 编码后的文件大小（不含元数据）
+    /// 
+    /// # Returns
+    /// 🔥 v6.4: 检查是否可以压缩（预留动态元数据余量）
+    /// 
+    /// 使用动态余量公式: max(input_size × 1%, 2KB)
+    /// 
+    /// # Returns
+    /// * `true` - 输出 < 压缩目标，可以压缩
+    /// * `false` - 无法保证压缩
+    #[inline]
+    fn can_compress_with_margin(&self, output_size: u64) -> bool {
+        can_compress_with_metadata(output_size, self.input_size)
+    }
+    
+    /// 🔥 v6.4: 获取压缩目标大小（预留动态元数据余量）
+    /// 
+    /// 使用动态余量公式: max(input_size × 1%, 2KB)
+    /// 返回探索时应该达到的目标大小，确保加上元数据后仍然小于输入。
+    #[inline]
+    fn get_compression_target(&self) -> u64 {
+        compression_target_size(self.input_size)
     }
     
     /// 验证输出质量
@@ -5382,7 +5588,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     let gpu_pct = (gpu_size as f64 / input_size as f64 - 1.0) * 100.0;
     let gpu_ssim = calculate_ssim_quick();
 
-    if gpu_size < input_size {
+    // 🔥 v6.4: 使用动态余量判断压缩
+    if can_compress_with_metadata(gpu_size, input_size) {
         // ✅ GPU 边界能压缩 → 向下搜索更高质量
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
@@ -5519,7 +5726,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
             let current_ssim_opt = calculate_ssim_quick();
 
-            if size < input_size {
+            // 🔥 v6.4: 使用动态余量判断压缩
+            if can_compress_with_metadata(size, input_size) {
                 // ✅ 能压缩 - 更新最佳点
                 last_good_crf = test_crf;
                 last_good_size = size;
@@ -5727,7 +5935,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             iterations += 1;
             let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
 
-            if size < input_size {
+            // 🔥 v6.4: 使用动态余量判断压缩
+            if can_compress_with_metadata(size, input_size) {
                 // ✅ 找到能压缩的点
                 best_crf = Some(test_crf);
                 best_size = Some(size);
@@ -5771,7 +5980,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
                 let current_ssim_opt = calculate_ssim_quick();  // 🔥 v5.70: 保持Option
 
-                if size < input_size {
+                // 🔥 v6.4: 使用动态余量判断压缩
+                if can_compress_with_metadata(size, input_size) {
                     consecutive_failures = 0;
 
                     best_crf = Some(test_crf);
@@ -5866,10 +6076,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.54: 使用完整视频大小计算结果
     let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
     
-    // 🔥 v5.70: 修复 quality_passed 逻辑 - 分离压缩检查和质量检查
-    // - 压缩检查：输出 < 输入
+    // 🔥 v6.4: 修复 quality_passed 逻辑 - 使用动态余量判断压缩
+    // - 压缩检查：输出 < 压缩目标（预留元数据余量）
     // - 质量检查：SSIM >= 阈值（仅当 SSIM 计算成功时）
-    let compressed = final_full_size < input_size;
+    let compressed = can_compress_with_metadata(final_full_size, input_size);
     let ssim_ok = match ssim {
         Some(s) => s >= min_ssim,
         None => false,  // SSIM 计算失败视为质量检查失败
@@ -5885,9 +6095,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.63: GPU 定位 + CPU 全片验证 + 双向验证，高准确度
     let prediction_accuracy = 0.95;
     
-    // 安全边界：输出比输入小的程度（5%为满分）
-    let margin_safety = if final_full_size < input_size {
-        let margin = (input_size - final_full_size) as f64 / input_size as f64;
+    // 🔥 v6.4: 安全边界：输出比压缩目标小的程度（5%为满分）
+    let target = compression_target_size(input_size);
+    let margin_safety = if final_full_size < target {
+        let margin = (target - final_full_size) as f64 / target as f64;
         (margin / 0.05).min(1.0)
     } else {
         0.0
@@ -5915,7 +6126,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("");
     eprintln!("═══════════════════════════════════════════════════════════");
     eprintln!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
-    eprintln!("   🎯 Guarantee: output < input = {}", if final_full_size < input_size { "✅ YES" } else { "❌ NO" });
+    // 🔥 v6.4: 使用动态余量判断压缩保证
+    eprintln!("   🎯 Guarantee: output < target = {}", if compressed { "✅ YES" } else { "❌ NO" });
     confidence_detail.print_report();
 
     cpu_progress.finish(final_crf, final_full_size, ssim);

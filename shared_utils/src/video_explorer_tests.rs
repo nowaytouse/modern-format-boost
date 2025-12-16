@@ -1125,3 +1125,406 @@ mod smart_wall_collision_tests {
         assert_eq!(detector.consecutive_zeros, 1, "小于阈值算零增益");
     }
 }
+
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.4.3: 动态元数据余量测试（百分比 + 最小值策略）
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod metadata_margin_tests {
+    use super::*;
+    use crate::video_explorer::{
+        calculate_metadata_margin, compression_target_size, can_compress_with_metadata,
+        verify_compression_precise, verify_compression_simple, detect_metadata_size, pure_video_size,
+        CompressionVerifyStrategy,
+        METADATA_MARGIN_MIN, METADATA_MARGIN_MAX, METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
+    };
+    use proptest::prelude::*;
+
+    // **Feature: dynamic-metadata-margin-v6.4, Property 1: 余量计算公式正确性**
+    // **Validates: Requirements 1.1, 1.2, 1.3**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_margin_formula_correctness(
+            input_size in 0u64..10_000_000_000u64,
+        ) {
+            let margin = calculate_metadata_margin(input_size);
+            
+            // 🔥 v6.4.3: 百分比 + 最小值策略
+            // 公式: max(input × 0.5%, 2KB).min(100KB)
+            let expected = {
+                let percent_based = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
+                percent_based.max(METADATA_MARGIN_MIN).min(METADATA_MARGIN_MAX)
+            };
+            
+            prop_assert_eq!(margin, expected,
+                "余量应符合公式: input={}, expected={}, actual={}", 
+                input_size, expected, margin);
+            
+            // 验证边界
+            prop_assert!(margin >= METADATA_MARGIN_MIN,
+                "余量应 >= 最小值: margin={}, min={}", margin, METADATA_MARGIN_MIN);
+            prop_assert!(margin <= METADATA_MARGIN_MAX,
+                "余量应 <= 最大值: margin={}, max={}", margin, METADATA_MARGIN_MAX);
+        }
+    }
+
+    // **Feature: dynamic-metadata-margin-v6.4.3, Property 2: 压缩目标计算正确性**
+    // **Validates: Requirements 1.4**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_target_calculation_correctness(
+            input_size in 0u64..10_000_000_000u64,
+        ) {
+            let target = compression_target_size(input_size);
+            let margin = calculate_metadata_margin(input_size);
+            
+            // 1. target = input - margin (saturating)
+            let expected = input_size.saturating_sub(margin);
+            prop_assert_eq!(target, expected,
+                "压缩目标应 = input - margin: input={}, margin={}, expected={}, actual={}",
+                input_size, margin, expected, target);
+            
+            // 🔥 v6.4.3: 所有文件都有余量（至少 2KB）
+            if input_size > margin {
+                prop_assert!(target < input_size,
+                    "压缩目标应 < 输入: input={}, target={}", input_size, target);
+            }
+        }
+    }
+
+    // **Feature: dynamic-metadata-margin-v6.4, Property 3: 压缩判断正确性**
+    // **Validates: Requirements 1.4**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_can_compress_correctness(
+            input_size in 1u64..10_000_000_000u64,
+            output_ratio in 0.5..1.5_f64,
+        ) {
+            let output_size = (input_size as f64 * output_ratio) as u64;
+            let target = compression_target_size(input_size);
+            let can_compress = can_compress_with_metadata(output_size, input_size);
+            
+            // can_compress 应等价于 output_size < target
+            let expected = output_size < target;
+            prop_assert_eq!(can_compress, expected,
+                "压缩判断应正确: input={}, output={}, target={}, expected={}, actual={}",
+                input_size, output_size, target, expected, can_compress);
+        }
+    }
+
+    // 🔥 v6.4.3: 百分比 + 最小值策略测试
+    #[test]
+    fn test_margin_formula_examples() {
+        // 100KB → max(500, 2048) = 2KB
+        let size_100kb = 100 * 1024;
+        let margin = calculate_metadata_margin(size_100kb);
+        assert_eq!(margin, METADATA_MARGIN_MIN,
+            "100KB 应使用最小余量: expected={}, actual={}", METADATA_MARGIN_MIN, margin);
+        
+        // 1MB → max(5120, 2048) = 5KB
+        let size_1mb = 1024 * 1024;
+        let margin = calculate_metadata_margin(size_1mb);
+        let expected = (size_1mb as f64 * METADATA_MARGIN_PERCENT) as u64;
+        assert_eq!(margin, expected,
+            "1MB 应使用百分比余量: expected={}, actual={}", expected, margin);
+        
+        // 100MB → min(512000, 102400) = 100KB
+        let size_100mb = 100 * 1024 * 1024;
+        let margin = calculate_metadata_margin(size_100mb);
+        assert_eq!(margin, METADATA_MARGIN_MAX,
+            "100MB 应使用最大余量: expected={}, actual={}", METADATA_MARGIN_MAX, margin);
+    }
+
+    #[test]
+    fn test_margin_extreme_cases() {
+        // 0 字节 → 最小余量
+        assert_eq!(calculate_metadata_margin(0), METADATA_MARGIN_MIN);
+        assert_eq!(compression_target_size(0), 0);
+        
+        // 1 字节 → 最小余量
+        assert_eq!(calculate_metadata_margin(1), METADATA_MARGIN_MIN);
+        assert_eq!(compression_target_size(1), 0);
+        
+        // 10GB → 最大余量
+        let size_10gb = 10 * 1024 * 1024 * 1024;
+        let margin = calculate_metadata_margin(size_10gb);
+        assert_eq!(margin, METADATA_MARGIN_MAX,
+            "10GB 应使用最大余量: expected={}, actual={}", METADATA_MARGIN_MAX, margin);
+    }
+
+    // 🔥 v6.4.3: 精确压缩验证测试（统一逻辑）
+    #[test]
+    fn test_verify_compression_precise() {
+        // 小文件场景 (<10MB)：对比纯视频数据
+        let input_small = 5 * 1024 * 1024; // 5MB
+        let output_total = 4800 * 1024; // 4.7MB 总大小
+        let metadata = 50 * 1024; // 50KB 元数据
+        
+        let (can_compress, pure_size, strategy) = verify_compression_precise(output_total, input_small, metadata);
+        assert_eq!(strategy, CompressionVerifyStrategy::PureVideo, "小文件应使用纯视频策略");
+        assert_eq!(pure_size, output_total - metadata, "纯视频大小应去除元数据");
+        assert!(can_compress, "纯视频 {} < 输入 {} 应可压缩", pure_size, input_small);
+        
+        // 大文件场景 (>=10MB)：直接对比总大小
+        let input_large = 20 * 1024 * 1024; // 20MB
+        let output_large = 18 * 1024 * 1024; // 18MB
+        let metadata_large = 80 * 1024; // 80KB
+        
+        let (can_compress, compare_size, strategy) = verify_compression_precise(output_large, input_large, metadata_large);
+        assert_eq!(strategy, CompressionVerifyStrategy::TotalSize, "大文件应使用总大小策略");
+        assert_eq!(compare_size, output_large, "大文件应对比总大小");
+        assert!(can_compress, "输出 {} < 输入 {} 应可压缩", compare_size, input_large);
+    }
+
+    #[test]
+    fn test_verify_compression_simple() {
+        // 测试简化版 API（向后兼容）
+        let (can_compress, size) = verify_compression_simple(1000, 2000, 100);
+        assert!(can_compress);
+        assert!(size > 0);
+    }
+
+    #[test]
+    fn test_detect_metadata_size() {
+        assert_eq!(detect_metadata_size(1000, 1500), 500);
+        assert_eq!(detect_metadata_size(1000, 1000), 0);
+        assert_eq!(detect_metadata_size(1500, 1000), 0); // saturating_sub
+    }
+
+    #[test]
+    fn test_pure_video_size() {
+        assert_eq!(pure_video_size(1000, 200), 800);
+        assert_eq!(pure_video_size(1000, 0), 1000);
+        assert_eq!(pure_video_size(100, 200), 0); // saturating_sub
+    }
+
+    #[test]
+    fn test_can_compress_with_margin() {
+        // 所有文件都有余量（至少 2KB）
+        let input_small = 500 * 1024; // 500KB
+        let target_small = compression_target_size(input_small);
+        assert!(target_small < input_small, "应预留余量");
+        
+        let input_large = 100 * 1024 * 1024; // 100MB
+        let target_large = compression_target_size(input_large);
+        assert!(target_large < input_large, "应预留余量");
+        assert_eq!(input_large - target_large, METADATA_MARGIN_MAX, "大文件余量应为最大值");
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.4.4: 边界测试增强
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod boundary_tests {
+    use super::super::video_explorer::*;
+    use proptest::prelude::*;
+
+    // **Feature: dynamic-metadata-margin-v6.4, Property 4: 边界值正确性**
+    // **Validates: Requirements 1.2, 1.3**
+    #[test]
+    fn test_metadata_margin_boundary_u64_max() {
+        // u64::MAX 应该返回最大余量
+        let margin = calculate_metadata_margin(u64::MAX);
+        assert_eq!(margin, METADATA_MARGIN_MAX,
+            "u64::MAX 应使用最大余量: expected={}, actual={}", METADATA_MARGIN_MAX, margin);
+    }
+
+    #[test]
+    fn test_compression_target_underflow_protection() {
+        // 非常小的文件不应下溢
+        for size in [0u64, 1, 100, 1000, 2047, 2048, 2049] {
+            let target = compression_target_size(size);
+            // saturating_sub 保证不会下溢
+            assert!(target <= size, "压缩目标 {} 不应大于输入 {}", target, size);
+        }
+    }
+
+    #[test]
+    fn test_small_file_threshold_boundary() {
+        // 刚好在阈值边界
+        let just_below = SMALL_FILE_THRESHOLD - 1;
+        let at_threshold = SMALL_FILE_THRESHOLD;
+        let just_above = SMALL_FILE_THRESHOLD + 1;
+        
+        // 小于阈值：使用 PureVideo 策略
+        let (_, _, strategy_below) = verify_compression_precise(1000, just_below, 100);
+        assert_eq!(strategy_below, CompressionVerifyStrategy::PureVideo,
+            "刚好低于阈值应使用 PureVideo 策略");
+        
+        // 等于阈值：使用 TotalSize 策略
+        let (_, _, strategy_at) = verify_compression_precise(1000, at_threshold, 100);
+        assert_eq!(strategy_at, CompressionVerifyStrategy::TotalSize,
+            "刚好等于阈值应使用 TotalSize 策略");
+        
+        // 大于阈值：使用 TotalSize 策略
+        let (_, _, strategy_above) = verify_compression_precise(1000, just_above, 100);
+        assert_eq!(strategy_above, CompressionVerifyStrategy::TotalSize,
+            "刚好高于阈值应使用 TotalSize 策略");
+    }
+
+    // **Feature: dynamic-metadata-margin-v6.4, Property 5: 余量单调性**
+    // **Validates: Requirements 1.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn prop_margin_monotonic(
+            size1 in 1u64..1_000_000_000u64,
+            size2 in 1u64..1_000_000_000u64,
+        ) {
+            let margin1 = calculate_metadata_margin(size1);
+            let margin2 = calculate_metadata_margin(size2);
+            
+            // 余量应该是单调非递减的（更大的文件 >= 更大的余量）
+            if size1 <= size2 {
+                prop_assert!(margin1 <= margin2,
+                    "余量应单调非递减: size1={}, margin1={}, size2={}, margin2={}",
+                    size1, margin1, size2, margin2);
+            }
+        }
+
+        #[test]
+        fn prop_margin_bounded(size in 0u64..u64::MAX / 2) {
+            let margin = calculate_metadata_margin(size);
+            
+            // 余量应在 [MIN, MAX] 范围内
+            prop_assert!(margin >= METADATA_MARGIN_MIN,
+                "余量 {} 应 >= 最小值 {}", margin, METADATA_MARGIN_MIN);
+            prop_assert!(margin <= METADATA_MARGIN_MAX,
+                "余量 {} 应 <= 最大值 {}", margin, METADATA_MARGIN_MAX);
+        }
+    }
+
+    #[test]
+    fn test_verify_compression_edge_cases() {
+        // 输出 = 输入：不能压缩
+        let (can_compress, _, _) = verify_compression_precise(1000, 1000, 0);
+        assert!(!can_compress, "输出 = 输入时不应能压缩");
+        
+        // 输出 > 输入：不能压缩
+        let (can_compress, _, _) = verify_compression_precise(2000, 1000, 0);
+        assert!(!can_compress, "输出 > 输入时不应能压缩");
+        
+        // 输出 = 0：能压缩
+        let (can_compress, _, _) = verify_compression_precise(0, 1000, 0);
+        assert!(can_compress, "输出 = 0 时应能压缩");
+        
+        // 元数据 > 输出：纯视频大小为 0
+        let (can_compress, pure_size, _) = verify_compression_precise(100, 500, 200);
+        assert_eq!(pure_size, 0, "元数据 > 输出时纯视频大小应为 0 (saturating_sub)");
+        assert!(can_compress, "纯视频 0 < 输入 500 应能压缩");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.4.4: Strategy 辅助方法测试
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod strategy_helper_tests {
+    use super::super::explore_strategy::*;
+    use super::super::video_explorer::{ExploreConfig, VideoEncoder, EncoderPreset};
+    use std::path::PathBuf;
+
+    fn create_test_context() -> ExploreContext {
+        ExploreContext::new(
+            PathBuf::from("/tmp/test_input.mp4"),
+            PathBuf::from("/tmp/test_output.mp4"),
+            1_000_000, // 1MB
+            VideoEncoder::Hevc,
+            vec![],
+            4,
+            false,
+            EncoderPreset::Medium,
+            ExploreConfig::default(),
+        )
+    }
+
+    #[test]
+    fn test_build_result_basic() {
+        let ctx = create_test_context();
+        
+        let result = ctx.build_result(
+            20.0,           // crf
+            800_000,        // size (80% of input)
+            None,           // ssim_result
+            5,              // iterations
+            true,           // quality_passed
+            0.85,           // confidence
+        );
+        
+        assert_eq!(result.optimal_crf, 20.0);
+        assert_eq!(result.output_size, 800_000);
+        assert!((result.size_change_pct - (-20.0)).abs() < 0.1, "应为 -20%");
+        assert!(result.ssim.is_none());
+        assert_eq!(result.iterations, 5);
+        assert!(result.quality_passed);
+        assert_eq!(result.confidence, 0.85);
+    }
+
+    #[test]
+    fn test_build_result_with_ssim() {
+        let ctx = create_test_context();
+        
+        let ssim_result = SsimResult::actual(0.98, Some(45.0));
+        let result = ctx.build_result(
+            18.0,
+            900_000,
+            Some(ssim_result),
+            3,
+            true,
+            0.9,
+        );
+        
+        assert_eq!(result.ssim, Some(0.98));
+        assert_eq!(result.psnr, Some(45.0));
+    }
+
+    #[test]
+    fn test_size_change_pct_calculation() {
+        let ctx = create_test_context();
+        
+        // 压缩 20%
+        let pct = ctx.size_change_pct(800_000);
+        assert!((pct - (-20.0)).abs() < 0.1);
+        
+        // 膨胀 50%
+        let pct = ctx.size_change_pct(1_500_000);
+        assert!((pct - 50.0).abs() < 0.1);
+        
+        // 无变化
+        let pct = ctx.size_change_pct(1_000_000);
+        assert!(pct.abs() < 0.1);
+    }
+
+    #[test]
+    fn test_can_compress() {
+        let ctx = create_test_context();
+        
+        assert!(ctx.can_compress(999_999), "小于输入应能压缩");
+        assert!(!ctx.can_compress(1_000_000), "等于输入不应能压缩");
+        assert!(!ctx.can_compress(1_000_001), "大于输入不应能压缩");
+    }
+
+    #[test]
+    fn test_ssim_result_helpers() {
+        let actual = SsimResult::actual(0.98, Some(45.0));
+        assert!(actual.is_actual());
+        assert!(!actual.is_predicted());
+        
+        let predicted = SsimResult::predicted(0.95, 40.0);
+        assert!(!predicted.is_actual());
+        assert!(predicted.is_predicted());
+    }
+}
