@@ -40,6 +40,7 @@ pub mod realtime_progress;
 pub mod lru_cache;
 pub mod error_handler;
 pub mod ssim_mapping;
+pub mod explore_strategy;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -210,3 +211,11 @@ pub use error_handler::{ErrorCategory, ErrorAction, handle_error};
 
 // 🔥 v5.74: PSNR→SSIM 动态映射模块
 pub use ssim_mapping::{PsnrSsimMapping, MappingPoint};
+
+// 🔥 v6.3: Strategy 模式探索器
+pub use explore_strategy::{
+    ExploreStrategy, ExploreContext, SsimResult, ProgressConfig,
+    create_strategy, strategy_name,
+    SizeOnlyStrategy, QualityMatchStrategy, PreciseQualityMatchStrategy,
+    PreciseQualityMatchWithCompressionStrategy, CompressOnlyStrategy, CompressWithQualityStrategy,
+};
