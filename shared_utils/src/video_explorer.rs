@@ -4725,7 +4725,10 @@ pub fn explore_with_gpu_coarse_search(
                         eprintln!("      (GPU SSIM ceiling, CPU can break through to 0.99+)");
                     }
                     
-                    // 🔥 v5.26: 根据 GPU SSIM 动态调整 CPU 搜索范围
+                    // 🔥 v5.95: 根据 GPU SSIM 动态调整 CPU 搜索范围
+                    // 🔥 修复：扩大 min_crf 范围，让撞墙算法能真正撞墙而不是提前停止
+                    // 之前 cpu_start - 3.0 太保守，导致算法在 SSIM 0.98 就停止
+                    // 现在使用 cpu_start - 15.0，让算法能探索到更低CRF获得更高SSIM
                     let (cpu_min, cpu_max) = if let Some(ssim) = gpu_result.gpu_best_ssim {
                         let quality_hint = if ssim >= 0.97 { "🟢 Near GPU ceiling" } 
                                           else if ssim >= 0.95 { "🟡 Good" } 
@@ -4740,20 +4743,24 @@ pub fn explore_with_gpu_coarse_search(
                             (ABSOLUTE_MIN_CRF, (cpu_start + 8.0).min(max_crf))
                         } else if gpu_result.fine_tuned {
                             // 🔥 v5.65: GPU 已精细搜索，CPU 只需小范围验证
-                            eprintln!("   ⚡ GPU fine-tuned → CPU narrow search ±1.5 CRF");
-                            ((cpu_start - 1.5).max(ABSOLUTE_MIN_CRF), (cpu_start + 1.5).min(max_crf))
+                            eprintln!("   ⚡ GPU fine-tuned → CPU narrow search ±3 CRF");
+                            // 🔥 v5.95: 扩大范围 1.5 → 3.0，允许更多探索
+                            ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 3.0).min(max_crf))
                         } else {
                             eprintln!("   💡 CPU will achieve SSIM 0.98+ (GPU max ~0.97)");
-                            // 🔥 v5.56: 使用校准后的起点作为搜索中心
-                            ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
+                            // 🔥 v5.95: 大幅扩大搜索范围 3.0 → 15.0
+                            // 让撞墙算法能真正撞墙（文件变大）而不是提前停止
+                            // 这样才能找到最高SSIM的CRF点
+                            ((cpu_start - 15.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                         }
                     } else if gpu_result.fine_tuned {
                         // 🔥 v5.65: GPU 已精细搜索，CPU 只需小范围验证
-                        eprintln!("   ⚡ GPU fine-tuned → CPU narrow search ±1.5 CRF");
-                        ((cpu_start - 1.5).max(ABSOLUTE_MIN_CRF), (cpu_start + 1.5).min(max_crf))
+                        eprintln!("   ⚡ GPU fine-tuned → CPU narrow search ±3 CRF");
+                        // 🔥 v5.95: 扩大范围 1.5 → 3.0
+                        ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 3.0).min(max_crf))
                     } else {
-                        // 🔥 v5.56: 使用校准后的起点作为搜索中心
-                        ((cpu_start - 3.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
+                        // 🔥 v5.95: 大幅扩大搜索范围 3.0 → 15.0
+                        ((cpu_start - 15.0).max(ABSOLUTE_MIN_CRF), (cpu_start + 5.0).min(max_crf))
                     };
                     
                     eprintln!("   📊 CPU search range: [{:.1}, {:.1}] (start: {:.1})", cpu_min, cpu_max, cpu_start);
@@ -5104,6 +5111,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
+    #[allow(unused_assignments)]
     let mut best_ssim_tracked: Option<f64> = None;  // 🔥 v5.67: 跟踪 SSIM (用于边际效益计算)
 
     eprintln!("{}📍{} Step: {}{:.2}{} | GPU boundary: {}CRF {:.1}{}", 
@@ -5224,7 +5232,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut step_index = 0_usize;
         let mut step_count = 0_u32;
         let mut test_crf = gpu_boundary_crf - current_step;
+        #[allow(unused_assignments)]
         let mut prev_ssim_opt = gpu_ssim;
+        #[allow(unused_variables, unused_assignments)]
         let mut _prev_size = gpu_size;  // 用于未来的边际效益计算
         let mut last_good_crf = gpu_boundary_crf;  // 最后一个能压缩的点
         let mut last_good_size = gpu_size;
