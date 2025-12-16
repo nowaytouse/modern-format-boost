@@ -300,11 +300,17 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     std::fs::create_dir_all(&output_dir)?;
     
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-    let target_ext = strategy.target.extension();
+    // 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
+    let target_ext = if config.apple_compat && strategy.target == TargetVideoFormat::HevcMp4 {
+        "mov"
+    } else {
+        strategy.target.extension()
+    };
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
     
     // 🔥 当输入输出扩展名相同时，添加 _hevc 后缀避免冲突
-    let output_path = if input_ext.eq_ignore_ascii_case(target_ext) {
+    let output_path = if input_ext.eq_ignore_ascii_case(target_ext) || 
+                        (config.apple_compat && input_ext.eq_ignore_ascii_case("mov")) {
         output_dir.join(format!("{}_hevc.{}", stem, target_ext))
     } else {
         output_dir.join(format!("{}.{}", stem, target_ext))
