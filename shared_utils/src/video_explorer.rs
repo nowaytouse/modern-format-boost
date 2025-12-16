@@ -1421,8 +1421,8 @@ impl VideoExplorer {
     /// 3. 使用缓存避免重复编码
     fn explore_compress_with_quality(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
-        // 缓存：CRF (x10) -> (size, ssim)
-        let mut cache: std::collections::HashMap<i32, (u64, Option<f64>)> = std::collections::HashMap::new();
+        // 🔥 v6.6: 使用 CrfCache 替代 HashMap
+        let mut cache: CrfCache<(u64, Option<f64>)> = CrfCache::new();
 
         // 🔥 v5.7: Unified Process
         let pb = crate::progress::create_professional_spinner("📦 Compress+Quality");
@@ -1467,8 +1467,8 @@ impl VideoExplorer {
             let size = self.encode(mid as f32)?;
             iterations += 1;
 
-            let key = precision::crf_to_cache_key(mid as f32);  // 🔥 v5.73: 统一缓存 Key
-            cache.insert(key, (size, None));
+            // 🔥 v6.6: CrfCache 直接用 crf 作为 key
+            cache.insert(mid as f32, (size, None));
 
             // 🔥 v6.4: 使用动态余量判断压缩
             if self.can_compress_with_margin(size) {
@@ -1486,8 +1486,8 @@ impl VideoExplorer {
             log_realtime!("   📍 Phase 2: Validate quality at CRF {:.1}", boundary);
 
             // 直接在边界点验证质量（边界点是最低能压缩的 CRF = 最高质量）
-            let key = precision::crf_to_cache_key(boundary);  // 🔥 v5.73: 统一缓存 Key
-            let size = if let Some(&(s, _)) = cache.get(&key) {
+            // 🔥 v6.6: CrfCache 直接用 crf 作为 key
+            let size = if let Some(&(s, _)) = cache.get(boundary) {
                 s
             } else {
                 let s = self.encode(boundary)?;
@@ -1497,7 +1497,7 @@ impl VideoExplorer {
 
             let quality = self.validate_quality()?;
             let ssim = quality.0.unwrap_or(0.0);
-            cache.insert(key, (size, Some(ssim)));
+            cache.insert(boundary, (size, Some(ssim)));
 
             log_realtime!("      CRF {:.1}: SSIM {:.4}, Size {:+.1}%", boundary, ssim, self.calc_change_pct(size));
 
@@ -1565,11 +1565,10 @@ impl VideoExplorer {
     /// 4. **早期终止**：检测到SSIM平台立即停止
     fn explore_precise_quality_match(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
-        // 🔥 v4.9: 统一缓存 - CRF (x10) -> (size, quality)
-        let mut cache: std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))> =
-            std::collections::HashMap::new();
-        // 🔥 v4.9: 跟踪最后实际编码的 CRF（整数 x10）
-        let mut last_encoded_key: i32 = -1;
+        // 🔥 v6.6: 使用 CrfCache 替代 HashMap
+        let mut cache: CrfCache<(u64, (Option<f64>, Option<f64>, Option<f64>))> = CrfCache::new();
+        // 🔥 v6.6: 跟踪最后实际编码的 CRF
+        let mut last_encoded_crf: Option<f32> = None;
 
         macro_rules! log_realtime {
             ($($arg:tt)*) => {{
@@ -1606,21 +1605,19 @@ impl VideoExplorer {
         let mut best_quality: (Option<f64>, Option<f64>, Option<f64>);
         let mut best_ssim: f64;
 
-        // 🔥 v4.9: 带缓存和跟踪的编码函数
-        // 🔥 v5.73: 使用统一的 crf_to_cache_key()
+        // 🔥 v6.6: 使用 CrfCache（直接用 crf 作为 key）
         let encode_cached = |crf: f32,
-                            cache: &mut std::collections::HashMap<i32, (u64, (Option<f64>, Option<f64>, Option<f64>))>,
-                            last_key: &mut i32,
+                            cache: &mut CrfCache<(u64, (Option<f64>, Option<f64>, Option<f64>))>,
+                            last_crf: &mut Option<f32>,
                             explorer: &VideoExplorer| -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
-            let key = precision::crf_to_cache_key(crf);
-            if let Some(&cached) = cache.get(&key) {
+            if let Some(&cached) = cache.get(crf) {
                 return Ok(cached);
             }
 
             let size = explorer.encode(crf)?;
             let quality = explorer.validate_quality()?;
-            cache.insert(key, (size, quality));
-            *last_key = key;  // 更新最后编码的 key
+            cache.insert(crf, (size, quality));
+            *last_crf = Some(crf);  // 更新最后编码的 CRF
             Ok((size, quality))
         };
 
@@ -1628,7 +1625,7 @@ impl VideoExplorer {
         log_realtime!("   📍 Phase 1: Boundary test");
 
         log_realtime!("   🔄 Testing min CRF {:.1}...", self.config.min_crf);
-        let (min_size, min_quality) = encode_cached(self.config.min_crf, &mut cache, &mut last_encoded_key, self)?;
+        let (min_size, min_quality) = encode_cached(self.config.min_crf, &mut cache, &mut last_encoded_crf, self)?;
         iterations += 1;
         let min_ssim = min_quality.0.unwrap_or(0.0);
         log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
@@ -1640,7 +1637,7 @@ impl VideoExplorer {
         best_ssim = min_ssim;
 
         log_realtime!("   🔄 Testing max CRF {:.1}...", self.config.max_crf);
-        let (max_size, max_quality) = encode_cached(self.config.max_crf, &mut cache, &mut last_encoded_key, self)?;
+        let (max_size, max_quality) = encode_cached(self.config.max_crf, &mut cache, &mut last_encoded_crf, self)?;
         iterations += 1;
         let max_ssim = max_quality.0.unwrap_or(0.0);
         log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
@@ -1670,7 +1667,7 @@ impl VideoExplorer {
                 let mid_rounded = (mid * 2.0).round() / 2.0;
 
                 log_realtime!("   🔄 Testing CRF {:.1}...", mid_rounded);
-                let (size, quality) = encode_cached(mid_rounded, &mut cache, &mut last_encoded_key, self)?;
+                let (size, quality) = encode_cached(mid_rounded, &mut cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
                 let ssim = quality.0.unwrap_or(0.0);
                 log_realtime!("      CRF {:.1}: SSIM {:.6}, Size {:+.1}%",
@@ -1704,7 +1701,7 @@ impl VideoExplorer {
                     if iterations >= max_iterations { break; }
 
                     log_realtime!("   🔄 Testing CRF {:.1}...", crf);
-                    let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
+                    let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_crf, self)?;
                     iterations += 1;
                     let ssim = quality.0.unwrap_or(0.0);
                     log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
@@ -1721,13 +1718,12 @@ impl VideoExplorer {
                 if iterations < max_iterations {
                     for offset in [-0.25_f32, 0.25, -0.5, 0.5] {
                         let crf = (best_crf + offset).clamp(self.config.min_crf, self.config.max_crf);
-                        // 避免重复测试已缓存的值 - 🔥 v5.73: 统一缓存 Key
-                        let key = precision::crf_to_cache_key(crf);
-                        if cache.contains_key(&key) { continue; }
+                        // 🔥 v6.6: CrfCache 直接用 crf 检查
+                        if cache.contains_key(crf) { continue; }
                         if iterations >= max_iterations { break; }
 
                         log_realtime!("   🔄 Testing CRF {:.1}...", crf);
-                        let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_key, self)?;
+                        let (size, quality) = encode_cached(crf, &mut cache, &mut last_encoded_crf, self)?;
                         iterations += 1;
                         let ssim = quality.0.unwrap_or(0.0);
                         log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
@@ -1743,10 +1739,8 @@ impl VideoExplorer {
             }
         }
 
-        // 🔥 v4.9: 智能最终编码 - 只有必要时才重新编码
-        // 🔥 v5.73: 使用统一的 crf_to_cache_key()
-        let best_key = precision::crf_to_cache_key(best_crf);
-        let (final_size, final_quality) = if last_encoded_key == best_key {
+        // 🔥 v6.6: 智能最终编码 - 使用 Option<f32> 比较
+        let (final_size, final_quality) = if last_encoded_crf == Some(best_crf) {
             // 最后一次编码就是 best_crf，直接使用缓存
             log_realtime!("   ✨ Output already at best CRF {:.1} (no re-encoding needed)", best_crf);
             (best_size, best_quality)
@@ -1810,9 +1804,10 @@ impl VideoExplorer {
     /// - Phase 3: 只对最终边界点算1次SSIM
     fn explore_precise_quality_match_with_compression(&self) -> Result<ExploreResult> {
         let mut log = Vec::new();
-        let mut size_cache: std::collections::HashMap<i32, u64> = std::collections::HashMap::new();
-        let mut quality_cache: std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)> = std::collections::HashMap::new();
-        let mut last_encoded_key: i32 = -1;
+        // 🔥 v6.6: 使用 CrfCache 替代 HashMap
+        let mut size_cache: CrfCache<u64> = CrfCache::new();
+        let mut quality_cache: CrfCache<(Option<f64>, Option<f64>, Option<f64>)> = CrfCache::new();
+        let mut last_encoded_crf: Option<f32> = None;
         
         // 🔥 v6.4: 压缩目标大小（预留动态元数据余量）
         // 元数据复制会增加约 2-5KB，必须预留这个空间
@@ -1869,32 +1864,30 @@ impl VideoExplorer {
             }};
         }
 
-        // 🔥 v5.73: 统一缓存精度 - 使用 crf_to_cache_key()
+        // 🔥 v6.6: 使用 CrfCache（直接用 crf 作为 key）
         // 仅编码（不计算SSIM）
         let encode_size_only = |crf: f32,
-                               size_cache: &mut std::collections::HashMap<i32, u64>,
-                               last_key: &mut i32,
+                               size_cache: &mut CrfCache<u64>,
+                               last_crf: &mut Option<f32>,
                                explorer: &VideoExplorer| -> Result<u64> {
-            let key = precision::crf_to_cache_key(crf);
-            if let Some(&size) = size_cache.get(&key) {
+            if let Some(&size) = size_cache.get(crf) {
                 return Ok(size);
             }
             let size = explorer.encode(crf)?;
-            size_cache.insert(key, size);
-            *last_key = key;
+            size_cache.insert(crf, size);
+            *last_crf = Some(crf);
             Ok(size)
         };
 
         // 计算SSIM
         let validate_ssim = |crf: f32,
-                            quality_cache: &mut std::collections::HashMap<i32, (Option<f64>, Option<f64>, Option<f64>)>,
+                            quality_cache: &mut CrfCache<(Option<f64>, Option<f64>, Option<f64>)>,
                             explorer: &VideoExplorer| -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
-            let key = precision::crf_to_cache_key(crf);
-            if let Some(&quality) = quality_cache.get(&key) {
+            if let Some(&quality) = quality_cache.get(crf) {
                 return Ok(quality);
             }
             let quality = explorer.validate_quality()?;
-            quality_cache.insert(key, quality);
+            quality_cache.insert(crf, quality);
             Ok(quality)
         };
 
@@ -1910,7 +1903,7 @@ impl VideoExplorer {
         log_header!("   📍 Stage A: 大小搜索");
 
         // 🔥 关键修复：从 min_crf 开始测试（最高质量）
-        let min_size = encode_size_only(self.config.min_crf, &mut size_cache, &mut last_encoded_key, self)?;
+        let min_size = encode_size_only(self.config.min_crf, &mut size_cache, &mut last_encoded_crf, self)?;
         iterations += 1;
         log_progress!("Stage A", self.config.min_crf, min_size, iterations);
 
@@ -1926,7 +1919,7 @@ impl VideoExplorer {
             log_header!("   📍 Stage B-1: 快速搜索 (0.5 步长)");
             let mut test_crf = self.config.min_crf - 0.5;
             while test_crf >= ABSOLUTE_MIN_CRF && iterations < STAGE_B1_MAX_ITERATIONS {
-                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
                 log_progress!("Stage B-1", test_crf, size, iterations);
                 
@@ -1948,10 +1941,10 @@ impl VideoExplorer {
                 if fine_crf < ABSOLUTE_MIN_CRF { break; }
                 if iterations >= STAGE_B2_MAX_ITERATIONS { break; }
 
-                let key = precision::crf_to_cache_key(fine_crf);  // 🔥 v5.73: 统一缓存 Key
-                if size_cache.contains_key(&key) { continue; }
+                // 🔥 v6.6: CrfCache 直接用 crf 检查
+                if size_cache.contains_key(fine_crf) { continue; }
 
-                let size = encode_size_only(fine_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                let size = encode_size_only(fine_crf, &mut size_cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
                 log_progress!("Stage B-2", fine_crf, size, iterations);
 
@@ -1965,11 +1958,10 @@ impl VideoExplorer {
             }
             progress_done!();
 
-            // 确保输出文件是 best_crf 的版本
-            let best_key = precision::crf_to_cache_key(best_crf);  // 🔥 v5.73: 统一缓存 Key
-            if last_encoded_key != best_key {
+            // 🔥 v6.6: 使用 Option<f32> 比较
+            if last_encoded_crf != Some(best_crf) {
                 progress_line!("│ 重新编码到最佳 CRF {:.1}... │", best_crf);
-                let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_crf, self)?;
                 progress_done!();
             }
             
@@ -2011,7 +2003,7 @@ impl VideoExplorer {
         progress_done!();
 
         // 测试 max_crf 确认能否压缩
-        let max_size = encode_size_only(self.config.max_crf, &mut size_cache, &mut last_encoded_key, self)?;
+        let max_size = encode_size_only(self.config.max_crf, &mut size_cache, &mut last_encoded_crf, self)?;
         iterations += 1;
         log_progress!("Stage A", self.config.max_crf, max_size, iterations);
 
@@ -2083,7 +2075,7 @@ impl VideoExplorer {
         while high - low > 0.5 && iterations < 12 {
             let mid = ((low + high) / 2.0 * 2.0).round() / 2.0;
 
-            let size = encode_size_only(mid, &mut size_cache, &mut last_encoded_key, self)?;
+            let size = encode_size_only(mid, &mut size_cache, &mut last_encoded_crf, self)?;
             iterations += 1;
             size_history.push((mid, size));
             log_progress!("二分搜索", mid, size, iterations);
@@ -2130,10 +2122,10 @@ impl VideoExplorer {
             if test_crf < self.config.min_crf { continue; }
             if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
             
-            let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
-            if size_cache.contains_key(&key) { continue; }
+            // 🔥 v6.6: CrfCache 直接用 crf 检查
+            if size_cache.contains_key(test_crf) { continue; }
 
-            let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+            let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_crf, self)?;
             iterations += 1;
             fine_tune_history.push(size);
             log_progress!("精细调整↓", test_crf, size, iterations);
@@ -2166,10 +2158,10 @@ impl VideoExplorer {
                 if test_crf > self.config.max_crf { continue; }
                 if iterations >= STAGE_B_BIDIRECTIONAL_MAX { break; }
                 
-                let key = precision::crf_to_cache_key(test_crf);  // 🔥 v5.73: 统一缓存 Key
-                if size_cache.contains_key(&key) { continue; }
+                // 🔥 v6.6: CrfCache 直接用 crf 检查
+                if size_cache.contains_key(test_crf) { continue; }
 
-                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_key, self)?;
+                let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
                 fine_tune_history.push(size);
                 log_progress!("精细调整↑", test_crf, size, iterations);
@@ -2203,11 +2195,10 @@ impl VideoExplorer {
         // ═══════════════════════════════════════════════════════════
         log_header!("   📍 Stage C: SSIM 验证");
 
-        // 确保输出文件是 boundary_crf 的版本
-        let boundary_key = precision::crf_to_cache_key(boundary_crf);  // 🔥 v5.73: 统一缓存 Key
-        if last_encoded_key != boundary_key {
+        // 🔥 v6.6: 使用 Option<f32> 比较
+        if last_encoded_crf != Some(boundary_crf) {
             progress_line!("│ 重新编码到 CRF {:.1}... │", boundary_crf);
-            let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_key, self)?;
+            let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_crf, self)?;
             progress_done!();
         }
 
@@ -2217,7 +2208,8 @@ impl VideoExplorer {
 
         progress_done!();
         
-        let final_size = *size_cache.get(&boundary_key).unwrap();
+        // 🔥 v6.6: CrfCache 直接用 crf 获取
+        let final_size = *size_cache.get(boundary_crf).unwrap();
 
         let size_change_pct = self.calc_change_pct(final_size);
         let status = if ssim >= 0.999 { "✅ 极佳" }
