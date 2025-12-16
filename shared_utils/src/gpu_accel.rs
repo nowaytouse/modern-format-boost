@@ -68,6 +68,37 @@ pub const GPU_DEFAULT_MAX_CRF: f32 = 40.0;
 /// GPU 加速检测结果（全局缓存）
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.4.7: GPU 临时文件扩展名派生
+// ═══════════════════════════════════════════════════════════════
+
+/// 从输出路径派生 GPU 临时文件扩展名
+/// 
+/// 🔥 v6.4.7: 修复硬编码 `.gpu_temp.mp4` 导致 MKV 输出失败的问题
+/// 
+/// # Arguments
+/// * `output` - 目标输出文件路径
+/// 
+/// # Returns
+/// 临时文件扩展名字符串，格式为 "gpu_temp.{ext}"
+/// 
+/// # Examples
+/// - output.mp4 → "gpu_temp.mp4"
+/// - output.mkv → "gpu_temp.mkv"
+/// - output.webm → "gpu_temp.webm"
+/// - output (无扩展名) → "gpu_temp.mp4" (默认)
+/// 
+/// # 为什么需要这个函数？
+/// 
+/// 某些容器格式（如 MKV）支持 MP4 不支持的轨道类型（如某些字幕流）。
+/// 如果用户目标是 MKV 但临时文件是 MP4，FFmpeg 可能会报错。
+pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
+    let ext = output.extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("mp4");
+    format!("gpu_temp.{}", ext)
+}
+
 /// GPU 编码器类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GpuType {
@@ -1717,7 +1748,9 @@ pub fn gpu_coarse_search_with_log(
     let encode_warmup = |crf: f32| -> anyhow::Result<u64> {
         let crf_args = gpu_encoder.get_crf_args(crf);
         let extra_args = gpu_encoder.get_extra_args();
-        let warmup_output = output.with_extension("warmup.mp4");
+        // 🔥 v6.4.7: 从输出路径派生临时文件扩展名
+        let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+        let warmup_output = output.with_extension(format!("warmup.{}", ext));
         
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
@@ -2753,5 +2786,87 @@ mod tests {
         // 边界限制测试
         let (low, _high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
         assert!((low - 12.0).abs() < 0.1, "low should be GPU boundary");
+    }
+    
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v6.4.7: GPU 临时文件扩展名派生测试
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// **Feature: code-quality-v6.4.7, Property 3: GPU 临时文件扩展名派生**
+    /// **验证: Requirements 2.1, 2.2, 2.3**
+    #[test]
+    fn test_derive_gpu_temp_extension_mp4() {
+        use std::path::PathBuf;
+        let output = PathBuf::from("/path/to/output.mp4");
+        let ext = super::derive_gpu_temp_extension(&output);
+        assert_eq!(ext, "gpu_temp.mp4");
+    }
+    
+    #[test]
+    fn test_derive_gpu_temp_extension_mkv() {
+        use std::path::PathBuf;
+        let output = PathBuf::from("/path/to/output.mkv");
+        let ext = super::derive_gpu_temp_extension(&output);
+        assert_eq!(ext, "gpu_temp.mkv");
+    }
+    
+    #[test]
+    fn test_derive_gpu_temp_extension_webm() {
+        use std::path::PathBuf;
+        let output = PathBuf::from("/path/to/output.webm");
+        let ext = super::derive_gpu_temp_extension(&output);
+        assert_eq!(ext, "gpu_temp.webm");
+    }
+    
+    #[test]
+    fn test_derive_gpu_temp_extension_no_ext() {
+        use std::path::PathBuf;
+        let output = PathBuf::from("/path/to/output");
+        let ext = super::derive_gpu_temp_extension(&output);
+        assert_eq!(ext, "gpu_temp.mp4", "Should default to mp4 when no extension");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.4.7: GPU 临时文件扩展名属性测试
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+    use std::path::PathBuf;
+    
+    proptest! {
+        /// **Feature: code-quality-v6.4.7, Property 3: GPU 临时文件扩展名派生**
+        /// *对于任意*输出路径，GPU 临时文件的扩展名应与输出路径的扩展名匹配
+        /// **验证: Requirements 2.1, 2.2, 2.3**
+        #[test]
+        fn prop_gpu_temp_extension_matches_output(ext in "[a-z]{2,4}") {
+            let output = PathBuf::from(format!("/path/to/output.{}", ext));
+            let temp_ext = derive_gpu_temp_extension(&output);
+            
+            // 验证临时文件扩展名以原始扩展名结尾
+            prop_assert!(temp_ext.ends_with(&ext),
+                "Temp extension '{}' should end with '{}'", temp_ext, ext);
+            
+            // 验证格式为 "gpu_temp.{ext}"
+            prop_assert_eq!(temp_ext, format!("gpu_temp.{}", ext));
+        }
+        
+        /// **Feature: code-quality-v6.4.7, Property 3b: 常见视频格式支持**
+        /// 验证常见视频格式都能正确派生
+        #[test]
+        fn prop_gpu_temp_common_formats(
+            format_idx in 0usize..5
+        ) {
+            let formats = ["mp4", "mkv", "webm", "mov", "avi"];
+            let ext = formats[format_idx];
+            let output = PathBuf::from(format!("/video/output.{}", ext));
+            let temp_ext = derive_gpu_temp_extension(&output);
+            
+            prop_assert_eq!(temp_ext, format!("gpu_temp.{}", ext),
+                "Format {} should derive correctly", ext);
+        }
     }
 }

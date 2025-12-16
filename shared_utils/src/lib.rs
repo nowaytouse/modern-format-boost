@@ -41,6 +41,8 @@ pub mod lru_cache;
 pub mod error_handler;
 pub mod ssim_mapping;
 pub mod explore_strategy;
+// 🔥 v6.4.7: FFmpeg 进程管理模块（防死锁）
+pub mod ffmpeg_process;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -223,4 +225,10 @@ pub use explore_strategy::{
     create_strategy, strategy_name,
     SizeOnlyStrategy, QualityMatchStrategy, PreciseQualityMatchStrategy,
     PreciseQualityMatchWithCompressionStrategy, CompressOnlyStrategy, CompressWithQualityStrategy,
+};
+
+// 🔥 v6.4.7: FFmpeg 进程管理（防死锁）
+pub use ffmpeg_process::{
+    FfmpegProcess, FfmpegProgressParser,
+    format_ffmpeg_error, is_recoverable_error,
 };
