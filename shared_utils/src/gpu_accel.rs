@@ -2146,64 +2146,89 @@ pub fn gpu_coarse_search_with_log(
     }
     
     // ═══════════════════════════════════════════════════════════
-    // 🔥 v5.47: Stage 1 重写 - 双向智能搜索找真正的边界
+    // 🔥 v6.0: Stage 1 重写 - 曲线模型激进撞墙策略
     //
-    // 核心改进：
-    // 1. 如果 initial_crf 能压缩 → 向上搜索找**最高**的可压缩 CRF
-    // 2. 如果 initial_crf 不能压缩 → 向下搜索找**最低**的可压缩 CRF
-    // 3. 使用大步长（2.0 CRF）快速跳跃
-    // 4. 不在找到第一个点就停，而是找到真正的边界
+    // 核心改进（与 CPU v5.99 一致）：
+    // 1. 使用指数衰减曲线计算步长：step = initial_step * 0.5^(wall_hits)
+    // 2. 每次撞墙后步长衰减，但仍保持激进
+    // 3. 当曲线步长 < 1.0 时，切换到 0.5 精细调整阶段
+    // 4. 最多 4 次撞墙即停止
     // ═══════════════════════════════════════════════════════════
+    
+    // 🔥 v6.0: GPU 曲线模型常量
+    const GPU_DECAY_FACTOR: f32 = 0.5;  // GPU 衰减因子（比 CPU 的 0.4 保守一点）
+    const GPU_MAX_WALL_HITS: u32 = 4;   // 最大撞墙次数
+    const GPU_MIN_STEP: f32 = 0.5;      // GPU 最小步长
 
     if (boundary_high - boundary_low) > 4.0 {
         if found_compress_point {
-            // ✅ 场景 A: 初始探测找到压缩点 → 向上搜索更高的 CRF
+            // ✅ 场景 A: 初始探测找到压缩点 → 向上搜索更高的 CRF（曲线模型）
             // 目标：找到最高的仍能压缩的 CRF（比如从 35 搜到 39）
-            log_msg!("   📈 Stage 1A: Search upward from CRF {:.1} to find highest compressible CRF", boundary_low);
+            let crf_range = config.max_crf - boundary_low;
+            let initial_step = (crf_range / 2.0).clamp(4.0, 15.0);  // 初始大步长
+            
+            log_msg!("   📈 Stage 1A: Curve model search upward (v6.0)");
+            log_msg!("      CRF range: {:.1} → Initial step: {:.1}", crf_range, initial_step);
+            log_msg!("      Strategy: step × {:.1} per wall hit, max {} hits", GPU_DECAY_FACTOR, GPU_MAX_WALL_HITS);
 
-            let mut test_crf = boundary_low + 2.0;
+            let mut current_step = initial_step;
+            let mut wall_hits: u32 = 0;
+            let mut test_crf = boundary_low + current_step;
             let mut last_compressible_crf = boundary_low;
             let mut last_compressible_size = best_size.unwrap_or(0);
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
-                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
-                if size_cache.contains_key(&key) {
-                    let cached_size = *size_cache.get(&key).unwrap();
-                    if cached_size < sample_input_size {
-                        last_compressible_crf = test_crf;
-                        last_compressible_size = cached_size;
-                        best_crf = Some(test_crf);
-                        best_size = Some(cached_size);
-                        boundary_low = test_crf;
-                        log_msg!("   ✓ CRF {:.1} compresses ({:.1}%) → continue", test_crf, (cached_size as f64 / sample_input_size as f64 - 1.0) * 100.0);
-                        test_crf += 2.0;
-                    } else {
-                        log_msg!("   ✗ CRF {:.1} fails → boundary found at {:.1}", test_crf, last_compressible_crf);
-                        boundary_high = test_crf;
-                        break;
-                    }
-                    continue;
-                }
-
-                match encode_cached(test_crf, &mut size_cache) {
+                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);
+                
+                let size_result = if size_cache.contains_key(&key) {
+                    Ok(*size_cache.get(&key).unwrap())
+                } else {
+                    encode_cached(test_crf, &mut size_cache)
+                };
+                
+                match size_result {
                     Ok(size) => {
-                        iterations += 1;
-                        if let Some(cb) = progress_cb { cb(test_crf, size); }
+                        if !size_cache.contains_key(&key) {
+                            iterations += 1;
+                            if let Some(cb) = progress_cb { cb(test_crf, size); }
+                        }
 
                         if size < sample_input_size {
-                            // 还能压缩！记录并继续向上
+                            // ✅ 能压缩！记录并继续向上
                             last_compressible_crf = test_crf;
                             last_compressible_size = size;
                             best_crf = Some(test_crf);
                             best_size = Some(size);
                             boundary_low = test_crf;
-                            log_msg!("   ✓ CRF {:.1} compresses ({:.1}%) → continue", test_crf, (size as f64 / sample_input_size as f64 - 1.0) * 100.0);
-                            test_crf += 2.0;
+                            log_msg!("   ✓ CRF {:.1}: {:.1}% (step {:.1}) → continue", 
+                                test_crf, (size as f64 / sample_input_size as f64 - 1.0) * 100.0, current_step);
+                            test_crf += current_step;
                         } else {
-                            // 不能压缩了！找到上边界
-                            log_msg!("   ✗ CRF {:.1} fails → boundary found at {:.1}", test_crf, last_compressible_crf);
+                            // ❌ 不能压缩 - WALL HIT！
+                            wall_hits += 1;
+                            log_msg!("   ✗ CRF {:.1}: WALL HIT #{} (size +{:.1}%)", 
+                                test_crf, wall_hits, (size as f64 / sample_input_size as f64 - 1.0) * 100.0);
+                            
+                            if wall_hits >= GPU_MAX_WALL_HITS {
+                                log_msg!("   🧱 MAX WALL HITS ({})! Stopping at CRF {:.1}", GPU_MAX_WALL_HITS, last_compressible_crf);
+                                boundary_high = test_crf;
+                                break;
+                            }
+                            
+                            // 曲线衰减步长
+                            let curve_step = initial_step * GPU_DECAY_FACTOR.powi(wall_hits as i32);
+                            let new_step = if curve_step < 1.0 { GPU_MIN_STEP } else { curve_step };
+                            
+                            let phase_info = if new_step <= GPU_MIN_STEP + 0.01 {
+                                "→ FINE TUNING".to_string()
+                            } else {
+                                format!("decay ×{:.1}^{}", GPU_DECAY_FACTOR, wall_hits)
+                            };
+                            log_msg!("   ↩️ Curve backtrack: step {:.1} → {:.1} ({})", current_step, new_step, phase_info);
+                            
+                            current_step = new_step;
                             boundary_high = test_crf;
-                            break;
+                            test_crf = last_compressible_crf + current_step;
                         }
                     }
                     Err(_) => break,
@@ -2217,55 +2242,71 @@ pub fn gpu_coarse_search_with_log(
             }
 
         } else {
-            // ✅ 场景 B: 初始探测未找到压缩点 → 向下搜索找第一个能压缩的 CRF
-            log_msg!("   📉 Stage 1B: Search downward from CRF {:.1} to find compressible CRF", boundary_high);
+            // ✅ 场景 B: 初始探测未找到压缩点 → 向下搜索（曲线模型）
+            let crf_range = boundary_high - config.min_crf;
+            let initial_step = (crf_range / 2.0).clamp(4.0, 15.0);
+            
+            log_msg!("   📉 Stage 1B: Curve model search downward (v6.0)");
+            log_msg!("      CRF range: {:.1} → Initial step: {:.1}", crf_range, initial_step);
 
-            let mut test_crf = boundary_high - 2.0;
+            let mut current_step = initial_step;
+            let mut wall_hits: u32 = 0;
+            let mut test_crf = boundary_high - current_step;
+            let mut last_fail_crf = boundary_high;
 
             while test_crf >= config.min_crf && iterations < max_iterations_limit {
-                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);  // 🔥 v5.73
-                if size_cache.contains_key(&key) {
-                    let cached_size = *size_cache.get(&key).unwrap();
-                    if cached_size < sample_input_size {
-                        best_crf = Some(test_crf);
-                        best_size = Some(cached_size);
-                        found_compress_point = true;
-                        boundary_low = test_crf;
-                        log_msg!("   ✓ CRF {:.1} compresses → boundary found", test_crf);
-                        break;
-                    } else {
-                        boundary_high = test_crf;
-                        prev_size = Some(cached_size);
-                        log_msg!("   ✗ CRF {:.1} fails → continue down", test_crf);
-                        test_crf -= 2.0;
-                    }
-                    continue;
-                }
+                let key = crate::video_explorer::precision::crf_to_cache_key(test_crf);
+                
+                let size_result = if size_cache.contains_key(&key) {
+                    Ok(*size_cache.get(&key).unwrap())
+                } else {
+                    encode_cached(test_crf, &mut size_cache)
+                };
 
-                match encode_cached(test_crf, &mut size_cache) {
+                match size_result {
                     Ok(size) => {
-                        iterations += 1;
-                        if let Some(cb) = progress_cb { cb(test_crf, size); }
+                        if !size_cache.contains_key(&key) {
+                            iterations += 1;
+                            if let Some(cb) = progress_cb { cb(test_crf, size); }
+                        }
 
                         if size < sample_input_size {
-                            // 找到第一个能压缩的点！
+                            // ✅ 找到能压缩的点！
                             best_crf = Some(test_crf);
                             best_size = Some(size);
                             found_compress_point = true;
                             boundary_low = test_crf;
-                            log_msg!("   ✓ CRF {:.1} compresses → boundary found", test_crf);
+                            log_msg!("   ✓ CRF {:.1}: {:.1}% (step {:.1}) → found compress point", 
+                                test_crf, (size as f64 / sample_input_size as f64 - 1.0) * 100.0, current_step);
                             break;
                         } else {
-                            // 还不能压缩，继续向下
-                            boundary_high = test_crf;
+                            // ❌ 还不能压缩 - 继续向下或撞墙回退
+                            wall_hits += 1;
+                            log_msg!("   ✗ CRF {:.1}: WALL HIT #{} (size +{:.1}%)", 
+                                test_crf, wall_hits, (size as f64 / sample_input_size as f64 - 1.0) * 100.0);
+                            
+                            if wall_hits >= GPU_MAX_WALL_HITS {
+                                log_msg!("   🧱 MAX WALL HITS ({})! Cannot find compress point", GPU_MAX_WALL_HITS);
+                                break;
+                            }
+                            
+                            // 曲线衰减步长
+                            let curve_step = initial_step * GPU_DECAY_FACTOR.powi(wall_hits as i32);
+                            let new_step = if curve_step < 1.0 { GPU_MIN_STEP } else { curve_step };
+                            log_msg!("   ↩️ Curve backtrack: step {:.1} → {:.1}", current_step, new_step);
+                            
+                            current_step = new_step;
+                            last_fail_crf = test_crf;
                             prev_size = Some(size);
-                            log_msg!("   ✗ CRF {:.1} fails → continue down", test_crf);
-                            test_crf -= 2.0;
+                            test_crf -= current_step;
                         }
                     }
                     Err(_) => break,
                 }
             }
+            
+            // 🔥 v6.0: 抑制未使用变量警告
+            let _ = last_fail_crf;
         }
     }
     
