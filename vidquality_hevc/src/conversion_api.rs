@@ -27,8 +27,7 @@ impl TargetVideoFormat {
     pub fn extension(&self) -> &str {
         match self {
             TargetVideoFormat::HevcLosslessMkv => "mkv",
-            // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
-            TargetVideoFormat::HevcMp4 => "mov",
+            TargetVideoFormat::HevcMp4 => "mp4",
             TargetVideoFormat::Skip => "",
         }
     }
@@ -36,8 +35,7 @@ impl TargetVideoFormat {
     pub fn as_str(&self) -> &str {
         match self {
             TargetVideoFormat::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
-            // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式）
-            TargetVideoFormat::HevcMp4 => "HEVC MOV (High Quality, Apple Native)",
+            TargetVideoFormat::HevcMp4 => "HEVC MP4 (High Quality)",
             TargetVideoFormat::Skip => "Skip",
         }
     }
@@ -236,15 +234,14 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
     
-    // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
-    // 当输入是 mp4/mov 时，添加 _hevc 后缀避免冲突
-    let output_path = if input_ext.eq_ignore_ascii_case("mp4") || input_ext.eq_ignore_ascii_case("mov") {
-        output_dir.join(format!("{}_hevc.mov", stem))
+    // 🔥 当输入是 mp4 时，添加 _hevc 后缀避免冲突
+    let output_path = if input_ext.eq_ignore_ascii_case("mp4") {
+        output_dir.join(format!("{}_hevc.mp4", stem))
     } else {
-        output_dir.join(format!("{}.mov", stem))
+        output_dir.join(format!("{}.mp4", stem))
     };
     
-    info!("🎬 Simple Mode: {} → HEVC MOV (CRF 18)", input.display());
+    info!("🎬 Simple Mode: {} → HEVC MP4 (CRF 18)", input.display());
     
     let output_size = execute_hevc_conversion(&detection, &output_path, 18)?;
     
@@ -837,8 +834,7 @@ mod tests {
     #[test]
     fn test_target_format() {
         assert_eq!(TargetVideoFormat::HevcLosslessMkv.extension(), "mkv");
-        // 🔥 v6.4.8: 使用 MOV 容器格式（苹果原生格式）
-        assert_eq!(TargetVideoFormat::HevcMp4.extension(), "mov");
+        assert_eq!(TargetVideoFormat::HevcMp4.extension(), "mp4");
     }
 
     // ============================================================
