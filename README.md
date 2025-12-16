@@ -413,6 +413,18 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ## Version History / 版本历史
 
+### v6.4.5 (2025-12) - Performance & Error Handling / 性能与错误处理
+- ⚡ **CrfCache array optimization**: O(1) lookup replacing HashMap, ~30% faster cache access
+- 🔧 **calculate_ssim_logged()**: Consistent error logging for SSIM failures
+- 🔧 **Type aliases**: `SsimCalculationResult`, `SsimDataSource` for clearer naming
+- 🧪 **CrfCache property tests**: Equivalence and boundary safety tests
+
+### v6.4.5 (2025-12) - 性能与错误处理
+- ⚡ **CrfCache 数组优化**：O(1) 查找替代 HashMap，缓存访问速度提升约 30%
+- 🔧 **calculate_ssim_logged()**：统一的 SSIM 失败错误日志记录
+- 🔧 **类型别名**：`SsimCalculationResult`, `SsimDataSource` 更清晰的命名
+- 🧪 **CrfCache 属性测试**：等价性和边界安全测试
+
 ### v6.4.4 (2025-12) - Code Quality Improvements / 代码质量改进
 - 🔧 **Strategy helper methods**: `build_result()`, `binary_search_compress()`, `binary_search_quality()`, `log_final_result()` reduce ~40% duplicate code
 - 🔧 **Enhanced documentation**: Rustdoc comments with examples for public APIs
@@ -453,4 +465,4 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ---
 
-**Version**: 6.4.4 | **Updated**: 2025-12-16
+**Version**: 6.4.5 | **Updated**: 2025-12-16
