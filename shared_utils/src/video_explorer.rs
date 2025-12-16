@@ -951,6 +951,32 @@ impl VideoExplorer {
         }
     }
     
+    /// 🔥 v6.3: 使用 Strategy 模式执行探索
+    /// 
+    /// 这是新的 Strategy 模式入口，将逐步替代旧的 explore() 方法。
+    /// 每种探索模式由独立的 Strategy 结构体实现，更易维护和测试。
+    pub fn explore_with_strategy(&self) -> Result<ExploreResult> {
+        use crate::explore_strategy::{create_strategy, ExploreContext};
+        
+        // 创建 ExploreContext
+        let mut ctx = ExploreContext::new(
+            self.input_path.clone(),
+            self.output_path.clone(),
+            self.input_size,
+            self.encoder,
+            self.vf_args.clone(),
+            self.max_threads,
+            self.use_gpu,
+            self.preset,
+            self.config.clone(),
+        );
+        
+        // 创建并执行 Strategy
+        let strategy = create_strategy(self.config.mode);
+        eprintln!("🔥 Using Strategy: {} - {}", strategy.name(), strategy.description());
+        strategy.explore(&mut ctx)
+    }
+    
     /// 模式 1: 仅探索更小的文件大小（--explore 单独使用）
     ///
     /// 🔥 v4.8: 简化逻辑 + 避免重复编码
