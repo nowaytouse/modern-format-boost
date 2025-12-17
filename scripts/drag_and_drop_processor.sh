@@ -1,6 +1,9 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.2
+# Modern Format Boost - Drag & Drop Processor v6.5.1
 # 
+# 🔥 v6.5.1: 取消硬上限机制！改为保底机制
+#            - 长视频不再限制迭代次数，算法通过 SSIM 饱和自然停止
+#            - 保底上限只在极端异常时触发（100/80次）
 # 🔥 v6.2: 极限探索模式 - --ultimate flag 持续搜索直到 SSIM 完全饱和
 #          删除 --cpu flag（已无实际作用），完善 flag 组合验证
 # 🔥 v6.1: 边界精细调整 - 到达min_crf边界时自动切换到0.1精细阶段
@@ -44,6 +47,7 @@ XMP_MERGER="$PROJECT_ROOT/xmp_merger/target/release/xmp-merge"
 OUTPUT_MODE="inplace"
 OUTPUT_DIR=""
 SELECTED=0
+ULTIMATE_MODE=true
 
 # 终端颜色
 RED='\033[0;31m'
@@ -179,7 +183,7 @@ show_welcome() {
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v5.98                                         ║"
+    echo "  ║     🚀 Modern Format Boost v6.5.1                                        ║"
     echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证                            ║"
     echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -246,7 +250,9 @@ process_images_with_structure() {
         print_progress_box "图像" "$current" "$total" "$(basename "$file")" ""
         
         # 执行转换（显示详细输出）
-        "$IMGQUALITY_HEVC" auto "$file" --explore --match-quality --compress --apple-compat --output "$out_dir" </dev/null || true
+        local img_args=(auto "$file" --explore --match-quality --compress --apple-compat --output "$out_dir")
+        [[ "$ULTIMATE_MODE" == true ]] && img_args+=(--ultimate)
+        "$IMGQUALITY_HEVC" "${img_args[@]}" </dev/null || true
     done
     
     echo ""
@@ -286,7 +292,9 @@ process_videos_with_structure() {
         print_progress_box "视频" "$current" "$total" "$(basename "$file")" ""
         
         # 执行转换（显示详细输出）
-        "$VIDQUALITY_HEVC" auto "$file" --explore --match-quality true --compress --apple-compat --output "$out_dir" </dev/null || true
+        local vid_args=(auto "$file" --explore --match-quality true --compress --apple-compat --output "$out_dir")
+        [[ "$ULTIMATE_MODE" == true ]] && vid_args+=(--ultimate)
+        "$VIDQUALITY_HEVC" "${vid_args[@]}" </dev/null || true
     done
     
     echo ""
@@ -322,12 +330,29 @@ select_mode() {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# 解析命令行参数
+# ═══════════════════════════════════════════════════════════════
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --ultimate)
+                ULTIMATE_MODE=true
+                shift
+                ;;
+            *)
+                # 第一个非flag参数作为目标目录
+                TARGET_DIR="$1"
+                shift
+                ;;
+        esac
+    done
+}
+
+# ═══════════════════════════════════════════════════════════════
 # 获取目标目录
 # ═══════════════════════════════════════════════════════════════
 get_target_directory() {
-    if [[ $# -gt 0 ]]; then
-        TARGET_DIR="$1"
-    else
+    if [[ -z "$TARGET_DIR" ]]; then
         echo -e "${BOLD}请将要处理的文件夹拖拽到此窗口，然后按回车：${NC}"
         read -r TARGET_DIR
         TARGET_DIR="${TARGET_DIR%\"}"
@@ -344,6 +369,10 @@ get_target_directory() {
     fi
     
     echo -e "${BLUE}📂${NC} 目标目录: ${BOLD}$TARGET_DIR${NC}"
+    
+    if [[ "$ULTIMATE_MODE" == true ]]; then
+        echo -e "${MAGENTA}🔥${NC} 极限模式已启用 - 持续搜索直到SSIM完全饱和"
+    fi
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -421,23 +450,28 @@ process_images() {
         # 原地转换模式
         local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat --in-place)
         
-        # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
+        # 🔥 添加极限模式flag
+        if [[ "$ULTIMATE_MODE" == true ]]; then
+            args+=(--ultimate)
+        fi
+        
+        # 🔥 v6.2.2: 保留信号处理，只禁用回显和规范模式
+        # 关键修复：移除 -isig，保持 Ctrl+C 可用
         local original_stty
         original_stty=$(stty -g 2>/dev/null) || original_stty=""
-        exec 0</dev/null
-        if [[ -t 1 ]]; then
-            stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
-            stty min 0 time 0 2>/dev/null || true
+        if [[ -t 0 ]]; then
+            # 只禁用回显和规范模式，保留信号处理 (isig)
+            stty -echo -icanon 2>/dev/null || true
         fi
         
         # 执行转换
-        TERM=dumb LANG=C LC_ALL=C "$IMGQUALITY_HEVC" "${args[@]}" || true
+        "$IMGQUALITY_HEVC" "${args[@]}" </dev/null || true
         
         # 恢复原始终端设置
         if [[ -n "$original_stty" ]]; then
             stty "$original_stty" 2>/dev/null || true
         else
-            stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+            stty echo icanon 2>/dev/null || true
         fi
     else
         # 相邻目录模式：逐个处理文件以保持目录结构
@@ -462,23 +496,28 @@ process_videos() {
         # 原地转换模式
         local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat --in-place)
         
-        # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
+        # 🔥 添加极限模式flag
+        if [[ "$ULTIMATE_MODE" == true ]]; then
+            args+=(--ultimate)
+        fi
+        
+        # 🔥 v6.2.2: 保留信号处理，只禁用回显和规范模式
+        # 关键修复：移除 -isig，保持 Ctrl+C 可用
         local original_stty
         original_stty=$(stty -g 2>/dev/null) || original_stty=""
-        exec 0</dev/null
-        if [[ -t 1 ]]; then
-            stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
-            stty min 0 time 0 2>/dev/null || true
+        if [[ -t 0 ]]; then
+            # 只禁用回显和规范模式，保留信号处理 (isig)
+            stty -echo -icanon 2>/dev/null || true
         fi
         
         # 执行转换
-        TERM=dumb LANG=C LC_ALL=C "$VIDQUALITY_HEVC" "${args[@]}" || true
+        "$VIDQUALITY_HEVC" "${args[@]}" </dev/null || true
         
         # 恢复原始终端设置
         if [[ -n "$original_stty" ]]; then
             stty "$original_stty" 2>/dev/null || true
         else
-            stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+            stty echo icanon 2>/dev/null || true
         fi
     else
         # 相邻目录模式：逐个处理文件以保持目录结构
@@ -516,13 +555,41 @@ show_completion() {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# 🔥 v6.2.2: 改进的信号处理 - 确保子进程被正确终止
+# ═══════════════════════════════════════════════════════════════
+cleanup_and_exit() {
+    local exit_code=${1:-130}
+    
+    # 恢复光标
+    printf "\033[?25h"
+    
+    # 恢复终端设置
+    stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
+    
+    # 终止所有子进程
+    jobs -p 2>/dev/null | xargs -r kill -TERM 2>/dev/null || true
+    
+    echo -e "\n${YELLOW}⚠️ 用户中断，正在清理...${NC}"
+    
+    # 等待子进程结束
+    wait 2>/dev/null || true
+    
+    echo -e "${GREEN}✅ 清理完成${NC}"
+    exit "$exit_code"
+}
+
+# ═══════════════════════════════════════════════════════════════
 # 主函数
 # ═══════════════════════════════════════════════════════════════
 main() {
-    trap 'printf "\033[?25h"; echo -e "\n${YELLOW}⚠️ 中断${NC}"' INT TERM
+    # 🔥 v6.2.2: 改进的 trap - 调用清理函数
+    trap 'cleanup_and_exit 130' INT
+    trap 'cleanup_and_exit 143' TERM
+    trap 'printf "\033[?25h"; stty echo 2>/dev/null' EXIT
     
+    parse_arguments "$@"
     check_tools
-    get_target_directory "$@"
+    get_target_directory
     show_welcome
     select_mode
     safety_check
