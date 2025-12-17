@@ -150,38 +150,60 @@ pub mod jxl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
 
+    // 🔥 v7.0: 修复假测试 - 使用真实文件数据
+    
     #[test]
-    fn test_png_compression_estimate() {
-        let level = png::estimate_compression_level(Path::new("test.png"));
-        assert!(level <= 9);
+    fn test_webp_lossless_detection() {
+        let webp_lossless: Vec<u8> = {
+            let mut data = b"RIFF".to_vec();
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+            data.extend_from_slice(b"WEBP");
+            data.extend_from_slice(b"VP8L");
+            data.extend_from_slice(&[0u8; 20]);
+            data
+        };
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        file.write_all(&webp_lossless).expect("写入失败");
+        
+        assert!(webp::is_lossless(file.path()), "VP8L 应被检测为 lossless");
     }
-
+    
     #[test]
-    fn test_jpeg_quality_estimate() {
-        let quality = jpeg::estimate_quality(Path::new("test.jpg"));
-        assert!(quality <= 100);
+    fn test_gif_frame_count() {
+        let gif_data: Vec<u8> = {
+            let mut data = b"GIF89a".to_vec();
+            data.extend_from_slice(&[0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+            data.push(0x2C); // frame 1
+            data.extend_from_slice(&[0u8; 10]);
+            data.push(0x2C); // frame 2
+            data.extend_from_slice(&[0u8; 10]);
+            data.push(0x3B);
+            data
+        };
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        file.write_all(&gif_data).expect("写入失败");
+        
+        assert_eq!(gif::get_frame_count(file.path()), 2, "应检测到 2 帧");
     }
-
+    
     #[test]
-    fn test_webp_detection_nonexistent() {
-        let path = Path::new("/nonexistent/file.webp");
+    fn test_jxl_codestream_signature() {
+        let jxl_data: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        file.write_all(jxl_data).expect("写入失败");
+        
+        assert!(jxl::verify_signature(file.path()), "JXL 签名应被识别");
+    }
+    
+    #[test]
+    fn test_error_handling_nonexistent() {
+        let path = std::path::Path::new("/nonexistent/file.test");
         assert!(!webp::is_lossless(path));
-        assert!(!webp::is_animated(path));
-    }
-
-    #[test]
-    fn test_gif_detection_nonexistent() {
-        let path = Path::new("/nonexistent/file.gif");
         assert!(!gif::is_animated(path));
         assert_eq!(gif::get_frame_count(path), 0);
-    }
-
-    #[test]
-    fn test_jxl_signature_nonexistent() {
-        let path = Path::new("/nonexistent/file.jxl");
         assert!(!jxl::verify_signature(path));
-        assert!(!jxl::is_valid(path));
     }
 }

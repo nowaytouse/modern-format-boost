@@ -1079,13 +1079,95 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
     
+    // 🔥 v7.0: 修复自证断言 - 使用真实 magic bytes 测试实际检测函数
+    // 旧测试只验证常量数组，新测试验证 detect_format_from_bytes 函数
+    
+    /// 测试 PNG 格式检测 - 使用真实 magic bytes
     #[test]
-    fn test_format_detection() {
-        // PNG magic bytes
-        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert!(png_header.starts_with(&[0x89, 0x50, 0x4E, 0x47]));
+    fn test_detect_png_format() {
+        // PNG magic bytes (来自 PNG 规范，不是代码生成)
+        let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        // 写入 PNG header + 足够的数据让 detect_format_from_bytes 读取
+        let mut data = png_magic.to_vec();
+        data.extend_from_slice(&[0u8; 24]); // 填充到 32 字节
+        file.write_all(&data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "PNG 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::PNG, "应该检测为 PNG 格式");
+    }
+    
+    /// 测试 JPEG 格式检测
+    #[test]
+    fn test_detect_jpeg_format() {
+        let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0]; // JPEG SOI + APP0
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = jpeg_magic.to_vec();
+        data.extend_from_slice(&[0u8; 28]);
+        file.write_all(&data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "JPEG 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::JPEG, "应该检测为 JPEG 格式");
+    }
+    
+    /// 测试 GIF 格式检测
+    #[test]
+    fn test_detect_gif_format() {
+        let gif_magic: &[u8] = b"GIF89a"; // GIF89a 签名
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = gif_magic.to_vec();
+        data.extend_from_slice(&[0u8; 26]);
+        file.write_all(&data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "GIF 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::GIF, "应该检测为 GIF 格式");
+    }
+    
+    /// 测试 WebP 格式检测
+    #[test]
+    fn test_detect_webp_format() {
+        // WebP: RIFF....WEBP
+        let mut webp_data = b"RIFF".to_vec();
+        webp_data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // file size placeholder
+        webp_data.extend_from_slice(b"WEBP");
+        webp_data.extend_from_slice(&[0u8; 20]);
+        
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        file.write_all(&webp_data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "WebP 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::WebP, "应该检测为 WebP 格式");
+    }
+    
+    /// 测试未知格式检测
+    #[test]
+    fn test_detect_unknown_format() {
+        let random_data: &[u8] = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = random_data.to_vec();
+        data.extend_from_slice(&[0u8; 26]);
+        file.write_all(&data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "未知格式检测应该成功（返回 Unknown）");
+        match result.unwrap() {
+            DetectedFormat::Unknown(_) => (), // 预期结果
+            other => panic!("应该检测为 Unknown 格式，实际为 {:?}", other),
+        }
+    }
+    
+    /// 测试文件不存在时的错误处理
+    #[test]
+    fn test_detect_nonexistent_file() {
+        let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
+        assert!(result.is_err(), "不存在的文件应该返回错误");
     }
 }

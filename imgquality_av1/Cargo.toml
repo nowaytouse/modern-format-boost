@@ -51,6 +51,9 @@ shared_utils = { path = "../shared_utils" }
 # CPU detection for performance optimization
 num_cpus = "1.16"
 
+[dev-dependencies]
+tempfile = "3.10"
+
 [profile.release]
 opt-level = 3
 lto = true

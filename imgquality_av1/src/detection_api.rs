@@ -1079,13 +1079,44 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
     
+    // 🔥 v7.0: 修复自证断言 - 使用真实 magic bytes 测试实际检测函数
+    
+    /// 测试 PNG 格式检测 - 使用真实 magic bytes
     #[test]
-    fn test_format_detection() {
-        // PNG magic bytes
-        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        assert!(png_header.starts_with(&[0x89, 0x50, 0x4E, 0x47]));
+    fn test_detect_png_format() {
+        let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = png_magic.to_vec();
+        data.extend_from_slice(&[0u8; 24]);
+        file.write_all(&data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "PNG 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::PNG, "应该检测为 PNG 格式");
+    }
+    
+    /// 测试 JPEG 格式检测
+    #[test]
+    fn test_detect_jpeg_format() {
+        let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = jpeg_magic.to_vec();
+        data.extend_from_slice(&[0u8; 28]);
+        file.write_all(&data).expect("写入失败");
+        
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "JPEG 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::JPEG, "应该检测为 JPEG 格式");
+    }
+    
+    /// 测试文件不存在时的错误处理
+    #[test]
+    fn test_detect_nonexistent_file() {
+        let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
+        assert!(result.is_err(), "不存在的文件应该返回错误");
     }
 }
