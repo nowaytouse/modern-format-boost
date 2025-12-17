@@ -53,6 +53,10 @@ pub mod ffprobe_json;
 pub mod stream_size;
 // 🔥 v6.7: 纯媒体压缩验证器
 pub mod pure_media_verifier;
+// 🔥 v7.1: 类型安全模块
+pub mod types;
+// 🔥 v7.1: 统一错误类型
+pub mod app_error;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -244,10 +248,18 @@ pub use ffmpeg_process::{
 };
 
 // 🔥 v6.4.9: 代码质量模块
+// 🔥 v7.1: 扩展浮点比较函数
 pub use float_compare::{
+    // 通用 epsilon
     F64_EPSILON, F32_EPSILON,
+    // 通用比较函数
     approx_eq_f64, approx_eq_f32, approx_zero_f64, approx_zero_f32,
     approx_le_f64, approx_ge_f64,
+    // 🔥 v7.1: 领域特定 epsilon
+    SSIM_EPSILON as FLOAT_SSIM_EPSILON, CRF_EPSILON, PSNR_EPSILON,
+    // 🔥 v7.1: 领域特定比较函数
+    approx_eq_ssim, approx_eq_crf, approx_eq_psnr,
+    ssim_meets_threshold, ssim_below_threshold, crf_in_range,
 };
 
 pub use path_validator::{
@@ -284,3 +296,14 @@ pub use pure_media_verifier::{
     PureMediaVerifyResult, verify_pure_media_compression,
     is_video_compressed, video_compression_ratio,
 };
+
+// 🔥 v7.1: 类型安全包装器
+pub use types::{
+    Crf, CrfError, EncoderBounds, HevcEncoder, Av1Encoder, Vp9Encoder, X264Encoder,
+    Ssim, SsimError, SSIM_EPSILON,
+    FileSize,
+    IterationGuard, IterationError,
+};
+
+// 🔥 v7.1: 统一错误类型
+pub use app_error::AppError;
