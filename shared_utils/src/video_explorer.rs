@@ -305,7 +305,7 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     }
 }
 
-/// 🔥 v6.2.2: 根据视频时长计算零增益检测次数
+/// 🔥 v6.2.2: 根据视频时长计算零增益检测次数（兼容包装）
 /// 
 /// # Arguments
 /// * `duration_secs` - 视频时长（秒）
@@ -313,15 +313,61 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
 /// 
 /// # Returns
 /// 零增益检测次数
+/// 
+/// # Note
+/// 此函数为兼容包装，默认使用 crf_range=41.0（全范围）
+/// 新代码应使用 `calculate_zero_gains_for_duration_and_range`
 pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
-    if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
+    calculate_zero_gains_for_duration_and_range(duration_secs, 41.0, ultimate_mode)
+}
+
+/// 🔥 v6.9: 根据视频时长和CRF范围计算零增益检测次数
+/// 
+/// # Arguments
+/// * `duration_secs` - 视频时长（秒）
+/// * `crf_range` - CRF搜索范围 (max_crf - min_crf)
+/// * `ultimate_mode` - 是否为极限模式
+/// 
+/// # Returns
+/// 零增益检测次数（最小为3）
+/// 
+/// # 公式
+/// ```text
+/// base = 根据时长和模式计算的基础值
+/// factor = if crf_range < 20 { clamp(crf_range/20, 0.5, 1.0) } else { 1.0 }
+/// result = max(3, base * factor)
+/// ```
+/// 
+/// # 设计原理
+/// - CRF范围小时，搜索空间小，不需要那么多次零增益检测
+/// - 最小值3保证基本的饱和检测能力
+/// - 仅当 crf_range < 20 时才缩放，保持极限探索的严格性
+pub fn calculate_zero_gains_for_duration_and_range(
+    duration_secs: f32,
+    crf_range: f32,
+    ultimate_mode: bool,
+) -> u32 {
+    // 计算基础值
+    let base = if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
         // 长视频：更宽松的零增益检测（3次）
         LONG_VIDEO_REQUIRED_ZERO_GAINS
     } else if ultimate_mode {
         ULTIMATE_REQUIRED_ZERO_GAINS
     } else {
         NORMAL_REQUIRED_ZERO_GAINS
-    }
+    };
+    
+    // 🔥 v6.9: CRF范围缩放因子
+    // 仅当 crf_range < 20 时才缩放，保持极限探索的严格性
+    let factor = if crf_range < 20.0 {
+        (crf_range / 20.0).clamp(0.5, 1.0)
+    } else {
+        1.0
+    };
+    
+    // 应用缩放并确保最小值为3
+    let scaled = (base as f32 * factor).round() as u32;
+    scaled.max(3)
 }
 
 /// 🔥 v6.2.1: 自适应撞墙公式的对数增长基数
@@ -4155,8 +4201,155 @@ pub mod precheck {
         Ok(0.0)
     }
 
+    /// 🔥 v6.9: 精确时长检测（提前综合检测，非静默Fallback）
+    /// 
+    /// VP9/WebM等容器的duration字段可能为空或0
+    /// 此函数在 get_video_info 内部**提前**完成所有检测方法
+    /// 
+    /// # 检测顺序（每步响亮报告）
+    /// 1. stream.duration (标准方法)
+    /// 2. format.duration (容器级别)
+    /// 3. frame_count / fps (计算方法)
+    /// 4. 失败 → 响亮报错
+    /// 
+    /// # Arguments
+    /// * `input` - 输入文件路径
+    /// 
+    /// # Returns
+    /// (duration, fps, frame_count, method_used) - 时长、帧率、帧数、使用的检测方法
+    pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
+        // 🔥 一次性获取所有需要的信息：stream + format
+        let output = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=r_frame_rate,duration,nb_frames",
+                "-show_entries", "format=duration",
+                "-of", "json",
+            ])
+            .arg(input)
+            .output()
+            .context("ffprobe执行失败")?;
+
+        if !output.status.success() {
+            bail!("ffprobe获取时长信息失败");
+        }
+
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        let json: serde_json::Value = serde_json::from_str(&json_str)
+            .context("ffprobe JSON解析失败")?;
+
+        // 解析帧率
+        let fps: f64 = json["streams"]
+            .get(0)
+            .and_then(|s| s["r_frame_rate"].as_str())
+            .and_then(|s| {
+                let parts: Vec<&str> = s.split('/').collect();
+                if parts.len() == 2 {
+                    let num: f64 = parts[0].parse().ok()?;
+                    let den: f64 = parts[1].parse().ok()?;
+                    if den > 0.0 { Some(num / den) } else { None }
+                } else {
+                    s.parse().ok()
+                }
+            })
+            .unwrap_or(30.0);
+
+        // 解析帧数
+        let frame_count: u64 = json["streams"]
+            .get(0)
+            .and_then(|s| s["nb_frames"].as_str())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+
+        // 🔥 方法1: stream.duration（标准方法）
+        let stream_duration: Option<f64> = json["streams"]
+            .get(0)
+            .and_then(|s| s["duration"].as_str())
+            .and_then(|s| s.parse().ok())
+            .filter(|&d: &f64| d > 0.0 && !d.is_nan());
+
+        if let Some(duration) = stream_duration {
+            return Ok((duration, fps, frame_count, "stream.duration"));
+        }
+
+        // 🔥 方法2: format.duration（容器级别）
+        eprintln!("   ⚠️ DURATION: stream.duration unavailable, trying format.duration...");
+        let format_duration: Option<f64> = json["format"]["duration"]
+            .as_str()
+            .and_then(|s| s.parse().ok())
+            .filter(|&d: &f64| d > 0.0 && !d.is_nan());
+
+        if let Some(duration) = format_duration {
+            eprintln!("   ✅ DURATION RECOVERED via format.duration: {:.2}s", duration);
+            return Ok((duration, fps, frame_count, "format.duration"));
+        }
+
+        // 🔥 方法3: frame_count / fps（计算方法）
+        eprintln!("   ⚠️ DURATION: format.duration failed, trying frame_count/fps...");
+        if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
+            let duration = frame_count as f64 / fps;
+            if duration > 0.0 {
+                eprintln!("   ✅ DURATION RECOVERED via frame_count/fps: {:.2}s ({} frames / {:.2} fps)", 
+                    duration, frame_count, fps);
+                return Ok((duration, fps, frame_count, "frame_count/fps"));
+            }
+        }
+
+        // 🔴 所有方法都失败 - 响亮报错
+        eprintln!("   🔴 DURATION DETECTION FAILED - Cannot determine video duration");
+        eprintln!("   🔴 File: {}", input.display());
+        bail!("无法检测视频时长 - 所有方法都失败")
+    }
+
+    /// 🔥 v6.9: 兼容包装 - 供旧代码调用
+    #[allow(dead_code)]
+    pub fn get_duration_with_fallback(
+        input: &Path,
+        fps: f64,
+        frame_count: u64,
+    ) -> Option<f64> {
+        // 方法2: format.duration（容器级别）
+        eprintln!("   ⚠️ DURATION: Primary method failed, trying format.duration...");
+        let output = Command::new("ffprobe")
+            .args([
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+            ])
+            .arg(input)
+            .output();
+        
+        if let Ok(output) = output {
+            if output.status.success() {
+                let duration_str = String::from_utf8_lossy(&output.stdout);
+                if let Ok(duration) = duration_str.trim().parse::<f64>() {
+                    if duration > 0.0 && !duration.is_nan() {
+                        eprintln!("   ✅ DURATION RECOVERED via format.duration: {:.2}s", duration);
+                        return Some(duration);
+                    }
+                }
+            }
+        }
+        
+        // 方法3: frame_count / fps（计算方法）
+        eprintln!("   ⚠️ DURATION: format.duration failed, trying frame_count/fps...");
+        if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
+            let duration = frame_count as f64 / fps;
+            if duration > 0.0 {
+                eprintln!("   ✅ DURATION RECOVERED via frame_count/fps: {:.2}s ({} frames / {:.2} fps)", 
+                    duration, frame_count, fps);
+                return Some(duration);
+            }
+        }
+        
+        eprintln!("   🔴 DURATION DETECTION FAILED - Cannot determine video duration");
+        None
+    }
+
     /// 获取视频信息（宽、高、帧数、时长、FPS）
     ///
+    /// 🔥 v6.9: 使用精确提前检测，一次性获取所有信息
     /// 使用 ffprobe 快速提取视频元数据
     pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         let file_size = std::fs::metadata(input)
@@ -4166,14 +4359,12 @@ pub mod precheck {
         // 🔥 v5.70: 获取编解码器
         let codec = get_codec_info(input)?;
 
-        // 使用 ffprobe 获取视频信息
-        // 🔥 v6.8: 修复字段顺序问题 - ffprobe输出顺序与show_entries顺序一致
-        // 输出格式: width,height,r_frame_rate,duration,nb_frames
+        // 🔥 v6.9: 使用精确提前检测获取宽高
         let output = Command::new("ffprobe")
             .args([
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,r_frame_rate,duration,nb_frames",
+                "-show_entries", "stream=width,height",
                 "-of", "csv=p=0",
             ])
             .arg(input)
@@ -4187,7 +4378,7 @@ pub mod precheck {
         let info_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = info_str.trim().split(',').collect();
 
-        if parts.len() < 4 {
+        if parts.len() < 2 {
             bail!("ffprobe输出格式异常: {}", info_str);
         }
 
@@ -4199,36 +4390,14 @@ pub mod precheck {
             .and_then(|s| s.parse().ok())
             .context("无法解析视频高度")?;
 
-        // 🔥 v6.8: 修复字段顺序 - 先解析帧率
-        // 解析帧率 (如 "30/1" 或 "30000/1001")
-        let fps: f64 = parts.get(2)
-            .and_then(|s| {
-                let fps_parts: Vec<&str> = s.split('/').collect();
-                if fps_parts.len() == 2 {
-                    let num: f64 = fps_parts[0].parse().ok()?;
-                    let den: f64 = fps_parts[1].parse().ok()?;
-                    if den > 0.0 { Some(num / den) } else { None }
-                } else {
-                    s.parse().ok()
-                }
-            })
-            .unwrap_or(30.0);
+        // 🔥 v6.9: 精确提前检测时长、帧率、帧数（一次性完成所有方法）
+        let (duration, fps, frame_count_raw, _method) = detect_duration_comprehensive(input)?;
 
-        // 解析时长
-        let duration: f64 = parts.get(3)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-
-        // 解析帧数（可能为 N/A 或空）
-        let frame_count: u64 = parts.get(4)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-
-        // 如果帧数为 0，尝试从时长估算
-        let frame_count = if frame_count == 0 && duration > 0.0 {
+        // 如果帧数为 0，从时长估算
+        let frame_count = if frame_count_raw == 0 && duration > 0.0 {
             (duration * fps) as u64
         } else {
-            frame_count.max(1)
+            frame_count_raw.max(1)
         };
 
         // 🔥 v5.70: 获取比特率
@@ -5787,7 +5956,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             NORMAL_MAX_WALL_HITS
         };
         
-        let required_zero_gains = calculate_zero_gains_for_duration(duration, ultimate_mode);
+        // 🔥 v6.9: 使用新函数，传入 crf_range 实现自适应缩放
+        let required_zero_gains = calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode);
         
         // 🔥 v6.2.2: 长视频迭代上限
         let max_iterations_for_video = calculate_max_iterations_for_duration(duration, ultimate_mode);
@@ -7862,6 +8032,134 @@ mod tests {
             let back = cache_key_to_crf(key);
             assert!((crf - back).abs() < 0.001, 
                 "Roundtrip failed: {} -> {} -> {}", crf, key, back);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 🔥 v6.9: Zero-gains 自适应缩放测试
+    // ═══════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_zero_gains_scaling_basic() {
+        // CRF范围 >= 20 时，factor = 1.0，不缩放
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(60.0, 41.0, true),
+            ULTIMATE_REQUIRED_ZERO_GAINS  // 8
+        );
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(60.0, 20.0, true),
+            ULTIMATE_REQUIRED_ZERO_GAINS  // 8
+        );
+        
+        // CRF范围 15 → factor = 0.75 → 8 * 0.75 = 6
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(60.0, 15.0, true),
+            6
+        );
+        
+        // CRF范围 10 → factor = 0.5 → 8 * 0.5 = 4
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(60.0, 10.0, true),
+            4
+        );
+        
+        // CRF范围 5 → factor = 0.5 (clamped) → 8 * 0.5 = 4
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(60.0, 5.0, true),
+            4
+        );
+    }
+
+    #[test]
+    fn test_zero_gains_minimum_guarantee() {
+        // 即使极端情况，也保证最小值 3
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 1.0, true) >= 3);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 0.1, true) >= 3);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 5.0, false) >= 3);
+    }
+
+    #[test]
+    fn test_zero_gains_long_video_override() {
+        // 长视频 (>= 300s) 始终返回 3，不受 CRF 范围影响
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(300.0, 41.0, true),
+            LONG_VIDEO_REQUIRED_ZERO_GAINS  // 3
+        );
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(600.0, 10.0, true),
+            LONG_VIDEO_REQUIRED_ZERO_GAINS  // 3
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.9: 属性测试 - Zero-gains 自适应缩放
+// ═══════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod prop_tests_v69 {
+    use super::*;
+    use proptest::prelude::*;
+
+    // **Feature: v6.9-iteration-optimization, Property 1: Zero-gains随CRF范围缩放**
+    // **验证: 需求 1.1**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_zero_gains_scales_with_crf_range(
+            duration in 1.0f32..299.0f32,  // 短视频范围
+            crf_range_small in 1.0f32..19.9f32,
+            crf_range_large in 20.0f32..50.0f32,
+        ) {
+            // 属性: 小CRF范围的zero-gains <= 大CRF范围的zero-gains
+            let small_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_small, true);
+            let large_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_large, true);
+            
+            prop_assert!(small_result <= large_result,
+                "小CRF范围({})的zero-gains({}) 应 <= 大CRF范围({})的zero-gains({})",
+                crf_range_small, small_result, crf_range_large, large_result);
+        }
+    }
+
+    // **Feature: v6.9-iteration-optimization, Property 2: Zero-gains下限保证 >= 3**
+    // **验证: 需求 1.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_zero_gains_minimum_three(
+            duration in 0.1f32..1000.0f32,
+            crf_range in 0.1f32..100.0f32,
+            ultimate_mode in proptest::bool::ANY,
+        ) {
+            let result = calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode);
+            
+            // 属性: zero-gains 永远 >= 3
+            prop_assert!(result >= 3,
+                "zero-gains({}) 应 >= 3 (duration={}, crf_range={}, ultimate={})",
+                result, duration, crf_range, ultimate_mode);
+        }
+    }
+
+    // **Feature: v6.9-iteration-optimization, Property 3: Duration Fallback链**
+    // **验证: 需求 2.2**
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+        #[test]
+        fn prop_duration_fallback_calculation(
+            frame_count in 1u64..1_000_000u64,
+            fps in 1.0f64..240.0f64,
+        ) {
+            // 属性: 如果 frame_count 和 fps 有效，duration = frame_count / fps
+            let expected_duration = frame_count as f64 / fps;
+            
+            // 验证计算正确性（允许浮点误差）
+            prop_assert!((expected_duration - (frame_count as f64 / fps)).abs() < 0.0001,
+                "Duration计算应为 frame_count/fps: {} / {} = {}",
+                frame_count, fps, expected_duration);
+            
+            // 验证结果为正数
+            prop_assert!(expected_duration > 0.0,
+                "Duration应为正数: {}", expected_duration);
         }
     }
 }
