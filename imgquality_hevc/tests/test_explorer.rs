@@ -298,7 +298,7 @@ fn test_explore_result_fields() {
     // 验证 ExploreResult 结构体字段
     // 这是编译时测试，确保结构体定义正确
     
-    // 模拟一个探索结果
+    // 模拟一个探索结果 - 使用 Default 然后修改需要的字段
     let result = shared_utils::ExploreResult {
         optimal_crf: 22.0,
         output_size: 186000,
@@ -310,8 +310,11 @@ fn test_explore_result_fields() {
         quality_passed: true,
         log: vec!["Test log".to_string()],
         confidence: 0.85,
-        confidence_detail: shared_utils::ConfidenceBreakdown::default(),
-        actual_min_ssim: 0.95,  // 🔥 v5.69
+        confidence_detail: shared_utils::video_explorer::ConfidenceBreakdown::default(),
+        actual_min_ssim: 0.95,
+        input_video_stream_size: 200000,  // 🔥 v6.7
+        output_video_stream_size: 180000, // 🔥 v6.7
+        container_overhead: 6000,         // 🔥 v6.7
     };
     
     assert!((result.optimal_crf - 22.0).abs() < 0.01);
