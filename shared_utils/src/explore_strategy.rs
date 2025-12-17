@@ -515,6 +515,7 @@ impl ExploreContext {
             confidence,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: self.config.quality_thresholds.min_ssim,
+            ..Default::default()
         }
     }
     

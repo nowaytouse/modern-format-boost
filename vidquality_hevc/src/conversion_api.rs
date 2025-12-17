@@ -540,39 +540,41 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         pre_metadata_size, actual_output_size
     );
     
-    // 🔥 v6.4.2: 小文件显示详细元数据信息
-    let is_small_file = detection.file_size < shared_utils::video_explorer::SMALL_FILE_THRESHOLD;
-    if metadata_delta > 0 {
-        if is_small_file {
-            info!("   📋 Metadata (small file): +{} bytes (video: {}, total: {})", 
-                metadata_delta, pre_metadata_size, actual_output_size);
-        } else {
-            info!("   📋 Metadata: +{} bytes", metadata_delta);
-        }
+    // 🔥 v6.7: 使用纯视频流大小进行压缩验证
+    // 提取输入和输出的纯视频流大小
+    let input_stream_info = shared_utils::extract_stream_sizes(input);
+    let output_stream_info = shared_utils::extract_stream_sizes(&output_path);
+    
+    // 使用纯媒体验证器
+    let verify_result = shared_utils::verify_pure_media_compression(
+        &input_stream_info, &output_stream_info
+    );
+    
+    // 显示详细信息
+    if metadata_delta > 0 || output_stream_info.container_overhead > 10000 {
+        info!("   📋 Metadata: +{} bytes", metadata_delta);
+        info!("   📦 Container overhead: {} bytes ({:.1}%)", 
+            output_stream_info.container_overhead,
+            output_stream_info.container_overhead_percent());
     }
     
-    // 🔥 v6.4.3: 精确压缩验证（统一逻辑）
-    // 小文件 (<10MB): 对比纯视频数据大小（去除元数据）
-    // 大文件 (>=10MB): 直接对比总大小
-    let (can_compress, compare_size, verify_strategy) = shared_utils::video_explorer::verify_compression_precise(
-        actual_output_size, detection.file_size, metadata_delta
-    );
-    let is_pure_video_strategy = verify_strategy == shared_utils::video_explorer::CompressionVerifyStrategy::PureVideo;
+    // 显示纯视频流压缩信息
+    info!("   🎬 Video stream: {} → {} ({:+.1}%)",
+        shared_utils::format_bytes(input_stream_info.video_stream_size),
+        shared_utils::format_bytes(output_stream_info.video_stream_size),
+        verify_result.video_size_change_percent());
+    
+    // 🔥 v6.7: 使用纯视频流大小判断压缩成功
+    // 只要纯视频流变小就算成功，无论总文件大小如何
+    let can_compress = verify_result.video_compressed;
     
     if config.require_compression && !can_compress {
-        if is_pure_video_strategy {
-            // 纯视频数据对比策略
-            warn!("   ⚠️  COMPRESSION FAILED (pure video comparison):");
-            warn!("   ⚠️  Pure video: {} bytes >= input: {} bytes",
-                compare_size, detection.file_size);
-            warn!("   ⚠️  Metadata: {} bytes (excluded)", metadata_delta);
-        } else {
-            // 总大小对比策略
-            warn!("   ⚠️  COMPRESSION FAILED: {} bytes >= {} bytes",
-                actual_output_size, detection.file_size);
-            if metadata_delta > 0 {
-                warn!("   ⚠️  Metadata: +{} bytes", metadata_delta);
-            }
+        // 纯视频流未压缩
+        warn!("   ⚠️  COMPRESSION FAILED (pure video stream comparison):");
+        warn!("   ⚠️  Video stream: {} bytes >= {} bytes",
+            output_stream_info.video_stream_size, input_stream_info.video_stream_size);
+        if verify_result.is_container_overhead_issue() {
+            warn!("   ⚠️  Note: Container overhead caused total file to be larger");
         }
         warn!("   🛡️  Original file PROTECTED");
         
@@ -587,11 +589,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             output_path: input.display().to_string(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
-                reason: if is_small_file {
-                    format!("Compression failed: pure video {} >= input {}", compare_size, detection.file_size)
-                } else {
-                    format!("Compression failed: {} >= {}", actual_output_size, detection.file_size)
-                },
+                reason: format!("Compression failed: video stream {} >= {}", 
+                    output_stream_info.video_stream_size, input_stream_info.video_stream_size),
                 command: String::new(),
                 preserve_audio: detection.has_audio,
                 crf: final_crf,
@@ -601,15 +600,23 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             output_size: detection.file_size,
             size_ratio: 1.0,
             success: false,
-            message: if is_pure_video_strategy {
-                format!("Skipped: pure video {} >= input (metadata {} excluded)", 
-                    compare_size, metadata_delta)
-            } else {
-                format!("Skipped: output {} >= input", actual_output_size)
-            },
+            message: format!("Skipped: video stream {} >= {} (container overhead: {})", 
+                output_stream_info.video_stream_size, 
+                input_stream_info.video_stream_size,
+                output_stream_info.container_overhead),
             final_crf,
             exploration_attempts: attempts,
         });
+    }
+    
+    // 🔥 v6.7: 如果纯视频压缩成功但总文件更大，显示警告但仍然保留输出
+    if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0 {
+        warn!("   ⚠️  Video stream compressed ({:+.1}%) but total file larger ({:+.1}%)",
+            verify_result.video_size_change_percent(),
+            verify_result.total_size_change_percent());
+        warn!("   ⚠️  Cause: Container overhead (+{} bytes)",
+            verify_result.container_overhead_diff);
+        info!("   ✅ Keeping output (video stream is smaller)");
     }
     
     // 使用实际文件大小计算比率

@@ -589,6 +589,34 @@ pub struct ExploreResult {
     pub confidence_detail: ConfidenceBreakdown,
     /// 🔥 v5.69: 实际使用的 min_ssim 阈值（用于日志显示）
     pub actual_min_ssim: f64,
+    /// 🔥 v6.7: 输入视频流大小（纯媒体，不含容器开销）
+    pub input_video_stream_size: u64,
+    /// 🔥 v6.7: 输出视频流大小（纯媒体，不含容器开销）
+    pub output_video_stream_size: u64,
+    /// 🔥 v6.7: 容器开销（字节）
+    pub container_overhead: u64,
+}
+
+impl Default for ExploreResult {
+    fn default() -> Self {
+        Self {
+            optimal_crf: 0.0,
+            output_size: 0,
+            size_change_pct: 0.0,
+            ssim: None,
+            psnr: None,
+            vmaf: None,
+            iterations: 0,
+            quality_passed: false,
+            log: Vec::new(),
+            confidence: 0.0,
+            confidence_detail: ConfidenceBreakdown::default(),
+            actual_min_ssim: 0.95,
+            input_video_stream_size: 0,
+            output_video_stream_size: 0,
+            container_overhead: 0,
+        }
+    }
 }
 
 /// 质量验证阈值
@@ -648,6 +676,9 @@ pub struct ExploreConfig {
     /// 🔥 v6.2: 极限探索模式
     /// 启用后使用自适应撞墙上限，持续搜索直到 SSIM 完全饱和（领域墙）
     pub ultimate_mode: bool,
+    /// 🔥 v6.7: 使用纯媒体对比（默认 true）
+    /// 启用后探索阶段使用纯视频流大小对比，排除容器开销影响
+    pub use_pure_media_comparison: bool,
 }
 
 impl Default for ExploreConfig {
@@ -663,6 +694,7 @@ impl Default for ExploreConfig {
             // 粗搜索 ~5 次 + 细搜索 ~4 次 + 精细化 ~2 次 = ~11 次
             max_iterations: EXPLORE_DEFAULT_MAX_ITERATIONS,
             ultimate_mode: false, // 🔥 v6.2: 默认关闭极限模式
+            use_pure_media_comparison: true, // 🔥 v6.7: 默认启用纯媒体对比
         }
     }
 }
@@ -1065,6 +1097,8 @@ pub struct VideoExplorer {
     use_gpu: bool,
     /// 🔥 v5.74: 编码器 preset（探索和最终编码必须一致）
     preset: EncoderPreset,
+    /// 🔥 v6.7: 输入视频流大小（纯媒体，不含容器开销）
+    input_video_stream_size: u64,
 }
 
 impl VideoExplorer {
@@ -1104,6 +1138,14 @@ impl VideoExplorer {
             VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
         };
 
+        // 🔥 v6.7: 提取输入视频流大小（纯媒体对比）
+        let input_video_stream_size = if config.use_pure_media_comparison {
+            let stream_info = crate::stream_size::extract_stream_sizes(input);
+            stream_info.video_stream_size
+        } else {
+            input_size // 回退到总文件大小
+        };
+
         Ok(Self {
             config,
             encoder,
@@ -1114,6 +1156,7 @@ impl VideoExplorer {
             max_threads,
             use_gpu,
             preset: EncoderPreset::default(),
+            input_video_stream_size,
         })
     }
 
@@ -1139,6 +1182,14 @@ impl VideoExplorer {
         // 🔥 v6.2.1: 使用统一的线程数计算函数
         let max_threads = calculate_max_threads(num_cpus::get(), None);
 
+        // 🔥 v6.7: 提取输入视频流大小（纯媒体对比）
+        let input_video_stream_size = if config.use_pure_media_comparison {
+            let stream_info = crate::stream_size::extract_stream_sizes(input);
+            stream_info.video_stream_size
+        } else {
+            input_size
+        };
+
         Ok(Self {
             config,
             encoder,
@@ -1149,6 +1200,7 @@ impl VideoExplorer {
             max_threads,
             use_gpu,
             preset: EncoderPreset::default(),
+            input_video_stream_size,
         })
     }
 
@@ -1185,6 +1237,14 @@ impl VideoExplorer {
             VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
         };
 
+        // 🔥 v6.7: 提取输入视频流大小（纯媒体对比）
+        let input_video_stream_size = if config.use_pure_media_comparison {
+            let stream_info = crate::stream_size::extract_stream_sizes(input);
+            stream_info.video_stream_size
+        } else {
+            input_size
+        };
+
         Ok(Self {
             config,
             encoder,
@@ -1195,6 +1255,7 @@ impl VideoExplorer {
             max_threads,
             use_gpu,
             preset,
+            input_video_stream_size,
         })
     }
 
@@ -1313,6 +1374,7 @@ impl VideoExplorer {
             confidence: 0.7,  // 简单模式默认置信度
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+            ..Default::default()
         })
     }
     
@@ -1362,6 +1424,7 @@ impl VideoExplorer {
             confidence: 0.6,  // 单次编码置信度较低
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+            ..Default::default()
         })
     }
     
@@ -1443,6 +1506,7 @@ impl VideoExplorer {
                 confidence: 0.7,
                 confidence_detail: ConfidenceBreakdown::default(),
                 actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+                ..Default::default()
             });
         }
 
@@ -1508,6 +1572,7 @@ impl VideoExplorer {
             confidence: 0.65,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+            ..Default::default()
         })
     }
     
@@ -1648,6 +1713,7 @@ impl VideoExplorer {
             confidence: 0.75,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: min_ssim,  // 🔥 v5.69
+            ..Default::default()
         })
     }
     
@@ -1886,6 +1952,7 @@ impl VideoExplorer {
             confidence: 0.8,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+            ..Default::default()
         })
     }
     
@@ -2105,6 +2172,7 @@ impl VideoExplorer {
                 confidence: 0.85,
                 confidence_detail: ConfidenceBreakdown::default(),
                 actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+                ..Default::default()
             });
         }
 
@@ -2138,6 +2206,7 @@ impl VideoExplorer {
                 confidence: 0.3,  // 无法压缩，置信度低
                 confidence_detail: ConfidenceBreakdown::default(),
                 actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+                ..Default::default()
             });
         }
 
@@ -2346,6 +2415,7 @@ impl VideoExplorer {
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: self.config.quality_thresholds.min_ssim,  // 🔥 v5.69
+            ..Default::default()
         })
     }
 
@@ -2682,6 +2752,7 @@ impl VideoExplorer {
     /// 
     /// # Returns
     /// 🔥 v6.4: 检查是否可以压缩（预留动态元数据余量）
+    /// 🔥 v6.7: 支持纯媒体对比模式
     /// 
     /// 使用动态余量公式: max(input_size × 1%, 2KB)
     /// 
@@ -2690,7 +2761,15 @@ impl VideoExplorer {
     /// * `false` - 无法保证压缩
     #[inline]
     fn can_compress_with_margin(&self, output_size: u64) -> bool {
-        can_compress_with_metadata(output_size, self.input_size)
+        if self.config.use_pure_media_comparison {
+            // 🔥 v6.7: 纯媒体对比模式
+            // 提取输出视频流大小，与输入视频流大小对比
+            let output_stream_info = crate::stream_size::extract_stream_sizes(&self.output_path);
+            output_stream_info.video_stream_size < self.input_video_stream_size
+        } else {
+            // 传统模式：总文件大小对比
+            can_compress_with_metadata(output_size, self.input_size)
+        }
     }
     
     /// 🔥 v6.4: 获取压缩目标大小（预留动态元数据余量）
@@ -2699,7 +2778,12 @@ impl VideoExplorer {
     /// 返回探索时应该达到的目标大小，确保加上元数据后仍然小于输入。
     #[inline]
     fn get_compression_target(&self) -> u64 {
-        compression_target_size(self.input_size)
+        if self.config.use_pure_media_comparison {
+            // 🔥 v6.7: 纯媒体对比模式，目标是输入视频流大小
+            self.input_video_stream_size
+        } else {
+            compression_target_size(self.input_size)
+        }
     }
     
     /// 验证输出质量
@@ -6193,6 +6277,26 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}", final_crf, size_change_pct, iterations);
     // 🔥 v6.4: 使用动态余量判断压缩保证
     eprintln!("   🎯 Guarantee: output < target = {}", if compressed { "✅ YES" } else { "❌ NO" });
+    
+    // 🔥 v6.7: 显示纯视频流大小信息
+    let output_stream_info = crate::stream_size::extract_stream_sizes(output);
+    let input_stream_info = crate::stream_size::extract_stream_sizes(input);
+    let video_stream_pct = if input_stream_info.video_stream_size > 0 {
+        (output_stream_info.video_stream_size as f64 / input_stream_info.video_stream_size as f64 - 1.0) * 100.0
+    } else {
+        0.0
+    };
+    eprintln!("   🎬 Video stream: {} → {} ({:+.1}%)",
+        crate::format_bytes(input_stream_info.video_stream_size),
+        crate::format_bytes(output_stream_info.video_stream_size),
+        video_stream_pct);
+    
+    // 🔥 v6.7: 容器开销警告
+    if output_stream_info.is_overhead_excessive() {
+        eprintln!("   ⚠️  Container overhead: {:.1}% (> 10%)",
+            output_stream_info.container_overhead_percent());
+    }
+    
     confidence_detail.print_report();
 
     cpu_progress.finish(final_crf, final_full_size, ssim);
@@ -6210,6 +6314,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         confidence,
         confidence_detail,
         actual_min_ssim: min_ssim,  // 🔥 v5.69: 传递实际阈值
+        input_video_stream_size: input_stream_info.video_stream_size,
+        output_video_stream_size: output_stream_info.video_stream_size,
+        container_overhead: output_stream_info.container_overhead,
     })
 }
 
@@ -7015,6 +7122,7 @@ mod tests {
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
             actual_min_ssim: 0.95,  // 🔥 v5.69
+            ..Default::default()
         };
         
         // 验证所有字段都有意义
