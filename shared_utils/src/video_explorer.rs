@@ -4167,11 +4167,13 @@ pub mod precheck {
         let codec = get_codec_info(input)?;
 
         // 使用 ffprobe 获取视频信息
+        // 🔥 v6.8: 修复字段顺序问题 - ffprobe输出顺序与show_entries顺序一致
+        // 输出格式: width,height,r_frame_rate,duration,nb_frames
         let output = Command::new("ffprobe")
             .args([
                 "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=width,height,nb_frames,duration,r_frame_rate",
+                "-show_entries", "stream=width,height,r_frame_rate,duration,nb_frames",
                 "-of", "csv=p=0",
             ])
             .arg(input)
@@ -4197,29 +4199,30 @@ pub mod precheck {
             .and_then(|s| s.parse().ok())
             .context("无法解析视频高度")?;
 
-        // 解析帧数（可能为 N/A）
-        let frame_count: u64 = parts.get(2)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        // 🔥 v6.8: 修复字段顺序 - 先解析帧率
+        // 解析帧率 (如 "30/1" 或 "30000/1001")
+        let fps: f64 = parts.get(2)
+            .and_then(|s| {
+                let fps_parts: Vec<&str> = s.split('/').collect();
+                if fps_parts.len() == 2 {
+                    let num: f64 = fps_parts[0].parse().ok()?;
+                    let den: f64 = fps_parts[1].parse().ok()?;
+                    if den > 0.0 { Some(num / den) } else { None }
+                } else {
+                    s.parse().ok()
+                }
+            })
+            .unwrap_or(30.0);
 
         // 解析时长
         let duration: f64 = parts.get(3)
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0);
 
-        // 解析帧率 (如 "30/1" 或 "30000/1001")
-        let fps: f64 = parts.get(4)
-            .and_then(|s| {
-                let parts: Vec<&str> = s.split('/').collect();
-                if parts.len() == 2 {
-                    let num: f64 = parts[0].parse().ok()?;
-                    let den: f64 = parts[1].parse().ok()?;
-                    Some(num / den)
-                } else {
-                    s.parse().ok()
-                }
-            })
-            .unwrap_or(30.0);
+        // 解析帧数（可能为 N/A 或空）
+        let frame_count: u64 = parts.get(4)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
 
         // 如果帧数为 0，尝试从时长估算
         let frame_count = if frame_count == 0 && duration > 0.0 {
