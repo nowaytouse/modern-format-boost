@@ -2470,7 +2470,10 @@ pub fn gpu_coarse_search_with_log(
 
                             // 🔥 v5.80: 使用PSNR进行快速质量监控
                             // PSNR计算速度约为SSIM的10-50倍，适合GPU阶段频繁检测
-                            if let Ok(psnr) = calculate_psnr_fast(input.to_str().unwrap(), output.to_str().unwrap()) {
+                            // 🔥 v6.5: 安全路径转换，避免 unwrap panic
+                            let input_str = input.to_string_lossy();
+                            let output_str = output.to_string_lossy();
+                            if let Ok(psnr) = calculate_psnr_fast(&input_str, &output_str) {
                                 log_msg!("      📊 PSNR: {:.2}dB", psnr);
 
                                 // 添加到质量天花板检测器
@@ -2583,7 +2586,8 @@ pub fn gpu_coarse_search_with_log(
                     .arg("-")
                     .output();
 
-                let psnr_result = calculate_psnr_fast(input.to_str().unwrap(), output.to_str().unwrap());
+                // 🔥 v6.5: 安全路径转换
+                let psnr_result = calculate_psnr_fast(&input.to_string_lossy(), &output.to_string_lossy());
 
                 let ssim = match ssim_output {
                     Ok(out) => {

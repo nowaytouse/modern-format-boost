@@ -47,6 +47,8 @@ pub mod ffmpeg_process;
 pub mod float_compare;
 pub mod path_validator;
 pub mod crf_constants;
+// 🔥 v6.5: FFprobe JSON 解析模块
+pub mod ffprobe_json;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -262,3 +264,6 @@ pub use crf_constants::{
     // Iterations
     NORMAL_MAX_ITERATIONS, EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS,
 };
+
+// 🔥 v6.5: FFprobe JSON 解析
+pub use ffprobe_json::{ColorInfo, extract_color_info as ffprobe_extract_color_info};

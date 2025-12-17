@@ -246,6 +246,84 @@ pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 /// 普通模式：SSIM 饱和检测所需的连续零增益次数
 pub const NORMAL_REQUIRED_ZERO_GAINS: u32 = 4;
 
+/// 🔥 v6.2.2: 长视频阈值（秒）- 超过此时长的视频使用简化探索策略
+/// 5 分钟 = 300 秒
+pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
+
+/// 🔥 v6.2.2: 超长视频阈值（秒）- 超过此时长的视频强制使用最简策略
+/// 10 分钟 = 600 秒
+pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
+
+/// 🔥 v6.2.2 → v6.5.1: 长视频保底迭代上限（不再限制正常搜索）
+/// 这是保底值，正常情况下算法会通过 SSIM 饱和、撞墙等条件自然停止
+/// 只有在极端情况下才会触发此保底
+pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 100;
+
+/// 🔥 v6.2.2 → v6.5.1: 超长视频保底迭代上限
+/// 同上，这是保底值而非限制值
+pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 80;
+
+/// 🔥 v6.2.2: 长视频的零增益检测次数（更宽松）
+pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
+
+/// 🔥 v6.2.2: 根据视频时长计算最大迭代次数
+/// 
+/// # Arguments
+/// * `duration_secs` - 视频时长（秒）
+/// * `ultimate_mode` - 是否为极限模式
+/// 
+/// # Returns
+/// 保底迭代上限（不是限制，是保底！算法会通过 SSIM 饱和等条件自然停止）
+/// 
+/// # 🔥 v6.5.1 重大改动
+/// **取消硬上限机制！** 改为保底机制：
+/// - 正常情况：算法通过 SSIM 饱和、撞墙、边界等条件自然停止
+/// - 保底情况：只有在极端异常时才触发保底上限
+/// 
+/// 为什么取消硬上限？
+/// 1. 硬上限会导致搜索提前终止，找不到最优 CRF
+/// 2. 长视频需要更多迭代才能找到 SSIM 饱和点
+/// 3. 算法本身有多重停止条件（撞墙、SSIM 饱和、边界）
+/// 4. 保底机制只在极端情况下触发，不影响正常搜索
+pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
+    // 🔥 v6.5.1: 统一使用保底上限，不限制正常搜索
+    // 算法会通过 SSIM 饱和、撞墙、边界等条件自然停止
+    // 保底上限只在极端异常情况下触发
+    
+    if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
+        // 超长视频（>10分钟）：保底 80 次（不是限制！）
+        VERY_LONG_VIDEO_FALLBACK_ITERATIONS
+    } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
+        // 长视频（5-10分钟）：保底 100 次（不是限制！）
+        LONG_VIDEO_FALLBACK_ITERATIONS
+    } else if ultimate_mode {
+        // 短视频 + 极限模式：使用自适应上限
+        crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS
+    } else {
+        // 短视频 + 普通模式：保底 100 次
+        100
+    }
+}
+
+/// 🔥 v6.2.2: 根据视频时长计算零增益检测次数
+/// 
+/// # Arguments
+/// * `duration_secs` - 视频时长（秒）
+/// * `ultimate_mode` - 是否为极限模式
+/// 
+/// # Returns
+/// 零增益检测次数
+pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
+    if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
+        // 长视频：更宽松的零增益检测（3次）
+        LONG_VIDEO_REQUIRED_ZERO_GAINS
+    } else if ultimate_mode {
+        ULTIMATE_REQUIRED_ZERO_GAINS
+    } else {
+        NORMAL_REQUIRED_ZERO_GAINS
+    }
+}
+
 /// 🔥 v6.2.1: 自适应撞墙公式的对数增长基数
 /// 
 /// 基于实验观察：
@@ -4352,77 +4430,10 @@ pub mod precheck {
 
     /// 🔥 新增：提取色彩空间、像素格式、位深度信息
     ///
-    /// 使用ffprobe获取详细的色彩信息，用于HDR检测和质量评估
+    /// 🔥 v6.5: 使用 ffprobe_json 模块解析色彩信息
     fn extract_color_info(input: &Path) -> (Option<String>, Option<String>, Option<u8>) {
-        let output = match Command::new("ffprobe")
-            .args(&[
-                "-v", "quiet",
-                "-print_format", "json",
-                "-show_streams",
-                "-select_streams", "v:0",
-                input.to_str().unwrap_or(""),
-            ])
-            .output()
-        {
-            Ok(output) => output,
-            Err(_) => return (None, None, None),
-        };
-
-        if !output.status.success() {
-            return (None, None, None);
-        }
-
-        // 解析JSON获取color_space、pix_fmt、bits_per_raw_sample
-        let json_str = match String::from_utf8(output.stdout) {
-            Ok(s) => s,
-            Err(_) => return (None, None, None),
-        };
-
-        // 简单的JSON解析（避免依赖serde_json）
-        let mut color_space: Option<String> = None;
-        let mut pix_fmt: Option<String> = None;
-        let mut bit_depth: Option<u8> = None;
-
-        for line in json_str.lines() {
-            let line = line.trim();
-
-            // 提取 color_space: "bt709"
-            if line.starts_with("\"color_space\"") {
-                if let Some(value_start) = line.find(": \"") {
-                    let value = &line[value_start + 3..];
-                    if let Some(end) = value.find('"') {
-                        let cs = value[..end].to_string();
-                        if !cs.is_empty() && cs != "unknown" {
-                            color_space = Some(cs);
-                        }
-                    }
-                }
-            }
-
-            // 提取 pix_fmt: "yuv420p"
-            if line.starts_with("\"pix_fmt\"") {
-                if let Some(value_start) = line.find(": \"") {
-                    let value = &line[value_start + 3..];
-                    if let Some(end) = value.find('"') {
-                        pix_fmt = Some(value[..end].to_string());
-                    }
-                }
-            }
-
-            // 提取 bits_per_raw_sample: "8" 或 "10"
-            if line.starts_with("\"bits_per_raw_sample\"") {
-                if let Some(value_start) = line.find(": \"") {
-                    let value = &line[value_start + 3..];
-                    if let Some(end) = value.find('"') {
-                        if let Ok(depth) = value[..end].parse::<u8>() {
-                            bit_depth = Some(depth);
-                        }
-                    }
-                }
-            }
-        }
-
-        (color_space, pix_fmt, bit_depth)
+        let info = crate::ffprobe_json::extract_color_info(input);
+        (info.color_space, info.pix_fmt, info.bit_depth)
     }
 
     /// 计算 BPP (bits per pixel)
@@ -5671,17 +5682,24 @@ fn cpu_fine_tune_from_gpu_boundary(
         const DECAY_FACTOR: f32 = 0.4;  // 衰减因子
         const MIN_STEP: f32 = 0.1;      // 最小步长
         
-        // 🔥 v6.2: 根据 ultimate_mode 选择撞墙上限和零增益阈值
-        let max_wall_hits = if ultimate_mode {
+        // 🔥 v6.2.2: 根据视频时长和 ultimate_mode 动态调整参数
+        // 长视频使用更保守的策略，防止卡死
+        let max_wall_hits = if duration >= VERY_LONG_VIDEO_THRESHOLD_SECS {
+            // 超长视频：最多 3 次撞墙
+            3
+        } else if duration >= LONG_VIDEO_THRESHOLD_SECS {
+            // 长视频：最多 4 次撞墙
+            4
+        } else if ultimate_mode {
             calculate_adaptive_max_walls(crf_range)
         } else {
             NORMAL_MAX_WALL_HITS
         };
-        let required_zero_gains = if ultimate_mode {
-            ULTIMATE_REQUIRED_ZERO_GAINS
-        } else {
-            NORMAL_REQUIRED_ZERO_GAINS
-        };
+        
+        let required_zero_gains = calculate_zero_gains_for_duration(duration, ultimate_mode);
+        
+        // 🔥 v6.2.2: 长视频迭代上限
+        let max_iterations_for_video = calculate_max_iterations_for_duration(duration, ultimate_mode);
         
         // 🔥 v6.2: 极限模式启动日志
         if ultimate_mode {
@@ -5730,7 +5748,15 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut quality_wall_hit = false;
         let mut domain_wall_hit = false;  // 🔥 v6.2: 领域墙标记
 
-        while iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
+        // 🔥 v6.5.1: 长视频提示（不再是警告，因为不再限制迭代）
+        if duration >= LONG_VIDEO_THRESHOLD_SECS {
+            eprintln!("   {}📹 LONG VIDEO{} ({:.1} min) - {}No iteration limit{}, will search until SSIM saturates",
+                BRIGHT_CYAN, RESET, duration / 60.0, BRIGHT_GREEN, RESET);
+            eprintln!("   {}📊 Fallback limit: {} (emergency only), Max walls: {}, Zero-gains: {}{}",
+                DIM, max_iterations_for_video, max_wall_hits, required_zero_gains, RESET);
+        }
+
+        while iterations < max_iterations_for_video {
             // 🔥 v6.1: 边界检查 - 如果 test_crf < min_crf，钳制到 min_crf 并进入精细阶段
             if test_crf < min_crf {
                 if current_step > MIN_STEP + 0.01 {
@@ -5962,7 +5988,10 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut test_crf = gpu_boundary_crf + step_size;
         let mut found_compress_point = false;
         
-        while test_crf <= max_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
+        // 🔥 v6.2.2: 使用视频时长感知的迭代上限
+        let max_iterations_for_video = calculate_max_iterations_for_duration(duration, ultimate_mode);
+        
+        while test_crf <= max_crf && iterations < max_iterations_for_video {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
             let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
@@ -6000,7 +6029,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut prev_ssim_opt = best_ssim_tracked;  // 🔥 v5.70: 使用Option，不用默认值
             let mut prev_size = best_size.unwrap();
 
-            while test_crf >= min_crf && iterations < crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS {
+            while test_crf >= min_crf && iterations < max_iterations_for_video {
                 // 🔥 v6.5: CrfCache 直接用 crf 作为 key
                 if size_cache.contains_key(test_crf) {
                     test_crf -= step_size;
