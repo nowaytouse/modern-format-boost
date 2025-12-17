@@ -94,6 +94,7 @@ impl StreamSizeInfo {
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]  // serde 反序列化需要这些字段
 struct FfprobeStreamInfo {
     #[serde(default)]
     codec_type: String,
@@ -106,6 +107,7 @@ struct FfprobeStreamInfo {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]  // serde 反序列化需要这些字段
 struct FfprobeFormatInfo {
     #[serde(default)]
     size: Option<String>,
