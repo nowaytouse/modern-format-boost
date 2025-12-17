@@ -5465,7 +5465,11 @@ fn cpu_fine_tune_from_gpu_boundary(
             .arg(output);
 
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
+        // 🔥 v6.6.1: 修复死锁问题 - stderr 必须被消费，否则缓冲区满会导致 ffmpeg 阻塞
+        // 使用 Stdio::null() 丢弃 stderr，避免死锁
+        // 原因：ffmpeg 同时向 stdout/stderr 写入，如果 stderr 缓冲区满（64KB），
+        // ffmpeg 会阻塞等待 stderr 被读取，但代码只读取 stdout → 死锁！
+        cmd.stderr(Stdio::null());
         
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         
