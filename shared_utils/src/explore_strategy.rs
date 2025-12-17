@@ -185,7 +185,6 @@ impl Default for ProgressConfig {
 
 use crate::crf_constants::{
     CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID,
-    EMERGENCY_MAX_ITERATIONS,
 };
 
 /// CRF 缓存数组大小

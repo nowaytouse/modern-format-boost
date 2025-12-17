@@ -355,12 +355,6 @@ pub fn format_ffmpeg_error(stderr: &str) -> String {
 }
 
 /// 检查 FFmpeg 错误是否为可恢复的临时错误
-///
-/// # Arguments
-/// * `stderr` - FFmpeg 的 stderr 输出
-///
-/// # Returns
-/// true 如果错误可能是临时的（如资源不足），可以重试
 pub fn is_recoverable_error(stderr: &str) -> bool {
     let recoverable_patterns = [
         "Resource temporarily unavailable",
@@ -369,10 +363,97 @@ pub fn is_recoverable_error(stderr: &str) -> bool {
         "Connection reset",
         "Broken pipe",
     ];
+    recoverable_patterns.iter().any(|pattern| stderr.contains(pattern))
+}
 
-    recoverable_patterns
-        .iter()
-        .any(|pattern| stderr.contains(pattern))
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.5: 详细的 FFmpeg 错误报告
+// ═══════════════════════════════════════════════════════════════
+
+/// FFmpeg 错误详情
+#[derive(Debug, Clone)]
+pub struct FfmpegError {
+    /// 完整命令行
+    pub command: String,
+    /// stdout 输出
+    pub stdout: String,
+    /// stderr 输出
+    pub stderr: String,
+    /// 退出码
+    pub exit_code: Option<i32>,
+    /// 可操作的建议
+    pub suggestion: Option<String>,
+}
+
+impl std::fmt::Display for FfmpegError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "❌ FFMPEG ERROR")?;
+        writeln!(f, "   Command: {}", self.command)?;
+        if let Some(code) = self.exit_code {
+            writeln!(f, "   Exit code: {}", code)?;
+        }
+        writeln!(f, "   Error: {}", format_ffmpeg_error(&self.stderr))?;
+        if let Some(ref suggestion) = self.suggestion {
+            writeln!(f, "   💡 Suggestion: {}", suggestion)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for FfmpegError {}
+
+/// 🔥 v6.5: 解析常见错误模式并提供建议
+pub fn get_error_suggestion(stderr: &str) -> Option<String> {
+    let patterns = [
+        ("No such file or directory", "检查输入文件路径是否正确"),
+        ("Invalid data found", "输入文件可能已损坏，尝试重新下载"),
+        ("Encoder", "安装对应的编码器 (如 libx265, libsvtav1)"),
+        ("not found", "检查 FFmpeg 是否正确安装"),
+        ("Permission denied", "检查文件权限，确保有读写权限"),
+        ("Output file is empty", "编码失败，尝试降低质量参数"),
+        ("Avi header", "AVI 文件头损坏，尝试使用 -fflags +genpts"),
+        ("moov atom not found", "MP4 文件不完整，尝试使用 -movflags faststart"),
+        ("Invalid NAL unit size", "视频流损坏，尝试使用 -err_detect ignore_err"),
+        ("Discarding", "部分帧被丢弃，可能是时间戳问题"),
+        ("Too many packets buffered", "增加 -max_muxing_queue_size 参数"),
+    ];
+
+    for (pattern, suggestion) in patterns {
+        if stderr.contains(pattern) {
+            return Some(suggestion.to_string());
+        }
+    }
+    None
+}
+
+/// 🔥 v6.5: 运行 FFmpeg 并返回详细错误报告
+pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.args(args);
+    
+    let command_str = format!("ffmpeg {}", args.join(" "));
+    
+    let output = cmd.output().context("Failed to execute FFmpeg")?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        
+        let error = FfmpegError {
+            command: command_str,
+            stdout,
+            stderr: stderr.clone(),
+            exit_code: output.status.code(),
+            suggestion: get_error_suggestion(&stderr),
+        };
+        
+        // 🔥 响亮报错
+        eprintln!("{}", error);
+        
+        return Err(anyhow::anyhow!(error));
+    }
+    
+    Ok(output)
 }
 
 // ═══════════════════════════════════════════════════════════════

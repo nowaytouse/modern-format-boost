@@ -62,6 +62,49 @@ impl fmt::Display for PathValidationError {
 
 impl std::error::Error for PathValidationError {}
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.5: 安全路径转换 (避免 unwrap panic)
+// ═══════════════════════════════════════════════════════════════
+
+/// 路径转换错误
+#[derive(Debug, Clone)]
+pub struct PathConversionError {
+    pub path_display: String,
+    pub reason: String,
+}
+
+impl fmt::Display for PathConversionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "⚠️ PATH CONVERSION ERROR: {} (path: {})", self.reason, self.path_display)
+    }
+}
+
+impl std::error::Error for PathConversionError {}
+
+/// 安全地将 Path 转换为 &str，失败时返回 Result
+/// 🔥 v6.5: 替代 path.to_str().unwrap() 避免 panic
+pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
+    path.to_str().ok_or_else(|| {
+        let err = PathConversionError {
+            path_display: path.to_string_lossy().to_string(),
+            reason: "Path contains non-UTF-8 characters".to_string(),
+        };
+        eprintln!("{}", err);
+        err
+    })
+}
+
+/// 安全地将 Path 转换为 String，使用 lossy 转换
+/// 🔥 v6.5: 非 UTF-8 字符会被替换为 U+FFFD
+pub fn path_to_string_lossy(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+/// 安全地将 Path 转换为 String，失败时返回 Result
+pub fn path_to_string_safe(path: &Path) -> Result<String, PathConversionError> {
+    path_to_str_safe(path).map(|s| s.to_string())
+}
+
 /// Validate a path for safety before using in shell commands
 /// 在 shell 命令中使用前验证路径安全性
 ///
