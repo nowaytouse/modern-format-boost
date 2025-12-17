@@ -2,6 +2,25 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.0] - 2025-12-18
+
+### 🔥 Iteration Optimization
+
+- **Adaptive Zero-gains Threshold**: CRF range < 20 scales threshold (factor 0.5-1.0), minimum 3
+  - Formula: `factor = clamp(crf_range/20, 0.5, 1.0)` when range < 20
+  - Preserves ultimate mode strictness for large CRF ranges
+  - Reduces iterations for narrow search spaces (e.g., 07.mp4: 51 → ~30 iterations)
+
+- **VP9 Duration Detection**: Comprehensive 3-method detection with loud reporting
+  - Method 1: `stream.duration` (standard)
+  - Method 2: `format.duration` (container-level)
+  - Method 3: `frame_count / fps` (calculated)
+  - All steps reported with ⚠️/✅/🔴 icons
+
+- **Property-Based Tests**: 3 new proptest properties for correctness validation
+
+---
+
 ## [0.4.0] - 2025-12-13 (v4.9)
 
 ### 🔥 Performance Optimization - Eliminated Redundant Encoding
