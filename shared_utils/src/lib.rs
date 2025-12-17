@@ -49,6 +49,10 @@ pub mod path_validator;
 pub mod crf_constants;
 // 🔥 v6.5: FFprobe JSON 解析模块
 pub mod ffprobe_json;
+// 🔥 v6.7: 纯视频流大小提取模块
+pub mod stream_size;
+// 🔥 v6.7: 纯媒体压缩验证器
+pub mod pure_media_verifier;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -267,3 +271,16 @@ pub use crf_constants::{
 
 // 🔥 v6.5: FFprobe JSON 解析
 pub use ffprobe_json::{ColorInfo, extract_color_info as ffprobe_extract_color_info};
+
+// 🔥 v6.7: 纯视频流大小提取
+pub use stream_size::{
+    StreamSizeInfo, ExtractionMethod, extract_stream_sizes,
+    get_container_overhead_percent,
+    MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT, MKV_OVERHEAD_PERCENT, DEFAULT_OVERHEAD_PERCENT,
+};
+
+// 🔥 v6.7: 纯媒体压缩验证
+pub use pure_media_verifier::{
+    PureMediaVerifyResult, verify_pure_media_compression,
+    is_video_compressed, video_compression_ratio,
+};
