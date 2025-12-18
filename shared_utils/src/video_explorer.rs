@@ -5705,6 +5705,16 @@ fn cpu_fine_tune_from_gpu_boundary(
         .context("Failed to read input file metadata")?
         .len();
 
+    // 🔥 v6.8: 提取输入视频流大小（纯媒体对比）
+    // 在函数开始时提取并缓存，确保探索和验证阶段使用相同标准
+    let input_stream_info = crate::stream_size::extract_stream_sizes(input);
+    let input_video_stream_size = input_stream_info.video_stream_size;
+    eprintln!("{}📊{} Input video stream: {} (total file: {}, overhead: {:.1}%)",
+        CYAN, RESET,
+        crate::modern_ui::format_size(input_video_stream_size),
+        crate::modern_ui::format_size(input_size),
+        input_stream_info.container_overhead_percent());
+
     // 🔥 v5.60: 获取视频时长（用于进度显示）
     let duration: f32 = {
         use std::process::Command;
@@ -5936,11 +5946,13 @@ fn cpu_fine_tune_from_gpu_boundary(
     eprintln!("{}📍 Phase 1:{} {}Verify GPU boundary{}", BRIGHT_CYAN, RESET, BOLD, RESET);
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
     iterations += 1;
-    let gpu_pct = (gpu_size as f64 / input_size as f64 - 1.0) * 100.0;
+    // 🔥 v6.8: 使用纯视频流大小计算压缩率
+    let gpu_output_video_size = crate::stream_size::get_output_video_stream_size(output);
+    let gpu_pct = (gpu_output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
     let gpu_ssim = calculate_ssim_quick();
 
-    // 🔥 v6.4: 使用动态余量判断压缩
-    if can_compress_with_metadata(gpu_size, input_size) {
+    // 🔥 v6.8: 使用纯视频流对比（与验证阶段一致）
+    if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
         // ✅ GPU 边界能压缩 → 向下搜索更高质量
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
@@ -6095,11 +6107,13 @@ fn cpu_fine_tune_from_gpu_boundary(
 
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
+            // 🔥 v6.8: 使用纯视频流大小计算压缩率
+            let output_video_size = crate::stream_size::get_output_video_stream_size(output);
+            let size_pct = (output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
             let current_ssim_opt = calculate_ssim_quick();
 
-            // 🔥 v6.4: 使用动态余量判断压缩
-            if can_compress_with_metadata(size, input_size) {
+            // 🔥 v6.8: 使用纯视频流对比（与验证阶段一致）
+            if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
                 // ✅ 能压缩 - 更新最佳点
                 last_good_crf = test_crf;
                 last_good_size = size;
@@ -6200,12 +6214,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 overshoot_detected = true;
                 wall_hits += 1;
                 
-                // 🔥 v6.2: 使用智能大小差异格式化（自动选择 B/KB/MB）
-                let size_diff = crate::format_size_diff(size as i64 - input_size as i64);
-                eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} (size {}{}{})",
+                // 🔥 v6.8: 使用纯视频流大小差异格式化
+                let video_size_diff = crate::format_size_diff(output_video_size as i64 - input_video_stream_size as i64);
+                eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} (video stream {}{}{})",
                     BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     BRIGHT_RED, size_pct, RESET, RED, wall_hits, RESET, 
-                    RED, size_diff, RESET);
+                    RED, video_size_diff, RESET);
 
                 // 🔥 v6.2: 曲线模型回退策略 + 精细调整阶段
                 // 极限模式使用自适应撞墙上限，普通模式使用固定 4 次
@@ -6308,10 +6322,12 @@ fn cpu_fine_tune_from_gpu_boundary(
         while test_crf <= max_crf && iterations < max_iterations_for_video {
             let size = encode_cached(test_crf, &mut size_cache)?;
             iterations += 1;
-            let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
+            // 🔥 v6.8: 使用纯视频流大小计算压缩率
+            let output_video_size = crate::stream_size::get_output_video_stream_size(output);
+            let size_pct = (output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
 
-            // 🔥 v6.4: 使用动态余量判断压缩
-            if can_compress_with_metadata(size, input_size) {
+            // 🔥 v6.8: 使用纯视频流对比（与验证阶段一致）
+            if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
                 // ✅ 找到能压缩的点
                 best_crf = Some(test_crf);
                 best_size = Some(size);
@@ -6328,6 +6344,12 @@ fn cpu_fine_tune_from_gpu_boundary(
         if !found_compress_point {
             eprintln!("⚠️ Cannot compress even at max CRF {:.1}!", max_crf);
             eprintln!("   File may be already optimally compressed");
+            // 🔥 v6.8: 显示视频流大小对比
+            let last_output_video = crate::stream_size::get_output_video_stream_size(output);
+            eprintln!("   📊 Video stream: input {} vs output {} ({:+.1}%)",
+                crate::format_bytes(input_video_stream_size),
+                crate::format_bytes(last_output_video),
+                (last_output_video as f64 / input_video_stream_size as f64 - 1.0) * 100.0);
             let max_size = encode_cached(max_crf, &mut size_cache)?;
             iterations += 1;
             best_crf = Some(max_crf);
@@ -6352,11 +6374,13 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 let size = encode_cached(test_crf, &mut size_cache)?;
                 iterations += 1;
-                let size_pct = (size as f64 / input_size as f64 - 1.0) * 100.0;
+                // 🔥 v6.8: 使用纯视频流大小计算压缩率
+                let output_video_size = crate::stream_size::get_output_video_stream_size(output);
+                let size_pct = (output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
                 let current_ssim_opt = calculate_ssim_quick();  // 🔥 v5.70: 保持Option
 
-                // 🔥 v6.4: 使用动态余量判断压缩
-                if can_compress_with_metadata(size, input_size) {
+                // 🔥 v6.8: 使用纯视频流对比（与验证阶段一致）
+                if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
                     consecutive_failures = 0;
 
                     best_crf = Some(test_crf);
@@ -6426,6 +6450,12 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
         _ => {
             eprintln!("⚠️ Cannot compress this file");
+            // 🔥 v6.8: 显示视频流大小对比
+            let last_output_video = crate::stream_size::get_output_video_stream_size(output);
+            eprintln!("   📊 Video stream: input {} vs output {} ({:+.1}%)",
+                crate::format_bytes(input_video_stream_size),
+                crate::format_bytes(last_output_video),
+                (last_output_video as f64 / input_video_stream_size as f64 - 1.0) * 100.0);
             let size = encode_cached(max_crf, &mut size_cache)?;
             iterations += 1;
             (max_crf, size)
@@ -6451,10 +6481,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     // 🔥 v5.54: 使用完整视频大小计算结果
     let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
     
-    // 🔥 v6.4: 修复 quality_passed 逻辑 - 使用动态余量判断压缩
-    // - 压缩检查：输出 < 压缩目标（预留元数据余量）
+    // 🔥 v6.8: 使用纯视频流对比判断压缩（与探索阶段一致）
+    // - 压缩检查：输出视频流 < 输入视频流
     // - 质量检查：SSIM >= 阈值（仅当 SSIM 计算成功时）
-    let compressed = can_compress_with_metadata(final_full_size, input_size);
+    let compressed = crate::stream_size::can_compress_pure_video(output, input_video_stream_size);
     let ssim_ok = match ssim {
         Some(s) => s >= min_ssim,
         None => false,  // SSIM 计算失败视为质量检查失败
@@ -6517,9 +6547,18 @@ fn cpu_fine_tune_from_gpu_boundary(
         crate::format_bytes(output_stream_info.video_stream_size),
         video_stream_pct);
     
-    // 🔥 v6.7: 容器开销警告
+    // 🔥 v6.8: 容器开销报告（增强版）
+    let total_file_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
     if output_stream_info.is_overhead_excessive() {
         eprintln!("   ⚠️  Container overhead: {:.1}% (> 10%)",
+            output_stream_info.container_overhead_percent());
+    }
+    // 🔥 v6.8: 当视频流变小但总文件变大时，单独报告
+    if video_stream_pct < 0.0 && total_file_pct > 0.0 {
+        eprintln!("   ⚠️  Video stream compressed ({:+.1}%) but total file larger ({:+.1}%)",
+            video_stream_pct, total_file_pct);
+        eprintln!("   📦 Container overhead: {} ({:.1}% of output)",
+            crate::format_bytes(output_stream_info.container_overhead),
             output_stream_info.container_overhead_percent());
     }
     
