@@ -846,6 +846,24 @@ pub struct QualityScore {
     pub combined_score: f64,
 }
 
+impl QualityScore {
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v7.1: 类型安全辅助方法
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 获取类型安全的 SSIM 值
+    #[inline]
+    pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
+        crate::types::Ssim::new(self.ssim).ok()
+    }
+    
+    /// 检查 SSIM 是否满足阈值
+    #[inline]
+    pub fn ssim_meets(&self, threshold: f64) -> bool {
+        crate::float_compare::ssim_meets_threshold(self.ssim, threshold)
+    }
+}
+
 /// 🔥 v5.52: 计算质量综合分数（SSIM + 大小）
 ///
 /// 用户要求："考量和目标需要同时考量 SSIM 和大小两个指标"
@@ -1097,6 +1115,30 @@ pub struct GpuCoarseResult {
     pub quality_ceiling_crf: Option<f32>,
     /// 🔥 v5.66: GPU 质量天花板 SSIM（GPU 能达到的最高 SSIM）
     pub quality_ceiling_ssim: Option<f64>,
+}
+
+impl GpuCoarseResult {
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v7.1: 类型安全辅助方法
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 获取类型安全的最优 SSIM 值
+    #[inline]
+    pub fn best_ssim_typed(&self) -> Option<crate::types::Ssim> {
+        self.gpu_best_ssim.and_then(|v| crate::types::Ssim::new(v).ok())
+    }
+    
+    /// 获取类型安全的质量天花板 SSIM 值
+    #[inline]
+    pub fn ceiling_ssim_typed(&self) -> Option<crate::types::Ssim> {
+        self.quality_ceiling_ssim.and_then(|v| crate::types::Ssim::new(v).ok())
+    }
+    
+    /// 获取类型安全的输出文件大小
+    #[inline]
+    pub fn best_size_typed(&self) -> Option<crate::types::FileSize> {
+        self.gpu_best_size.map(crate::types::FileSize::new)
+    }
 }
 
 /// GPU/CPU CRF 映射表
