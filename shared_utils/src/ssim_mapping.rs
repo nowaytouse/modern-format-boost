@@ -11,6 +11,18 @@ pub struct MappingPoint {
     pub ssim: f64,
 }
 
+impl MappingPoint {
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v7.1: 类型安全辅助方法
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 获取类型安全的 SSIM 值
+    #[inline]
+    pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
+        crate::types::Ssim::new(self.ssim).ok()
+    }
+}
+
 /// PSNR→SSIM 动态映射表
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PsnrSsimMapping {
@@ -47,6 +59,13 @@ impl PsnrSsimMapping {
         self.points.is_empty()
     }
 
+
+    /// 使用线性插值预测 SSIM（类型安全版本）
+    /// 
+    /// 🔥 v7.1: 返回 Option<Ssim> 确保值在有效范围内
+    pub fn predict_ssim_typed(&self, psnr: f64) -> Option<crate::types::Ssim> {
+        self.predict_ssim(psnr).and_then(|v| crate::types::Ssim::new(v).ok())
+    }
 
     /// 使用线性插值预测 SSIM
     pub fn predict_ssim(&self, psnr: f64) -> Option<f64> {
