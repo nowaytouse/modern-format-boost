@@ -5549,12 +5549,21 @@ pub fn explore_with_gpu_coarse_search(
     
     // 🔥 v5.8: 直接从 GPU 边界开始精细化，跳过二分搜索
     // 🔥 v6.2: 传递 ultimate_mode 参数
+    // 🔥 v6.8: 修复 CRF 超出范围问题 - 确保 cpu_center_crf 在有效范围内
+    // 问题：当 GPU 边界 38.5 + offset 4.0 = 42.5 时，超出 max_crf 40.0
+    // 解决：将 cpu_center_crf 钳制到 [cpu_min_crf, cpu_max_crf] 范围内
+    let clamped_cpu_center_crf = cpu_center_crf.clamp(cpu_min_crf, cpu_max_crf);
+    if (clamped_cpu_center_crf - cpu_center_crf).abs() > 0.01 {
+        eprintln!("   ⚠️ CPU start CRF {:.1} clamped to {:.1} (within valid range [{:.1}, {:.1}])",
+            cpu_center_crf, clamped_cpu_center_crf, cpu_min_crf, cpu_max_crf);
+    }
+    
     let mut result = cpu_fine_tune_from_gpu_boundary(
         input,
         output,
         encoder,
         vf_args,
-        cpu_center_crf,
+        clamped_cpu_center_crf,
         cpu_min_crf,
         cpu_max_crf,
         min_ssim,
