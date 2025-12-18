@@ -93,8 +93,10 @@ impl StreamSizeInfo {
 // FFprobe JSON 结构
 // ═══════════════════════════════════════════════════════════════
 
+/// FFprobe 流信息（serde 反序列化需要所有字段）
+/// 注意：某些字段仅用于 serde 反序列化，代码中未直接使用
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)]  // serde 反序列化需要这些字段
 struct FfprobeStreamInfo {
     #[serde(default)]
     codec_type: String,
@@ -106,8 +108,10 @@ struct FfprobeStreamInfo {
     nb_frames: Option<String>,
 }
 
+/// FFprobe 格式信息（serde 反序列化需要所有字段）
+/// 注意：某些字段仅用于 serde 反序列化，代码中未直接使用
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)]  // serde 反序列化需要这些字段
 struct FfprobeFormatInfo {
     #[serde(default)]
     size: Option<String>,
