@@ -21,6 +21,11 @@ use std::process::Command;
 // 🔥 v6.5: 使用统一的 CrfCache 替代 HashMap
 use crate::explore_strategy::CrfCache;
 
+// 🔥 v7.1: 类型安全包装器
+use crate::types::{Ssim, FileSize};
+// 🔥 v7.1: 领域特定浮点比较（不导入 ssim_meets_threshold，避免与 precision 模块冲突）
+// 使用 crate::float_compare::ssim_meets_threshold 完整路径调用
+
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.5: 进度条辅助宏 - 固定底部显示
 // ═══════════════════════════════════════════════════════════════
@@ -662,6 +667,34 @@ impl Default for ExploreResult {
             output_video_stream_size: 0,
             container_overhead: 0,
         }
+    }
+}
+
+impl ExploreResult {
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v7.1: 类型安全辅助方法
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 获取类型安全的 SSIM 值
+    /// 
+    /// 返回 `Option<Ssim>` 而不是 `Option<f64>`，确保值在有效范围内
+    #[inline]
+    pub fn ssim_typed(&self) -> Option<Ssim> {
+        self.ssim.and_then(|v| Ssim::new(v).ok())
+    }
+    
+    /// 获取类型安全的输出文件大小
+    #[inline]
+    pub fn output_size_typed(&self) -> FileSize {
+        FileSize::new(self.output_size)
+    }
+    
+    /// 检查 SSIM 是否满足阈值（使用类型安全比较）
+    /// 
+    /// 🔥 v7.1: 使用 float_compare::ssim_meets_threshold 进行精确比较
+    #[inline]
+    pub fn ssim_meets(&self, threshold: f64) -> bool {
+        self.ssim.map_or(false, |s| crate::float_compare::ssim_meets_threshold(s, threshold))
     }
 }
 
@@ -3718,6 +3751,10 @@ pub mod precision {
     /// 
     /// 支持 CRF 范围 [0, 63]（AV1 最大值），key 范围 [0, 630]
     /// 
+    /// # 🔥 v7.1: 类型安全版本
+    /// 
+    /// 推荐使用 `Crf<E>::to_cache_key()` 获得编译时类型安全
+    /// 
     /// # Example
     /// ```
     /// use shared_utils::video_explorer::precision::crf_to_cache_key;
@@ -3742,6 +3779,10 @@ pub mod precision {
     }
     
     /// 🔥 v5.73: 缓存 Key 到 CRF 的反向转换
+    /// 
+    /// # 🔥 v7.1: 类型安全版本
+    /// 
+    /// 推荐使用 `Crf::<E>::from_cache_key()` 获得编译时类型安全和范围验证
     #[inline]
     pub fn cache_key_to_crf(key: i32) -> f32 {
         key as f32 / CACHE_KEY_MULTIPLIER
@@ -3840,7 +3881,8 @@ pub mod precision {
     
     /// SSIM 比较精度：0.0001
     /// 🔥 v3.1: 这是 ffmpeg ssim 滤镜的输出精度
-    pub const SSIM_COMPARE_EPSILON: f64 = 0.0001;
+    /// 🔥 v7.1: 现在使用 crate::types::SSIM_EPSILON 作为权威来源
+    pub const SSIM_COMPARE_EPSILON: f64 = crate::types::SSIM_EPSILON;
     
     /// 默认最小 SSIM（视觉无损）
     pub const DEFAULT_MIN_SSIM: f64 = 0.95;
@@ -3874,15 +3916,17 @@ pub mod precision {
     /// 验证 SSIM 是否满足阈值（考虑浮点精度）
     /// 
     /// 🔥 v3.1: 使用 epsilon 比较避免浮点精度问题
+    /// 🔥 v7.1: 委托给 float_compare::ssim_meets_threshold
     pub fn ssim_meets_threshold(ssim: f64, threshold: f64) -> bool {
-        ssim >= threshold - SSIM_COMPARE_EPSILON
+        crate::float_compare::ssim_meets_threshold(ssim, threshold)
     }
     
     /// 验证 SSIM 值是否有效
     /// 
     /// 🔥 v3.1: SSIM 必须在 [0, 1] 范围内
+    /// 🔥 v7.1: 可以使用 Ssim::new() 进行类型安全验证
     pub fn is_valid_ssim(ssim: f64) -> bool {
-        (0.0..=1.0).contains(&ssim)
+        crate::types::Ssim::new(ssim).is_ok()
     }
     
     /// 验证 PSNR 值是否有效
