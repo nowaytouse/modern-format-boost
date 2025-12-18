@@ -379,6 +379,28 @@ pub struct MatchedQuality {
     pub analysis_details: AnalysisDetails,
 }
 
+impl MatchedQuality {
+    // ═══════════════════════════════════════════════════════════════
+    // 🔥 v7.1: 类型安全辅助方法
+    // ═══════════════════════════════════════════════════════════════
+    
+    /// 获取类型安全的 HEVC CRF 值
+    /// 
+    /// 返回 `Option<Crf<HevcEncoder>>` 确保值在 HEVC 有效范围内
+    #[inline]
+    pub fn crf_hevc_typed(&self) -> Option<crate::types::Crf<crate::types::HevcEncoder>> {
+        crate::types::Crf::<crate::types::HevcEncoder>::new(self.crf).ok()
+    }
+    
+    /// 获取类型安全的 AV1 CRF 值
+    /// 
+    /// 返回 `Option<Crf<Av1Encoder>>` 确保值在 AV1 有效范围内
+    #[inline]
+    pub fn crf_av1_typed(&self) -> Option<crate::types::Crf<crate::types::Av1Encoder>> {
+        crate::types::Crf::<crate::types::Av1Encoder>::new(self.crf).ok()
+    }
+}
+
 /// Detailed analysis breakdown for debugging/logging
 /// 
 /// ## 🔥 Enhanced v3.0 - All Factors Exposed
