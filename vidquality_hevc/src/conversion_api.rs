@@ -457,21 +457,36 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 
                 // 🔥 v3.8: 质量验证失败时，保护原文件！
                 // 🔥 v5.70: 修复错误信息 - 区分压缩失败、SSIM 计算失败、SSIM 阈值未达标
+                // 🔥 v6.8.1: 使用纯视频流大小判断压缩（与 quality_passed 一致）
                 if !explore_result.quality_passed && (config.match_quality || config.explore_smaller) {
                     let actual_ssim = explore_result.ssim.unwrap_or(0.0);
                     let threshold = explore_result.actual_min_ssim;
-                    let compressed = explore_result.output_size < detection.file_size;
+                    // 🔥 v6.8.1: 使用纯视频流大小判断，与 video_explorer.rs 中的 quality_passed 一致
+                    let video_stream_compressed = explore_result.output_video_stream_size < explore_result.input_video_stream_size;
+                    let total_file_compressed = explore_result.output_size < detection.file_size;
                     
-                    // 🔥 v5.70: 响亮报错 - 准确区分失败原因
-                    let (fail_reason, fail_message) = if !compressed {
-                        // 压缩失败：输出 >= 输入
-                        warn!("   ⚠️  COMPRESSION FAILED: output ({:.2} MB) >= input ({:.2} MB)",
-                            explore_result.output_size as f64 / 1024.0 / 1024.0,
-                            detection.file_size as f64 / 1024.0 / 1024.0);
+                    // 🔥 v6.8.2: 调试日志 - 帮助诊断问题
+                    warn!("   📊 DEBUG: input_stream={} bytes, output_stream={} bytes, compressed={}",
+                        explore_result.input_video_stream_size,
+                        explore_result.output_video_stream_size,
+                        video_stream_compressed);
+                    
+                    // 🔥 v6.8.1: 响亮报错 - 准确区分失败原因
+                    let (fail_reason, fail_message) = if !video_stream_compressed {
+                        // 视频流压缩失败
+                        let input_stream_mb = explore_result.input_video_stream_size as f64 / 1024.0 / 1024.0;
+                        let output_stream_mb = explore_result.output_video_stream_size as f64 / 1024.0 / 1024.0;
+                        let stream_change_pct = (output_stream_mb / input_stream_mb - 1.0) * 100.0;
+                        
+                        warn!("   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.2} MB → {:.2} MB ({:+.1}%)",
+                            input_stream_mb, output_stream_mb, stream_change_pct);
+                        if total_file_compressed {
+                            warn!("   ⚠️  Total file smaller but video stream larger (audio/container overhead)");
+                        }
                         warn!("   ⚠️  File may already be highly optimized");
                         (
-                            format!("Compression failed: output >= input"),
-                            format!("Skipped: cannot compress (output {:+.1}%)", explore_result.size_change_pct)
+                            format!("Video stream compression failed: {:+.1}%", stream_change_pct),
+                            format!("Skipped: video stream larger ({:+.1}%)", stream_change_pct)
                         )
                     } else if explore_result.ssim.is_none() {
                         // SSIM 计算失败
@@ -481,12 +496,19 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             format!("SSIM calculation failed"),
                             format!("Skipped: SSIM calculation failed")
                         )
-                    } else {
+                    } else if actual_ssim < threshold {
                         // SSIM 阈值未达标
                         warn!("   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}", actual_ssim, threshold);
                         (
                             format!("Quality validation failed: SSIM {:.4} < {:.4}", actual_ssim, threshold),
                             format!("Skipped: SSIM {:.4} below threshold {:.4}", actual_ssim, threshold)
+                        )
+                    } else {
+                        // 其他未知原因（不应该到达这里）
+                        warn!("   ⚠️  Quality validation FAILED: unknown reason");
+                        (
+                            format!("Quality validation failed: unknown reason"),
+                            format!("Skipped: quality validation failed")
                         )
                     };
                     warn!("   🛡️  Original file PROTECTED (quality too low to replace)");

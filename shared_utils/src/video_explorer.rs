@@ -5757,6 +5757,68 @@ fn cpu_fine_tune_from_gpu_boundary(
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
 
     // 🔥 v5.60: 全片编码（带实时进度显示）
+    // 🔥 v6.9.1: 智能音频转码策略
+    // - 高质量音频 (>256kbps 或无损): 使用 ALAC (Apple Lossless)
+    // - 中等质量音频 (128-256kbps): 使用 AAC 256k
+    // - 低质量音频 (<128kbps): 使用 AAC 192k
+    // - 兼容音频: 直接复制 (-c:a copy)
+    #[derive(Debug, Clone)]
+    enum AudioTranscodeStrategy {
+        Copy,                    // 直接复制（兼容格式）
+        Alac,                    // Apple Lossless（高质量/无损源）
+        AacHigh,                 // AAC 256kbps（中高质量源）
+        AacMedium,               // AAC 192kbps（中等质量源）
+    }
+    
+    let audio_strategy = {
+        let output_ext = output.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let is_mov_mp4 = output_ext == "mov" || output_ext == "mp4" || output_ext == "m4v";
+        
+        if !is_mov_mp4 {
+            AudioTranscodeStrategy::Copy
+        } else {
+            // 检测输入音频信息
+            let probe_result = crate::ffprobe::probe_video(input).ok();
+            let audio_codec = probe_result.as_ref()
+                .and_then(|info| info.audio_codec.as_ref())
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            let audio_bitrate = probe_result.as_ref()
+                .and_then(|info| info.audio_bit_rate)
+                .unwrap_or(0);
+            
+            // 检查是否为不兼容编解码器
+            let incompatible = audio_codec.contains("opus") || 
+                              audio_codec.contains("vorbis") ||
+                              audio_codec.contains("webm");
+            
+            // 检查是否为无损格式
+            let is_lossless = audio_codec.contains("flac") ||
+                             audio_codec.contains("alac") ||
+                             audio_codec.contains("pcm") ||
+                             audio_codec.contains("wav");
+            
+            if !incompatible {
+                AudioTranscodeStrategy::Copy
+            } else if is_lossless || audio_bitrate > 256_000 {
+                // 高质量源：使用 ALAC 保持无损
+                eprintln!("   🎵 High-quality audio detected ({}kbps {}), using ALAC (lossless)", 
+                    audio_bitrate / 1000, audio_codec);
+                AudioTranscodeStrategy::Alac
+            } else if audio_bitrate >= 128_000 {
+                // 中等质量源：使用 AAC 256k
+                eprintln!("   🎵 Medium-quality audio ({}kbps {}), using AAC 256k", 
+                    audio_bitrate / 1000, audio_codec);
+                AudioTranscodeStrategy::AacHigh
+            } else {
+                // 低质量源或未知：使用 AAC 192k
+                eprintln!("   🎵 Audio codec '{}' incompatible with {}, using AAC 192k", 
+                    audio_codec, output_ext.to_uppercase());
+                AudioTranscodeStrategy::AacMedium
+            }
+        }
+    };
+    
     // 关键改动：CPU 阶段统一使用全片编码，确保 100% 准确度
     let encode_full = |crf: f32| -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
@@ -5780,15 +5842,37 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        cmd.arg("-c:a").arg("copy")
-            .arg(output);
+        // 🔥 v6.9.1: 根据音频质量智能选择转码策略
+        match &audio_strategy {
+            AudioTranscodeStrategy::Copy => {
+                cmd.arg("-c:a").arg("copy");
+            }
+            AudioTranscodeStrategy::Alac => {
+                // Apple Lossless - 无损，适合高质量源
+                cmd.arg("-c:a").arg("alac");
+            }
+            AudioTranscodeStrategy::AacHigh => {
+                // AAC 256kbps - 高质量有损
+                cmd.arg("-c:a").arg("aac").arg("-b:a").arg("256k");
+            }
+            AudioTranscodeStrategy::AacMedium => {
+                // AAC 192kbps - 中等质量有损
+                cmd.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
+            }
+        }
+        cmd.arg(output);
 
         cmd.stdout(Stdio::piped());
-        // 🔥 v6.6.1: 修复死锁问题 - stderr 必须被消费，否则缓冲区满会导致 ffmpeg 阻塞
-        // 使用 Stdio::null() 丢弃 stderr，避免死锁
-        // 原因：ffmpeg 同时向 stdout/stderr 写入，如果 stderr 缓冲区满（64KB），
-        // ffmpeg 会阻塞等待 stderr 被读取，但代码只读取 stdout → 死锁！
-        cmd.stderr(Stdio::null());
+        // 🔥 v6.9: 改进错误处理 - 使用临时文件捕获stderr，避免死锁同时保留错误信息
+        // 原因：直接pipe stderr会导致死锁（缓冲区满），但丢弃stderr会丢失错误信息
+        // 解决方案：将stderr重定向到临时文件，编码失败时读取错误信息
+        let stderr_file = std::env::temp_dir().join(format!("ffmpeg_stderr_{}.log", std::process::id()));
+        let stderr_handle = std::fs::File::create(&stderr_file).ok();
+        if let Some(file) = stderr_handle {
+            cmd.stderr(file);
+        } else {
+            cmd.stderr(Stdio::null());
+        }
         
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         
@@ -5826,8 +5910,34 @@ fn cpu_fine_tune_from_gpu_boundary(
         eprint!("\r                                                                              \r");
         
         if !status.success() {
-            anyhow::bail!("❌ Encoding failed at CRF {:.1}", crf);
+            // 🔥 v6.9: 读取stderr文件获取详细错误信息
+            let error_detail = if stderr_file.exists() {
+                let stderr_content = std::fs::read_to_string(&stderr_file).unwrap_or_default();
+                let _ = std::fs::remove_file(&stderr_file); // 清理临时文件
+                // 提取最后几行有意义的错误信息
+                let error_lines: Vec<&str> = stderr_content
+                    .lines()
+                    .filter(|l| l.contains("Error") || l.contains("error") || l.contains("Invalid") || l.contains("failed"))
+                    .collect();
+                if !error_lines.is_empty() {
+                    format!("\n   📋 FFmpeg error: {}", error_lines.join("\n   "))
+                } else {
+                    // 如果没有明确的错误行，显示最后3行
+                    let last_lines: Vec<&str> = stderr_content.lines().rev().take(3).collect();
+                    if !last_lines.is_empty() {
+                        format!("\n   📋 FFmpeg output: {}", last_lines.into_iter().rev().collect::<Vec<_>>().join("\n   "))
+                    } else {
+                        String::new()
+                    }
+                }
+            } else {
+                String::new()
+            };
+            anyhow::bail!("❌ Encoding failed at CRF {:.1}{}", crf, error_detail);
         }
+        
+        // 清理临时文件（成功时）
+        let _ = std::fs::remove_file(&stderr_file);
 
         Ok(fs::metadata(output)?.len())
     };
