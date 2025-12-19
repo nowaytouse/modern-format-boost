@@ -2,7 +2,7 @@
 name = "imgquality-av1"
 version = "0.1.0"
 edition = "2021"
-authors = ["nyamiiko"]
+authors = ["Modern Format Boost Contributors"]
 description = "High-performance image quality analyzer - AV1/AVIF format converter"
 license = "MIT"
 

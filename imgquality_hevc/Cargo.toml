@@ -2,7 +2,7 @@
 name = "imgquality-hevc"
 version = "0.1.0"
 edition = "2021"
-authors = ["nyamiiko"]
+authors = ["Modern Format Boost Contributors"]
 description = "High-performance image quality analyzer - HEVC version for animated images"
 license = "MIT"
 

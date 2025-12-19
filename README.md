@@ -14,90 +14,61 @@ High-performance media conversion toolkit with intelligent quality matching, SSI
 ## Key Features
 
 ### 1. Smart Quality Matching System
-- **BPP Analysis**: Calculates bits-per-pixel from video bitrate (excludes audio)
+- **BPP Analysis**: Calculates bits-per-pixel from video bitrate
 - **Codec Efficiency**: H.264=1.0, HEVC=0.65, AV1=0.50, VVC=0.35
-- **GOP Structure**: Analyzes keyframe interval and B-frame pyramid
 - **Content Detection**: Animation/Film/Screen recording optimization
 - **HDR Support**: BT.2020 color space detection
 
 ### 2. CRF Binary Search Explorer
-- **Three-phase search**: Coarse → Fine → Refine
+- **Three-phase search**: Coarse → Fine → Refine (±0.1 precision)
 - **SSIM validation**: Default threshold ≥ 0.95
-- **Transparency report**: Shows every iteration with metrics
+- **Transparency report**: Every iteration with metrics
 - **Confidence scoring**: Sampling coverage + prediction accuracy
 
-### 3. GPU Hardware Acceleration
+### 3. Smart Audio Transcoding (v6.9.1)
+- **Quality-aware**: ALAC for high-quality, AAC for lossy sources
+- **VP9/WebM fix**: Opus/Vorbis → ALAC/AAC for MOV/MP4 compatibility
+- **Bitrate detection**: Automatic quality tier selection
+
+### 4. GPU Hardware Acceleration
 
 | Platform | HEVC | AV1 | H.264 |
 |----------|------|-----|-------|
-| NVIDIA NVENC | hevc_nvenc | av1_nvenc | h264_nvenc |
-| Apple VideoToolbox | hevc_videotoolbox | - | h264_videotoolbox |
-| Intel QSV | hevc_qsv | av1_qsv | h264_qsv |
-| AMD AMF | hevc_amf | av1_amf | h264_amf |
-| VA-API (Linux) | hevc_vaapi | av1_vaapi | h264_vaapi |
+| NVIDIA NVENC | ✅ | ✅ | ✅ |
+| Apple VideoToolbox | ✅ | - | ✅ |
+| Intel QSV | ✅ | ✅ | ✅ |
+| AMD AMF | ✅ | ✅ | ✅ |
 
-### 4. Conversion Logic
+### 5. Conversion Logic
 
-**Static Images:**
-- JPEG → JXL: Lossless DCT transcode (zero quality loss)
-- PNG/TIFF/BMP → JXL: Mathematical lossless
-- WebP/AVIF/HEIC (lossy) → Skip (avoid generation loss)
+**Static Images:** JPEG → JXL (lossless DCT), PNG/TIFF → JXL (mathematical lossless)
 
-**Animated Images (≥3s duration):**
-- GIF/APNG → HEVC/AV1 MP4
-- Animated WebP → HEVC MP4 (with `--apple-compat`)
-- Short animations (<3s) → Skip
+**Animated Images (≥3s):** GIF/APNG/WebP → HEVC/AV1 MP4
 
-**Video:**
-- H.264/MPEG/MJPEG → HEVC/AV1
-- HEVC/AV1/VP9 → Skip (already modern)
-- AV1/VP9 → HEVC (with `--apple-compat`)
+**Video:** H.264/MPEG → HEVC/AV1, AV1/VP9 → HEVC (`--apple-compat`)
 
 ## Installation
 
 ```bash
 cd modern_format_boost
-./build_all.sh
+./smart_build.sh
 ```
 
 **Dependencies:** FFmpeg (libx265, libsvtav1, libjxl), Rust 1.70+
 
-
 ## Commands
-
-### Subcommands
-
-```bash
-# Analyze media properties
-vidquality-hevc analyze input.mp4
-vidquality-hevc analyze input.mp4 --output json
-
-# Auto convert (intelligent mode selection)
-vidquality-hevc auto input.mp4 [OPTIONS]
-
-# Simple convert (all → target format)
-vidquality-hevc simple input.mp4
-
-# Show recommended strategy
-vidquality-hevc strategy input.mp4
-```
 
 ### Flag Combinations (7 Valid Modes)
 
 | Flags | Mode | Behavior |
 |-------|------|----------|
 | (none) | Default | Single encode with AI-predicted CRF |
-| `--compress` | Compress-Only | Ensure output < input (even 1KB) |
+| `--compress` | Compress-Only | Ensure output < input |
 | `--explore` | Size-Only | Binary search for smallest file |
 | `--match-quality` | Quality-Match | Single encode + SSIM validation |
-| `--compress --match-quality` | Compress+Quality | output < input + SSIM check |
 | `--explore --match-quality` | Precise | Binary search + SSIM validation |
 | `--explore --match-quality --compress` | Full | Precise quality + must compress |
-| `--explore --match-quality --compress --ultimate` | 🔥 Ultimate | Search until SSIM saturates (Domain Wall) |
-
-**Invalid combinations:**
-- `--explore --compress` (conflicting goals)
-- `--ultimate` alone or with incomplete flag combinations
+| `--explore --match-quality --compress --ultimate` | 🔥 Ultimate | Search until SSIM saturates |
 
 ### All Options
 
@@ -107,10 +78,8 @@ vidquality-hevc strategy input.mp4
 -r, --recursive        Recursive directory scan
 --delete-original      Delete original after conversion
 --in-place             Convert and delete original (replace)
---lossless             Mathematical lossless (very slow)
 --apple-compat         Convert AV1/VP9 → HEVC for Apple devices
---ultimate             🔥 v6.2: Ultimate explore mode (SSIM saturation)
-                       Must use with --explore --match-quality --compress
+--ultimate             🔥 Ultimate explore mode (SSIM saturation)
 ```
 
 ## Architecture
@@ -123,70 +92,12 @@ modern_format_boost/
 ├── imgquality_av1/         # Image → JXL/AV1 converter
 ├── shared_utils/           # Core modules
 │   ├── video_explorer.rs   # CRF binary search + SSIM
-│   ├── quality_matcher.rs  # BPP→CRF prediction algorithm
+│   ├── quality_matcher.rs  # BPP→CRF prediction
 │   ├── gpu_accel.rs        # Multi-platform GPU detection
-│   ├── flag_validator.rs   # Flag combination validation
-│   ├── ssim_mapping.rs     # PSNR→SSIM dynamic mapping
-│   ├── lru_cache.rs        # LRU cache with eviction
-│   ├── checkpoint.rs       # Checkpoint/resume + atomic delete
-│   └── error_handler.rs    # Unified error handling
+│   ├── ffprobe.rs          # Media analysis + audio detection
+│   └── types/              # Type-safe wrappers (v7.1)
 ├── xmp_merger/             # XMP sidecar merging tool
-├── scripts/                # Drag-and-drop scripts
 └── Modern Format Boost.app # macOS GUI app
-```
-
-### 5. Error Handling System
-Three-level error classification with loud reporting:
-- **Recoverable**: Log warning, use fallback, continue
-- **Fatal**: Log error, abort operation
-- **Optional**: Log info, continue (non-critical)
-
-### 6. Checkpoint & Resume
-- **Progress tracking**: Resume after interruption
-- **Atomic delete**: Verify output integrity before deleting original
-- **Lock file**: Prevent concurrent processing
-
-### 7. LRU Cache
-- **Capacity limit**: Auto-evict oldest entries
-- **Persistence**: Save/load to JSON file
-- **Memory safety**: Prevent long-running memory leaks
-
-### 8. PSNR→SSIM Mapping
-- **Dynamic prediction**: Linear interpolation from collected data
-- **Self-correction**: Update mapping with actual measurements
-- **Transparency**: Show predicted vs actual in reports
-
-
-## Quality Validation System
-
-### SSIM Thresholds
-- Default: ≥ 0.95 (visually lossless)
-- Conservative: ≥ 0.98 (use `--cpu`)
-- GPU ceiling: ~0.95 (VideoToolbox limitation)
-
-### Confidence Report
-```
-┌─────────────────────────────────────────────────────
-│ 📊 Confidence Report
-├─────────────────────────────────────────────────────
-│ 📈 Overall Confidence: 85% 🟡 Good
-├─────────────────────────────────────────────────────
-│ 📹 Sampling Coverage: 90% (weight 30%)
-│ 🎯 Prediction Accuracy: 80% (weight 30%)
-│ 💾 Safety Margin: 85% (weight 20%)
-│ 📊 SSIM Reliability: 88% (weight 20%)
-└─────────────────────────────────────────────────────
-```
-
-### Transparency Report
-```
-┌────┬──────────────┬───────────┬─────────────┬─────────────┐
-│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │
-├────┼──────────────┼───────────┼─────────────┼─────────────┤
-│  1 │ Coarse       │ CRF  23.0 │  -45.2% ✅  │ 0.9612 ✅   │
-│  2 │ Fine         │ CRF  20.0 │  -32.1% ✅  │ 0.9734 ✅   │
-│  3 │ Refine       │ CRF  18.5 │  -25.8% ✅  │ 0.9821 ✅   │
-└────┴──────────────┴───────────┴─────────────┴─────────────┘
 ```
 
 ## Supported Formats
@@ -196,37 +107,12 @@ Three-level error classification with loud reporting:
 **Video Output:** MP4 (HEVC/AV1), MKV (lossless)
 **Image Output:** JXL
 
-## Metadata Preservation
-
-All 4 conversion tools automatically preserve metadata via `shared_utils::copy_metadata`:
-- **EXIF/IPTC/XMP**: Via ExifTool (internal metadata)
-- **XMP Sidecar (v5.76)**: Auto-detect and merge `photo.jpg.xmp` or `photo.xmp` to output
-- **macOS**: ACL, xattr, creation time, Date Added
-- **Timestamps**: Access/modification time preserved after conversion
-
-### XMP Sidecar Auto-Merge (v5.76)
-
-During conversion, tools automatically detect XMP sidecar files:
-1. `photo.jpg.xmp` (Adobe standard)
-2. `photo.xmp` (same stem)
-3. Case-insensitive matching (`photo.XMP`, `photo.Xmp`)
-
-### XMP Sidecar Merger (Standalone Tool)
-
-Batch merge XMP sidecar files (from Lightroom/Capture One):
-
-```bash
-xmp-merge /path/to/directory
-xmp-merge --delete-xmp /path/to/directory  # Delete .xmp after merge
-```
-
 ## macOS App
 
-Double-click `Modern Format Boost.app` for drag-and-drop conversion with default flags:
+Double-click `Modern Format Boost.app` for drag-and-drop conversion:
 `--explore --match-quality --compress --in-place`
 
 ---
-
 
 # 中文文档
 
@@ -244,165 +130,45 @@ Double-click `Modern Format Boost.app` for drag-and-drop conversion with default
 ## 核心功能
 
 ### 1. 智能质量匹配系统
-- **BPP分析**：从视频码率计算每像素比特数（排除音频）
-- **编码效率**：H.264=1.0, HEVC=0.65, AV1=0.50, VVC=0.35
-- **GOP结构**：分析关键帧间隔和B帧金字塔
+- **BPP分析**：从视频码率计算每像素比特数
+- **编码效率**：H.264=1.0, HEVC=0.65, AV1=0.50
 - **内容检测**：动画/电影/屏幕录制优化
-- **HDR支持**：BT.2020色彩空间检测
 
 ### 2. CRF二分搜索探索器
-- **三阶段搜索**：粗搜索 → 精搜索 → 微调
+- **三阶段搜索**：粗搜索 → 精搜索 → 微调（±0.1精度）
 - **SSIM验证**：默认阈值 ≥ 0.95
 - **透明度报告**：显示每次迭代的详细指标
-- **置信度评分**：采样覆盖度 + 预测准确度
 
-### 3. GPU硬件加速
+### 3. 智能音频转码 (v6.9.1)
+- **质量感知**：高质量源用ALAC，有损源用AAC
+- **VP9/WebM修复**：Opus/Vorbis → ALAC/AAC
+- **比特率检测**：自动选择质量等级
 
-| 平台 | HEVC | AV1 | H.264 |
-|------|------|-----|-------|
-| NVIDIA NVENC | hevc_nvenc | av1_nvenc | h264_nvenc |
-| Apple VideoToolbox | hevc_videotoolbox | - | h264_videotoolbox |
-| Intel QSV | hevc_qsv | av1_qsv | h264_qsv |
-| AMD AMF | hevc_amf | av1_amf | h264_amf |
-| VA-API (Linux) | hevc_vaapi | av1_vaapi | h264_vaapi |
-
-### 4. 转换逻辑
-
-**静态图片：**
-- JPEG → JXL：无损DCT转码（零质量损失）
-- PNG/TIFF/BMP → JXL：数学无损
-- WebP/AVIF/HEIC（有损）→ 跳过（避免代际损失）
-
-**动态图片（≥3秒）：**
-- GIF/APNG → HEVC/AV1 MP4
-- 动态WebP → HEVC MP4（使用 `--apple-compat`）
-- 短动画（<3秒）→ 跳过
-
-**视频：**
-- H.264/MPEG/MJPEG → HEVC/AV1
-- HEVC/AV1/VP9 → 跳过（已是现代编码）
-- AV1/VP9 → HEVC（使用 `--apple-compat`）
-
+### 4. GPU硬件加速
+支持 NVIDIA NVENC、Apple VideoToolbox、Intel QSV、AMD AMF
 
 ## 安装
 
 ```bash
 cd modern_format_boost
-./build_all.sh
+./smart_build.sh
 ```
 
 **依赖：** FFmpeg（libx265, libsvtav1, libjxl），Rust 1.70+
 
 ## 命令
 
-### 子命令
-
-```bash
-# 分析媒体属性
-vidquality-hevc analyze input.mp4
-vidquality-hevc analyze input.mp4 --output json
-
-# 自动转换（智能模式选择）
-vidquality-hevc auto input.mp4 [选项]
-
-# 简单转换（全部 → 目标格式）
-vidquality-hevc simple input.mp4
-
-# 显示推荐策略
-vidquality-hevc strategy input.mp4
-```
-
 ### 参数组合（7种有效模式）
 
 | 参数 | 模式 | 行为 |
 |------|------|------|
 | (无) | 默认 | 单次编码，使用AI预测CRF |
-| `--compress` | 仅压缩 | 确保输出 < 输入（哪怕1KB）|
+| `--compress` | 仅压缩 | 确保输出 < 输入 |
 | `--explore` | 仅体积 | 二分搜索最小文件 |
 | `--match-quality` | 质量匹配 | 单次编码 + SSIM验证 |
-| `--compress --match-quality` | 压缩+质量 | 输出 < 输入 + SSIM检查 |
 | `--explore --match-quality` | 精确 | 二分搜索 + SSIM验证 |
 | `--explore --match-quality --compress` | 完整 | 精确质量 + 必须压缩 |
-| `--explore --match-quality --compress --ultimate` | 🔥 极限 | 持续搜索直到SSIM饱和（领域墙）|
-
-**无效组合：**
-- `--explore --compress`（目标冲突）
-- `--ultimate` 单独使用或与不完整组合搭配
-
-### 所有选项
-
-```bash
--o, --output <目录>    输出目录
--f, --force            覆盖已存在文件
--r, --recursive        递归扫描目录
---delete-original      转换后删除原文件
---in-place             原地转换（替换原文件）
---lossless             数学无损（非常慢）
---apple-compat         AV1/VP9 → HEVC（Apple设备兼容）
---ultimate             🔥 v6.2: 极限探索模式（SSIM饱和）
-                       必须与 --explore --match-quality --compress 组合使用
-```
-
-## 质量验证系统
-
-### SSIM阈值
-- 默认：≥ 0.95（视觉无损）
-- 保守：≥ 0.98（使用 `--cpu`）
-- GPU上限：~0.95（VideoToolbox限制）
-
-## 高级功能
-
-### 5. 错误处理系统
-三级错误分类，响亮报告：
-- **Recoverable**：记录警告，使用回退，继续执行
-- **Fatal**：记录错误，中断操作
-- **Optional**：记录信息，继续执行（非关键）
-
-### 6. 断点续传
-- **进度追踪**：中断后可恢复
-- **原子删除**：验证输出完整性后才删除原文件
-- **锁文件**：防止并发处理
-
-### 7. LRU缓存
-- **容量限制**：自动驱逐最旧条目
-- **持久化**：保存/加载JSON文件
-- **内存安全**：防止长时间运行内存泄漏
-
-### 8. PSNR→SSIM映射
-- **动态预测**：从收集的数据线性插值
-- **自校正**：用实际测量值更新映射
-- **透明度**：报告中显示预测值 vs 实际值
-
-## 支持格式
-
-**视频输入：** mp4, mkv, avi, mov, webm, flv, wmv, m4v, mpg, mpeg, ts, mts
-**图片输入：** png, jpg, jpeg, webp, gif, tiff, tif, heic, avif
-**视频输出：** MP4（HEVC/AV1），MKV（无损）
-**图片输出：** JXL
-
-## 元数据保留
-
-所有4个转换工具通过 `shared_utils::copy_metadata` 自动保留元数据：
-- **EXIF/IPTC/XMP**：通过ExifTool（内部元数据）
-- **XMP边车 (v5.76)**：自动检测并合并 `photo.jpg.xmp` 或 `photo.xmp` 到输出文件
-- **macOS**：ACL、xattr、创建时间、Date Added
-- **时间戳**：转换后保留访问/修改时间
-
-### XMP边车自动合并 (v5.76)
-
-转换时自动检测XMP边车文件：
-1. `photo.jpg.xmp`（Adobe标准）
-2. `photo.xmp`（同名）
-3. 大小写不敏感（`photo.XMP`、`photo.Xmp`）
-
-### XMP边车合并工具（独立工具）
-
-批量合并XMP边车文件（来自Lightroom/Capture One）：
-
-```bash
-xmp-merge /path/to/directory
-xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
-```
+| `--explore --match-quality --compress --ultimate` | 🔥 极限 | 持续搜索直到SSIM饱和 |
 
 ## macOS应用
 
@@ -411,4 +177,4 @@ xmp-merge --delete-xmp /path/to/directory  # 合并后删除.xmp
 
 ---
 
-**Version**: 6.9.0 | **Updated**: 2025-12-18 | [CHANGELOG](CHANGELOG.md)
+**Version**: 6.9.1 | **Updated**: 2025-12-19 | [CHANGELOG](CHANGELOG.md)

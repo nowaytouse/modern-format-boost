@@ -20,5 +20,5 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Local test data
-/Users/nyamiiko/Library/Mobile Documents/com~apple~CloudDocs/Application/GitHub/script_hub/local
+# Local test data (user-specific paths)
+# /path/to/local/test/data

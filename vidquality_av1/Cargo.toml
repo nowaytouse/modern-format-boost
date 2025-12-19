@@ -2,7 +2,7 @@
 name = "vidquality-av1"
 version = "0.1.0"
 edition = "2021"
-authors = ["nyamiiko"]
+authors = ["Modern Format Boost Contributors"]
 description = "Video quality analyzer and format converter - AV1 compression"
 license = "MIT"
 keywords = ["video", "ffv1", "av1", "quality", "archival"]
