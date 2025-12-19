@@ -55,6 +55,10 @@ pub struct FFprobeResult {
     pub bit_depth: u8,
     pub has_audio: bool,
     pub audio_codec: Option<String>,
+    // 🔥 v6.9.1: 音频质量信息（用于智能转码决策）
+    pub audio_bit_rate: Option<u64>,      // 音频比特率 (bps)
+    pub audio_sample_rate: Option<u32>,   // 采样率 (Hz)
+    pub audio_channels: Option<u32>,      // 声道数
     // Enhanced fields for precise CRF matching
     pub profile: Option<String>,        // H.264 profile (Baseline/Main/High)
     pub level: Option<String>,          // H.264 level (3.1, 4.0, etc.)
@@ -171,12 +175,23 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .and_then(|s| s.parse::<u64>().ok());
     let refs = video_stream["refs"].as_u64().map(|r| r as u32);
     
-    // Check for audio
-    let has_audio = streams.iter().any(|s| s["codec_type"].as_str() == Some("audio"));
-    let audio_codec = streams.iter()
-        .find(|s| s["codec_type"].as_str() == Some("audio"))
+    // Check for audio and extract audio quality info
+    let audio_stream = streams.iter()
+        .find(|s| s["codec_type"].as_str() == Some("audio"));
+    let has_audio = audio_stream.is_some();
+    let audio_codec = audio_stream
         .and_then(|s| s["codec_name"].as_str())
         .map(|s| s.to_string());
+    // 🔥 v6.9.1: 提取音频质量信息
+    let audio_bit_rate = audio_stream
+        .and_then(|s| s["bit_rate"].as_str())
+        .and_then(|s| s.parse::<u64>().ok());
+    let audio_sample_rate = audio_stream
+        .and_then(|s| s["sample_rate"].as_str())
+        .and_then(|s| s.parse::<u32>().ok());
+    let audio_channels = audio_stream
+        .and_then(|s| s["channels"].as_u64())
+        .map(|c| c as u32);
     
     Ok(FFprobeResult {
         format_name,
@@ -195,6 +210,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         bit_depth,
         has_audio,
         audio_codec,
+        audio_bit_rate,
+        audio_sample_rate,
+        audio_channels,
         profile,
         level,
         has_b_frames,
