@@ -336,17 +336,17 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     info!("🎬 Auto Mode: {} → {}", input.display(), strategy.target.as_str());
     info!("   Reason: {}", strategy.reason);
     
-    let (output_size, final_crf, attempts) = match strategy.target {
+    let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
         TargetVideoFormat::HevcLosslessMkv => {
             info!("   🚀 Using HEVC Lossless Mode");
             let size = execute_hevc_lossless(&detection, &output_path)?;
-            (size, 0.0, 0) // 🔥 v3.4: CRF is now f32
+            (size, 0.0, 0, None) // 🔥 v3.4: CRF is now f32
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
                 info!("   🚀 Using HEVC Lossless Mode (forced)");
                 let size = execute_hevc_lossless(&detection, &output_path)?;
-                (size, 0.0, 0) // 🔥 v3.4: CRF is now f32
+                (size, 0.0, 0, None) // 🔥 v3.4: CRF is now f32
             } else {
                 // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -386,14 +386,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     }
                     shared_utils::FlagMode::PreciseQuality => {
                         // 模式 5: --explore --match-quality
+                        // 🔥 v6.9: 使用 GPU+CPU 智能探索（包含 MS-SSIM 验证）
                         let initial_crf = calculate_matched_crf(&detection);
-                        let (max_crf, min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
-                            initial_crf, shared_utils::VideoEncoder::Hevc
-                        );
                         info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_precise_quality_match_gpu(
-                            input_path, &output_path, shared_utils::VideoEncoder::Hevc, vf_args,
-                            initial_crf, max_crf, min_ssim, use_gpu
+                        shared_utils::explore_hevc_with_gpu_coarse_full(
+                            input_path, &output_path, vf_args, initial_crf, false, config.force_ms_ssim_long
                         )
                     }
                     shared_utils::FlagMode::CompressWithQuality => {
@@ -552,11 +549,57 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     });
                 }
                 
-                (explore_result.output_size, explore_result.optimal_crf, explore_result.iterations as u8)
+                (explore_result.output_size, explore_result.optimal_crf, explore_result.iterations as u8, Some(explore_result))
             }
         }
         TargetVideoFormat::Skip => unreachable!(),
     };
+    
+    // 🔥 v6.9: MS-SSIM 目标阈值检查 - 即使 SSIM 通过，MS-SSIM 不达标也要拒绝
+    if let Some(ref result) = explore_result_opt {
+        if let Some(false) = result.ms_ssim_passed {
+            let ms_ssim_score = result.ms_ssim_score.unwrap_or(0.0);
+            warn!("   ❌ MS-SSIM TARGET FAILED: {:.4} < 0.90", ms_ssim_score);
+            warn!("   🛡️  Original file PROTECTED (MS-SSIM quality too low)");
+            
+            // 删除低质量的输出文件
+            if output_path.exists() {
+                let _ = std::fs::remove_file(&output_path);
+                info!("   🗑️  Low MS-SSIM output deleted");
+            }
+            
+            // 相邻目录模式下，复制原始文件到输出目录
+            if let Some(ref out_dir) = config.output_dir {
+                let file_name = input.file_name().unwrap_or_default();
+                let dest = out_dir.join(file_name);
+                if !dest.exists() {
+                    if let Ok(_) = std::fs::copy(input, &dest) {
+                        info!("   📋 Copied original to output dir: {}", dest.display());
+                    }
+                }
+            }
+            
+            return Ok(ConversionOutput {
+                input_path: input.display().to_string(),
+                output_path: input.display().to_string(),
+                strategy: ConversionStrategy {
+                    target: TargetVideoFormat::Skip,
+                    reason: format!("MS-SSIM target failed: {:.4} < 0.90", ms_ssim_score),
+                    command: String::new(),
+                    preserve_audio: detection.has_audio,
+                    crf: result.optimal_crf,
+                    lossless: false,
+                },
+                input_size: detection.file_size,
+                output_size: detection.file_size,
+                size_ratio: 1.0,
+                success: false,
+                message: format!("Skipped: MS-SSIM {:.4} below target 0.90", ms_ssim_score),
+                final_crf: result.optimal_crf,
+                exploration_attempts: result.iterations as u8,
+            });
+        }
+    }
     
     // 🔥 v6.4.2: 记录元数据复制前的大小
     let pre_metadata_size = output_size;
