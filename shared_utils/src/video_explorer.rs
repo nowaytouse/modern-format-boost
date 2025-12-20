@@ -5612,13 +5612,32 @@ pub fn explore_with_gpu_coarse_search(
             eprintln!("   ✅ Short video detected (≤5min)");
             eprintln!("   🎯 Enabling MS-SSIM precise verification...");
 
+            // 🔥 v6.9.3: 同时计算 SSIM All 用于对比（检测色度损失）
+            let ssim_all_result = calculate_ssim_all(input, output);
+
             // 计算MS-SSIM分数
             if let Some(ms_ssim) = calculate_ms_ssim(input, output) {
                 eprintln!("   ═══════════════════════════════════════════════════");
                 eprintln!("   📊 Final Quality Scores:");
                 let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
-                eprintln!("      SSIM: {} (exploration metric)", ssim_str);
-                eprintln!("      MS-SSIM: {:.4} (target metric)", ms_ssim);
+                eprintln!("      SSIM (explore): {}", ssim_str);
+                eprintln!("      MS-SSIM (Y only): {:.4}", ms_ssim);
+                
+                // 🔥 v6.9.3: 显示完整 SSIM 并检测色度损失
+                if let Some((y, u, v, all)) = ssim_all_result {
+                    eprintln!("      SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
+                    
+                    // 检测色度损失（U或V通道 SSIM 显著低于 Y 通道）
+                    let chroma_loss = (y - u).max(y - v);
+                    if chroma_loss > 0.02 {
+                        eprintln!("      ⚠️  CHROMA LOSS DETECTED: Y-U={:.4}, Y-V={:.4}", y - u, y - v);
+                        eprintln!("         (可能是 yuv444p → yuv420p 色度下采样导致)");
+                    }
+                    
+                    // 使用 SSIM All 作为更准确的质量指标
+                    let quality_score = all;  // 使用包含色度的 SSIM All
+                    eprintln!("      📊 Quality Score (SSIM All): {:.4}", quality_score);
+                }
 
                 // 🔥 MS-SSIM 作为目标阈值 - 默认 0.90
                 const MS_SSIM_TARGET: f64 = 0.90;
@@ -6800,6 +6819,55 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
 /// ## 返回值
 /// - `Some(score)`: MS-SSIM分数（0-1，越高越好，1.0=完全相同）
 /// - `None`: 计算失败或不支持
+
+/// 🔥 v6.9.3: 计算完整 SSIM（包含 Y/U/V 所有通道）
+/// 
+/// MS-SSIM 只计算亮度通道，对于 yuv444p → yuv420p 的色度下采样无法检测
+/// 此函数返回 SSIM All（加权平均），能更准确反映色度损失
+pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
+    use std::process::Command;
+
+    let result = Command::new("ffmpeg")
+        .arg("-i").arg(input)
+        .arg("-i").arg(output)
+        .arg("-lavfi").arg("[0:v][1:v]ssim")
+        .arg("-f").arg("null")
+        .arg("-")
+        .output();
+
+    match result {
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // 解析: [Parsed_ssim_0 @ ...] SSIM Y:0.999399 ... U:0.966225 ... V:0.936907 ... All:0.967510 ...
+            for line in stderr.lines() {
+                if line.contains("SSIM Y:") && line.contains("All:") {
+                    let y = extract_ssim_value(&line, "Y:");
+                    let u = extract_ssim_value(&line, "U:");
+                    let v = extract_ssim_value(&line, "V:");
+                    let all = extract_ssim_value(&line, "All:");
+                    if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all) {
+                        return Some((y, u, v, all));
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    None
+}
+
+/// 从 SSIM 输出行提取指定通道的值
+fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
+    if let Some(pos) = line.find(prefix) {
+        let after = &line[pos + prefix.len()..];
+        let end = after.find(|c: char| !c.is_numeric() && c != '.').unwrap_or(after.len());
+        if end > 0 {
+            return after[..end].parse::<f64>().ok();
+        }
+    }
+    None
+}
+
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     use std::process::Command;
 
