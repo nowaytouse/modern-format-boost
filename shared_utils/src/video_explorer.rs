@@ -6857,21 +6857,34 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
 
 /// 从JSON输出解析MS-SSIM分数
 fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {
-    // float_ms_ssim JSON格式示例：
-    // "float_ms_ssim": {"min": 0.95, "max": 0.99, "mean": 0.97, ...}
-
-    // 查找 float_ms_ssim 块中的 mean 值
-    if let Some(ms_ssim_pos) = stdout.find("\"float_ms_ssim\"") {
-        let after_ms_ssim = &stdout[ms_ssim_pos..];
-        if let Some(mean_pos) = after_ms_ssim.find("\"mean\"") {
-            let after_mean = &after_ms_ssim[mean_pos + 6..];  // skip "mean"
-            if let Some(colon_pos) = after_mean.find(':') {
-                let after_colon = after_mean[colon_pos + 1..].trim_start();
-                // 提取数字（可能后面跟逗号或括号）
-                let end = after_colon.find(|c: char| !c.is_numeric() && c != '.')
-                    .unwrap_or(after_colon.len());
-                if end > 0 {
-                    return after_colon[..end].parse::<f64>().ok();
+    // 🔥 v6.9.2: 修复解析逻辑 - 必须从 pooled_metrics 中获取 mean 值
+    // JSON 结构:
+    // {
+    //   "frames": [{"metrics": {"float_ms_ssim": 0.999xxx, ...}}, ...],
+    //   "pooled_metrics": {
+    //     "float_ms_ssim": {"min": 0.95, "max": 0.99, "mean": 0.97, "harmonic_mean": 0.97}
+    //   }
+    // }
+    
+    // 首先定位到 pooled_metrics 部分
+    if let Some(pooled_pos) = stdout.find("\"pooled_metrics\"") {
+        let after_pooled = &stdout[pooled_pos..];
+        
+        // 在 pooled_metrics 中查找 float_ms_ssim
+        if let Some(ms_ssim_pos) = after_pooled.find("\"float_ms_ssim\"") {
+            let after_ms_ssim = &after_pooled[ms_ssim_pos..];
+            
+            // 查找 mean 值
+            if let Some(mean_pos) = after_ms_ssim.find("\"mean\"") {
+                let after_mean = &after_ms_ssim[mean_pos + 6..];  // skip "mean"
+                if let Some(colon_pos) = after_mean.find(':') {
+                    let after_colon = after_mean[colon_pos + 1..].trim_start();
+                    // 提取数字（可能后面跟逗号或括号）
+                    let end = after_colon.find(|c: char| !c.is_numeric() && c != '.')
+                        .unwrap_or(after_colon.len());
+                    if end > 0 {
+                        return after_colon[..end].parse::<f64>().ok();
+                    }
                 }
             }
         }
