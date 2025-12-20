@@ -25,10 +25,19 @@ High-performance media conversion toolkit with intelligent quality matching, SSI
 - **Transparency report**: Every iteration with metrics
 - **Confidence scoring**: Sampling coverage + prediction accuracy
 
-### 3. Smart Audio Transcoding (v6.9.1)
-- **Quality-aware**: ALAC for high-quality, AAC for lossy sources
-- **VP9/WebM fix**: Opus/Vorbis → ALAC/AAC for MOV/MP4 compatibility
-- **Bitrate detection**: Automatic quality tier selection
+### 3. Quality Verification System (v6.9.9)
+
+| Mode | Metric | Threshold | Description |
+|------|--------|-----------|-------------|
+| Short video (≤5min) | Fusion Score | ≥0.91 | `0.6×MS-SSIM + 0.4×SSIM_All` |
+| Long video (>5min) | SSIM All | ≥0.92 | Y+U+V weighted average |
+
+**MS-SSIM (Multi-Scale SSIM):**
+- 5-level resolution analysis, closer to human perception
+- 3-channel (Y+U+V) average, includes chroma quality
+- Enabled with `--ms-ssim` flag
+
+**Fusion Formula:** `Final = 0.6 × MS-SSIM(3-ch) + 0.4 × SSIM_All`
 
 ### 4. GPU Hardware Acceleration
 
@@ -139,10 +148,19 @@ Double-click `Modern Format Boost.app` for drag-and-drop conversion:
 - **SSIM验证**：默认阈值 ≥ 0.95
 - **透明度报告**：显示每次迭代的详细指标
 
-### 3. 智能音频转码 (v6.9.1)
-- **质量感知**：高质量源用ALAC，有损源用AAC
-- **VP9/WebM修复**：Opus/Vorbis → ALAC/AAC
-- **比特率检测**：自动选择质量等级
+### 3. 质量验证系统 (v6.9.9)
+
+| 模式 | 指标 | 阈值 | 说明 |
+|------|------|------|------|
+| 短视频 (≤5分钟) | 融合评分 | ≥0.91 | `0.6×MS-SSIM + 0.4×SSIM_All` |
+| 长视频 (>5分钟) | SSIM All | ≥0.92 | Y+U+V 加权平均 |
+
+**MS-SSIM（多尺度SSIM）：**
+- 5级分辨率分析，更接近人眼感知
+- 3通道 (Y+U+V) 平均，包含色度质量
+- 使用 `--ms-ssim` 参数启用
+
+**融合公式：** `最终分数 = 0.6 × MS-SSIM(3通道) + 0.4 × SSIM_All`
 
 ### 4. GPU硬件加速
 支持 NVIDIA NVENC、Apple VideoToolbox、Intel QSV、AMD AMF
@@ -177,4 +195,4 @@ cd modern_format_boost
 
 ---
 
-**Version**: 6.9.1 | **Updated**: 2025-12-19 | [CHANGELOG](CHANGELOG.md)
+**Version**: 6.9.9 | **Updated**: 2025-12-20 | [CHANGELOG](CHANGELOG.md)
