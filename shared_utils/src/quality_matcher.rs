@@ -45,6 +45,8 @@ pub enum SourceCodec {
     H265,
     /// H.266/VVC - ~50% more efficient than HEVC (cutting-edge 2024+)
     Vvc,
+    /// VP8 - slightly better than H.264, predecessor to VP9
+    Vp8,
     /// VP9 - similar to HEVC
     Vp9,
     /// AV1 - ~50% more efficient than H.264
@@ -101,6 +103,7 @@ impl SourceCodec {
             // === Video Codecs (by generation) ===
             SourceCodec::H264 => 1.0,       // Baseline (2003)
             SourceCodec::H265 => 0.65,      // ~35% more efficient (2013)
+            SourceCodec::Vp8 => 0.85,       // ~15% better than H.264 (2008)
             SourceCodec::Vp9 => 0.70,       // Similar to HEVC (2013)
             SourceCodec::Av1 => 0.50,       // ~50% more efficient than H.264 (2018)
             SourceCodec::Vvc => 0.35,       // ~50% more efficient than HEVC (2020)
@@ -1406,6 +1409,10 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     }
     if codec_lower.contains("vp9") {
         return SourceCodec::Vp9;
+    }
+    // 🔥 v6.5.2: VP8 检测 - VP8 源视频需要更高的初始 CRF 来实现压缩
+    if codec_lower.contains("vp8") || codec_lower == "libvpx" {
+        return SourceCodec::Vp8;
     }
     if codec_lower.contains("h264") || codec_lower.contains("avc") || codec_lower.contains("x264") || codec_lower.contains("h.264") {
         return SourceCodec::H264;
