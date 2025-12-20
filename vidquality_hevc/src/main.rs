@@ -63,17 +63,17 @@ enum Commands {
         /// Use with --explore --match-quality for precise quality match + guaranteed compression
         #[arg(long, default_value_t = false)]
         compress: bool,
-        /// 🔥 v5.75: Enable VMAF verification (slower but more accurate)
-        /// VMAF is Netflix's perceptual quality metric (0-100)
+        /// 🔥 Enable MS-SSIM verification (Multi-Scale SSIM, more accurate but slower)
+        /// MS-SSIM is a perceptual quality metric with better correlation to human vision (0-1)
         #[arg(long, default_value_t = false)]
-        vmaf: bool,
-        /// 🔥 v5.75: Minimum VMAF score threshold (default: 85.0)
-        #[arg(long, default_value_t = 85.0)]
-        vmaf_threshold: f64,
-        /// 🔥 v5.75: Force VMAF verification even for long videos (>5min)
-        /// By default, VMAF is skipped for long videos to avoid slow processing
+        ms_ssim: bool,
+        /// 🔥 Minimum MS-SSIM score threshold (default: 0.90, range: 0-1)
+        #[arg(long, default_value_t = 0.90)]
+        ms_ssim_threshold: f64,
+        /// 🔥 Force MS-SSIM verification even for long videos (>5min)
+        /// By default, MS-SSIM is skipped for long videos to avoid slow processing
         #[arg(long, default_value_t = false)]
-        force_vmaf_long: bool,
+        force_ms_ssim_long: bool,
         /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
         /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
         /// ⚠️ MUST be used with --explore --match-quality --compress
@@ -125,7 +125,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, vmaf, vmaf_threshold, force_vmaf_long, ultimate } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, ms_ssim, ms_ssim_threshold, force_ms_ssim_long, ultimate } => {
             // 🔥 v6.2: Validate flag combinations with ultimate support
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate) {
                 eprintln!("{}", e);
@@ -144,10 +144,10 @@ fn main() -> anyhow::Result<()> {
                 apple_compat,
                 require_compression: compress,
                 use_gpu: true,  // 🔥 v6.2: Always use GPU for coarse search, CPU for fine search
-                // 🔥 v5.75: VMAF 验证参数
-                validate_vmaf: vmaf,
-                min_vmaf: vmaf_threshold,
-                force_vmaf_long,
+                // 🔥 MS-SSIM 验证参数
+                validate_ms_ssim: ms_ssim,
+                min_ms_ssim: ms_ssim_threshold,
+                force_ms_ssim_long,
                 ultimate_mode: ultimate,  // 🔥 v6.2: 极限探索模式
             };
             
@@ -176,10 +176,10 @@ fn main() -> anyhow::Result<()> {
             if ultimate {
                 info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
-            if vmaf {
-                info!("   📊 VMAF Verification: ENABLED (threshold: {:.1})", vmaf_threshold);
-                if force_vmaf_long {
-                    info!("   ⚠️  Force VMAF for long videos: ENABLED");
+            if ms_ssim {
+                info!("   📊 MS-SSIM Verification: ENABLED (threshold: {:.2})", ms_ssim_threshold);
+                if force_ms_ssim_long {
+                    info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
                 }
             }
             info!("");

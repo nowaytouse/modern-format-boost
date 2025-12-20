@@ -35,14 +35,14 @@ fi
 
 echo ""
 echo "=========================================="
-echo "🧪 长视频 + VMAF启用 (无force)"
-echo "预期: 应该跳过VMAF (>5分钟)"
+echo "🧪 长视频 + MS-SSIM启用 (无force)"
+echo "预期: 应该跳过MS-SSIM (>5分钟)"
 echo "=========================================="
 
 "$BINARY" auto \
     "$TEST_DIR/long_6min.mp4" \
-    --vmaf \
-    --vmaf-threshold 85 \
+    --ms-ssim \
+    --ms-ssim-threshold 85 \
     --explore \
     --match-quality true \
     --compress \

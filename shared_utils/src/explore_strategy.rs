@@ -528,7 +528,7 @@ impl ExploreContext {
             size_change_pct,
             ssim,
             psnr,
-            vmaf: None,
+            ms_ssim: None,
             iterations,
             quality_passed,
             log: self.log.clone(),

@@ -30,6 +30,24 @@ All notable changes to Modern Format Boost will be documented in this file.
   - Better compression boundary detection for already-efficient codecs (VP8, VP9)
   - Reduces "GPU didn't find compression boundary" failures
 
+### 🎬 Comprehensive Codec Support
+
+- **Added 15+ legacy and lossless codecs** to prevent "Unknown codec" efficiency mismatches:
+  - **Legacy Video**: MPEG-4 (XviD/DivX), MPEG-2 (DVD), MPEG-1 (VCD), WMV/VC-1, Theora, RealVideo, Flash Video
+  - **Lossless Video**: RawVideo, Lagarith, MagicYUV
+  - **Image Formats**: BMP, TIFF
+  
+- **Efficiency factors calibrated for all codecs**:
+  | Codec | Efficiency Factor | Notes |
+  |-------|------------------|-------|
+  | MPEG-4 | 1.3 | ~30% less efficient than H.264 |
+  | MPEG-2 | 1.8 | ~80% less efficient (DVD era) |
+  | MPEG-1 | 2.5 | Very old (VCD era) |
+  | WMV/VC-1 | 1.1 | Similar to H.264 |
+  | Theora | 1.2 | Similar to MPEG-4 ASP |
+  | RealVideo | 2.0 | Ancient, very inefficient |
+  | Flash Video | 1.5 | FLV1/VP6 legacy |
+
 ---
 
 ## [6.9.1] - 2025-12-19
