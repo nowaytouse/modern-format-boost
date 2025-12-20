@@ -628,6 +628,10 @@ pub struct ExploreResult {
     pub psnr: Option<f64>,
     /// MS-SSIM 分数 (0-1, 多尺度结构相似性指标)
     pub ms_ssim: Option<f64>,
+    /// 🔥 v6.9: MS-SSIM 是否达标 (None=未计算, Some(true)=达标, Some(false)=不达标)
+    pub ms_ssim_passed: Option<bool>,
+    /// 🔥 v6.9: MS-SSIM 实际分数
+    pub ms_ssim_score: Option<f64>,
     /// 探索迭代次数
     pub iterations: u32,
     /// 是否通过质量验证
@@ -657,6 +661,8 @@ impl Default for ExploreResult {
             ssim: None,
             psnr: None,
             ms_ssim: None,
+            ms_ssim_passed: None,
+            ms_ssim_score: None,
             iterations: 0,
             quality_passed: false,
             log: Vec::new(),
@@ -1447,6 +1453,8 @@ impl VideoExplorer {
             ssim,
             psnr: None,
             ms_ssim: None,
+            ms_ssim_passed: None,
+            ms_ssim_score: None,
             iterations,
             quality_passed,
             log,
@@ -1579,6 +1587,8 @@ impl VideoExplorer {
                 ssim: None,
                 psnr: None,
                 ms_ssim: None,
+            ms_ssim_passed: None,
+            ms_ssim_score: None,
                 iterations,
                 quality_passed: true,
                 log,
@@ -1645,6 +1655,8 @@ impl VideoExplorer {
             ssim: None,
             psnr: None,
             ms_ssim: None,
+            ms_ssim_passed: None,
+            ms_ssim_score: None,
             iterations,
             quality_passed: compressed,
             log,
@@ -1786,6 +1798,8 @@ impl VideoExplorer {
             ssim: Some(final_ssim),
             psnr: None,
             ms_ssim: None,
+            ms_ssim_passed: None,
+            ms_ssim_score: None,
             iterations,
             quality_passed: passed,
             log,
@@ -5594,7 +5608,7 @@ pub fn explore_with_gpu_coarse_search(
         let should_run_vmaf = duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long;
 
         if should_run_vmaf {
-            // 短视频（≤5分钟），开启VMAF精确验证
+            // 短视频（≤5分钟）或强制启用，开启MS-SSIM精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
             eprintln!("   🎯 Enabling MS-SSIM precise verification...");
 
@@ -5604,43 +5618,41 @@ pub fn explore_with_gpu_coarse_search(
                 eprintln!("   📊 Final Quality Scores:");
                 let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
                 eprintln!("      SSIM: {} (exploration metric)", ssim_str);
-                eprintln!("      MS-SSIM: {:.4} (verification metric)", ms_ssim);
+                eprintln!("      MS-SSIM: {:.4} (target metric)", ms_ssim);
 
-                // 🔥 MS-SSIM分数解读 - 范围 0-1
-                let ms_ssim_normalized = ms_ssim; // MS-SSIM 本身就是 0-1 范围
-
-                let ms_ssim_grade = if ms_ssim_normalized >= 0.95 {
+                // 🔥 MS-SSIM 作为目标阈值 - 默认 0.90
+                const MS_SSIM_TARGET: f64 = 0.90;
+                
+                let ms_ssim_grade = if ms_ssim >= 0.95 {
                     "🟢 Excellent (near transparent)"
-                } else if ms_ssim_normalized >= 0.90 {
-                    "🟡 Very Good (imperceptible diff)"
-                } else if ms_ssim_normalized >= 0.85 {
-                    "🟠 Good (minor artifacts)"
+                } else if ms_ssim >= MS_SSIM_TARGET {
+                    "🟡 Very Good (meets target)"
+                } else if ms_ssim >= 0.85 {
+                    "🟠 Below Target (minor artifacts)"
                 } else {
-                    "🔴 Fair (noticeable artifacts)"
+                    "🔴 FAILED (noticeable artifacts)"
                 };
                 eprintln!("      Grade: {}", ms_ssim_grade);
+                eprintln!("      Target: ≥{:.2}", MS_SSIM_TARGET);
 
-                // SSIM vs MS-SSIM 映射关系展示
-                let ssim_val = result.ssim.unwrap_or(0.0);
-                let ssim_ms_ssim_correlation = if ms_ssim_normalized >= 0.90 && ssim_val >= 0.98 {
-                    "✅ Excellent correlation"
-                } else if ms_ssim_normalized >= 0.85 && ssim_val >= 0.95 {
-                    "✅ Good correlation"
+                // 🔥 MS-SSIM 目标检查 - 低于阈值时标记失败
+                if ms_ssim < MS_SSIM_TARGET {
+                    eprintln!("   ❌ MS-SSIM BELOW TARGET! {:.4} < {:.2}", ms_ssim, MS_SSIM_TARGET);
+                    eprintln!("      ⚠️  Quality does not meet MS-SSIM threshold!");
+                    eprintln!("      💡 Suggestion: Lower CRF or disable --compress for better quality");
+                    // 🔥 标记结果为质量不达标
+                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_score = Some(ms_ssim);
                 } else {
-                    "⚠️  Divergence detected"
-                };
-                eprintln!("      SSIM-MS-SSIM: {}", ssim_ms_ssim_correlation);
-
-                // 如果 MS-SSIM 显著低于预期，给出建议
-                if ms_ssim_normalized < 0.85 {
-                    eprintln!("   ⚠️  MS-SSIM lower than expected!");
-                    eprintln!("      Suggestion: Try lowering CRF by 1-2 for better quality");
-                } else if ms_ssim_normalized >= 0.95 {
-                    eprintln!("   ✅ Excellent quality confirmed by MS-SSIM");
+                    eprintln!("   ✅ MS-SSIM TARGET MET: {:.4} ≥ {:.2}", ms_ssim, MS_SSIM_TARGET);
+                    result.ms_ssim_passed = Some(true);
+                    result.ms_ssim_score = Some(ms_ssim);
                 }
             } else {
                 eprintln!("   ⚠️  MS-SSIM calculation failed (libvmaf not available?)");
                 eprintln!("   ℹ️  Falling back to SSIM verification only");
+                result.ms_ssim_passed = None;
+                result.ms_ssim_score = None;
             }
         } else {
             let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
@@ -6682,6 +6694,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         ssim,
         psnr: None,
         ms_ssim: None,
+            ms_ssim_passed: None,
+            ms_ssim_score: None,
         iterations,
         quality_passed,
         log,
