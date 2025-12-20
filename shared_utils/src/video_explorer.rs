@@ -5625,10 +5625,9 @@ pub fn explore_with_gpu_coarse_search(
                 eprintln!("      MS-SSIM (Y only): {:.4}", ms_ssim);
             }
 
-            // 🔥 v6.9.4: 使用 SSIM All 作为最终质量判断标准
-            // SSIM All 包含 Y/U/V 所有通道，能检测色度损失
-            // 阈值: 0.92（考虑到 yuv444p → yuv420p 色度下采样是正常的）
-            const SSIM_ALL_TARGET: f64 = 0.92;
+            // 🔥 v6.9.5: 使用探索阶段的动态阈值，保持一致性
+            // result.actual_min_ssim 存储了探索阶段计算的动态阈值
+            let ssim_all_target = result.actual_min_ssim.max(0.90);  // 最低 0.90
             
             if let Some((y, u, v, all)) = ssim_all_result {
                 eprintln!("      SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
@@ -5639,31 +5638,31 @@ pub fn explore_with_gpu_coarse_search(
                     eprintln!("      ⚠️  CHROMA LOSS: Y-U={:.4}, Y-V={:.4} (yuv444p→yuv420p)", y - u, y - v);
                 }
 
-                // 🔥 v6.9.4: 使用 SSIM All 作为最终判断
+                // 🔥 v6.9.5: 使用动态阈值判断
                 let quality_grade = if all >= 0.98 {
                     "🟢 Excellent"
                 } else if all >= 0.95 {
                     "🟢 Very Good"
-                } else if all >= SSIM_ALL_TARGET {
+                } else if all >= ssim_all_target {
                     "🟡 Good (meets target)"
                 } else if all >= 0.85 {
                     "🟠 Below Target"
                 } else {
                     "🔴 FAILED"
                 };
-                eprintln!("      📊 SSIM All: {:.4} {} (target: ≥{:.2})", all, quality_grade, SSIM_ALL_TARGET);
+                eprintln!("      📊 SSIM All: {:.4} {} (target: ≥{:.2})", all, quality_grade, ssim_all_target);
 
-                // 🔥 v6.9.4: SSIM All 目标检查
-                if all < SSIM_ALL_TARGET {
-                    eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, SSIM_ALL_TARGET);
+                // 🔥 v6.9.5: SSIM All 目标检查（使用动态阈值）
+                if all < ssim_all_target {
+                    eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, ssim_all_target);
                     eprintln!("      ⚠️  Quality does not meet threshold (including chroma)!");
                     eprintln!("      💡 Suggestion: Lower CRF or disable --compress");
                     result.ms_ssim_passed = Some(false);
-                    result.ms_ssim_score = Some(all);  // 存储 SSIM All
+                    result.ms_ssim_score = Some(all);
                 } else {
-                    eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, SSIM_ALL_TARGET);
+                    eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, ssim_all_target);
                     result.ms_ssim_passed = Some(true);
-                    result.ms_ssim_score = Some(all);  // 存储 SSIM All
+                    result.ms_ssim_score = Some(all);
                 }
             } else if let Some(ms_ssim) = ms_ssim_result {
                 // Fallback: 如果 SSIM All 计算失败，使用 MS-SSIM
