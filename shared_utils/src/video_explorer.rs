@@ -6798,7 +6798,7 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
 /// - **关系**：VMAF ≈ f(SSIM)，存在映射关系
 ///
 /// ## 返回值
-/// - `Some(score)`: MS-SSIM分数（0-100，越高越好）
+/// - `Some(score)`: MS-SSIM分数（0-1，越高越好，1.0=完全相同）
 /// - `None`: 计算失败或不支持
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     use std::process::Command;
@@ -6822,14 +6822,24 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
 
             // 尝试从stdout解析（JSON格式）
             if let Some(ms_ssim) = parse_ms_ssim_from_json(&stdout) {
-                eprintln!("   📊 MS-SSIM score: {:.4}", ms_ssim);
-                return Some(ms_ssim);
+                // 🔥 v6.9.1: Clamp to valid range [0, 1] - 防止浮点精度误差导致超出范围
+                let clamped = ms_ssim.clamp(0.0, 1.0);
+                if (ms_ssim - clamped).abs() > 0.0001 {
+                    eprintln!("   ⚠️  MS-SSIM raw value {:.6} out of range, clamped to {:.4}", ms_ssim, clamped);
+                }
+                eprintln!("   📊 MS-SSIM score: {:.4}", clamped);
+                return Some(clamped);
             }
 
             // fallback: 尝试从stderr解析（旧版格式）
             if let Some(ms_ssim) = parse_ms_ssim_from_legacy(&stderr) {
-                eprintln!("   📊 MS-SSIM score: {:.4}", ms_ssim);
-                return Some(ms_ssim);
+                // 🔥 v6.9.1: Clamp to valid range [0, 1]
+                let clamped = ms_ssim.clamp(0.0, 1.0);
+                if (ms_ssim - clamped).abs() > 0.0001 {
+                    eprintln!("   ⚠️  MS-SSIM raw value {:.6} out of range, clamped to {:.4}", ms_ssim, clamped);
+                }
+                eprintln!("   📊 MS-SSIM score: {:.4}", clamped);
+                return Some(clamped);
             }
 
             eprintln!("   ⚠️  MS-SSIM calculated but failed to parse score");
