@@ -2,6 +2,36 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.5.2] - 2025-12-20
+
+### 🔧 Adjacent Directory Mode Fix
+
+- **Copy original when skipped**: Fixed issue where skipped files were missing from output directory
+  - Short animations (< 3s) now copied to output directory instead of being silently skipped
+  - Videos that cannot be compressed (VP8, already optimized) now copied to output directory
+  - Modern formats (WebP, AVIF, HEIC) skipped but copied to preserve directory completeness
+  
+- **Quality Protection with Copy**: When video stream compression fails:
+  - Original file protected (not replaced with larger file)
+  - Original copied to output directory in adjacent mode
+  - Clear logging with `📋 Copied original to output dir` message
+
+### 🎯 VP8 Source Compression Fix
+
+- **Added VP8 codec detection**: VP8 sources now properly identified with efficiency factor 0.85
+  - Previously VP8 was treated as `Unknown` (efficiency 1.0), causing CRF underestimation
+  - VP8 → HEVC conversion now starts with more appropriate (higher) CRF values
+  - Improved chance of achieving compression for VP8 sources
+
+### 📊 GPU Coarse Search Range Expansion
+
+- **Expanded GPU max CRF**: 40 → 48
+  - GPU phase now explores a wider CRF range
+  - Better compression boundary detection for already-efficient codecs (VP8, VP9)
+  - Reduces "GPU didn't find compression boundary" failures
+
+---
+
 ## [6.9.1] - 2025-12-19
 
 ### 🎵 Smart Audio Transcoding Strategy

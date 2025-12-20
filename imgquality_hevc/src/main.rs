@@ -531,6 +531,23 @@ struct AutoConvertConfig {
     ultimate: bool,
 }
 
+/// 🔥 v6.5.2: 在"输出到相邻目录"模式下复制原始文件
+/// 当文件被跳过时（短动画、无法压缩等），需要将原始文件复制到输出目录
+fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
+    if let Some(ref output_dir) = config.output_dir {
+        // 相邻目录模式：复制原始文件
+        let file_name = input.file_name().ok_or_else(|| anyhow::anyhow!("No file name"))?;
+        let dest = output_dir.join(file_name);
+        
+        // 如果目标不存在，复制
+        if !dest.exists() {
+            std::fs::copy(input, &dest)?;
+            println!("   📋 Copied to output dir: {}", dest.display());
+        }
+    }
+    Ok(())
+}
+
 /// Smart auto-convert a single file based on format detection
 /// 
 /// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）：
@@ -577,6 +594,8 @@ fn auto_convert_single_file(
         // 🍎 Apple compat mode: Skip static lossy modern formats, but animated will be handled below
         ("WebP", false, false) | ("AVIF", false, false) | ("HEIC", false, false) | ("HEIF", false, false) => {
             println!("⏭️ Skipping modern lossy format (avoid generation loss): {}", input.display());
+            // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+            copy_original_if_adjacent_mode(input, config)?;
             return Ok(());
         }
 
@@ -609,6 +628,8 @@ fn auto_convert_single_file(
             if is_modern_animated && !is_lossless && !config.apple_compat {
                 println!("⏭️ Skipping modern lossy animated format (avoid generation loss): {}", input.display());
                 println!("   💡 Use --apple-compat to convert to HEVC for Apple device compatibility");
+                // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+                copy_original_if_adjacent_mode(input, config)?;
                 return Ok(());
             }
             
@@ -618,6 +639,8 @@ fn auto_convert_single_file(
                 _ => {
                     eprintln!("⚠️  Cannot get animation duration, skipping conversion: {}", input.display());
                     eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                    // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+                    copy_original_if_adjacent_mode(input, config)?;
                     return Ok(());
                 }
             };
@@ -650,6 +673,8 @@ fn auto_convert_single_file(
             } else if duration < 3.0 {
                 // 非 Apple 兼容模式下，短动画跳过
                 println!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
+                // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+                copy_original_if_adjacent_mode(input, config)?;
                 return Ok(());
             } else if config.lossless {
                 // 用户显式要求数学无损
@@ -668,6 +693,8 @@ fn auto_convert_single_file(
              // Redundant safecheck for WebP/AVIF/HEIC just in case pattern matching missed
             if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
                 println!("⏭️ Skipping modern lossy format: {}", input.display());
+                // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+                copy_original_if_adjacent_mode(input, config)?;
                 return Ok(());
             }
             

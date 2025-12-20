@@ -63,7 +63,9 @@ pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 pub const GPU_DEFAULT_MIN_CRF: f32 = 1.0;
 
 /// GPU 默认最大 CRF
-pub const GPU_DEFAULT_MAX_CRF: f32 = 40.0;
+/// 🔥 v6.5.2: 扩大范围 40 → 48，让 GPU 更好地找到压缩边界
+/// 特别是对于 VP8/VP9 等已经相对高效的编码
+pub const GPU_DEFAULT_MAX_CRF: f32 = 48.0;
 
 /// GPU 加速检测结果（全局缓存）
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
