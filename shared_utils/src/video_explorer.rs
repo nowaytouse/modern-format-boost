@@ -5748,14 +5748,51 @@ pub fn explore_with_gpu_coarse_search(
                 }
             }
         } else {
-            let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
+            // 🔥 v6.9.9: 长视频使用 SSIM All 验证（包含色度）
             eprintln!("   ⏭️  Long video (>{:.0}min) - skipping MS-SSIM verification", VMAF_DURATION_THRESHOLD / 60.0);
-            eprintln!("   ℹ️  Using SSIM verification only: {}", ssim_str);
+            eprintln!("   🎯 Using SSIM All verification (includes chroma)...");
+            
+            if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
+                eprintln!("   📊 SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
+                
+                // 使用 SSIM All 作为评价指标，阈值 0.92
+                const SSIM_ALL_THRESHOLD: f64 = 0.92;
+                if all < SSIM_ALL_THRESHOLD {
+                    eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, SSIM_ALL_THRESHOLD);
+                    result.ms_ssim_passed = Some(false);
+                } else {
+                    eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, SSIM_ALL_THRESHOLD);
+                    result.ms_ssim_passed = Some(true);
+                }
+                result.ms_ssim_score = Some(all);
+            } else {
+                eprintln!("   ⚠️  SSIM All calculation failed, using Y channel only");
+                let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
+                eprintln!("   ℹ️  SSIM (Y only): {}", ssim_str);
+            }
         }
     } else {
-        let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
+        // 🔥 v6.9.9: 无法获取时长时也使用 SSIM All
         eprintln!("   ⚠️  Could not determine video duration");
-        eprintln!("   ℹ️  Using SSIM verification only: {}", ssim_str);
+        eprintln!("   🎯 Using SSIM All verification (includes chroma)...");
+        
+        if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
+            eprintln!("   📊 SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
+            
+            const SSIM_ALL_THRESHOLD: f64 = 0.92;
+            if all < SSIM_ALL_THRESHOLD {
+                eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, SSIM_ALL_THRESHOLD);
+                result.ms_ssim_passed = Some(false);
+            } else {
+                eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, SSIM_ALL_THRESHOLD);
+                result.ms_ssim_passed = Some(true);
+            }
+            result.ms_ssim_score = Some(all);
+        } else {
+            let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
+            eprintln!("   ⚠️  SSIM All calculation failed");
+            eprintln!("   ℹ️  SSIM (Y only): {}", ssim_str);
+        }
     }
 
     eprintln!("");
