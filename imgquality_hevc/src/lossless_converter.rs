@@ -768,6 +768,17 @@ pub fn convert_to_hevc_mp4_matched(
             eprintln!("   🗑️  Low-quality output deleted");
         }
         
+        // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+        if let Some(ref out_dir) = options.output_dir {
+            let file_name = input.file_name().unwrap_or_default();
+            let dest = out_dir.join(file_name);
+            if !dest.exists() {
+                if let Ok(_) = fs::copy(input, &dest) {
+                    eprintln!("   📋 Copied original to output dir: {}", dest.display());
+                }
+            }
+        }
+        
         // 返回跳过状态，不删除原文件
         return Ok(ConversionResult {
             success: false,
