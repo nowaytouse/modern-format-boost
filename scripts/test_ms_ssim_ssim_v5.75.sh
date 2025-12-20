@@ -1,20 +1,20 @@
 #!/bin/bash
-# VMAF-SSIM协同验证测试脚本 v5.75
+# MS-SSIM-SSIM协同验证测试脚本 v5.75
 # 测试场景：
-# 1. 短视频 + VMAF启用 → 应该计算VMAF
-# 2. 长视频(>5min) + VMAF启用 → 应该跳过VMAF
-# 3. 长视频 + force-vmaf-long → 应该强制计算VMAF
+# 1. 短视频 + MS-SSIM启用 → 应该计算MS-SSIM
+# 2. 长视频(>5min) + MS-SSIM启用 → 应该跳过MS-SSIM
+# 3. 长视频 + force-vmaf-long → 应该强制计算MS-SSIM
 
 set -e
 SCRIPT_DIR="$(dirname "$0")"
 PROJECT_DIR="$SCRIPT_DIR/.."
 
 echo "=========================================="
-echo "🧪 VMAF-SSIM协同验证测试 v5.75"
+echo "🧪 MS-SSIM-SSIM协同验证测试 v5.75"
 echo "=========================================="
 
 # 创建测试目录
-TEST_DIR="$PROJECT_DIR/test_vmaf_ssim_output"
+TEST_DIR="$PROJECT_DIR/test_ms_ssim_ssim_output"
 rm -rf "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 
@@ -46,13 +46,13 @@ fi
 
 echo ""
 echo "=========================================="
-echo "测试1: 短视频 + VMAF启用 (双击脚本参数)"
-echo "预期: 应该计算VMAF"
+echo "测试1: 短视频 + MS-SSIM启用 (双击脚本参数)"
+echo "预期: 应该计算MS-SSIM"
 echo "=========================================="
 "$BINARY" auto \
     "$TEST_DIR/short_10s.mp4" \
-    --vmaf \
-    --vmaf-threshold 85 \
+    --ms-ssim \
+    --ms-ssim-threshold 0.90 \
     --explore \
     --match-quality true \
     --compress \
@@ -62,13 +62,13 @@ echo "=========================================="
 
 echo ""
 echo "=========================================="
-echo "测试2: 长视频 + VMAF启用 (无force)"
-echo "预期: 应该跳过VMAF (>5分钟)"
+echo "测试2: 长视频 + MS-SSIM启用 (无force)"
+echo "预期: 应该跳过MS-SSIM (>5分钟)"
 echo "=========================================="
 "$BINARY" auto \
     "$TEST_DIR/long_6min.mp4" \
-    --vmaf \
-    --vmaf-threshold 85 \
+    --ms-ssim \
+    --ms-ssim-threshold 0.90 \
     --explore \
     --match-quality true \
     --compress \
@@ -79,12 +79,12 @@ echo "=========================================="
 echo ""
 echo "=========================================="
 echo "测试3: 长视频 + force-vmaf-long"
-echo "预期: 应该强制计算VMAF"
+echo "预期: 应该强制计算MS-SSIM"
 echo "=========================================="
 echo "⚠️  此测试耗时较长，跳过实际执行"
 echo "命令: $BINARY auto \\"
 echo "    \"$TEST_DIR/long_6min.mp4\" \\"
-echo "    --vmaf --force-vmaf-long --explore --match-quality true --compress \\"
+echo "    --ms-ssim --force-ms-ssim-long --explore --match-quality true --compress \\"
 echo "    --output \"$TEST_DIR/long_forced.mp4\""
 
 echo ""
@@ -95,10 +95,10 @@ echo "=========================================="
 echo ""
 echo "--- 测试1日志 (短视频+VMAF) ---"
 if grep -q "VMAF" "$TEST_DIR/test1_short_vmaf.log" 2>/dev/null; then
-    echo "✅ 检测到VMAF相关输出"
+    echo "✅ 检测到MS-SSIM相关输出"
     grep -i "vmaf\|ssim\|psnr" "$TEST_DIR/test1_short_vmaf.log" | head -10 || true
 else
-    echo "⚠️  未检测到VMAF输出"
+    echo "⚠️  未检测到MS-SSIM输出"
 fi
 
 echo ""
