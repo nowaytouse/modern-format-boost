@@ -5660,21 +5660,41 @@ pub fn explore_with_gpu_coarse_search(
                     result.ms_ssim_score = Some(avg);
                 }
             } else {
-                // Fallback: 三通道 MS-SSIM 失败，尝试单通道
-                eprintln!("      ⚠️  3-channel MS-SSIM failed, trying single-channel fallback...");
+                // 🔥 Fallback: 三通道 MS-SSIM 失败，响亮报错！
+                eprintln!("   ════════════════════════════════════════════════════");
+                eprintln!("   ⚠️⚠️⚠️  3-CHANNEL MS-SSIM CALCULATION FAILED!  ⚠️⚠️⚠️");
+                eprintln!("   ════════════════════════════════════════════════════");
+                eprintln!("      Possible causes:");
+                eprintln!("         - libvmaf not available in ffmpeg");
+                eprintln!("         - Incompatible pixel format");
+                eprintln!("         - Resolution mismatch between channels");
+                eprintln!("      🔄 FALLBACK: Using single-channel MS-SSIM (Y only)");
+                eprintln!("      ⚠️  WARNING: Single-channel ignores chroma loss!");
+                eprintln!("   ════════════════════════════════════════════════════");
+                
                 if let Some(ms_ssim) = calculate_ms_ssim(input, output) {
                     eprintln!("      MS-SSIM (Y only): {:.4}", ms_ssim);
+                    eprintln!("      ⚠️  This value may be HIGHER than actual quality!");
                     if ms_ssim < ms_ssim_target {
                         eprintln!("   ❌ MS-SSIM BELOW TARGET! {:.4} < {:.2}", ms_ssim, ms_ssim_target);
                         result.ms_ssim_passed = Some(false);
                         result.ms_ssim_score = Some(ms_ssim);
                     } else {
                         eprintln!("   ✅ MS-SSIM TARGET MET: {:.4} ≥ {:.2}", ms_ssim, ms_ssim_target);
+                        eprintln!("      ⚠️  (Fallback mode - chroma quality not verified)");
                         result.ms_ssim_passed = Some(true);
                         result.ms_ssim_score = Some(ms_ssim);
                     }
                 } else {
-                    eprintln!("   ⚠️  All MS-SSIM calculations failed!");
+                    eprintln!("   ════════════════════════════════════════════════════");
+                    eprintln!("   ❌❌❌  ALL MS-SSIM CALCULATIONS FAILED!  ❌❌❌");
+                    eprintln!("   ════════════════════════════════════════════════════");
+                    eprintln!("      Cannot verify output quality!");
+                    eprintln!("      Possible causes:");
+                    eprintln!("         - ffmpeg libvmaf not installed");
+                    eprintln!("         - Corrupted video file");
+                    eprintln!("         - Unsupported codec/format");
+                    eprintln!("   ════════════════════════════════════════════════════");
                     result.ms_ssim_passed = None;
                     result.ms_ssim_score = None;
                 }
