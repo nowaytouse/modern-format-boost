@@ -5610,59 +5610,107 @@ pub fn explore_with_gpu_coarse_search(
         if should_run_vmaf {
             // 短视频（≤5分钟）或强制启用，开启精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
-            eprintln!("   🎯 Enabling 3-channel MS-SSIM verification (most accurate)...");
+            eprintln!("   🎯 Enabling fusion quality verification (MS-SSIM + SSIM)...");
 
-            // 🔥 v6.9.6: 使用三通道 MS-SSIM (Y+U+V) 作为最终判断标准
+            // 🔥 v6.9.8: 计算两种指标用于融合评分
             let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output);
+            let ssim_all_result = calculate_ssim_all(input, output);
 
             eprintln!("   ═══════════════════════════════════════════════════");
-            eprintln!("   📊 Final Quality Scores:");
+            eprintln!("   📊 Quality Metrics:");
             let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
             eprintln!("      SSIM (explore): {}", ssim_str);
 
-            // 🔥 v6.9.6: 使用动态阈值（与探索阶段一致）
-            let ms_ssim_target = result.actual_min_ssim.max(0.90);
+            // 🔥 v6.9.8: 使用动态阈值（与探索阶段一致）
+            let quality_target = result.actual_min_ssim.max(0.90);
             
+            // 🔥 v6.9.8: 融合评分公式
+            // Final = 0.6 × MS-SSIM(3-ch) + 0.4 × SSIM_All
+            // MS-SSIM: 多尺度分析，更接近人眼感知
+            // SSIM_All: 准确的色度损失检测（无上采样偏差）
+            const MS_SSIM_WEIGHT: f64 = 0.6;
+            const SSIM_ALL_WEIGHT: f64 = 0.4;
+            
+            let mut final_score: Option<f64> = None;
+            let mut ms_ssim_avg: Option<f64> = None;
+            let mut ssim_all_val: Option<f64> = None;
+            
+            // 显示 MS-SSIM 三通道结果
             if let Some((y, u, v, avg)) = ms_ssim_yuv_result {
                 eprintln!("      MS-SSIM Y/U/V: {:.4}/{:.4}/{:.4}", y, u, v);
-                eprintln!("      MS-SSIM (weighted avg): {:.4}", avg);
+                eprintln!("      MS-SSIM (3-ch avg): {:.4}", avg);
+                ms_ssim_avg = Some(avg);
                 
                 // 检测色度损失
                 let chroma_loss = (y - u).max(y - v);
                 if chroma_loss > 0.02 {
-                    eprintln!("      ⚠️  CHROMA LOSS: Y-U={:.4}, Y-V={:.4}", y - u, y - v);
+                    eprintln!("      ⚠️  MS-SSIM CHROMA DIFF: Y-U={:.4}, Y-V={:.4}", y - u, y - v);
                 }
-
-                // 质量等级
-                let quality_grade = if avg >= 0.98 {
+            }
+            
+            // 显示 SSIM All 结果
+            if let Some((y, u, v, all)) = ssim_all_result {
+                eprintln!("      SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
+                ssim_all_val = Some(all);
+                
+                // 检测色度损失
+                let chroma_loss = (y - u).max(y - v);
+                if chroma_loss > 0.02 {
+                    eprintln!("      ⚠️  SSIM CHROMA LOSS: Y-U={:.4}, Y-V={:.4}", y - u, y - v);
+                }
+            }
+            
+            // 🔥 v6.9.8: 计算融合评分
+            eprintln!("   ───────────────────────────────────────────────────");
+            if let (Some(ms), Some(ss)) = (ms_ssim_avg, ssim_all_val) {
+                // 两种指标都有，使用融合公式
+                let fusion = MS_SSIM_WEIGHT * ms + SSIM_ALL_WEIGHT * ss;
+                final_score = Some(fusion);
+                eprintln!("   📊 FUSION SCORE: {:.4}", fusion);
+                eprintln!("      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All", MS_SSIM_WEIGHT, SSIM_ALL_WEIGHT);
+                eprintln!("      = {:.1}×{:.4} + {:.1}×{:.4}", MS_SSIM_WEIGHT, ms, SSIM_ALL_WEIGHT, ss);
+            } else if let Some(ms) = ms_ssim_avg {
+                // 只有 MS-SSIM
+                final_score = Some(ms);
+                eprintln!("   📊 SCORE (MS-SSIM only): {:.4}", ms);
+                eprintln!("      ⚠️  SSIM All unavailable, using MS-SSIM alone");
+            } else if let Some(ss) = ssim_all_val {
+                // 只有 SSIM All
+                final_score = Some(ss);
+                eprintln!("   📊 SCORE (SSIM All only): {:.4}", ss);
+                eprintln!("      ⚠️  MS-SSIM unavailable, using SSIM All alone");
+            }
+            
+            // 🔥 v6.9.8: 最终判断
+            if let Some(score) = final_score {
+                let quality_grade = if score >= 0.98 {
                     "🟢 Excellent"
-                } else if avg >= 0.95 {
+                } else if score >= 0.95 {
                     "🟢 Very Good"
-                } else if avg >= ms_ssim_target {
+                } else if score >= quality_target {
                     "🟡 Good (meets target)"
-                } else if avg >= 0.85 {
+                } else if score >= 0.85 {
                     "🟠 Below Target"
                 } else {
                     "🔴 FAILED"
                 };
-                eprintln!("      📊 Grade: {} (target: ≥{:.2})", quality_grade, ms_ssim_target);
+                eprintln!("      Grade: {} (target: ≥{:.2})", quality_grade, quality_target);
 
-                // 🔥 v6.9.6: 三通道 MS-SSIM 目标检查
-                if avg < ms_ssim_target {
-                    eprintln!("   ❌ MS-SSIM (3-ch) BELOW TARGET! {:.4} < {:.2}", avg, ms_ssim_target);
+                if score < quality_target {
+                    eprintln!("   ❌ FUSION SCORE BELOW TARGET! {:.4} < {:.2}", score, quality_target);
                     eprintln!("      ⚠️  Quality does not meet threshold!");
                     eprintln!("      💡 Suggestion: Lower CRF or disable --compress");
                     result.ms_ssim_passed = Some(false);
-                    result.ms_ssim_score = Some(avg);
+                    result.ms_ssim_score = Some(score);
                 } else {
-                    eprintln!("   ✅ MS-SSIM (3-ch) TARGET MET: {:.4} ≥ {:.2}", avg, ms_ssim_target);
+                    eprintln!("   ✅ FUSION SCORE TARGET MET: {:.4} ≥ {:.2}", score, quality_target);
                     result.ms_ssim_passed = Some(true);
-                    result.ms_ssim_score = Some(avg);
+                    result.ms_ssim_score = Some(score);
                 }
             } else {
-                // 🔥 Fallback: 三通道 MS-SSIM 失败，响亮报错！
+                // 🔥 Fallback: 所有质量计算都失败，响亮报错！
                 eprintln!("   ════════════════════════════════════════════════════");
-                eprintln!("   ⚠️⚠️⚠️  3-CHANNEL MS-SSIM CALCULATION FAILED!  ⚠️⚠️⚠️");
+                eprintln!("   ⚠️⚠️⚠️  ALL QUALITY CALCULATIONS FAILED!  ⚠️⚠️⚠️");
                 eprintln!("   ════════════════════════════════════════════════════");
                 eprintln!("      Possible causes:");
                 eprintln!("         - libvmaf not available in ffmpeg");
@@ -5675,12 +5723,12 @@ pub fn explore_with_gpu_coarse_search(
                 if let Some(ms_ssim) = calculate_ms_ssim(input, output) {
                     eprintln!("      MS-SSIM (Y only): {:.4}", ms_ssim);
                     eprintln!("      ⚠️  This value may be HIGHER than actual quality!");
-                    if ms_ssim < ms_ssim_target {
-                        eprintln!("   ❌ MS-SSIM BELOW TARGET! {:.4} < {:.2}", ms_ssim, ms_ssim_target);
+                    if ms_ssim < quality_target {
+                        eprintln!("   ❌ MS-SSIM BELOW TARGET! {:.4} < {:.2}", ms_ssim, quality_target);
                         result.ms_ssim_passed = Some(false);
                         result.ms_ssim_score = Some(ms_ssim);
                     } else {
-                        eprintln!("   ✅ MS-SSIM TARGET MET: {:.4} ≥ {:.2}", ms_ssim, ms_ssim_target);
+                        eprintln!("   ✅ MS-SSIM TARGET MET: {:.4} ≥ {:.2}", ms_ssim, quality_target);
                         eprintln!("      ⚠️  (Fallback mode - chroma quality not verified)");
                         result.ms_ssim_passed = Some(true);
                         result.ms_ssim_score = Some(ms_ssim);
