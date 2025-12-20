@@ -79,7 +79,7 @@ mod quality_thresholds_tests {
         assert!(thresholds.min_ssim >= 0.9);
         assert!(thresholds.min_ssim <= 1.0);
         assert!(thresholds.min_psnr >= 30.0);
-        assert!(thresholds.min_vmaf >= 80.0);
+        assert!(thresholds.min_ms_ssim >= 80.0);
     }
     
     #[test]
@@ -729,18 +729,18 @@ mod vmaf_ssim_synergy_tests {
 
         #[test]
         fn prop_vmaf_threshold_config(
-            min_vmaf in 70.0..99.0_f64,
+            min_ms_ssim in 70.0..99.0_f64,
             force_long in proptest::bool::ANY,
         ) {
             let thresholds = QualityThresholds {
-                min_vmaf,
+                min_ms_ssim,
                 force_vmaf_long: force_long,
                 ..Default::default()
             };
             
             // 验证阈值正确传递
-            prop_assert!((thresholds.min_vmaf - min_vmaf).abs() < 0.001,
-                "VMAF 阈值应正确传递: expected={}, actual={}", min_vmaf, thresholds.min_vmaf);
+            prop_assert!((thresholds.min_ms_ssim - min_ms_ssim).abs() < 0.001,
+                "VMAF 阈值应正确传递: expected={}, actual={}", min_ms_ssim, thresholds.min_ms_ssim);
             prop_assert_eq!(thresholds.force_vmaf_long, force_long,
                 "force_vmaf_long 应正确传递");
         }

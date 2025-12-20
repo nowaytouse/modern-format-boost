@@ -70,9 +70,9 @@ pub struct ConversionConfig {
     /// 🔥 v3.5: Minimum SSIM threshold for quality validation (default: 0.95)
     pub min_ssim: f64,
     /// 🔥 v3.5: Enable VMAF validation (slower but more accurate)
-    pub validate_vmaf: bool,
+    pub validate_ms_ssim: bool,
     /// 🔥 v3.5: Minimum VMAF threshold (default: 85.0)
-    pub min_vmaf: f64,
+    pub min_ms_ssim: f64,
     /// 🔥 v4.6: Require compression - output must be smaller than input
     pub require_compression: bool,
     /// 🍎 v4.15: Apple compatibility mode (warn about AV1 not being Apple-native)
@@ -93,8 +93,8 @@ impl Default for ConversionConfig {
             match_quality: false,
             in_place: false,
             min_ssim: 0.95,      // 🔥 v3.5: Default SSIM threshold
-            validate_vmaf: false, // 🔥 v3.5: VMAF disabled by default (slower)
-            min_vmaf: 85.0,      // 🔥 v3.5: Default VMAF threshold
+            validate_ms_ssim: false, // 🔥 v3.5: VMAF disabled by default (slower)
+            min_ms_ssim: 0.90,      // 🔥 v3.5: Default VMAF threshold
             require_compression: false, // 🔥 v4.6
             apple_compat: false, // 🍎 v4.15
             use_gpu: true,       // 🔥 v4.15: GPU by default (AV1 uses CPU anyway)

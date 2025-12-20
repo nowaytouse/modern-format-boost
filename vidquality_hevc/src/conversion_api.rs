@@ -76,11 +76,11 @@ pub struct ConversionConfig {
     /// VideoToolbox hardware encoding caps at ~0.95 SSIM
     pub use_gpu: bool,
     /// 🔥 v5.75: Enable VMAF verification
-    pub validate_vmaf: bool,
+    pub validate_ms_ssim: bool,
     /// 🔥 v5.75: Minimum VMAF score threshold
-    pub min_vmaf: f64,
+    pub min_ms_ssim: f64,
     /// 🔥 v5.75: Force VMAF verification for long videos (>5min)
-    pub force_vmaf_long: bool,
+    pub force_ms_ssim_long: bool,
     /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates
     pub ultimate_mode: bool,
 }
@@ -99,9 +99,9 @@ impl Default for ConversionConfig {
             apple_compat: false,
             require_compression: false,
             use_gpu: true,  // 🔥 v4.15: GPU by default
-            validate_vmaf: false,  // 🔥 v5.75: VMAF 默认关闭
-            min_vmaf: 85.0,
-            force_vmaf_long: false,
+            validate_ms_ssim: false,  // 🔥 v5.75: MS-SSIM 默认关闭
+            min_ms_ssim: 0.90,
+            force_ms_ssim_long: false,
             ultimate_mode: false,  // 🔥 v6.2: 默认关闭极限模式
         }
     }
@@ -371,8 +371,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         // 🔥 v6.2: 极限探索模式 - 持续搜索直到 SSIM 饱和
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔥 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_hevc_with_gpu_coarse_ultimate(
-                            input_path, &output_path, vf_args, initial_crf, true
+                        shared_utils::explore_hevc_with_gpu_coarse_full(
+                            input_path, &output_path, vf_args, initial_crf, true, config.force_ms_ssim_long
                         )
                     }
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
@@ -380,8 +380,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         // 🔥 v5.1: 使用 GPU 粗略搜索 + CPU 精细搜索智能化处理
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔬 {}: CRF {:.1}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_hevc_with_gpu_coarse(
-                            input_path, &output_path, vf_args, initial_crf
+                        shared_utils::explore_hevc_with_gpu_coarse_full(
+                            input_path, &output_path, vf_args, initial_crf, false, config.force_ms_ssim_long
                         )
                     }
                     shared_utils::FlagMode::PreciseQuality => {

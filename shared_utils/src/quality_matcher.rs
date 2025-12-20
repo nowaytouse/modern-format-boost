@@ -39,6 +39,7 @@ pub enum EncoderType {
 /// Source codec information for efficiency calculation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SourceCodec {
+    // === Modern Video Codecs (should skip re-encoding) ===
     /// H.264/AVC - baseline efficiency
     H264,
     /// H.265/HEVC - ~30% more efficient than H.264
@@ -53,24 +54,54 @@ pub enum SourceCodec {
     Av1,
     /// AV2 - next-gen AV1 successor (~30% better than AV1, experimental 2025+)
     Av2,
+    
+    // === Legacy Video Codecs (should convert) ===
+    /// 🔥 v6.5.2: MPEG-4 Part 2 (XviD, DivX) - less efficient than H.264
+    Mpeg4,
+    /// 🔥 v6.5.2: MPEG-2 (DVD, DVB) - much less efficient
+    Mpeg2,
+    /// 🔥 v6.5.2: MPEG-1 (VCD) - ancient, very inefficient
+    Mpeg1,
+    /// 🔥 v6.5.2: WMV/VC-1 (Windows Media Video) - similar to H.264
+    Wmv,
+    /// 🔥 v6.5.2: Theora (Ogg) - similar to H.264 but less efficient
+    Theora,
+    /// 🔥 v6.5.2: RealVideo (RV10/RV20/RV30/RV40) - ancient, very inefficient
+    RealVideo,
+    /// 🔥 v6.5.2: Flash Video (FLV1/VP6) - legacy, inefficient
+    FlashVideo,
+    
+    // === Intermediate/Professional Codecs ===
     /// ProRes - high bitrate intermediate codec
     ProRes,
     /// DNxHD/DNxHR - high bitrate intermediate codec
     DnxHD,
-    /// MJPEG - very inefficient
+    /// MJPEG - very inefficient (intra-only)
     Mjpeg,
+    
+    // === Lossless Video Codecs ===
     /// FFV1 - lossless archival codec
     Ffv1,
     /// UT Video - lossless intermediate codec
     UtVideo,
     /// HuffYUV - lossless codec
     HuffYuv,
+    /// 🔥 v6.5.2: Raw Video - uncompressed
+    RawVideo,
+    /// 🔥 v6.5.2: Lagarith - lossless codec
+    Lagarith,
+    /// 🔥 v6.5.2: MagicYUV - lossless codec
+    MagicYuv,
+    
+    // === Animation Formats ===
     /// GIF - very inefficient (256 colors, LZW)
     Gif,
     /// APNG - moderately efficient
     Apng,
     /// WebP animated - efficient
     WebpAnimated,
+    
+    // === Image Formats ===
     /// JPEG - lossy image
     Jpeg,
     /// JPEG XL - next-gen image format
@@ -83,6 +114,11 @@ pub enum SourceCodec {
     Avif,
     /// HEIC/HEIF - HEVC-based image format
     Heic,
+    /// 🔥 v6.5.2: BMP - uncompressed bitmap
+    Bmp,
+    /// 🔥 v6.5.2: TIFF - lossless/lossy image
+    Tiff,
+    
     /// Unknown codec
     #[default]
     Unknown,
@@ -100,7 +136,7 @@ impl SourceCodec {
     /// - AV2: ~30% better than AV1 (projected) → 0.35
     pub fn efficiency_factor(&self) -> f64 {
         match self {
-            // === Video Codecs (by generation) ===
+            // === Modern Video Codecs (by generation) ===
             SourceCodec::H264 => 1.0,       // Baseline (2003)
             SourceCodec::H265 => 0.65,      // ~35% more efficient (2013)
             SourceCodec::Vp8 => 0.85,       // ~15% better than H.264 (2008)
@@ -108,6 +144,15 @@ impl SourceCodec {
             SourceCodec::Av1 => 0.50,       // ~50% more efficient than H.264 (2018)
             SourceCodec::Vvc => 0.35,       // ~50% more efficient than HEVC (2020)
             SourceCodec::Av2 => 0.35,       // ~30% more efficient than AV1 (2025+, projected)
+            
+            // === Legacy Video Codecs (v6.5.2) ===
+            SourceCodec::Mpeg4 => 1.3,      // ~30% less efficient than H.264 (XviD/DivX era)
+            SourceCodec::Mpeg2 => 1.8,      // ~80% less efficient than H.264 (DVD era)
+            SourceCodec::Mpeg1 => 2.5,      // Very old, very inefficient (VCD era)
+            SourceCodec::Wmv => 1.1,        // VC-1 similar to H.264, WMV3 slightly worse
+            SourceCodec::Theora => 1.2,     // Similar to MPEG-4 ASP, less efficient than H.264
+            SourceCodec::RealVideo => 2.0,  // Ancient, very inefficient
+            SourceCodec::FlashVideo => 1.5, // FLV1 based on H.263, VP6 slightly better
             
             // === Intermediate/Professional Codecs ===
             SourceCodec::ProRes => 1.8,     // High bitrate intermediate (quality-focused)
@@ -118,6 +163,9 @@ impl SourceCodec {
             SourceCodec::Ffv1 => 1.0,       // Lossless archival
             SourceCodec::UtVideo => 1.0,    // Lossless intermediate
             SourceCodec::HuffYuv => 1.0,    // Lossless
+            SourceCodec::RawVideo => 1.0,   // Uncompressed (lossless)
+            SourceCodec::Lagarith => 1.0,   // Lossless
+            SourceCodec::MagicYuv => 1.0,   // Lossless
             
             // === Animation Formats ===
             SourceCodec::Gif => 3.0,        // Very inefficient (256 colors, no inter-frame)
@@ -131,6 +179,8 @@ impl SourceCodec {
             SourceCodec::WebpStatic => 0.75, // ~25% better than JPEG
             SourceCodec::Avif => 0.55,      // AV1-based, very efficient
             SourceCodec::Heic => 0.65,      // HEVC-based
+            SourceCodec::Bmp => 3.0,        // Uncompressed, very large
+            SourceCodec::Tiff => 1.2,       // Variable (can be lossless or lossy)
             
             SourceCodec::Unknown => 1.0,
         }
@@ -141,7 +191,8 @@ impl SourceCodec {
         matches!(
             self,
             SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv |
-            SourceCodec::Png | SourceCodec::Apng
+            SourceCodec::RawVideo | SourceCodec::Lagarith | SourceCodec::MagicYuv |
+            SourceCodec::Png | SourceCodec::Apng | SourceCodec::Bmp
         )
     }
     
@@ -1418,6 +1469,29 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
         return SourceCodec::H264;
     }
     
+    // === 🔥 v6.5.2: Legacy video codecs (full support) ===
+    if codec_lower.contains("mpeg4") || codec_lower.contains("xvid") || codec_lower.contains("divx") || codec_lower.contains("mp4v") {
+        return SourceCodec::Mpeg4;
+    }
+    if codec_lower.contains("mpeg2") || codec_lower == "mpeg2video" {
+        return SourceCodec::Mpeg2;
+    }
+    if codec_lower.contains("mpeg1") || codec_lower == "mpeg1video" {
+        return SourceCodec::Mpeg1;
+    }
+    if codec_lower.contains("wmv") || codec_lower.contains("vc1") || codec_lower.contains("vc-1") {
+        return SourceCodec::Wmv;
+    }
+    if codec_lower.contains("theora") {
+        return SourceCodec::Theora;
+    }
+    if codec_lower.contains("rv10") || codec_lower.contains("rv20") || codec_lower.contains("rv30") || codec_lower.contains("rv40") || codec_lower.contains("realvideo") {
+        return SourceCodec::RealVideo;
+    }
+    if codec_lower.contains("flv") || codec_lower.contains("vp6") || codec_lower.contains("flashsv") {
+        return SourceCodec::FlashVideo;
+    }
+    
     // === Professional/Intermediate codecs ===
     if codec_lower.contains("prores") {
         return SourceCodec::ProRes;
@@ -1438,6 +1512,16 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     }
     if codec_lower.contains("huffyuv") || codec_lower.contains("ffvhuff") {
         return SourceCodec::HuffYuv;
+    }
+    // 🔥 v6.5.2: Additional lossless codecs
+    if codec_lower.contains("rawvideo") || codec_lower == "raw" {
+        return SourceCodec::RawVideo;
+    }
+    if codec_lower.contains("lagarith") {
+        return SourceCodec::Lagarith;
+    }
+    if codec_lower.contains("magicyuv") {
+        return SourceCodec::MagicYuv;
     }
     
     // === Animation formats ===
@@ -1472,6 +1556,13 @@ pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     }
     if codec_lower.contains("png") {
         return SourceCodec::Png;
+    }
+    // 🔥 v6.5.2: Additional image formats
+    if codec_lower.contains("bmp") || codec_lower.contains("bitmap") {
+        return SourceCodec::Bmp;
+    }
+    if codec_lower.contains("tiff") || codec_lower.contains("tif") {
+        return SourceCodec::Tiff;
     }
     
     SourceCodec::Unknown

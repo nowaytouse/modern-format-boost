@@ -305,7 +305,7 @@ fn test_explore_result_fields() {
         size_change_pct: -11.0,
         ssim: Some(0.97),
         psnr: None,
-        vmaf: None,
+        ms_ssim: None,
         iterations: 5,
         quality_passed: true,
         log: vec!["Test log".to_string()],
@@ -329,10 +329,10 @@ fn test_quality_thresholds_customization() {
     let thresholds = shared_utils::QualityThresholds {
         min_ssim: 0.98,      // 更严格
         min_psnr: 40.0,      // 更严格
-        min_vmaf: 90.0,      // VMAF 阈值
+        min_ms_ssim: 90.0,      // VMAF 阈值
         validate_ssim: true,
         validate_psnr: true, // 同时验证两者
-        validate_vmaf: false, // 不验证 VMAF
+        validate_ms_ssim: false, // 不验证 VMAF
         ..Default::default()
     };
     

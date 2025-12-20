@@ -199,6 +199,7 @@ pub use video_explorer::{
     explore_with_gpu_coarse_search,
     explore_hevc_with_gpu_coarse,
     explore_hevc_with_gpu_coarse_ultimate,  // 🔥 v6.2: 极限探索模式
+    explore_hevc_with_gpu_coarse_full,  // 🔥 v6.9: 完整参数版本
     explore_av1_with_gpu_coarse,
 };
 

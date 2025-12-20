@@ -467,8 +467,8 @@ pub const EXPLORE_DEFAULT_MIN_SSIM: f64 = 0.95;
 /// 默认最小 PSNR 阈值（dB）
 pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = 35.0;
 
-/// 默认最小 VMAF 阈值（0-100）
-pub const EXPLORE_DEFAULT_MIN_VMAF: f64 = 85.0;
+/// 默认最小 MS-SSIM 阈值（0-1，多尺度 SSIM）
+pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = 0.90;
 
 /// 🔥 v5.73: 根据 CPU 核心数和分辨率动态计算最大线程数
 /// 
@@ -543,7 +543,7 @@ pub enum ExploreMode {
 /// 🔥 v4.1: 交叉验证结果
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrossValidationResult {
-    /// 所有指标一致通过 (SSIM + PSNR + VMAF)
+    /// 所有指标一致通过 (SSIM + PSNR + MS-SSIM)
     AllAgree,
     /// 多数指标通过 (2/3)
     MajorityAgree,
@@ -626,8 +626,8 @@ pub struct ExploreResult {
     pub ssim: Option<f64>,
     /// PSNR 分数
     pub psnr: Option<f64>,
-    /// VMAF 分数 (0-100, Netflix 感知质量指标)
-    pub vmaf: Option<f64>,
+    /// MS-SSIM 分数 (0-1, 多尺度结构相似性指标)
+    pub ms_ssim: Option<f64>,
     /// 探索迭代次数
     pub iterations: u32,
     /// 是否通过质量验证
@@ -656,7 +656,7 @@ impl Default for ExploreResult {
             size_change_pct: 0.0,
             ssim: None,
             psnr: None,
-            vmaf: None,
+            ms_ssim: None,
             iterations: 0,
             quality_passed: false,
             log: Vec::new(),
@@ -705,19 +705,19 @@ pub struct QualityThresholds {
     pub min_ssim: f64,
     /// 最小 PSNR（dB，推荐 >= 35）
     pub min_psnr: f64,
-    /// 最小 VMAF（0-100，推荐 >= 85）
-    pub min_vmaf: f64,
+    /// 最小 MS-SSIM（0.0-1.0，推荐 >= 0.90）
+    pub min_ms_ssim: f64,
     /// 是否启用 SSIM 验证
     pub validate_ssim: bool,
     /// 是否启用 PSNR 验证
     pub validate_psnr: bool,
-    /// 是否启用 VMAF 验证（较慢但更准确）
-    pub validate_vmaf: bool,
-    /// 🔥 v5.75: 强制长视频也验证 VMAF（默认 false，>5分钟视频跳过 VMAF）
-    pub force_vmaf_long: bool,
+    /// 是否启用 MS-SSIM 验证（多尺度 SSIM，更准确但稍慢）
+    pub validate_ms_ssim: bool,
+    /// 🔥 强制长视频也验证 MS-SSIM（默认 false，>5分钟视频跳过 MS-SSIM）
+    pub force_ms_ssim_long: bool,
 }
 
-/// 🔥 v5.75: 长视频阈值（秒）- 超过此时长默认跳过 VMAF
+/// 🔥 长视频阈值（秒）- 超过此时长默认跳过 MS-SSIM
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
 impl Default for QualityThresholds {
@@ -725,11 +725,11 @@ impl Default for QualityThresholds {
         Self {
             min_ssim: EXPLORE_DEFAULT_MIN_SSIM,
             min_psnr: EXPLORE_DEFAULT_MIN_PSNR,
-            min_vmaf: EXPLORE_DEFAULT_MIN_VMAF,
+            min_ms_ssim: EXPLORE_DEFAULT_MIN_MS_SSIM,
             validate_ssim: true,
             validate_psnr: false,
-            validate_vmaf: false, // 默认关闭，因为较慢
-            force_vmaf_long: false, // 🔥 v5.75: 默认跳过长视频 VMAF
+            validate_ms_ssim: false, // 默认关闭，因为较慢
+            force_ms_ssim_long: false, // 默认跳过长视频 MS-SSIM
         }
     }
 }
@@ -822,10 +822,10 @@ impl ExploreConfig {
             quality_thresholds: QualityThresholds {
                 min_ssim,
                 min_psnr: 40.0,
-                min_vmaf: 90.0,
+                min_ms_ssim: 90.0,
                 validate_ssim: true,
                 validate_psnr: false, // 简化，只用 SSIM
-                validate_vmaf: false,
+                validate_ms_ssim: false,
                 ..Default::default()
             },
             ..Default::default()
@@ -844,10 +844,10 @@ impl ExploreConfig {
             quality_thresholds: QualityThresholds {
                 min_ssim,
                 min_psnr: 40.0,
-                min_vmaf: 90.0,
+                min_ms_ssim: 90.0,
                 validate_ssim: true,
                 validate_psnr: false,
-                validate_vmaf: false,
+                validate_ms_ssim: false,
                 ..Default::default()
             },
             ..Default::default()
@@ -867,7 +867,7 @@ impl ExploreConfig {
             quality_thresholds: QualityThresholds {
                 validate_ssim: false, // 不验证质量
                 validate_psnr: false,
-                validate_vmaf: false,
+                validate_ms_ssim: false,
                 ..Default::default()
             },
             max_iterations: 8, // 较少迭代，因为只需要找到能压缩的点
@@ -888,7 +888,7 @@ impl ExploreConfig {
                 min_ssim: 0.95, // 粗略验证阈值
                 validate_ssim: true,
                 validate_psnr: false,
-                validate_vmaf: false,
+                validate_ms_ssim: false,
                 ..Default::default()
             },
             max_iterations: 10,
@@ -1446,7 +1446,7 @@ impl VideoExplorer {
             size_change_pct,
             ssim,
             psnr: None,
-            vmaf: None,
+            ms_ssim: None,
             iterations,
             quality_passed,
             log,
@@ -1475,7 +1475,7 @@ impl VideoExplorer {
         // 🔥 v3.3: 显示所有启用的质量指标
         let mut quality_str = format!("SSIM: {:.4}", quality.0.unwrap_or(0.0));
         if let Some(vmaf) = quality.2 {
-            quality_str.push_str(&format!(", VMAF: {:.2}", vmaf));
+            quality_str.push_str(&format!(", MS-SSIM: {:.2}", vmaf));
         }
         log.push(format!("   CRF {}: {} bytes ({:+.1}%), {}", 
             self.config.initial_crf, output_size, 
@@ -1496,7 +1496,7 @@ impl VideoExplorer {
             size_change_pct: self.calc_change_pct(output_size),
             ssim: quality.0,
             psnr: quality.1,
-            vmaf: quality.2,
+            ms_ssim: quality.2,
             iterations: 1,
             quality_passed,
             log,
@@ -1578,7 +1578,7 @@ impl VideoExplorer {
                 size_change_pct: self.calc_change_pct(initial_size),
                 ssim: None,
                 psnr: None,
-                vmaf: None,
+                ms_ssim: None,
                 iterations,
                 quality_passed: true,
                 log,
@@ -1644,7 +1644,7 @@ impl VideoExplorer {
             size_change_pct,
             ssim: None,
             psnr: None,
-            vmaf: None,
+            ms_ssim: None,
             iterations,
             quality_passed: compressed,
             log,
@@ -1785,7 +1785,7 @@ impl VideoExplorer {
             size_change_pct,
             ssim: Some(final_ssim),
             psnr: None,
-            vmaf: None,
+            ms_ssim: None,
             iterations,
             quality_passed: passed,
             log,
@@ -2024,7 +2024,7 @@ impl VideoExplorer {
             size_change_pct,
             ssim: final_quality.0,
             psnr: final_quality.1,
-            vmaf: final_quality.2,
+            ms_ssim: final_quality.2,
             iterations,
             quality_passed,
             log,
@@ -2244,7 +2244,7 @@ impl VideoExplorer {
                 size_change_pct: self.calc_change_pct(best_size),
                 ssim: quality.0,
                 psnr: quality.1,
-                vmaf: quality.2,
+                ms_ssim: quality.2,
                 iterations,
                 quality_passed: true,
                 log,
@@ -2278,7 +2278,7 @@ impl VideoExplorer {
                 size_change_pct: self.calc_change_pct(max_size),
                 ssim: quality.0,
                 psnr: quality.1,
-                vmaf: quality.2,
+                ms_ssim: quality.2,
                 iterations,
                 quality_passed: false,
                 log,
@@ -2487,7 +2487,7 @@ impl VideoExplorer {
             size_change_pct,
             ssim: quality.0,
             psnr: quality.1,
-            vmaf: quality.2,
+            ms_ssim: quality.2,
             iterations,
             quality_passed: ssim >= self.config.quality_thresholds.min_ssim,
             log,
@@ -2511,13 +2511,13 @@ impl VideoExplorer {
         } else {
             true // 未启用则视为通过
         };
-        let vmaf_pass = if t.validate_vmaf {
-            quality.2.map(|v| v >= t.min_vmaf).unwrap_or(false)
+        let ms_ssim_pass = if t.validate_ms_ssim {
+            quality.2.map(|v| v >= t.min_ms_ssim).unwrap_or(false)
         } else {
             true // 未启用则视为通过
         };
         
-        let pass_count = [ssim_pass, psnr_pass, vmaf_pass].iter().filter(|&&x| x).count();
+        let pass_count = [ssim_pass, psnr_pass, ms_ssim_pass].iter().filter(|&&x| x).count();
         
         match pass_count {
             3 => CrossValidationResult::AllAgree,
@@ -2528,28 +2528,28 @@ impl VideoExplorer {
     
     /// 🔥 v4.1: 计算综合质量评分
     ///
-    /// 综合 SSIM、PSNR、VMAF 计算加权评分
+    /// 综合 SSIM、PSNR、MS-SSIM 计算加权评分
     /// - SSIM 权重: 50% (主要指标)
-    /// - VMAF 权重: 35% (感知质量)
+    /// - MS-SSIM 权重: 35% (感知质量)
     /// - PSNR 权重: 15% (参考指标)
     #[allow(dead_code)]  // 保留供将来使用
     fn calculate_composite_score(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> f64 {
         let ssim = quality.0.unwrap_or(0.0);
         let psnr = quality.1.unwrap_or(0.0);
-        let vmaf = quality.2.unwrap_or(0.0);
+        let ms_ssim = quality.2.unwrap_or(0.0);
         
         // 归一化各指标到 0-1 范围
         let ssim_norm = ssim; // 已经是 0-1
         let psnr_norm = (psnr / 60.0).clamp(0.0, 1.0); // PSNR 60dB 视为满分
-        let vmaf_norm = (vmaf / 100.0).clamp(0.0, 1.0); // VMAF 100 视为满分
+        let ms_ssim_norm = ms_ssim.clamp(0.0, 1.0); // MS-SSIM 已经是 0-1 范围
         
         // 加权计算
-        let score = if self.config.quality_thresholds.validate_vmaf && self.config.quality_thresholds.validate_psnr {
-            // 三重验证：SSIM 50%, VMAF 35%, PSNR 15%
-            ssim_norm * 0.50 + vmaf_norm * 0.35 + psnr_norm * 0.15
-        } else if self.config.quality_thresholds.validate_vmaf {
-            // SSIM + VMAF：SSIM 60%, VMAF 40%
-            ssim_norm * 0.60 + vmaf_norm * 0.40
+        let score = if self.config.quality_thresholds.validate_ms_ssim && self.config.quality_thresholds.validate_psnr {
+            // 三重验证：SSIM 50%, MS-SSIM 35%, PSNR 15%
+            ssim_norm * 0.50 + ms_ssim_norm * 0.35 + psnr_norm * 0.15
+        } else if self.config.quality_thresholds.validate_ms_ssim {
+            // SSIM + MS-SSIM：SSIM 60%, MS-SSIM 40%
+            ssim_norm * 0.60 + ms_ssim_norm * 0.40
         } else if self.config.quality_thresholds.validate_psnr {
             // SSIM + PSNR：SSIM 70%, PSNR 30%
             ssim_norm * 0.70 + psnr_norm * 0.30
@@ -2572,7 +2572,7 @@ impl VideoExplorer {
             parts.push(format!("PSNR: {:.2}dB", psnr));
         }
         if let Some(vmaf) = quality.2 {
-            parts.push(format!("VMAF: {:.2}", vmaf));
+            parts.push(format!("MS-SSIM: {:.2}", vmaf));
         }
         if parts.is_empty() {
             "N/A".to_string()
@@ -2867,7 +2867,7 @@ impl VideoExplorer {
     
     /// 验证输出质量
     /// 
-    /// 🔥 v3.3: 支持 SSIM/PSNR/VMAF 三重验证
+    /// 🔥 v3.3: 支持 SSIM/PSNR/MS-SSIM 三重验证
     /// 🔥 v5.75: 添加长视频 VMAF 跳过逻辑
     fn validate_quality(&self) -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
         let ssim = if self.config.quality_thresholds.validate_ssim {
@@ -2882,33 +2882,33 @@ impl VideoExplorer {
             None
         };
         
-        // 🔥 v5.75: VMAF 验证 - 考虑长视频跳过逻辑
-        let vmaf = if self.config.quality_thresholds.validate_vmaf {
+        // 🔥 v5.75: MS-SSIM 验证 - 考虑长视频跳过逻辑
+        let ms_ssim = if self.config.quality_thresholds.validate_ms_ssim {
             // 检测视频时长
             let duration = get_video_duration(&self.input_path);
             let should_skip = match duration {
-                Some(d) => d >= LONG_VIDEO_THRESHOLD as f64 && !self.config.quality_thresholds.force_vmaf_long,
+                Some(d) => d >= LONG_VIDEO_THRESHOLD as f64 && !self.config.quality_thresholds.force_ms_ssim_long,
                 None => {
                     // 无法检测时长，响亮报错，默认跳过
-                    eprintln!("   ⚠️ 无法检测视频时长，跳过 VMAF 验证");
+                    eprintln!("   ⚠️ 无法检测视频时长，跳过 MS-SSIM 验证");
                     true
                 }
             };
             
             if should_skip {
                 if let Some(d) = duration {
-                    eprintln!("   ⏭️ 长视频 ({:.1}min > 5min) - 跳过 VMAF 验证", d / 60.0);
-                    eprintln!("   💡 使用 --force-vmaf-long 强制启用");
+                    eprintln!("   ⏭️ 长视频 ({:.1}min > 5min) - 跳过 MS-SSIM 验证", d / 60.0);
+                    eprintln!("   💡 使用 --force-ms-ssim-long 强制启用");
                 }
                 None
             } else {
-                self.calculate_vmaf()?
+                self.calculate_ms_ssim()?
             }
         } else {
             None
         };
-        
-        Ok((ssim, psnr, vmaf))
+
+        Ok((ssim, psnr, ms_ssim))
     }
     
     /// 🔥 v5.74: 同时计算 SSIM 和 PSNR（单次 ffmpeg 调用，更高效）
@@ -3126,18 +3126,18 @@ impl VideoExplorer {
         }
     }
     
-    /// 计算 VMAF（Netflix 感知质量指标）
+    /// 计算 MS-SSIM（Netflix 感知质量指标）
     /// 
     /// 🔥 精确度改进 v3.3：
-    /// - VMAF 与人眼感知相关性更高 (Pearson 0.93 vs SSIM 0.85)
+    /// - MS-SSIM 与结构相似性相关性更高 (Pearson 0.93 vs SSIM 0.85)
     /// - 对运动、模糊、压缩伪影更敏感
     /// - 计算较慢（约 100ms/帧），建议作为可选验证
     /// 
     /// 🔥 v6.2.1: 长视频智能采样优化
     /// - 视频 > 60s 时使用三段采样：开头10% + 中间10% + 结尾10%
     /// - 覆盖不同场景（片头/正片/片尾），比均匀采样更准确
-    /// - 避免 VMAF 计算时间比压制还长的问题
-    fn calculate_vmaf(&self) -> Result<Option<f64>> {
+    /// - 避免 MS-SSIM 计算时间比压制还长的问题
+    fn calculate_ms_ssim(&self) -> Result<Option<f64>> {
         // 🔥 v6.2.1: 检测视频时长，决定是否采样
         let duration = get_video_duration(&self.input_path);
         
@@ -3153,7 +3153,7 @@ impl VideoExplorer {
                 let mid_end = dur * 0.55;        // 中间段结束点
                 let tail_start = dur * 0.90;     // 结尾段开始点
                 
-                eprintln!("   📊 VMAF: 三段采样 (开头10% + 中间10% + 结尾10%)");
+                eprintln!("   📊 MS-SSIM: 三段采样 (开头10% + 中间10% + 结尾10%)");
                 // select 表达式：t < 10% OR (45% <= t < 55%) OR t >= 90%
                 format!(
                     "[0:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})',\
@@ -3184,13 +3184,13 @@ impl VideoExplorer {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 
-                // 解析 VMAF score: XX.XXXXXX
+                // 解析 MS-SSIM score: XX.XXXXXX
                 for line in stderr.lines() {
-                    if let Some(pos) = line.find("VMAF score:") {
+                    if let Some(pos) = line.find("MS-SSIM score:") {
                         let value_str = &line[pos + 11..];
                         let value_str = value_str.trim();
                         if let Ok(vmaf) = value_str.parse::<f64>() {
-                            if precision::is_valid_vmaf(vmaf) {
+                            if precision::is_valid_ms_ssim(vmaf) {
                                 if use_sampling {
                                     eprintln!("   📊 VMAF (采样): {:.2}", vmaf);
                                 }
@@ -3208,12 +3208,12 @@ impl VideoExplorer {
         }
     }
     
-    /// 检查质量是否通过（增强版：支持 SSIM/PSNR/VMAF 三重验证）
+    /// 检查质量是否通过（增强版：支持 SSIM/PSNR/MS-SSIM 三重验证）
     /// 
     /// 🔥 精确度改进 v3.3：
     /// - 使用 epsilon 比较避免浮点精度问题
     /// - 当验证启用但值为 None 时，视为失败
-    /// - 支持 VMAF 验证
+    /// - 支持 MS-SSIM 验证
     fn check_quality_passed(&self, ssim: Option<f64>, psnr: Option<f64>, vmaf: Option<f64>) -> bool {
         let t = &self.config.quality_thresholds;
         
@@ -3250,16 +3250,16 @@ impl VideoExplorer {
             }
         }
         
-        // 🔥 v3.3: VMAF 验证
-        if t.validate_vmaf {
+        // 🔥 v3.3: MS-SSIM 验证
+        if t.validate_ms_ssim {
             match vmaf {
                 Some(v) => {
-                    if v < t.min_vmaf {
+                    if v < t.min_ms_ssim {
                         return false;
                     }
                 }
                 None => {
-                    // VMAF 验证启用但无法计算时，视为失败
+                    // MS-SSIM 验证启用但无法计算时，视为失败
                     return false;
                 }
             }
@@ -3988,47 +3988,47 @@ pub mod precision {
     }
     
     // ═══════════════════════════════════════════════════════════
-    // VMAF 相关常量和函数 (v3.3)
+    // MS-SSIM 相关常量和函数 (v3.3)
     // ═══════════════════════════════════════════════════════════
+
+    /// 默认最小 MS-SSIM（流媒体质量，0-1 范围）
+    pub const DEFAULT_MIN_MS_SSIM: f64 = 0.90;
+
+    /// 高质量最小 MS-SSIM（存档质量，0-1 范围）
+    pub const HIGH_QUALITY_MIN_MS_SSIM: f64 = 0.95;
+
+    /// 可接受最小 MS-SSIM（移动端，0-1 范围）
+    pub const ACCEPTABLE_MIN_MS_SSIM: f64 = 0.85;
     
-    /// 默认最小 VMAF（流媒体质量）
-    pub const DEFAULT_MIN_VMAF: f64 = 85.0;
-    
-    /// 高质量最小 VMAF（存档质量）
-    pub const HIGH_QUALITY_MIN_VMAF: f64 = 93.0;
-    
-    /// 可接受最小 VMAF（移动端）
-    pub const ACCEPTABLE_MIN_VMAF: f64 = 75.0;
-    
-    /// 验证 VMAF 值是否有效
-    /// 
-    /// 🔥 v3.3: VMAF 在 [0, 100] 范围内
-    pub fn is_valid_vmaf(vmaf: f64) -> bool {
-        (0.0..=100.0).contains(&vmaf)
+    /// 验证 MS-SSIM 值是否有效
+    ///
+    /// 🔥 v3.3: MS-SSIM 在 [0, 1] 范围内
+    pub fn is_valid_ms_ssim(ms_ssim: f64) -> bool {
+        (0.0..=1.0).contains(&ms_ssim)
     }
     
-    /// 获取 VMAF 质量等级描述
-    /// 
-    /// 🔥 v3.3: Netflix 感知质量指标
-    pub fn vmaf_quality_grade(vmaf: f64) -> &'static str {
-        if vmaf >= 93.0 {
+    /// 获取 MS-SSIM 质量等级描述
+    ///
+    /// 🔥 v3.3: 多尺度结构相似性指标 (0-1 范围)
+    pub fn ms_ssim_quality_grade(ms_ssim: f64) -> &'static str {
+        if ms_ssim >= 0.95 {
             "Excellent (几乎无法区分)"
-        } else if vmaf >= 85.0 {
+        } else if ms_ssim >= 0.90 {
             "Good (流媒体质量)"
-        } else if vmaf >= 75.0 {
+        } else if ms_ssim >= 0.85 {
             "Acceptable (移动端质量)"
-        } else if vmaf >= 60.0 {
+        } else if ms_ssim >= 0.80 {
             "Fair (可见差异)"
         } else {
             "Poor (明显质量损失)"
         }
     }
-    
-    /// 格式化 VMAF 值用于显示
-    /// 
-    /// 🔥 v3.3: 统一使用 2 位小数
-    pub fn format_vmaf(vmaf: f64) -> String {
-        format!("{:.2}", vmaf)
+
+    /// 格式化 MS-SSIM 值用于显示
+    ///
+    /// 🔥 v3.3: 统一使用 4 位小数
+    pub fn format_ms_ssim(ms_ssim: f64) -> String {
+        format!("{:.4}", ms_ssim)
     }
 }
 
@@ -5270,6 +5270,7 @@ pub fn explore_with_gpu_coarse_search(
     max_crf: f32,
     min_ssim: f64,
     ultimate_mode: bool,  // 🔥 v6.2: 极限探索模式
+    force_ms_ssim_long: bool,  // 🔥 v6.9: 强制长视频 MS-SSIM
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     // 🔥 v5.35: 简化流程 - 完全移除旧的RealtimeExploreProgress
@@ -5578,7 +5579,7 @@ pub fn explore_with_gpu_coarse_search(
     // 策略：
     // - 探索阶段使用SSIM（快速迭代）
     // - 验证阶段使用VMAF（精确确认）
-    // - 5分钟阈值：300秒（可通过force_vmaf_long强制开启）
+    // - 5分钟阈值：300秒（可通过force_ms_ssim_long强制开启）
     eprintln!("");
     eprintln!("📊 Phase 3: Quality Verification");
 
@@ -5588,59 +5589,57 @@ pub fn explore_with_gpu_coarse_search(
 
         const VMAF_DURATION_THRESHOLD: f64 = 300.0;  // 5分钟 = 300秒
 
-        // 🔥 v5.87: 检查是否应该运行VMAF
-        // 注意：这个函数没有config参数，所以不支持force_vmaf_long
-        // 如果需要强制长视频VMAF，请使用VideoExplorer API
-        let should_run_vmaf = duration <= VMAF_DURATION_THRESHOLD;
+        // 🔥 v6.9: 检查是否应该运行 MS-SSIM
+        // 短视频（≤5分钟）自动启用，长视频需要 force_ms_ssim_long 参数
+        let should_run_vmaf = duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long;
 
         if should_run_vmaf {
             // 短视频（≤5分钟），开启VMAF精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
-            eprintln!("   🎯 Enabling VMAF precise verification...");
+            eprintln!("   🎯 Enabling MS-SSIM precise verification...");
 
-            // 计算VMAF分数
-            if let Some(vmaf) = calculate_vmaf(input, output) {
+            // 计算MS-SSIM分数
+            if let Some(ms_ssim) = calculate_ms_ssim(input, output) {
                 eprintln!("   ═══════════════════════════════════════════════════");
                 eprintln!("   📊 Final Quality Scores:");
                 let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
                 eprintln!("      SSIM: {} (exploration metric)", ssim_str);
-                eprintln!("      VMAF: {:.2} (verification metric)", vmaf);
+                eprintln!("      MS-SSIM: {:.4} (verification metric)", ms_ssim);
 
-                // 🔥 v5.94: VMAF分数解读 - 支持0-1和0-100两种范围
-                // ffmpeg libvmaf 可能返回 0-100 或 0-1 范围，需要自动检测
-                let vmaf_normalized = if vmaf > 1.0 { vmaf / 100.0 } else { vmaf };
-                
-                let vmaf_grade = if vmaf_normalized >= 0.95 {
+                // 🔥 MS-SSIM分数解读 - 范围 0-1
+                let ms_ssim_normalized = ms_ssim; // MS-SSIM 本身就是 0-1 范围
+
+                let ms_ssim_grade = if ms_ssim_normalized >= 0.95 {
                     "🟢 Excellent (near transparent)"
-                } else if vmaf_normalized >= 0.90 {
+                } else if ms_ssim_normalized >= 0.90 {
                     "🟡 Very Good (imperceptible diff)"
-                } else if vmaf_normalized >= 0.85 {
+                } else if ms_ssim_normalized >= 0.85 {
                     "🟠 Good (minor artifacts)"
                 } else {
                     "🔴 Fair (noticeable artifacts)"
                 };
-                eprintln!("      Grade: {}", vmaf_grade);
+                eprintln!("      Grade: {}", ms_ssim_grade);
 
-                // SSIM vs VMAF 映射关系展示
+                // SSIM vs MS-SSIM 映射关系展示
                 let ssim_val = result.ssim.unwrap_or(0.0);
-                let ssim_vmaf_correlation = if vmaf_normalized >= 0.90 && ssim_val >= 0.98 {
+                let ssim_ms_ssim_correlation = if ms_ssim_normalized >= 0.90 && ssim_val >= 0.98 {
                     "✅ Excellent correlation"
-                } else if vmaf_normalized >= 0.85 && ssim_val >= 0.95 {
+                } else if ms_ssim_normalized >= 0.85 && ssim_val >= 0.95 {
                     "✅ Good correlation"
                 } else {
                     "⚠️  Divergence detected"
                 };
-                eprintln!("      SSIM-VMAF: {}", ssim_vmaf_correlation);
+                eprintln!("      SSIM-MS-SSIM: {}", ssim_ms_ssim_correlation);
 
-                // 如果VMAF显著低于预期，给出建议
-                if vmaf_normalized < 0.85 {
-                    eprintln!("   ⚠️  VMAF lower than expected!");
+                // 如果 MS-SSIM 显著低于预期，给出建议
+                if ms_ssim_normalized < 0.85 {
+                    eprintln!("   ⚠️  MS-SSIM lower than expected!");
                     eprintln!("      Suggestion: Try lowering CRF by 1-2 for better quality");
-                } else if vmaf_normalized >= 0.95 {
-                    eprintln!("   ✅ Excellent quality confirmed by VMAF");
+                } else if ms_ssim_normalized >= 0.95 {
+                    eprintln!("   ✅ Excellent quality confirmed by MS-SSIM");
                 }
             } else {
-                eprintln!("   ⚠️  VMAF calculation failed (libvmaf not available?)");
+                eprintln!("   ⚠️  MS-SSIM calculation failed (libvmaf not available?)");
                 eprintln!("   ℹ️  Falling back to SSIM verification only");
             }
         } else {
@@ -6682,7 +6681,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         size_change_pct,
         ssim,
         psnr: None,
-        vmaf: None,
+        ms_ssim: None,
         iterations,
         quality_passed,
         log,
@@ -6769,7 +6768,7 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
 // 🔥 v5.80: VMAF精确验证 - 用于短视频的最终质量确认
 // ═══════════════════════════════════════════════════════════════
 
-/// 🔥 v5.80: 计算VMAF分数（Netflix视频质量指标）
+/// 🔥 v5.80: 计算MS-SSIM分数（Netflix视频质量指标）
 ///
 /// ## 使用场景
 /// - **短视频**（≤5分钟）：作为最终验证指标
@@ -6785,18 +6784,19 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
 /// - **关系**：VMAF ≈ f(SSIM)，存在映射关系
 ///
 /// ## 返回值
-/// - `Some(score)`: VMAF分数（0-100，越高越好）
+/// - `Some(score)`: MS-SSIM分数（0-100，越高越好）
 /// - `None`: 计算失败或不支持
-pub fn calculate_vmaf(input: &Path, output: &Path) -> Option<f64> {
+pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     use std::process::Command;
 
-    eprintln!("   📊 Calculating VMAF (precise video quality metric)...");
+    eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
 
-    // 🔥 尝试libvmaf滤镜（需要ffmpeg编译时包含libvmaf）
+    // 🔥 使用 libvmaf 的 float_ms_ssim 功能
+    // 正确语法: feature='name=float_ms_ssim'
     let result = Command::new("ffmpeg")
         .arg("-i").arg(input)
         .arg("-i").arg(output)
-        .arg("-lavfi").arg("libvmaf=log_fmt=json:log_path=/dev/stdout")
+        .arg("-lavfi").arg("[0:v][1:v]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'")
         .arg("-f").arg("null")
         .arg("-")
         .output();
@@ -6807,48 +6807,47 @@ pub fn calculate_vmaf(input: &Path, output: &Path) -> Option<f64> {
             let stderr = String::from_utf8_lossy(&out.stderr);
 
             // 尝试从stdout解析（JSON格式）
-            if let Some(vmaf) = parse_vmaf_from_json(&stdout) {
-                eprintln!("   📊 VMAF score: {:.2}", vmaf);
-                return Some(vmaf);
+            if let Some(ms_ssim) = parse_ms_ssim_from_json(&stdout) {
+                eprintln!("   📊 MS-SSIM score: {:.4}", ms_ssim);
+                return Some(ms_ssim);
             }
 
             // fallback: 尝试从stderr解析（旧版格式）
-            if let Some(vmaf) = parse_vmaf_from_legacy(&stderr) {
-                eprintln!("   📊 VMAF score: {:.2}", vmaf);
-                return Some(vmaf);
+            if let Some(ms_ssim) = parse_ms_ssim_from_legacy(&stderr) {
+                eprintln!("   📊 MS-SSIM score: {:.4}", ms_ssim);
+                return Some(ms_ssim);
             }
 
-            eprintln!("   ⚠️  VMAF calculated but failed to parse score");
+            eprintln!("   ⚠️  MS-SSIM calculated but failed to parse score");
         }
         Ok(_) => {
-            eprintln!("   ⚠️  VMAF calculation failed (libvmaf not available?)");
+            eprintln!("   ⚠️  MS-SSIM calculation failed (libvmaf not available?)");
         }
         Err(e) => {
-            eprintln!("   ⚠️  ffmpeg VMAF failed: {}", e);
+            eprintln!("   ⚠️  ffmpeg MS-SSIM failed: {}", e);
         }
     }
 
     None
 }
 
-/// 从JSON输出解析VMAF分数
-fn parse_vmaf_from_json(stdout: &str) -> Option<f64> {
-    // VMAF JSON格式示例：
-    // {"version":"...", "vmaf": {"min": 85.2, "max": 98.5, "mean": 92.3, ...}}
+/// 从JSON输出解析MS-SSIM分数
+fn parse_ms_ssim_from_json(stdout: &str) -> Option<f64> {
+    // float_ms_ssim JSON格式示例：
+    // "float_ms_ssim": {"min": 0.95, "max": 0.99, "mean": 0.97, ...}
 
-    // 简单解析：查找 "mean": 后的数字
-    for line in stdout.lines() {
-        if line.contains("\"mean\"") {
-            if let Some(mean_pos) = line.find("\"mean\"") {
-                let after_mean = &line[mean_pos + 6..];  // skip "mean"
-                if let Some(colon_pos) = after_mean.find(':') {
-                    let after_colon = &after_mean[colon_pos + 1..].trim_start();
-                    // 提取数字（可能后面跟逗号或括号）
-                    let end = after_colon.find(|c: char| !c.is_numeric() && c != '.')
-                        .unwrap_or(after_colon.len());
-                    if end > 0 {
-                        return after_colon[..end].parse::<f64>().ok();
-                    }
+    // 查找 float_ms_ssim 块中的 mean 值
+    if let Some(ms_ssim_pos) = stdout.find("\"float_ms_ssim\"") {
+        let after_ms_ssim = &stdout[ms_ssim_pos..];
+        if let Some(mean_pos) = after_ms_ssim.find("\"mean\"") {
+            let after_mean = &after_ms_ssim[mean_pos + 6..];  // skip "mean"
+            if let Some(colon_pos) = after_mean.find(':') {
+                let after_colon = after_mean[colon_pos + 1..].trim_start();
+                // 提取数字（可能后面跟逗号或括号）
+                let end = after_colon.find(|c: char| !c.is_numeric() && c != '.')
+                    .unwrap_or(after_colon.len());
+                if end > 0 {
+                    return after_colon[..end].parse::<f64>().ok();
                 }
             }
         }
@@ -6856,13 +6855,15 @@ fn parse_vmaf_from_json(stdout: &str) -> Option<f64> {
     None
 }
 
-/// 从旧版stderr输出解析VMAF分数
-fn parse_vmaf_from_legacy(stderr: &str) -> Option<f64> {
+/// 从旧版stderr输出解析MS-SSIM分数
+fn parse_ms_ssim_from_legacy(stderr: &str) -> Option<f64> {
     // 旧版格式示例：
-    // [libvmaf @ 0x...] VMAF score: 92.345678
+    // [libvmaf @ 0x...] MS-SSIM score: 0.9734
+    // 或 float_ms_ssim 相关输出
 
     for line in stderr.lines() {
-        if line.contains("VMAF") && line.contains("score:") {
+        if (line.contains("MS-SSIM") || line.contains("ms_ssim") || line.contains("float_ms_ssim")) 
+            && line.contains("score:") {
             if let Some(score_pos) = line.find("score:") {
                 let after_score = &line[score_pos + 6..].trim_start();
                 let end = after_score.find(|c: char| !c.is_numeric() && c != '.')
@@ -6876,9 +6877,9 @@ fn parse_vmaf_from_legacy(stderr: &str) -> Option<f64> {
     None
 }
 
-/// 🔥 v5.80: 获取视频时长（秒）
+/// 🔥 获取视频时长（秒）
 ///
-/// 用于判断是否启用VMAF验证
+/// 用于判断是否启用 MS-SSIM 验证
 pub fn get_video_duration(input: &Path) -> Option<f64> {
     use std::process::Command;
 
@@ -6905,8 +6906,7 @@ pub fn explore_hevc_with_gpu_coarse(
     vf_args: Vec<String>,
     initial_crf: f32,
 ) -> Result<ExploreResult> {
-    let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_with_gpu_coarse_search(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim, false)
+    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, false, false)
 }
 
 /// 🔥 v6.2: HEVC GPU+CPU 智能探索（极限模式）
@@ -6920,8 +6920,24 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     initial_crf: f32,
     ultimate_mode: bool,
 ) -> Result<ExploreResult> {
+    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, ultimate_mode, false)
+}
+
+/// 🔥 v6.9: HEVC GPU+CPU 智能探索（完整参数版本）
+/// 
+/// 先用 GPU 粗略搜索缩小范围，再用 CPU 精细搜索找最优 CRF
+/// ultimate_mode: 启用后使用自适应撞墙上限，持续搜索直到 SSIM 完全饱和
+/// force_ms_ssim_long: 强制长视频也计算 MS-SSIM
+pub fn explore_hevc_with_gpu_coarse_full(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    ultimate_mode: bool,
+    force_ms_ssim_long: bool,
+) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_with_gpu_coarse_search(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim, ultimate_mode)
+    explore_with_gpu_coarse_search(input, output, VideoEncoder::Hevc, vf_args, initial_crf, max_crf, min_ssim, ultimate_mode, force_ms_ssim_long)
 }
 
 /// 🔥 v5.1: AV1 GPU+CPU 智能探索
@@ -6934,7 +6950,7 @@ pub fn explore_av1_with_gpu_coarse(
     initial_crf: f32,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
-    explore_with_gpu_coarse_search(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf, min_ssim, false)
+    explore_with_gpu_coarse_search(input, output, VideoEncoder::Av1, vf_args, initial_crf, max_crf, min_ssim, false, false)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -7240,10 +7256,10 @@ mod tests {
         let thresholds = QualityThresholds {
             min_ssim: 0.95,
             min_psnr: 35.0,
-            min_vmaf: 85.0,
+            min_ms_ssim: 85.0,
             validate_ssim: true,
             validate_psnr: false,
-            validate_vmaf: false,
+            validate_ms_ssim: false,
             ..Default::default()
         };
         
@@ -7279,10 +7295,10 @@ mod tests {
         let thresholds = QualityThresholds {
             min_ssim: 0.95,
             min_psnr: 35.0,
-            min_vmaf: 85.0,
+            min_ms_ssim: 85.0,
             validate_ssim: true,
             validate_psnr: true,
-            validate_vmaf: false,
+            validate_ms_ssim: false,
             ..Default::default()
         };
         
@@ -7354,11 +7370,11 @@ mod tests {
     /// 🔥 测试：VMAF 有效性验证
     #[test]
     fn test_vmaf_validity() {
-        assert!(is_valid_vmaf(0.0));
-        assert!(is_valid_vmaf(50.0));
-        assert!(is_valid_vmaf(100.0));
-        assert!(!is_valid_vmaf(-1.0));
-        assert!(!is_valid_vmaf(101.0));
+        assert!(is_valid_ms_ssim(0.0));
+        assert!(is_valid_ms_ssim(50.0));
+        assert!(is_valid_ms_ssim(100.0));
+        assert!(!is_valid_ms_ssim(-1.0));
+        assert!(!is_valid_ms_ssim(101.0));
     }
     
     /// 🔥 测试：三种模式的配置正确性
@@ -7368,7 +7384,7 @@ mod tests {
         let size_only = ExploreConfig::size_only(20.0, 30.0);
         assert_eq!(size_only.mode, ExploreMode::SizeOnly);
         assert!(!size_only.quality_thresholds.validate_ssim, "SizeOnly should NOT validate SSIM");
-        assert!(!size_only.quality_thresholds.validate_vmaf, "SizeOnly should NOT validate VMAF");
+        assert!(!size_only.quality_thresholds.validate_ms_ssim, "SizeOnly should NOT validate VMAF");
         
         // 模式 2: QualityMatch - 单次编码 + SSIM 验证
         let quality_match = ExploreConfig::quality_match(22.0);
@@ -7409,10 +7425,10 @@ mod tests {
         let thresholds = QualityThresholds {
             min_ssim: 0.95,
             min_psnr: 35.0,
-            min_vmaf: 85.0,
+            min_ms_ssim: 85.0,
             validate_ssim: true,
             validate_psnr: false,
-            validate_vmaf: true, // 启用 VMAF
+            validate_ms_ssim: true, // 启用 VMAF
             ..Default::default()
         };
         
@@ -7424,9 +7440,9 @@ mod tests {
                     _ => return false,
                 }
             }
-            if thresholds.validate_vmaf {
+            if thresholds.validate_ms_ssim {
                 match vmaf {
-                    Some(v) if v >= thresholds.min_vmaf => {}
+                    Some(v) if v >= thresholds.min_ms_ssim => {}
                     _ => return false,
                 }
             }
@@ -7456,9 +7472,9 @@ mod tests {
         assert!(MIN_ACCEPTABLE_SSIM >= 0.85, "Minimum acceptable SSIM should be >= 0.85");
         
         // VMAF 评价标准
-        assert!(DEFAULT_MIN_VMAF >= 85.0, "Default VMAF should be >= 85 (Good)");
-        assert!(HIGH_QUALITY_MIN_VMAF >= 93.0, "High quality VMAF should be >= 93 (Excellent)");
-        assert!(ACCEPTABLE_MIN_VMAF >= 75.0, "Acceptable VMAF should be >= 75");
+        assert!(DEFAULT_MIN_MS_SSIM >= 85.0, "Default VMAF should be >= 85 (Good)");
+        assert!(HIGH_QUALITY_MIN_MS_SSIM >= 93.0, "High quality VMAF should be >= 93 (Excellent)");
+        assert!(ACCEPTABLE_MIN_MS_SSIM >= 75.0, "Acceptable VMAF should be >= 75");
     }
     
     /// 🔥 测试：CRF 0.5 步长精度
