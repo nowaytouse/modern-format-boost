@@ -5610,79 +5610,84 @@ pub fn explore_with_gpu_coarse_search(
         if should_run_vmaf {
             // 短视频（≤5分钟）或强制启用，开启精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
-            eprintln!("   🎯 Enabling SSIM All verification (Y+U+V channels)...");
+            eprintln!("   🎯 Enabling 3-channel MS-SSIM verification (most accurate)...");
 
-            // 🔥 v6.9.6: 完全使用 SSIM All 评价体系，移除 MS-SSIM
-            let ssim_all_result = calculate_ssim_all(input, output);
+            // 🔥 v6.9.6: 使用三通道 MS-SSIM (Y+U+V) 作为最终判断标准
+            let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output);
 
             eprintln!("   ═══════════════════════════════════════════════════");
             eprintln!("   📊 Final Quality Scores:");
             let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
             eprintln!("      SSIM (explore): {}", ssim_str);
 
-            // 🔥 v6.9.6: 使用探索阶段的动态阈值
-            let ssim_all_target = result.actual_min_ssim.max(0.90);
+            // 🔥 v6.9.6: 使用动态阈值（与探索阶段一致）
+            let ms_ssim_target = result.actual_min_ssim.max(0.90);
             
-            if let Some((y, u, v, all)) = ssim_all_result {
-                eprintln!("      SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
+            if let Some((y, u, v, avg)) = ms_ssim_yuv_result {
+                eprintln!("      MS-SSIM Y/U/V: {:.4}/{:.4}/{:.4}", y, u, v);
+                eprintln!("      MS-SSIM (weighted avg): {:.4}", avg);
                 
                 // 检测色度损失
                 let chroma_loss = (y - u).max(y - v);
                 if chroma_loss > 0.02 {
-                    eprintln!("      ⚠️  CHROMA LOSS: Y-U={:.4}, Y-V={:.4} (yuv444p→yuv420p)", y - u, y - v);
+                    eprintln!("      ⚠️  CHROMA LOSS: Y-U={:.4}, Y-V={:.4}", y - u, y - v);
                 }
 
-                // 质量等级判断
-                let quality_grade = if all >= 0.98 {
+                // 质量等级
+                let quality_grade = if avg >= 0.98 {
                     "🟢 Excellent"
-                } else if all >= 0.95 {
+                } else if avg >= 0.95 {
                     "🟢 Very Good"
-                } else if all >= ssim_all_target {
+                } else if avg >= ms_ssim_target {
                     "🟡 Good (meets target)"
-                } else if all >= 0.85 {
+                } else if avg >= 0.85 {
                     "🟠 Below Target"
                 } else {
                     "🔴 FAILED"
                 };
-                eprintln!("      📊 SSIM All: {:.4} {} (target: ≥{:.2})", all, quality_grade, ssim_all_target);
+                eprintln!("      📊 Grade: {} (target: ≥{:.2})", quality_grade, ms_ssim_target);
 
-                // SSIM All 目标检查
-                if all < ssim_all_target {
-                    eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, ssim_all_target);
+                // 🔥 v6.9.6: 三通道 MS-SSIM 目标检查
+                if avg < ms_ssim_target {
+                    eprintln!("   ❌ MS-SSIM (3-ch) BELOW TARGET! {:.4} < {:.2}", avg, ms_ssim_target);
                     eprintln!("      ⚠️  Quality does not meet threshold!");
                     eprintln!("      💡 Suggestion: Lower CRF or disable --compress");
                     result.ms_ssim_passed = Some(false);
-                    result.ms_ssim_score = Some(all);
+                    result.ms_ssim_score = Some(avg);
                 } else {
-                    eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, ssim_all_target);
+                    eprintln!("   ✅ MS-SSIM (3-ch) TARGET MET: {:.4} ≥ {:.2}", avg, ms_ssim_target);
                     result.ms_ssim_passed = Some(true);
-                    result.ms_ssim_score = Some(all);
+                    result.ms_ssim_score = Some(avg);
                 }
             } else {
-                eprintln!("   ⚠️  SSIM All calculation failed");
-                eprintln!("   ℹ️  Using explore phase SSIM as fallback");
-                // Fallback: 使用探索阶段的 SSIM
-                if let Some(ssim) = result.ssim {
-                    if ssim < ssim_all_target {
+                // Fallback: 三通道 MS-SSIM 失败，尝试单通道
+                eprintln!("      ⚠️  3-channel MS-SSIM failed, trying single-channel fallback...");
+                if let Some(ms_ssim) = calculate_ms_ssim(input, output) {
+                    eprintln!("      MS-SSIM (Y only): {:.4}", ms_ssim);
+                    if ms_ssim < ms_ssim_target {
+                        eprintln!("   ❌ MS-SSIM BELOW TARGET! {:.4} < {:.2}", ms_ssim, ms_ssim_target);
                         result.ms_ssim_passed = Some(false);
+                        result.ms_ssim_score = Some(ms_ssim);
                     } else {
+                        eprintln!("   ✅ MS-SSIM TARGET MET: {:.4} ≥ {:.2}", ms_ssim, ms_ssim_target);
                         result.ms_ssim_passed = Some(true);
+                        result.ms_ssim_score = Some(ms_ssim);
                     }
-                    result.ms_ssim_score = Some(ssim);
                 } else {
+                    eprintln!("   ⚠️  All MS-SSIM calculations failed!");
                     result.ms_ssim_passed = None;
                     result.ms_ssim_score = None;
                 }
             }
         } else {
             let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
-            eprintln!("   ⏭️  Long video (>{:.0}min) - skipping detailed verification", VMAF_DURATION_THRESHOLD / 60.0);
-            eprintln!("   ℹ️  Using explore phase SSIM: {}", ssim_str);
+            eprintln!("   ⏭️  Long video (>{:.0}min) - skipping MS-SSIM verification", VMAF_DURATION_THRESHOLD / 60.0);
+            eprintln!("   ℹ️  Using SSIM verification only: {}", ssim_str);
         }
     } else {
         let ssim_str = result.ssim.map(|s| format!("{:.6}", s)).unwrap_or_else(|| "N/A".to_string());
         eprintln!("   ⚠️  Could not determine video duration");
-        eprintln!("   ℹ️  Using explore phase SSIM: {}", ssim_str);
+        eprintln!("   ℹ️  Using SSIM verification only: {}", ssim_str);
     }
 
     eprintln!("");
@@ -6855,6 +6860,72 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
         Err(_) => {}
     }
     None
+}
+
+/// 🔥 v6.9.6: 计算三通道 MS-SSIM (Y+U+V 平均)
+/// 
+/// 分别计算 Y/U/V 三个通道的 MS-SSIM，然后取平均值
+/// 这比单通道 MS-SSIM 更准确，能检测色度损失
+/// 
+/// 返回: (y_ms_ssim, u_ms_ssim, v_ms_ssim, average)
+pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
+    use std::process::Command;
+    
+    eprintln!("   📊 Calculating 3-channel MS-SSIM (Y+U+V)...");
+    
+    // 计算 Y 通道 MS-SSIM
+    eprint!("      Y channel... ");
+    let y_ms_ssim = calculate_ms_ssim_channel(input, output, "y")?;
+    eprintln!("{:.4}", y_ms_ssim);
+    
+    // 计算 U 通道 MS-SSIM
+    eprint!("      U channel... ");
+    let u_ms_ssim = calculate_ms_ssim_channel(input, output, "u")?;
+    eprintln!("{:.4}", u_ms_ssim);
+    
+    // 计算 V 通道 MS-SSIM
+    eprint!("      V channel... ");
+    let v_ms_ssim = calculate_ms_ssim_channel(input, output, "v")?;
+    eprintln!("{:.4}", v_ms_ssim);
+    
+    // 计算加权平均 (Y:U:V = 6:1:1，与 SSIM All 权重一致)
+    let weighted_avg = (y_ms_ssim * 6.0 + u_ms_ssim + v_ms_ssim) / 8.0;
+    
+    // Clamp 到有效范围
+    let y_clamped = y_ms_ssim.clamp(0.0, 1.0);
+    let u_clamped = u_ms_ssim.clamp(0.0, 1.0);
+    let v_clamped = v_ms_ssim.clamp(0.0, 1.0);
+    let avg_clamped = weighted_avg.clamp(0.0, 1.0);
+    
+    Some((y_clamped, u_clamped, v_clamped, avg_clamped))
+}
+
+/// 计算单个通道的 MS-SSIM
+fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Option<f64> {
+    use std::process::Command;
+    
+    // 🔥 v6.9.6: 先统一格式为 yuv444p，确保 U/V 通道尺寸一致
+    // 然后提取指定通道并计算 MS-SSIM
+    let filter = format!(
+        "[0:v]format=yuv444p,extractplanes={}[c0];[1:v]format=yuv444p,extractplanes={}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
+        channel, channel
+    );
+    
+    let result = Command::new("ffmpeg")
+        .arg("-i").arg(input)
+        .arg("-i").arg(output)
+        .arg("-filter_complex").arg(&filter)
+        .arg("-f").arg("null")
+        .arg("-")
+        .output();
+    
+    match result {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            parse_ms_ssim_from_json(&stdout)
+        }
+        _ => None
+    }
 }
 
 /// 从 SSIM 输出行提取指定通道的值
