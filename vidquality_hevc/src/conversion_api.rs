@@ -517,12 +517,19 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     }
                     
                     // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+                    // 🔥 v6.9.11: 同时合并XMP边车文件
                     if let Some(ref out_dir) = config.output_dir {
                         let file_name = input.file_name().unwrap_or_default();
                         let dest = out_dir.join(file_name);
                         if !dest.exists() {
                             if let Ok(_) = std::fs::copy(input, &dest) {
                                 info!("   📋 Copied original to output dir: {}", dest.display());
+                                // 🔥 v6.9.11: 合并XMP边车
+                                match shared_utils::merge_xmp_for_copied_file(input, &dest) {
+                                    Ok(true) => {}, // XMP已合并
+                                    Ok(false) => {}, // 没有XMP
+                                    Err(e) => warn!("⚠️ Failed to merge XMP sidecar: {}", e),
+                                }
                             }
                         }
                     }
@@ -569,12 +576,19 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             }
             
             // 相邻目录模式下，复制原始文件到输出目录
+            // 🔥 v6.9.11: 同时合并XMP边车文件
             if let Some(ref out_dir) = config.output_dir {
                 let file_name = input.file_name().unwrap_or_default();
                 let dest = out_dir.join(file_name);
                 if !dest.exists() {
                     if let Ok(_) = std::fs::copy(input, &dest) {
                         info!("   📋 Copied original to output dir: {}", dest.display());
+                        // 🔥 v6.9.11: 合并XMP边车
+                        match shared_utils::merge_xmp_for_copied_file(input, &dest) {
+                            Ok(true) => {},
+                            Ok(false) => {},
+                            Err(e) => warn!("⚠️ Failed to merge XMP sidecar: {}", e),
+                        }
                     }
                 }
             }
@@ -661,12 +675,19 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         }
         
         // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
+        // 🔥 v6.9.11: 同时合并XMP边车文件
         if let Some(ref out_dir) = config.output_dir {
             let file_name = input.file_name().unwrap_or_default();
             let dest = out_dir.join(file_name);
             if !dest.exists() {
                 if let Ok(_) = std::fs::copy(input, &dest) {
                     info!("   📋 Copied original to output dir: {}", dest.display());
+                    // 🔥 v6.9.11: 合并XMP边车
+                    match shared_utils::merge_xmp_for_copied_file(input, &dest) {
+                        Ok(true) => {},
+                        Ok(false) => {},
+                        Err(e) => warn!("⚠️ Failed to merge XMP sidecar: {}", e),
+                    }
                 }
             }
         }

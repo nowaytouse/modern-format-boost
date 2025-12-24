@@ -172,6 +172,7 @@ pub use checkpoint::{
 
 pub use xmp_merger::{
     XmpMerger, XmpMergerConfig, XmpFile, MergeResult, MergeSummary,
+    merge_xmp_for_copied_file,  // 🔥 v6.9.11: 复制文件时合并XMP
 };
 
 // 🔥 v4.6: Flag 组合验证器
