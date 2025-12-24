@@ -749,16 +749,35 @@ pub fn convert_to_hevc_mp4_matched(
     
     // 🔥 v3.8: 质量验证失败时，保护原文件！
     // 🔥 v5.69: 使用实际的 min_ssim 阈值，响亮报错
+    // 🔥 v6.9.10: 修复错误信息 - 区分压缩失败、SSIM 计算失败、SSIM 阈值未达标
     if !explore_result.quality_passed {
         let actual_ssim = explore_result.ssim.unwrap_or(0.0);
         let threshold = explore_result.actual_min_ssim;
         
-        // 🔥 v5.69: 响亮报错 - 区分 SSIM 计算失败和阈值未达标
-        if explore_result.ssim.is_none() {
+        // 🔥 v6.9.10: 使用纯视频流大小判断压缩
+        let video_stream_compressed = explore_result.output_video_stream_size < explore_result.input_video_stream_size;
+        
+        // 🔥 v6.9.10: 响亮报错 - 准确区分失败原因
+        if !video_stream_compressed {
+            // 视频流压缩失败
+            let input_stream_kb = explore_result.input_video_stream_size as f64 / 1024.0;
+            let output_stream_kb = explore_result.output_video_stream_size as f64 / 1024.0;
+            let stream_change_pct = if explore_result.input_video_stream_size > 0 {
+                (output_stream_kb / input_stream_kb - 1.0) * 100.0
+            } else {
+                0.0
+            };
+            eprintln!("   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
+                input_stream_kb, output_stream_kb, stream_change_pct);
+            eprintln!("   ⚠️  File may already be highly optimized");
+        } else if explore_result.ssim.is_none() {
             eprintln!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
             eprintln!("   ⚠️  This may indicate codec compatibility issues");
-        } else {
+        } else if actual_ssim < threshold {
             eprintln!("   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}", actual_ssim, threshold);
+        } else {
+            // 不应该到达这里，但以防万一
+            eprintln!("   ⚠️  Quality validation FAILED: unknown reason");
         }
         eprintln!("   🛡️  Original file PROTECTED (quality too low to replace)");
         
