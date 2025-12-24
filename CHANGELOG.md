@@ -2,6 +2,16 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.11] - 2025-12-25
+
+### 🔧 XMP Sidecar Merge for Skipped Files
+
+- **Fixed: Skipped files now have XMP sidecars merged**
+  - Previously, files skipped (short animations, modern formats, quality failures) were copied without XMP metadata
+  - Now `merge_xmp_for_copied_file()` is called after copying to merge XMP sidecars
+  - Affects: short animations (<3s), modern lossy formats (WebP/AVIF/HEIC), quality validation failures
+  - Added new helper function `shared_utils::merge_xmp_for_copied_file()` for reuse
+
 ## [6.9.10] - 2025-12-25
 
 ### 🔧 XMP Sidecar Merge Fix

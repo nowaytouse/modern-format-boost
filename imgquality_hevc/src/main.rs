@@ -533,6 +533,7 @@ struct AutoConvertConfig {
 
 /// 🔥 v6.5.2: 在"输出到相邻目录"模式下复制原始文件
 /// 当文件被跳过时（短动画、无法压缩等），需要将原始文件复制到输出目录
+/// 🔥 v6.9.11: 同时合并XMP边车文件（如果存在）
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
     if let Some(ref output_dir) = config.output_dir {
         // 相邻目录模式：复制原始文件
@@ -543,6 +544,13 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
         if !dest.exists() {
             std::fs::copy(input, &dest)?;
             println!("   📋 Copied to output dir: {}", dest.display());
+            
+            // 🔥 v6.9.11: 查找并合并XMP边车文件
+            match shared_utils::merge_xmp_for_copied_file(input, &dest) {
+                Ok(true) => {}, // XMP已合并，消息已打印
+                Ok(false) => {}, // 没有XMP，静默
+                Err(e) => println!("⚠️ Failed to merge XMP sidecar: {}", e),
+            }
         }
     }
     Ok(())
