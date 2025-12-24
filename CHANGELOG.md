@@ -2,6 +2,16 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.10] - 2025-12-25
+
+### 🔧 XMP Sidecar Merge Fix
+
+- **Fixed false-positive XMP merge failures for JXL files**
+  - ExifTool outputs `[minor] Will wrap JXL codestream in ISO BMFF container` as informational message
+  - Previously this was incorrectly treated as an error, causing `⚠️ Failed to merge XMP sidecar` warnings
+  - XMP data was actually written successfully - now correctly recognized as success
+  - PNG→JXL conversions with XMP sidecars now report `✅ XMP sidecar merged successfully`
+
 ## [6.5.2] - 2025-12-20
 
 ### 🔧 Adjacent Directory Mode Fix

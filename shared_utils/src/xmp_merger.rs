@@ -581,10 +581,16 @@ impl XmpMerger {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Some warnings are OK, only fail on actual errors
-            if !stderr.contains("Warning") || stderr.contains("Error") {
+            // 🔥 v6.9.10: [minor] warnings are OK for JXL container wrapping
+            // ExifTool outputs "[minor] Will wrap JXL codestream in ISO BMFF container"
+            // This is informational, not an actual error - XMP data is still written successfully
+            let is_minor_warning = stderr.contains("[minor]");
+            let is_real_error = stderr.contains("Error:") && !is_minor_warning;
+            
+            if is_real_error {
                 bail!("ExifTool merge failed: {}", stderr);
             }
+            // Minor warnings are acceptable, continue silently
         }
 
         // Restore timestamps

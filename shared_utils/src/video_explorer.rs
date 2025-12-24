@@ -6974,8 +6974,6 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
 /// 
 /// 返回: (y_ms_ssim, u_ms_ssim, v_ms_ssim, average)
 pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
-    use std::process::Command;
-    
     eprintln!("   📊 Calculating 3-channel MS-SSIM (Y+U+V)...");
     
     // 计算 Y 通道 MS-SSIM
