@@ -8,9 +8,16 @@ All notable changes to Modern Format Boost will be documented in this file.
 
 - **Fixed false-positive XMP merge failures for JXL files**
   - ExifTool outputs `[minor] Will wrap JXL codestream in ISO BMFF container` as informational message
-  - Previously this was incorrectly treated as an error, causing `⚠️ Failed to merge XMP sidecar` warnings
-  - XMP data was actually written successfully - now correctly recognized as success
+  - Previously this was incorrectly treated as an error
   - PNG→JXL conversions with XMP sidecars now report `✅ XMP sidecar merged successfully`
+
+### 🔧 Quality Validation Error Message Fix
+
+- **Fixed misleading error messages when video stream compression fails**
+  - Previously showed `SSIM X < Y` even when SSIM was actually higher than threshold
+  - Root cause: `quality_passed=false` due to video stream not compressing, not SSIM failure
+  - Now correctly shows `VIDEO STREAM COMPRESSION FAILED` with size details
+  - Accurate distinction between: compression failure / SSIM calculation failure / SSIM below threshold
 
 ## [6.5.2] - 2025-12-20
 
