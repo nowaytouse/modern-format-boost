@@ -268,7 +268,7 @@ fn analyze_directory(
     output_format: OutputFormat,
     recommend: bool,
 ) -> anyhow::Result<()> {
-    let image_extensions = ["png", "jpg", "jpeg", "webp", "gif", "tiff", "tif"];
+    let image_extensions = ["png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif"];
     
     let walker = if recursive {
         WalkDir::new(path).follow_links(true)
@@ -651,7 +651,7 @@ fn auto_convert_directory(
     }
     
     let start_time = Instant::now();
-    let image_extensions = ["png", "jpg", "jpeg", "webp", "gif", "tiff", "tif", "heic", "avif"];
+    let image_extensions = ["png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif"];
     
     let walker = if config.recursive {
         WalkDir::new(input).follow_links(true)
