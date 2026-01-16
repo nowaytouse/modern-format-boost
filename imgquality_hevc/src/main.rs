@@ -834,7 +834,7 @@ fn auto_convert_directory(
                         actual_input_bytes.fetch_add(input_size, Ordering::Relaxed);
                         actual_output_bytes.fetch_add(output_size, Ordering::Relaxed);
                     } else {
-                        // 跳过的文件（没有生成输出）
+                        // 跳过的文件（没有生成输出）- 已在 auto_convert_single_file 中复制
                         skipped.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -845,6 +845,21 @@ fn auto_convert_directory(
                     } else {
                         eprintln!("❌ Conversion failed {}: {}", path.display(), e);
                         failed.fetch_add(1, Ordering::Relaxed);
+                        
+                        // 🔥 v6.9.14: 无遗漏设计 - 失败的文件也复制原始文件
+                        if let Some(ref output_dir) = config.output_dir {
+                            let file_name = path.file_name().unwrap_or_default();
+                            let dest = output_dir.join(file_name);
+                            if !dest.exists() {
+                                if let Err(copy_err) = std::fs::copy(path, &dest) {
+                                    eprintln!("❌ Failed to copy original after conversion failure: {}", copy_err);
+                                } else {
+                                    println!("📋 Copied original (conversion failed): {}", path.display());
+                                    // 尝试合并XMP
+                                    let _ = shared_utils::merge_xmp_for_copied_file(path, &dest);
+                                }
+                            }
+                        }
                     }
                 }
             }

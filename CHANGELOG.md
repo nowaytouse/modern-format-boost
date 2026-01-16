@@ -2,6 +2,15 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.14] - 2025-12-25
+
+### 🔧 No-Loss Design - Failed Files Fallback
+
+- **Failed files now copied**: When conversion fails, original file is copied to output
+- **XMP merged for failed files**: XMP sidecars merged even for failed conversions
+- **Build fix**: Added `build.rs` for dynamic Homebrew library path detection (dav1d/libheif)
+- **Loud error reporting**: All failures reported with clear messages
+
 ## [6.9.13] - 2025-12-25
 
 ### 🔧 No-Loss Design - Core Implementation
