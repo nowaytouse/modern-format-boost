@@ -38,8 +38,9 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
 }
 
 /// Image file extensions commonly supported
+/// 🔥 v6.9.12: 添加 jpe, jfif 格式支持
 pub const IMAGE_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "webp", "gif", "tiff", "tif", 
+    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", 
     "heic", "heif", "avif", "jxl", "bmp"
 ];
 

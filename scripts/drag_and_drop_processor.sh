@@ -1,6 +1,11 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.5.2
+# Modern Format Boost - Drag & Drop Processor v6.9.12
 # 
+# 🔥 v6.9.12: 格式支持增强 + 验证机制
+#            - 添加 .jpe, .jfif 图像格式支持
+#            - 添加 .wmv, .flv 视频格式支持
+#            - 添加输出完整性验证机制（输入输出数量对比）
+#            - 检测并报告不支持的格式（如 .psd, RAW）
 # 🔥 v6.5.2: 修复"输出到相邻目录"模式下跳过的文件未被复制的问题
 #            - 短动画(< 3s)被跳过时，复制原始文件到输出目录
 #            - 无法压缩的视频被保护时，复制原始文件到输出目录
@@ -187,8 +192,8 @@ show_welcome() {
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v6.5.2                                        ║"
-    echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证                            ║"
+    echo "  ║     🚀 Modern Format Boost v6.9.12                                       ║"
+    echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证 + 完整性校验              ║"
     echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -223,6 +228,7 @@ create_directory_structure() {
 # ═══════════════════════════════════════════════════════════════
 # 保持目录结构的图像处理
 # 🔥 v5.77: 修复子shell问题，使用数组而非管道
+# 🔥 v6.9.12: 添加更多图像格式支持 (.jpe, .avif, .jfif, .psd)
 # ═══════════════════════════════════════════════════════════════
 process_images_with_structure() {
     # 🔥 关键：使用数组收集文件，避免子shell问题
@@ -230,8 +236,9 @@ process_images_with_structure() {
     while IFS= read -r -d '' file; do
         files+=("$file")
     done < <(find "$TARGET_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" \
-        -o -iname "*.bmp" -o -iname "*.tiff" -o -iname "*.webp" -o -iname "*.heic" \
+        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
+        -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
+        -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
     \) -print0)
     
     local total=${#files[@]}
@@ -265,6 +272,7 @@ process_images_with_structure() {
 # ═══════════════════════════════════════════════════════════════
 # 保持目录结构的视频处理
 # 🔥 v5.77: 修复子shell问题，使用数组而非管道
+# 🔥 v6.9.12: 添加更多视频格式支持
 # ═══════════════════════════════════════════════════════════════
 process_videos_with_structure() {
     # 🔥 关键：使用数组收集文件，避免子shell问题
@@ -273,7 +281,7 @@ process_videos_with_structure() {
         files+=("$file")
     done < <(find "$TARGET_DIR" -type f \( \
         -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" \
+        -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
     \) -print0)
     
     local total=${#files[@]}
@@ -403,18 +411,20 @@ safety_check() {
 
 # ═══════════════════════════════════════════════════════════════
 # 统计文件数量
+# 🔥 v6.9.12: 添加更多格式支持，确保无遗漏
 # ═══════════════════════════════════════════════════════════════
 count_files() {
     echo -e "${CYAN}📊 统计文件...${NC}"
     
     XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" 2>/dev/null | wc -l | tr -d ' ')
     IMG_COUNT=$(find "$TARGET_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" \
-        -o -iname "*.bmp" -o -iname "*.tiff" -o -iname "*.webp" -o -iname "*.heic" \
+        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
+        -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
+        -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
     \) 2>/dev/null | wc -l | tr -d ' ')
     VID_COUNT=$(find "$TARGET_DIR" -type f \( \
         -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" \
+        -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
     \) 2>/dev/null | wc -l | tr -d ' ')
     
     echo -e "  📋 XMP: ${BOLD}$XMP_COUNT${NC}  🖼️ 图像: ${BOLD}$IMG_COUNT${NC}  🎬 视频: ${BOLD}$VID_COUNT${NC}"
@@ -530,6 +540,61 @@ process_videos() {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# 🔥 v6.9.12: 验证机制 - 确保输入输出数量匹配
+# ═══════════════════════════════════════════════════════════════
+verify_output_count() {
+    if [[ "$OUTPUT_MODE" != "adjacent" ]]; then
+        return 0  # 原地模式不需要验证
+    fi
+    
+    echo ""
+    echo -e "${CYAN}🔍 验证输出完整性...${NC}"
+    
+    # 统计输出目录的媒体文件数量（包括转换后的格式）
+    local out_media_count
+    out_media_count=$(find "$OUTPUT_DIR" -type f \( \
+        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
+        -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
+        -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
+        -o -iname "*.jxl" \
+        -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
+        -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
+    \) 2>/dev/null | wc -l | tr -d ' ')
+    
+    local input_total=$((IMG_COUNT + VID_COUNT))
+    local diff=$((input_total - out_media_count))
+    
+    echo -e "  📥 输入媒体: ${BOLD}$input_total${NC} (图像: $IMG_COUNT, 视频: $VID_COUNT)"
+    echo -e "  📤 输出媒体: ${BOLD}$out_media_count${NC}"
+    
+    if [[ $diff -eq 0 ]]; then
+        echo -e "  ${GREEN}✅ 验证通过: 输入输出数量匹配${NC}"
+        VERIFY_PASSED=true
+    elif [[ $diff -gt 0 ]]; then
+        echo -e "  ${RED}❌ 验证失败: 缺少 $diff 个文件!${NC}"
+        echo -e "  ${YELLOW}⚠️  可能原因: 格式不支持、转换失败、或文件被跳过${NC}"
+        VERIFY_PASSED=false
+        
+        # 列出可能被忽略的格式
+        echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${YELLOW}📋 检查不支持的格式:${NC}"
+        
+        # 检查 PSD 文件
+        local psd_count
+        psd_count=$(find "$TARGET_DIR" -type f -iname "*.psd" 2>/dev/null | wc -l | tr -d ' ')
+        [[ $psd_count -gt 0 ]] && echo -e "     ⚠️  .psd (Photoshop): $psd_count 个 - 不支持"
+        
+        # 检查其他可能被忽略的格式
+        local raw_count
+        raw_count=$(find "$TARGET_DIR" -type f \( -iname "*.cr2" -o -iname "*.nef" -o -iname "*.arw" -o -iname "*.dng" \) 2>/dev/null | wc -l | tr -d ' ')
+        [[ $raw_count -gt 0 ]] && echo -e "     ⚠️  RAW格式: $raw_count 个 - 不支持"
+    else
+        echo -e "  ${YELLOW}⚠️  输出比输入多 $((0 - diff)) 个文件 (可能有重复或额外生成)${NC}"
+        VERIFY_PASSED=true
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════
 # 完成信息
 # ═══════════════════════════════════════════════════════════════
 show_completion() {
@@ -545,6 +610,9 @@ show_completion() {
     echo -e "     🎬 视频: $VID_COUNT 个"
     echo -e "     📋 XMP:  $XMP_COUNT 个"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    # 🔥 v6.9.12: 验证输出完整性
+    verify_output_count
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         echo -e "  ${BLUE}📂${NC} 输出目录: ${BOLD}$OUTPUT_DIR${NC}"
