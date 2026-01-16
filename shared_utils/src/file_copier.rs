@@ -143,6 +143,13 @@ pub fn copy_unsupported_files(
                     .and_then(|e| e.to_str())
                     .unwrap_or("unknown");
                 println!("📦 Copied unsupported file (.{}): {}", ext, path.display());
+                
+                // 🔥 v6.9.15: 尝试合并XMP边车（如果是媒体类文件）
+                // 对于非媒体文件，XMP无法合并，需要单独复制XMP边车
+                if let Err(_) = crate::merge_xmp_for_copied_file(path, &dest) {
+                    // XMP合并失败或不存在，检查是否需要复制XMP边车文件
+                    copy_xmp_sidecar_if_exists(path, &dest);
+                }
             }
             Err(e) => {
                 result.failed += 1;
@@ -154,6 +161,34 @@ pub fn copy_unsupported_files(
     }
     
     result
+}
+
+/// 复制XMP边车文件（如果存在）
+/// 用于非媒体文件，因为XMP无法合并到这些文件中
+fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
+    let source_str = source.to_string_lossy();
+    let dest_str = dest.to_string_lossy();
+    
+    // 尝试多种XMP命名模式
+    let xmp_patterns = [
+        format!("{}.xmp", source_str),           // file.psd.xmp
+        format!("{}.XMP", source_str),           // file.psd.XMP
+        source.with_extension("xmp").to_string_lossy().to_string(),  // file.xmp
+    ];
+    
+    for xmp_source in &xmp_patterns {
+        let xmp_path = Path::new(xmp_source);
+        if xmp_path.exists() {
+            // 计算目标XMP路径
+            let xmp_dest = format!("{}.xmp", dest_str);
+            if let Err(e) = std::fs::copy(xmp_path, &xmp_dest) {
+                eprintln!("⚠️ Failed to copy XMP sidecar: {}", e);
+            } else {
+                println!("   📋 Copied XMP sidecar: {}", xmp_path.display());
+            }
+            return;
+        }
+    }
 }
 
 /// 统计目录中的文件数量
