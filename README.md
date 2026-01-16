@@ -111,59 +111,67 @@ modern_format_boost/
 
 ## No-Loss Design (v6.9.16)
 
-The toolkit uses a **Whitelist + Fallback Copy** mechanism to ensure zero file loss:
+**Whitelist + Smart Skip + Fallback Copy** mechanism ensures zero file loss.
 
-### Processing Strategy
+### Format Processing Rules
 
-| File Type | Action | XMP Handling |
-|-----------|--------|--------------|
-| **Supported Images** (jpg, png, gif, webp, heic, avif, etc.) | Convert → JXL/HEVC | Merge into output |
-| **Supported Videos** (mp4, mov, mkv, avi, webm, etc.) | Convert → HEVC/AV1 | Merge into output |
-| **Skipped Files** (short animation <3s, modern lossy) | Copy original | Merge XMP |
-| **Failed Conversions** | Copy original | Merge XMP |
-| **Unsupported Files** (.psd, .txt, .pdf, etc.) | Copy original | Merge XMP (ExifTool) or copy sidecar |
-| **XMP Sidecars** (.xmp) | Merged into media | Not output separately |
+| Format | Lossless | Lossy | Animated |
+|--------|----------|-------|----------|
+| **JPEG** | - | → JXL (DCT lossless) | - |
+| **PNG/TIFF/BMP** | → JXL | - | APNG → HEVC |
+| **GIF** | - | - | → HEVC (≥3s) or copy |
+| **WebP/AVIF/HEIC** | → JXL | ⏭️ SKIP (avoid loss) | → HEVC (`--apple-compat`) |
 
-### Whitelist (Supported Formats)
+### Why Skip Modern Lossy Formats?
 
-**Images:** `png, jpg, jpeg, jpe, jfif, webp, gif, tiff, tif, heic, heif, avif, bmp`
+Re-encoding lossy → lossy causes **generational quality loss**. The tool protects your files:
+- `WebP lossy` → Skip (already compressed)
+- `AVIF lossy` → Skip (already compressed)  
+- `HEIC lossy` → Skip (already compressed)
 
-**Videos:** `mp4, mov, mkv, avi, webm, m4v, wmv, flv, mpg, mpeg, ts, mts`
+Use `--apple-compat` to force convert animated WebP/AVIF to HEVC for Apple device compatibility.
+
+### File Handling Strategy
+
+| Scenario | Action | XMP |
+|----------|--------|-----|
+| Converted successfully | Output new format | Merged |
+| Skipped (modern lossy) | Copy original | Merged |
+| Skipped (short <3s) | Copy original | Merged |
+| Conversion failed | Copy original | Merged |
+| Unsupported (.psd, .txt) | Copy original | Merge or copy sidecar |
 
 ### Verification
 
-After processing, the system verifies: `Output files = Total files - XMP sidecars`
-
-If mismatch detected, a loud warning is displayed.
+`Output files = Total files - XMP sidecars`
 
 ---
 
 ## 无遗漏设计 (v6.9.16)
 
-工具集采用**白名单 + 回退复制**机制，确保零文件丢失：
+**白名单 + 智能跳过 + 回退复制**机制，确保零文件丢失。
 
-### 处理策略
+### 格式处理规则
 
-| 文件类型 | 操作 | XMP处理 |
-|----------|------|---------|
-| **支持的图像** (jpg, png, gif, webp, heic, avif等) | 转换 → JXL/HEVC | 合并到输出 |
-| **支持的视频** (mp4, mov, mkv, avi, webm等) | 转换 → HEVC/AV1 | 合并到输出 |
-| **跳过的文件** (短动画<3秒, 现代有损格式) | 复制原始 | 合并XMP |
-| **转换失败** | 复制原始 | 合并XMP |
-| **不支持的文件** (.psd, .txt, .pdf等) | 复制原始 | 合并XMP (ExifTool) 或复制边车 |
-| **XMP边车** (.xmp) | 合并到媒体文件 | 不单独输出 |
+| 格式 | 无损 | 有损 | 动图 |
+|------|------|------|------|
+| **JPEG** | - | → JXL (DCT无损) | - |
+| **PNG/TIFF/BMP** | → JXL | - | APNG → HEVC |
+| **GIF** | - | - | → HEVC (≥3秒) 或复制 |
+| **WebP/AVIF/HEIC** | → JXL | ⏭️ 跳过 (避免损失) | → HEVC (`--apple-compat`) |
 
-### 白名单（支持的格式）
+### 为什么跳过现代有损格式？
 
-**图像：** `png, jpg, jpeg, jpe, jfif, webp, gif, tiff, tif, heic, heif, avif, bmp`
+有损→有损重编码会导致**代际质量损失**。工具保护你的文件：
+- `WebP有损` → 跳过（已压缩）
+- `AVIF有损` → 跳过（已压缩）
+- `HEIC有损` → 跳过（已压缩）
 
-**视频：** `mp4, mov, mkv, avi, webm, m4v, wmv, flv, mpg, mpeg, ts, mts`
+使用 `--apple-compat` 可强制将动态 WebP/AVIF 转换为 HEVC 以兼容 Apple 设备。
 
 ### 验证机制
 
-处理完成后，系统验证：`输出文件数 = 全部文件数 - XMP边车数`
-
-如检测到不匹配，会响亮警告。
+`输出文件数 = 全部文件数 - XMP边车数`
 
 ---
 
