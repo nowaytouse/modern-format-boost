@@ -109,6 +109,64 @@ modern_format_boost/
 └── Modern Format Boost.app # macOS GUI app
 ```
 
+## No-Loss Design (v6.9.16)
+
+The toolkit uses a **Whitelist + Fallback Copy** mechanism to ensure zero file loss:
+
+### Processing Strategy
+
+| File Type | Action | XMP Handling |
+|-----------|--------|--------------|
+| **Supported Images** (jpg, png, gif, webp, heic, avif, etc.) | Convert → JXL/HEVC | Merge into output |
+| **Supported Videos** (mp4, mov, mkv, avi, webm, etc.) | Convert → HEVC/AV1 | Merge into output |
+| **Skipped Files** (short animation <3s, modern lossy) | Copy original | Merge XMP |
+| **Failed Conversions** | Copy original | Merge XMP |
+| **Unsupported Files** (.psd, .txt, .pdf, etc.) | Copy original | Merge XMP (ExifTool) or copy sidecar |
+| **XMP Sidecars** (.xmp) | Merged into media | Not output separately |
+
+### Whitelist (Supported Formats)
+
+**Images:** `png, jpg, jpeg, jpe, jfif, webp, gif, tiff, tif, heic, heif, avif, bmp`
+
+**Videos:** `mp4, mov, mkv, avi, webm, m4v, wmv, flv, mpg, mpeg, ts, mts`
+
+### Verification
+
+After processing, the system verifies: `Output files = Total files - XMP sidecars`
+
+If mismatch detected, a loud warning is displayed.
+
+---
+
+## 无遗漏设计 (v6.9.16)
+
+工具集采用**白名单 + 回退复制**机制，确保零文件丢失：
+
+### 处理策略
+
+| 文件类型 | 操作 | XMP处理 |
+|----------|------|---------|
+| **支持的图像** (jpg, png, gif, webp, heic, avif等) | 转换 → JXL/HEVC | 合并到输出 |
+| **支持的视频** (mp4, mov, mkv, avi, webm等) | 转换 → HEVC/AV1 | 合并到输出 |
+| **跳过的文件** (短动画<3秒, 现代有损格式) | 复制原始 | 合并XMP |
+| **转换失败** | 复制原始 | 合并XMP |
+| **不支持的文件** (.psd, .txt, .pdf等) | 复制原始 | 合并XMP (ExifTool) 或复制边车 |
+| **XMP边车** (.xmp) | 合并到媒体文件 | 不单独输出 |
+
+### 白名单（支持的格式）
+
+**图像：** `png, jpg, jpeg, jpe, jfif, webp, gif, tiff, tif, heic, heif, avif, bmp`
+
+**视频：** `mp4, mov, mkv, avi, webm, m4v, wmv, flv, mpg, mpeg, ts, mts`
+
+### 验证机制
+
+处理完成后，系统验证：`输出文件数 = 全部文件数 - XMP边车数`
+
+如检测到不匹配，会响亮警告。
+
+---
+
 ## Supported Formats
 
 **Video Input:** mp4, mkv, avi, mov, webm, flv, wmv, m4v, mpg, mpeg, ts, mts
@@ -195,4 +253,4 @@ cd modern_format_boost
 
 ---
 
-**Version**: 6.9.9 | **Updated**: 2025-12-20 | [CHANGELOG](CHANGELOG.md)
+**Version**: 6.9.16 | **Updated**: 2025-12-25 | [CHANGELOG](CHANGELOG.md)
