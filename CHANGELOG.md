@@ -2,6 +2,17 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.12] - 2025-12-25
+
+### 🔧 Format Support Enhancement + Validation Mechanism
+
+- **Added image formats**: `.jpe`, `.jfif` (JPEG variants)
+- **Added video formats**: `.wmv`, `.flv`
+- **Output integrity verification**: Compares input/output file counts after processing
+  - Reports missing files with clear warnings
+  - Detects unsupported formats (`.psd`, RAW files) and reports them
+- **Updated**: `imgquality_hevc`, `imgquality_av1`, `shared_utils/batch.rs`, `drag_and_drop_processor.sh`
+
 ## [6.9.11] - 2025-12-25
 
 ### 🔧 XMP Sidecar Merge for Skipped Files
