@@ -452,59 +452,11 @@ count_files() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# XMP 合并 (v5.76: 已整合到转换工具中，此函数仅用于独立合并)
-# 🔥 注意：imgquality-hevc/vidquality-hevc 的 copy_metadata() 已自动合并XMP
-# 此函数现在只在用户明确需要独立合并时使用
+# XMP 合并 (v5.76: 已整合到转换工具中)
 # ═══════════════════════════════════════════════════════════════
 merge_xmp_files() {
-    # 🔥 v5.76: 转换工具已自动合并XMP，跳过独立合并避免重复
-    # 如果用户只想合并XMP而不转换，可以直接运行 xmp-merge 命令
     [[ $XMP_COUNT -gt 0 ]] && echo -e "${DIM}📋 XMP边车将在转换时自动合并${NC}"
     return 0
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 🔥 v6.9.13: 复制不支持的文件（如 .psd, .txt 等）
-# 确保输出目录包含所有文件，无遗漏
-# ═══════════════════════════════════════════════════════════════
-copy_other_files() {
-    [[ "$OUTPUT_MODE" != "adjacent" ]] && return 0
-    [[ $OTHER_COUNT -eq 0 ]] && return 0
-    
-    echo ""
-    echo -e "${CYAN}📦 复制其他文件 ($OTHER_COUNT 个)...${NC}"
-    
-    local copied=0
-    
-    # 遍历所有文件，排除已处理的格式和XMP
-    while IFS= read -r -d '' file; do
-        local ext="${file##*.}"
-        ext="${ext,,}"  # 转小写
-        
-        # 跳过已处理的格式和XMP
-        case "$ext" in
-            jpg|jpeg|jpe|jfif|png|gif|bmp|tiff|tif|webp|heic|heif|avif) continue ;;
-            mp4|mov|avi|mkv|webm|m4v|wmv|flv) continue ;;
-            xmp) continue ;;  # XMP已被合并
-        esac
-        
-        # 计算相对路径并复制
-        local rel_path="${file#$TARGET_DIR}"
-        rel_path="${rel_path#/}"
-        local dest="$OUTPUT_DIR/$rel_path"
-        local dest_dir
-        dest_dir="$(dirname "$dest")"
-        
-        mkdir -p "$dest_dir"
-        cp "$file" "$dest" 2>/dev/null && ((copied++))
-        
-        # 显示进度（每10个文件显示一次）
-        if [[ $((copied % 10)) -eq 0 ]]; then
-            printf '\r  📦 已复制: %d/%d' "$copied" "$OTHER_COUNT"
-        fi
-    done < <(find "$TARGET_DIR" -type f ! -name ".*" -print0 2>/dev/null)
-    
-    echo -e "\r  ${GREEN}✅ 已复制 $copied 个其他文件${NC}          "
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -600,48 +552,8 @@ process_videos() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v6.9.13: 验证机制 - 确保输出无遗漏
-# 预期: 输出文件数 = 全部文件 - XMP（XMP被合并）
-# ═══════════════════════════════════════════════════════════════
-verify_output_count() {
-    if [[ "$OUTPUT_MODE" != "adjacent" ]]; then
-        return 0  # 原地模式不需要验证
-    fi
-    
-    echo ""
-    echo -e "${CYAN}🔍 验证输出完整性...${NC}"
-    
-    # 统计输出目录的全部文件（排除隐藏文件）
-    local out_total
-    out_total=$(find "$OUTPUT_DIR" -type f ! -name ".*" 2>/dev/null | wc -l | tr -d ' ')
-    
-    local diff=$((EXPECTED_OUTPUT - out_total))
-    
-    echo -e "  📥 输入文件: ${BOLD}$TOTAL_FILES${NC} (XMP: $XMP_COUNT 将被合并)"
-    echo -e "  📤 预期输出: ${BOLD}$EXPECTED_OUTPUT${NC}"
-    echo -e "  📤 实际输出: ${BOLD}$out_total${NC}"
-    
-    if [[ $diff -eq 0 ]]; then
-        echo -e "  ${GREEN}✅ 验证通过: 输出完整，无遗漏${NC}"
-        VERIFY_PASSED=true
-    elif [[ $diff -gt 0 ]]; then
-        echo -e "  ${RED}❌ 验证失败: 缺少 $diff 个文件!${NC}"
-        VERIFY_PASSED=false
-        
-        # 详细分析缺失原因
-        echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "  ${YELLOW}⚠️  可能原因: 转换失败或文件被跳过${NC}"
-        echo -e "  ${YELLOW}💡 建议: 检查日志查看具体失败的文件${NC}"
-    else
-        # 输出比预期多（可能有额外生成的文件）
-        echo -e "  ${YELLOW}⚠️  输出比预期多 $((0 - diff)) 个文件${NC}"
-        echo -e "  ${DIM}可能原因: 动图转换生成了额外的 .mp4 文件${NC}"
-        VERIFY_PASSED=true
-    fi
-}
-
-# ═══════════════════════════════════════════════════════════════
 # 完成信息
+# 🔥 v6.9.13: 验证机制已移至主程序，脚本仅显示摘要
 # ═══════════════════════════════════════════════════════════════
 show_completion() {
     echo ""
@@ -652,13 +564,12 @@ show_completion() {
     # 显示处理摘要
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "  📊 处理摘要:"
-    echo -e "     🖼️  图像: $IMG_COUNT 个"
-    echo -e "     🎬 视频: $VID_COUNT 个"
-    echo -e "     📋 XMP:  $XMP_COUNT 个"
+    echo -e "     📁 全部文件: $TOTAL_FILES 个"
+    echo -e "     🖼️  图像(转换): $IMG_COUNT 个"
+    echo -e "     🎬 视频(转换): $VID_COUNT 个"
+    echo -e "     📋 XMP(合并): $XMP_COUNT 个"
+    echo -e "     📦 其他(复制): $OTHER_COUNT 个"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    
-    # 🔥 v6.9.12: 验证输出完整性
-    verify_output_count
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         echo -e "  ${BLUE}📂${NC} 输出目录: ${BOLD}$OUTPUT_DIR${NC}"
@@ -715,7 +626,7 @@ main() {
     merge_xmp_files
     process_images
     process_videos
-    copy_other_files  # 🔥 v6.9.13: 复制不支持的文件
+    # 🔥 v6.9.13: 复制其他文件和验证已移至主程序 (imgquality-hevc/vidquality-hevc)
     show_completion
 }
 

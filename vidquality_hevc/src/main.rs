@@ -275,6 +275,26 @@ fn main() -> anyhow::Result<()> {
                     total_output_bytes,
                     "HEVC Video",
                 );
+                
+                // 🔥 v6.9.13: 无遗漏设计 - 复制不支持的文件
+                if let Some(ref output_dir) = output {
+                    info!("\n📦 Copying unsupported files...");
+                    let copy_result = shared_utils::copy_unsupported_files(&input, output_dir, recursive);
+                    if copy_result.copied > 0 {
+                        info!("📦 Copied {} unsupported files", copy_result.copied);
+                    }
+                    if copy_result.failed > 0 {
+                        eprintln!("❌ Failed to copy {} files", copy_result.failed);
+                    }
+                    
+                    // 🔥 验证输出完整性
+                    info!("\n🔍 Verifying output completeness...");
+                    let verify = shared_utils::verify_output_completeness(&input, output_dir, recursive);
+                    info!("{}", verify.message);
+                    if !verify.passed {
+                        eprintln!("⚠️  Some files may be missing from output!");
+                    }
+                }
             } else {
                 // 🔥 单文件处理：先检查是否是视频文件
                 let video_extensions = ["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts", "mts"];
