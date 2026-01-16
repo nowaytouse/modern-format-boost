@@ -874,6 +874,26 @@ fn auto_convert_directory(
     // 🔥 Print detailed summary report
     print_summary_report(&result, start_time.elapsed(), final_input_bytes, final_output_bytes, "Image Conversion");
 
+    // 🔥 v6.9.13: 无遗漏设计 - 复制不支持的文件
+    if let Some(ref output_dir) = config.output_dir {
+        println!("\n📦 Copying unsupported files...");
+        let copy_result = shared_utils::copy_unsupported_files(input, output_dir, recursive);
+        if copy_result.copied > 0 {
+            println!("📦 Copied {} unsupported files", copy_result.copied);
+        }
+        if copy_result.failed > 0 {
+            eprintln!("❌ Failed to copy {} files", copy_result.failed);
+        }
+        
+        // 🔥 验证输出完整性
+        println!("\n🔍 Verifying output completeness...");
+        let verify = shared_utils::verify_output_completeness(input, output_dir, recursive);
+        println!("{}", verify.message);
+        if !verify.passed {
+            eprintln!("⚠️  Some files may be missing from output!");
+        }
+    }
+
     Ok(())
 }
 

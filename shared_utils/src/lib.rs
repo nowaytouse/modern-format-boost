@@ -57,6 +57,8 @@ pub mod pure_media_verifier;
 pub mod types;
 // 🔥 v7.1: 统一错误类型
 pub mod app_error;
+// 🔥 v6.9.13: 文件复制模块（无遗漏设计）
+pub mod file_copier;
 
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
@@ -309,3 +311,10 @@ pub use types::{
 
 // 🔥 v7.1: 统一错误类型
 pub use app_error::AppError;
+
+// 🔥 v6.9.13: 文件复制模块（无遗漏设计）
+pub use file_copier::{
+    copy_unsupported_files, count_files as count_all_files, verify_output_completeness,
+    CopyResult, FileStats, VerifyResult,
+    SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, SIDECAR_EXTENSIONS,
+};
