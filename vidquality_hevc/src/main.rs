@@ -262,6 +262,20 @@ fn main() -> anyhow::Result<()> {
                             } else {
                                 info!("❌ {} failed: {}", file.display(), e);
                                 batch_result.fail(file.clone(), e.to_string());
+                                
+                                // 🔥 v6.9.14: 无遗漏设计 - 失败的文件也复制原始文件
+                                if let Some(ref out_dir) = output {
+                                    let file_name = file.file_name().unwrap_or_default();
+                                    let dest = out_dir.join(file_name);
+                                    if !dest.exists() {
+                                        if let Err(copy_err) = std::fs::copy(file, &dest) {
+                                            eprintln!("❌ Failed to copy original: {}", copy_err);
+                                        } else {
+                                            info!("📋 Copied original (conversion failed): {}", file.display());
+                                            let _ = shared_utils::merge_xmp_for_copied_file(file, &dest);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
