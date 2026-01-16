@@ -2,6 +2,14 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.16] - 2025-12-25
+
+### 🔧 XMP Merge Priority
+
+- **Always try merge first**: ExifTool supports XMP merge for PSD and many other formats
+- **Fallback to copy**: Only copy XMP sidecar if merge fails
+- **Clear logging**: Shows merge success/failure/fallback status
+
 ## [6.9.15] - 2025-12-25
 
 ### 🔧 No-Loss Design - XMP Handling for Unsupported Files

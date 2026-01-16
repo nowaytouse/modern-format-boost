@@ -144,11 +144,20 @@ pub fn copy_unsupported_files(
                     .unwrap_or("unknown");
                 println!("📦 Copied unsupported file (.{}): {}", ext, path.display());
                 
-                // 🔥 v6.9.15: 尝试合并XMP边车（如果是媒体类文件）
-                // 对于非媒体文件，XMP无法合并，需要单独复制XMP边车
-                if let Err(_) = crate::merge_xmp_for_copied_file(path, &dest) {
-                    // XMP合并失败或不存在，检查是否需要复制XMP边车文件
-                    copy_xmp_sidecar_if_exists(path, &dest);
+                // 🔥 v6.9.16: 优先尝试合并XMP（ExifTool支持PSD等多种格式）
+                // 只有合并失败时才复制XMP边车文件
+                match crate::merge_xmp_for_copied_file(path, &dest) {
+                    Ok(true) => {
+                        // XMP合并成功，已打印消息
+                    }
+                    Ok(false) => {
+                        // 没有找到XMP边车，无需处理
+                    }
+                    Err(e) => {
+                        // 🔥 XMP合并失败，回退到复制边车文件
+                        println!("⚠️ XMP merge failed ({}), trying to copy sidecar...", e);
+                        copy_xmp_sidecar_if_exists(path, &dest);
+                    }
                 }
             }
             Err(e) => {
