@@ -4,13 +4,13 @@ All notable changes to Modern Format Boost will be documented in this file.
 
 ## [6.9.13] - 2025-12-25
 
-### 🔧 No-Loss Design - Process All Files
+### 🔧 No-Loss Design - Core Implementation
 
-- **Supported formats**: Convert (JPEG→JXL, PNG→JXL, Animated→HEVC)
-- **Unsupported formats** (.psd, .txt, etc.): Copy directly to output
-- **XMP sidecars**: Merged into media files (not output separately)
-- **Validation**: Output count = Total files - XMP count
-- **New function**: `copy_other_files()` copies unsupported formats
+- **Moved to core program**: Copy unsupported files + verification now in Rust code
+- **New module**: `shared_utils/file_copier.rs` - handles file copying and verification
+- **Functions**: `copy_unsupported_files()`, `count_all_files()`, `verify_output_completeness()`
+- **Shell script simplified**: Only UI/wrapper, logic moved to main programs
+- **Verification**: Automatic output completeness check after directory processing
 
 ## [6.9.12] - 2025-12-25
 
