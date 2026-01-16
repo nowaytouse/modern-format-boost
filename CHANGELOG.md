@@ -2,6 +2,14 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.15] - 2025-12-25
+
+### 🔧 No-Loss Design - XMP Handling for Unsupported Files
+
+- **XMP for unsupported files**: When copying .psd/.txt etc, also copy their XMP sidecars
+- **Dual strategy**: Media files → merge XMP; Non-media files → copy XMP sidecar
+- **New function**: `copy_xmp_sidecar_if_exists()` handles XMP for non-media files
+
 ## [6.9.14] - 2025-12-25
 
 ### 🔧 No-Loss Design - Failed Files Fallback
