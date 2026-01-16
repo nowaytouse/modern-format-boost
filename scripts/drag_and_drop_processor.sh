@@ -1,12 +1,12 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.9.12
+# Modern Format Boost - Drag & Drop Processor v6.9.13
 # 
+# 🔥 v6.9.13: 无遗漏设计 - 处理全部文件
+#            - 支持的格式：转换
+#            - 不支持的格式（.psd等）：直接复制
+#            - XMP边车：合并到媒体文件（不单独输出）
+#            - 验证机制：输出文件数 = 全部文件 - XMP
 # 🔥 v6.9.12: 格式支持增强 + 验证机制
-#            - 添加 .jpe, .jfif 图像格式支持
-#            - 添加 .wmv, .flv 视频格式支持
-#            - 添加输出完整性验证机制（输入输出数量对比）
-#            - 检测并报告不支持的格式（如 .psd, RAW）
-# 🔥 v6.5.2: 修复"输出到相邻目录"模式下跳过的文件未被复制的问题
 #            - 短动画(< 3s)被跳过时，复制原始文件到输出目录
 #            - 无法压缩的视频被保护时，复制原始文件到输出目录
 #            - 确保输出目录包含所有文件，无遗漏
@@ -192,8 +192,8 @@ show_welcome() {
     echo ""
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v6.9.12                                       ║"
-    echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证 + 完整性校验              ║"
+    echo "  ║     🚀 Modern Format Boost v6.9.13                                       ║"
+    echo "  ║     无遗漏设计: 转换+复制+XMP合并 = 完整输出                             ║"
     echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -411,27 +411,43 @@ safety_check() {
 
 # ═══════════════════════════════════════════════════════════════
 # 统计文件数量
-# 🔥 v6.9.12: 添加更多格式支持，确保无遗漏
+# 🔥 v6.9.13: 统计全部文件，确保无遗漏设计
 # ═══════════════════════════════════════════════════════════════
 count_files() {
     echo -e "${CYAN}📊 统计文件...${NC}"
     
+    # 统计全部文件（排除隐藏文件）
+    TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" 2>/dev/null | wc -l | tr -d ' ')
+    
+    # XMP边车文件（将被合并，不计入输出）
     XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" 2>/dev/null | wc -l | tr -d ' ')
+    
+    # 可处理的图像格式
     IMG_COUNT=$(find "$TARGET_DIR" -type f \( \
         -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
         -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
         -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
     \) 2>/dev/null | wc -l | tr -d ' ')
+    
+    # 可处理的视频格式
     VID_COUNT=$(find "$TARGET_DIR" -type f \( \
         -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
         -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
     \) 2>/dev/null | wc -l | tr -d ' ')
     
-    echo -e "  📋 XMP: ${BOLD}$XMP_COUNT${NC}  🖼️ 图像: ${BOLD}$IMG_COUNT${NC}  🎬 视频: ${BOLD}$VID_COUNT${NC}"
+    # 不支持但需要复制的文件数量
+    OTHER_COUNT=$((TOTAL_FILES - IMG_COUNT - VID_COUNT - XMP_COUNT))
+    
+    echo -e "  📁 全部文件: ${BOLD}$TOTAL_FILES${NC}"
+    echo -e "  🖼️  图像(转换): ${BOLD}$IMG_COUNT${NC}  🎬 视频(转换): ${BOLD}$VID_COUNT${NC}"
+    echo -e "  📋 XMP(合并): ${BOLD}$XMP_COUNT${NC}  📦 其他(复制): ${BOLD}$OTHER_COUNT${NC}"
+    
+    # 预期输出数量 = 全部文件 - XMP（XMP被合并到媒体文件中）
+    EXPECTED_OUTPUT=$((TOTAL_FILES - XMP_COUNT))
+    echo -e "  ${DIM}预期输出: $EXPECTED_OUTPUT 个文件${NC}"
     
     if [[ $((IMG_COUNT + VID_COUNT)) -eq 0 ]]; then
-        echo -e "${RED}❌ 未找到支持的媒体文件${NC}"
-        exit 1
+        echo -e "${YELLOW}⚠️  未找到可转换的媒体文件，将仅复制其他文件${NC}"
     fi
 }
 
@@ -445,6 +461,50 @@ merge_xmp_files() {
     # 如果用户只想合并XMP而不转换，可以直接运行 xmp-merge 命令
     [[ $XMP_COUNT -gt 0 ]] && echo -e "${DIM}📋 XMP边车将在转换时自动合并${NC}"
     return 0
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 🔥 v6.9.13: 复制不支持的文件（如 .psd, .txt 等）
+# 确保输出目录包含所有文件，无遗漏
+# ═══════════════════════════════════════════════════════════════
+copy_other_files() {
+    [[ "$OUTPUT_MODE" != "adjacent" ]] && return 0
+    [[ $OTHER_COUNT -eq 0 ]] && return 0
+    
+    echo ""
+    echo -e "${CYAN}📦 复制其他文件 ($OTHER_COUNT 个)...${NC}"
+    
+    local copied=0
+    
+    # 遍历所有文件，排除已处理的格式和XMP
+    while IFS= read -r -d '' file; do
+        local ext="${file##*.}"
+        ext="${ext,,}"  # 转小写
+        
+        # 跳过已处理的格式和XMP
+        case "$ext" in
+            jpg|jpeg|jpe|jfif|png|gif|bmp|tiff|tif|webp|heic|heif|avif) continue ;;
+            mp4|mov|avi|mkv|webm|m4v|wmv|flv) continue ;;
+            xmp) continue ;;  # XMP已被合并
+        esac
+        
+        # 计算相对路径并复制
+        local rel_path="${file#$TARGET_DIR}"
+        rel_path="${rel_path#/}"
+        local dest="$OUTPUT_DIR/$rel_path"
+        local dest_dir
+        dest_dir="$(dirname "$dest")"
+        
+        mkdir -p "$dest_dir"
+        cp "$file" "$dest" 2>/dev/null && ((copied++))
+        
+        # 显示进度（每10个文件显示一次）
+        if [[ $((copied % 10)) -eq 0 ]]; then
+            printf '\r  📦 已复制: %d/%d' "$copied" "$OTHER_COUNT"
+        fi
+    done < <(find "$TARGET_DIR" -type f ! -name ".*" -print0 2>/dev/null)
+    
+    echo -e "\r  ${GREEN}✅ 已复制 $copied 个其他文件${NC}          "
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -540,7 +600,8 @@ process_videos() {
 }
 
 # ═══════════════════════════════════════════════════════════════
-# 🔥 v6.9.12: 验证机制 - 确保输入输出数量匹配
+# 🔥 v6.9.13: 验证机制 - 确保输出无遗漏
+# 预期: 输出文件数 = 全部文件 - XMP（XMP被合并）
 # ═══════════════════════════════════════════════════════════════
 verify_output_count() {
     if [[ "$OUTPUT_MODE" != "adjacent" ]]; then
@@ -550,46 +611,31 @@ verify_output_count() {
     echo ""
     echo -e "${CYAN}🔍 验证输出完整性...${NC}"
     
-    # 统计输出目录的媒体文件数量（包括转换后的格式）
-    local out_media_count
-    out_media_count=$(find "$OUTPUT_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
-        -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
-        -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
-        -o -iname "*.jxl" \
-        -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
-    \) 2>/dev/null | wc -l | tr -d ' ')
+    # 统计输出目录的全部文件（排除隐藏文件）
+    local out_total
+    out_total=$(find "$OUTPUT_DIR" -type f ! -name ".*" 2>/dev/null | wc -l | tr -d ' ')
     
-    local input_total=$((IMG_COUNT + VID_COUNT))
-    local diff=$((input_total - out_media_count))
+    local diff=$((EXPECTED_OUTPUT - out_total))
     
-    echo -e "  📥 输入媒体: ${BOLD}$input_total${NC} (图像: $IMG_COUNT, 视频: $VID_COUNT)"
-    echo -e "  📤 输出媒体: ${BOLD}$out_media_count${NC}"
+    echo -e "  📥 输入文件: ${BOLD}$TOTAL_FILES${NC} (XMP: $XMP_COUNT 将被合并)"
+    echo -e "  📤 预期输出: ${BOLD}$EXPECTED_OUTPUT${NC}"
+    echo -e "  📤 实际输出: ${BOLD}$out_total${NC}"
     
     if [[ $diff -eq 0 ]]; then
-        echo -e "  ${GREEN}✅ 验证通过: 输入输出数量匹配${NC}"
+        echo -e "  ${GREEN}✅ 验证通过: 输出完整，无遗漏${NC}"
         VERIFY_PASSED=true
     elif [[ $diff -gt 0 ]]; then
         echo -e "  ${RED}❌ 验证失败: 缺少 $diff 个文件!${NC}"
-        echo -e "  ${YELLOW}⚠️  可能原因: 格式不支持、转换失败、或文件被跳过${NC}"
         VERIFY_PASSED=false
         
-        # 列出可能被忽略的格式
+        # 详细分析缺失原因
         echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "  ${YELLOW}📋 检查不支持的格式:${NC}"
-        
-        # 检查 PSD 文件
-        local psd_count
-        psd_count=$(find "$TARGET_DIR" -type f -iname "*.psd" 2>/dev/null | wc -l | tr -d ' ')
-        [[ $psd_count -gt 0 ]] && echo -e "     ⚠️  .psd (Photoshop): $psd_count 个 - 不支持"
-        
-        # 检查其他可能被忽略的格式
-        local raw_count
-        raw_count=$(find "$TARGET_DIR" -type f \( -iname "*.cr2" -o -iname "*.nef" -o -iname "*.arw" -o -iname "*.dng" \) 2>/dev/null | wc -l | tr -d ' ')
-        [[ $raw_count -gt 0 ]] && echo -e "     ⚠️  RAW格式: $raw_count 个 - 不支持"
+        echo -e "  ${YELLOW}⚠️  可能原因: 转换失败或文件被跳过${NC}"
+        echo -e "  ${YELLOW}💡 建议: 检查日志查看具体失败的文件${NC}"
     else
-        echo -e "  ${YELLOW}⚠️  输出比输入多 $((0 - diff)) 个文件 (可能有重复或额外生成)${NC}"
+        # 输出比预期多（可能有额外生成的文件）
+        echo -e "  ${YELLOW}⚠️  输出比预期多 $((0 - diff)) 个文件${NC}"
+        echo -e "  ${DIM}可能原因: 动图转换生成了额外的 .mp4 文件${NC}"
         VERIFY_PASSED=true
     fi
 }
@@ -669,6 +715,7 @@ main() {
     merge_xmp_files
     process_images
     process_videos
+    copy_other_files  # 🔥 v6.9.13: 复制不支持的文件
     show_completion
 }
 
