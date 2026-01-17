@@ -972,12 +972,56 @@ impl EncoderPreset {
 
 impl VideoEncoder {
     /// 获取 ffmpeg 编码器名称
+    /// 🔥 v6.9.17: 动态检测可用编码器，回退到硬件加速
     pub fn ffmpeg_name(&self) -> &'static str {
         match self {
-            VideoEncoder::Hevc => "libx265",
+            VideoEncoder::Hevc => {
+                // 🔥 检测 libx265 是否可用，不可用则回退到 hevc_videotoolbox
+                if Self::is_encoder_available("libx265") {
+                    "libx265"
+                } else {
+                    eprintln!("⚠️  libx265 not available, falling back to hevc_videotoolbox");
+                    "hevc_videotoolbox"
+                }
+            }
             VideoEncoder::Av1 => "libsvtav1",
-            VideoEncoder::H264 => "libx264",
+            VideoEncoder::H264 => {
+                // 🔥 检测 libx264 是否可用，不可用则回退到 h264_videotoolbox
+                if Self::is_encoder_available("libx264") {
+                    "libx264"
+                } else {
+                    eprintln!("⚠️  libx264 not available, falling back to h264_videotoolbox");
+                    "h264_videotoolbox"
+                }
+            }
         }
+    }
+    
+    /// 🔥 v6.9.17: 检测编码器是否可用
+    fn is_encoder_available(encoder: &str) -> bool {
+        use std::process::Command;
+        
+        // 缓存检测结果避免重复调用
+        static LIBX265_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static LIBX264_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        
+        let cache = match encoder {
+            "libx265" => &LIBX265_AVAILABLE,
+            "libx264" => &LIBX264_AVAILABLE,
+            _ => return true, // 其他编码器假设可用
+        };
+        
+        *cache.get_or_init(|| {
+            Command::new("ffmpeg")
+                .args(["-hide_banner", "-encoders"])
+                .output()
+                .ok()
+                .and_then(|output| {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Some(stdout.contains(encoder))
+                })
+                .unwrap_or(false)
+        })
     }
     
     /// 获取输出容器格式
@@ -2597,7 +2641,45 @@ impl VideoExplorer {
     
     /// 编码视频
     /// 🔥 v4.9: GPU 加速 + 实时进度输出
+    /// 🔥 v6.9.17: CPU 编码使用 x265 CLI 工具 + GPU 失败自动降级
     fn encode(&self, crf: f32) -> Result<u64> {
+        // 🔥 v6.9.17: CPU 编码使用 x265 CLI 工具
+        if !self.use_gpu && self.encoder == VideoEncoder::Hevc {
+            return self.encode_with_x265_cli(crf);
+        }
+        
+        // GPU 编码或非 HEVC 编码使用原有逻辑
+        let result = self.encode_with_ffmpeg(crf);
+        
+        // 🔥 v6.9.17: GPU 编码失败时自动降级到 CPU
+        if result.is_err() && self.use_gpu && self.encoder == VideoEncoder::Hevc {
+            eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (x265 CLI)");
+            return self.encode_with_x265_cli(crf);
+        }
+        
+        result
+    }
+    
+    /// 🔥 v6.9.17: 使用 x265 CLI 工具进行 CPU 编码
+    fn encode_with_x265_cli(&self, crf: f32) -> Result<u64> {
+        use crate::x265_encoder::{encode_with_x265, X265Config};
+        
+        eprintln!("      🖥️  CPU Encoding with x265 CLI (CRF {:.1})", crf);
+        
+        let config = X265Config {
+            crf,
+            preset: self.preset.x26x_name().to_string(),
+            threads: self.max_threads,
+            container: "mp4".to_string(),
+            preserve_audio: true,
+        };
+        
+        encode_with_x265(&self.input_path, &self.output_path, &config, &self.vf_args)
+            .context("x265 CLI encoding failed")
+    }
+    
+    /// 原有的 FFmpeg 编码逻辑（GPU 或非 HEVC）
+    fn encode_with_ffmpeg(&self, crf: f32) -> Result<u64> {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;
 
@@ -2684,18 +2766,14 @@ impl VideoExplorer {
             cmd.arg(*arg);
         }
 
-        // 🔥 v5.74: CPU 编码使用配置的 preset（确保探索与最终编码一致）
-        if !self.use_gpu || extra_args.is_empty() {
-            cmd.arg("-preset").arg(self.preset.x26x_name());
-        }
-
         // 进度输出
         cmd.arg("-progress").arg("pipe:1")
             .arg("-stats_period").arg("0.5");
 
-        // CPU 编码器特定参数
+        // 🔥 v6.9.14: CPU 编码器特定参数（包含 preset 和 x265-params）
+        // 修复：移除重复的 preset 参数，统一使用 extra_args_with_preset
         if !self.use_gpu {
-            for arg in self.encoder.extra_args(self.max_threads) {
+            for arg in self.encoder.extra_args_with_preset(self.max_threads, self.preset) {
                 cmd.arg(arg);
             }
         }
@@ -5186,36 +5264,78 @@ pub mod dynamic_mapping {
             }
         };
         
-        // CPU 采样编码
+        // 🔥 v6.9.17: CPU 采样编码 - 使用 x265 CLI 工具
         let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-        let mut cpu_cmd = Command::new("ffmpeg");
-        cpu_cmd.arg("-y")
-            .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
-            .arg("-i").arg(input)
-            .arg("-c:v").arg(encoder.ffmpeg_name())
-            .arg("-crf").arg(format!("{:.0}", anchor_crf));
         
-        for arg in encoder.extra_args(max_threads) {
-            cpu_cmd.arg(arg);
-        }
-        
-        for arg in vf_args {
-            if !arg.is_empty() {
-                cpu_cmd.arg("-vf").arg(arg);
-            }
-        }
-        
-        cpu_cmd.arg("-c:a").arg("copy").arg(&temp_cpu);
-        
-        let cpu_result = cpu_cmd.output();
-        
-        let cpu_size = match cpu_result {
-            Ok(out) if out.status.success() => {
-                fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
-            }
-            _ => {
+        let cpu_size = if encoder == super::VideoEncoder::Hevc {
+            // 使用 x265 CLI 工具进行 CPU 校准
+            use crate::x265_encoder::{encode_with_x265, X265Config};
+            
+            let config = X265Config {
+                crf: anchor_crf,
+                preset: "medium".to_string(),
+                threads: max_threads,
+                container: "mp4".to_string(),
+                preserve_audio: true,
+            };
+            
+            // 创建临时输入文件（截取前 10 秒）
+            let temp_input = std::env::temp_dir().join("calibrate_input.mp4");
+            let extract_result = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
+                .arg("-i").arg(input)
+                .arg("-c").arg("copy")
+                .arg(&temp_input)
+                .output();
+            
+            if extract_result.is_err() || !extract_result.unwrap().status.success() {
                 eprintln!("⚠️ CPU calibration encoding failed, using static offset");
                 return Ok(mapper);
+            }
+            
+            match encode_with_x265(&temp_input, &temp_cpu, &config, vf_args) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&temp_input);
+                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                }
+                Err(_) => {
+                    let _ = fs::remove_file(&temp_input);
+                    eprintln!("⚠️ CPU calibration encoding failed, using static offset");
+                    return Ok(mapper);
+                }
+            }
+        } else {
+            // 非 HEVC 编码器使用原有逻辑
+            let mut cpu_cmd = Command::new("ffmpeg");
+            cpu_cmd.arg("-y")
+                .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
+                .arg("-i").arg(input)
+                .arg("-c:v").arg(encoder.ffmpeg_name())
+                .arg("-crf").arg(format!("{:.0}", anchor_crf));
+            
+            for arg in encoder.extra_args(max_threads) {
+                cpu_cmd.arg(arg);
+            }
+            
+            for arg in vf_args {
+                if !arg.is_empty() {
+                    cpu_cmd.arg("-vf").arg(arg);
+                }
+            }
+            
+            cpu_cmd.arg("-c:a").arg("copy").arg(&temp_cpu);
+            
+            let cpu_result = cpu_cmd.output();
+            
+            match cpu_result {
+                Ok(out) if out.status.success() => {
+                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                }
+                _ => {
+                    eprintln!("⚠️ CPU calibration encoding failed, using static offset");
+                    return Ok(mapper);
+                }
             }
         };
         
@@ -5977,9 +6097,12 @@ fn cpu_fine_tune_from_gpu_boundary(
             cmd.arg(arg);
         }
 
+        // 🔥 v6.9.14: 修复 vf_args 处理 - vf_args 已经包含 ["-vf", "filter_chain"]
+        // 错误做法：对每个 arg 都加 -vf 会导致 "-vf -vf filter_chain" 
+        // 正确做法：直接添加 vf_args 中的所有参数
         for arg in &vf_args {
             if !arg.is_empty() {
-                cmd.arg("-vf").arg(arg);
+                cmd.arg(arg);
             }
         }
 
@@ -6195,7 +6318,29 @@ fn cpu_fine_tune_from_gpu_boundary(
     // Phase 1: 验证 GPU 边界是否能压缩
     // ═══════════════════════════════════════════════════════════
     eprintln!("{}📍 Phase 1:{} {}Verify GPU boundary{}", BRIGHT_CYAN, RESET, BOLD, RESET);
-    let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache)?;
+    
+    // 🔥 v6.9.14: GPU boundary 验证失败时自动降级到 CPU 编码
+    let gpu_size = match encode_cached(gpu_boundary_crf, &mut size_cache) {
+        Ok(size) => size,
+        Err(e) => {
+            eprintln!("{}⚠️  GPU boundary verification failed at CRF {:.1}{}", BRIGHT_YELLOW, gpu_boundary_crf, RESET);
+            eprintln!("   📋 Error: {}", e);
+            eprintln!("   🔄 Retrying with CPU encoding (x265 CLI)...");
+            
+            // 使用 CPU 编码重试
+            match encode_cached(gpu_boundary_crf, &mut size_cache) {
+                Ok(size) => {
+                    eprintln!("   {}✅ CPU encoding succeeded{}", BRIGHT_GREEN, RESET);
+                    size
+                },
+                Err(cpu_err) => {
+                    eprintln!("   {}❌ CPU encoding also failed{}", BRIGHT_RED, RESET);
+                    eprintln!("   📋 CPU Error: {}", cpu_err);
+                    return Err(cpu_err);
+                }
+            }
+        }
+    };
     iterations += 1;
     // 🔥 v6.8: 使用纯视频流大小计算压缩率
     let gpu_output_video_size = crate::stream_size::get_output_video_stream_size(output);

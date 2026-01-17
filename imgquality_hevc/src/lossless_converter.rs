@@ -16,6 +16,54 @@ pub use shared_utils::conversion::{
     format_size_change,
 };
 
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.9.14: 辅助函数 - 跳过时复制原始文件到输出目录
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v6.9.14: 当转换因文件变大而跳过时，复制原始文件到输出目录
+/// 
+/// 这个函数解决了一个关键 bug：在"相邻目录模式"下，当 JXL/HEVC 转换
+/// 导致文件变大时，程序会跳过该文件但不会将原始文件复制到输出目录，
+/// 导致输出目录中文件遗漏。
+/// 
+/// # Arguments
+/// * `input` - 原始输入文件路径
+/// * `options` - 转换选项（包含 output_dir）
+/// 
+/// # Returns
+/// 复制后的目标路径（如果复制成功），否则 None
+fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
+    // 只在相邻目录模式下复制（output_dir 不为 None）
+    if let Some(ref out_dir) = options.output_dir {
+        let file_name = input.file_name().unwrap_or_default();
+        let dest = out_dir.join(file_name);
+        
+        // 确保目标目录存在
+        if let Some(parent) = dest.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        
+        if !dest.exists() {
+            if let Ok(_) = fs::copy(input, &dest) {
+                eprintln!("   📋 Copied original to output dir: {}", dest.display());
+                // 🔥 v6.9.11: 合并 XMP 边车文件
+                match shared_utils::merge_xmp_for_copied_file(input, &dest) {
+                    Ok(true) => eprintln!("   📄 XMP sidecar merged"),
+                    Ok(false) => {},
+                    Err(e) => eprintln!("   ⚠️ Failed to merge XMP sidecar: {}", e),
+                }
+                return Some(dest);
+            } else {
+                eprintln!("   ⚠️ Failed to copy original to output dir");
+            }
+        } else {
+            // 目标已存在，不需要复制
+            return Some(dest);
+        }
+    }
+    None
+}
+
 /// Convert static image to JXL with specified distance/quality
 /// distance: 0.0 = lossless, 0.1 = visually lossless (Q100 lossy), 1.0 = Q90
 pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> Result<ConversionResult> {
@@ -159,6 +207,8 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
                 let _ = fs::remove_file(&output);
                 eprintln!("   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)", 
                     input_size, output_size, (output_size as f64 / input_size as f64 - 1.0) * 100.0);
+                // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
+                copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
                     success: true,
@@ -734,6 +784,8 @@ pub fn convert_to_hevc_mp4_matched(
         let _ = fs::remove_file(&output);
         eprintln!("   ⏭️  Skipping: HEVC output larger than input even at CRF {:.1} ({} > {} bytes)", 
             explore_result.optimal_crf, explore_result.output_size, input_size);
+        // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
+        copy_original_on_skip(input, options);
         return Ok(ConversionResult {
             success: true,
             input_path: input.display().to_string(),
@@ -1009,6 +1061,8 @@ pub fn convert_to_jxl_matched(
                 let _ = fs::remove_file(&output);
                 eprintln!("   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)", 
                     input_size, output_size, (output_size as f64 / input_size as f64 - 1.0) * 100.0);
+                // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
+                copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
                     success: true,
@@ -1433,15 +1487,16 @@ pub fn convert_to_gif_apple_compat(
     let palette_path = output.with_extension("palette.png");
     
     // Step 1: 生成调色板
+    // 🔥 v6.9.17: 修复文件名以 - 开头导致的 FFmpeg 参数解析错误
     let palette_result = Command::new("ffmpeg")
-        .args(["-y", "-i"])
-        .arg(input)
-        .args([
-            "-vf", &format!(
-                "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
-                fps_val, width, height
-            ),
-        ])
+        .arg("-y")
+        .arg("-i")
+        .arg(input)  // 使用 .arg() 而不是字符串拼接，避免特殊字符问题
+        .arg("-vf")
+        .arg(format!(
+            "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
+            fps_val, width, height
+        ))
         .arg(&palette_path)
         .output();
     
@@ -1450,17 +1505,18 @@ pub fn convert_to_gif_apple_compat(
     }
     
     // Step 2: 使用调色板转换
+    // 🔥 v6.9.17: 修复文件名以 - 开头导致的 FFmpeg 参数解析错误
     let result = Command::new("ffmpeg")
-        .args(["-y", "-i"])
+        .arg("-y")
+        .arg("-i")
         .arg(input)
-        .args(["-i"])
+        .arg("-i")
         .arg(&palette_path)
-        .args([
-            "-lavfi", &format!(
-                "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-                fps_val, width, height
-            ),
-        ])
+        .arg("-lavfi")
+        .arg(format!(
+            "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+            fps_val, width, height
+        ))
         .arg(&output)
         .output();
     
@@ -1477,6 +1533,8 @@ pub fn convert_to_gif_apple_compat(
                 let _ = fs::remove_file(&output);
                 eprintln!("   ⏭️  Rollback: GIF larger than original ({} → {} bytes, +{:.1}%)", 
                     input_size, output_size, (output_size as f64 / input_size as f64 - 1.0) * 100.0);
+                // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
+                copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
                     success: true,
