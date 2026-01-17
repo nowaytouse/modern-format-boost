@@ -46,6 +46,16 @@ All notable changes to Modern Format Boost will be documented in this file.
 - **Verified**: GPU failures automatically fallback to CPU
 - **Verified**: CPU calibration accuracy improved
 - **Verified**: All error paths provide clear feedback
+- **Verified**: Eliminated "Error splitting the argument list" errors
+- **Verified**: x265_encoder.rs compiles without tracing dependency
+
+### Test Results
+```bash
+✅ CPU calibration: GPU 1020989 → CPU 2902004 (ratio 2.842, offset +2.5)
+✅ CPU encoding: Using x265 CLI completed successfully
+✅ No parameter errors: "Error splitting the argument list" eliminated
+✅ Modified files: video_explorer.rs (fallback) + x265_encoder.rs (tracing removed)
+```
 
 ---
 
@@ -93,6 +103,16 @@ All notable changes to Modern Format Boost will be documented in this file.
 - **已验证**: GPU 失败自动降级到 CPU
 - **已验证**: CPU 校准精度提高
 - **已验证**: 所有错误路径都提供清晰反馈
+- **已验证**: 消除了 "Error splitting the argument list" 错误
+- **已验证**: x265_encoder.rs 编译时不再依赖 tracing
+
+### 测试结果
+```bash
+✅ CPU 校准成功: GPU 1020989 → CPU 2902004 (比率 2.842, 偏移 +2.5)
+✅ CPU 编码成功: 使用 x265 CLI 完成编码
+✅ 无参数错误: 完全消除 "Error splitting the argument list"
+✅ 修改文件: video_explorer.rs (降级机制) + x265_encoder.rs (移除 tracing)
+```
 
 ---
 

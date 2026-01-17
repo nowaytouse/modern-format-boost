@@ -17,7 +17,14 @@ High-performance media conversion toolkit with intelligent quality matching, SSI
 ❌ Before: Encoding failed at CRF 19.9 - Error splitting the argument list
 ✅ After: Calibration complete: GPU 1020989 → CPU 2902004 (ratio 2.842, offset +2.5)
 ✅ After: GPU encoding failed, falling back to CPU (x265 CLI) → Success
+✅ After: No more "Error splitting the argument list" errors
 ```
+
+### Technical Implementation
+- **Three-step encoding**: FFmpeg decode → x265 CLI → FFmpeg mux
+- **Dependency removal**: Removed tracing dependency from x265_encoder.rs
+- **Format conversion**: Automatic bgra → yuv420p for GIF compatibility
+- **Fallback mechanism**: GPU boundary verification with CPU retry
 
 ## Core Tools
 
