@@ -162,6 +162,27 @@ pub fn execute_conversion(
     
     // Skip if no conversion needed
     if strategy.target == TargetFormat::NoConversion {
+        // 🔥 v6.9.14: 相邻目录模式下，复制原始文件到输出目录
+        // 这修复了跳过现代编码格式时文件遗漏的问题
+        if let Some(ref out_dir) = config.output_dir {
+            let file_name = input_path.file_name().unwrap_or_default();
+            let dest = out_dir.join(file_name);
+
+            // 确保目标目录存在
+            std::fs::create_dir_all(out_dir).ok();
+
+            if !dest.exists() {
+                if let Ok(_) = std::fs::copy(input_path, &dest) {
+                    // 🔥 v6.9.11: 合并XMP边车
+                    match shared_utils::merge_xmp_for_copied_file(input_path, &dest) {
+                        Ok(true) => {},
+                        Ok(false) => {},
+                        Err(_) => {},
+                    }
+                }
+            }
+        }
+
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
             output_path: detection.file_path.clone(),

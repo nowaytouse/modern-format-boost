@@ -60,6 +60,9 @@ pub mod app_error;
 // 🔥 v6.9.13: 文件复制模块（无遗漏设计）
 pub mod file_copier;
 
+// 🔥 v6.9.17: x265 CPU编码器模块
+pub mod x265_encoder;
+
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
     CoarseProgressBar,

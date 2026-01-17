@@ -270,6 +270,31 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     if strategy.target == TargetVideoFormat::Skip {
         info!("🎬 Auto Mode: {} → SKIP", input.display());
         info!("   Reason: {}", strategy.reason);
+        
+        // 🔥 v6.9.14: 相邻目录模式下，复制原始文件到输出目录
+        // 这修复了跳过现代编码格式时文件遗漏的问题
+        if let Some(ref out_dir) = config.output_dir {
+            let file_name = input.file_name().unwrap_or_default();
+            let dest = out_dir.join(file_name);
+            
+            // 确保目标目录存在
+            std::fs::create_dir_all(out_dir).ok();
+            
+            if !dest.exists() {
+                if let Ok(_) = std::fs::copy(input, &dest) {
+                    info!("   📋 Copied original to output dir: {}", dest.display());
+                    // 🔥 v6.9.11: 合并XMP边车
+                    match shared_utils::merge_xmp_for_copied_file(input, &dest) {
+                        Ok(true) => info!("   📄 XMP sidecar merged"),
+                        Ok(false) => {},
+                        Err(e) => warn!("⚠️ Failed to merge XMP sidecar: {}", e),
+                    }
+                } else {
+                    warn!("   ⚠️ Failed to copy original to output dir");
+                }
+            }
+        }
+        
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: "".to_string(),

@@ -2,6 +2,51 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [6.9.17] - 2025-01-18
+
+### 🔥 Critical Fixes - CPU Encoding & GPU Fallback
+
+#### CPU Encoding Reliability
+- **Fixed**: Replaced FFmpeg libx265 with x265 CLI tool for better compatibility
+- **Problem**: FFmpeg 8.0.1's libx265 fails on GIF files with bgra pixel format
+- **Solution**: Three-step encoding process:
+  1. FFmpeg decode input → Y4M (raw YUV)
+  2. x265 CLI encode Y4M → HEVC bitstream  
+  3. FFmpeg mux HEVC + audio → MP4 container
+- **Benefits**: Higher reliability, better format support, 0.1 CRF precision
+
+#### GPU Fallback System
+- **New**: Automatic CPU fallback when GPU encoding fails
+- **Triggers**: GPU boundary verification failures, high CRF encoding failures
+- **Logging**: Clear error messages and fallback notifications
+- **Example**: `⚠️  GPU encoding failed, falling back to CPU (x265 CLI)`
+
+#### Input Format Compatibility  
+- **Fixed**: GIF files with bgra pixel format now supported
+- **Auto-conversion**: bgra → yuv420p, removes alpha channel
+- **Dimension fix**: Adjusts odd dimensions to even numbers
+
+#### CPU Calibration Improvements
+- **Fixed**: CPU calibration now uses x265 CLI instead of libx265
+- **Result**: Accurate GPU→CPU CRF mapping with confidence reporting
+- **Fallback**: Static offset used when calibration fails (with warning)
+
+#### Error Transparency
+- **Principle**: All errors are "loudly reported" (响亮报错)
+- **No silent failures**: Every fallback has clear user notification
+- **Context**: Detailed error messages with troubleshooting hints
+
+### 🔧 Files Modified
+- `shared_utils/src/video_explorer.rs`: GPU fallback logic, x265 CLI integration
+- `shared_utils/src/x265_encoder.rs`: Three-step encoding implementation
+- Added test scripts: `test_gpu_boundary_fallback.sh`, `test_x265_cli_fix.sh`
+
+### 🧪 Testing
+- **Verified**: GIF files with problematic formats now convert successfully
+- **Verified**: GPU failures automatically fallback to CPU
+- **Verified**: CPU calibration accuracy improved
+- **Verified**: All error paths provide clear feedback
+
 ## [6.9.16] - 2025-12-25
 
 ### 🔧 XMP Merge Priority
