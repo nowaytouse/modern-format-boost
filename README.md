@@ -253,7 +253,32 @@ Double-click `Modern Format Boost.app` for drag-and-drop conversion:
 **融合公式：** `最终分数 = 0.6 × MS-SSIM(3通道) + 0.4 × SSIM_All`
 
 ### 4. GPU硬件加速
-支持 NVIDIA NVENC、Apple VideoToolbox、Intel QSV、AMD AMF
+
+| 平台 | HEVC | AV1 | H.264 | 降级方案 |
+|------|------|-----|-------|----------|
+| NVIDIA NVENC | ✅ | ✅ | ✅ | → x265 CLI |
+| Apple VideoToolbox | ✅ | - | ✅ | → x265 CLI |
+| Intel QSV | ✅ | ✅ | ✅ | → x265 CLI |
+| AMD AMF | ✅ | ✅ | ✅ | → x265 CLI |
+
+**v6.9.17 新增**: GPU 编码失败时自动降级到 x265 CLI CPU 编码
+
+## 🔥 最新更新 (v6.9.17)
+
+### 关键修复
+- **✅ CPU 编码可靠性**: 使用 x265 CLI 工具替代 FFmpeg libx265，提高兼容性
+- **✅ GPU 降级系统**: GPU 编码在高 CRF 值失败时自动降级到 CPU
+- **✅ GIF 格式支持**: 修复动态 GIF 文件的 bgra 像素格式处理
+- **✅ CPU 校准**: 使用 x265 CLI 提高 GPU→CPU CRF 映射精度
+- **✅ 错误透明化**: 所有失败都提供清晰的错误信息和降级通知
+
+### 修复前后对比
+```
+❌ 修复前: CPU 校准编码失败，使用静态偏移
+❌ 修复前: CRF 19.9 编码失败 - 参数列表分割错误
+✅ 修复后: 校准完成: GPU 1020989 → CPU 2902004 (比率 2.842, 偏移 +2.5)
+✅ 修复后: GPU 编码失败，降级到 CPU (x265 CLI) → 成功
+```
 
 ## 安装
 
@@ -262,7 +287,12 @@ cd modern_format_boost
 ./smart_build.sh
 ```
 
-**依赖：** FFmpeg（libx265, libsvtav1, libjxl），Rust 1.70+
+**依赖项：** 
+- FFmpeg (libx265, libsvtav1, libjxl)
+- x265 CLI 工具: `brew install x265` (macOS) 或 `apt install x265` (Linux)
+- Rust 1.70+
+
+**注意**: 现在需要 x265 CLI 工具来确保可靠的 CPU HEVC 编码
 
 ## 命令
 
@@ -283,17 +313,17 @@ cd modern_format_boost
 双击 `Modern Format Boost.app` 即可拖拽转换，默认参数：
 `--explore --match-quality --compress --in-place`
 
-## Troubleshooting
+## 故障排除
 
-### Common Issues
+### 常见问题
 
-**GPU Encoding Fails**: System automatically falls back to CPU (x265 CLI)
+**GPU 编码失败**: 系统自动降级到 CPU (x265 CLI)
 ```
-⚠️  GPU encoding failed, falling back to CPU (x265 CLI)
-✅ CPU encoding succeeded
+⚠️  GPU 编码失败，降级到 CPU (x265 CLI)
+✅ CPU 编码成功
 ```
 
-**x265 CLI Not Found**: Install x265 command-line tool
+**找不到 x265 CLI**: 安装 x265 命令行工具
 ```bash
 # macOS
 brew install x265
@@ -305,17 +335,17 @@ sudo apt install x265
 sudo yum install x265
 ```
 
-**GIF Files Fail**: Ensure FFmpeg supports bgra pixel format conversion
-- System automatically converts bgra → yuv420p
-- Removes alpha channel for HEVC compatibility
+**GIF 文件失败**: 确保 FFmpeg 支持 bgra 像素格式转换
+- 系统自动转换 bgra → yuv420p
+- 移除 alpha 通道以兼容 HEVC
 
-### Error Messages
+### 错误信息
 
-All errors are now **loudly reported** with clear context:
+所有错误现在都**响亮报告**，提供清晰的上下文：
 - `⚠️  GPU boundary verification failed at CRF X.X`
 - `🔄 Retrying with CPU encoding (x265 CLI)...`
 - `✅ CPU encoding succeeded` / `❌ CPU encoding also failed`
 
 ---
 
-**Version**: 6.9.17 | **Updated**: 2025-01-18 | [CHANGELOG](CHANGELOG.md)
+**版本**: 6.9.17 | **更新**: 2025-01-18 | [更新日志](CHANGELOG.md)
