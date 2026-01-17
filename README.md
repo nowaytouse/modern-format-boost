@@ -2,6 +2,23 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
+## 🔥 Latest Updates (v6.9.17)
+
+### Critical Fixes
+- **✅ CPU Encoding Reliability**: Replaced FFmpeg libx265 with x265 CLI tool for better compatibility
+- **✅ GPU Fallback System**: Automatic CPU fallback when GPU encoding fails at high CRF values
+- **✅ GIF Format Support**: Fixed bgra pixel format handling for animated GIF files
+- **✅ CPU Calibration**: Improved GPU→CPU CRF mapping accuracy using x265 CLI
+- **✅ Error Transparency**: All failures now provide clear error messages and fallback notifications
+
+### Before vs After
+```
+❌ Before: CPU calibration encoding failed, using static offset
+❌ Before: Encoding failed at CRF 19.9 - Error splitting the argument list
+✅ After: Calibration complete: GPU 1020989 → CPU 2902004 (ratio 2.842, offset +2.5)
+✅ After: GPU encoding failed, falling back to CPU (x265 CLI) → Success
+```
+
 ## Core Tools
 
 | Tool | Function | Output Format |
@@ -41,12 +58,14 @@ High-performance media conversion toolkit with intelligent quality matching, SSI
 
 ### 4. GPU Hardware Acceleration
 
-| Platform | HEVC | AV1 | H.264 |
-|----------|------|-----|-------|
-| NVIDIA NVENC | ✅ | ✅ | ✅ |
-| Apple VideoToolbox | ✅ | - | ✅ |
-| Intel QSV | ✅ | ✅ | ✅ |
-| AMD AMF | ✅ | ✅ | ✅ |
+| Platform | HEVC | AV1 | H.264 | Fallback |
+|----------|------|-----|-------|----------|
+| NVIDIA NVENC | ✅ | ✅ | ✅ | → x265 CLI |
+| Apple VideoToolbox | ✅ | - | ✅ | → x265 CLI |
+| Intel QSV | ✅ | ✅ | ✅ | → x265 CLI |
+| AMD AMF | ✅ | ✅ | ✅ | → x265 CLI |
+
+**New in v6.9.17**: Automatic CPU fallback using x265 CLI when GPU encoding fails
 
 ### 5. Conversion Logic
 
@@ -63,7 +82,12 @@ cd modern_format_boost
 ./smart_build.sh
 ```
 
-**Dependencies:** FFmpeg (libx265, libsvtav1, libjxl), Rust 1.70+
+**Dependencies:** 
+- FFmpeg (libx265, libsvtav1, libjxl)
+- x265 CLI tool: `brew install x265` (macOS) or `apt install x265` (Linux)
+- Rust 1.70+
+
+**Note**: x265 CLI is now required for reliable CPU HEVC encoding
 
 ## Commands
 
@@ -259,6 +283,39 @@ cd modern_format_boost
 双击 `Modern Format Boost.app` 即可拖拽转换，默认参数：
 `--explore --match-quality --compress --in-place`
 
+## Troubleshooting
+
+### Common Issues
+
+**GPU Encoding Fails**: System automatically falls back to CPU (x265 CLI)
+```
+⚠️  GPU encoding failed, falling back to CPU (x265 CLI)
+✅ CPU encoding succeeded
+```
+
+**x265 CLI Not Found**: Install x265 command-line tool
+```bash
+# macOS
+brew install x265
+
+# Ubuntu/Debian
+sudo apt install x265
+
+# CentOS/RHEL
+sudo yum install x265
+```
+
+**GIF Files Fail**: Ensure FFmpeg supports bgra pixel format conversion
+- System automatically converts bgra → yuv420p
+- Removes alpha channel for HEVC compatibility
+
+### Error Messages
+
+All errors are now **loudly reported** with clear context:
+- `⚠️  GPU boundary verification failed at CRF X.X`
+- `🔄 Retrying with CPU encoding (x265 CLI)...`
+- `✅ CPU encoding succeeded` / `❌ CPU encoding also failed`
+
 ---
 
-**Version**: 6.9.16 | **Updated**: 2025-12-25 | [CHANGELOG](CHANGELOG.md)
+**Version**: 6.9.17 | **Updated**: 2025-01-18 | [CHANGELOG](CHANGELOG.md)
