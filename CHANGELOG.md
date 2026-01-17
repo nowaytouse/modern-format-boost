@@ -47,6 +47,55 @@ All notable changes to Modern Format Boost will be documented in this file.
 - **Verified**: CPU calibration accuracy improved
 - **Verified**: All error paths provide clear feedback
 
+---
+
+## [6.9.17] - 2025-01-18 (中文版)
+
+### 🔥 关键修复 - CPU 编码与 GPU 降级
+
+#### CPU 编码可靠性
+- **修复**: 使用 x265 CLI 工具替代 FFmpeg libx265，提高兼容性
+- **问题**: FFmpeg 8.0.1 的 libx265 在处理 bgra 像素格式的 GIF 文件时失败
+- **解决方案**: 三步编码流程：
+  1. FFmpeg 解码输入 → Y4M (原始 YUV)
+  2. x265 CLI 编码 Y4M → HEVC 比特流
+  3. FFmpeg 封装 HEVC + 音频 → MP4 容器
+- **优势**: 更高可靠性，更好格式支持，0.1 CRF 精度
+
+#### GPU 降级系统
+- **新增**: GPU 编码失败时自动降级到 CPU
+- **触发条件**: GPU 边界验证失败，高 CRF 编码失败
+- **日志记录**: 清晰的错误信息和降级通知
+- **示例**: `⚠️  GPU 编码失败，降级到 CPU (x265 CLI)`
+
+#### 输入格式兼容性
+- **修复**: 现在支持带 bgra 像素格式的 GIF 文件
+- **自动转换**: bgra → yuv420p，移除 alpha 通道
+- **尺寸修复**: 将奇数尺寸调整为偶数
+
+#### CPU 校准改进
+- **修复**: CPU 校准现在使用 x265 CLI 而不是 libx265
+- **结果**: 准确的 GPU→CPU CRF 映射，带置信度报告
+- **降级**: 校准失败时使用静态偏移（带警告）
+
+#### 错误透明化
+- **原则**: 所有错误都"响亮报告"（响亮报错）
+- **无静默失败**: 每个降级都有清晰的用户通知
+- **上下文**: 详细的错误信息和故障排除提示
+
+### 🔧 修改文件
+- `shared_utils/src/video_explorer.rs`: GPU 降级逻辑，x265 CLI 集成
+- `shared_utils/src/x265_encoder.rs`: 三步编码实现
+- 新增测试脚本: `test_gpu_boundary_fallback.sh`, `test_x265_cli_fix.sh`
+
+### 🧪 测试验证
+- **已验证**: 有问题格式的 GIF 文件现在可以成功转换
+- **已验证**: GPU 失败自动降级到 CPU
+- **已验证**: CPU 校准精度提高
+- **已验证**: 所有错误路径都提供清晰反馈
+
+---
+
 ## [6.9.16] - 2025-12-25
 
 ### 🔧 XMP Merge Priority
