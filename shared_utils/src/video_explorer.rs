@@ -5234,120 +5234,186 @@ pub mod dynamic_mapping {
         
         let mut mapper = DynamicCrfMapper::new(input_size);
         
-        // 校准锚点：CRF 20（高质量区域）
-        let anchor_crf = 20.0_f32;
+        // 🔥 v7.4: 尝试多个校准CRF值，提高成功率
+        let calibration_crfs = vec![20.0_f32, 18.0, 22.0];
+        let mut calibration_success = false;
         
-        eprintln!("🔬 Dynamic calibration: Testing CRF {:.1}...", anchor_crf);
-        
-        // 创建临时文件
-        let temp_gpu = std::env::temp_dir().join("calibrate_gpu.mp4");
-        let temp_cpu = std::env::temp_dir().join("calibrate_cpu.mp4");
-        
-        // GPU 采样编码
-        let gpu_result = Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-t").arg(format!("{}", sample_duration.min(10.0)))  // 只用10秒
-            .arg("-i").arg(input)
-            .arg("-c:v").arg(gpu_encoder)
-            .arg("-crf").arg(format!("{:.0}", anchor_crf))
-            .arg("-c:a").arg("copy")
-            .arg(&temp_gpu)
-            .output();
-        
-        let gpu_size = match gpu_result {
-            Ok(out) if out.status.success() => {
-                fs::metadata(&temp_gpu).map(|m| m.len()).unwrap_or(0)
-            }
-            _ => {
-                eprintln!("⚠️ GPU calibration encoding failed, using static offset");
-                return Ok(mapper);
-            }
-        };
-        
-        // 🔥 v6.9.17: CPU 采样编码 - 使用 x265 CLI 工具
-        let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-        
-        let cpu_size = if encoder == super::VideoEncoder::Hevc {
-            // 使用 x265 CLI 工具进行 CPU 校准
-            use crate::x265_encoder::{encode_with_x265, X265Config};
+        for (attempt, anchor_crf) in calibration_crfs.iter().enumerate() {
+            eprintln!("🔬 Dynamic calibration attempt {}/{}: Testing CRF {:.1}...", 
+                attempt + 1, calibration_crfs.len(), anchor_crf);
             
-            let config = X265Config {
-                crf: anchor_crf,
-                preset: "medium".to_string(),
-                threads: max_threads,
-                container: "mp4".to_string(),
-                preserve_audio: true,
-            };
+            // 创建临时文件
+            let temp_gpu = std::env::temp_dir().join(format!("calibrate_gpu_{}.mp4", attempt));
+            let temp_cpu = std::env::temp_dir().join(format!("calibrate_cpu_{}.mp4", attempt));
             
-            // 创建临时输入文件（截取前 10 秒）
-            let temp_input = std::env::temp_dir().join("calibrate_input.mp4");
-            let extract_result = Command::new("ffmpeg")
+            // GPU 采样编码
+            let gpu_result = Command::new("ffmpeg")
                 .arg("-y")
-                .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
+                .arg("-t").arg(format!("{}", sample_duration.min(10.0)))  // 只用10秒
                 .arg("-i").arg(input)
-                .arg("-c").arg("copy")
-                .arg(&temp_input)
+                .arg("-c:v").arg(gpu_encoder)
+                .arg("-crf").arg(format!("{:.0}", anchor_crf))
+                .arg("-c:a").arg("copy")
+                .arg(&temp_gpu)
                 .output();
             
-            if extract_result.is_err() || !extract_result.unwrap().status.success() {
-                eprintln!("⚠️ CPU calibration encoding failed, using static offset");
-                return Ok(mapper);
-            }
-            
-            match encode_with_x265(&temp_input, &temp_cpu, &config, vf_args) {
-                Ok(_) => {
-                    let _ = fs::remove_file(&temp_input);
-                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
-                }
-                Err(_) => {
-                    let _ = fs::remove_file(&temp_input);
-                    eprintln!("⚠️ CPU calibration encoding failed, using static offset");
-                    return Ok(mapper);
-                }
-            }
-        } else {
-            // 非 HEVC 编码器使用原有逻辑
-            let mut cpu_cmd = Command::new("ffmpeg");
-            cpu_cmd.arg("-y")
-                .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
-                .arg("-i").arg(input)
-                .arg("-c:v").arg(encoder.ffmpeg_name())
-                .arg("-crf").arg(format!("{:.0}", anchor_crf));
-            
-            for arg in encoder.extra_args(max_threads) {
-                cpu_cmd.arg(arg);
-            }
-            
-            for arg in vf_args {
-                if !arg.is_empty() {
-                    cpu_cmd.arg("-vf").arg(arg);
-                }
-            }
-            
-            cpu_cmd.arg("-c:a").arg("copy").arg(&temp_cpu);
-            
-            let cpu_result = cpu_cmd.output();
-            
-            match cpu_result {
+            let gpu_size = match gpu_result {
                 Ok(out) if out.status.success() => {
-                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                    fs::metadata(&temp_gpu).map(|m| m.len()).unwrap_or(0)
                 }
-                _ => {
-                    eprintln!("⚠️ CPU calibration encoding failed, using static offset");
-                    return Ok(mapper);
+                Ok(out) => {
+                    // 🔥 v7.4: 响亮报告GPU校准失败原因
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    eprintln!("   ❌ GPU calibration failed for CRF {:.1}", anchor_crf);
+                    if stderr.contains("No such encoder") {
+                        eprintln!("      Cause: GPU encoder '{}' not available", gpu_encoder);
+                    } else if stderr.contains("Invalid") {
+                        eprintln!("      Cause: Invalid parameters");
+                    }
+                    continue;
                 }
-            }
-        };
-        
-        // 清理临时文件
-        let _ = fs::remove_file(&temp_gpu);
-        let _ = fs::remove_file(&temp_cpu);
-        
-        if gpu_size > 0 && cpu_size > 0 {
-            mapper.add_anchor(anchor_crf, gpu_size, cpu_size);
+                Err(e) => {
+                    eprintln!("   ❌ GPU calibration command failed: {}", e);
+                    continue;
+                }
+            };
             
-            let ratio = cpu_size as f64 / gpu_size as f64;
+            if gpu_size == 0 {
+                eprintln!("   ❌ GPU output file is empty");
+                let _ = fs::remove_file(&temp_gpu);
+                continue;
+            }
+            
+            // 🔥 v6.9.17: CPU 采样编码 - 使用 x265 CLI 工具
+            let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+            
+            let cpu_size = if encoder == super::VideoEncoder::Hevc {
+                // 使用 x265 CLI 工具进行 CPU 校准
+                use crate::x265_encoder::{encode_with_x265, X265Config};
+                
+                let config = X265Config {
+                    crf: *anchor_crf,
+                    preset: "medium".to_string(),
+                    threads: max_threads,
+                    container: "mp4".to_string(),
+                    preserve_audio: true,
+                };
+                
+                // 创建临时输入文件（截取前 10 秒）
+                let temp_input = std::env::temp_dir().join(format!("calibrate_input_{}.mp4", attempt));
+                let extract_result = Command::new("ffmpeg")
+                    .arg("-y")
+                    .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
+                    .arg("-i").arg(input)
+                    .arg("-c").arg("copy")
+                    .arg(&temp_input)
+                    .output();
+                
+                match extract_result {
+                    Ok(out) if out.status.success() => {},
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        eprintln!("   ❌ Failed to extract input sample for CRF {:.1}", anchor_crf);
+                        if stderr.contains("Invalid") {
+                            eprintln!("      Cause: Invalid input file or parameters");
+                        }
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ Extract command failed: {}", e);
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                }
+                
+                match encode_with_x265(&temp_input, &temp_cpu, &config, vf_args) {
+                    Ok(_) => {
+                        let _ = fs::remove_file(&temp_input);
+                        fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ CPU x265 encoding failed for CRF {:.1}: {}", anchor_crf, e);
+                        let _ = fs::remove_file(&temp_input);
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                }
+            } else {
+                // 非 HEVC 编码器使用原有逻辑
+                let mut cpu_cmd = Command::new("ffmpeg");
+                cpu_cmd.arg("-y")
+                    .arg("-t").arg(format!("{}", sample_duration.min(10.0)))
+                    .arg("-i").arg(input)
+                    .arg("-c:v").arg(encoder.ffmpeg_name())
+                    .arg("-crf").arg(format!("{:.0}", anchor_crf));
+                
+                for arg in encoder.extra_args(max_threads) {
+                    cpu_cmd.arg(arg);
+                }
+                
+                for arg in vf_args {
+                    if !arg.is_empty() {
+                        cpu_cmd.arg("-vf").arg(arg);
+                    }
+                }
+                
+                cpu_cmd.arg("-c:a").arg("copy").arg(&temp_cpu);
+                
+                let cpu_result = cpu_cmd.output();
+                
+                match cpu_result {
+                    Ok(out) if out.status.success() => {
+                        fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        eprintln!("   ❌ CPU encoding failed for CRF {:.1}", anchor_crf);
+                        if stderr.contains("No such encoder") {
+                            eprintln!("      Cause: CPU encoder not available");
+                        }
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ CPU command failed: {}", e);
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                }
+            };
+            
+            // 清理临时文件
+            let _ = fs::remove_file(&temp_gpu);
+            let _ = fs::remove_file(&temp_cpu);
+            
+            if gpu_size > 0 && cpu_size > 0 {
+                mapper.add_anchor(*anchor_crf, gpu_size, cpu_size);
+                
+                let ratio = cpu_size as f64 / gpu_size as f64;
+                let _offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
+                
+                eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
+                eprintln!("      GPU: {} bytes, CPU: {} bytes (ratio: {:.2})", 
+                    gpu_size, cpu_size, ratio);
+                calibration_success = true;
+                break;
+            }
+        }
+        
+        if !calibration_success {
+            eprintln!("⚠️ All CPU calibration attempts failed, using static offset");
+            eprintln!("   Tried CRF values: {:?}", calibration_crfs);
+            eprintln!("   This may affect GPU→CPU mapping accuracy");
+            return Ok(mapper);
+        }
+        
+        // 继续原有逻辑...
+        {
+            let ratio = mapper.anchors[0].cpu_size as f64 / mapper.anchors[0].gpu_size as f64;
             let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
+            let gpu_size = mapper.anchors[0].gpu_size;
+            let cpu_size = mapper.anchors[0].cpu_size;
             eprintln!("✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
                 gpu_size, cpu_size, ratio, offset);
         }
@@ -5691,6 +5757,8 @@ pub fn explore_with_gpu_coarse_search(
     if (clamped_cpu_center_crf - cpu_center_crf).abs() > 0.01 {
         eprintln!("   ⚠️ CPU start CRF {:.1} clamped to {:.1} (within valid range [{:.1}, {:.1}])",
             cpu_center_crf, clamped_cpu_center_crf, cpu_min_crf, cpu_max_crf);
+        eprintln!("      💡 This is normal when GPU boundary exceeds CPU range");
+        eprintln!("      🔧 Search will start from boundary instead of optimal point");
     }
     
     let mut result = cpu_fine_tune_from_gpu_boundary(
@@ -7172,7 +7240,39 @@ fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Opti
             let stdout = String::from_utf8_lossy(&out.stdout);
             parse_ms_ssim_from_json(&stdout)
         }
-        _ => None
+        Ok(out) => {
+            // 🔥 v7.4: 响亮报告失败原因
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!("\n      ❌ Channel {} MS-SSIM failed!", channel.to_uppercase());
+            
+            // 检测常见错误
+            if stderr.contains("No such filter: 'libvmaf'") {
+                eprintln!("         Cause: libvmaf filter not available in ffmpeg");
+                eprintln!("         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf");
+            } else if stderr.contains("Invalid pixel format") || stderr.contains("format") {
+                eprintln!("         Cause: Pixel format incompatibility");
+                eprintln!("         Input: {}", input.display());
+            } else if stderr.contains("scale") || stderr.contains("resolution") {
+                eprintln!("         Cause: Resolution mismatch");
+            } else {
+                // 显示前3行错误信息
+                let error_lines: Vec<&str> = stderr.lines()
+                    .filter(|l| l.contains("Error") || l.contains("error") || l.contains("failed"))
+                    .take(3)
+                    .collect();
+                if !error_lines.is_empty() {
+                    eprintln!("         Error details:");
+                    for line in error_lines {
+                        eprintln!("           {}", line.trim());
+                    }
+                }
+            }
+            None
+        }
+        Err(e) => {
+            eprintln!("\n      ❌ Channel {} MS-SSIM command failed: {}", channel.to_uppercase(), e);
+            None
+        }
     }
 }
 
