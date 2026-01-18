@@ -2,6 +2,54 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.2] - 2025-01-18
+
+### 🔥 Quality Verification Fix - Standalone VMAF Integration
+
+#### Problem
+MS-SSIM calculation failed when ffmpeg lacks libvmaf support:
+```
+⚠️⚠️⚠️  ALL QUALITY CALCULATIONS FAILED!  ⚠️⚠️⚠️
+- libvmaf not available in ffmpeg
+```
+
+#### Solution
+Integrated standalone `vmaf` CLI tool (Netflix official) to bypass ffmpeg dependency.
+
+#### Changes
+- **New Module**: `vmaf_standalone.rs` - Independent VMAF tool wrapper
+- **Modified**: `video_explorer.rs` - Priority: standalone vmaf → ffmpeg libvmaf → SSIM fallback
+- **Updated**: `lib.rs` - Export vmaf_standalone module
+
+#### Fallback Chain
+1. **Standalone vmaf** (preferred) → MS-SSIM
+2. **ffmpeg libvmaf** → MS-SSIM  
+3. **ffmpeg ssim** → SSIM All (Y+U+V)
+4. **ffmpeg ssim** → SSIM Y only
+
+#### Benefits
+- ✅ No ffmpeg recompilation required
+- ✅ More reliable MS-SSIM calculation
+- ✅ Graceful multi-layer fallback
+- ✅ Loud error reporting (no silent failures)
+
+#### Installation
+```bash
+# macOS
+brew install libvmaf
+
+# Verify
+vmaf --version
+```
+
+#### Testing
+```bash
+./scripts/e2e_quality_test.sh
+./scripts/verify_fix.sh
+```
+
+---
+
 ## [6.9.17] - 2025-01-18
 
 ### 🔥 Critical Fixes - CPU Encoding & GPU Fallback

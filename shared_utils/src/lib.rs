@@ -63,6 +63,9 @@ pub mod file_copier;
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
 
+// 🔥 v7.2: 独立 VMAF 工具集成（绕过 ffmpeg libvmaf 依赖）
+pub mod vmaf_standalone;
+
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
     CoarseProgressBar,
