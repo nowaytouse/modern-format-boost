@@ -2,6 +2,27 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.4.6] - 2026-01-18
+
+### ✅ Unified Directory Metadata Preservation
+
+**All Four Tools Now Preserve Directory Metadata:**
+- imgquality_hevc ✅
+- imgquality_av1 ✅ (NEW)
+- vidquality_hevc ✅ (NEW)
+- vidquality_av1 ✅ (NEW)
+
+**What's Preserved:**
+- Folder timestamps (creation, modification, access)
+- Unix permissions (mode)
+- Extended attributes (xattr)
+- macOS creation time
+
+**Implementation:**
+- Added `base_dir` field to `CliRunnerConfig`
+- All tools call `preserve_directory_metadata()` after processing
+- Recursive preservation of entire directory tree
+
 ## [7.4.5] - 2026-01-18
 
 ### 🔥 Critical Fixes - Complete Directory Structure Audit
