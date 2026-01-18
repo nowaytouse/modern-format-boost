@@ -2,18 +2,22 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.3)
+## 🔥 Latest Updates (v7.4.6)
 
-### Critical Fixes - Directory Structure & Metadata
-- **✅ Directory Structure**: All subdirectories now preserved in output
-- **✅ Metadata Preservation**: Timestamps, permissions, xattrs all preserved
-- **✅ XMP Auto-Merge**: Sidecar files automatically merged into output
-- **✅ Path Correction**: Fixed binary paths in drag-and-drop script
+### Complete Metadata & Structure Preservation
+- **✅ All 4 Tools**: imgquality/vidquality HEVC/AV1 preserve directory metadata
+- **✅ Folder Timestamps**: Creation, modification, access times preserved
+- **✅ Permissions & Xattr**: Unix permissions and extended attributes preserved
+- **✅ Directory Structure**: All subdirectories preserved in output
+- **✅ File Metadata**: Timestamps, XMP sidecars auto-merged
+- **✅ Progress Bars**: Clean single progress bar in parallel mode
+- **✅ macOS Compatible**: Works with default bash 3.x
 
 **Test Results:**
 ```
 Input:  photos/2024/summer/beach.png (2020-01-01)
 Output: photos/2024/summer/beach.jxl (2020-01-01) ✅
+Folder: photos/2024/summer/ (timestamps preserved) ✅
 XMP:    Title & Description merged ✅
 ```
 
