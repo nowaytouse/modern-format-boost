@@ -23,6 +23,10 @@ pub fn is_vmaf_available() -> bool {
 /// 
 /// # Returns
 /// MS-SSIM 分数 (0.0-1.0)
+/// 
+/// # Note
+/// vmaf 的 float_ms_ssim 特征在 YUV 色彩空间上计算，
+/// 已隐式包含亮度(Y)和色度(U,V)信息，无需分别计算各通道。
 pub fn calculate_ms_ssim_standalone(
     reference: &Path,
     distorted: &Path,
