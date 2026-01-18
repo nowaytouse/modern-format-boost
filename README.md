@@ -2,29 +2,19 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v6.9.17)
+## 🔥 Latest Updates (v7.2)
 
-### Critical Fixes
-- **✅ CPU Encoding Reliability**: Replaced FFmpeg libx265 with x265 CLI tool for better compatibility
-- **✅ GPU Fallback System**: Automatic CPU fallback when GPU encoding fails at high CRF values
-- **✅ GIF Format Support**: Fixed bgra pixel format handling for animated GIF files
-- **✅ CPU Calibration**: Improved GPU→CPU CRF mapping accuracy using x265 CLI
-- **✅ Error Transparency**: All failures now provide clear error messages and fallback notifications
+### Quality Verification Fix
+- **✅ Standalone VMAF**: Bypass ffmpeg libvmaf dependency using Netflix's vmaf CLI
+- **✅ Multi-layer Fallback**: vmaf → libvmaf → SSIM All → SSIM Y
+- **✅ No Recompilation**: Works without rebuilding ffmpeg
+- **✅ Installation**: `brew install libvmaf` (macOS) or `apt install libvmaf` (Linux)
 
-### Before vs After
-```
-❌ Before: CPU calibration encoding failed, using static offset
-❌ Before: Encoding failed at CRF 19.9 - Error splitting the argument list
-✅ After: Calibration complete: GPU 1020989 → CPU 2902004 (ratio 2.842, offset +2.5)
-✅ After: GPU encoding failed, falling back to CPU (x265 CLI) → Success
-✅ After: No more "Error splitting the argument list" errors
-```
-
-### Technical Implementation
-- **Three-step encoding**: FFmpeg decode → x265 CLI → FFmpeg mux
-- **Dependency removal**: Removed tracing dependency from x265_encoder.rs
-- **Format conversion**: Automatic bgra → yuv420p for GIF compatibility
-- **Fallback mechanism**: GPU boundary verification with CPU retry
+### Previous (v6.9.17)
+- **✅ CPU Encoding**: x265 CLI for better reliability
+- **✅ GPU Fallback**: Auto CPU fallback on GPU failures
+- **✅ GIF Support**: Fixed bgra pixel format
+- **✅ Error Transparency**: Loud error reporting
 
 ## Core Tools
 
@@ -49,7 +39,13 @@ High-performance media conversion toolkit with intelligent quality matching, SSI
 - **Transparency report**: Every iteration with metrics
 - **Confidence scoring**: Sampling coverage + prediction accuracy
 
-### 3. Quality Verification System (v6.9.9)
+### 3. Quality Verification System (v7.2)
+
+**Fallback Chain:**
+1. **Standalone vmaf** (preferred) → MS-SSIM 3-channel
+2. **ffmpeg libvmaf** → MS-SSIM 3-channel
+3. **ffmpeg ssim** → SSIM All (Y+U+V)
+4. **ffmpeg ssim** → SSIM Y only
 
 | Mode | Metric | Threshold | Description |
 |------|--------|-----------|-------------|
@@ -91,10 +87,11 @@ cd modern_format_boost
 
 **Dependencies:** 
 - FFmpeg (libx265, libsvtav1, libjxl)
-- x265 CLI tool: `brew install x265` (macOS) or `apt install x265` (Linux)
+- x265 CLI: `brew install x265` (macOS) or `apt install x265` (Linux)
+- libvmaf: `brew install libvmaf` (macOS) or `apt install libvmaf` (Linux)
 - Rust 1.70+
 
-**Note**: x265 CLI is now required for reliable CPU HEVC encoding
+**Note**: x265 CLI and libvmaf are required for reliable encoding and quality verification
 
 ## Commands
 
