@@ -30,6 +30,7 @@ pub use shared_utils::conversion::{
 /// 
 /// # Returns
 /// 输出文件路径，如果设置了 base_dir 则保留目录结构
+#[allow(dead_code)]  // 🔥 暂时允许，后续会在所有转换函数中使用
 fn determine_output(input: &Path, extension: &str, options: &ConvertOptions) -> Result<std::path::PathBuf> {
     let result = if let (Some(ref base), Some(ref out)) = (&options.base_dir, &options.output_dir) {
         // 🔥 保留目录结构模式
