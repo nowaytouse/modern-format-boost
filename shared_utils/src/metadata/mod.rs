@@ -171,6 +171,107 @@ pub fn copy_metadata(src: &Path, dst: &Path) {
     merge_xmp_sidecar(src, dst);
 }
 
+/// 🔥 v7.4: 保留文件夹元数据（时间戳、权限）
+/// 
+/// 递归保留整个目录树的元数据：
+/// - 时间戳（创建、修改、访问）
+/// - 权限（Unix mode）
+/// - 扩展属性（xattr）
+/// 
+/// 用于相邻目录输出模式，确保输出目录结构与源目录完全一致。
+pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
+    use std::collections::HashMap;
+    
+    // Step 1: 收集源目录树的所有目录及其元数据
+    let mut dir_metadata: HashMap<std::path::PathBuf, std::fs::Metadata> = HashMap::new();
+    
+    if src_dir.is_dir() {
+        // 收集根目录
+        if let Ok(meta) = std::fs::metadata(src_dir) {
+            dir_metadata.insert(src_dir.to_path_buf(), meta);
+        }
+        
+        // 递归收集所有子目录
+        collect_dir_metadata(src_dir, &mut dir_metadata)?;
+    }
+    
+    // Step 2: 应用元数据到目标目录树
+    for (src_path, metadata) in dir_metadata.iter() {
+        // 计算相对路径
+        let rel_path = src_path.strip_prefix(src_dir).unwrap_or(src_path);
+        let dst_path = dst_dir.join(rel_path);
+        
+        if !dst_path.exists() {
+            continue; // 目标目录不存在，跳过
+        }
+        
+        // 复制权限
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = metadata.permissions().mode();
+            if let Err(e) = std::fs::set_permissions(&dst_path, std::fs::Permissions::from_mode(mode)) {
+                eprintln!("⚠️ Failed to set permissions for {}: {}", dst_path.display(), e);
+            }
+        }
+        
+        // 复制时间戳
+        let atime = filetime::FileTime::from_last_access_time(metadata);
+        let mtime = filetime::FileTime::from_last_modification_time(metadata);
+        if let Err(e) = filetime::set_file_times(&dst_path, atime, mtime) {
+            eprintln!("⚠️ Failed to set timestamps for {}: {}", dst_path.display(), e);
+        }
+        
+        // macOS: 复制创建时间
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(created) = metadata.created() {
+                if let Err(e) = macos::set_creation_time(&dst_path, created) {
+                    eprintln!("⚠️ Failed to set creation time for {}: {}", dst_path.display(), e);
+                }
+            }
+        }
+        
+        // 复制扩展属性
+        copy_dir_xattrs(src_path, &dst_path);
+    }
+    
+    Ok(())
+}
+
+/// 递归收集目录树的元数据
+fn collect_dir_metadata(
+    dir: &Path,
+    map: &mut std::collections::HashMap<std::path::PathBuf, std::fs::Metadata>,
+) -> io::Result<()> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    map.insert(path.clone(), meta);
+                }
+                // 递归
+                collect_dir_metadata(&path, map)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 复制目录的扩展属性
+fn copy_dir_xattrs(src: &Path, dst: &Path) {
+    if let Ok(iter) = xattr::list(src) {
+        for name in iter {
+            if let Some(name_str) = name.to_str() {
+                if let Ok(Some(value)) = xattr::get(src, name_str) {
+                    let _ = xattr::set(dst, name_str, &value);
+                }
+            }
+        }
+    }
+}
+
 /// 🔥 v5.76: 自动合并XMP边车文件到输出文件
 /// 
 /// 检测源文件是否有对应的XMP边车文件，如果有则合并到输出文件。
