@@ -2,6 +2,47 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.4.5] - 2026-01-18
+
+### 🔥 Critical Fixes - Complete Directory Structure Audit
+
+#### Fixed
+- **All File Copy Locations Audited** - Ensured all file copy operations preserve directory structure
+- **imgquality_av1** - NoConversion skip now uses `smart_file_copier`
+- **vidquality_av1** - NoConversion skip now uses `smart_file_copier`
+- **imgquality_hevc** - Conversion failure fallback now uses `smart_file_copier`
+- **Progress Bar Chaos Fixed** - All progress bar creation functions check `is_quiet_mode()`
+- **smart_build.sh Compatibility** - Fixed bash 3.x compatibility (removed `declare -A`)
+
+#### What's Guaranteed
+- ✅ All file copies preserve complete directory structure
+- ✅ All metadata (timestamps, permissions, xattr) preserved
+- ✅ XMP sidecars automatically merged
+- ✅ No more progress bar mixing in parallel processing
+- ✅ Works on macOS default bash 3.x
+
+#### Technical Details
+**smart_file_copier Module** - Centralized file copying logic:
+```rust
+pub fn copy_on_skip_or_fail(
+    source: &Path,
+    output_dir: Option<&Path>,
+    base_dir: Option<&Path>,
+    verbose: bool,
+) -> Result<Option<PathBuf>>
+```
+
+**Progress Mode Control**:
+```rust
+// Enable quiet mode before parallel processing
+shared_utils::progress_mode::enable_quiet_mode();
+
+// Parallel processing...
+
+// Disable after completion
+shared_utils::progress_mode::disable_quiet_mode();
+```
+
 ## [7.3] - 2025-01-18
 
 ### 🔥 Critical Fixes - Directory Structure & Metadata Preservation
