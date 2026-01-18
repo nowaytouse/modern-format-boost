@@ -186,7 +186,7 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
     let mut dir_metadata: HashMap<std::path::PathBuf, std::fs::Metadata> = HashMap::new();
     
     if src_dir.is_dir() {
-        // 收集根目录
+        // 🔥 v7.4.9: 确保收集根目录元数据
         if let Ok(meta) = std::fs::metadata(src_dir) {
             dir_metadata.insert(src_dir.to_path_buf(), meta);
         }
@@ -201,8 +201,12 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
         let rel_path = src_path.strip_prefix(src_dir).unwrap_or(src_path);
         let dst_path = dst_dir.join(rel_path);
         
+        // 🔥 v7.4.9: 如果目标目录不存在，创建它（保留结构）
         if !dst_path.exists() {
-            continue; // 目标目录不存在，跳过
+            if let Err(e) = std::fs::create_dir_all(&dst_path) {
+                eprintln!("⚠️ Failed to create directory {}: {}", dst_path.display(), e);
+                continue;
+            }
         }
         
         // 复制权限
