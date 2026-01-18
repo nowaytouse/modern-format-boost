@@ -206,8 +206,7 @@ pub struct ConvertOptions {
     pub force: bool,
     /// Output directory (None = same as input)
     pub output_dir: Option<PathBuf>,
-    /// 🔥 v6.9.15: Base directory for preserving relative paths
-    /// When set, output files will preserve their directory structure relative to this base
+    /// Base directory for preserving directory structure
     pub base_dir: Option<PathBuf>,
     /// Delete original after successful conversion
     pub delete_original: bool,

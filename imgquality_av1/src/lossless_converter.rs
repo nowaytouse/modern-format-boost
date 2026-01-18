@@ -35,7 +35,7 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "jxl", &options.output_dir)?;
+    let output = get_output_path(input, "jxl", options)?;
     
     // Ensure output directory exists
     if let Some(parent) = output.parent() {
@@ -291,7 +291,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "jxl", &options.output_dir)?;
+    let output = get_output_path(input, "jxl", options)?;
     
     // Check if output already exists
     if output.exists() && !options.force {
@@ -387,7 +387,7 @@ pub fn convert_to_avif(input: &Path, quality: Option<u8>, options: &ConvertOptio
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "avif", &options.output_dir)?;
+    let output = get_output_path(input, "avif", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -476,7 +476,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    let output = get_output_path(input, "mp4", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -581,7 +581,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "avif", &options.output_dir)?;
+    let output = get_output_path(input, "avif", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -675,7 +675,7 @@ pub fn convert_to_av1_mp4_matched(
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    let output = get_output_path(input, "mp4", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -882,7 +882,7 @@ pub fn convert_to_jxl_matched(
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "jxl", &options.output_dir)?;
+    let output = get_output_path(input, "jxl", options)?;
     
     // Ensure output directory exists
     if let Some(parent) = output.parent() {
@@ -1015,7 +1015,7 @@ pub fn convert_to_av1_mp4_lossless(input: &Path, options: &ConvertOptions) -> Re
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", &options.output_dir)?;
+    let output = get_output_path(input, "mp4", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -1264,9 +1264,14 @@ fn prepare_input_for_cjxl(input: &Path) -> Result<(std::path::PathBuf, Option<st
 }
 
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
-fn get_output_path(input: &Path, extension: &str, output_dir: &Option<std::path::PathBuf>) -> Result<std::path::PathBuf> {
-    shared_utils::conversion::determine_output_path(input, extension, output_dir)
-        .map_err(ImgQualityError::ConversionError)
+fn get_output_path(input: &Path, extension: &str, options: &ConvertOptions) -> Result<std::path::PathBuf> {
+    if let Some(ref base) = options.base_dir {
+        shared_utils::conversion::determine_output_path_with_base(input, base, extension, &options.output_dir)
+            .map_err(ImgQualityError::ConversionError)
+    } else {
+        shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
+            .map_err(ImgQualityError::ConversionError)
+    }
 }
 
 /// 获取输入文件的尺寸（宽度和高度）

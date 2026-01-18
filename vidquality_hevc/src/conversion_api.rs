@@ -205,8 +205,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         });
     }
 
-    let output_dir = config.output_dir.clone()
-        .unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf());
+    let output_dir = if let (Some(ref user_out), Some(ref base)) = (&config.output_dir, &config.base_dir) {
+        // preserve structure relative to base_dir
+        let rel_path = input.strip_prefix(base).unwrap_or(input).parent().unwrap_or(Path::new(""));
+        user_out.join(rel_path)
+    } else {
+        config.output_dir.clone().unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf())
+    };
     
     std::fs::create_dir_all(&output_dir)?;
     

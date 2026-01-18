@@ -24,6 +24,8 @@ struct AutoConvertConfig<'a> {
     use_gpu: bool,
     /// Verbose output
     verbose: bool,
+    /// Base directory for relative path preservation
+    base_dir: Option<&'a Path>,
 }
 
 #[derive(Parser)]
@@ -211,6 +213,16 @@ fn main() -> anyhow::Result<()> {
             if cpu {
                 eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
+
+            // Determine base directory
+            let base_dir = if recursive {
+                // Recursive: base is the input directory (or parent if input is file)
+                if input.is_dir() { Some(input.clone()) } else { input.parent().map(|p| p.to_path_buf()) }
+            } else {
+                // Non-recursive: base is parent of input
+                input.parent().map(|p| p.to_path_buf())
+            };
+
             let config = AutoConvertConfig {
                 output_dir: output.as_deref(),
                 force,
@@ -223,6 +235,7 @@ fn main() -> anyhow::Result<()> {
                 compress,
                 use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
                 verbose,
+                base_dir: base_dir.as_deref(),
             };
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -518,7 +531,7 @@ fn auto_convert_single_file(
     let options = ConvertOptions {
         force: config.force,
         output_dir: config.output_dir.map(|p| p.to_path_buf()),
-        base_dir: None,  // 🔥 v6.9.15: AV1 工具暂不支持目录结构保留
+        base_dir: config.base_dir.map(|p| p.to_path_buf()),
         delete_original: config.delete_original,
         in_place: config.in_place,
         explore: config.explore,

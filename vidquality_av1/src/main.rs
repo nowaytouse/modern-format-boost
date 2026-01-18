@@ -138,8 +138,16 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress, apple_compat, cpu } => {
+            // Determine base directory
+            let base_dir = if recursive {
+                if input.is_dir() { Some(input.clone()) } else { input.parent().map(|p| p.to_path_buf()) }
+            } else {
+                input.parent().map(|p| p.to_path_buf())
+            };
+
             let config = ConversionConfig {
                 output_dir: output.clone(),
+                base_dir,
                 force,
                 delete_original,
                 preserve_metadata: true,

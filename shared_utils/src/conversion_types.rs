@@ -52,6 +52,8 @@ pub struct ConversionStrategy {
 #[derive(Debug, Clone)]
 pub struct ConversionConfig {
     pub output_dir: Option<PathBuf>,
+    /// Base directory for preserving directory structure
+    pub base_dir: Option<PathBuf>,
     pub force: bool,
     pub delete_original: bool,
     pub preserve_metadata: bool,
@@ -85,6 +87,7 @@ impl Default for ConversionConfig {
     fn default() -> Self {
         Self {
             output_dir: None,
+            base_dir: None,
             force: false,
             delete_original: false,
             preserve_metadata: true,
