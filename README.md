@@ -2,16 +2,24 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.4.6)
+## 🔥 Latest Updates (v7.4.8)
 
-### Complete Metadata & Structure Preservation
+### Complete Metadata & Structure Preservation - All Scenarios
 - **✅ All 4 Tools**: imgquality/vidquality HEVC/AV1 preserve directory metadata
+- **✅ All Copy Scenarios**: Conversion success, skip, failure - all preserve structure
 - **✅ Folder Timestamps**: Creation, modification, access times preserved
 - **✅ Permissions & Xattr**: Unix permissions and extended attributes preserved
 - **✅ Directory Structure**: All subdirectories preserved in output
 - **✅ File Metadata**: Timestamps, XMP sidecars auto-merged
 - **✅ Progress Bars**: Clean single progress bar in parallel mode
 - **✅ macOS Compatible**: Works with default bash 3.x
+- **✅ Build System**: Fixed smart_build.sh script (set -e compatibility)
+
+**What's Preserved:**
+- Media files (converted): Structure + metadata + XMP ✅
+- Media files (skipped/failed): Structure + metadata + XMP ✅
+- Non-media files (.psd, .txt, etc.): Structure + metadata + XMP ✅
+- Directories: Timestamps + permissions + xattr ✅
 
 **Test Results:**
 ```
@@ -322,7 +330,24 @@ Double-click `Modern Format Boost.app` for drag-and-drop conversion:
 
 **v6.9.17 新增**: GPU 编码失败时自动降级到 x265 CLI CPU 编码
 
-## 🔥 最新更新 (v6.9.17)
+## 🔥 最新更新 (v7.4.8)
+
+### 完整的元数据和结构保留 - 所有场景
+- **✅ 全部4个工具**: imgquality/vidquality HEVC/AV1 保留目录元数据
+- **✅ 所有复制场景**: 转换成功、跳过、失败 - 全部保留结构
+- **✅ 文件夹时间戳**: 创建、修改、访问时间全部保留
+- **✅ 权限和扩展属性**: Unix 权限和扩展属性保留
+- **✅ 目录结构**: 所有子目录在输出中保留
+- **✅ 文件元数据**: 时间戳、XMP 边车自动合并
+- **✅ 进度条**: 并行模式下单一清晰进度条
+- **✅ macOS 兼容**: 兼容默认 bash 3.x
+- **✅ 构建系统**: 修复 smart_build.sh 脚本（set -e 兼容性）
+
+**保留内容：**
+- 媒体文件（已转换）：结构 + 元数据 + XMP ✅
+- 媒体文件（跳过/失败）：结构 + 元数据 + XMP ✅
+- 非媒体文件（.psd、.txt 等）：结构 + 元数据 + XMP ✅
+- 目录：时间戳 + 权限 + xattr ✅
 
 ### 关键修复
 - **✅ CPU 编码可靠性**: 使用 x265 CLI 工具替代 FFmpeg libx265，提高兼容性
