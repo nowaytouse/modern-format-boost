@@ -77,23 +77,24 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
         let _ = fs::remove_file(temp);
     }
     
-    // 🔥 Fallback: 如果 cjxl 失败且报告 "Getting pixel data failed"，使用 ImageMagick 管道重新编码
+    // 🔥 v7.4: Fallback - 使用 ImageMagick 管道重新编码
+    // 如果 cjxl 失败且报告 "Getting pixel data failed"
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
                 eprintln!("   ⚠️  CJXL DECODE FAILED: {}", stderr.lines().next().unwrap_or("Unknown error"));
                 eprintln!("   🔧 FALLBACK: Using ImageMagick pipeline to re-encode PNG");
-                eprintln!("   📋 Reason: PNG contains metadata/encoding that cjxl cannot handle");
+                eprintln!("   📋 Reason: PNG contains incompatible metadata/encoding (will be preserved)");
                 
                 // 🔥 v7.4: 使用管道避免临时文件
                 // ImageMagick → stdout → cjxl stdin
                 use std::process::Stdio;
                 
-                eprintln!("   🔄 Pipeline: magick → cjxl (no temp files)");
+                eprintln!("   🔄 Pipeline: magick → cjxl (streaming, no temp files)");
                 
-                // Step 1: ImageMagick 输出到 stdout
-                let mut magick_cmd = Command::new("magick")
+                // Step 1: 启动 ImageMagick 进程
+                let magick_result = Command::new("magick")
                     .arg(input)
                     .arg("-depth").arg("16")  // 保留位深
                     .arg("png:-")  // 输出到 stdout
@@ -101,47 +102,96 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
                     .stderr(Stdio::piped())
                     .spawn();
                 
-                match magick_cmd {
+                match magick_result {
                     Ok(mut magick_proc) => {
-                        // Step 2: cjxl 从 stdin 读取
+                        // Step 2: 启动 cjxl 进程，从 stdin 读取
                         if let Some(magick_stdout) = magick_proc.stdout.take() {
-                            let retry_result = Command::new("cjxl")
+                            let cjxl_result = Command::new("cjxl")
                                 .arg("-")  // 从 stdin 读取
                                 .arg(&output)
                                 .arg("-d").arg(format!("{:.1}", distance))
                                 .arg("-e").arg("7")
                                 .arg("-j").arg(max_threads.to_string())
                                 .stdin(magick_stdout)
-                                .output();
+                                .stderr(Stdio::piped())
+                                .spawn();
                             
-                            // 等待 magick 进程结束
-                            let _ = magick_proc.wait();
-                            
-                            // 检查重试结果
-                            match &retry_result {
-                                Ok(retry_out) if retry_out.status.success() => {
-                                    eprintln!("   🎉 FALLBACK SUCCESS: cjxl conversion via ImageMagick pipeline");
-                                }
-                                Ok(retry_out) => {
-                                    eprintln!("   ❌ FALLBACK FAILED: cjxl still failed after re-encode");
-                                    let err_msg = String::from_utf8_lossy(&retry_out.stderr);
-                                    if !err_msg.is_empty() {
-                                        eprintln!("   📝 Error: {}", err_msg.lines().next().unwrap_or("Unknown"));
+                            match cjxl_result {
+                                Ok(mut cjxl_proc) => {
+                                    // 等待两个进程完成
+                                    let magick_status = magick_proc.wait();
+                                    let cjxl_status = cjxl_proc.wait();
+                                    
+                                    // 检查 magick 进程
+                                    let magick_ok = match magick_status {
+                                        Ok(status) if status.success() => true,
+                                        Ok(status) => {
+                                            eprintln!("   ❌ ImageMagick failed with exit code: {:?}", status.code());
+                                            if let Some(mut stderr) = magick_proc.stderr {
+                                                use std::io::Read;
+                                                let mut err = String::new();
+                                                if stderr.read_to_string(&mut err).is_ok() && !err.is_empty() {
+                                                    eprintln!("      Error: {}", err.lines().next().unwrap_or("Unknown"));
+                                                }
+                                            }
+                                            false
+                                        }
+                                        Err(e) => {
+                                            eprintln!("   ❌ Failed to wait for ImageMagick: {}", e);
+                                            false
+                                        }
+                                    };
+                                    
+                                    // 检查 cjxl 进程
+                                    let cjxl_ok = match cjxl_status {
+                                        Ok(status) if status.success() => true,
+                                        Ok(status) => {
+                                            eprintln!("   ❌ cjxl failed with exit code: {:?}", status.code());
+                                            if let Some(mut stderr) = cjxl_proc.stderr {
+                                                use std::io::Read;
+                                                let mut err = String::new();
+                                                if stderr.read_to_string(&mut err).is_ok() && !err.is_empty() {
+                                                    eprintln!("      Error: {}", err.lines().next().unwrap_or("Unknown"));
+                                                }
+                                            }
+                                            false
+                                        }
+                                        Err(e) => {
+                                            eprintln!("   ❌ Failed to wait for cjxl: {}", e);
+                                            false
+                                        }
+                                    };
+                                    
+                                    // 构造结果
+                                    if magick_ok && cjxl_ok {
+                                        eprintln!("   🎉 FALLBACK SUCCESS: Pipeline completed successfully");
+                                        Ok(std::process::Output {
+                                            status: std::process::ExitStatus::default(),
+                                            stdout: Vec::new(),
+                                            stderr: Vec::new(),
+                                        })
+                                    } else {
+                                        eprintln!("   ❌ FALLBACK FAILED: Pipeline error (magick: {}, cjxl: {})", 
+                                            if magick_ok { "✓" } else { "✗" },
+                                            if cjxl_ok { "✓" } else { "✗" });
+                                        result
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("   ❌ FALLBACK ERROR: {}", e);
+                                    eprintln!("   ❌ Failed to start cjxl process: {}", e);
+                                    let _ = magick_proc.kill();
+                                    result
                                 }
                             }
-                            
-                            retry_result
                         } else {
                             eprintln!("   ❌ Failed to capture ImageMagick stdout");
+                            let _ = magick_proc.kill();
                             result
                         }
                     }
                     Err(e) => {
                         eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
+                        eprintln!("      💡 Install: brew install imagemagick");
                         result
                     }
                 }
