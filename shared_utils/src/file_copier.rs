@@ -138,6 +138,10 @@ pub fn copy_unsupported_files(
         match std::fs::copy(path, &dest) {
             Ok(_) => {
                 result.copied += 1;
+                
+                // 🔥 v7.4.6: 保留元数据（时间戳、权限、xattr）
+                crate::copy_metadata(path, &dest);
+                
                 // 🔥 响亮报告：复制了哪些文件
                 let ext = path.extension()
                     .and_then(|e| e.to_str())
@@ -193,6 +197,8 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
             if let Err(e) = std::fs::copy(xmp_path, &xmp_dest) {
                 eprintln!("⚠️ Failed to copy XMP sidecar: {}", e);
             } else {
+                // 🔥 v7.4.6: 保留XMP文件的元数据
+                crate::copy_metadata(xmp_path, Path::new(&xmp_dest));
                 println!("   📋 Copied XMP sidecar: {}", xmp_path.display());
             }
             return;
