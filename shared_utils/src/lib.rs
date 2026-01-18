@@ -59,6 +59,11 @@ pub mod types;
 pub mod app_error;
 // 🔥 v6.9.13: 文件复制模块（无遗漏设计）
 pub mod file_copier;
+// 🔥 v7.3.2: 智能文件复制模块（统一目录结构+元数据保留）
+pub mod smart_file_copier;
+
+// 🔥 v7.3.2: 进度条模式控制（解决并行输出混乱）
+pub mod progress_mode;
 
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
