@@ -227,6 +227,7 @@ fn main() -> anyhow::Result<()> {
             }
             let config = AutoConvertConfig {
                 output_dir: output.clone(),
+                base_dir: None,  // 🔥 v6.9.15: Will be set in auto_convert_directory
                 force,
                 delete_original: should_delete,
                 in_place,
@@ -518,8 +519,11 @@ fn print_recommendation_human(rec: &imgquality_hevc::UpgradeRecommendation) {
 }
 
 /// Auto-convert configuration
+#[derive(Clone)]  // 🔥 v6.9.15: 需要 Clone 以设置 base_dir
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
+    /// 🔥 v6.9.15: Base directory for preserving relative paths
+    base_dir: Option<PathBuf>,
     force: bool,
     delete_original: bool,
     in_place: bool,
@@ -587,6 +591,7 @@ fn auto_convert_single_file(
     let options = ConvertOptions {
         force: config.force,
         output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),  // 🔥 v6.9.15: 保留目录结构
         delete_original: config.delete_original,
         in_place: config.in_place,
         explore: config.explore,
@@ -757,6 +762,13 @@ fn auto_convert_directory(
             std::process::exit(1);
         }
     }
+    
+    // 🔥 v6.9.15: 克隆 config 并设置 base_dir 以保留目录结构
+    let mut config_with_base = config.clone();
+    if config_with_base.output_dir.is_some() {
+        config_with_base.base_dir = Some(input.to_path_buf());
+    }
+    let config = &config_with_base;
     
     let start_time = Instant::now();
     let image_extensions = ["png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif"];
