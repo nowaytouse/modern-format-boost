@@ -227,23 +227,16 @@ process_images() {
     
     draw_separator "Processing Images ($IMG_COUNT)"
     
-    local args=(auto --explore --match-quality --compress --apple-compat)
+    # 🔥 v6.9.16: 修复参数顺序，确保 --recursive 正确传递以保留目录结构
+    local args=(auto --explore --match-quality --compress --apple-compat --recursive)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place "$TARGET_DIR")
-    [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
-    [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=(--recursive) 
-    
-    # In adjacent mode, we rely on recursive directory walking now that create_structure exists
-    # Or rely on the tool's recursion if passed top level
-    
-    # Actually, simpler logic:
-    # Just pass the target directory to the tool.
-    # The tool handles recursion and directory structure if provided output dir.
     
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-         # Recursive is implied for inplace usually, but let's be explicit
-         args+=(--recursive)
+        args+=(--in-place "$TARGET_DIR")
+    else
+        # 相邻目录模式：必须先传目录，再传 --output
+        args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
     
     # Execution
@@ -257,13 +250,17 @@ process_videos() {
     
     draw_separator "Processing Videos ($VID_COUNT)"
     
-    local args=(auto --explore --match-quality --compress --apple-compat)
+    # 🔥 v6.9.16: 修复参数顺序，确保 --recursive 正确传递以保留目录结构
+    local args=(auto --explore --match-quality --compress --apple-compat --recursive)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place "$TARGET_DIR")
-    [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
-    # Add recursive
-    args+=(--recursive)
+    
+    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
+        args+=(--in-place "$TARGET_DIR")
+    else
+        # 相邻目录模式：必须先传目录，再传 --output
+        args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
+    fi
     
     # Execution
     "$VIDQUALITY_HEVC" "${args[@]}"
