@@ -31,9 +31,18 @@ Real encoding:      MS-SSIM=0.999, SSIM All=0.998 ✅ Complementary
 1. **ffmpeg libvmaf** → MS-SSIM (primary, luma quality)
 2. **Standalone vmaf** → MS-SSIM (fallback if ffmpeg fails)
 3. **SSIM All** → Y+U+V weighted (essential for chroma verification)
-4. **SSIM Y** → Last resort
+4. **SSIM Y** → Emergency fallback (rare, when SSIM All fails)
 
 **Why this works**: MS-SSIM excels at luma, SSIM All catches chroma issues MS-SSIM misses.
+
+**Why SSIM Y instead of PSNR for Layer 4?**
+- ✅ Consistent metric family (SSIM-based)
+- ✅ Better perceptual correlation than PSNR
+- ✅ SSIM Y is subset of SSIM All (degraded, not different)
+- ❌ PSNR is MSE-based, poor perceptual correlation
+- ❌ PSNR overly sensitive to brightness shifts (low PSNR but looks fine)
+
+Test evidence: Brightness shift → SSIM Y: 0.978 (good), PSNR: 28.31 dB (falsely low)
 
 ## Changes
 
@@ -73,6 +82,7 @@ ffmpeg -filters 2>&1 | grep libvmaf
 
 ## Validation Scripts
 - `scripts/final_quality_validation.sh` - Proves current design is optimal
+- `scripts/compare_ssim_vs_psnr.sh` - Why SSIM Y > PSNR as fallback
 - `scripts/verify_ffmpeg_libvmaf_multichannel.sh` - Multi-channel testing
 - `scripts/test_realistic_chroma_deg.sh` - Realistic chroma degradation
 
