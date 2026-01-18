@@ -113,7 +113,7 @@ clean_old_binaries() {
         while IFS= read -r -d '' old_binary; do
             echo -e "   ${RED}🗑️  Removing: ${DIM}$old_binary${NC}"
             rm -f "$old_binary"
-            ((cleaned++))
+            cleaned=$((cleaned + 1))
         done < <(find . -name "$binary_name" -type f -not -path "*/target/*" -print0 2>/dev/null)
     done
     
@@ -191,12 +191,13 @@ decide_build_action() {
 build_project() {
     local project_dir="$1"
     
-    if ! cargo build --release --manifest-path "$project_dir/Cargo.toml" 2>&1; then
+    # 🔥 修复：正确处理 cargo 输出和返回码
+    if cargo build --release --manifest-path "$project_dir/Cargo.toml"; then
+        return 0
+    else
         print_error "$project_dir"
         return 1
     fi
-    
-    return 0
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -324,7 +325,7 @@ main() {
         
         if [[ -z "$binary_name" ]]; then
             echo -e "${RED}❌ Unknown project: $proj_dir${NC}"
-            ((failed++))
+            failed=$((failed + 1))
             continue
         fi
         
@@ -335,14 +336,14 @@ main() {
 
         if [[ "$action" == "skip" ]]; then
             print_status "$proj_dir" "skip" ""
-            ((skipped++))
+            skipped=$((skipped + 1))
         else
             print_status "$proj_dir" "rebuild" "$reason"
             if build_project "$proj_dir"; then
                 print_success "$proj_dir"
-                ((rebuilt++))
+                rebuilt=$((rebuilt + 1))
             else
-                ((failed++))
+                failed=$((failed + 1))
             fi
         fi
     done

@@ -2,6 +2,52 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.4.8] - 2026-01-18
+
+### 🔧 Critical Fix - smart_build.sh Script
+
+**Problem:**
+- Script exited after compiling first project due to `set -e` + `((var++))` interaction
+- When variable is 0, `((var++))` returns 1, causing script to exit with `set -e`
+
+**Solution:**
+- Changed `((var++))` to `var=$((var + 1))` for all counters
+- Fixed `build_project()` function to properly handle cargo output
+
+**Test Results:**
+```bash
+✅ All 5 tools compile successfully
+✅ imgquality-hevc: 4.4M
+✅ vidquality-hevc: 2.9M  
+✅ imgquality-av1: 4.1M
+✅ vidquality-av1: 2.6M
+✅ xmp-merge: 1.4M
+```
+
+## [7.4.7] - 2026-01-18
+
+### ✅ Complete Metadata Preservation for ALL File Types
+
+**Non-Media Files Now Preserve Metadata:**
+- Text files (.txt, .md, .json, etc.)
+- Document files (.pdf, .doc, .psd, etc.)
+- Config files (.conf, .ini, .yaml, etc.)
+- XMP sidecar files (.xmp)
+
+**Implementation:**
+- Modified `copy_unsupported_files()` in `file_copier.rs`
+- Added `crate::copy_metadata()` after file copy
+- XMP sidecars also preserve metadata
+
+**Coverage:**
+- ✅ Media files: via `smart_file_copier`
+- ✅ Non-media files: via `copy_unsupported_files`
+- ✅ Directory metadata: via `preserve_directory_metadata`
+- ✅ XMP sidecars: metadata preserved
+
+**No Data Loss Design:**
+All file types now preserve complete metadata (timestamps, permissions, xattr).
+
 ## [7.4.6] - 2026-01-18
 
 ### ✅ Unified Directory Metadata Preservation
