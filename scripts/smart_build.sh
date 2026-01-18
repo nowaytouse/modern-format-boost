@@ -1,7 +1,9 @@
-#!/bin/bash
-# Smart Build System v7.4 - 智能选择性构建
+#!/usr/bin/env bash
+# Smart Build System v7.4.1 - 智能选择性构建
 # 
-# 🔥 v7.4 新特性：
+# 🔥 v7.4.1 修复：
+# - ✅ 兼容 macOS bash 3.x（移除关联数组）
+# 🔥 v7.4 特性：
 # - ✅ 选择性构建（仅构建需要的项目）
 # - ✅ 智能清理过时二进制
 # - ✅ 智能时间戳比对
@@ -27,18 +29,34 @@ DIM='\033[2m'
 NC='\033[0m'
 
 # ═══════════════════════════════════════════════════════════════
-# 项目配置
+# 项目配置 - 兼容 bash 3.x
 # ═══════════════════════════════════════════════════════════════
-declare -A ALL_PROJECTS=(
-    ["imgquality_hevc"]="imgquality-hevc"
-    ["vidquality_hevc"]="vidquality-hevc"
-    ["imgquality_av1"]="imgquality-av1"
-    ["vidquality_av1"]="vidquality-av1"
-    ["xmp_merger"]="xmp-merge"
+# 格式: "项目目录:二进制名称"
+ALL_PROJECTS=(
+    "imgquality_hevc:imgquality-hevc"
+    "vidquality_hevc:vidquality-hevc"
+    "imgquality_av1:imgquality-av1"
+    "vidquality_av1:vidquality-av1"
+    "xmp_merger:xmp-merge"
 )
 
 # 默认构建项目（HEVC工具）
 DEFAULT_PROJECTS=("imgquality_hevc" "vidquality_hevc")
+
+# 辅助函数：根据项目目录获取二进制名称
+get_binary_name() {
+    local project_dir="$1"
+    for entry in "${ALL_PROJECTS[@]}"; do
+        local dir="${entry%%:*}"
+        local bin="${entry##*:}"
+        if [[ "$dir" == "$project_dir" ]]; then
+            echo "$bin"
+            return 0
+        fi
+    done
+    echo ""
+    return 1
+}
 
 # CLI 参数
 FORCE_REBUILD=false
@@ -90,7 +108,8 @@ clean_old_binaries() {
     local cleaned=0
     
     # 查找并删除所有旧的二进制文件（不在 target/release 中的）
-    for binary_name in "${ALL_PROJECTS[@]}"; do
+    for entry in "${ALL_PROJECTS[@]}"; do
+        local binary_name="${entry##*:}"
         while IFS= read -r -d '' old_binary; do
             echo -e "   ${RED}🗑️  Removing: ${DIM}$old_binary${NC}"
             rm -f "$old_binary"
@@ -267,7 +286,10 @@ main() {
     # 确定要构建的项目
     local projects_to_build=()
     if [[ "$BUILD_ALL" == "true" ]]; then
-        projects_to_build=("${!ALL_PROJECTS[@]}")
+        # 构建所有项目 - 提取项目目录名
+        for entry in "${ALL_PROJECTS[@]}"; do
+            projects_to_build+=("${entry%%:*}")
+        done
     elif [[ ${#SELECTED_PROJECTS[@]} -gt 0 ]]; then
         projects_to_build=("${SELECTED_PROJECTS[@]}")
     else
@@ -297,7 +319,14 @@ main() {
     local failed=0
     
     for proj_dir in "${projects_to_build[@]}"; do
-        local binary_name="${ALL_PROJECTS[$proj_dir]}"
+        local binary_name
+        binary_name=$(get_binary_name "$proj_dir")
+        
+        if [[ -z "$binary_name" ]]; then
+            echo -e "${RED}❌ Unknown project: $proj_dir${NC}"
+            ((failed++))
+            continue
+        fi
         
         local decision
         decision=$(decide_build_action "$proj_dir" "$binary_name")
@@ -337,7 +366,11 @@ main() {
         echo ""
         echo -e "${DIM}Binary info:${NC}"
         for proj_dir in "${projects_to_build[@]}"; do
-            local binary_name="${ALL_PROJECTS[$proj_dir]}"
+            local binary_name
+            binary_name=$(get_binary_name "$proj_dir")
+            if [[ -z "$binary_name" ]]; then
+                continue
+            fi
             local binary_path="$proj_dir/target/release/$binary_name"
             if [[ -f "$binary_path" ]]; then
                 local size mtime
