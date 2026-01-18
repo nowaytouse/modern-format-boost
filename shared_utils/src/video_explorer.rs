@@ -7191,24 +7191,9 @@ fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     use std::process::Command;
 
-    // 🔥 v7.2: 优先使用独立 vmaf 工具（更可靠，绕过 ffmpeg libvmaf 依赖）
-    if crate::vmaf_standalone::is_vmaf_available() {
-        eprintln!("   📊 Using standalone vmaf tool (bypassing ffmpeg)...");
-        match crate::vmaf_standalone::calculate_ms_ssim_standalone(input, output) {
-            Ok(score) => {
-                eprintln!("   ✅ MS-SSIM score: {:.4}", score);
-                return Some(score);
-            }
-            Err(e) => {
-                eprintln!("   ⚠️  Standalone vmaf failed: {}", e);
-                eprintln!("   🔄 Falling back to ffmpeg libvmaf...");
-            }
-        }
-    }
-
     eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
 
-    // 🔥 使用 libvmaf 的 float_ms_ssim 功能
+    // 🔥 v7.3: 优先使用 ffmpeg libvmaf（现已安装）
     // 正确语法: feature='name=float_ms_ssim'
     let result = Command::new("ffmpeg")
         .arg("-i").arg(input)
@@ -7248,7 +7233,21 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
             eprintln!("   ⚠️  MS-SSIM calculated but failed to parse score");
         }
         Ok(_) => {
-            eprintln!("   ⚠️  MS-SSIM calculation failed (libvmaf not available?)");
+            eprintln!("   ⚠️  ffmpeg libvmaf MS-SSIM failed");
+            eprintln!("   🔄 Trying standalone vmaf tool as fallback...");
+            
+            // 🔥 v7.3: 回退到独立 vmaf 工具
+            if crate::vmaf_standalone::is_vmaf_available() {
+                match crate::vmaf_standalone::calculate_ms_ssim_standalone(input, output) {
+                    Ok(score) => {
+                        eprintln!("   ✅ Standalone vmaf MS-SSIM: {:.4}", score);
+                        return Some(score);
+                    }
+                    Err(e) => {
+                        eprintln!("   ⚠️  Standalone vmaf also failed: {}", e);
+                    }
+                }
+            }
         }
         Err(e) => {
             eprintln!("   ⚠️  ffmpeg MS-SSIM failed: {}", e);
