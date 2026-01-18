@@ -518,6 +518,7 @@ fn auto_convert_single_file(
     let options = ConvertOptions {
         force: config.force,
         output_dir: config.output_dir.map(|p| p.to_path_buf()),
+        base_dir: None,  // 🔥 v6.9.15: AV1 工具暂不支持目录结构保留
         delete_original: config.delete_original,
         in_place: config.in_place,
         explore: config.explore,
