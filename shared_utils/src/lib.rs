@@ -66,6 +66,15 @@ pub mod x265_encoder;
 // 🔥 v7.2: 独立 VMAF 工具集成（绕过 ffmpeg libvmaf 依赖）
 pub mod vmaf_standalone;
 
+// 🔥 Refactor: Shared CLI Runner
+pub mod cli_runner;
+
+// 🔥 Refactor: Shared Errors
+pub mod errors;
+
+// 🔥 Refactor: Shared Conversion Types
+pub mod conversion_types;
+
 pub use progress::{
     // 🔥 v5.31: 新增粗进度条
     CoarseProgressBar,

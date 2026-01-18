@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
 use std::path::PathBuf;
-use std::time::Instant;
+
 
 // 使用 lib crate
 use vidquality_hevc::{
@@ -10,7 +10,7 @@ use vidquality_hevc::{
 };
 
 // 🔥 使用 shared_utils 的统计报告功能（模块化）
-use shared_utils::{print_summary_report, BatchResult};
+
 
 #[derive(Parser)]
 #[command(name = "vidquality-hevc")]
@@ -147,6 +147,7 @@ fn main() -> anyhow::Result<()> {
                 // 🔥 MS-SSIM 验证参数
                 validate_ms_ssim: ms_ssim,
                 min_ms_ssim: ms_ssim_threshold,
+                min_ssim: 0.95,      // Output defaults to 0.95
                 force_ms_ssim_long,
                 ultimate_mode: ultimate,  // 🔥 v6.2: 极限探索模式
             };
@@ -184,162 +185,15 @@ fn main() -> anyhow::Result<()> {
             }
             info!("");
             
-            if input.is_dir() {
-                use walkdir::WalkDir;
-                let video_extensions = ["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts", "mts"];
-                
-                // 🔥 支持递归目录遍历
-                let walker = if recursive {
-                    WalkDir::new(&input).follow_links(true)
-                } else {
-                    WalkDir::new(&input).max_depth(1)
-                };
-                
-                let files: Vec<_> = walker
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .filter(|e| {
-                        if let Some(ext) = e.path().extension() {
-                            video_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
-                        } else {
-                            false
-                        }
-                    })
-                    .map(|e| e.path().to_path_buf())
-                    .collect();
-                
-                // 🔥 响亮报错：目录中没有视频文件
-                if files.is_empty() {
-                    anyhow::bail!(
-                        "❌ 目录中没有找到视频文件: {}\n\
-                         💡 支持的视频格式: {}\n\
-                         💡 如果要处理图像，请使用 imgquality 工具",
-                        input.display(),
-                        video_extensions.join(", ")
-                    );
-                }
-                
-                info!("📂 Found {} video files to process", files.len());
-                
-                // 🔥 使用 shared_utils 的 BatchResult 进行统计（模块化）
-                let start_time = Instant::now();
-                let mut batch_result = BatchResult::new();
-                let mut total_input_bytes: u64 = 0;
-                let mut total_output_bytes: u64 = 0;
-                
-                for file in &files {
-                    match auto_convert(file, &config) {
-                        Ok(result) => {
-                            // 🔥 修复：区分跳过和真正成功的转换
-                            if result.output_size == 0 && result.output_path.is_empty() {
-                                // 跳过的文件（已是现代编码）
-                                info!("⏭️ {} → SKIP ({:.1}%)", 
-                                    file.file_name().unwrap_or_default().to_string_lossy(),
-                                    result.size_ratio * 100.0
-                                );
-                                batch_result.skip();
-                            } else {
-                                // 真正成功的转换
-                                info!("✅ {} → {} ({:.1}%)", 
-                                    file.file_name().unwrap_or_default().to_string_lossy(),
-                                    result.output_path,
-                                    result.size_ratio * 100.0
-                                );
-                                batch_result.success();
-                                total_input_bytes += result.input_size;
-                                total_output_bytes += result.output_size;
-                            }
-                        }
-                        Err(e) => {
-                            // 🔥 修复：将"Output exists"错误视为跳过而非失败
-                            let error_msg = e.to_string();
-                            if error_msg.contains("Output exists:") {
-                                info!("⏭️ {} → SKIP (output exists)", 
-                                    file.file_name().unwrap_or_default().to_string_lossy()
-                                );
-                                batch_result.skip();
-                            } else {
-                                info!("❌ {} failed: {}", file.display(), e);
-                                batch_result.fail(file.clone(), e.to_string());
-                                
-                                // 🔥 v6.9.14: 无遗漏设计 - 失败的文件也复制原始文件
-                                if let Some(ref out_dir) = output {
-                                    let file_name = file.file_name().unwrap_or_default();
-                                    let dest = out_dir.join(file_name);
-                                    if !dest.exists() {
-                                        if let Err(copy_err) = std::fs::copy(file, &dest) {
-                                            eprintln!("❌ Failed to copy original: {}", copy_err);
-                                        } else {
-                                            info!("📋 Copied original (conversion failed): {}", file.display());
-                                            let _ = shared_utils::merge_xmp_for_copied_file(file, &dest);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 🔥 使用 shared_utils 的统一报告格式（模块化）
-                print_summary_report(
-                    &batch_result,
-                    start_time.elapsed(),
-                    total_input_bytes,
-                    total_output_bytes,
-                    "HEVC Video",
-                );
-                
-                // 🔥 v6.9.13: 无遗漏设计 - 复制不支持的文件
-                if let Some(ref output_dir) = output {
-                    info!("\n📦 Copying unsupported files...");
-                    let copy_result = shared_utils::copy_unsupported_files(&input, output_dir, recursive);
-                    if copy_result.copied > 0 {
-                        info!("📦 Copied {} unsupported files", copy_result.copied);
-                    }
-                    if copy_result.failed > 0 {
-                        eprintln!("❌ Failed to copy {} files", copy_result.failed);
-                    }
-                    
-                    // 🔥 验证输出完整性
-                    info!("\n🔍 Verifying output completeness...");
-                    let verify = shared_utils::verify_output_completeness(&input, output_dir, recursive);
-                    info!("{}", verify.message);
-                    if !verify.passed {
-                        eprintln!("⚠️  Some files may be missing from output!");
-                    }
-                }
-            } else {
-                // 🔥 单文件处理：先检查是否是视频文件
-                let video_extensions = ["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts", "mts"];
-                let ext = input.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                    .unwrap_or_default();
-                
-                if !video_extensions.contains(&ext.as_str()) {
-                    anyhow::bail!(
-                        "❌ 不是视频文件: {}\n\
-                         💡 文件扩展名: .{}\n\
-                         💡 支持的视频格式: {}\n\
-                         💡 如果要处理图像，请使用 imgquality 工具",
-                        input.display(),
-                        ext,
-                        video_extensions.join(", ")
-                    );
-                }
-                
-                let result = auto_convert(&input, &config)?;
-                
-                info!("");
-                info!("📊 Conversion Summary:");
-                info!("   Input:  {} ({} bytes)", result.input_path, result.input_size);
-                info!("   Output: {} ({} bytes)", result.output_path, result.output_size);
-                info!("   Ratio:  {:.1}%", result.size_ratio * 100.0);
-                if result.exploration_attempts > 0 {
-                    info!("   🔍 Explored {} CRF values, final: CRF {:.1}", result.exploration_attempts, result.final_crf);
-                }
-            }
+            shared_utils::cli_runner::run_auto_command(
+                shared_utils::cli_runner::CliRunnerConfig {
+                    input: input.clone(),
+                    output: output.clone(),
+                    recursive,
+                    label: "HEVC Video".to_string(),
+                },
+                |file| auto_convert(file, &config).map_err(|e| e.into())
+            )?;
         }
 
         Commands::Simple { input, output, lossless: _ } => {

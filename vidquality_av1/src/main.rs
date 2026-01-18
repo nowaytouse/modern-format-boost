@@ -1,11 +1,11 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use tracing::info;
 use std::path::PathBuf;
-use std::time::Instant;
+
 use vidquality_av1::{detect_video, auto_convert, determine_strategy, ConversionConfig};
 
 // 🔥 使用 shared_utils 的统计报告功能（模块化）
-use shared_utils::{print_summary_report, BatchResult};
+
 
 #[derive(Parser)]
 #[command(name = "vidquality")]
@@ -154,6 +154,9 @@ fn main() -> anyhow::Result<()> {
                 require_compression: compress, // 🔥 v4.6
                 apple_compat,         // 🍎 v4.15
                 use_gpu: !cpu,        // 🔥 v4.15: CPU mode = no GPU
+                // HEVC flags (unused in AV1)
+                force_ms_ssim_long: false,
+                ultimate_mode: false,
             };
             
             info!("🎬 Auto Mode Conversion (AV1)");
@@ -182,130 +185,15 @@ fn main() -> anyhow::Result<()> {
             }
             info!("");
             
-            if input.is_dir() {
-                // Directory processing
-                use walkdir::WalkDir;
-                let video_extensions = ["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts", "mts"];
-                
-                // 🔥 支持递归目录遍历
-                let walker = if recursive {
-                    WalkDir::new(&input).follow_links(true)
-                } else {
-                    WalkDir::new(&input).max_depth(1)
-                };
-                
-                let files: Vec<_> = walker
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .filter(|e| {
-                        if let Some(ext) = e.path().extension() {
-                            video_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
-                        } else {
-                            false
-                        }
-                    })
-                    .map(|e| e.path().to_path_buf())
-                    .collect();
-                
-                // 🔥 响亮报错：目录中没有视频文件
-                if files.is_empty() {
-                    anyhow::bail!(
-                        "❌ 目录中没有找到视频文件: {}\n\
-                         💡 支持的视频格式: {}\n\
-                         💡 如果要处理图像，请使用 imgquality 工具",
-                        input.display(),
-                        video_extensions.join(", ")
-                    );
-                }
-                
-                info!("📂 Found {} video files to process", files.len());
-                
-                // 🔥 使用 shared_utils 的 BatchResult 进行统计（模块化）
-                let start_time = Instant::now();
-                let mut batch_result = BatchResult::new();
-                let mut total_input_bytes: u64 = 0;
-                let mut total_output_bytes: u64 = 0;
-                
-                for file in &files {
-                    match auto_convert(file, &config) {
-                        Ok(result) => {
-                            // 🔥 修复：区分跳过和真正成功的转换
-                            if result.output_size == 0 && result.output_path.is_empty() {
-                                // 跳过的文件（已是现代编码）
-                                info!("⏭️ {} → SKIP ({:.1}%)", 
-                                    file.file_name().unwrap_or_default().to_string_lossy(),
-                                    result.size_ratio * 100.0
-                                );
-                                batch_result.skip();
-                            } else {
-                                // 真正成功的转换
-                                info!("✅ {} → {} ({:.1}%)", 
-                                    file.file_name().unwrap_or_default().to_string_lossy(),
-                                    result.output_path,
-                                    result.size_ratio * 100.0
-                                );
-                                batch_result.success();
-                                total_input_bytes += result.input_size;
-                                total_output_bytes += result.output_size;
-                            }
-                        }
-                        Err(e) => {
-                            // 🔥 修复：将"Output exists"错误视为跳过而非失败
-                            let error_msg = e.to_string();
-                            if error_msg.contains("Output exists:") {
-                                info!("⏭️ {} → SKIP (output exists)", 
-                                    file.file_name().unwrap_or_default().to_string_lossy()
-                                );
-                                batch_result.skip();
-                            } else {
-                                info!("❌ {} failed: {}", file.display(), e);
-                                batch_result.fail(file.clone(), e.to_string());
-                            }
-                        }
-                    }
-                }
-                
-                // 🔥 使用 shared_utils 的统一报告格式（模块化）
-                print_summary_report(
-                    &batch_result,
-                    start_time.elapsed(),
-                    total_input_bytes,
-                    total_output_bytes,
-                    "AV1 Video",
-                );
-            } else {
-                // 🔥 单文件处理：先检查是否是视频文件
-                let video_extensions = ["mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "mpg", "mpeg", "ts", "mts"];
-                let ext = input.extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase())
-                    .unwrap_or_default();
-                
-                if !video_extensions.contains(&ext.as_str()) {
-                    anyhow::bail!(
-                        "❌ 不是视频文件: {}\n\
-                         💡 文件扩展名: .{}\n\
-                         💡 支持的视频格式: {}\n\
-                         💡 如果要处理图像，请使用 imgquality 工具",
-                        input.display(),
-                        ext,
-                        video_extensions.join(", ")
-                    );
-                }
-                
-                // Single file processing
-                let result = auto_convert(&input, &config)?;
-                
-                info!("");
-                info!("📊 Conversion Summary:");
-                info!("   Input:  {} ({} bytes)", result.input_path, result.input_size);
-                info!("   Output: {} ({} bytes)", result.output_path, result.output_size);
-                info!("   Ratio:  {:.1}%", result.size_ratio * 100.0);
-                if result.exploration_attempts > 0 {
-                    info!("   🔍 Explored {} CRF values, final: CRF {}", result.exploration_attempts, result.final_crf);
-                }
-            }
+            shared_utils::cli_runner::run_auto_command(
+                shared_utils::cli_runner::CliRunnerConfig {
+                    input: input.clone(),
+                    output: output.clone(),
+                    recursive,
+                    label: "AV1 Video".to_string(),
+                },
+                |file| auto_convert(file, &config).map_err(|e| e.into())
+            )?;
         }
 
         Commands::Simple { input, output, lossless: _ } => {

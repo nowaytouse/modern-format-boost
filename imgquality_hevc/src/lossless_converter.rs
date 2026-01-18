@@ -131,7 +131,7 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
-                eprintln!("   ⚠️  CJXL DECODE FAILED: {}", stderr.lines().next().unwrap_or("Unknown error"));
+                eprintln!("   ⚠️  CJXL ENCODING FAILED: {}", stderr.lines().next().unwrap_or("Unknown error"));
                 eprintln!("   � FALLBACK: GUsing ImageMagick pipeline to re-encode PNG");
                 eprintln!("   📋 Reason: PNG contains incompatible metadata/encoding (will be preserved)");
                 

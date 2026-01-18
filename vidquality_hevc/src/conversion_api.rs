@@ -7,128 +7,14 @@
 
 use crate::{VidQualityError, Result};
 use crate::detection_api::{detect_video, VideoDetectionResult, CompressionType};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+
+// 🔥 v9.2: Use shared types
+use shared_utils::conversion_types::{
+    TargetVideoFormat, ConversionStrategy, ConversionConfig, ConversionOutput
+};
+use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
-
-/// Target video format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TargetVideoFormat {
-    /// HEVC Lossless in MKV container - for archival
-    HevcLosslessMkv,
-    /// HEVC in MP4 container - for compression
-    HevcMp4,
-    /// Skip conversion (already modern/efficient)
-    Skip,
-}
-
-impl TargetVideoFormat {
-    pub fn extension(&self) -> &str {
-        match self {
-            TargetVideoFormat::HevcLosslessMkv => "mkv",
-            TargetVideoFormat::HevcMp4 => "mp4",
-            TargetVideoFormat::Skip => "",
-        }
-    }
-    
-    pub fn as_str(&self) -> &str {
-        match self {
-            TargetVideoFormat::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
-            TargetVideoFormat::HevcMp4 => "HEVC MP4 (High Quality)",
-            TargetVideoFormat::Skip => "Skip",
-        }
-    }
-}
-
-/// Conversion strategy result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversionStrategy {
-    pub target: TargetVideoFormat,
-    pub reason: String,
-    pub command: String,
-    pub preserve_audio: bool,
-    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
-    pub crf: f32,
-    pub lossless: bool,
-}
-
-/// Conversion configuration
-#[derive(Debug, Clone)]
-pub struct ConversionConfig {
-    pub output_dir: Option<PathBuf>,
-    pub force: bool,
-    pub delete_original: bool,
-    pub preserve_metadata: bool,
-    pub explore_smaller: bool,
-    pub use_lossless: bool,
-    /// Match input video quality level (auto-calculate CRF based on input bitrate)
-    pub match_quality: bool,
-    /// In-place conversion: convert and delete original file
-    pub in_place: bool,
-    /// 🍎 Apple compatibility mode: Convert non-Apple-compatible modern codecs to HEVC
-    pub apple_compat: bool,
-    /// 🔥 v4.5: Require compression - output must be smaller than input
-    /// Use with --explore --match-quality for precise quality match + guaranteed compression
-    pub require_compression: bool,
-    /// 🔥 v4.15: Use GPU acceleration (default: true)
-    /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
-    /// VideoToolbox hardware encoding caps at ~0.95 SSIM
-    pub use_gpu: bool,
-    /// 🔥 v5.75: Enable VMAF verification
-    pub validate_ms_ssim: bool,
-    /// 🔥 v5.75: Minimum VMAF score threshold
-    pub min_ms_ssim: f64,
-    /// 🔥 v5.75: Force VMAF verification for long videos (>5min)
-    pub force_ms_ssim_long: bool,
-    /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates
-    pub ultimate_mode: bool,
-}
-
-impl Default for ConversionConfig {
-    fn default() -> Self {
-        Self {
-            output_dir: None,
-            force: false,
-            delete_original: false,
-            preserve_metadata: true,
-            explore_smaller: false,
-            use_lossless: false,
-            match_quality: false,
-            in_place: false,
-            apple_compat: false,
-            require_compression: false,
-            use_gpu: true,  // 🔥 v4.15: GPU by default
-            validate_ms_ssim: false,  // 🔥 v5.75: MS-SSIM 默认关闭
-            min_ms_ssim: 0.90,
-            force_ms_ssim_long: false,
-            ultimate_mode: false,  // 🔥 v6.2: 默认关闭极限模式
-        }
-    }
-}
-
-impl ConversionConfig {
-    /// Check if original should be deleted (either via delete_original or in_place)
-    pub fn should_delete_original(&self) -> bool {
-        self.delete_original || self.in_place
-    }
-}
-
-/// Conversion output
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversionOutput {
-    pub input_path: String,
-    pub output_path: String,
-    pub strategy: ConversionStrategy,
-    pub input_size: u64,
-    pub output_size: u64,
-    pub size_ratio: f64,
-    pub success: bool,
-    pub message: String,
-    /// 🔥 v3.4: Changed from u8 to f32 for sub-integer precision (0.5 step)
-    pub final_crf: f32,
-    pub exploration_attempts: u8,
-}
 
 /// Determine conversion strategy based on detection result (for auto mode)
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
@@ -341,6 +227,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         output_dir.join(format!("{}.{}", stem, target_ext))
     };
     
+    // 🔥 检测输入输出路径冲突（作为安全检查）
+    shared_utils::path_validator::check_input_output_conflict(input, &output_path)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+        
     // 🔥 修复：输出文件已存在时返回跳过状态而非错误
     if output_path.exists() && !config.force {
         info!("⏭️ Output exists, skipping: {}", output_path.display());
@@ -585,6 +475,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             }
         }
         TargetVideoFormat::Skip => unreachable!(),
+        _ => unreachable!("HEVC tool should not return AV1/FFV1 target"),
     };
     
     // 🔥 v6.9: MS-SSIM 目标阈值检查 - 即使 SSIM 通过，MS-SSIM 不达标也要拒绝
@@ -1343,3 +1234,5 @@ mod tests {
         assert_ne!(apple.target, TargetVideoFormat::Skip);
     }
 }
+
+

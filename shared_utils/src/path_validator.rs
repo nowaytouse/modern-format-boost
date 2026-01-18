@@ -41,6 +41,11 @@ pub enum PathValidationError {
     /// Path contains null byte
     /// 路径包含空字节
     NullByte(String),
+    /// Input and output paths are the same
+    /// 输入和输出路径相同
+    InputOutputConflict {
+        path: String,
+    },
 }
 
 impl fmt::Display for PathValidationError {
@@ -55,6 +60,9 @@ impl fmt::Display for PathValidationError {
             }
             PathValidationError::NullByte(path) => {
                 write!(f, "❌ PATH SECURITY ERROR: Null byte found in path: {}", path)
+            }
+            PathValidationError::InputOutputConflict { path } => {
+                write!(f, "❌ PATH CONFLICT ERROR: Input and output paths are identical: {}", path)
             }
         }
     }
@@ -155,6 +163,32 @@ pub fn validate_paths(paths: &[&Path]) -> Result<(), PathValidationError> {
     for path in paths {
         validate_path(path)?;
     }
+    Ok(())
+}
+
+/// Check if input and output paths conflict (are the same file)
+/// 检查输入和输出路径是否冲突（是否为同一文件）
+pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), PathValidationError> {
+    let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+    
+    // 如果输出路径存在，获取规范路径；否则使用原始路径（尽力而为）
+    let output_canonical = if output.exists() {
+        output.canonicalize().unwrap_or_else(|_| output.to_path_buf())
+    } else {
+        // 尝试解析绝对路径即使文件不存在
+        if output.is_relative() {
+            std::env::current_dir().unwrap_or_default().join(output)
+        } else {
+            output.to_path_buf()
+        }
+    };
+    
+    if input_canonical == output_canonical {
+        return Err(PathValidationError::InputOutputConflict {
+            path: input.display().to_string(),
+        });
+    }
+    
     Ok(())
 }
 
