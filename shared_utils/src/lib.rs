@@ -338,3 +338,4 @@ pub use file_copier::{
     CopyResult, FileStats, VerifyResult,
     SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, SIDECAR_EXTENSIONS,
 };
+pub use smart_file_copier::{smart_copy_with_structure, copy_on_skip_or_fail};

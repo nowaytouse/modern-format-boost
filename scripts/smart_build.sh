@@ -1,17 +1,15 @@
 #!/bin/bash
-# Smart Build System for Modern Format Boost
-# v7.3.4: 智能编译 + 自动清理旧二进制
-#
-# 功能增强：
-# - ✅ 时间戳比对，只在源代码更新时重新编译
-# - ✅ 版本号识别，防止版本混乱
-# - ✅ 自动清理旧二进制文件（防止使用过时版本）
-# - ✅ 响亮报错，完全透明
-# - ✅ 彩色输出，清晰易读
+# Smart Build System v7.4 - 智能选择性构建
+# 
+# 🔥 v7.4 新特性：
+# - ✅ 选择性构建（仅构建需要的项目）
+# - ✅ 智能清理过时二进制
+# - ✅ 智能时间戳比对
+# - ✅ 强制重新构建选项
+# - ✅ 准确的路径处理
 
 set -e
 
-# 获取脚本所在目录和项目根目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
@@ -24,62 +22,40 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
 # ═══════════════════════════════════════════════════════════════
-# 项目配置: "项目目录:二进制名称"
+# 项目配置
 # ═══════════════════════════════════════════════════════════════
-PROJECTS=(
-    "vidquality_hevc:vidquality-hevc"
-    "imgquality_hevc:imgquality-hevc"
-    "vidquality_av1:vidquality-av1"
-    "imgquality_av1:imgquality-av1"
-    "xmp_merger:xmp-merge"
+declare -A ALL_PROJECTS=(
+    ["imgquality_hevc"]="imgquality-hevc"
+    ["vidquality_hevc"]="vidquality-hevc"
+    ["imgquality_av1"]="imgquality-av1"
+    ["vidquality_av1"]="vidquality-av1"
+    ["xmp_merger"]="xmp-merge"
 )
 
-# 共享库目录
-SHARED_UTILS_DIR="shared_utils"
+# 默认构建项目（HEVC工具）
+DEFAULT_PROJECTS=("imgquality_hevc" "vidquality_hevc")
 
 # CLI 参数
 FORCE_REBUILD=false
 CLEAN_BUILD=false
 VERBOSE=false
-CLEAN_OLD_BINARIES=true  # 🔥 v7.3.4: 默认清理旧二进制
-
-# ═══════════════════════════════════════════════════════════════
-# 🔥 v7.3.4: 清理旧二进制文件
-# ═══════════════════════════════════════════════════════════════
-clean_old_binaries() {
-    echo -e "${YELLOW}🧹 Cleaning old binaries...${NC}"
-    
-    local cleaned=0
-    
-    # 查找并删除所有旧的二进制文件（不在 target/release 中的）
-    for proj_config in "${PROJECTS[@]}"; do
-        local binary_name="${proj_config##*:}"
-        
-        # 查找旧二进制（排除 target/ 目录）
-        while IFS= read -r -d '' old_binary; do
-            echo -e "   ${RED}🗑️  Removing old binary: ${DIM}$old_binary${NC}"
-            rm -f "$old_binary"
-            ((cleaned++))
-        done < <(find . -name "$binary_name" -type f -not -path "*/target/*" -print0 2>/dev/null)
-    done
-    
-    if [ $cleaned -eq 0 ]; then
-        echo -e "   ${GREEN}✓${NC} ${DIM}No old binaries found${NC}"
-    else
-        echo -e "   ${GREEN}✅ Cleaned $cleaned old binary file(s)${NC}"
-    fi
-    echo ""
-}
+CLEAN_OLD_BINARIES=true
+BUILD_ALL=false
+SELECTED_PROJECTS=()
 
 # ═══════════════════════════════════════════════════════════════
 # 输出函数
 # ═══════════════════════════════════════════════════════════════
+print_header() {
+    echo ""
+    echo -e "${CYAN}${BOLD}🔧 Smart Build System v7.4${NC}"
+    echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
 
 print_status() {
     local project="$1"
@@ -94,33 +70,50 @@ print_status() {
 }
 
 print_success() {
-    local project="$1"
-    echo -e "${GREEN}✅${NC} ${BOLD}$project${NC} - compiled"
+    echo -e "${GREEN}✅${NC} ${BOLD}$1${NC} - compiled"
 }
 
 print_error() {
-    local message="$1"
     echo ""
     echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${RED}❌ COMPILATION FAILED: $message${NC}"
+    echo -e "${RED}❌ COMPILATION FAILED: $1${NC}"
     echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
-print_header() {
+# ═══════════════════════════════════════════════════════════════
+# 🔥 v7.4: 智能清理过时二进制
+# ═══════════════════════════════════════════════════════════════
+clean_old_binaries() {
+    echo -e "${YELLOW}🧹 Cleaning old binaries...${NC}"
+    
+    local cleaned=0
+    
+    # 查找并删除所有旧的二进制文件（不在 target/release 中的）
+    for binary_name in "${ALL_PROJECTS[@]}"; do
+        while IFS= read -r -d '' old_binary; do
+            echo -e "   ${RED}🗑️  Removing: ${DIM}$old_binary${NC}"
+            rm -f "$old_binary"
+            ((cleaned++))
+        done < <(find . -name "$binary_name" -type f -not -path "*/target/*" -print0 2>/dev/null)
+    done
+    
+    if [ $cleaned -eq 0 ]; then
+        echo -e "   ${GREEN}✓${NC} ${DIM}No old binaries found${NC}"
+    else
+        echo -e "   ${GREEN}✅ Cleaned $cleaned old binary file(s)${NC}"
+    fi
     echo ""
-    echo -e "${CYAN}${BOLD}🔧 Smart Build System v7.3.4${NC}"
-    echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
 # ═══════════════════════════════════════════════════════════════
 # 时间戳函数
 # ═══════════════════════════════════════════════════════════════
-
 get_newest_source_mtime() {
     local project_dir="$1"
     local newest=0
     
+    # 项目源代码
     if [[ -d "$project_dir/src" ]]; then
         while IFS= read -r -d '' file; do
             local mtime
@@ -135,19 +128,13 @@ get_newest_source_mtime() {
         [[ $mtime -gt $newest ]] && newest=$mtime
     fi
 
-    # 包含 shared_utils
-    if [[ -d "$SHARED_UTILS_DIR/src" ]]; then
+    # shared_utils 依赖
+    if [[ -d "shared_utils/src" ]]; then
         while IFS= read -r -d '' file; do
             local mtime
             mtime=$(stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || echo 0)
             [[ $mtime -gt $newest ]] && newest=$mtime
-        done < <(find "$SHARED_UTILS_DIR/src" -type f -name "*.rs" -print0 2>/dev/null)
-    fi
-    
-    if [[ -f "$SHARED_UTILS_DIR/Cargo.toml" ]]; then
-        local mtime
-        mtime=$(stat -f %m "$SHARED_UTILS_DIR/Cargo.toml" 2>/dev/null || stat -c %Y "$SHARED_UTILS_DIR/Cargo.toml" 2>/dev/null || echo 0)
-        [[ $mtime -gt $newest ]] && newest=$mtime
+        done < <(find "shared_utils/src" -type f -name "*.rs" -print0 2>/dev/null)
     fi
     
     echo "$newest"
@@ -155,75 +142,26 @@ get_newest_source_mtime() {
 
 get_binary_mtime() {
     local binary_path="$1"
-    
-    if [[ ! -f "$binary_path" ]]; then
-        echo "0"
-        return
-    fi
-    
+    [[ ! -f "$binary_path" ]] && echo "0" && return
     stat -f %m "$binary_path" 2>/dev/null || stat -c %Y "$binary_path" 2>/dev/null || echo 0
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 版本函数
-# ═══════════════════════════════════════════════════════════════
-
-get_cargo_version() {
-    local cargo_toml="$1"
-    grep -m1 '^version' "$cargo_toml" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "unknown"
-}
-
-get_binary_version() {
-    local binary_path="$1"
-    
-    if [[ ! -x "$binary_path" ]]; then
-        echo "missing"
-        return
-    fi
-    
-    local version
-    version=$(timeout 2 "$binary_path" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "unknown")
-    echo "$version"
 }
 
 # ═══════════════════════════════════════════════════════════════
 # 编译决策
 # ═══════════════════════════════════════════════════════════════
-
 decide_build_action() {
     local project_dir="$1"
     local binary_name="$2"
     local binary_path="$project_dir/target/release/$binary_name"
     
-    if [[ "$FORCE_REBUILD" == "true" ]]; then
-        echo "rebuild:force"
-        return
-    fi
-    
-    if [[ ! -f "$binary_path" ]]; then
-        echo "rebuild:binary-missing"
-        return
-    fi
+    [[ "$FORCE_REBUILD" == "true" ]] && echo "rebuild:force" && return
+    [[ ! -f "$binary_path" ]] && echo "rebuild:binary-missing" && return
     
     local source_mtime binary_mtime
     source_mtime=$(get_newest_source_mtime "$project_dir")
     binary_mtime=$(get_binary_mtime "$binary_path")
     
-    if [[ $source_mtime -gt $binary_mtime ]]; then
-        echo "rebuild:source-newer"
-        return
-    fi
-    
-    local cargo_version binary_version
-    cargo_version=$(get_cargo_version "$project_dir/Cargo.toml")
-    binary_version=$(get_binary_version "$binary_path")
-    
-    if [[ "$cargo_version" != "unknown" && "$binary_version" != "unknown" && "$binary_version" != "missing" ]]; then
-        if [[ "$cargo_version" != "$binary_version" ]]; then
-            echo "rebuild:version-mismatch"
-            return
-        fi
-    fi
+    [[ $source_mtime -gt $binary_mtime ]] && echo "rebuild:source-newer" && return
     
     echo "skip"
 }
@@ -231,7 +169,6 @@ decide_build_action() {
 # ═══════════════════════════════════════════════════════════════
 # 编译函数
 # ═══════════════════════════════════════════════════════════════
-
 build_project() {
     local project_dir="$1"
     
@@ -246,7 +183,6 @@ build_project() {
 # ═══════════════════════════════════════════════════════════════
 # CLI 参数解析
 # ═══════════════════════════════════════════════════════════════
-
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -266,15 +202,51 @@ parse_args() {
                 CLEAN_OLD_BINARIES=false
                 shift
                 ;;
+            --all|-a)
+                BUILD_ALL=true
+                shift
+                ;;
+            --hevc)
+                SELECTED_PROJECTS+=("imgquality_hevc" "vidquality_hevc")
+                shift
+                ;;
+            --av1)
+                SELECTED_PROJECTS+=("imgquality_av1" "vidquality_av1")
+                shift
+                ;;
+            --img)
+                SELECTED_PROJECTS+=("imgquality_hevc" "imgquality_av1")
+                shift
+                ;;
+            --vid)
+                SELECTED_PROJECTS+=("vidquality_hevc" "vidquality_av1")
+                shift
+                ;;
+            --xmp)
+                SELECTED_PROJECTS+=("xmp_merger")
+                shift
+                ;;
             --help|-h)
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
                 echo "Options:"
-                echo "  --force, -f       Force rebuild all projects"
+                echo "  --force, -f       Force rebuild all selected projects"
                 echo "  --clean, -c       Clean build artifacts before compiling"
                 echo "  --verbose, -v     Show detailed output"
                 echo "  --no-clean-old    Don't clean old binary files"
+                echo "  --all, -a         Build all projects"
+                echo "  --hevc            Build HEVC tools (default)"
+                echo "  --av1             Build AV1 tools"
+                echo "  --img             Build image tools"
+                echo "  --vid             Build video tools"
+                echo "  --xmp             Build XMP merger"
                 echo "  --help, -h        Show this help"
+                echo ""
+                echo "Examples:"
+                echo "  $0                # Build HEVC tools (default)"
+                echo "  $0 --all          # Build all projects"
+                echo "  $0 --hevc --force # Force rebuild HEVC tools"
+                echo "  $0 --img --av1    # Build AV1 image tools"
                 exit 0
                 ;;
             *)
@@ -288,12 +260,24 @@ parse_args() {
 # ═══════════════════════════════════════════════════════════════
 # 主函数
 # ═══════════════════════════════════════════════════════════════
-
 main() {
     parse_args "$@"
     print_header
     
-    # 🔥 v7.3.4: 清理旧二进制文件
+    # 确定要构建的项目
+    local projects_to_build=()
+    if [[ "$BUILD_ALL" == "true" ]]; then
+        projects_to_build=("${!ALL_PROJECTS[@]}")
+    elif [[ ${#SELECTED_PROJECTS[@]} -gt 0 ]]; then
+        projects_to_build=("${SELECTED_PROJECTS[@]}")
+    else
+        projects_to_build=("${DEFAULT_PROJECTS[@]}")
+    fi
+    
+    echo -e "${CYAN}📦 Building:${NC} ${BOLD}${projects_to_build[*]}${NC}"
+    echo ""
+    
+    # 清理旧二进制
     if [[ "$CLEAN_OLD_BINARIES" == "true" ]]; then
         clean_old_binaries
     fi
@@ -301,11 +285,10 @@ main() {
     # 清理构建产物
     if [[ "$CLEAN_BUILD" == "true" ]]; then
         echo -e "${YELLOW}🧹 Cleaning build artifacts...${NC}"
-        for proj_config in "${PROJECTS[@]}"; do
-            local proj_dir="${proj_config%%:*}"
+        for proj_dir in "${projects_to_build[@]}"; do
             rm -rf "$proj_dir/target/release/deps" 2>/dev/null || true
         done
-        rm -rf "$SHARED_UTILS_DIR/target/release/deps" 2>/dev/null || true
+        rm -rf "shared_utils/target/release/deps" 2>/dev/null || true
         echo ""
     fi
     
@@ -313,9 +296,8 @@ main() {
     local skipped=0
     local failed=0
     
-    for proj_config in "${PROJECTS[@]}"; do
-        local proj_dir="${proj_config%%:*}"
-        local binary_name="${proj_config##*:}"
+    for proj_dir in "${projects_to_build[@]}"; do
+        local binary_name="${ALL_PROJECTS[$proj_dir]}"
         
         local decision
         decision=$(decide_build_action "$proj_dir" "$binary_name")
@@ -354,9 +336,8 @@ main() {
     if [[ "$VERBOSE" == "true" ]] || [[ $rebuilt -gt 0 ]]; then
         echo ""
         echo -e "${DIM}Binary info:${NC}"
-        for proj_config in "${PROJECTS[@]}"; do
-            local proj_dir="${proj_config%%:*}"
-            local binary_name="${proj_config##*:}"
+        for proj_dir in "${projects_to_build[@]}"; do
+            local binary_name="${ALL_PROJECTS[$proj_dir]}"
             local binary_path="$proj_dir/target/release/$binary_name"
             if [[ -f "$binary_path" ]]; then
                 local size mtime

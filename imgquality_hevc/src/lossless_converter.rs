@@ -59,45 +59,18 @@ fn determine_output(input: &Path, extension: &str, options: &ConvertOptions) -> 
 /// 
 /// # Returns
 /// 复制后的目标路径（如果复制成功），否则 None
+/// 
+/// 🔥 v7.4.1: 使用统一的 smart_file_copier 模块
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
-    // 只在相邻目录模式下复制（output_dir 不为 None）
-    if let Some(ref out_dir) = options.output_dir {
-        // 🔥 v6.9.15: 保留目录结构
-        let dest = if let Some(ref base) = options.base_dir {
-            // 计算相对路径
-            let rel_path = input.strip_prefix(base).unwrap_or(input);
-            let dest_path = out_dir.join(rel_path);
-            
-            // 确保目标目录存在
-            if let Some(parent) = dest_path.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            dest_path
-        } else {
-            // 没有 base_dir，使用文件名（向后兼容）
-            let file_name = input.file_name().unwrap_or_default();
-            out_dir.join(file_name)
-        };
-        
-        if !dest.exists() {
-            if let Ok(_) = fs::copy(input, &dest) {
-                // 🔥 v6.9.15: 保留元数据（时间戳等）+ 合并 XMP
-                shared_utils::copy_metadata(input, &dest);
-                
-                if options.verbose {
-                    eprintln!("   📋 Copied original to output dir: {}", dest.display());
-                }
-                return Some(dest);
-            } else {
-                eprintln!("   ⚠️ Failed to copy original to output dir");
-            }
-        } else {
-            // 🔥 目标已存在，但仍需确保 XMP 已合并和元数据已保留
-            shared_utils::copy_metadata(input, &dest);
-            return Some(dest);
-        }
+    match shared_utils::copy_on_skip_or_fail(
+        input,
+        options.output_dir.as_deref(),
+        options.base_dir.as_deref(),
+        options.verbose
+    ) {
+        Ok(result) => result,
+        Err(_) => None, // 错误已经在 copy_on_skip_or_fail 中响亮报告
     }
-    None
 }
 
 /// Convert static image to JXL with specified distance/quality
@@ -960,22 +933,13 @@ pub fn convert_to_hevc_mp4_matched(
         }
         
         // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
-        // 🔥 v6.9.11: 同时合并XMP边车文件
-        if let Some(ref out_dir) = options.output_dir {
-            let file_name = input.file_name().unwrap_or_default();
-            let dest = out_dir.join(file_name);
-            if !dest.exists() {
-                if let Ok(_) = fs::copy(input, &dest) {
-                    eprintln!("   📋 Copied original to output dir: {}", dest.display());
-                    // 🔥 v6.9.11: 合并XMP边车
-                    match shared_utils::merge_xmp_for_copied_file(input, &dest) {
-                        Ok(true) => {},
-                        Ok(false) => {},
-                        Err(e) => eprintln!("⚠️ Failed to merge XMP sidecar: {}", e),
-                    }
-                }
-            }
-        }
+        // 🔥 v7.4.1: 使用统一的 smart_file_copier 模块
+        let _ = shared_utils::copy_on_skip_or_fail(
+            input,
+            options.output_dir.as_deref(),
+            options.base_dir.as_deref(),
+            false  // 不需要 verbose，因为这是失败场景
+        );
         
         // 返回跳过状态，不删除原文件
         return Ok(ConversionResult {
