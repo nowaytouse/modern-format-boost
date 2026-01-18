@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "vidquality_av1",
+    "vidquality_hevc",
+    "imgquality_hevc",
+    "imgquality_av1",
+    "shared_utils", 
+    "xmp_merger" 
+]
+resolver = "2"
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1

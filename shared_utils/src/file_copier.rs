@@ -16,9 +16,9 @@ pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "tiff", "tif", "heic", "heif", "avif", "bmp"
 ];
 
-/// 支持的视频格式（会被转换，不需要复制）
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv"
+    "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", 
+    "mpg", "mpeg", "ts", "mts"
 ];
 
 /// 会被合并的边车格式（不需要复制）
