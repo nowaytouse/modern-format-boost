@@ -700,6 +700,19 @@ fn auto_convert_directory(
     let total = files.len();
     if total == 0 {
         println!("📂 No image files found in {}", input.display());
+        
+        // 🔥 v7.4.9: 即使没有文件，也要保留目录元数据
+        if let Some(output_dir) = config.output_dir.as_ref() {
+            if let Some(ref base_dir) = config.base_dir {
+                println!("\n📁 Preserving directory metadata...");
+                if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
+                    eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
+                } else {
+                    println!("✅ Directory metadata preserved");
+                }
+            }
+        }
+        
         return Ok(());
     }
     
