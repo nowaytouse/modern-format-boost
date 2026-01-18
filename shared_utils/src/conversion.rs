@@ -206,6 +206,9 @@ pub struct ConvertOptions {
     pub force: bool,
     /// Output directory (None = same as input)
     pub output_dir: Option<PathBuf>,
+    /// 🔥 v6.9.15: Base directory for preserving relative paths
+    /// When set, output files will preserve their directory structure relative to this base
+    pub base_dir: Option<PathBuf>,
     /// Delete original after successful conversion
     pub delete_original: bool,
     /// In-place conversion: convert and delete original (effectively "replace")
@@ -246,6 +249,7 @@ impl Default for ConvertOptions {
         Self {
             force: false,
             output_dir: None,
+            base_dir: None,  // 🔥 v6.9.15
             delete_original: false,
             in_place: false,
             explore: false,
@@ -314,6 +318,10 @@ impl ConvertOptions {
 
 /// Determine output path and ensure directory exists
 /// Returns Err if input and output would be the same file
+/// 
+/// 🔥 v6.9.15: 保留目录结构
+/// - 如果指定 output_dir，保留输入文件相对于基准目录的路径结构
+/// - 需要配合 determine_output_path_with_base 使用
 pub fn determine_output_path(input: &Path, extension: &str, output_dir: &Option<PathBuf>) -> Result<PathBuf, String> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
     
@@ -322,6 +330,74 @@ pub fn determine_output_path(input: &Path, extension: &str, output_dir: &Option<
             // Ensure output directory exists
             let _ = fs::create_dir_all(dir);
             dir.join(format!("{}.{}", stem, extension))
+        }
+        None => input.with_extension(extension),
+    };
+    
+    // 🔥 检测输入输出路径冲突
+    let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
+    let output_canonical = if output.exists() {
+        output.canonicalize().unwrap_or_else(|_| output.clone())
+    } else {
+        output.clone()
+    };
+    
+    if input_canonical == output_canonical || input == output {
+        return Err(format!(
+            "❌ 输入和输出路径相同: {}\n\
+             💡 建议:\n\
+             - 使用 --output/-o 指定不同的输出目录\n\
+             - 或使用 --in-place 参数进行原地替换（会删除原文件）",
+            input.display()
+        ));
+    }
+    
+    // Ensure output directory exists
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    
+    Ok(output)
+}
+
+/// 🔥 v6.9.15: 保留目录结构的输出路径计算
+/// 
+/// # Arguments
+/// * `input` - 输入文件路径
+/// * `base_dir` - 基准目录（通常是用户指定的输入目录）
+/// * `extension` - 输出文件扩展名
+/// * `output_dir` - 输出目录
+/// 
+/// # Returns
+/// 保留相对路径结构的输出路径
+/// 
+/// # Example
+/// ```
+/// // 输入: /data/photos/2024/img.jpg
+/// // 基准: /data/photos
+/// // 输出: /output
+/// // 结果: /output/2024/img.jxl
+/// ```
+pub fn determine_output_path_with_base(
+    input: &Path, 
+    base_dir: &Path,
+    extension: &str, 
+    output_dir: &Option<PathBuf>
+) -> Result<PathBuf, String> {
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    
+    let output = match output_dir {
+        Some(dir) => {
+            // 🔥 计算相对路径，保留目录结构
+            let rel_path = input.strip_prefix(base_dir)
+                .unwrap_or(input)
+                .parent()
+                .unwrap_or(Path::new(""));
+            
+            let out_subdir = dir.join(rel_path);
+            let _ = fs::create_dir_all(&out_subdir);
+            
+            out_subdir.join(format!("{}.{}", stem, extension))
         }
         None => input.with_extension(extension),
     };

@@ -14,7 +14,33 @@ pub use shared_utils::conversion::{
     is_already_processed, mark_as_processed, clear_processed_list,
     load_processed_list, save_processed_list,
     format_size_change,
+    determine_output_path_with_base,  // 🔥 v6.9.15: 保留目录结构
 };
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v6.9.15: 辅助函数 - 统一输出路径计算（保留目录结构）
+// ═══════════════════════════════════════════════════════════════
+
+/// 🔥 v6.9.15: 统一的输出路径计算，自动选择是否保留目录结构
+/// 
+/// # Arguments
+/// * `input` - 输入文件路径
+/// * `extension` - 输出文件扩展名
+/// * `options` - 转换选项（包含 output_dir 和 base_dir）
+/// 
+/// # Returns
+/// 输出文件路径，如果设置了 base_dir 则保留目录结构
+fn determine_output(input: &Path, extension: &str, options: &ConvertOptions) -> Result<std::path::PathBuf> {
+    let result = if let (Some(ref base), Some(ref out)) = (&options.base_dir, &options.output_dir) {
+        // 🔥 保留目录结构模式
+        determine_output_path_with_base(input, base, extension, &Some(out.clone()))
+    } else {
+        // 🔥 传统模式（不保留目录结构）
+        shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
+    };
+    
+    result.map_err(ImgQualityError::ConversionError)
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.9.14: 辅助函数 - 跳过时复制原始文件到输出目录
