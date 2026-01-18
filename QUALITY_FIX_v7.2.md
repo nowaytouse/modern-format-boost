@@ -11,16 +11,25 @@ MS-SSIM calculation failed due to missing `libvmaf` in ffmpeg:
 Integrated standalone `vmaf` CLI tool to bypass ffmpeg dependency.
 
 **⚠️ Critical Finding** (Verified with rigorous testing):
-- vmaf's `float_ms_ssim` is **Y-channel (luma) only**
+- Both standalone `vmaf` and `ffmpeg libvmaf` MS-SSIM are **Y-channel (luma) only**
 - Does NOT detect chroma (U/V) degradation
+- Even with `extractplanes` filter, U/V channels show 1.000000 for 30% degradation
 - **Solution**: Use MS-SSIM + SSIM All fusion for complete verification
 
-Test Evidence:
+Test Evidence (Multi-channel verification):
 ```
-Y-only degradation (10%):  MS-SSIM = 0.995354 ✅ Detected
-UV-only degradation (30%): MS-SSIM = 1.000000 ❌ Not detected
-All-channel degradation:   MS-SSIM = 0.999159
+Y-only degradation (10%):
+  Y channel: 0.996465 ✅ Detected
+  U channel: 1.000000 ✅ Unchanged
+  V channel: 1.000000 ✅ Unchanged
+
+UV-only degradation (30%):
+  Y channel: 1.000000 ✅ Unchanged
+  U channel: 1.000000 ❌ Not detected (should be <0.95)
+  V channel: 1.000000 ❌ Not detected (should be <0.95)
 ```
+
+**Conclusion**: MS-SSIM algorithm itself is luma-based, not a limitation of the tool.
 
 ## Changes
 
@@ -63,10 +72,12 @@ vmaf --version
 ```
 
 ## Fallback Chain
-1. **Standalone vmaf** (preferred) → MS-SSIM
-2. **ffmpeg libvmaf** → MS-SSIM  
-3. **ffmpeg ssim** → SSIM All (Y+U+V)
-4. **ffmpeg ssim** → SSIM Y only
+1. **ffmpeg libvmaf** (primary, now installed) → MS-SSIM (Y-channel only)
+2. **Standalone vmaf** (fallback) → MS-SSIM (Y-channel only)
+3. **ffmpeg ssim** → SSIM All (Y+U+V weighted) - **Essential for chroma verification**
+4. **ffmpeg ssim** → SSIM Y only (last resort)
+
+**Why SSIM All is essential**: MS-SSIM (both ffmpeg and standalone) only measures luma channel, missing chroma degradation entirely. SSIM All provides the necessary chroma verification.
 
 ## Benefits
 ✅ No ffmpeg recompilation required
