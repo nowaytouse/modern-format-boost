@@ -2,7 +2,26 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.4.9)
+## 🔥 Latest Updates (v7.5.0)
+
+### File Processing Optimization - Small Files First
+- **✅ Intelligent Sorting**: Files processed by size (small → large)
+- **✅ Quick Feedback**: Small files finish fast, see progress immediately
+- **✅ Early Detection**: Problems found sooner with small files
+- **✅ No Blocking**: Large files don't hold up the queue
+- **✅ Modular Design**: `file_sorter.rs` module for easy maintenance
+
+**Benefits:**
+```
+Processing order:
+  1. tiny.jpg (10KB)    ← Fast feedback
+  2. small.png (100KB)  ← Quick wins
+  3. medium.gif (1MB)   ← Steady progress
+  4. large.mp4 (100MB)  ← No blocking
+  5. huge.mov (1GB)     ← Processed last
+```
+
+### Previous (v7.4.9)
 
 ### Output Directory Timestamp Preservation
 - **✅ Root Directory**: Output directory inherits timestamp from source

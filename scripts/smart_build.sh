@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Smart Build System v7.4.1 - 智能选择性构建
+# Smart Build System v7.5 - 智能选择性构建
 # 
+# 🔥 v7.5 新增：
+# - ✅ 编译后时间戳验证（确保二进制确实更新）
+# - ✅ 多次验证失败自动强制重新编译
+# - ✅ 响亮报错机制（编译异常必须通知用户）
 # 🔥 v7.4.1 修复：
 # - ✅ 兼容 macOS bash 3.x（移除关联数组）
 # 🔥 v7.4 特性：
@@ -66,12 +70,16 @@ CLEAN_OLD_BINARIES=true
 BUILD_ALL=false
 SELECTED_PROJECTS=()
 
+# 🔥 v7.5: 时间戳验证配置
+VERIFY_TIMESTAMPS=true
+MAX_STALE_RETRIES=2  # 最多允许2次时间戳验证失败，第3次强制重新编译
+
 # ═══════════════════════════════════════════════════════════════
 # 输出函数
 # ═══════════════════════════════════════════════════════════════
 print_header() {
     echo ""
-    echo -e "${CYAN}${BOLD}🔧 Smart Build System v7.4${NC}"
+    echo -e "${CYAN}${BOLD}🔧 Smart Build System v7.5${NC}"
     echo -e "${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
@@ -171,10 +179,13 @@ get_binary_mtime() {
 decide_build_action() {
     local project_dir="$1"
     local binary_name="$2"
-    local binary_path="$project_dir/target/release/$binary_name"
+    
+    # 🔥 v7.5: 使用 get_binary_path 获取正确的二进制路径
+    local binary_path
+    binary_path=$(get_binary_path "$project_dir" "$binary_name")
     
     [[ "$FORCE_REBUILD" == "true" ]] && echo "rebuild:force" && return
-    [[ ! -f "$binary_path" ]] && echo "rebuild:binary-missing" && return
+    [[ -z "$binary_path" ]] && echo "rebuild:binary-missing" && return
     
     local source_mtime binary_mtime
     source_mtime=$(get_newest_source_mtime "$project_dir")
@@ -186,18 +197,100 @@ decide_build_action() {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# 🔥 v7.5: 时间戳验证函数
+# ═══════════════════════════════════════════════════════════════
+get_binary_path() {
+    local project_dir="$1"
+    local binary_name="$2"
+    
+    # 🔥 v7.5: Cargo workspace 的二进制文件在根目录的 target/release
+    # 优先检查根目录，然后检查项目目录
+    if [[ -f "target/release/$binary_name" ]]; then
+        echo "target/release/$binary_name"
+    elif [[ -f "$project_dir/target/release/$binary_name" ]]; then
+        echo "$project_dir/target/release/$binary_name"
+    else
+        echo ""
+    fi
+}
+
+verify_binary_timestamp() {
+    local binary_path="$1"
+    local compile_start_time="$2"
+    
+    if [[ ! -f "$binary_path" ]]; then
+        echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED: Binary not found${NC}"
+        echo -e "${DIM}   Expected: $binary_path${NC}"
+        return 1
+    fi
+    
+    local binary_mtime
+    binary_mtime=$(get_binary_mtime "$binary_path")
+    
+    # 二进制文件的修改时间应该 >= 编译开始时间
+    if [[ $binary_mtime -lt $compile_start_time ]]; then
+        echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED${NC}"
+        echo -e "${DIM}   Binary mtime: $(date -r $binary_mtime '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @$binary_mtime '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
+        echo -e "${DIM}   Compile start: $(date -r $compile_start_time '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @$compile_start_time '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
+        echo -e "${YELLOW}   ⚠️  Binary timestamp is older than compile time!${NC}"
+        return 1
+    fi
+    
+    return 0
+}
+
+# ═══════════════════════════════════════════════════════════════
 # 编译函数
 # ═══════════════════════════════════════════════════════════════
 build_project() {
     local project_dir="$1"
+    local binary_name="$2"
+    local retry_count="${3:-0}"
+    
+    # 记录编译开始时间
+    local compile_start_time
+    compile_start_time=$(date +%s)
     
     # 🔥 修复：正确处理 cargo 输出和返回码
-    if cargo build --release --manifest-path "$project_dir/Cargo.toml"; then
-        return 0
-    else
+    if ! cargo build --release --manifest-path "$project_dir/Cargo.toml"; then
         print_error "$project_dir"
         return 1
     fi
+    
+    # 🔥 v7.5: 编译后验证时间戳
+    if [[ "$VERIFY_TIMESTAMPS" == "true" ]]; then
+        local binary_path
+        binary_path=$(get_binary_path "$project_dir" "$binary_name")
+        
+        if [[ -z "$binary_path" ]]; then
+            echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED: Binary not found${NC}"
+            echo -e "${DIM}   Project: $project_dir, Binary: $binary_name${NC}"
+            return 1
+        fi
+        
+        # 等待1秒确保文件系统同步
+        sleep 1
+        
+        if ! verify_binary_timestamp "$binary_path" "$compile_start_time"; then
+            # 时间戳验证失败
+            if [[ $retry_count -lt $MAX_STALE_RETRIES ]]; then
+                echo -e "${YELLOW}🔄 Retry $((retry_count + 1))/$MAX_STALE_RETRIES: Rebuilding with clean...${NC}"
+                # 清理并重试
+                rm -rf "$project_dir/target/release/deps" 2>/dev/null || true
+                rm -rf "$project_dir/target/release/.fingerprint" 2>/dev/null || true
+                rm -rf "target/release/deps" 2>/dev/null || true
+                rm -rf "target/release/.fingerprint" 2>/dev/null || true
+                build_project "$project_dir" "$binary_name" $((retry_count + 1))
+                return $?
+            else
+                echo -e "${RED}❌ CRITICAL: Timestamp verification failed after $MAX_STALE_RETRIES retries${NC}"
+                echo -e "${YELLOW}💡 Suggestion: Try 'cargo clean' or check file system issues${NC}"
+                return 1
+            fi
+        fi
+    fi
+    
+    return 0
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -246,6 +339,10 @@ parse_args() {
                 SELECTED_PROJECTS+=("xmp_merger")
                 shift
                 ;;
+            --no-verify-timestamps)
+                VERIFY_TIMESTAMPS=false
+                shift
+                ;;
             --help|-h)
                 echo "Usage: $0 [OPTIONS]"
                 echo ""
@@ -260,6 +357,7 @@ parse_args() {
                 echo "  --img             Build image tools"
                 echo "  --vid             Build video tools"
                 echo "  --xmp             Build XMP merger"
+                echo "  --no-verify-timestamps  Disable timestamp verification after build"
                 echo "  --help, -h        Show this help"
                 echo ""
                 echo "Examples:"
@@ -339,7 +437,7 @@ main() {
             skipped=$((skipped + 1))
         else
             print_status "$proj_dir" "rebuild" "$reason"
-            if build_project "$proj_dir"; then
+            if build_project "$proj_dir" "$binary_name"; then
                 print_success "$proj_dir"
                 rebuilt=$((rebuilt + 1))
             else
@@ -372,8 +470,9 @@ main() {
             if [[ -z "$binary_name" ]]; then
                 continue
             fi
-            local binary_path="$proj_dir/target/release/$binary_name"
-            if [[ -f "$binary_path" ]]; then
+            local binary_path
+            binary_path=$(get_binary_path "$proj_dir" "$binary_name")
+            if [[ -n "$binary_path" ]] && [[ -f "$binary_path" ]]; then
                 local size mtime
                 size=$(ls -lh "$binary_path" | awk '{print $5}')
                 mtime=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$binary_path" 2>/dev/null || stat -c "%y" "$binary_path" 2>/dev/null | cut -d. -f1)

@@ -5,7 +5,6 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use log::{info, warn, error};
-use walkdir::WalkDir;
 
 /// Trait to unify result reporting from different tools
 pub trait CliProcessingResult {
@@ -62,27 +61,11 @@ where
     let input = &config.input;
     let recursive = config.recursive;
 
-    // 1. Find files
-    let walker = if recursive {
-        WalkDir::new(input).follow_links(true)
-    } else {
-        WalkDir::new(input).max_depth(1)
-    };
-
-    let files: Vec<_> = walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            if let Some(ext) = e.path().extension() {
-                let ext_str = ext.to_string_lossy().to_lowercase();
-                SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_str.as_str())
-            } else {
-                false
-            }
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
+    // 🔥 v7.5: 使用文件排序功能，优先处理小文件
+    // - 快速看到进度反馈
+    // - 小文件处理快，可以更早发现问题
+    // - 大文件留到后面，避免长时间卡住
+    let files = crate::collect_files_small_first(input, SUPPORTED_VIDEO_EXTENSIONS, recursive);
 
     if files.is_empty() {
         anyhow::bail!(
