@@ -931,7 +931,7 @@ fn auto_convert_directory(
             eprintln!("⚠️  Some files may be missing from output!");
         }
         
-        // 🔥 v7.4: 保留目录元数据（时间戳、权限）
+        // 🔥 v7.4.9: 保留目录元数据（时间戳、权限、xattr）
         if let Some(ref base_dir) = config.base_dir {
             println!("\n📁 Preserving directory metadata...");
             if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {

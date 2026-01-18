@@ -2,6 +2,33 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.4.9] - 2026-01-18
+
+### 🔥 Output Directory Timestamp Preservation
+
+#### Fixed: Output Directory Inherits Source Timestamp
+**Problem:**
+- Output directory (e.g., `all_optimized`) had current timestamp instead of source timestamp
+- Only subdirectories preserved timestamps, not the root output directory
+
+**Solution:**
+- Modified `preserve_directory_metadata()` to collect root directory metadata
+- Added `create_dir_all` to ensure target directories exist before setting metadata
+- Root output directory now inherits timestamp from source directory
+
+**Test Results:**
+```bash
+Source:      /Downloads/all (2020-01-01 00:00)
+Output:      /Downloads/all_optimized (2020-01-01 00:00) ✅
+```
+
+**What's Preserved:**
+- ✅ Root output directory timestamp (NEW)
+- ✅ All subdirectory timestamps
+- ✅ Directory permissions
+- ✅ Extended attributes (xattr)
+- ✅ macOS creation time
+
 ## [7.4.8] - 2026-01-18
 
 ### 🔥 Critical Fixes - Complete Coverage

@@ -2,7 +2,14 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.4.8)
+## 🔥 Latest Updates (v7.4.9)
+
+### Output Directory Timestamp Preservation
+- **✅ Root Directory**: Output directory inherits timestamp from source
+- **✅ All Subdirectories**: Timestamps preserved recursively
+- **Example**: `all/` (2020-01-01) → `all_optimized/` (2020-01-01) ✅
+
+### Previous (v7.4.8)
 
 ### Complete Metadata & Structure Preservation - All Scenarios
 - **✅ All 4 Tools**: imgquality/vidquality HEVC/AV1 preserve directory metadata
@@ -330,7 +337,14 @@ Double-click `Modern Format Boost.app` for drag-and-drop conversion:
 
 **v6.9.17 新增**: GPU 编码失败时自动降级到 x265 CLI CPU 编码
 
-## 🔥 最新更新 (v7.4.8)
+## 🔥 最新更新 (v7.4.9)
+
+### 输出目录时间戳保留
+- **✅ 根目录**: 输出目录继承源目录时间戳
+- **✅ 所有子目录**: 递归保留时间戳
+- **示例**: `all/` (2020-01-01) → `all_optimized/` (2020-01-01) ✅
+
+### 之前版本 (v7.4.8)
 
 ### 完整的元数据和结构保留 - 所有场景
 - **✅ 全部4个工具**: imgquality/vidquality HEVC/AV1 保留目录元数据
