@@ -132,8 +132,15 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
+            let base_dir = if recursive {
+                if input.is_dir() { Some(input.clone()) } else { input.parent().map(|p| p.to_path_buf()) }
+            } else {
+                input.parent().map(|p| p.to_path_buf())
+            };
+
             let config = ConversionConfig {
                 output_dir: output.clone(),
+                base_dir,
                 force,
                 delete_original,
                 preserve_metadata: true,
@@ -143,13 +150,12 @@ fn main() -> anyhow::Result<()> {
                 in_place,
                 apple_compat,
                 require_compression: compress,
-                use_gpu: true,  // 🔥 v6.2: Always use GPU for coarse search, CPU for fine search
-                // 🔥 MS-SSIM 验证参数
+                use_gpu: true,
                 validate_ms_ssim: ms_ssim,
                 min_ms_ssim: ms_ssim_threshold,
-                min_ssim: 0.95,      // Output defaults to 0.95
+                min_ssim: 0.95,
                 force_ms_ssim_long,
-                ultimate_mode: ultimate,  // 🔥 v6.2: 极限探索模式
+                ultimate_mode: ultimate,
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");

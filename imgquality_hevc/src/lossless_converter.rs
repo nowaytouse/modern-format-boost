@@ -136,7 +136,7 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
             });
         }
     }
-    let output = get_output_path(input, "jxl", &options.output_dir)?;
+    let output = get_output_path(input, "jxl", options)?;
     
     // Ensure output directory exists
     if let Some(parent) = output.parent() {
@@ -396,7 +396,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "jxl", &options.output_dir)?;
+    let output = get_output_path(input, "jxl", options)?;
     
     // Check if output already exists
     if output.exists() && !options.force {
@@ -492,7 +492,7 @@ pub fn convert_to_avif(input: &Path, quality: Option<u8>, options: &ConvertOptio
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "avif", &options.output_dir)?;
+    let output = get_output_path(input, "avif", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -584,7 +584,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     let input_size = fs::metadata(input)?.len();
     // 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式（苹果原生格式，与 hvc1 标签配合更好）
     let ext = if options.apple_compat { "mov" } else { "mp4" };
-    let output = get_output_path(input, ext, &options.output_dir)?;
+    let output = get_output_path(input, ext, options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -692,7 +692,7 @@ pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Resul
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "avif", &options.output_dir)?;
+    let output = get_output_path(input, "avif", options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -794,7 +794,7 @@ pub fn convert_to_hevc_mp4_matched(
     let input_size = fs::metadata(input)?.len();
     // 🔥 v6.4.8: 苹果兼容模式使用 MOV 容器格式
     let ext = if options.apple_compat { "mov" } else { "mp4" };
-    let output = get_output_path(input, ext, &options.output_dir)?;
+    let output = get_output_path(input, ext, options)?;
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -1119,7 +1119,7 @@ pub fn convert_to_jxl_matched(
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "jxl", &options.output_dir)?;
+    let output = get_output_path(input, "jxl", options)?;
     
     // Ensure output directory exists
     if let Some(parent) = output.parent() {
@@ -1254,7 +1254,7 @@ pub fn convert_to_hevc_mkv_lossless(input: &Path, options: &ConvertOptions) -> R
     }
     
     let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mkv", &options.output_dir)?;  // MKV for lossless
+    let output = get_output_path(input, "mkv", options)?;  // MKV for lossless
     
     if output.exists() && !options.force {
         return Ok(ConversionResult {
@@ -1502,9 +1502,15 @@ fn prepare_input_for_cjxl(input: &Path) -> Result<(std::path::PathBuf, Option<st
 }
 
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
-fn get_output_path(input: &Path, extension: &str, output_dir: &Option<std::path::PathBuf>) -> Result<std::path::PathBuf> {
-    shared_utils::conversion::determine_output_path(input, extension, output_dir)
-        .map_err(ImgQualityError::ConversionError)
+/// Wrapper for shared_utils::determine_output_path with imgquality error type
+fn get_output_path(input: &Path, extension: &str, options: &ConvertOptions) -> Result<std::path::PathBuf> {
+    if let Some(ref base) = options.base_dir {
+        shared_utils::conversion::determine_output_path_with_base(input, base, extension, &options.output_dir)
+            .map_err(ImgQualityError::ConversionError)
+    } else {
+        shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
+            .map_err(ImgQualityError::ConversionError)
+    }
 }
 
 /// 🍎 Apple 兼容模式：将现代动态图片转换为 GIF
@@ -1563,7 +1569,7 @@ pub fn convert_to_gif_apple_compat(
         });
     }
     
-    let output = get_output_path(input, "gif", &options.output_dir)?;
+    let output = get_output_path(input, "gif", options)?;
     
     // Ensure output directory exists
     if let Some(parent) = output.parent() {
