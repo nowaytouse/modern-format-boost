@@ -315,6 +315,8 @@ fn test_explore_result_fields() {
         input_video_stream_size: 200000,  // 🔥 v6.7
         output_video_stream_size: 180000, // 🔥 v6.7
         container_overhead: 6000,         // 🔥 v6.7
+        ms_ssim_passed: None,
+        ms_ssim_score: None,
     };
     
     assert!((result.optimal_crf - 22.0).abs() < 0.01);

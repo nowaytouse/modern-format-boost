@@ -19,37 +19,20 @@ pub mod conversion_api;
 pub mod ffprobe;
 pub mod codecs;
 
-use thiserror::Error;
+
 
 // Re-exports
 pub use detection_api::{detect_video, VideoDetectionResult, DetectedCodec, CompressionType, ColorSpace};
 pub use conversion_api::{
-    simple_convert, auto_convert, determine_strategy, determine_strategy_with_apple_compat, ConversionConfig, ConversionStrategy, ConversionOutput, TargetVideoFormat
+    simple_convert, auto_convert, determine_strategy, determine_strategy_with_apple_compat
+};
+// 🔥 v9.2: Use shared types
+pub use shared_utils::conversion_types::{
+    ConversionConfig, ConversionStrategy, ConversionOutput, TargetVideoFormat
 };
 pub use ffprobe::{probe_video, FFprobeResult};
 
-#[derive(Error, Debug)]
-pub enum VidQualityError {
-    #[error("Video format not supported: {0}")]
-    UnsupportedFormat(String),
+// 🔥 v9.1: Use shared error types
+pub use shared_utils::errors::{VidQualityError, Result};
 
-    #[error("Failed to read video: {0}")]
-    VideoReadError(String),
 
-    #[error("FFprobe failed: {0}")]
-    FFprobeError(String),
-
-    #[error("FFmpeg failed: {0}")]
-    FFmpegError(String),
-
-    #[error("Conversion failed: {0}")]
-    ConversionError(String),
-
-    #[error("External tool not found: {0}")]
-    ToolNotFound(String),
-
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-}
-
-pub type Result<T> = std::result::Result<T, VidQualityError>;

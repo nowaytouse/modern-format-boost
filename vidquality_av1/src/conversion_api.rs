@@ -7,124 +7,14 @@
 
 use crate::{VidQualityError, Result};
 use crate::detection_api::{detect_video, VideoDetectionResult, CompressionType};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+
+// 🔥 v9.2: Use shared types
+use shared_utils::conversion_types::{
+    TargetVideoFormat, ConversionStrategy, ConversionConfig, ConversionOutput
+};
+use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
-
-/// Target video format
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TargetVideoFormat {
-    /// FFV1 in MKV container - for archival
-    Ffv1Mkv,
-    /// AV1 in MP4 container - for compression
-    Av1Mp4,
-    /// Skip conversion (already modern/efficient)
-    Skip,
-}
-
-impl TargetVideoFormat {
-    pub fn extension(&self) -> &str {
-        match self {
-            TargetVideoFormat::Ffv1Mkv => "mkv",
-            TargetVideoFormat::Av1Mp4 => "mp4",
-            TargetVideoFormat::Skip => "",
-        }
-    }
-    
-    pub fn as_str(&self) -> &str {
-        match self {
-            TargetVideoFormat::Ffv1Mkv => "FFV1 MKV (Archival)",
-            TargetVideoFormat::Av1Mp4 => "AV1 MP4 (High Quality)",
-            TargetVideoFormat::Skip => "Skip",
-        }
-    }
-}
-
-/// Conversion strategy result
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversionStrategy {
-    pub target: TargetVideoFormat,
-    pub reason: String,
-    pub command: String,
-    pub preserve_audio: bool,
-    pub crf: u8,
-    pub lossless: bool, // New field for mathematical lossless
-}
-
-/// Conversion configuration
-#[derive(Debug, Clone)]
-pub struct ConversionConfig {
-    pub output_dir: Option<PathBuf>,
-    pub force: bool,
-    pub delete_original: bool,
-    pub preserve_metadata: bool,
-    /// Enable size exploration (try higher CRF if output > input)
-    pub explore_smaller: bool,
-    /// Use mathematical lossless AV1 (⚠️ VERY SLOW)
-    pub use_lossless: bool,
-    /// Match input video quality level (auto-calculate CRF based on input bitrate)
-    pub match_quality: bool,
-    /// In-place conversion: convert and delete original file
-    pub in_place: bool,
-    /// 🔥 v3.5: Minimum SSIM threshold for quality validation (default: 0.95)
-    pub min_ssim: f64,
-    /// 🔥 v3.5: Enable VMAF validation (slower but more accurate)
-    pub validate_ms_ssim: bool,
-    /// 🔥 v3.5: Minimum VMAF threshold (default: 85.0)
-    pub min_ms_ssim: f64,
-    /// 🔥 v4.6: Require compression - output must be smaller than input
-    pub require_compression: bool,
-    /// 🍎 v4.15: Apple compatibility mode (warn about AV1 not being Apple-native)
-    pub apple_compat: bool,
-    /// 🔥 v4.15: Use GPU acceleration (default: true for AV1 it's CPU anyway)
-    pub use_gpu: bool,
-}
-
-impl Default for ConversionConfig {
-    fn default() -> Self {
-        Self {
-            output_dir: None,
-            force: false,
-            delete_original: false,
-            preserve_metadata: true,
-            explore_smaller: false,
-            use_lossless: false,
-            match_quality: false,
-            in_place: false,
-            min_ssim: 0.95,      // 🔥 v3.5: Default SSIM threshold
-            validate_ms_ssim: false, // 🔥 v3.5: VMAF disabled by default (slower)
-            min_ms_ssim: 0.90,      // 🔥 v3.5: Default VMAF threshold
-            require_compression: false, // 🔥 v4.6
-            apple_compat: false, // 🍎 v4.15
-            use_gpu: true,       // 🔥 v4.15: GPU by default (AV1 uses CPU anyway)
-        }
-    }
-}
-
-impl ConversionConfig {
-    /// Check if original should be deleted (either via delete_original or in_place)
-    pub fn should_delete_original(&self) -> bool {
-        self.delete_original || self.in_place
-    }
-}
-
-/// Conversion output
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConversionOutput {
-    pub input_path: String,
-    pub output_path: String,
-    pub strategy: ConversionStrategy,
-    pub input_size: u64,
-    pub output_size: u64,
-    pub size_ratio: f64,
-    pub success: bool,
-    pub message: String,
-    /// CRF used for final output (if exploration was done)
-    pub final_crf: u8,
-    /// Number of exploration attempts
-    pub exploration_attempts: u8,
-}
 
 /// Determine conversion strategy based on detection result (for auto mode)
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
@@ -138,7 +28,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             reason: skip_decision.reason,
             command: String::new(),
             preserve_audio: false,
-            crf: 0,
+            crf: 0.0,
             lossless: false,
         };
     }
@@ -152,7 +42,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
                 reason: unknown_skip.reason,
                 command: String::new(),
                 preserve_audio: false,
-                crf: 0,
+                crf: 0.0,
                 lossless: false,
             };
         }
@@ -163,7 +53,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             (
                 TargetVideoFormat::Av1Mp4,
                 format!("Source is {} (lossless) - converting to AV1 Lossless", result.codec.as_str()),
-                0,
+                0.0,
                 true // Enable mathematical lossless
             )
         }
@@ -181,7 +71,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             (
                 TargetVideoFormat::Av1Mp4,
                 format!("Source is {} (visually lossless) - compressing with AV1 CRF 0", result.codec.as_str()),
-                0,
+                0.0,
                 false
             )
         }
@@ -189,7 +79,7 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
             (
                 TargetVideoFormat::Av1Mp4,
                 format!("Source is {} ({}) - compressing with AV1 CRF 0", result.codec.as_str(), result.compression.as_str()),
-                0,
+                0.0,
                 false
             )
         }
@@ -246,7 +136,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
             reason: "Simple mode: Always AV1 Lossless".to_string(),
             command: String::new(),
             preserve_audio: detection.has_audio,
-            crf: 0,
+            crf: 0.0,
             lossless: true,
         },
         input_size: detection.file_size,
@@ -254,7 +144,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         size_ratio,
         success: true,
         message: "Simple conversion successful (Lossless)".to_string(),
-        final_crf: 0,
+        final_crf: 0.0,
         exploration_attempts: 0,
     })
 }
@@ -304,7 +194,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             size_ratio: 0.0,
             success: true, 
             message: "Skipped modern codec to avoid generation loss".to_string(),
-            final_crf: 0,
+            final_crf: 0.0,
             exploration_attempts: 0,
         });
     }
@@ -326,7 +216,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     };
     
     // 🔥 检测输入输出路径冲突（作为安全检查）
-    check_input_output_conflict(input, &output_path)?;
+    shared_utils::path_validator::check_input_output_conflict(input, &output_path)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
     
     // 🔥 修复：输出文件已存在时返回跳过状态而非错误
     if output_path.exists() && !config.force {
@@ -340,7 +231,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             size_ratio: 1.0,
             success: true,
             message: format!("Skipped: output exists ({})", output_path.display()),
-            final_crf: 0,
+            final_crf: 0.0,
             exploration_attempts: 0,
         });
     }
@@ -352,13 +243,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::Ffv1Mkv => {
             // Legacy/Fallback catch-all
             let size = execute_ffv1_conversion(&detection, &output_path)?;
-            (size, 0, 0)
+            (size, 0.0, 0)
         }
         TargetVideoFormat::Av1Mp4 => {
             if strategy.lossless {
                  info!("   🚀 Using AV1 Mathematical Lossless Mode");
                  let size = execute_av1_lossless(&detection, &output_path)?;
-                 (size, 0, 0)
+                 (size, 0.0, 0)
             } else {
                 // 🔥 v4.6: 使用模块化的 flag 验证器
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -424,7 +315,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             size_ratio: size as f64 / detection.file_size as f64,
                             success: true,
                             message: "Conversion successful".to_string(),
-                            final_crf: 0,
+                            final_crf: 0.0,
                             exploration_attempts: 0,
                         });
                     }
@@ -435,10 +326,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     info!("{}", log_line);
                 }
                 
-                (explore_result.output_size, explore_result.optimal_crf as u8, explore_result.iterations as u8)
+                (explore_result.output_size, explore_result.optimal_crf, explore_result.iterations as u8)
             }
         }
         TargetVideoFormat::Skip => unreachable!(), // Handled above
+        _ => unreachable!("AV1 tool should not return HEVC target"),
     };
     
     // Preserve metadata (complete copy)
@@ -676,27 +568,7 @@ fn execute_av1_lossless(detection: &VideoDetectionResult, output: &Path) -> Resu
 
 // MacOS specialized timestamp setter (creation time + date added)
 
-/// 🔥 检测输入输出路径冲突
-/// 当输入和输出是同一个文件时，响亮报错并提供建议
-fn check_input_output_conflict(input: &Path, output: &Path) -> Result<()> {
-    let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
-    let output_canonical = if output.exists() {
-        output.canonicalize().unwrap_or_else(|_| output.to_path_buf())
-    } else {
-        output.to_path_buf()
-    };
-    
-    if input_canonical == output_canonical || input == output {
-        return Err(VidQualityError::ConversionError(format!(
-            "❌ 输入和输出路径相同: {}\n\
-             💡 建议:\n\
-             - 使用 --output/-o 指定不同的输出目录\n\
-             - 或确保输入文件扩展名与目标格式不同",
-            input.display()
-        )));
-    }
-    Ok(())
-}
+
 
 // 🔥 v4.8: 使用 shared_utils::copy_metadata 替代本地实现
 // pub use shared_utils::copy_metadata;
@@ -718,3 +590,5 @@ mod tests {
         assert_eq!(TargetVideoFormat::Av1Mp4.extension(), "mp4");
     }
 }
+
+

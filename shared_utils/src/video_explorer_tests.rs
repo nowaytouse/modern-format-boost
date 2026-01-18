@@ -79,7 +79,7 @@ mod quality_thresholds_tests {
         assert!(thresholds.min_ssim >= 0.9);
         assert!(thresholds.min_ssim <= 1.0);
         assert!(thresholds.min_psnr >= 30.0);
-        assert!(thresholds.min_ms_ssim >= 80.0);
+        assert!(thresholds.min_ms_ssim >= 0.80);
     }
     
     #[test]
@@ -136,7 +136,7 @@ mod explore_result_tests {
             size_change_pct: -20.0,
             ssim: Some(0.98),
             psnr: None,
-            vmaf: None,
+            // vmaf removed
             iterations: 5,
             quality_passed: true,
             log: vec![],
@@ -158,7 +158,7 @@ mod explore_result_tests {
             size_change_pct: 20.0,
             ssim: Some(0.95),
             psnr: None,
-            vmaf: None,
+            // vmaf removed
             iterations: 10,
             quality_passed: false,
             log: vec![],
@@ -236,8 +236,9 @@ mod edge_case_tests {
     #[test]
     fn test_zero_input_size() {
         // 输入大小为 0 的边缘情况
-        let size_pct = if 0_u64 > 0 {
-            ((100_u64 as f64 / 0_u64 as f64) - 1.0) * 100.0
+        let input_size = 0_u64;
+        let size_pct = if input_size > 0 {
+            ((100_u64 as f64 / input_size as f64) - 1.0) * 100.0
         } else {
             0.0
         };
@@ -608,7 +609,7 @@ mod preset_consistency_tests {
 
 #[cfg(test)]
 mod mock_tests {
-    use super::super::video_explorer::*;
+
     use super::super::ssim_mapping::PsnrSsimMapping;
 
     /// Mock encode 函数：CRF 越高，文件越小
@@ -639,7 +640,7 @@ mod mock_tests {
         let input_size = 1000000_u64;
         
         // 即使 CRF 51（最高），输出仍然大于输入
-        let output_at_max_crf = mock_encode(51.0, input_size);
+        let _output_at_max_crf = mock_encode(51.0, input_size);
         // 在这个 mock 中，CRF 51 时 ratio = 1.0 - (51-20)*0.05 = -0.55，被 clamp 到 0.1
         // 所以 output = 100000，小于输入
         
@@ -734,15 +735,15 @@ mod vmaf_ssim_synergy_tests {
         ) {
             let thresholds = QualityThresholds {
                 min_ms_ssim,
-                force_vmaf_long: force_long,
+                force_ms_ssim_long: force_long,
                 ..Default::default()
             };
             
             // 验证阈值正确传递
             prop_assert!((thresholds.min_ms_ssim - min_ms_ssim).abs() < 0.001,
                 "VMAF 阈值应正确传递: expected={}, actual={}", min_ms_ssim, thresholds.min_ms_ssim);
-            prop_assert_eq!(thresholds.force_vmaf_long, force_long,
-                "force_vmaf_long 应正确传递");
+            prop_assert_eq!(thresholds.force_ms_ssim_long, force_long,
+                "force_ms_ssim_long 应正确传递");
         }
     }
 
@@ -755,7 +756,7 @@ mod vmaf_ssim_synergy_tests {
     #[test]
     fn test_default_force_vmaf_long_is_false() {
         let thresholds = QualityThresholds::default();
-        assert!(!thresholds.force_vmaf_long, "默认应跳过长视频 VMAF");
+        assert!(!thresholds.force_ms_ssim_long, "默认应跳过长视频 VMAF");
     }
 }
 
@@ -879,7 +880,7 @@ mod vmaf_enable_condition_tests {
 
 #[cfg(test)]
 mod quality_report_tests {
-    use super::super::video_explorer::*;
+
     use proptest::prelude::*;
 
     /// 模拟质量报告生成
@@ -1135,12 +1136,12 @@ mod smart_wall_collision_tests {
 
 #[cfg(test)]
 mod metadata_margin_tests {
-    use super::*;
+
     use crate::video_explorer::{
         calculate_metadata_margin, compression_target_size, can_compress_with_metadata,
         verify_compression_precise, verify_compression_simple, detect_metadata_size, pure_video_size,
         CompressionVerifyStrategy,
-        METADATA_MARGIN_MIN, METADATA_MARGIN_MAX, METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
+        METADATA_MARGIN_MIN, METADATA_MARGIN_MAX, METADATA_MARGIN_PERCENT,
     };
     use proptest::prelude::*;
 

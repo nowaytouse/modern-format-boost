@@ -110,11 +110,14 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         apple_compat: bool,
 
-        /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
         /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
         /// ⚠️ MUST be used with --explore --match-quality --compress
         #[arg(long, default_value_t = false)]
         ultimate: bool,
+
+        /// Verbose output (show skipped files and success messages)
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Verify conversion quality
@@ -193,6 +196,7 @@ fn main() -> anyhow::Result<()> {
             compress,
             apple_compat,
             ultimate,
+            verbose,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
@@ -206,7 +210,7 @@ fn main() -> anyhow::Result<()> {
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
                 eprintln!("   Smart quality matching: DISABLED");
-            } else {
+            } else if verbose {
                 // 显示探索模式信息
                 let flag_mode = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate).unwrap();
                 eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
@@ -233,6 +237,7 @@ fn main() -> anyhow::Result<()> {
                 apple_compat,
                 use_gpu: true,  // 🔥 v6.2: Always use GPU for coarse search
                 ultimate,  // 🔥 v6.2: 极限探索模式
+                verbose,
             };
 
             if input.is_file() {
@@ -529,6 +534,8 @@ struct AutoConvertConfig {
     use_gpu: bool,
     /// 🔥 v6.2: 极限探索模式
     ultimate: bool,
+    /// Verbose output
+    verbose: bool,
 }
 
 /// 🔥 v6.5.2: 在"输出到相邻目录"模式下复制原始文件
@@ -543,7 +550,9 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
         // 如果目标不存在，复制
         if !dest.exists() {
             std::fs::copy(input, &dest)?;
-            println!("   📋 Copied to output dir: {}", dest.display());
+            if config.verbose {
+                println!("   📋 Copied to output dir: {}", dest.display());
+            }
             
             // 🔥 v6.9.11: 查找并合并XMP边车文件
             match shared_utils::merge_xmp_for_copied_file(input, &dest) {
@@ -588,6 +597,15 @@ fn auto_convert_single_file(
         ultimate: config.ultimate,  // 🔥 v6.2: 极限探索模式
     };
     
+    // Helper macro for verbose logging
+    macro_rules! verbose_log {
+        ($($arg:tt)*) => {
+            if config.verbose {
+                println!($($arg)*);
+            }
+        };
+    }
+    
     // Smart conversion based on format and lossless status
     let result = match (analysis.format.as_str(), analysis.is_lossless, analysis.is_animated) {
         // Modern Formats Logic (WebP, AVIF, HEIC)
@@ -596,12 +614,12 @@ fn auto_convert_single_file(
         // - If Lossless: CONVERT to JXL (better compression)
         // 🍎 Apple compat mode: animated WebP (VP8/VP9) will be converted to HEVC
         ("WebP", true, false) | ("AVIF", true, false) | ("HEIC", true, false) | ("HEIF", true, false) => {
-            println!("🔄 Modern Lossless→JXL: {}", input.display());
+            verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)? // Mathematical lossless
         }
         // 🍎 Apple compat mode: Skip static lossy modern formats, but animated will be handled below
         ("WebP", false, false) | ("AVIF", false, false) | ("HEIC", false, false) | ("HEIF", false, false) => {
-            println!("⏭️ Skipping modern lossy format (avoid generation loss): {}", input.display());
+            verbose_log!("⏭️ Skipping modern lossy format (avoid generation loss): {}", input.display());
             // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
             copy_original_if_adjacent_mode(input, config)?;
             return Ok(());
@@ -611,12 +629,12 @@ fn auto_convert_single_file(
         ("JPEG", _, false) => {
             // 🔥 JPEG 始终使用无损转码（保留 DCT 系数，零质量损失）
             // match_quality 仅用于动图转视频，不影响静态图片
-            println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
+            verbose_log!("🔄 JPEG→JXL lossless transcode: {}", input.display());
             convert_jpeg_to_jxl(input, &options)?
         }
         // Legacy Static lossless (PNG, TIFF, BMP etc) → JXL
         (_, true, false) => {
-            println!("🔄 Legacy Lossless→JXL: {}", input.display());
+            verbose_log!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
         // Animated → HEVC MP4 or GIF (based on duration and quality)
@@ -634,8 +652,8 @@ fn auto_convert_single_file(
             // GIF 本身就是 Apple 兼容格式，不属于"现代格式"
             let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
             if is_modern_animated && !is_lossless && !config.apple_compat {
-                println!("⏭️ Skipping modern lossy animated format (avoid generation loss): {}", input.display());
-                println!("   💡 Use --apple-compat to convert to HEVC for Apple device compatibility");
+                verbose_log!("⏭️ Skipping modern lossy animated format (avoid generation loss): {}", input.display());
+                verbose_log!("   💡 Use --apple-compat to convert to HEVC for Apple device compatibility");
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
                 return Ok(());
@@ -667,30 +685,30 @@ fn auto_convert_single_file(
             if config.apple_compat && is_modern_animated {
                 if duration >= 3.0 || is_high_quality {
                     // 长动画或高质量 → HEVC MP4
-                    println!("🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s, {}): {}", 
+                    verbose_log!("🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s, {}): {}", 
                         format, duration, 
                         if is_high_quality { "高质量" } else { "长动画" },
                         input.display());
                     convert_to_hevc_mp4_matched(input, &options, &analysis)?
                 } else {
                     // 短动画且非高质量 → GIF (Bayer 256色)
-                    println!("🍎 Animated {}→GIF (Apple Compat, {:.1}s, Bayer 256 colors): {}", 
+                    verbose_log!("🍎 Animated {}→GIF (Apple Compat, {:.1}s, Bayer 256 colors): {}", 
                         format, duration, input.display());
                     convert_to_gif_apple_compat(input, &options, None)?
                 }
             } else if duration < 3.0 {
                 // 非 Apple 兼容模式下，短动画跳过
-                println!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
+                verbose_log!("⏭️ Skipping short animation ({:.1}s < 3s): {}", duration, input.display());
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
                 return Ok(());
             } else if config.lossless {
                 // 用户显式要求数学无损
-                println!("🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
+                verbose_log!("🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mkv_lossless(input, &options)?
             } else {
                 // 🔥 默认：智能质量匹配（二分搜索 + SSIM 验证）
-                println!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
+                verbose_log!("🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}", duration, input.display());
                 convert_to_hevc_mp4_matched(input, &options, &analysis)?
             }
         }
@@ -700,7 +718,7 @@ fn auto_convert_single_file(
         (format, false, false) => {
              // Redundant safecheck for WebP/AVIF/HEIC just in case pattern matching missed
             if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
-                println!("⏭️ Skipping modern lossy format: {}", input.display());
+                verbose_log!("⏭️ Skipping modern lossy format: {}", input.display());
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
                 return Ok(());
@@ -708,13 +726,13 @@ fn auto_convert_single_file(
             
             // 🔥 静态有损图片使用高质量转换（distance 0.1 ≈ Q100）
             // match_quality 仅用于动图转视频
-            println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
+            verbose_log!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
             convert_to_jxl(input, &options, 0.1)?
         }
     };
     
     if result.skipped {
-        println!("⏭️ {}", result.message);
+        verbose_log!("⏭️ {}", result.message);
     } else {
         // 🔥 修复：message 已经包含了正确的 size reduction/increase 信息
         println!("✅ {}", result.message);
