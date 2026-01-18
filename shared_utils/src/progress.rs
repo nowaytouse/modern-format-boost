@@ -867,15 +867,21 @@ impl ExploreLogger {
 /// 🔥 v5.30: 统一专业 Spinner
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template(progress_style::SPINNER_TEMPLATE)
-            .expect("Invalid spinner template")
-            .tick_chars(progress_style::SPINNER_CHARS)
-    );
-    pb.set_prefix(prefix.to_string());
-    // 🔥 v5.31: 降低刷新频率防止刷屏
-    pb.enable_steady_tick(Duration::from_millis(100));
+    
+    // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(
+            ProgressStyle::default_spinner()
+                .template(progress_style::SPINNER_TEMPLATE)
+                .expect("Invalid spinner template")
+                .tick_chars(progress_style::SPINNER_CHARS)
+        );
+        pb.set_prefix(prefix.to_string());
+        // 🔥 v5.31: 降低刷新频率防止刷屏
+        pb.enable_steady_tick(Duration::from_millis(100));
+    }
     pb
 }
 
@@ -884,45 +890,63 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
 /// 🔥 v5.30: 统一进度条样式
 pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(progress_style::BATCH_TEMPLATE)
-            .expect("Invalid progress bar template")
-            .progress_chars(progress_style::PROGRESS_CHARS)
-            .tick_chars(progress_style::SPINNER_CHARS)
-    );
-    pb.set_prefix(prefix.to_string());
-    pb.enable_steady_tick(Duration::from_millis(100));
+    
+    // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(progress_style::BATCH_TEMPLATE)
+                .expect("Invalid progress bar template")
+                .progress_chars(progress_style::PROGRESS_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS)
+        );
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(100));
+    }
     pb
 }
 
 /// 🔥 v5.30: 创建详细进度条（带更多参数）- 统一样式
 pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(progress_style::BATCH_TEMPLATE)
-            .expect("Invalid progress bar template")
-            .progress_chars(progress_style::PROGRESS_CHARS)
-            .tick_chars(progress_style::SPINNER_CHARS)
-    );
-    pb.set_prefix(prefix.to_string());
-    pb.enable_steady_tick(Duration::from_millis(100));
-    pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(10));
+    
+    // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(progress_style::BATCH_TEMPLATE)
+                .expect("Invalid progress bar template")
+                .progress_chars(progress_style::PROGRESS_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS)
+        );
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(100));
+        pb.set_draw_target(ProgressDrawTarget::stderr_with_hz(10));
+    }
     pb
 }
 
 /// 🔥 v5.30: 创建紧凑型进度条（单行，不刷屏）- 统一样式
 pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template(progress_style::COMPACT_TEMPLATE)
-            .expect("Invalid progress bar template")
-            .progress_chars(progress_style::PROGRESS_CHARS)
-    );
-    pb.set_prefix(prefix.to_string());
-    pb.enable_steady_tick(Duration::from_millis(200));
+    
+    // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+    if crate::progress_mode::is_quiet_mode() {
+        pb.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(progress_style::COMPACT_TEMPLATE)
+                .expect("Invalid progress bar template")
+                .progress_chars(progress_style::PROGRESS_CHARS)
+        );
+        pb.set_prefix(prefix.to_string());
+        pb.enable_steady_tick(Duration::from_millis(200));
+    }
     pb
 }
 
@@ -944,16 +968,22 @@ pub struct SmartProgressBar {
 impl SmartProgressBar {
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
-        // 🔥 v5.30: 统一样式
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template(progress_style::BATCH_TEMPLATE)
-                .expect("Invalid progress bar template")
-                .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS)
-        );
-        bar.set_prefix(prefix.to_string());
-        bar.enable_steady_tick(Duration::from_millis(100));
+        
+        // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            // 🔥 v5.30: 统一样式
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template(progress_style::BATCH_TEMPLATE)
+                    .expect("Invalid progress bar template")
+                    .progress_chars(progress_style::PROGRESS_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS)
+            );
+            bar.set_prefix(prefix.to_string());
+            bar.enable_steady_tick(Duration::from_millis(100));
+        }
         
         Self {
             bar,
@@ -1024,15 +1054,21 @@ fn format_eta(seconds: f64) -> String {
 /// Create a spinner for indeterminate progress
 pub fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
-    // 🔥 v5.30: 统一 Spinner 样式
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .expect("Invalid spinner template")
-            .tick_chars(progress_style::SPINNER_CHARS)
-    );
-    spinner.set_message(message.to_string());
-    spinner.enable_steady_tick(Duration::from_millis(80));
+    
+    // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+    if crate::progress_mode::is_quiet_mode() {
+        spinner.set_draw_target(ProgressDrawTarget::hidden());
+    } else {
+        // 🔥 v5.30: 统一 Spinner 样式
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .template("{spinner:.green} {msg}")
+                .expect("Invalid spinner template")
+                .tick_chars(progress_style::SPINNER_CHARS)
+        );
+        spinner.set_message(message.to_string());
+        spinner.enable_steady_tick(Duration::from_millis(80));
+    }
     spinner
 }
 
@@ -1167,15 +1203,21 @@ impl GlobalProgressManager {
     /// 创建主进度条（总体进度）- 🔥 v5.30 统一样式
     pub fn create_main(&mut self, total: u64, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new(total));
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template(progress_style::BATCH_TEMPLATE)
-                .expect("Invalid template")
-                .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS)
-        );
-        bar.set_prefix(prefix.to_string());
-        bar.enable_steady_tick(Duration::from_millis(100));
+        
+        // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template(progress_style::BATCH_TEMPLATE)
+                    .expect("Invalid template")
+                    .progress_chars(progress_style::PROGRESS_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS)
+            );
+            bar.set_prefix(prefix.to_string());
+            bar.enable_steady_tick(Duration::from_millis(100));
+        }
         self.main_bar = Some(bar);
         self.main_bar.as_ref().unwrap()
     }
@@ -1183,14 +1225,20 @@ impl GlobalProgressManager {
     /// 创建子进度条（当前文件进度）- 🔥 v5.30 统一样式
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());
-        bar.set_style(
-            ProgressStyle::default_spinner()
-                .template("  {spinner:.green} {prefix:.dim}: {msg}")
-                .expect("Invalid template")
-                .tick_chars(progress_style::SPINNER_CHARS)
-        );
-        bar.set_prefix(prefix.to_string());
-        bar.enable_steady_tick(Duration::from_millis(80));
+        
+        // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(
+                ProgressStyle::default_spinner()
+                    .template("  {spinner:.green} {prefix:.dim}: {msg}")
+                    .expect("Invalid template")
+                    .tick_chars(progress_style::SPINNER_CHARS)
+            );
+            bar.set_prefix(prefix.to_string());
+            bar.enable_steady_tick(Duration::from_millis(80));
+        }
         self.sub_bar = Some(bar);
         self.sub_bar.as_ref().unwrap()
     }
