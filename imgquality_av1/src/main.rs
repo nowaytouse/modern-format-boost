@@ -805,6 +805,18 @@ fn auto_convert_directory(
     // 🔥 Print detailed summary report
     print_summary_report(&result, start_time.elapsed(), final_input_bytes, final_output_bytes, "Image Conversion");
 
+    // 🔥 v7.4.5: 保留目录元数据（时间戳、权限、xattr）
+    if let Some(output_dir) = config.output_dir {
+        if let Some(base_dir) = config.base_dir {
+            println!("\n📁 Preserving directory metadata...");
+            if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
+                eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
+            } else {
+                println!("✅ Directory metadata preserved");
+            }
+        }
+    }
+
     Ok(())
 }
 

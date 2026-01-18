@@ -197,6 +197,7 @@ fn main() -> anyhow::Result<()> {
                     output: output.clone(),
                     recursive,
                     label: "HEVC Video".to_string(),
+                    base_dir: if output.is_some() { Some(input.clone()) } else { None }, // 🔥 v7.4.5
                 },
                 |file| auto_convert(file, &config).map_err(|e| e.into())
             )?;

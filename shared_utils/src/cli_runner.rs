@@ -35,6 +35,7 @@ pub struct CliRunnerConfig {
     pub output: Option<PathBuf>,
     pub recursive: bool,
     pub label: String, // e.g. "AV1 Video" or "HEVC Video"
+    pub base_dir: Option<PathBuf>, // 🔥 v7.4.5: For directory metadata preservation
 }
 
 /// Run the "Auto" command logic for batch processing
@@ -182,6 +183,16 @@ where
         info!("{}", verify.message);
         if !verify.passed {
             warn!("⚠️  Some files may be missing from output!");
+        }
+
+        // 🔥 v7.4.5: 保留目录元数据（时间戳、权限、xattr）
+        if let Some(ref base_dir) = config.base_dir {
+            info!("\n📁 Preserving directory metadata...");
+            if let Err(e) = crate::metadata::preserve_directory_metadata(base_dir, output_dir) {
+                error!("⚠️ Failed to preserve directory metadata: {}", e);
+            } else {
+                info!("✅ Directory metadata preserved");
+            }
         }
     }
 
