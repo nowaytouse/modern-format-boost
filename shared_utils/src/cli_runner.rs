@@ -139,19 +139,16 @@ where
                     info!("❌ {} failed: {}", file.display(), e);
                     batch_result.fail(file.clone(), e.to_string());
 
-                    // 🔥 Fallback: Copy original if conversion failed (No data loss)
-                    // 注意：cli_runner 是通用工具，不保证目录结构
-                    if let Some(ref out_dir) = config.output {
-                        let file_name = file.file_name().unwrap_or_default();
-                        let dest = out_dir.join(file_name);
-                        if !dest.exists() {
-                            if let Err(copy_err) = std::fs::copy(file, &dest) {
-                                error!("❌ Failed to copy original: {}", copy_err);
-                            } else {
-                                info!("📋 Copied original (conversion failed): {}", file.display());
-                                let _ = crate::xmp_merger::merge_xmp_for_copied_file(file, &dest);
-                            }
-                        }
+                    // 🔥 v7.4.8: Fallback - 使用 smart_file_copier 保留目录结构和元数据
+                    if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                        file,
+                        config.output.as_deref(),
+                        config.base_dir.as_deref(),
+                        false,
+                    ) {
+                        error!("❌ Failed to copy original: {}", copy_err);
+                    } else {
+                        info!("📋 Copied original (conversion failed): {}", file.display());
                     }
                 }
             }

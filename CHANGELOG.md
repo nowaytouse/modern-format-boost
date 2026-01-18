@@ -4,8 +4,20 @@ All notable changes to Modern Format Boost will be documented in this file.
 
 ## [7.4.8] - 2026-01-18
 
-### 🔧 Critical Fix - smart_build.sh Script
+### 🔥 Critical Fixes - Complete Coverage
 
+#### Fixed: cli_runner.rs Conversion Failure Fallback
+**Problem:**
+- When conversion failed, `cli_runner.rs` copied files without preserving directory structure
+- Used direct `fs::copy()` instead of `smart_file_copier`
+- Lost directory structure and metadata on failure
+
+**Solution:**
+- Changed to use `smart_file_copier::copy_on_skip_or_fail()`
+- Now preserves directory structure + metadata + XMP on all failures
+- Consistent behavior across all copy scenarios
+
+#### Fixed: smart_build.sh Script
 **Problem:**
 - Script exited after compiling first project due to `set -e` + `((var++))` interaction
 - When variable is 0, `((var++))` returns 1, causing script to exit with `set -e`
@@ -14,9 +26,17 @@ All notable changes to Modern Format Boost will be documented in this file.
 - Changed `((var++))` to `var=$((var + 1))` for all counters
 - Fixed `build_project()` function to properly handle cargo output
 
+**Complete Coverage Now Guaranteed:**
+- ✅ Conversion success → smart_file_copier (structure + metadata)
+- ✅ Conversion skip → smart_file_copier (structure + metadata)
+- ✅ Conversion failure → smart_file_copier (structure + metadata)
+- ✅ Non-media files → file_copier (structure + metadata)
+- ✅ Directory metadata → preserve_directory_metadata
+
 **Test Results:**
 ```bash
 ✅ All 5 tools compile successfully
+✅ All copy scenarios preserve structure + metadata
 ✅ imgquality-hevc: 4.4M
 ✅ vidquality-hevc: 2.9M  
 ✅ imgquality-av1: 4.1M
@@ -272,6 +292,50 @@ vmaf --version
 ✅ CPU encoding: Using x265 CLI completed successfully
 ✅ No parameter errors: "Error splitting the argument list" eliminated
 ✅ Modified files: video_explorer.rs (fallback) + x265_encoder.rs (tracing removed)
+```
+
+---
+
+## [7.4.8] - 2026-01-18 (中文版)
+
+### 🔥 关键修复 - 完整覆盖
+
+#### 修复：cli_runner.rs 转换失败回退
+**问题：**
+- 转换失败时，`cli_runner.rs` 复制文件时未保留目录结构
+- 使用直接的 `fs::copy()` 而非 `smart_file_copier`
+- 失败时丢失目录结构和元数据
+
+**解决方案：**
+- 改用 `smart_file_copier::copy_on_skip_or_fail()`
+- 现在所有失败场景都保留目录结构 + 元数据 + XMP
+- 所有复制场景行为一致
+
+#### 修复：smart_build.sh 脚本
+**问题：**
+- 由于 `set -e` + `((var++))` 交互，脚本在编译第一个项目后退出
+- 当变量为 0 时，`((var++))` 返回 1，导致 `set -e` 模式下脚本退出
+
+**解决方案：**
+- 将所有计数器的 `((var++))` 改为 `var=$((var + 1))`
+- 修复 `build_project()` 函数以正确处理 cargo 输出
+
+**现在保证完整覆盖：**
+- ✅ 转换成功 → smart_file_copier（结构 + 元数据）
+- ✅ 转换跳过 → smart_file_copier（结构 + 元数据）
+- ✅ 转换失败 → smart_file_copier（结构 + 元数据）
+- ✅ 非媒体文件 → file_copier（结构 + 元数据）
+- ✅ 目录元数据 → preserve_directory_metadata
+
+**测试结果：**
+```bash
+✅ 全部 5 个工具编译成功
+✅ 所有复制场景保留结构 + 元数据
+✅ imgquality-hevc: 4.4M
+✅ vidquality-hevc: 2.9M  
+✅ imgquality-av1: 4.1M
+✅ vidquality-av1: 2.6M
+✅ xmp-merge: 1.4M
 ```
 
 ---
