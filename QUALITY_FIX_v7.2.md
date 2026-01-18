@@ -10,6 +10,10 @@ MS-SSIM calculation failed due to missing `libvmaf` in ffmpeg:
 ## Solution
 Integrated standalone `vmaf` CLI tool to bypass ffmpeg dependency.
 
+**Key Insight**: vmaf's `float_ms_ssim` feature operates on YUV color space,
+implicitly including both luma (Y) and chroma (U, V) information. No need for
+separate per-channel calculations.
+
 ## Changes
 
 ### 1. New Module: `vmaf_standalone.rs`
