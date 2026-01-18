@@ -16,9 +16,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Tool Paths
-IMGQUALITY_HEVC="$PROJECT_ROOT/imgquality_hevc/target/release/imgquality-hevc"
-VIDQUALITY_HEVC="$PROJECT_ROOT/vidquality_hevc/target/release/vidquality-hevc"
+# Tool Paths (🔥 v6.9.15: 修正为正确的 target/release 路径)
+IMGQUALITY_HEVC="$PROJECT_ROOT/target/release/imgquality-hevc"
+VIDQUALITY_HEVC="$PROJECT_ROOT/target/release/vidquality-hevc"
 
 # Configuration
 OUTPUT_MODE="inplace"
