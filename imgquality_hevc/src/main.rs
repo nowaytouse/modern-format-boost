@@ -871,36 +871,14 @@ fn auto_convert_directory(
                         eprintln!("❌ Conversion failed {}: {}", path.display(), e);
                         failed.fetch_add(1, Ordering::Relaxed);
                         
-                        // 🔥 v6.9.14: 无遗漏设计 - 失败的文件也复制原始文件
-                        // 🔥 v7.3.1: 修复 - 保留目录结构
+                        // 🔥 v7.4.4: 使用 smart_file_copier 保留目录结构
                         if let Some(ref output_dir) = config.output_dir {
-                            // 🔥 保留目录结构
-                            let dest = if let Some(ref base_dir) = config.base_dir {
-                                let rel_path = path.strip_prefix(base_dir).unwrap_or(path);
-                                let dest_path = output_dir.join(rel_path);
-                                
-                                // 确保目标目录存在
-                                if let Some(parent) = dest_path.parent() {
-                                    let _ = std::fs::create_dir_all(parent);
-                                }
-                                dest_path
-                            } else {
-                                let file_name = path.file_name().unwrap_or_default();
-                                output_dir.join(file_name)
-                            };
-                            
-                            if !dest.exists() {
-                                if let Err(copy_err) = std::fs::copy(path, &dest) {
-                                    eprintln!("❌ Failed to copy original after conversion failure: {}", copy_err);
-                                } else {
-                                    println!("📋 Copied original (conversion failed): {}", path.display());
-                                    // 🔥 保留元数据 + 合并XMP
-                                    shared_utils::copy_metadata(path, &dest);
-                                }
-                            } else {
-                                // 目标已存在，确保元数据和XMP已保留
-                                shared_utils::copy_metadata(path, &dest);
-                            }
+                            let _ = shared_utils::copy_on_skip_or_fail(
+                                path,
+                                Some(output_dir),
+                                config.base_dir.as_deref(),
+                                false
+                            );
                         }
                     }
                 }
