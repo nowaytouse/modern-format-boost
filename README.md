@@ -2,19 +2,30 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.2)
+## 🔥 Latest Updates (v7.3)
 
-### Quality Verification Fix
-- **✅ Standalone VMAF**: Bypass ffmpeg libvmaf dependency using Netflix's vmaf CLI
-- **✅ Multi-layer Fallback**: vmaf → libvmaf → SSIM All → SSIM Y
-- **✅ No Recompilation**: Works without rebuilding ffmpeg
-- **✅ Installation**: `brew install libvmaf` (macOS) or `apt install libvmaf` (Linux)
+### Critical Fixes - Directory Structure & Metadata
+- **✅ Directory Structure**: All subdirectories now preserved in output
+- **✅ Metadata Preservation**: Timestamps, permissions, xattrs all preserved
+- **✅ XMP Auto-Merge**: Sidecar files automatically merged into output
+- **✅ Path Correction**: Fixed binary paths in drag-and-drop script
+
+**Test Results:**
+```
+Input:  photos/2024/summer/beach.png (2020-01-01)
+Output: photos/2024/summer/beach.jxl (2020-01-01) ✅
+XMP:    Title & Description merged ✅
+```
+
+### Previous (v7.2)
+- **✅ Standalone VMAF**: Bypass ffmpeg libvmaf dependency
+- **✅ Multi-layer Fallback**: vmaf → libvmaf → SSIM
+- **✅ Installation**: `brew install libvmaf`
 
 ### Previous (v6.9.17)
-- **✅ CPU Encoding**: x265 CLI for better reliability
-- **✅ GPU Fallback**: Auto CPU fallback on GPU failures
+- **✅ CPU Encoding**: x265 CLI for reliability
+- **✅ GPU Fallback**: Auto CPU fallback on failures
 - **✅ GIF Support**: Fixed bgra pixel format
-- **✅ Error Transparency**: Loud error reporting
 
 ## Core Tools
 
@@ -161,13 +172,28 @@ Use `--apple-compat` to force convert animated WebP/AVIF to HEVC for Apple devic
 
 ### File Handling Strategy
 
-| Scenario | Action | XMP |
-|----------|--------|-----|
-| Converted successfully | Output new format | Merged |
-| Skipped (modern lossy) | Copy original | Merged |
-| Skipped (short <3s) | Copy original | Merged |
-| Conversion failed | Copy original | Merged |
-| Unsupported (.psd, .txt) | Copy original | Merge or copy sidecar |
+| Scenario | Action | XMP | Metadata |
+|----------|--------|-----|----------|
+| Converted successfully | Output new format | Merged | Preserved |
+| Skipped (modern lossy) | Copy original | Merged | Preserved |
+| Skipped (short <3s) | Copy original | Merged | Preserved |
+| Conversion failed | Copy original | Merged | Preserved |
+| Unsupported (.psd, .txt) | Copy original | Merge or copy sidecar | Preserved |
+
+### Metadata Preservation (v7.3)
+
+**All files preserve:**
+- ✅ Directory structure (all subdirectories)
+- ✅ File timestamps (modification & access time)
+- ✅ File permissions
+- ✅ Extended attributes (xattrs, Finder tags on macOS)
+- ✅ Internal metadata (Exif, ICC color profiles)
+- ✅ XMP sidecar files (auto-merged)
+
+**XMP Auto-Merge:**
+- Detects `photo.jpg.xmp` and `photo.xmp` formats
+- Automatically merges into output file
+- Preserves all metadata fields
 
 ### Verification
 
@@ -187,6 +213,31 @@ Use `--apple-compat` to force convert animated WebP/AVIF to HEVC for Apple devic
 | **PNG/TIFF/BMP** | → JXL | - | APNG → HEVC |
 | **GIF** | - | - | → HEVC (≥3秒) 或复制 |
 | **WebP/AVIF/HEIC** | → JXL | ⏭️ 跳过 (避免损失) | → HEVC (`--apple-compat`) |
+
+### 文件处理策略
+
+| 场景 | 操作 | XMP | 元数据 |
+|------|------|-----|--------|
+| 转换成功 | 输出新格式 | 已合并 | 已保留 |
+| 跳过（现代有损） | 复制原文件 | 已合并 | 已保留 |
+| 跳过（短动画<3秒） | 复制原文件 | 已合并 | 已保留 |
+| 转换失败 | 复制原文件 | 已合并 | 已保留 |
+| 不支持（.psd, .txt） | 复制原文件 | 合并或复制边车 | 已保留 |
+
+### 元数据保留 (v7.3)
+
+**所有文件保留：**
+- ✅ 目录结构（所有子目录）
+- ✅ 文件时间戳（修改时间和访问时间）
+- ✅ 文件权限
+- ✅ 扩展属性（xattrs，macOS Finder 标签）
+- ✅ 内部元数据（Exif，ICC 颜色配置文件）
+- ✅ XMP 边车文件（自动合并）
+
+**XMP 自动合并：**
+- 检测 `photo.jpg.xmp` 和 `photo.xmp` 格式
+- 自动合并到输出文件
+- 保留所有元数据字段
 
 ### 为什么跳过现代有损格式？
 

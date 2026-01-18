@@ -2,6 +2,67 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.3] - 2025-01-18
+
+### 🔥 Critical Fixes - Directory Structure & Metadata Preservation
+
+#### Fixed Issues
+1. **Directory Structure Not Preserved** - Files placed in output root instead of subdirectories
+2. **Metadata Lost** - Timestamps showing current time instead of original
+3. **XMP Sidecars Not Merged** - XMP files not automatically merged when copying
+
+#### Root Causes
+- `copy_original_on_skip()`: Used only filename, losing directory structure
+- `copy_original_if_adjacent_mode()`: Same issue + didn't preserve metadata
+- `fs::copy()`: Doesn't preserve timestamps by default
+
+#### Solutions
+
+**1. Directory Structure Preservation**
+```rust
+// Calculate relative path from base_dir
+let rel_path = input.strip_prefix(base_dir).unwrap_or(input);
+let dest = output_dir.join(rel_path);
+```
+
+**2. Metadata Preservation**
+```rust
+// Preserve all metadata + auto-merge XMP
+shared_utils::copy_metadata(input, &dest);
+```
+
+**3. XMP Auto-Merge**
+- Automatically detects and merges `.xmp` sidecar files
+- Supports both `photo.jpg.xmp` and `photo.xmp` formats
+
+#### Test Results
+```
+Input:  photos/2024/summer/beach.png (2020-01-01)
+Output: photos/2024/summer/beach.jxl (2020-01-01) ✅
+
+XMP Content:
+- Title: Test Image ✅
+- Description: XMP Sidecar Test ✅
+```
+
+#### What's Preserved
+- ✅ Directory structure (all subdirectories)
+- ✅ File timestamps (modification & access time)
+- ✅ File permissions
+- ✅ Extended attributes (xattrs, Finder tags)
+- ✅ Internal metadata (Exif, ICC profiles)
+- ✅ XMP sidecar files (auto-merged)
+
+#### Modified Files
+- `imgquality_hevc/src/lossless_converter.rs` - Fixed `copy_original_on_skip()`
+- `imgquality_hevc/src/main.rs` - Fixed `copy_original_if_adjacent_mode()`
+- `scripts/drag_and_drop_processor.sh` - Corrected binary paths
+
+#### Breaking Changes
+None - All changes are backward compatible.
+
+---
+
 ## [7.2] - 2025-01-18
 
 ### 🔥 Quality Verification Fix - Standalone VMAF Integration
