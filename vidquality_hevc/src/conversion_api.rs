@@ -420,31 +420,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         info!("   🗑️  Low-quality output deleted");
                     }
                     
-                    // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
-                    // 🔥 v7.3.1: 修复 - 保留目录结构
-                    if let Some(ref out_dir) = config.output_dir {
-                        let dest = if let Some(ref base_dir) = config.base_dir {
-                            let rel_path = input.strip_prefix(base_dir).unwrap_or(input);
-                            let dest_path = out_dir.join(rel_path);
-                            if let Some(parent) = dest_path.parent() {
-                                let _ = std::fs::create_dir_all(parent);
-                            }
-                            dest_path
-                        } else {
-                            let file_name = input.file_name().unwrap_or_default();
-                            out_dir.join(file_name)
-                        };
-                        
-                        if !dest.exists() {
-                            if let Ok(_) = std::fs::copy(input, &dest) {
-                                info!("   📋 Copied original to output dir: {}", dest.display());
-                                // 🔥 v7.3.1: 保留元数据 + 合并XMP
-                                shared_utils::copy_metadata(input, &dest);
-                            }
-                        } else {
-                            shared_utils::copy_metadata(input, &dest);
-                        }
-                    }
+                    // 🔥 v7.4.3: 使用 smart_file_copier 模块
+                    let _ = shared_utils::copy_on_skip_or_fail(
+                        input,
+                        config.output_dir.as_deref(),
+                        config.base_dir.as_deref(),
+                        false
+                    );
                     
                     // 返回跳过状态，不删除原文件
                     return Ok(ConversionOutput {
@@ -490,29 +472,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             
             // 相邻目录模式下，复制原始文件到输出目录
             // 🔥 v7.3.1: 修复 - 保留目录结构
-            if let Some(ref out_dir) = config.output_dir {
-                let dest = if let Some(ref base_dir) = config.base_dir {
-                    let rel_path = input.strip_prefix(base_dir).unwrap_or(input);
-                    let dest_path = out_dir.join(rel_path);
-                    if let Some(parent) = dest_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    dest_path
-                } else {
-                    let file_name = input.file_name().unwrap_or_default();
-                    out_dir.join(file_name)
-                };
-                
-                if !dest.exists() {
-                    if let Ok(_) = std::fs::copy(input, &dest) {
-                        info!("   📋 Copied original to output dir: {}", dest.display());
-                        // 🔥 v7.3.1: 保留元数据 + 合并XMP
-                        shared_utils::copy_metadata(input, &dest);
-                    }
-                } else {
-                    shared_utils::copy_metadata(input, &dest);
-                }
-            }
+            // 🔥 v7.4.3: 使用 smart_file_copier 模块
+            let _ = shared_utils::copy_on_skip_or_fail(
+                input,
+                config.output_dir.as_deref(),
+                config.base_dir.as_deref(),
+                false
+            );
             
             return Ok(ConversionOutput {
                 input_path: input.display().to_string(),
@@ -595,31 +561,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             info!("   🗑️  Output deleted (cannot compress)");
         }
         
-        // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
-        // 🔥 v7.3.1: 修复 - 保留目录结构
-        if let Some(ref out_dir) = config.output_dir {
-            let dest = if let Some(ref base_dir) = config.base_dir {
-                let rel_path = input.strip_prefix(base_dir).unwrap_or(input);
-                let dest_path = out_dir.join(rel_path);
-                if let Some(parent) = dest_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                dest_path
-            } else {
-                let file_name = input.file_name().unwrap_or_default();
-                out_dir.join(file_name)
-            };
-            
-            if !dest.exists() {
-                if let Ok(_) = std::fs::copy(input, &dest) {
-                    info!("   📋 Copied original to output dir: {}", dest.display());
-                    // 🔥 v7.3.1: 保留元数据 + 合并XMP
-                    shared_utils::copy_metadata(input, &dest);
-                }
-            } else {
-                shared_utils::copy_metadata(input, &dest);
-            }
-        }
+        // 🔥 v7.4.3: 使用 smart_file_copier 模块
+        let _ = shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false
+        );
         
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
