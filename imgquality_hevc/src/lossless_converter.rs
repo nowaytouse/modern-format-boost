@@ -81,7 +81,7 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
         
         if !dest.exists() {
             if let Ok(_) = fs::copy(input, &dest) {
-                // 🔥 v6.9.15: 保留元数据（时间戳等）
+                // 🔥 v6.9.15: 保留元数据（时间戳等）+ 合并 XMP
                 shared_utils::copy_metadata(input, &dest);
                 
                 if options.verbose {
@@ -92,7 +92,8 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
                 eprintln!("   ⚠️ Failed to copy original to output dir");
             }
         } else {
-            // 目标已存在，不需要复制
+            // 🔥 目标已存在，但仍需确保 XMP 已合并和元数据已保留
+            shared_utils::copy_metadata(input, &dest);
             return Some(dest);
         }
     }
