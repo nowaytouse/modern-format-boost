@@ -676,26 +676,11 @@ fn auto_convert_directory(
     let start_time = Instant::now();
     let image_extensions = ["png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif"];
     
-    let walker = if config.recursive {
-        WalkDir::new(input).follow_links(true)
-    } else {
-        WalkDir::new(input).max_depth(1)
-    };
-
-    // Collect all file paths first for parallel processing
-    let files: Vec<PathBuf> = walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            if let Some(ext) = e.path().extension() {
-                image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
-            } else {
-                false
-            }
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
+    // 🔥 v7.5: 使用文件排序功能，优先处理小文件
+    // - 快速看到进度反馈
+    // - 小文件处理快，可以更早发现问题
+    // - 大文件留到后面，避免长时间卡住
+    let files = shared_utils::collect_files_small_first(&input, &image_extensions, config.recursive);
 
     let total = files.len();
     if total == 0 {
