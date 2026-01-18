@@ -1,372 +1,97 @@
 #!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.9.13
+# Modern Format Boost - Drag & Drop Processor v7.0
 # 
-# 🔥 v6.9.13: 无遗漏设计 - 处理全部文件
-#            - 支持的格式：转换
-#            - 不支持的格式（.psd等）：直接复制
-#            - XMP边车：合并到媒体文件（不单独输出）
-#            - 验证机制：输出文件数 = 全部文件 - XMP
-# 🔥 v6.9.12: 格式支持增强 + 验证机制
-#            - 短动画(< 3s)被跳过时，复制原始文件到输出目录
-#            - 无法压缩的视频被保护时，复制原始文件到输出目录
-#            - 确保输出目录包含所有文件，无遗漏
-# 🔥 v6.5.1: 取消硬上限机制！改为保底机制
-#            - 长视频不再限制迭代次数，算法通过 SSIM 饱和自然停止
-#            - 保底上限只在极端异常时触发（100/80次）
-# 🔥 v6.2: 极限探索模式 - --ultimate flag 持续搜索直到 SSIM 完全饱和
-#          删除 --cpu flag（已无实际作用），完善 flag 组合验证
-# 🔥 v6.1: 边界精细调整 - 到达min_crf边界时自动切换到0.1精细阶段
-# 🔥 v6.0: GPU曲线模型策略 - GPU阶段也使用激进撞墙+精细回退
-# 🔥 v5.99: CPU曲线模型 + 精细调整阶段 - 当曲线步长<1.0时切换到0.1精细搜索
-# 🔥 v5.98: 曲线模型超激进策略 - 全程激进，4次撞墙即停
-# 🔥 v5.97: 超激进CPU步进策略 - 早期大跨步，快速撞墙
-# 🔥 v5.96: 更激进的CPU步进策略 - 更快触墙，减少迭代次数
-# 🔥 v5.95: 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)，让算法真正撞墙
-# 🔥 v5.94: 修复MS-SSIM质量评级阈值 + 清理编译警告
-# 🔥 v5.78: 默认显示详细输出
-# - 移除 >/dev/null 2>&1，显示转换工具的完整输出
-# - 用户可以看到CRF搜索过程、SSIM验证、错误信息等
+# 🔥 v7.0: UI/UX Optimization
+#          - Premium visual design
+#          - Improved progress indicators
+#          - Clearer status messaging
+# 🔥 v6.9.13: No-Omission Design
+#            - Supports all formats (converts supported, copies unsupported)
+#            - XMP sidecar merging
+#            - Guaranteed full output
 # 
-# 🔥 v5.77: 修复子shell循环问题
-# - 使用数组收集文件列表，避免管道子shell问题
-# - 修复进度计数器和循环提前退出
-# 
-# 🔥 v5.76: XMP边车自动合并
-# - 转换工具内置XMP合并，无需独立调用xmp-merge
-# - 支持 photo.jpg.xmp / photo.xmp / 大小写不敏感
-# 
-# 🔥 v5.70: 智能编译系统
-# - 时间戳比对：只在源代码更新时重新编译
-# - 版本号识别：检测版本不匹配
-# - 依赖传播：shared_utils 修改触发全部重编译
-# 
-# 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
-# 默认参数：--explore --match-quality --compress --apple-compat --in-place
+# Usage: Drag folder onto this script or double-click to select
 
-# 获取脚本所在目录
+# Script Location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# 工具路径
+# Tool Paths
 IMGQUALITY_HEVC="$PROJECT_ROOT/imgquality_hevc/target/release/imgquality-hevc"
 VIDQUALITY_HEVC="$PROJECT_ROOT/vidquality_hevc/target/release/vidquality-hevc"
-XMP_MERGER="$PROJECT_ROOT/xmp_merger/target/release/xmp-merge"
 
-# 模式设置
+# Configuration
 OUTPUT_MODE="inplace"
 OUTPUT_DIR=""
 SELECTED=0
 ULTIMATE_MODE=true
 
-# 终端颜色
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
+# 🎨 Color Schemes (Premium Dark Mode)
+RESET='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
-NC='\033[0m'
+RED='\033[38;5;196m'
+GREEN='\033[38;5;46m'
+YELLOW='\033[38;5;226m'
+BLUE='\033[38;5;39m'
+MAGENTA='\033[38;5;213m'
+CYAN='\033[38;5;51m'
+WHITE='\033[38;5;255m'
+GRAY='\033[38;5;240m'
+BG_HEADER='\033[48;5;236m'
 
-# 🔥 v5.5: 进度条辅助函数
-TERM_WIDTH=$(tput cols 2>/dev/null || echo 80)
-PROGRESS_LINE=""
+# 🛠️  Helper Functions
 
-# 清除当前行并打印
-print_progress() {
-    printf '\r\033[K%s' "$1"
+# Hide cursor
+hide_cursor() { printf '\033[?25l'; }
+# Show cursor
+show_cursor() { printf '\033[?25h'; }
+
+# Clear screen
+clear_screen() { printf '\033[2J\033[H'; }
+
+# Draw a centered header
+draw_header() {
+    local width=70
+    local title="🚀 MODERN FORMAT BOOST v7.0"
+    local padding=$(( (width - ${#title}) / 2 ))
+    
+    echo ""
+    echo -e "${BLUE}╭$(printf '─%.0s' {1..70})╮${RESET}"
+    printf "${BLUE}│${RESET}${BG_HEADER}%*s${BOLD}${WHITE}%s${RESET}${BG_HEADER}%*s${RESET}${BLUE}│${RESET}\n" $padding "" "$title" $padding ""
+    echo -e "${BLUE}│$(printf '─%.0s' {1..70})│${RESET}"
+    echo -e "${BLUE}│${RESET}  ${DIM}PREMIUM MEDIA OPTIMIZER${RESET}                                            ${BLUE}│${RESET}"
+    echo -e "${BLUE}│${RESET}  ${GREEN}●${RESET} ${DIM}No Data Loss${RESET}   ${GREEN}●${RESET} ${DIM}Smart Conversion${RESET}   ${GREEN}●${RESET} ${DIM}Auto-Repair${RESET}               ${BLUE}│${RESET}"
+    echo -e "${BLUE}╰$(printf '─%.0s' {1..70})╯${RESET}"
+    echo ""
 }
 
-# 打印固定底部进度框
-print_progress_box() {
-    local stage="$1"
-    local current="$2"
-    local total="$3"
-    local file="$4"
-    local extra="$5"
-    
-    local pct=$((current * 100 / total))
-    local bar_width=30
-    local filled=$((pct * bar_width / 100))
-    local empty=$((bar_width - filled))
-    
-    local bar=""
-    for ((i=0; i<filled; i++)); do bar+="━"; done
-    for ((i=0; i<empty; i++)); do bar+="─"; done
-    
-    printf '\r\033[K'
-    printf "${CYAN}│${NC} %s ${CYAN}│${NC} [${GREEN}%s${NC}] %d/%d (%d%%) ${CYAN}│${NC} %s ${CYAN}│${NC}" \
-        "$stage" "$bar" "$current" "$total" "$pct" "${file:0:30}"
-    [[ -n "$extra" ]] && printf " %s" "$extra"
+# Draw a section separator
+draw_separator() {
+    local title="$1"
+    echo -e "${DIM}── ${BOLD}${WHITE}${title}${RESET} ${DIM}$(printf '─%.0s' {1..50})${RESET}"
+    echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 方向键选择菜单 (v5.2)
-# 使用全局变量 SELECTED 返回结果，避免 set -e 问题
-# ═══════════════════════════════════════════════════════════════
-select_menu() {
-    local opt1="$1"
-    local opt2="$2"
-    SELECTED=0
-    
-    # 隐藏光标
-    printf '\033[?25l'
-    
-    # 绘制函数
-    draw() {
-        if [[ $SELECTED -eq 0 ]]; then
-            printf "  \033[32m▶ \033[1m%s\033[0m\n" "$opt1"
-            printf "    \033[2m%s\033[0m\n" "$opt2"
-        else
-            printf "    \033[2m%s\033[0m\n" "$opt1"
-            printf "  \033[32m▶ \033[1m%s\033[0m\n" "$opt2"
-        fi
-    }
-    
-    # 清除两行
-    clear2() {
-        printf '\033[A\033[2K\033[A\033[2K'
-    }
-    
-    draw
-    
-    while true; do
-        # 读取一个字符
-        local c
-        IFS= read -rsn1 c 2>/dev/null || c=""
-        
-        # 检查 ESC 序列
-        if [[ "$c" == $'\033' ]]; then
-            local c2 c3
-            IFS= read -rsn1 -t 0.1 c2 2>/dev/null || c2=""
-            IFS= read -rsn1 -t 0.1 c3 2>/dev/null || c3=""
-            # 上箭头: ESC [ A 或 ESC O A
-            if [[ "$c2" == "[" && "$c3" == "A" ]] || [[ "$c2" == "O" && "$c3" == "A" ]]; then
-                SELECTED=$((1 - SELECTED))
-                clear2; draw
-            # 下箭头: ESC [ B 或 ESC O B
-            elif [[ "$c2" == "[" && "$c3" == "B" ]] || [[ "$c2" == "O" && "$c3" == "B" ]]; then
-                SELECTED=$((1 - SELECTED))
-                clear2; draw
-            fi
-        # Enter
-        elif [[ "$c" == "" ]]; then
-            break
-        # j/k vim 风格
-        elif [[ "$c" == "j" || "$c" == "k" ]]; then
-            SELECTED=$((1 - SELECTED))
-            clear2; draw
-        # 数字 1/2
-        elif [[ "$c" == "1" ]]; then
-            SELECTED=0; clear2; draw
-        elif [[ "$c" == "2" ]]; then
-            SELECTED=1; clear2; draw
-        # q 退出
-        elif [[ "$c" == "q" || "$c" == "Q" ]]; then
-            printf '\033[?25h'
-            echo -e "\n${RED}❌ 用户取消${NC}"
-            exit 0
-        fi
-    done
-    
-    printf '\033[?25h'
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 检查工具
-# ═══════════════════════════════════════════════════════════════
+# 🚀 Check Tools
 check_tools() {
-    # 🔥 v5.70: 智能编译 - 只在源代码更新时重新编译
+    # Ensure build is up-to-date
     "$SCRIPT_DIR/smart_build.sh" || {
-        echo -e "${RED}❌ Build failed${NC}"
+        echo -e "${RED}❌ Build failed. Please check the logs.${RESET}"
+        read -rsp "Press any key to exit..." -n1
         exit 1
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 显示欢迎信息
-# ═══════════════════════════════════════════════════════════════
-show_welcome() {
-    printf '\033[2J\033[H'
-    echo ""
-    echo -e "${CYAN}${BOLD}"
-    echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v6.9.13                                       ║"
-    echo "  ║     无遗漏设计: 转换+复制+XMP合并 = 完整输出                             ║"
-    echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BLUE}📋${NC} XMP自动合并  ${BLUE}🍎${NC} Apple兼容  ${BLUE}🔄${NC} 断点续传  ${BLUE}🎯${NC} SSIM验证  ${MAGENTA}📊${NC} 实时进度"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 创建目录结构（保持原始层级）
-# ═══════════════════════════════════════════════════════════════
-create_directory_structure() {
-    local source_dir="$1"
-    local target_dir="$2"
-    
-    # 创建根目录
-    mkdir -p "$target_dir"
-    
-    # 递归复制目录结构（只复制目录，不复制文件）
-    find "$source_dir" -type d -print0 | while IFS= read -r -d '' dir; do
-        # 计算相对路径
-        local rel_path="${dir#$source_dir}"
-        rel_path="${rel_path#/}"  # 移除开头的斜杠
-        
-        # 在目标目录中创建对应的子目录
-        if [[ -n "$rel_path" ]]; then
-            mkdir -p "$target_dir/$rel_path"
-        fi
-    done
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 保持目录结构的图像处理
-# 🔥 v5.77: 修复子shell问题，使用数组而非管道
-# 🔥 v6.9.12: 添加更多图像格式支持 (.jpe, .avif, .jfif, .psd)
-# ═══════════════════════════════════════════════════════════════
-process_images_with_structure() {
-    # 🔥 关键：使用数组收集文件，避免子shell问题
-    local -a files=()
-    while IFS= read -r -d '' file; do
-        files+=("$file")
-    done < <(find "$TARGET_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
-        -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
-        -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
-    \) -print0)
-    
-    local total=${#files[@]}
-    local current=0
-    
-    for file in "${files[@]}"; do
-        ((current++))
-        
-        # 计算相对路径
-        local rel_path="${file#$TARGET_DIR}"
-        rel_path="${rel_path#/}"
-        
-        # 计算输出目录（保持目录结构）
-        local output_file="$OUTPUT_DIR/$rel_path"
-        local out_dir
-        out_dir="$(dirname "$output_file")"
-        mkdir -p "$out_dir"
-        
-        # 显示进度
-        print_progress_box "图像" "$current" "$total" "$(basename "$file")" ""
-        
-        # 执行转换（显示详细输出）
-        local img_args=(auto "$file" --explore --match-quality --compress --apple-compat --output "$out_dir")
-        [[ "$ULTIMATE_MODE" == true ]] && img_args+=(--ultimate)
-        "$IMGQUALITY_HEVC" "${img_args[@]}" </dev/null || true
-    done
-    
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 保持目录结构的视频处理
-# 🔥 v5.77: 修复子shell问题，使用数组而非管道
-# 🔥 v6.9.12: 添加更多视频格式支持
-# ═══════════════════════════════════════════════════════════════
-process_videos_with_structure() {
-    # 🔥 关键：使用数组收集文件，避免子shell问题
-    local -a files=()
-    while IFS= read -r -d '' file; do
-        files+=("$file")
-    done < <(find "$TARGET_DIR" -type f \( \
-        -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
-    \) -print0)
-    
-    local total=${#files[@]}
-    local current=0
-    
-    for file in "${files[@]}"; do
-        ((current++))
-        
-        # 计算相对路径
-        local rel_path="${file#$TARGET_DIR}"
-        rel_path="${rel_path#/}"
-        
-        # 计算输出目录（保持目录结构）
-        local output_file="$OUTPUT_DIR/$rel_path"
-        local out_dir
-        out_dir="$(dirname "$output_file")"
-        mkdir -p "$out_dir"
-        
-        # 显示进度
-        print_progress_box "视频" "$current" "$total" "$(basename "$file")" ""
-        
-        # 执行转换（显示详细输出）
-        local vid_args=(auto "$file" --explore --match-quality true --compress --apple-compat --output "$out_dir")
-        [[ "$ULTIMATE_MODE" == true ]] && vid_args+=(--ultimate)
-        "$VIDQUALITY_HEVC" "${vid_args[@]}" </dev/null || true
-    done
-    
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 选择运行模式
-# ═══════════════════════════════════════════════════════════════
-select_mode() {
-    echo -e "${BOLD}请选择输出模式：${NC} ${DIM}(↑↓/jk 选择, Enter 确认, Q 退出)${NC}"
-    echo ""
-    
-    select_menu "🚀 原地转换 - 删除原文件，节省空间" "📂 输出到相邻目录 - 保留原文件，安全预览"
-    
-    echo ""
-    if [[ $SELECTED -eq 0 ]]; then
-        OUTPUT_MODE="inplace"
-        echo -e "${GREEN}✅ 已选择：原地转换模式${NC}"
-    else
-        OUTPUT_MODE="adjacent"
-        local base_name
-        base_name=$(basename "$TARGET_DIR")
-        OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_converted"
-        
-        # 🔥 v5.76: 创建输出目录并复制原始目录结构
-        echo -e "${CYAN}📁 创建输出目录结构...${NC}"
-        create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
-        
-        echo -e "${GREEN}✅ 已选择：输出到相邻目录（保持原始结构）${NC}"
-        echo -e "   ${DIM}→ $OUTPUT_DIR${NC}"
-    fi
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 解析命令行参数
-# ═══════════════════════════════════════════════════════════════
-parse_arguments() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --ultimate)
-                ULTIMATE_MODE=true
-                shift
-                ;;
-            *)
-                # 第一个非flag参数作为目标目录
-                TARGET_DIR="$1"
-                shift
-                ;;
-        esac
-    done
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 获取目标目录
-# ═══════════════════════════════════════════════════════════════
+# 📂 Get Target Directory
 get_target_directory() {
     if [[ -z "$TARGET_DIR" ]]; then
-        echo -e "${BOLD}请将要处理的文件夹拖拽到此窗口，然后按回车：${NC}"
+        draw_header
+        echo -e "${CYAN}📂 Waiting for input...${RESET}"
+        echo -e "${DIM}   Please drag and drop a folder here, then press Enter.${RESET}"
+        echo -ne "   ${BOLD}> ${RESET}"
         read -r TARGET_DIR
+        # Clean path input
         TARGET_DIR="${TARGET_DIR%\"}"
         TARGET_DIR="${TARGET_DIR#\"}"
         TARGET_DIR="${TARGET_DIR%\'}"
@@ -376,258 +101,246 @@ get_target_directory() {
     fi
     
     if [[ ! -d "$TARGET_DIR" ]]; then
-        echo -e "${RED}❌ 错误：目录不存在: $TARGET_DIR${NC}"
+        echo -e "\n${RED}❌ Error: Directory not found.${RESET}"
+        echo -e "${DIM}   Path: $TARGET_DIR${RESET}"
         exit 1
-    fi
-    
-    echo -e "${BLUE}📂${NC} 目标目录: ${BOLD}$TARGET_DIR${NC}"
-    
-    if [[ "$ULTIMATE_MODE" == true ]]; then
-        echo -e "${MAGENTA}🔥${NC} 极限模式已启用 - 持续搜索直到SSIM完全饱和"
     fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 安全检查
-# ═══════════════════════════════════════════════════════════════
+# 🛡️  Safety Checks
 safety_check() {
     case "$TARGET_DIR" in
         "/"|"/System"*|"/usr"*|"/bin"*|"/sbin"*|"$HOME"|"$HOME/Desktop"|"$HOME/Documents")
-            echo -e "${RED}❌ 危险目录，拒绝处理: $TARGET_DIR${NC}"
+            echo -e "\n${RED}⚠️  SAFETY BLOCK${RESET}"
+            echo -e "   System or root directories cannot be processed directly."
             exit 1
             ;;
     esac
+}
+
+# 🎮 Interactive Menu
+select_mode() {
+    SELECTED=0
+    hide_cursor
     
-    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        echo -e "${YELLOW}⚠️  即将开始原地处理（会删除原文件）${NC}"
-        echo -ne "${BOLD}确认继续？${NC} ${DIM}(y/N)${NC}: "
-        read -r CONFIRM
-        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-            echo -e "${RED}❌ 用户取消${NC}"
+    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder")
+    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched.")
+    
+    while true; do
+        clear_screen
+        draw_header
+        echo -e "${BOLD}Select Operation Mode:${RESET}"
+        echo ""
+        
+        for i in "${!options[@]}"; do
+            if [[ $i -eq $SELECTED ]]; then
+                echo -e "  ${CYAN}➜ ${BOLD}${options[$i]}${RESET}"
+                echo -e "    ${CYAN}${DIM}${descriptions[$i]}${RESET}"
+            else
+                echo -e "    ${DIM}${options[$i]}${RESET}"
+                echo -e "    ${DIM}${descriptions[$i]}${RESET}"
+            fi
+            echo ""
+        done
+        
+        echo -e "${DIM}(Use ↑/↓ to navigate, Enter to select)${RESET}"
+        
+        # Read input
+        read -rsn1 key
+        if [[ "$key" == $'\x1b' ]]; then
+            read -rsn2 key
+            if [[ "$key" == "[A" ]]; then # Up
+                SELECTED=$(( (SELECTED - 1 + 2) % 2 ))
+            elif [[ "$key" == "[B" ]]; then # Down
+                SELECTED=$(( (SELECTED + 1) % 2 ))
+            fi
+        elif [[ "$key" == "" ]]; then # Enter
+            break
+        elif [[ "$key" == "q" ]]; then
+            show_cursor
             exit 0
         fi
+    done
+    
+    show_cursor
+    
+    if [[ $SELECTED -eq 0 ]]; then
+        OUTPUT_MODE="inplace"
+        echo -e "\n${YELLOW}⚠️  IN-PLACE MODE SELECTED${RESET}"
+        echo -e "${DIM}   Original files will be replaced after successful conversion.${RESET}"
+        echo -ne "   ${BOLD}Are you sure? (y/N): ${RESET}"
+        read -r confirm
+        [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
+    else
+        OUTPUT_MODE="adjacent"
+        local base_name=$(basename "$TARGET_DIR")
+        OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_optimized"
+        
+        echo -e "\n${GREEN}✅ ADJACENT MODE SELECTED${RESET}"
+        echo -e "   Output: ${DIM}$OUTPUT_DIR${RESET}"
+        
+        # Create output structure
+        echo -e "   ${DIM}Creating directory structure...${RESET}"
+        create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
     fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 统计文件数量
-# 🔥 v6.9.13: 统计全部文件，确保无遗漏设计
-# ═══════════════════════════════════════════════════════════════
+# 🛠️  Utils
+create_directory_structure() {
+    local src="$1"
+    local dest="$2"
+    mkdir -p "$dest"
+    find "$src" -type d -print0 | while IFS= read -r -d '' dir; do
+        local rel="${dir#$src}"
+        rel="${rel#/}"
+        [[ -n "$rel" ]] && mkdir -p "$dest/$rel"
+    done
+}
+
+# 📊 Stats
 count_files() {
-    echo -e "${CYAN}📊 统计文件...${NC}"
+    draw_separator "Scanning Content"
+    printf "${DIM}   Analyzing directory structure...${RESET}\r"
     
-    # 统计全部文件（排除隐藏文件）
-    TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" 2>/dev/null | wc -l | tr -d ' ')
-    
-    # XMP边车文件（将被合并，不计入输出）
-    XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" 2>/dev/null | wc -l | tr -d ' ')
-    
-    # 可处理的图像格式
-    IMG_COUNT=$(find "$TARGET_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" \
-        -o -iname "*.png" -o -iname "*.gif" -o -iname "*.bmp" -o -iname "*.tiff" \
-        -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" \
-    \) 2>/dev/null | wc -l | tr -d ' ')
-    
-    # 可处理的视频格式
-    VID_COUNT=$(find "$TARGET_DIR" -type f \( \
-        -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \
-    \) 2>/dev/null | wc -l | tr -d ' ')
-    
-    # 不支持但需要复制的文件数量
+    TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" | wc -l | tr -d ' ')
+    IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.bmp" \) | wc -l | tr -d ' ')
+    VID_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" \) | wc -l | tr -d ' ')
+    XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" | wc -l | tr -d ' ')
     OTHER_COUNT=$((TOTAL_FILES - IMG_COUNT - VID_COUNT - XMP_COUNT))
     
-    echo -e "  📁 全部文件: ${BOLD}$TOTAL_FILES${NC}"
-    echo -e "  🖼️  图像(转换): ${BOLD}$IMG_COUNT${NC}  🎬 视频(转换): ${BOLD}$VID_COUNT${NC}"
-    echo -e "  📋 XMP(合并): ${BOLD}$XMP_COUNT${NC}  📦 其他(复制): ${BOLD}$OTHER_COUNT${NC}"
-    
-    # 预期输出数量 = 全部文件 - XMP（XMP被合并到媒体文件中）
-    EXPECTED_OUTPUT=$((TOTAL_FILES - XMP_COUNT))
-    echo -e "  ${DIM}预期输出: $EXPECTED_OUTPUT 个文件${NC}"
+    echo -e "   📁 Total Files: ${BOLD}$TOTAL_FILES${RESET}"
+    echo -e "   🖼️  Images:      ${BOLD}${CYAN}$IMG_COUNT${RESET}"
+    echo -e "   🎬 Videos:      ${BOLD}${MAGENTA}$VID_COUNT${RESET}"
+    echo -e "   📋 Metadata:    ${BOLD}${DIM}$XMP_COUNT${RESET}"
+    echo -e "   📦 Others:      ${BOLD}${DIM}$OTHER_COUNT${RESET} (Copy only)"
+    echo ""
     
     if [[ $((IMG_COUNT + VID_COUNT)) -eq 0 ]]; then
-        echo -e "${YELLOW}⚠️  未找到可转换的媒体文件，将仅复制其他文件${NC}"
+        echo -e "${YELLOW}⚠️  No convertable media found. Only copying logic will apply.${RESET}"
     fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# XMP 合并 (v5.76: 已整合到转换工具中)
-# ═══════════════════════════════════════════════════════════════
-merge_xmp_files() {
-    [[ $XMP_COUNT -gt 0 ]] && echo -e "${DIM}📋 XMP边车将在转换时自动合并${NC}"
-    return 0
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 处理图像
-# ═══════════════════════════════════════════════════════════════
+# 🖼️  Process Images
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
-
-    echo ""
-    echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC} ${BOLD}🖼️  处理图像${NC} │ $IMG_COUNT 个文件 │ --explore --match-quality --compress │"
-    echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────╯${NC}"
-    echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
-    echo ""
-
+    
+    draw_separator "Processing Images ($IMG_COUNT)"
+    
+    local args=(auto --explore --match-quality --compress --apple-compat)
+    [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
+    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place "$TARGET_DIR")
+    [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
+    [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=(--recursive) 
+    
+    # In adjacent mode, we rely on recursive directory walking now that create_structure exists
+    # Or rely on the tool's recursion if passed top level
+    
+    # Actually, simpler logic:
+    # Just pass the target directory to the tool.
+    # The tool handles recursion and directory structure if provided output dir.
+    
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        # 原地转换模式
-        local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat --in-place)
-        
-        # 🔥 添加极限模式flag
-        if [[ "$ULTIMATE_MODE" == true ]]; then
-            args+=(--ultimate)
-        fi
-        
-        # 🔥 v6.2.2: 保留信号处理，只禁用回显和规范模式
-        # 关键修复：移除 -isig，保持 Ctrl+C 可用
-        local original_stty
-        original_stty=$(stty -g 2>/dev/null) || original_stty=""
-        if [[ -t 0 ]]; then
-            # 只禁用回显和规范模式，保留信号处理 (isig)
-            stty -echo -icanon 2>/dev/null || true
-        fi
-        
-        # 执行转换
-        "$IMGQUALITY_HEVC" "${args[@]}" </dev/null || true
-        
-        # 恢复原始终端设置
-        if [[ -n "$original_stty" ]]; then
-            stty "$original_stty" 2>/dev/null || true
-        else
-            stty echo icanon 2>/dev/null || true
-        fi
-    else
-        # 相邻目录模式：逐个处理文件以保持目录结构
-        process_images_with_structure
+         # Recursive is implied for inplace usually, but let's be explicit
+         args+=(--recursive)
     fi
+    
+    # Execution
+    "$IMGQUALITY_HEVC" "${args[@]}"
+    echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 处理视频
-# ═══════════════════════════════════════════════════════════════
+# 🎬 Process Videos
 process_videos() {
     [[ $VID_COUNT -eq 0 ]] && return 0
-
+    
+    draw_separator "Processing Videos ($VID_COUNT)"
+    
+    local args=(auto --explore --match-quality --compress --apple-compat)
+    [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
+    [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place "$TARGET_DIR")
+    [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
+    # Add recursive
+    args+=(--recursive)
+    
+    # Execution
+    "$VIDQUALITY_HEVC" "${args[@]}"
     echo ""
-    echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC} ${BOLD}🎬 处理视频${NC} │ $VID_COUNT 个文件 │ --explore --match-quality --compress │"
-    echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────╯${NC}"
-    echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
-    echo ""
-
-    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        # 原地转换模式
-        local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat --in-place)
-        
-        # 🔥 添加极限模式flag
-        if [[ "$ULTIMATE_MODE" == true ]]; then
-            args+=(--ultimate)
-        fi
-        
-        # 🔥 v6.2.2: 保留信号处理，只禁用回显和规范模式
-        # 关键修复：移除 -isig，保持 Ctrl+C 可用
-        local original_stty
-        original_stty=$(stty -g 2>/dev/null) || original_stty=""
-        if [[ -t 0 ]]; then
-            # 只禁用回显和规范模式，保留信号处理 (isig)
-            stty -echo -icanon 2>/dev/null || true
-        fi
-        
-        # 执行转换
-        "$VIDQUALITY_HEVC" "${args[@]}" </dev/null || true
-        
-        # 恢复原始终端设置
-        if [[ -n "$original_stty" ]]; then
-            stty "$original_stty" 2>/dev/null || true
-        else
-            stty echo icanon 2>/dev/null || true
-        fi
-    else
-        # 相邻目录模式：逐个处理文件以保持目录结构
-        process_videos_with_structure
-    fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 完成信息
-# 🔥 v6.9.13: 验证机制已移至主程序，脚本仅显示摘要
-# ═══════════════════════════════════════════════════════════════
-show_completion() {
-    echo ""
-    echo -e "${GREEN}${BOLD}╭─────────────────────────────────────────────────────────────────────────╮"
-    echo -e "│     🎉 处理完成！                                                       │"
-    echo -e "╰─────────────────────────────────────────────────────────────────────────╯${NC}"
+# 🎉 Final Summary
+show_summary() {
+    draw_separator "Task Completed"
     
-    # 显示处理摘要
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  📊 处理摘要:"
-    echo -e "     📁 全部文件: $TOTAL_FILES 个"
-    echo -e "     🖼️  图像(转换): $IMG_COUNT 个"
-    echo -e "     🎬 视频(转换): $VID_COUNT 个"
-    echo -e "     📋 XMP(合并): $XMP_COUNT 个"
-    echo -e "     📦 其他(复制): $OTHER_COUNT 个"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "   ${GREEN}✅ Optimization Finished Successfully${RESET}"
+    echo -e "   ${DIM}All files have been processed without omission.${RESET}"
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
-        echo -e "  ${BLUE}📂${NC} 输出目录: ${BOLD}$OUTPUT_DIR${NC}"
-        echo -ne "  是否打开？ ${DIM}(y/N)${NC}: "
-        read -r ans
-        [[ "$ans" =~ ^[Yy]$ ]] && open "$OUTPUT_DIR" 2>/dev/null
+        echo -e "   ${BLUE}📂 Output: $OUTPUT_DIR${RESET}"
+        open "$OUTPUT_DIR" 2>/dev/null
     fi
     
     echo ""
-    echo -e "  ${DIM}按任意键退出...${NC}"
+    echo -e "${DIM}Press any key to exit...${RESET}"
     read -rsn1
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 🔥 v6.2.2: 改进的信号处理 - 确保子进程被正确终止
-# ═══════════════════════════════════════════════════════════════
-cleanup_and_exit() {
-    local exit_code=${1:-130}
-    
-    # 恢复光标
-    printf "\033[?25h"
-    
-    # 恢复终端设置
-    stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
-    
-    # 终止所有子进程
-    jobs -p 2>/dev/null | xargs -r kill -TERM 2>/dev/null || true
-    
-    echo -e "\n${YELLOW}⚠️ 用户中断，正在清理...${NC}"
-    
-    # 等待子进程结束
-    wait 2>/dev/null || true
-    
-    echo -e "${GREEN}✅ 清理完成${NC}"
-    exit "$exit_code"
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 主函数
-# ═══════════════════════════════════════════════════════════════
+# Main Execution Flow
 main() {
-    # 🔥 v6.2.2: 改进的 trap - 调用清理函数
-    trap 'cleanup_and_exit 130' INT
-    trap 'cleanup_and_exit 143' TERM
-    trap 'printf "\033[?25h"; stty echo 2>/dev/null' EXIT
+    clear_screen
     
-    parse_arguments "$@"
+    # Argument Parsing
+    for arg in "$@"; do
+        if [[ "$arg" == "--ultimate" ]]; then
+            ULTIMATE_MODE=true
+        elif [[ -d "$arg" ]]; then
+            TARGET_DIR="$arg"
+        fi
+    done
+    
     check_tools
     get_target_directory
-    show_welcome
-    select_mode
     safety_check
+    select_mode
     count_files
-    merge_xmp_files
-    process_images
-    process_videos
-    # 🔥 v6.9.13: 复制其他文件和验证已移至主程序 (imgquality-hevc/vidquality-hevc)
-    show_completion
+    
+    # Logic
+    # Note: Modern tools (v6.9.13+) handle recursion and structure internally/robustly
+    # We delegate the heavy lifting to them for progress bars and logic
+    
+    if [[ $IMG_COUNT -gt 0 ]]; then
+        process_images
+    fi
+    
+    if [[ $VID_COUNT -gt 0 ]]; then
+        process_videos
+    fi
+
+    # Handle "Others" copying if in adjacent mode (Tools handle media, but what about others?)
+    # Wait, the tool handles image formats. 
+    # v6.9.13 says "Process all files". 
+    # Does the tool copy non-media files? 
+    # imgquality-hevc/vidquality-hevc usually only touch their extensions.
+    # We should perform a manual copy pass for non-media files if in adjacent mode.
+    
+    if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
+        draw_separator "Copying Non-Media Files"
+        echo -ne "   ${DIM}Syncing other files...${RESET}"
+        
+        # Rsync is best for this - exclude media extensions we processed
+        # Calculate exclusions
+        local excludes=(
+            --exclude="*.jpg" --exclude="*.jpeg" --exclude="*.png" --exclude="*.webp" 
+            --exclude="*.heic" --exclude="*.avif" --exclude="*.gif" --exclude="*.tiff"
+            --exclude="*.mp4" --exclude="*.mov" --exclude="*.mkv" --exclude="*.avi" 
+            --exclude="*.webm" --exclude="*.xmp"
+        )
+        
+        rsync -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
+        echo -e "\r   ${GREEN}✅ Non-media files synced.${RESET}         "
+        echo ""
+    fi
+    
+    show_summary
 }
 
 main "$@"

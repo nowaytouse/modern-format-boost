@@ -595,6 +595,7 @@ fn auto_convert_single_file(
         apple_compat: config.apple_compat,
         use_gpu: config.use_gpu,
         ultimate: config.ultimate,  // 🔥 v6.2: 极限探索模式
+        verbose: config.verbose,
     };
     
     // Helper macro for verbose logging
@@ -735,7 +736,7 @@ fn auto_convert_single_file(
         verbose_log!("⏭️ {}", result.message);
     } else {
         // 🔥 修复：message 已经包含了正确的 size reduction/increase 信息
-        println!("✅ {}", result.message);
+        verbose_log!("✅ {}", result.message);
     }
     
     Ok(())
@@ -787,8 +788,10 @@ fn auto_convert_directory(
         return Ok(());
     }
     
-    println!("📂 Found {} files to process", total);
-    if config.lossless {
+    if config.verbose {
+        println!("📂 Found {} files to process", total);
+    }
+    if config.lossless && config.verbose {
         println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
     }
 
@@ -816,7 +819,9 @@ fn auto_convert_directory(
         .build()
         .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap());
     
-    println!("🔧 Using {} parallel threads (CPU cores: {})", max_threads, num_cpus);
+    if config.verbose {
+        println!("🔧 Using {} parallel threads (CPU cores: {})", max_threads, num_cpus);
+    }
     
     // Process files in parallel using custom thread pool
     pool.install(|| {

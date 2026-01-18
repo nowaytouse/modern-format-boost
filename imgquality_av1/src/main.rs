@@ -22,6 +22,8 @@ struct AutoConvertConfig<'a> {
     compress: bool,
     /// 🔥 v4.15: Use GPU acceleration (default: true)
     use_gpu: bool,
+    /// Verbose output
+    verbose: bool,
 }
 
 #[derive(Parser)]
@@ -105,6 +107,10 @@ enum Commands {
         /// Hardware encoding may have lower quality ceiling. Use --cpu for maximum SSIM
         #[arg(long, default_value_t = false)]
         cpu: bool,
+
+        /// Verbose output
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Verify conversion quality
@@ -182,6 +188,7 @@ fn main() -> anyhow::Result<()> {
             match_quality,
             compress,
             cpu,
+            verbose,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
@@ -215,6 +222,7 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 compress,
                 use_gpu: !cpu,  // 🔥 v4.15: CPU mode = no GPU
+                verbose,
             };
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -518,6 +526,7 @@ fn auto_convert_single_file(
         apple_compat: false,  // imgquality_av1 不需要 Apple 兼容模式
         use_gpu: config.use_gpu,  // 🔥 v4.15: Pass GPU control
         ultimate: false,  // 🔥 v6.2: AV1 暂不支持极限模式
+        verbose: config.verbose,
     };
     
     // Smart conversion based on format and lossless status

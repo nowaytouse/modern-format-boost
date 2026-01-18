@@ -237,6 +237,8 @@ pub struct ConvertOptions {
     /// 持续搜索直到 SSIM 完全饱和（领域墙）
     /// 只能与 --explore --match-quality --compress 组合使用
     pub ultimate: bool,
+    /// Verbose output (informational messages)
+    pub verbose: bool,
 }
 
 impl Default for ConvertOptions {
@@ -252,6 +254,7 @@ impl Default for ConvertOptions {
             compress: false,
             use_gpu: true,  // 🔥 v4.15: GPU by default
             ultimate: false,  // 🔥 v6.2: 默认关闭极限模式
+            verbose: false,
         }
     }
 }
