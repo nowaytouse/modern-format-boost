@@ -833,6 +833,9 @@ fn auto_convert_directory(
     // 🔥 Progress bar with ETA
     let pb = shared_utils::create_progress_bar(total as u64, "Converting");
 
+    // 🔥 v7.3.2: 启用安静模式，避免并行线程的进度条互相干扰
+    shared_utils::progress_mode::enable_quiet_mode();
+
     // 🔥 性能优化：限制并发数，避免系统卡顿
     // - 使用 CPU 核心数的一半，留出资源给系统和编码器内部线程
     // - 最少 1 个，最多 4 个并发任务
@@ -936,6 +939,9 @@ fn auto_convert_directory(
     });
 
     pb.finish_with_message("Complete!");
+    
+    // 🔥 v7.3.2: 恢复正常模式
+    shared_utils::progress_mode::disable_quiet_mode();
 
     let success_count = success.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);
