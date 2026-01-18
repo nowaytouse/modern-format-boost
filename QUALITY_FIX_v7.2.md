@@ -10,9 +10,17 @@ MS-SSIM calculation failed due to missing `libvmaf` in ffmpeg:
 ## Solution
 Integrated standalone `vmaf` CLI tool to bypass ffmpeg dependency.
 
-**Key Insight**: vmaf's `float_ms_ssim` feature operates on YUV color space,
-implicitly including both luma (Y) and chroma (U, V) information. No need for
-separate per-channel calculations.
+**⚠️ Critical Finding** (Verified with rigorous testing):
+- vmaf's `float_ms_ssim` is **Y-channel (luma) only**
+- Does NOT detect chroma (U/V) degradation
+- **Solution**: Use MS-SSIM + SSIM All fusion for complete verification
+
+Test Evidence:
+```
+Y-only degradation (10%):  MS-SSIM = 0.995354 ✅ Detected
+UV-only degradation (30%): MS-SSIM = 1.000000 ❌ Not detected
+All-channel degradation:   MS-SSIM = 0.999159
+```
 
 ## Changes
 

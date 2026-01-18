@@ -24,9 +24,16 @@ pub fn is_vmaf_available() -> bool {
 /// # Returns
 /// MS-SSIM 分数 (0.0-1.0)
 /// 
-/// # Note
-/// vmaf 的 float_ms_ssim 特征在 YUV 色彩空间上计算，
-/// 已隐式包含亮度(Y)和色度(U,V)信息，无需分别计算各通道。
+/// # ⚠️ Important Limitation
+/// **Verified**: vmaf's float_ms_ssim is Y-channel (luma) only!
+/// - ✅ Detects luma degradation
+/// - ❌ Does NOT detect chroma (U/V) degradation
+/// - 💡 Recommendation: Use with SSIM All for complete verification
+/// 
+/// Test results:
+/// - Y-only degradation (10%): MS-SSIM = 0.995354 ✅ Detected
+/// - UV-only degradation (30%): MS-SSIM = 1.000000 ❌ Not detected
+/// - All-channel degradation: MS-SSIM = 0.999159
 pub fn calculate_ms_ssim_standalone(
     reference: &Path,
     distorted: &Path,
