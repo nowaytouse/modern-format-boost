@@ -40,6 +40,8 @@ pub struct ConversionStrategy {
 pub struct ConversionConfig {
     /// Output directory (None = same as input)
     pub output_dir: Option<PathBuf>,
+    /// 🔥 v7.3.1: Base directory for preserving directory structure
+    pub base_dir: Option<PathBuf>,
     /// Force conversion even if already processed
     pub force: bool,
     /// Delete original after successful conversion
@@ -163,23 +165,27 @@ pub fn execute_conversion(
     // Skip if no conversion needed
     if strategy.target == TargetFormat::NoConversion {
         // 🔥 v6.9.14: 相邻目录模式下，复制原始文件到输出目录
-        // 这修复了跳过现代编码格式时文件遗漏的问题
+        // 🔥 v7.3.1: 修复 - 保留目录结构
         if let Some(ref out_dir) = config.output_dir {
-            let file_name = input_path.file_name().unwrap_or_default();
-            let dest = out_dir.join(file_name);
-
-            // 确保目标目录存在
-            std::fs::create_dir_all(out_dir).ok();
+            let dest = if let Some(ref base_dir) = config.base_dir {
+                let rel_path = input_path.strip_prefix(base_dir).unwrap_or(input_path);
+                let dest_path = out_dir.join(rel_path);
+                if let Some(parent) = dest_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                dest_path
+            } else {
+                let file_name = input_path.file_name().unwrap_or_default();
+                out_dir.join(file_name)
+            };
 
             if !dest.exists() {
                 if let Ok(_) = std::fs::copy(input_path, &dest) {
-                    // 🔥 v6.9.11: 合并XMP边车
-                    match shared_utils::merge_xmp_for_copied_file(input_path, &dest) {
-                        Ok(true) => {},
-                        Ok(false) => {},
-                        Err(_) => {},
-                    }
+                    // 🔥 v7.3.1: 保留元数据 + 合并XMP
+                    shared_utils::copy_metadata(input_path, &dest);
                 }
+            } else {
+                shared_utils::copy_metadata(input_path, &dest);
             }
         }
 
