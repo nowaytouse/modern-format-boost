@@ -25,6 +25,7 @@ OUTPUT_MODE="inplace"
 OUTPUT_DIR=""
 SELECTED=0
 ULTIMATE_MODE=true
+VERBOSE_MODE=false  # 🔥 默认静默模式
 
 # 🎨 Color Schemes (Premium Dark Mode)
 RESET='\033[0m'
@@ -228,6 +229,7 @@ process_images() {
     
     local args=(auto --explore --match-quality --compress --apple-compat)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
+    [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place "$TARGET_DIR")
     [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=(--recursive) 
@@ -257,6 +259,7 @@ process_videos() {
     
     local args=(auto --explore --match-quality --compress --apple-compat)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
+    [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
     [[ "$OUTPUT_MODE" == "inplace" ]] && args+=(--in-place "$TARGET_DIR")
     [[ "$OUTPUT_MODE" == "adjacent" ]] && args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     # Add recursive
@@ -292,6 +295,8 @@ main() {
     for arg in "$@"; do
         if [[ "$arg" == "--ultimate" ]]; then
             ULTIMATE_MODE=true
+        elif [[ "$arg" == "--verbose" ]] || [[ "$arg" == "-v" ]]; then
+            VERBOSE_MODE=true
         elif [[ -d "$arg" ]]; then
             TARGET_DIR="$arg"
         fi
@@ -299,6 +304,15 @@ main() {
     
     check_tools
     get_target_directory
+    
+    # 🔥 显示配置信息
+    echo ""
+    echo -e "${CYAN}📋 Configuration:${RESET}"
+    echo -e "   ${DIM}Target: ${RESET}${BOLD}$TARGET_DIR${RESET}"
+    [[ "$ULTIMATE_MODE" == true ]] && echo -e "   ${MAGENTA}🔥 Ultimate Mode: ${RESET}${GREEN}ENABLED${RESET}"
+    [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}" || echo -e "   ${DIM}💬 Verbose: DISABLED (use --verbose for details)${RESET}"
+    echo ""
+    
     safety_check
     select_mode
     count_files
