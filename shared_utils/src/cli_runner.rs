@@ -139,6 +139,7 @@ where
                     batch_result.fail(file.clone(), e.to_string());
 
                     // 🔥 Fallback: Copy original if conversion failed (No data loss)
+                    // 注意：cli_runner 是通用工具，不保证目录结构
                     if let Some(ref out_dir) = config.output {
                         let file_name = file.file_name().unwrap_or_default();
                         let dest = out_dir.join(file_name);
