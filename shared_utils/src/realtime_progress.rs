@@ -46,22 +46,24 @@ impl SimpleIterationProgress {
     pub fn new(stage: &str, input_size: u64, total_iterations: u64) -> Arc<Self> {
         let bar = ProgressBar::new(total_iterations);
 
-        // 统一进度条样式
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template(progress_style::EXPLORE_TEMPLATE)
-                .expect("Invalid template")
-                .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS),
-        );
-        bar.set_prefix(stage.to_string());
-        bar.set_message("Initializing...");
+        // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            // 统一进度条样式
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template(progress_style::EXPLORE_TEMPLATE)
+                    .expect("Invalid template")
+                    .progress_chars(progress_style::PROGRESS_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS),
+            );
+            bar.set_prefix(stage.to_string());
+            bar.set_message("Initializing...");
 
-        // 🔥 v5.39: 使用超快刷新率 100Hz 覆盖任何键盘输入
-        // 关键洞察: ProgressDrawTarget::hidden() 在 macOS 上冻结进度条
-        // 解决方案: 用毫秒级刷新(10ms) 来覆盖键盘输入，使其对用户不可见
-        // 用户的建议："让进度条持续刷新！保持时刻毫秒级的更新！"
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+            // 🔥 v5.39: 使用超快刷新率 100Hz 覆盖任何键盘输入
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+        }
 
         Arc::new(Self {
             bar,
@@ -226,19 +228,23 @@ impl RealtimeExploreProgress {
     pub fn with_crf_range(stage: &str, input_size: u64, min_crf: f32, max_crf: f32) -> Arc<Self> {
         let bar = ProgressBar::new(100);
 
-        bar.set_style(
-            ProgressStyle::default_bar()
-                .template(progress_style::EXPLORE_TEMPLATE)
-                .expect("Invalid template")
-                .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS),
-        );
-        bar.set_prefix(stage.to_string());
-        bar.set_message("Initializing...");
+        // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(
+                ProgressStyle::default_bar()
+                    .template(progress_style::EXPLORE_TEMPLATE)
+                    .expect("Invalid template")
+                    .progress_chars(progress_style::PROGRESS_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS),
+            );
+            bar.set_prefix(stage.to_string());
+            bar.set_message("Initializing...");
 
-        // 🔥 v5.39: 使用超快刷新率 100Hz 覆盖任何键盘输入
-        // hidden() 模式在 macOS 上会冻结进度条，所以始终使用 100Hz 刷新
-        bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+            // 🔥 v5.39: 使用超快刷新率 100Hz 覆盖任何键盘输入
+            bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
+        }
 
         Arc::new(Self {
             bar,
@@ -373,14 +379,20 @@ pub struct RealtimeSpinner {
 impl RealtimeSpinner {
     pub fn new(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
-        bar.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {msg}")
-                .expect("Invalid template")
-                .tick_chars(progress_style::SPINNER_CHARS)
-        );
-        bar.set_message(message.to_string());
-        bar.enable_steady_tick(Duration::from_millis(80));
+        
+        // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
+        if crate::progress_mode::is_quiet_mode() {
+            bar.set_draw_target(ProgressDrawTarget::hidden());
+        } else {
+            bar.set_style(
+                ProgressStyle::default_spinner()
+                    .template("{spinner:.green} {msg}")
+                    .expect("Invalid template")
+                    .tick_chars(progress_style::SPINNER_CHARS)
+            );
+            bar.set_message(message.to_string());
+            bar.enable_steady_tick(Duration::from_millis(80));
+        }
 
         Self { bar }
     }
