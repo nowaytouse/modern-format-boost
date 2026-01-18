@@ -77,69 +77,73 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
         let _ = fs::remove_file(temp);
     }
     
-    // 🔥 Fallback: 如果 cjxl 失败且报告 "Getting pixel data failed"，使用 ImageMagick 重新编码后再试
+    // 🔥 Fallback: 如果 cjxl 失败且报告 "Getting pixel data failed"，使用 ImageMagick 管道重新编码
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
-                eprintln!("   ⚠️  CJXL DECODE FAILED: {}", stderr.trim());
-                eprintln!("   🔧 FALLBACK: Using ImageMagick to re-encode PNG for compatibility");
+                eprintln!("   ⚠️  CJXL DECODE FAILED: {}", stderr.lines().next().unwrap_or("Unknown error"));
+                eprintln!("   🔧 FALLBACK: Using ImageMagick pipeline to re-encode PNG");
                 eprintln!("   📋 Reason: PNG contains metadata/encoding that cjxl cannot handle");
                 
-                // 使用 ImageMagick 重新编码为 PNG
-                let fallback_png = std::env::temp_dir().join(format!(
-                    "mfb_fallback_{}_{}.png",
-                    std::process::id(),
-                    input.file_stem().unwrap_or_default().to_string_lossy()
-                ));
+                // 🔥 v7.4: 使用管道避免临时文件
+                // ImageMagick → stdout → cjxl stdin
+                use std::process::Stdio;
                 
-                eprintln!("   🔄 Re-encoding with ImageMagick: {} → temp PNG", 
-                    input.file_name().unwrap_or_default().to_string_lossy());
+                eprintln!("   🔄 Pipeline: magick → cjxl (no temp files)");
                 
-                let magick_result = Command::new("magick")
+                // Step 1: ImageMagick 输出到 stdout
+                let mut magick_cmd = Command::new("magick")
                     .arg(input)
                     .arg("-depth").arg("16")  // 保留位深
-                    .arg(&fallback_png)
-                    .output();
+                    .arg("png:-")  // 输出到 stdout
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn();
                 
-                if let Ok(magick_out) = magick_result {
-                    if magick_out.status.success() && fallback_png.exists() {
-                        eprintln!("   ✅ ImageMagick re-encode successful, retrying cjxl...");
-                        
-                        // 使用重新编码的 PNG 再次调用 cjxl
-                        let retry_result = Command::new("cjxl")
-                            .arg(&fallback_png)
-                            .arg(&output)
-                            .arg("-d").arg(format!("{:.1}", distance))
-                            .arg("-e").arg("7")
-                            .arg("-j").arg(max_threads.to_string())
-                            .output();
-                        
-                        let _ = fs::remove_file(&fallback_png);
-                        
-                        // 检查重试结果
-                        match &retry_result {
-                            Ok(retry_out) if retry_out.status.success() => {
-                                eprintln!("   🎉 FALLBACK SUCCESS: cjxl conversion completed via ImageMagick");
+                match magick_cmd {
+                    Ok(mut magick_proc) => {
+                        // Step 2: cjxl 从 stdin 读取
+                        if let Some(magick_stdout) = magick_proc.stdout.take() {
+                            let retry_result = Command::new("cjxl")
+                                .arg("-")  // 从 stdin 读取
+                                .arg(&output)
+                                .arg("-d").arg(format!("{:.1}", distance))
+                                .arg("-e").arg("7")
+                                .arg("-j").arg(max_threads.to_string())
+                                .stdin(magick_stdout)
+                                .output();
+                            
+                            // 等待 magick 进程结束
+                            let _ = magick_proc.wait();
+                            
+                            // 检查重试结果
+                            match &retry_result {
+                                Ok(retry_out) if retry_out.status.success() => {
+                                    eprintln!("   🎉 FALLBACK SUCCESS: cjxl conversion via ImageMagick pipeline");
+                                }
+                                Ok(retry_out) => {
+                                    eprintln!("   ❌ FALLBACK FAILED: cjxl still failed after re-encode");
+                                    let err_msg = String::from_utf8_lossy(&retry_out.stderr);
+                                    if !err_msg.is_empty() {
+                                        eprintln!("   📝 Error: {}", err_msg.lines().next().unwrap_or("Unknown"));
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("   ❌ FALLBACK ERROR: {}", e);
+                                }
                             }
-                            Ok(retry_out) => {
-                                eprintln!("   ❌ FALLBACK FAILED: cjxl still failed after re-encode");
-                                eprintln!("   📝 Error: {}", String::from_utf8_lossy(&retry_out.stderr));
-                            }
-                            Err(e) => {
-                                eprintln!("   ❌ FALLBACK ERROR: {}", e);
-                            }
+                            
+                            retry_result
+                        } else {
+                            eprintln!("   ❌ Failed to capture ImageMagick stdout");
+                            result
                         }
-                        
-                        retry_result
-                    } else {
-                        eprintln!("   ❌ ImageMagick re-encode failed, using original error");
-                        let _ = fs::remove_file(&fallback_png);
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
                         result
                     }
-                } else {
-                    eprintln!("   ❌ ImageMagick not available, using original error");
-                    result
                 }
             } else {
                 result
