@@ -1502,7 +1502,6 @@ fn prepare_input_for_cjxl(input: &Path) -> Result<(std::path::PathBuf, Option<st
 }
 
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
-/// Wrapper for shared_utils::determine_output_path with imgquality error type
 fn get_output_path(input: &Path, extension: &str, options: &ConvertOptions) -> Result<std::path::PathBuf> {
     if let Some(ref base) = options.base_dir {
         shared_utils::conversion::determine_output_path_with_base(input, base, extension, &options.output_dir)
