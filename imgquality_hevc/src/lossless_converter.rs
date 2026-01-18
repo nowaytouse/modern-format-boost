@@ -45,10 +45,12 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
         
         if !dest.exists() {
             if let Ok(_) = fs::copy(input, &dest) {
-                eprintln!("   📋 Copied original to output dir: {}", dest.display());
+                if options.verbose {
+                    eprintln!("   📋 Copied original to output dir: {}", dest.display());
+                }
                 // 🔥 v6.9.11: 合并 XMP 边车文件
                 match shared_utils::merge_xmp_for_copied_file(input, &dest) {
-                    Ok(true) => eprintln!("   📄 XMP sidecar merged"),
+                    Ok(true) => if options.verbose { eprintln!("   📄 XMP sidecar merged") },
                     Ok(false) => {},
                     Err(e) => eprintln!("   ⚠️ Failed to merge XMP sidecar: {}", e),
                 }
@@ -83,6 +85,30 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
     }
     
     let input_size = fs::metadata(input)?.len();
+
+    // 🔥 v7.5: PNG Strategy Refinement - Skip small files (< 500KB)
+    // Avoids massive skipping/rollback cycles for small files where JXL overhead is high
+    if let Some(ext) = input.extension() {
+        if ext.to_string_lossy().to_lowercase() == "png" && input_size < 500 * 1024 {
+            if options.verbose {
+                eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
+            }
+            // Copy original if needed (adjacent mode)
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            return Ok(ConversionResult {
+                success: true,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size,
+                output_size: None,
+                size_reduction: None,
+                message: "Skipped: Small PNG (< 500KB)".to_string(),
+                skipped: true,
+                skip_reason: Some("small_file".to_string()),
+            });
+        }
+    }
     let output = get_output_path(input, "jxl", &options.output_dir)?;
     
     // Ensure output directory exists
@@ -259,8 +285,10 @@ pub fn convert_to_jxl(input: &Path, options: &ConvertOptions, distance: f32) -> 
             // 这对于小型PNG或已高度优化的图片很常见
             if output_size > input_size {
                 let _ = fs::remove_file(&output);
-                eprintln!("   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)", 
-                    input_size, output_size, (output_size as f64 / input_size as f64 - 1.0) * 100.0);
+                if options.verbose {
+                    eprintln!("   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)", 
+                        input_size, output_size, (output_size as f64 / input_size as f64 - 1.0) * 100.0);
+                }
                 // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
@@ -618,7 +646,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
 /// Convert image to AVIF using mathematical lossless (⚠️ VERY SLOW)
 pub fn convert_to_avif_lossless(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
-    eprintln!("⚠️  Mathematical lossless AVIF encoding - this will be SLOW!");
+    if options.verbose {
+        eprintln!("⚠️  Mathematical lossless AVIF encoding - this will be SLOW!");
+    }
     
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult {
@@ -766,11 +796,13 @@ pub fn convert_to_hevc_mp4_matched(
 
     // 🔥 v4.15: GPU 控制
     let use_gpu = options.use_gpu;
-    if !use_gpu {
+    if !use_gpu && options.verbose {
         eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
     }
 
-    eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
+    if options.verbose {
+        eprintln!("   {} Mode: CRF {:.1} (based on input analysis)", flag_mode.description_cn(), initial_crf);
+    }
 
     // 🔥 v4.15: 使用智能阈值计算
     let (max_crf, min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
