@@ -4,17 +4,18 @@ All notable changes to Modern Format Boost will be documented in this file.
 
 ## [7.4.9] - 2026-01-18
 
-### 🔥 Output Directory Timestamp Preservation
+### 🔥 Output Directory Timestamp Preservation - FIXED
 
-#### Fixed: Output Directory Inherits Source Timestamp
+#### Fixed: Output Directory Now Correctly Inherits Source Timestamp
 **Problem:**
 - Output directory (e.g., `all_optimized`) had current timestamp instead of source timestamp
-- Only subdirectories preserved timestamps, not the root output directory
+- Root cause: `preserve_directory_metadata()` was not called when no files needed processing
+- Tools returned early if no matching files found, skipping metadata preservation
 
 **Solution:**
-- Modified `preserve_directory_metadata()` to collect root directory metadata
-- Added `create_dir_all` to ensure target directories exist before setting metadata
-- Root output directory now inherits timestamp from source directory
+- Modified `imgquality_hevc` and `imgquality_av1` to preserve directory metadata even when no files found
+- `preserve_directory_metadata()` now always executes for adjacent directory mode
+- Root output directory now correctly inherits timestamp from source directory
 
 **Test Results:**
 ```bash
@@ -23,11 +24,16 @@ Output:      /Downloads/all_optimized (2020-01-01 00:00) ✅
 ```
 
 **What's Preserved:**
-- ✅ Root output directory timestamp (NEW)
+- ✅ Root output directory timestamp (FIXED)
 - ✅ All subdirectory timestamps
 - ✅ Directory permissions
 - ✅ Extended attributes (xattr)
 - ✅ macOS creation time
+
+**Modified Files:**
+- `imgquality_hevc/src/main.rs` - Added metadata preservation for empty directories
+- `imgquality_av1/src/main.rs` - Added metadata preservation for empty directories
+- `scripts/drag_and_drop_processor.sh` - Added immediate timestamp copy after directory creation
 
 ## [7.4.8] - 2026-01-18
 

@@ -191,10 +191,18 @@ create_directory_structure() {
     local src="$1"
     local dest="$2"
     mkdir -p "$dest"
+    
+    # 🔥 v7.4.9: 立即复制根目录时间戳
+    touch -r "$src" "$dest"
+    
     find "$src" -type d -print0 | while IFS= read -r -d '' dir; do
         local rel="${dir#$src}"
         rel="${rel#/}"
-        [[ -n "$rel" ]] && mkdir -p "$dest/$rel"
+        if [[ -n "$rel" ]]; then
+            mkdir -p "$dest/$rel"
+            # 🔥 v7.4.9: 立即复制子目录时间戳
+            touch -r "$dir" "$dest/$rel"
+        fi
     done
 }
 
