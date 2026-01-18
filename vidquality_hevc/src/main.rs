@@ -51,8 +51,8 @@ enum Commands {
         #[arg(long)]
         lossless: bool,
         /// Match input video quality level (auto-calculate CRF based on input bitrate)
-        /// Use --match-quality true to enable, --match-quality false to disable
-        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+        /// Use --match-quality to enable
+        #[arg(long)]
         match_quality: bool,
         /// 🍎 Apple compatibility mode: Convert non-Apple-compatible modern codecs (AV1, VP9) to HEVC
         /// When enabled, AV1/VP9/VVC/AV2 videos will be converted to HEVC for Apple device compatibility
