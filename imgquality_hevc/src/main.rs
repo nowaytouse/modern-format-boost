@@ -545,41 +545,14 @@ struct AutoConvertConfig {
 /// 🔥 v6.5.2: 在"输出到相邻目录"模式下复制原始文件
 /// 当文件被跳过时（短动画、无法压缩等），需要将原始文件复制到输出目录
 /// 🔥 v6.9.11: 同时合并XMP边车文件（如果存在）
-/// 🔥 v6.9.15: 保留目录结构 + 元数据
+/// 🔥 v7.4.2: 使用 smart_file_copier 模块
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
-    if let Some(ref output_dir) = config.output_dir {
-        // 🔥 v6.9.15: 保留目录结构
-        let dest = if let Some(ref base_dir) = config.base_dir {
-            // 计算相对路径
-            let rel_path = input.strip_prefix(base_dir).unwrap_or(input);
-            let dest_path = output_dir.join(rel_path);
-            
-            // 确保目标目录存在
-            if let Some(parent) = dest_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            dest_path
-        } else {
-            // 没有 base_dir，使用文件名（向后兼容）
-            let file_name = input.file_name().ok_or_else(|| anyhow::anyhow!("No file name"))?;
-            output_dir.join(file_name)
-        };
-        
-        // 如果目标不存在，复制
-        if !dest.exists() {
-            std::fs::copy(input, &dest)?;
-            
-            // 🔥 v6.9.15: 保留元数据（时间戳等）+ 自动合并 XMP
-            shared_utils::copy_metadata(input, &dest);
-            
-            if config.verbose {
-                println!("   📋 Copied to output dir: {}", dest.display());
-            }
-        } else {
-            // 🔥 目标已存在，但仍需确保 XMP 已合并和元数据已保留
-            shared_utils::copy_metadata(input, &dest);
-        }
-    }
+    shared_utils::copy_on_skip_or_fail(
+        input,
+        config.output_dir.as_deref(),
+        config.base_dir.as_deref(),
+        config.verbose
+    )?;
     Ok(())
 }
 
