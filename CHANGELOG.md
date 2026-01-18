@@ -2,6 +2,74 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.5.0] - 2026-01-18
+
+### 🚀 File Processing Optimization - Small Files First
+
+#### New: Intelligent File Sorting Module
+**Feature:**
+- Created modular `file_sorter.rs` for flexible file sorting strategies
+- Implemented `SortStrategy` enum: SizeAscending, SizeDescending, NameAscending, None
+- Added convenience functions: `sort_by_size_ascending()`, `sort_by_size_descending()`, `sort_by_name()`
+
+**Benefits:**
+- ✅ Quick progress feedback (small files finish fast)
+- ✅ Early problem detection (issues found sooner)
+- ✅ Large files don't block the queue
+- ✅ Better user experience during batch processing
+
+**Implementation:**
+- Updated `batch.rs` with new functions:
+  - `collect_files_sorted()` - collect with custom sort strategy
+  - `collect_files_small_first()` - recommended default (small files first)
+- Updated all 5 tools to use file sorting:
+  - `imgquality_hevc` ✅
+  - `imgquality_av1` ✅
+  - `vidquality_hevc` ✅ (via cli_runner)
+  - `vidquality_av1` ✅ (via cli_runner)
+  - `xmp_merge` ✅ (via cli_runner)
+
+**Testing:**
+- Comprehensive unit tests with property-based validation
+- Test coverage: empty lists, single files, same-size files, large batches
+- Strict sorting correctness verification
+
+**Modified Files:**
+- `shared_utils/src/file_sorter.rs` - New module (modular design)
+- `shared_utils/src/batch.rs` - Added sorting functions
+- `shared_utils/src/lib.rs` - Export new module
+- `shared_utils/src/cli_runner.rs` - Use sorted file collection
+- `imgquality_hevc/src/main.rs` - Use sorted file collection
+- `imgquality_av1/src/main.rs` - Use sorted file collection
+
+### 🔧 Build System Enhancement - Timestamp Verification
+
+#### New: Smart Build v7.5 - Compilation Verification
+**Feature:**
+- Post-compilation timestamp verification
+- Automatic retry with clean build on verification failure
+- Loud error reporting (响亮报错机制)
+
+**How it works:**
+1. Record compilation start time
+2. Build project with cargo
+3. Verify binary timestamp >= compile start time
+4. If verification fails: clean and retry (max 2 retries)
+5. After 2 failures: report critical error with suggestions
+
+**Benefits:**
+- ✅ Ensures binary files are actually updated
+- ✅ Detects cargo caching issues automatically
+- ✅ Prevents stale binaries from being used
+- ✅ Clear error messages with actionable suggestions
+
+**Configuration:**
+- `VERIFY_TIMESTAMPS=true` (default, can disable with `--no-verify-timestamps`)
+- `MAX_STALE_RETRIES=2` (max retry attempts before critical error)
+
+**Modified Files:**
+- `scripts/smart_build.sh` - Added timestamp verification logic
+
 ## [7.4.9] - 2026-01-18
 
 ### 🔥 Output Directory Timestamp Preservation - FINAL FIX

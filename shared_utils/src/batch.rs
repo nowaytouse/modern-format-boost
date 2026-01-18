@@ -2,9 +2,12 @@
 //! 
 //! Provides utilities for batch file processing with proper error handling
 //! Reference: media/CONTRIBUTING.md - Batch Processing Capability requirement
+//! 
+//! 🔥 v7.5: 添加文件排序功能，优先处理小文件
 
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+use crate::file_sorter::{SortStrategy, sort_by_size_ascending};
 
 /// Collect files from a directory with extension filtering
 /// 
@@ -14,7 +17,7 @@ use walkdir::WalkDir;
 /// * `recursive` - Whether to scan subdirectories
 /// 
 /// # Returns
-/// Vector of file paths matching the criteria
+/// Vector of file paths matching the criteria (unsorted)
 pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
     let walker = if recursive {
         WalkDir::new(dir).follow_links(true)
@@ -35,6 +38,44 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
         })
         .map(|e| e.path().to_path_buf())
         .collect()
+}
+
+/// 🔥 v7.5: Collect and sort files from a directory
+/// 
+/// # Arguments
+/// * `dir` - Directory to scan
+/// * `extensions` - List of allowed extensions (lowercase, without dot)
+/// * `recursive` - Whether to scan subdirectories
+/// * `sort_strategy` - How to sort the files (default: SizeAscending for small files first)
+/// 
+/// # Returns
+/// Vector of file paths matching the criteria, sorted according to strategy
+pub fn collect_files_sorted(
+    dir: &Path, 
+    extensions: &[&str], 
+    recursive: bool,
+    sort_strategy: SortStrategy,
+) -> Vec<PathBuf> {
+    let files = collect_files(dir, extensions, recursive);
+    
+    match sort_strategy {
+        SortStrategy::None => files,
+        SortStrategy::SizeAscending => sort_by_size_ascending(files),
+        _ => {
+            // 使用 FileSorter 处理其他策略
+            crate::file_sorter::FileSorter::new(sort_strategy).sort(files)
+        }
+    }
+}
+
+/// 🔥 v7.5: Convenience function - collect files sorted by size (small first)
+/// 
+/// 这是推荐的默认方式，优先处理小文件：
+/// - 快速看到进度反馈
+/// - 小文件处理快，可以更早发现问题
+/// - 大文件留到后面，避免长时间卡住
+pub fn collect_files_small_first(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
+    collect_files_sorted(dir, extensions, recursive, SortStrategy::SizeAscending)
 }
 
 /// Image file extensions commonly supported

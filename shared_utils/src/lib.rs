@@ -65,6 +65,9 @@ pub mod smart_file_copier;
 // 🔥 v7.3.2: 进度条模式控制（解决并行输出混乱）
 pub mod progress_mode;
 
+// 🔥 v7.5: 文件排序模块（优先处理小文件）
+pub mod file_sorter;
+
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
 
@@ -339,3 +342,9 @@ pub use file_copier::{
     SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, SIDECAR_EXTENSIONS,
 };
 pub use smart_file_copier::{smart_copy_with_structure, copy_on_skip_or_fail};
+
+// 🔥 v7.5: 文件排序
+pub use file_sorter::{
+    FileSorter, SortStrategy, FileInfo,
+    sort_by_size_ascending, sort_by_size_descending, sort_by_name,
+};
