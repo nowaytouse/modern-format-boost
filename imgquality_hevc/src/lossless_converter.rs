@@ -62,24 +62,30 @@ fn determine_output(input: &Path, extension: &str, options: &ConvertOptions) -> 
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
     // 只在相邻目录模式下复制（output_dir 不为 None）
     if let Some(ref out_dir) = options.output_dir {
-        let file_name = input.file_name().unwrap_or_default();
-        let dest = out_dir.join(file_name);
-        
-        // 确保目标目录存在
-        if let Some(parent) = dest.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
+        // 🔥 v6.9.15: 保留目录结构
+        let dest = if let Some(ref base) = options.base_dir {
+            // 计算相对路径
+            let rel_path = input.strip_prefix(base).unwrap_or(input);
+            let dest_path = out_dir.join(rel_path);
+            
+            // 确保目标目录存在
+            if let Some(parent) = dest_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            dest_path
+        } else {
+            // 没有 base_dir，使用文件名（向后兼容）
+            let file_name = input.file_name().unwrap_or_default();
+            out_dir.join(file_name)
+        };
         
         if !dest.exists() {
             if let Ok(_) = fs::copy(input, &dest) {
+                // 🔥 v6.9.15: 保留元数据（时间戳等）
+                shared_utils::copy_metadata(input, &dest);
+                
                 if options.verbose {
                     eprintln!("   📋 Copied original to output dir: {}", dest.display());
-                }
-                // 🔥 v6.9.11: 合并 XMP 边车文件
-                match shared_utils::merge_xmp_for_copied_file(input, &dest) {
-                    Ok(true) => if options.verbose { eprintln!("   📄 XMP sidecar merged") },
-                    Ok(false) => {},
-                    Err(e) => eprintln!("   ⚠️ Failed to merge XMP sidecar: {}", e),
                 }
                 return Some(dest);
             } else {
