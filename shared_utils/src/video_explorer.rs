@@ -7191,6 +7191,21 @@ fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     use std::process::Command;
 
+    // 🔥 v7.2: 优先使用独立 vmaf 工具（更可靠，绕过 ffmpeg libvmaf 依赖）
+    if crate::vmaf_standalone::is_vmaf_available() {
+        eprintln!("   📊 Using standalone vmaf tool (bypassing ffmpeg)...");
+        match crate::vmaf_standalone::calculate_ms_ssim_standalone(input, output) {
+            Ok(score) => {
+                eprintln!("   ✅ MS-SSIM score: {:.4}", score);
+                return Some(score);
+            }
+            Err(e) => {
+                eprintln!("   ⚠️  Standalone vmaf failed: {}", e);
+                eprintln!("   🔄 Falling back to ffmpeg libvmaf...");
+            }
+        }
+    }
+
     eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
 
     // 🔥 使用 libvmaf 的 float_ms_ssim 功能
