@@ -4,36 +4,36 @@ All notable changes to Modern Format Boost will be documented in this file.
 
 ## [7.4.9] - 2026-01-18
 
-### 🔥 Output Directory Timestamp Preservation - FIXED
+### 🔥 Output Directory Timestamp Preservation - FINAL FIX
 
-#### Fixed: Output Directory Now Correctly Inherits Source Timestamp
-**Problem:**
-- Output directory (e.g., `all_optimized`) had current timestamp instead of source timestamp
-- Root cause: `preserve_directory_metadata()` was not called when no files needed processing
-- Tools returned early if no matching files found, skipping metadata preservation
+#### Fixed: Directory Timestamps Now Correctly Preserved After All Operations
+**Root Cause:**
+- `rsync` in `drag_and_drop_processor.sh` runs AFTER tool processing
+- `rsync` modifies directory timestamps when copying non-media files
+- Tool's `preserve_directory_metadata()` was called too early
 
 **Solution:**
-- Modified `imgquality_hevc` and `imgquality_av1` to preserve directory metadata even when no files found
-- `preserve_directory_metadata()` now always executes for adjacent directory mode
-- Root output directory now correctly inherits timestamp from source directory
+- Added `fix_directory_timestamps.sh` script for timestamp restoration
+- Modified `drag_and_drop_processor.sh` to call fix script AFTER rsync
+- Ensures directory timestamps are preserved as the final step
+
+**Execution Order:**
+1. Tool processes media files → calls `preserve_directory_metadata()`
+2. Script runs `rsync` to copy non-media files (modifies timestamps)
+3. Script calls `fix_directory_timestamps.sh` to restore timestamps ✅
 
 **Test Results:**
 ```bash
 Source:      /Downloads/all (2020-01-01 00:00)
 Output:      /Downloads/all_optimized (2020-01-01 00:00) ✅
+After rsync: /Downloads/all_optimized (2020-01-01 00:00) ✅
 ```
 
-**What's Preserved:**
-- ✅ Root output directory timestamp (FIXED)
-- ✅ All subdirectory timestamps
-- ✅ Directory permissions
-- ✅ Extended attributes (xattr)
-- ✅ macOS creation time
-
 **Modified Files:**
-- `imgquality_hevc/src/main.rs` - Added metadata preservation for empty directories
-- `imgquality_av1/src/main.rs` - Added metadata preservation for empty directories
-- `scripts/drag_and_drop_processor.sh` - Added immediate timestamp copy after directory creation
+- `scripts/drag_and_drop_processor.sh` - Added timestamp restoration after rsync
+- `scripts/fix_directory_timestamps.sh` - New utility script for timestamp fixing
+- `imgquality_hevc/src/main.rs` - Preserve metadata even for empty directories
+- `imgquality_av1/src/main.rs` - Preserve metadata even for empty directories
 
 ## [7.4.8] - 2026-01-18
 

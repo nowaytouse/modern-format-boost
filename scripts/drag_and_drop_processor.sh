@@ -356,6 +356,11 @@ main() {
         
         rsync -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
         echo -e "\r   ${GREEN}✅ Non-media files synced.${RESET}         "
+        
+        # 🔥 v7.4.9: rsync 会修改目录时间戳，需要在最后再次修复
+        echo -ne "   ${DIM}Restoring directory timestamps...${RESET}"
+        "$SCRIPT_DIR/fix_directory_timestamps.sh" "$TARGET_DIR" "$OUTPUT_DIR" >/dev/null 2>&1
+        echo -e "\r   ${GREEN}✅ Directory timestamps restored.${RESET}  "
         echo ""
     fi
     
