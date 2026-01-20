@@ -241,7 +241,7 @@ pub fn print_flag_help() {
     eprintln!("                           Precise quality match + must compress");
     eprintln!("   --explore --match-quality --compress --ultimate");
     eprintln!("                           🔥 Ultimate explore (search until SSIM saturates)");
-    eprintln!("");
+    eprintln!();
     eprintln!("❌ Invalid combinations:");
     eprintln!("   --explore --compress    Conflicting goals, please add --match-quality");
     eprintln!("   --ultimate alone        Must use with --explore --match-quality --compress");
@@ -472,7 +472,7 @@ mod tests {
     fn test_flag_mode_clone() {
         // 测试 FlagMode 的 Clone 实现
         let mode = FlagMode::PreciseQuality;
-        let cloned = mode.clone();
+        let cloned = mode;
         assert_eq!(mode, cloned);
     }
 

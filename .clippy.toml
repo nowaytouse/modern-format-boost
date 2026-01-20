@@ -1,0 +1,8 @@
+# Clippy configuration for modern_format_boost
+# 配置合理的警告阈值
+
+# 允许更多函数参数（媒体处理需要很多配置参数）
+too-many-arguments-threshold = 10
+
+# 允许复杂类型（Result<T, E>嵌套是必要的）
+type-complexity-threshold = 500

@@ -814,7 +814,7 @@ pub fn convert_to_av1_mp4_matched(
     // 🔥 v4.6: 使用模块化的 flag 验证器
     let flag_mode = options
         .flag_mode()
-        .map_err(|e| ImgQualityError::ConversionError(e))?;
+        .map_err(ImgQualityError::ConversionError)?;
 
     eprintln!(
         "   {} Mode: CRF {:.1} (based on input analysis)",
@@ -1554,15 +1554,24 @@ mod tests {
     #[test]
     fn test_get_output_path() {
         let input = Path::new("/path/to/image.png");
-        let output = get_output_path(input, "jxl", &None).unwrap();
+        let options = ConvertOptions {
+            output_dir: None,
+            base_dir: None,
+            ..Default::default()
+        };
+        let output = get_output_path(input, "jxl", &options).unwrap();
         assert_eq!(output, Path::new("/path/to/image.jxl"));
     }
 
     #[test]
     fn test_get_output_path_with_dir() {
         let input = Path::new("/path/to/image.png");
-        let output_dir = Some(PathBuf::from("/output"));
-        let output = get_output_path(input, "avif", &output_dir).unwrap();
+        let options = ConvertOptions {
+            output_dir: Some(PathBuf::from("/output")),
+            base_dir: None,
+            ..Default::default()
+        };
+        let output = get_output_path(input, "avif", &options).unwrap();
         assert_eq!(output, Path::new("/output/image.avif"));
     }
 
@@ -1570,7 +1579,12 @@ mod tests {
     fn test_get_output_path_same_file_error() {
         // 测试输入输出相同时应该报错
         let input = Path::new("/path/to/image.jxl");
-        let result = get_output_path(input, "jxl", &None);
+        let options = ConvertOptions {
+            output_dir: None,
+            base_dir: None,
+            ..Default::default()
+        };
+        let result = get_output_path(input, "jxl", &options);
         assert!(result.is_err());
     }
 }

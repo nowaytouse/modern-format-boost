@@ -83,7 +83,7 @@ impl StderrCapture {
 
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 let mut buf = lines.lock().unwrap();
                 if buf.len() >= max {
                     buf.pop_front();
@@ -1131,6 +1131,7 @@ pub fn is_quality_better(
 /// - 这不是精确的 CRF 转换，只是搜索范围的估算
 /// - 实际差异取决于内容、preset、编码器版本等
 /// - CPU 精细搜索会找到真正的边界
+///
 /// GPU 压缩边界到 CPU 压缩边界的估算（v5.31 动态优化）
 ///
 /// ## 背景
@@ -2174,11 +2175,7 @@ pub fn gpu_coarse_search_with_log(
 
         // 🔥 v7.5.3: 启动stderr捕获
         let stderr_capture = StderrCapture::new(100);
-        let stderr_handle = if let Some(stderr) = child.stderr.take() {
-            Some(stderr_capture.spawn_capture_thread(stderr))
-        } else {
-            None
-        };
+        let stderr_handle = child.stderr.take().map(|stderr| stderr_capture.spawn_capture_thread(stderr));
 
         // 🔥 v7.5.3: 启动心跳监控
         let last_activity = Arc::new(Mutex::new(Instant::now()));
@@ -2918,6 +2915,7 @@ pub fn gpu_coarse_search_with_log(
             let mut offset = 0.5_f32;
             let mut consecutive_small_improvements = 0;
 
+            #[allow(clippy::while_immutable_condition)]
             while iterations < max_iterations_limit {
                 let test_crf = current_best - offset;
 
@@ -3349,7 +3347,7 @@ mod tests {
             low
         );
         assert!(
-            high >= 15.0 && high <= 22.0,
+            (15.0..=22.0).contains(&high),
             "high={} should be in [15, 22]",
             high
         );
