@@ -36,6 +36,7 @@ use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
+use tracing::{debug, error, info};
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.7: FfmpegProcess - 防死锁的 FFmpeg 进程包装器
@@ -68,6 +69,13 @@ impl FfmpegProcess {
     /// - 进程启动失败
     /// - 无法捕获 stderr
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
+        // 记录即将执行的FFmpeg命令
+        let command_str = format!("{:?}", cmd);
+        info!(
+            command = %command_str,
+            "Executing FFmpeg command"
+        );
+
         // 设置管道
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -127,12 +135,33 @@ impl FfmpegProcess {
             .take()
             .map(|t| t.join().unwrap_or_default())
             .unwrap_or_default();
+
+        // 记录FFmpeg执行结果
+        if status.success() {
+            info!(
+                exit_code = status.code(),
+                "FFmpeg process completed successfully"
+            );
+            debug!(
+                stderr_output = %stderr,
+                "FFmpeg stderr output"
+            );
+        } else {
+            error!(
+                exit_code = status.code(),
+                stderr_output = %stderr,
+                "FFmpeg process failed"
+            );
+        }
+
         Ok((status, stderr))
     }
 
     /// 检查进程是否仍在运行
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
-        self.child.try_wait().context("Failed to check FFmpeg status")
+        self.child
+            .try_wait()
+            .context("Failed to check FFmpeg status")
     }
 
     /// 强制终止进程
@@ -140,7 +169,6 @@ impl FfmpegProcess {
         self.child.kill().context("Failed to kill FFmpeg process")
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.7: FfmpegProgressParser - 统一的进度解析器
@@ -308,7 +336,6 @@ impl FfmpegProgressParser {
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.7: FFmpeg 错误格式化
 // ═══════════════════════════════════════════════════════════════
@@ -363,7 +390,9 @@ pub fn is_recoverable_error(stderr: &str) -> bool {
         "Connection reset",
         "Broken pipe",
     ];
-    recoverable_patterns.iter().any(|pattern| stderr.contains(pattern))
+    recoverable_patterns
+        .iter()
+        .any(|pattern| stderr.contains(pattern))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -412,10 +441,19 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
         ("Permission denied", "检查文件权限，确保有读写权限"),
         ("Output file is empty", "编码失败，尝试降低质量参数"),
         ("Avi header", "AVI 文件头损坏，尝试使用 -fflags +genpts"),
-        ("moov atom not found", "MP4 文件不完整，尝试使用 -movflags faststart"),
-        ("Invalid NAL unit size", "视频流损坏，尝试使用 -err_detect ignore_err"),
+        (
+            "moov atom not found",
+            "MP4 文件不完整，尝试使用 -movflags faststart",
+        ),
+        (
+            "Invalid NAL unit size",
+            "视频流损坏，尝试使用 -err_detect ignore_err",
+        ),
         ("Discarding", "部分帧被丢弃，可能是时间戳问题"),
-        ("Too many packets buffered", "增加 -max_muxing_queue_size 参数"),
+        (
+            "Too many packets buffered",
+            "增加 -max_muxing_queue_size 参数",
+        ),
     ];
 
     for (pattern, suggestion) in patterns {
@@ -430,29 +468,56 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
 pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(args);
-    
+
     let command_str = format!("ffmpeg {}", args.join(" "));
-    
+
+    // 记录即将执行的命令
+    info!(
+        command = %command_str,
+        "Executing FFmpeg command"
+    );
+
     let output = cmd.output().context("Failed to execute FFmpeg")?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        
+
         let error = FfmpegError {
             command: command_str,
-            stdout,
+            stdout: stdout.clone(),
             stderr: stderr.clone(),
             exit_code: output.status.code(),
             suggestion: get_error_suggestion(&stderr),
         };
-        
-        // 🔥 响亮报错
+
+        // 🔥 响亮报错 - 使用tracing记录详细错误信息
+        error!(
+            command = %error.command,
+            exit_code = ?error.exit_code,
+            stderr = %error.stderr,
+            stdout = %error.stdout,
+            suggestion = ?error.suggestion,
+            "FFmpeg command failed"
+        );
+
+        // 同时输出到stderr供用户查看
         eprintln!("{}", error);
-        
+
         return Err(anyhow::anyhow!(error));
     }
-    
+
+    // 记录成功执行
+    info!(
+        exit_code = output.status.code(),
+        "FFmpeg command completed successfully"
+    );
+    debug!(
+        stdout_length = output.stdout.len(),
+        stderr_length = output.stderr.len(),
+        "FFmpeg output captured"
+    );
+
     Ok(output)
 }
 
@@ -522,7 +587,6 @@ Conversion failed!
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.7: 属性测试
 // ═══════════════════════════════════════════════════════════════
@@ -544,7 +608,7 @@ mod prop_tests {
             let mut parser = FfmpegProgressParser::new(Some(total));
             let line = format!("frame={}", current);
             let progress = parser.parse_line(&line);
-            
+
             if current > 0 {
                 let expected = (current as f64 / total as f64).min(1.0);
                 prop_assert!(progress.is_some());
@@ -553,7 +617,7 @@ mod prop_tests {
                     "Expected {}, got {} for frame {}/{}", expected, actual, current, total);
             }
         }
-        
+
         /// **Feature: code-quality-v6.4.7, Property 4b: 时间解析正确性**
         /// *对于任意*有效的时间，进度解析应返回正确的百分比
         #[test]
@@ -566,7 +630,7 @@ mod prop_tests {
             let mut parser = FfmpegProgressParser::with_duration(total_duration);
             let line = format!("time={:02}:{:02}:{:02}.00", hours, minutes, seconds);
             let progress = parser.parse_line(&line);
-            
+
             let current_seconds = hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64;
             if current_seconds > 0.0 {
                 let expected = (current_seconds / total_duration).min(1.0);
@@ -576,7 +640,7 @@ mod prop_tests {
                     "Expected {}, got {} for time {}:{}:{}", expected, actual, hours, minutes, seconds);
             }
         }
-        
+
         /// **Feature: code-quality-v6.4.7, Property 4c: 错误格式化非空**
         /// *对于任意*非空 stderr，format_ffmpeg_error 应返回非空字符串
         #[test]
@@ -586,7 +650,7 @@ mod prop_tests {
             let error = format_ffmpeg_error(&content);
             prop_assert!(!error.is_empty(), "Error message should not be empty");
         }
-        
+
         /// **Feature: code-quality-v6.4.7, Property 4d: 错误格式化优先 Error 行**
         /// 如果 stderr 包含 "Error"，应优先返回该行
         #[test]
@@ -596,7 +660,7 @@ mod prop_tests {
         ) {
             let stderr = format!("{}\nError: test error message\n{}", prefix, suffix);
             let error = format_ffmpeg_error(&stderr);
-            prop_assert!(error.contains("Error"), 
+            prop_assert!(error.contains("Error"),
                 "Should contain 'Error', got: {}", error);
         }
     }

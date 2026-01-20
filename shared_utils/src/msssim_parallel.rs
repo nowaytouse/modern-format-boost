@@ -8,13 +8,13 @@
 //! - 线程安全的错误处理
 //! - 降级策略支持
 
+use crate::app_error::AppError;
+use crate::msssim_heartbeat::Heartbeat;
+use crate::msssim_progress::MsssimProgressMonitor;
+use crate::msssim_sampling::{SamplingConfig, SamplingStrategy};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
-use crate::app_error::AppError;
-use crate::msssim_sampling::{SamplingStrategy, SamplingConfig};
-use crate::msssim_progress::MsssimProgressMonitor;
-use crate::msssim_heartbeat::Heartbeat;
 
 /// MS-SSIM计算结果
 #[derive(Debug, Clone)]
@@ -41,21 +41,23 @@ impl MsssimResult {
             total_frames: 0,
         }
     }
-    
+
     /// 是否跳过了计算
     pub fn is_skipped(&self) -> bool {
         self.sampling_strategy == SamplingStrategy::Skip
     }
-    
+
     /// 打印性能统计
     pub fn print_stats(&self, elapsed_secs: f64) {
         if self.is_skipped() {
             return;
         }
-        
+
         let speedup = self.total_frames as f64 / self.sampled_frames.max(1) as f64;
-        eprintln!("⏱️  MS-SSIM completed in {:.2}s (sampled {}/{} frames)", 
-            elapsed_secs, self.sampled_frames, self.total_frames);
+        eprintln!(
+            "⏱️  MS-SSIM completed in {:.2}s (sampled {}/{} frames)",
+            elapsed_secs, self.sampled_frames, self.total_frames
+        );
         eprintln!("   Parallel speedup: {:.1}x (theoretical: 3x)", speedup);
     }
 }
@@ -91,7 +93,7 @@ impl ParallelMsssimCalculator {
             sampling_config.duration_secs,
             sampling_config.sampled_frames,
         ));
-        
+
         Self {
             original_path,
             converted_path,
@@ -99,7 +101,7 @@ impl ParallelMsssimCalculator {
             progress_monitor,
         }
     }
-    
+
     /// 并行计算MS-SSIM
     ///
     /// # Returns
@@ -108,44 +110,44 @@ impl ParallelMsssimCalculator {
         if self.sampling_config.strategy == SamplingStrategy::Skip {
             return Ok(MsssimResult::skipped());
         }
-        
+
         eprintln!("🔄 Calculating MS-SSIM (heartbeat active)");
-        
+
         // 启动心跳检测
         let heartbeat = Heartbeat::start(30);
-        
+
         // 创建三个通道的计算任务
         let y_monitor = Arc::clone(&self.progress_monitor);
         let u_monitor = Arc::clone(&self.progress_monitor);
         let v_monitor = Arc::clone(&self.progress_monitor);
-        
+
         let orig_path = self.original_path.clone();
         let conv_path = self.converted_path.clone();
         let config = self.sampling_config.clone();
-        
+
         // Y通道线程
         let y_handle = thread::spawn(move || {
             Self::calculate_channel(&orig_path, &conv_path, &config, "Y", y_monitor)
         });
-        
+
         let orig_path = self.original_path.clone();
         let conv_path = self.converted_path.clone();
         let config = self.sampling_config.clone();
-        
+
         // U通道线程
         let u_handle = thread::spawn(move || {
             Self::calculate_channel(&orig_path, &conv_path, &config, "U", u_monitor)
         });
-        
+
         let orig_path = self.original_path.clone();
         let conv_path = self.converted_path.clone();
         let config = self.sampling_config.clone();
-        
+
         // V通道线程
         let v_handle = thread::spawn(move || {
             Self::calculate_channel(&orig_path, &conv_path, &config, "V", v_monitor)
         });
-        
+
         // 等待所有线程完成
         let y_result = y_handle.join().map_err(|_| {
             eprintln!("❌ Y channel thread panicked");
@@ -159,18 +161,21 @@ impl ParallelMsssimCalculator {
             eprintln!("❌ V channel thread panicked");
             AppError::Other(anyhow::anyhow!("V channel thread panicked"))
         })?;
-        
+
         // 停止心跳
         heartbeat.stop();
-        
+
         // 检查错误
         let y_score = y_result?;
         let u_score = u_result?;
         let v_score = v_result?;
-        
+
         eprintln!("✅ MS-SSIM complete, heartbeat stopped");
-        eprintln!("✅ MS-SSIM (parallel): Y={:.4} U={:.4} V={:.4}", y_score, u_score, v_score);
-        
+        eprintln!(
+            "✅ MS-SSIM (parallel): Y={:.4} U={:.4} V={:.4}",
+            y_score, u_score, v_score
+        );
+
         Ok(MsssimResult {
             y_score,
             u_score,
@@ -181,7 +186,7 @@ impl ParallelMsssimCalculator {
             total_frames: self.sampling_config.total_frames,
         })
     }
-    
+
     /// 计算单个通道的MS-SSIM
     ///
     /// # Arguments
@@ -202,10 +207,12 @@ impl ParallelMsssimCalculator {
     ) -> Result<f64, AppError> {
         // 构建ffmpeg命令参数
         let mut args = vec![
-            "-i", original_path.to_str().unwrap(),
-            "-i", converted_path.to_str().unwrap(),
+            "-i",
+            original_path.to_str().unwrap(),
+            "-i",
+            converted_path.to_str().unwrap(),
         ];
-        
+
         // 添加select filter（如果需要）
         let filter_str;
         if let Some(filter) = config.strategy.ffmpeg_filter() {
@@ -213,7 +220,7 @@ impl ParallelMsssimCalculator {
             args.push("-filter_complex");
             args.push(&filter_str);
         }
-        
+
         // 添加libvmaf filter计算MS-SSIM
         let lavfi_str = format!("libvmaf=feature=name=ms_ssim:channel={}", channel);
         args.push("-lavfi");
@@ -221,17 +228,17 @@ impl ParallelMsssimCalculator {
         args.push("-f");
         args.push("null");
         args.push("-");
-        
+
         // 执行命令并监控进度
-        progress_monitor.monitor_ffmpeg_process(&args, channel)
+        progress_monitor
+            .monitor_ffmpeg_process(&args, channel)
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
-        
+
         // 获取通道分数
-        progress_monitor.get_channel_score(channel)
-            .ok_or_else(|| {
-                eprintln!("❌ Failed to get {} channel score", channel);
-                AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
-            })
+        progress_monitor.get_channel_score(channel).ok_or_else(|| {
+            eprintln!("❌ Failed to get {} channel score", channel);
+            AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
+        })
     }
 }
 
@@ -260,7 +267,7 @@ mod tests {
             sampled_frames: 1000,
             total_frames: 3000,
         };
-        
+
         // 测试打印不会panic
         result.print_stats(30.5);
     }
@@ -273,9 +280,12 @@ mod tests {
             PathBuf::from("/tmp/converted.mp4"),
             config,
         );
-        
+
         assert_eq!(calculator.original_path, PathBuf::from("/tmp/original.mp4"));
-        assert_eq!(calculator.converted_path, PathBuf::from("/tmp/converted.mp4"));
+        assert_eq!(
+            calculator.converted_path,
+            PathBuf::from("/tmp/converted.mp4")
+        );
     }
 
     // 🔥 属性测试：验证并行计算结果
@@ -302,7 +312,7 @@ mod tests {
                     sampled_frames: 1000,
                     total_frames: 1000,
                 };
-                
+
                 // 验证组合分数计算正确
                 let expected = (y + u + v) / 3.0;
                 prop_assert!((result.combined_score - expected).abs() < 1e-10);
@@ -321,7 +331,7 @@ mod tests {
                     sampled_frames: 1000,
                     total_frames: 1000,
                 };
-                
+
                 // 测试打印不会panic
                 result.print_stats(elapsed);
             }
@@ -335,7 +345,7 @@ mod tests {
             ) {
                 let sampled_frames = sampled.min(total);
                 let total_frames = total.max(sampled);
-                
+
                 let result = MsssimResult {
                     y_score: 0.98,
                     u_score: 0.97,
@@ -345,7 +355,7 @@ mod tests {
                     sampled_frames,
                     total_frames,
                 };
-                
+
                 // 测试打印不会panic
                 result.print_stats(30.0);
             }
@@ -359,12 +369,12 @@ mod tests {
             ) {
                 let sampled_frames = sampled.min(total);
                 let total_frames = total.max(sampled);
-                
+
                 let speedup = total_frames as f64 / sampled_frames.max(1) as f64;
-                
+
                 // 验证加速比 >= 1.0
                 prop_assert!(speedup >= 1.0);
-                
+
                 // 验证加速比 = total / sampled
                 let expected = total_frames as f64 / sampled_frames as f64;
                 prop_assert!((speedup - expected).abs() < 1e-10);

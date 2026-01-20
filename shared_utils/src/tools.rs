@@ -39,7 +39,7 @@ pub fn get_tool_version(name: &str) -> Option<String> {
         .output()
         .or_else(|_| Command::new(name).arg("-version").output())
         .ok()?;
-    
+
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         // Get first line of version output
@@ -113,7 +113,7 @@ pub fn check_video_tools() -> Vec<ToolCheck> {
 pub fn print_tool_report(tools: &[ToolCheck]) {
     println!("🔧 External Tools Check");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
+
     let mut all_available = true;
     for tool in tools {
         if tool.available {
@@ -125,9 +125,9 @@ pub fn print_tool_report(tools: &[ToolCheck]) {
             all_available = false;
         }
     }
-    
+
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
+
     if all_available {
         println!("   ✅ All required tools are available!");
     } else {
@@ -138,13 +138,13 @@ pub fn print_tool_report(tools: &[ToolCheck]) {
 /// Check required tools and exit if any are missing
 pub fn require_tools(tool_names: &[&str]) -> Result<(), String> {
     let mut missing = Vec::new();
-    
+
     for name in tool_names {
         if !check_tool(name) && !check_tool_alt(name) {
             missing.push(*name);
         }
     }
-    
+
     if missing.is_empty() {
         Ok(())
     } else {

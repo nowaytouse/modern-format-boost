@@ -1,5 +1,5 @@
 //! Shared Utilities for modern_format_boost tools
-//! 
+//!
 //! This crate provides common functionality shared across imgquality, vidquality, and vidquality-hevc:
 //! - Progress bar with ETA
 //! - Safety checks (dangerous directory detection)
@@ -13,40 +13,40 @@
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 
-pub mod progress;
-pub mod simple_progress;
-pub mod safety;
 pub mod batch;
-pub mod report;
-pub mod ffprobe;
-pub mod tools;
+pub mod checkpoint;
 pub mod codecs;
-pub mod metadata;
 pub mod conversion;
-pub mod video;
 pub mod date_analysis;
-pub mod quality_matcher;
+pub mod error_handler;
+pub mod explore_strategy;
+pub mod ffprobe;
+pub mod flag_validator;
+pub mod gpu_accel;
 pub mod image_quality_detector;
-pub mod video_quality_detector;
+pub mod lru_cache;
+pub mod metadata;
+pub mod modern_ui;
+pub mod progress;
+pub mod quality_matcher;
+pub mod realtime_progress;
+pub mod report;
+pub mod safety;
+pub mod simple_progress;
+pub mod ssim_mapping;
+pub mod tools;
+pub mod video;
 pub mod video_explorer;
 #[cfg(test)]
 mod video_explorer_tests;
-pub mod checkpoint;
+pub mod video_quality_detector;
 pub mod xmp_merger;
-pub mod flag_validator;
-pub mod gpu_accel;
-pub mod modern_ui;
-pub mod realtime_progress;
-pub mod lru_cache;
-pub mod error_handler;
-pub mod ssim_mapping;
-pub mod explore_strategy;
 // 🔥 v6.4.7: FFmpeg 进程管理模块（防死锁）
 pub mod ffmpeg_process;
 // 🔥 v6.4.9: 代码质量模块
+pub mod crf_constants;
 pub mod float_compare;
 pub mod path_validator;
-pub mod crf_constants;
 // 🔥 v6.5: FFprobe JSON 解析模块
 pub mod ffprobe_json;
 // 🔥 v6.7: 纯视频流大小提取模块
@@ -81,8 +81,11 @@ pub mod msssim_progress;
 pub mod msssim_parallel;
 
 // 🔥 v7.7: 通用心跳系统
-pub mod universal_heartbeat;
 pub mod heartbeat_manager;
+pub mod universal_heartbeat;
+
+// 🔥 v7.8: 统一日志系统
+pub mod logging;
 
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
@@ -99,253 +102,334 @@ pub mod errors;
 // 🔥 Refactor: Shared Conversion Types
 pub mod conversion_types;
 
+pub use batch::*;
+pub use codecs::*;
+pub use conversion::*;
+pub use date_analysis::{
+    analyze_directory, print_analysis, DateAnalysisConfig, DateAnalysisResult, DateSource,
+    FileDateInfo,
+};
+pub use ffprobe::{
+    detect_bit_depth, get_duration, get_frame_count, is_ffprobe_available, parse_frame_rate,
+    probe_video, FFprobeError, FFprobeResult,
+};
+pub use metadata::{copy_metadata, preserve_directory_metadata, preserve_metadata, preserve_pro};
 pub use progress::{
+    create_compact_progress_bar,
+    create_detailed_progress_bar,
+    create_multi_progress,
+    // 原有导出
+    create_progress_bar,
+    create_progress_bar_with_eta,
+    create_spinner,
+    format_bytes,
+    format_duration,
+    BatchProgress,
     // 🔥 v5.31: 新增粗进度条
     CoarseProgressBar,
     // 🔥 v5.88: 详细粗进度条（视频探索专用）
     DetailedCoarseProgressBar,
+    ExploreLogger,
+    ExploreProgress,
     // 🔥 v5.5: 新增固定底部进度条
-    FixedBottomProgress, ProgressStats, ExploreProgress, ExploreLogger,
+    FixedBottomProgress,
     GlobalProgressManager,
-    // 原有导出
-    create_progress_bar, create_detailed_progress_bar, create_compact_progress_bar,
-    create_progress_bar_with_eta, SmartProgressBar,
-    create_spinner, create_multi_progress,
-    BatchProgress, format_bytes, format_duration,
+    ProgressStats,
+    SmartProgressBar,
 };
-pub use safety::*;
-pub use batch::*;
-pub use report::*;
-pub use ffprobe::{FFprobeResult, FFprobeError, probe_video, get_duration, get_frame_count, parse_frame_rate, detect_bit_depth, is_ffprobe_available};
-pub use tools::*;
-pub use codecs::*;
-pub use metadata::{preserve_metadata, preserve_pro, copy_metadata, preserve_directory_metadata};
-pub use conversion::*;
-pub use video::*;
-pub use date_analysis::{analyze_directory, DateAnalysisConfig, DateAnalysisResult, FileDateInfo, DateSource, print_analysis};
 pub use quality_matcher::{
-    // Core types
-    EncoderType, SourceCodec, QualityAnalysis, MatchedQuality, AnalysisDetails,
-    SkipDecision,
-    // v3.0 Enhanced types
-    MatchMode, QualityBias, ContentType, VideoAnalysisBuilder,
     // CRF/distance calculation
-    calculate_av1_crf, calculate_hevc_crf, calculate_jxl_distance,
+    calculate_av1_crf,
     // v3.0 with options
-    calculate_av1_crf_with_options, calculate_hevc_crf_with_options, calculate_jxl_distance_with_options,
+    calculate_av1_crf_with_options,
+    calculate_hevc_crf,
+    calculate_hevc_crf_with_options,
+    calculate_jxl_distance,
+    calculate_jxl_distance_with_options,
+    from_image_analysis,
+    from_video_detection,
     // Utilities
-    log_quality_analysis, from_video_detection, from_image_analysis,
-    should_skip_video_codec, should_skip_video_codec_apple_compat, should_skip_image_format, parse_source_codec,
+    log_quality_analysis,
+    parse_source_codec,
+    should_skip_image_format,
+    should_skip_video_codec,
+    should_skip_video_codec_apple_compat,
+    AnalysisDetails,
+    ContentType,
+    // Core types
+    EncoderType,
+    // v3.0 Enhanced types
+    MatchMode,
+    MatchedQuality,
+    QualityAnalysis,
+    QualityBias,
+    SkipDecision,
+    SourceCodec,
+    VideoAnalysisBuilder,
 };
+pub use report::*;
+pub use safety::*;
+pub use tools::*;
+pub use video::*;
 
 pub use image_quality_detector::{
-    // Core types
-    ImageQualityAnalysis, ImageContentType, RoutingDecision,
     // Main analysis function
     analyze_image_quality,
+    ImageContentType,
+    // Core types
+    ImageQualityAnalysis,
+    RoutingDecision,
 };
 
 pub use video_quality_detector::{
-    // Core types
-    VideoQualityAnalysis, VideoCodecType, ChromaSubsampling, 
-    VideoContentType, CompressionLevel, VideoRoutingDecision,
     // Main analysis function
     analyze_video_quality,
     // Integration helper
     to_quality_analysis as video_to_quality_analysis,
+    ChromaSubsampling,
+    CompressionLevel,
+    VideoCodecType,
+    VideoContentType,
+    // Core types
+    VideoQualityAnalysis,
+    VideoRoutingDecision,
 };
 
 pub use video_explorer::{
-    // Core types
-    ExploreResult, ExploreConfig, QualityThresholds, VideoEncoder, VideoExplorer,
-    // Explore mode enum
-    ExploreMode,
-    // 🔥 v5.74: 透明度报告类型
-    SsimSource, IterationMetrics, TransparencyReport,
-    // 🔥 v5.74: Preset 配置
-    EncoderPreset,
     // 🔥 v6.4.3: 动态元数据余量（百分比 + 最小值策略）
-    calculate_metadata_margin, compression_target_size, can_compress_with_metadata,
-    verify_compression_precise, verify_compression_simple, detect_metadata_size, pure_video_size,
-    CompressionVerifyStrategy,
-    METADATA_MARGIN_MIN, METADATA_MARGIN_MAX, METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
-    // New API: mode-specific functions
-    explore_size_only, explore_quality_match, explore_precise_quality_match,
+    calculate_metadata_margin,
+    can_compress_with_metadata,
+    compression_target_size,
+    detect_metadata_size,
+    // AV1 convenience functions
+    explore_av1,
+    explore_av1_compress_only,
+    explore_av1_compress_with_quality,
+    explore_av1_quality_match,
+    explore_av1_size_only,
+    // 🔥 v4.6: 仅压缩 + 压缩+质量
+    explore_compress_only,
+    explore_compress_with_quality,
+    // HEVC convenience functions
+    explore_hevc,
+    explore_hevc_compress_only,
+    explore_hevc_compress_with_quality,
+    explore_hevc_quality_match,
+    explore_hevc_size_only,
+    explore_precise_quality_match,
     // 🔥 v4.5: 精确质量匹配 + 压缩
     explore_precise_quality_match_with_compression,
-    // 🔥 v4.6: 仅压缩 + 压缩+质量
-    explore_compress_only, explore_compress_with_quality,
-    // HEVC convenience functions
-    explore_hevc, explore_hevc_size_only, explore_hevc_quality_match,
-    explore_hevc_compress_only, explore_hevc_compress_with_quality,
-    // AV1 convenience functions
-    explore_av1, explore_av1_size_only, explore_av1_quality_match,
-    explore_av1_compress_only, explore_av1_compress_with_quality,
+    explore_quality_match,
+    // New API: mode-specific functions
+    explore_size_only,
     // Precision module (精确度规范)
     precision,
     // 🔥 v5.72: 三阶段搜索
-    precision::SearchPhase, precision::ThreePhaseSearch,
+    precision::SearchPhase,
+    precision::ThreePhaseSearch,
+    pure_video_size,
+    verify_compression_precise,
+    verify_compression_simple,
+    CompressionVerifyStrategy,
+    // 🔥 v5.74: Preset 配置
+    EncoderPreset,
+    ExploreConfig,
+    // Explore mode enum
+    ExploreMode,
+    // Core types
+    ExploreResult,
+    IterationMetrics,
+    QualityThresholds,
+    // 🔥 v5.74: 透明度报告类型
+    SsimSource,
+    TransparencyReport,
+    VideoEncoder,
+    VideoExplorer,
+    METADATA_MARGIN_MAX,
+    METADATA_MARGIN_MIN,
+    METADATA_MARGIN_PERCENT,
+    SMALL_FILE_THRESHOLD,
 };
 
 // 🔥 v5.0: GPU 控制变体 (deprecated, GPU is now automatic)
 // 保留向后兼容，但不推荐使用
 #[allow(deprecated)]
 pub use video_explorer::{
-    explore_precise_quality_match_with_compression_gpu,
-    explore_precise_quality_match_gpu,
-    explore_compress_only_gpu,
-    explore_compress_with_quality_gpu,
-    explore_size_only_gpu,
-    explore_quality_match_gpu,
+    explore_compress_only_gpu, explore_compress_with_quality_gpu,
+    explore_precise_quality_match_gpu, explore_precise_quality_match_with_compression_gpu,
+    explore_quality_match_gpu, explore_size_only_gpu,
 };
-
-
 
 // Legacy API re-exports (deprecated but still available)
 #[allow(deprecated)]
-pub use video_explorer::quick_explore;
-#[allow(deprecated)]
 pub use video_explorer::full_explore;
+#[allow(deprecated)]
+pub use video_explorer::quick_explore;
 
-pub use checkpoint::{
-    CheckpointManager, verify_output_integrity, safe_delete_original,
-};
+pub use checkpoint::{safe_delete_original, verify_output_integrity, CheckpointManager};
 
 pub use xmp_merger::{
-    XmpMerger, XmpMergerConfig, XmpFile, MergeResult, MergeSummary,
-    merge_xmp_for_copied_file,  // 🔥 v6.9.11: 复制文件时合并XMP
+    merge_xmp_for_copied_file, // 🔥 v6.9.11: 复制文件时合并XMP
+    MergeResult,
+    MergeSummary,
+    XmpFile,
+    XmpMerger,
+    XmpMergerConfig,
 };
 
 // 🔥 v4.6: Flag 组合验证器
 // 🔥 v6.2: 添加 ultimate 支持
 pub use flag_validator::{
-    FlagMode, FlagValidation, validate_flags, validate_flags_result, 
-    validate_flags_with_ultimate, validate_flags_result_with_ultimate,
-    print_flag_help,
+    print_flag_help, validate_flags, validate_flags_result, validate_flags_result_with_ultimate,
+    validate_flags_with_ultimate, FlagMode, FlagValidation,
 };
 
 // 🔥 v4.9: GPU 加速模块
 // 🔥 v5.0: 新增 GPU→CPU 边界估算函数
 // 🔥 v5.1: 新增 GPU 粗略搜索 + CRF 映射
 pub use gpu_accel::{
-    GpuAccel, GpuEncoder, GpuType,
     // v5.0: GPU→CPU 边界估算
-    estimate_cpu_search_center, gpu_boundary_to_cpu_range,
+    estimate_cpu_search_center,
+    get_cpu_search_range_from_gpu,
+    gpu_boundary_to_cpu_range,
+    gpu_coarse_search,
+    gpu_coarse_search_with_log,
+    CrfMapping,
+    GpuAccel,
+    GpuCoarseConfig,
     // v5.1: GPU 粗略搜索
-    GpuCoarseResult, GpuCoarseConfig, CrfMapping,
-    gpu_coarse_search, gpu_coarse_search_with_log, get_cpu_search_range_from_gpu,
+    GpuCoarseResult,
+    GpuEncoder,
+    GpuType,
 };
 
 // 🔥 v5.1: GPU+CPU 智能探索
 pub use video_explorer::{
-    explore_with_gpu_coarse_search,
-    explore_hevc_with_gpu_coarse,
-    explore_hevc_with_gpu_coarse_ultimate,  // 🔥 v6.2: 极限探索模式
-    explore_hevc_with_gpu_coarse_full,  // 🔥 v6.9: 完整参数版本
     explore_av1_with_gpu_coarse,
+    explore_hevc_with_gpu_coarse,
+    explore_hevc_with_gpu_coarse_full,     // 🔥 v6.9: 完整参数版本
+    explore_hevc_with_gpu_coarse_ultimate, // 🔥 v6.2: 极限探索模式
+    explore_with_gpu_coarse_search,
 };
 
 // 🔥 v5.19: 现代化 UI/UX 模块
 pub use modern_ui::{
-    colors, symbols, progress_style,
-    render_progress_bar, render_colored_progress, ProgressStyle,
-    ExploreProgressState,
-    print_result_box, print_stage, print_substage,
-    print_success, print_warning, print_error, print_info,
-    format_size, format_size_change, format_size_diff,
-    spinner_frame, spinner_dots,
+    colors, format_size, format_size_change, format_size_diff, print_error, print_info,
+    print_result_box, print_stage, print_substage, print_success, print_warning, progress_style,
+    render_colored_progress, render_progress_bar, spinner_dots, spinner_frame, symbols,
+    ExploreProgressState, ProgressStyle,
 };
 
 // 🔥 v5.20: 真正的实时进度条
 #[allow(deprecated)]
 pub use realtime_progress::{
-    // 🔥 v5.34: 新的基于迭代计数的进度条（推荐）
-    SimpleIterationProgress,
-    // v5.31: 旧的基于CRF范围的进度条（已弃用但保留兼容）
-    RealtimeExploreProgress, RealtimeSpinner,
     // 🔥 v5.72: 详细进度状态
     DetailedProgressState,
+    // v5.31: 旧的基于CRF范围的进度条（已弃用但保留兼容）
+    RealtimeExploreProgress,
+    RealtimeSpinner,
+    // 🔥 v5.34: 新的基于迭代计数的进度条（推荐）
+    SimpleIterationProgress,
 };
 
 // 🔥 v5.72: LRU缓存模块
-pub use lru_cache::{LruCache, CacheEntry, SerializableCache};
+pub use lru_cache::{CacheEntry, LruCache, SerializableCache};
 
 // 🔥 v5.72: 统一错误处理模块
-pub use error_handler::{ErrorCategory, ErrorAction, handle_error};
+pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
 
 // 🔥 v5.74: PSNR→SSIM 动态映射模块
-pub use ssim_mapping::{PsnrSsimMapping, MappingPoint};
+pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
 
 // 🔥 v6.3: Strategy 模式探索器
 pub use explore_strategy::{
-    ExploreStrategy, ExploreContext, SsimResult, ProgressConfig,
-    create_strategy, strategy_name,
-    SizeOnlyStrategy, QualityMatchStrategy, PreciseQualityMatchStrategy,
-    PreciseQualityMatchWithCompressionStrategy, CompressOnlyStrategy, CompressWithQualityStrategy,
+    create_strategy, strategy_name, CompressOnlyStrategy, CompressWithQualityStrategy,
+    ExploreContext, ExploreStrategy, PreciseQualityMatchStrategy,
+    PreciseQualityMatchWithCompressionStrategy, ProgressConfig, QualityMatchStrategy,
+    SizeOnlyStrategy, SsimResult,
 };
 
 // 🔥 v6.4.7: FFmpeg 进程管理（防死锁）
 pub use ffmpeg_process::{
-    FfmpegProcess, FfmpegProgressParser,
-    format_ffmpeg_error, is_recoverable_error,
+    format_ffmpeg_error, is_recoverable_error, FfmpegProcess, FfmpegProgressParser,
 };
 
 // 🔥 v6.4.9: 代码质量模块
 // 🔥 v7.1: 扩展浮点比较函数
 pub use float_compare::{
-    // 通用 epsilon
-    F64_EPSILON, F32_EPSILON,
+    approx_eq_crf,
+    approx_eq_f32,
     // 通用比较函数
-    approx_eq_f64, approx_eq_f32, approx_zero_f64, approx_zero_f32,
-    approx_le_f64, approx_ge_f64,
-    // 🔥 v7.1: 领域特定 epsilon
-    SSIM_EPSILON as FLOAT_SSIM_EPSILON, CRF_EPSILON, PSNR_EPSILON,
+    approx_eq_f64,
+    approx_eq_psnr,
     // 🔥 v7.1: 领域特定比较函数
-    approx_eq_ssim, approx_eq_crf, approx_eq_psnr,
-    ssim_meets_threshold, ssim_below_threshold, crf_in_range,
+    approx_eq_ssim,
+    approx_ge_f64,
+    approx_le_f64,
+    approx_zero_f32,
+    approx_zero_f64,
+    crf_in_range,
+    ssim_below_threshold,
+    ssim_meets_threshold,
+    CRF_EPSILON,
+    F32_EPSILON,
+    // 通用 epsilon
+    F64_EPSILON,
+    PSNR_EPSILON,
+    // 🔥 v7.1: 领域特定 epsilon
+    SSIM_EPSILON as FLOAT_SSIM_EPSILON,
 };
 
-pub use path_validator::{
-    PathValidationError, validate_path, validate_paths,
-};
+pub use path_validator::{validate_path, validate_paths, PathValidationError};
 
 pub use crf_constants::{
-    // HEVC
-    HEVC_CRF_MIN, HEVC_CRF_MAX, HEVC_CRF_DEFAULT, HEVC_CRF_VISUALLY_LOSSLESS, HEVC_CRF_PRACTICAL_MAX,
+    AV1_CRF_DEFAULT,
+    AV1_CRF_MAX,
     // AV1
-    AV1_CRF_MIN, AV1_CRF_MAX, AV1_CRF_DEFAULT, AV1_CRF_VISUALLY_LOSSLESS, AV1_CRF_PRACTICAL_MAX,
-    // VP9
-    VP9_CRF_MIN, VP9_CRF_MAX, VP9_CRF_DEFAULT,
-    // x264
-    X264_CRF_MIN, X264_CRF_MAX, X264_CRF_DEFAULT,
+    AV1_CRF_MIN,
+    AV1_CRF_PRACTICAL_MAX,
+    AV1_CRF_VISUALLY_LOSSLESS,
     // Cache
-    CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID,
+    CRF_CACHE_KEY_MULTIPLIER,
+    CRF_CACHE_MAX_VALID,
+    EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS,
+    HEVC_CRF_DEFAULT,
+    HEVC_CRF_MAX,
+    // HEVC
+    HEVC_CRF_MIN,
+    HEVC_CRF_PRACTICAL_MAX,
+    HEVC_CRF_VISUALLY_LOSSLESS,
     // Iterations
-    NORMAL_MAX_ITERATIONS, EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS,
+    NORMAL_MAX_ITERATIONS,
+    VP9_CRF_DEFAULT,
+    VP9_CRF_MAX,
+    // VP9
+    VP9_CRF_MIN,
+    X264_CRF_DEFAULT,
+    X264_CRF_MAX,
+    // x264
+    X264_CRF_MIN,
 };
 
 // 🔥 v6.5: FFprobe JSON 解析
-pub use ffprobe_json::{ColorInfo, extract_color_info as ffprobe_extract_color_info};
+pub use ffprobe_json::{extract_color_info as ffprobe_extract_color_info, ColorInfo};
 
 // 🔥 v6.7: 纯视频流大小提取
 pub use stream_size::{
-    StreamSizeInfo, ExtractionMethod, extract_stream_sizes,
-    get_container_overhead_percent,
-    MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT, MKV_OVERHEAD_PERCENT, DEFAULT_OVERHEAD_PERCENT,
+    extract_stream_sizes, get_container_overhead_percent, ExtractionMethod, StreamSizeInfo,
+    DEFAULT_OVERHEAD_PERCENT, MKV_OVERHEAD_PERCENT, MOV_OVERHEAD_PERCENT, MP4_OVERHEAD_PERCENT,
 };
 
 // 🔥 v6.7: 纯媒体压缩验证
 pub use pure_media_verifier::{
-    PureMediaVerifyResult, verify_pure_media_compression,
-    is_video_compressed, video_compression_ratio,
+    is_video_compressed, verify_pure_media_compression, video_compression_ratio,
+    PureMediaVerifyResult,
 };
 
 // 🔥 v7.1: 类型安全包装器
 pub use types::{
-    Crf, CrfError, EncoderBounds, HevcEncoder, Av1Encoder, Vp9Encoder, X264Encoder,
-    Ssim, SsimError, SSIM_EPSILON,
-    FileSize,
-    IterationGuard, IterationError,
+    Av1Encoder, Crf, CrfError, EncoderBounds, FileSize, HevcEncoder, IterationError,
+    IterationGuard, Ssim, SsimError, Vp9Encoder, X264Encoder, SSIM_EPSILON,
 };
 
 // 🔥 v7.1: 统一错误类型
@@ -353,22 +437,20 @@ pub use app_error::AppError;
 
 // 🔥 v6.9.13: 文件复制模块（无遗漏设计）
 pub use file_copier::{
-    copy_unsupported_files, count_files as count_all_files, verify_output_completeness,
-    CopyResult, FileStats, VerifyResult,
-    SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS, SIDECAR_EXTENSIONS,
+    copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
+    FileStats, VerifyResult, SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS,
+    SUPPORTED_VIDEO_EXTENSIONS,
 };
-pub use smart_file_copier::{smart_copy_with_structure, copy_on_skip_or_fail};
+pub use smart_file_copier::{copy_on_skip_or_fail, smart_copy_with_structure};
 
 // 🔥 v7.5: 文件排序
 pub use file_sorter::{
-    FileSorter, SortStrategy, FileInfo,
-    sort_by_size_ascending, sort_by_size_descending, sort_by_name,
+    sort_by_name, sort_by_size_ascending, sort_by_size_descending, FileInfo, FileSorter,
+    SortStrategy,
 };
 
 // 🔥 v7.6: MS-SSIM智能采样
-pub use msssim_sampling::{
-    SamplingStrategy, SamplingConfig,
-};
+pub use msssim_sampling::{SamplingConfig, SamplingStrategy};
 
 // 🔥 v7.6: MS-SSIM心跳检测
 pub use msssim_heartbeat::Heartbeat;
@@ -377,9 +459,13 @@ pub use msssim_heartbeat::Heartbeat;
 pub use msssim_progress::MsssimProgressMonitor;
 
 // 🔥 v7.6: MS-SSIM并行计算
-pub use msssim_parallel::{ParallelMsssimCalculator, MsssimResult};
+pub use msssim_parallel::{MsssimResult, ParallelMsssimCalculator};
 
 // 🔥 v7.7: 通用心跳系统
-pub use universal_heartbeat::{UniversalHeartbeat, HeartbeatConfig, HeartbeatGuard};
 pub use heartbeat_manager::{HeartbeatManager, ProgressBarGuard};
+pub use universal_heartbeat::{HeartbeatConfig, HeartbeatGuard, UniversalHeartbeat};
 
+// 🔥 v7.8: 统一日志系统
+pub use logging::{
+    flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start, LogConfig,
+};
