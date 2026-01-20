@@ -1,18 +1,18 @@
 //! 🧪 Video Explorer Test Module
-//! 
+//!
 //! Modular test suite covering edge cases and comprehensive scenarios.
 
 #[cfg(test)]
 mod constants_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_crf_bounds() {
         assert!(ABSOLUTE_MIN_CRF >= 0.0);
         assert!(ABSOLUTE_MIN_CRF < ABSOLUTE_MAX_CRF);
         assert!(ABSOLUTE_MAX_CRF <= 63.0); // CRF max for most codecs
     }
-    
+
     #[test]
     fn test_iteration_limits() {
         assert!(STAGE_B1_MAX_ITERATIONS > 0);
@@ -20,7 +20,7 @@ mod constants_tests {
         assert!(GLOBAL_MAX_ITERATIONS >= 50);
         assert!(GLOBAL_MAX_ITERATIONS <= 100); // Reasonable upper bound
     }
-    
+
     #[test]
     fn test_binary_search_iterations() {
         assert!(BINARY_SEARCH_MAX_ITERATIONS >= 8);
@@ -31,7 +31,7 @@ mod constants_tests {
 #[cfg(test)]
 mod explore_config_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_default_config() {
         let config = ExploreConfig::default();
@@ -39,28 +39,28 @@ mod explore_config_tests {
         assert!(config.min_crf < config.max_crf);
         assert!(config.target_ratio > 0.0);
     }
-    
+
     #[test]
     fn test_size_only_config() {
         let config = ExploreConfig::size_only(20.0, 40.0);
         assert_eq!(config.mode, ExploreMode::SizeOnly);
         assert!(!config.quality_thresholds.validate_ssim);
     }
-    
+
     #[test]
     fn test_quality_match_config() {
         let config = ExploreConfig::quality_match(18.0);
         assert_eq!(config.mode, ExploreMode::QualityMatch);
         assert_eq!(config.max_iterations, 1);
     }
-    
+
     #[test]
     fn test_precise_quality_config() {
         let config = ExploreConfig::precise_quality_match(20.0, 35.0, 0.95);
         assert_eq!(config.mode, ExploreMode::PreciseQualityMatch);
         assert!(config.quality_thresholds.validate_ssim);
     }
-    
+
     #[test]
     fn test_compress_only_config() {
         let config = ExploreConfig::compress_only(20.0, 40.0);
@@ -72,7 +72,7 @@ mod explore_config_tests {
 #[cfg(test)]
 mod quality_thresholds_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_default_thresholds() {
         let thresholds = QualityThresholds::default();
@@ -81,7 +81,7 @@ mod quality_thresholds_tests {
         assert!(thresholds.min_psnr >= 30.0);
         assert!(thresholds.min_ms_ssim >= 0.80);
     }
-    
+
     #[test]
     fn test_ssim_range() {
         let thresholds = QualityThresholds::default();
@@ -94,28 +94,28 @@ mod quality_thresholds_tests {
 #[cfg(test)]
 mod video_encoder_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_hevc_encoder() {
         let encoder = VideoEncoder::Hevc;
         assert_eq!(encoder.ffmpeg_name(), "libx265");
         assert_eq!(encoder.container(), "mp4");
     }
-    
+
     #[test]
     fn test_av1_encoder() {
         let encoder = VideoEncoder::Av1;
         assert_eq!(encoder.ffmpeg_name(), "libsvtav1");
         assert_eq!(encoder.container(), "mp4");
     }
-    
+
     #[test]
     fn test_h264_encoder() {
         let encoder = VideoEncoder::H264;
         assert_eq!(encoder.ffmpeg_name(), "libx264");
         assert_eq!(encoder.container(), "mp4");
     }
-    
+
     #[test]
     fn test_extra_args() {
         let hevc = VideoEncoder::Hevc;
@@ -127,7 +127,7 @@ mod video_encoder_tests {
 #[cfg(test)]
 mod explore_result_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_result_size_change_calculation() {
         let result = ExploreResult {
@@ -142,14 +142,14 @@ mod explore_result_tests {
             log: vec![],
             confidence: 0.85,
             confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: 0.95,  // 🔥 v5.69
+            actual_min_ssim: 0.95, // 🔥 v5.69
             ..Default::default()
         };
-        
+
         assert!(result.size_change_pct < 0.0); // Compressed
         assert!(result.quality_passed);
     }
-    
+
     #[test]
     fn test_result_no_compression() {
         let result = ExploreResult {
@@ -164,10 +164,10 @@ mod explore_result_tests {
             log: vec![],
             confidence: 0.3,
             confidence_detail: ConfidenceBreakdown::default(),
-            actual_min_ssim: 0.95,  // 🔥 v5.69
+            actual_min_ssim: 0.95, // 🔥 v5.69
             ..Default::default()
         };
-        
+
         assert!(result.size_change_pct > 0.0); // Not compressed
         assert!(!result.quality_passed);
     }
@@ -176,7 +176,7 @@ mod explore_result_tests {
 #[cfg(test)]
 mod explore_mode_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_all_modes_exist() {
         let modes = [
@@ -189,7 +189,7 @@ mod explore_mode_tests {
         ];
         assert_eq!(modes.len(), 6);
     }
-    
+
     #[test]
     fn test_mode_equality() {
         assert_eq!(ExploreMode::SizeOnly, ExploreMode::SizeOnly);
@@ -202,22 +202,20 @@ mod dynamic_iteration_tests {
     #[test]
     fn test_log2_calculation() {
         // 测试动态迭代次数计算
-        let calc_max_iter = |range: f32| -> u32 {
-            ((range.log2().ceil() as u32) + 3).max(5)
-        };
-        
+        let calc_max_iter = |range: f32| -> u32 { ((range.log2().ceil() as u32) + 3).max(5) };
+
         // 小范围
         assert!(calc_max_iter(5.0) >= 5);
-        
+
         // 中等范围
         let mid = calc_max_iter(25.0);
         assert!(mid >= 7 && mid <= 10);
-        
+
         // 大范围
         let large = calc_max_iter(50.0);
         assert!(large >= 8 && large <= 12);
     }
-    
+
     #[test]
     fn test_iteration_bounds() {
         // 确保迭代次数在合理范围内
@@ -232,7 +230,7 @@ mod dynamic_iteration_tests {
 #[cfg(test)]
 mod edge_case_tests {
     use super::super::video_explorer::*;
-    
+
     #[test]
     fn test_zero_input_size() {
         // 输入大小为 0 的边缘情况
@@ -244,7 +242,7 @@ mod edge_case_tests {
         };
         assert_eq!(size_pct, 0.0);
     }
-    
+
     #[test]
     fn test_crf_precision() {
         // CRF 精度测试（0.1 步进）
@@ -252,7 +250,7 @@ mod edge_case_tests {
         let rounded = (crf * 10.0).round() / 10.0;
         assert!((rounded - 20.5).abs() < 0.01);
     }
-    
+
     #[test]
     fn test_ssim_bounds() {
         // SSIM 边界测试
@@ -261,13 +259,13 @@ mod edge_case_tests {
             assert!(ssim >= 0.0 && ssim <= 1.0);
         }
     }
-    
+
     #[test]
     fn test_extreme_crf_values() {
         // 极端 CRF 值测试
         assert!(ABSOLUTE_MIN_CRF >= 0.0);
         assert!(ABSOLUTE_MAX_CRF <= 63.0);
-        
+
         // 确保范围有效
         let range = ABSOLUTE_MAX_CRF - ABSOLUTE_MIN_CRF;
         assert!(range > 20.0); // 至少 20 CRF 范围
@@ -276,39 +274,40 @@ mod edge_case_tests {
 
 #[cfg(test)]
 mod precision_tests {
-    use super::super::video_explorer::precision::{crf_to_cache_key, cache_key_to_crf, CACHE_KEY_MULTIPLIER};
-    
+    use super::super::video_explorer::precision::{
+        cache_key_to_crf, crf_to_cache_key, CACHE_KEY_MULTIPLIER,
+    };
+
     #[test]
     fn test_crf_key_generation() {
         // 🔥 v5.73: 测试统一的 crf_to_cache_key() 函数
         assert_eq!(crf_to_cache_key(20.0), 200);
         assert_eq!(crf_to_cache_key(20.1), 201);
         assert_eq!(crf_to_cache_key(20.5), 205);
-        
+
         let crf2 = 20.55_f32;
         let key2 = crf_to_cache_key(crf2);
         assert_eq!(key2, 206); // 四舍五入
-        
+
         // 测试反向转换
         assert!((cache_key_to_crf(200) - 20.0).abs() < 0.01);
         assert!((cache_key_to_crf(205) - 20.5).abs() < 0.01);
-        
+
         // 验证乘数常量
         assert_eq!(CACHE_KEY_MULTIPLIER, 10.0);
     }
-    
+
     #[test]
     fn test_size_ratio_calculation() {
         let input_size = 1000_u64;
         let output_size = 800_u64;
         let ratio = output_size as f64 / input_size as f64;
         assert!((ratio - 0.8).abs() < 0.001);
-        
+
         let pct = (ratio - 1.0) * 100.0;
         assert!((pct - (-20.0)).abs() < 0.1);
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.72: 三阶段搜索属性测试
@@ -326,25 +325,56 @@ mod three_phase_search_tests {
     #[test]
     fn prop_gpu_cpu_dual_refinement() {
         let search = ThreePhaseSearch::default();
-        
+
         // 🔥 核心属性：GPU 步进值递减 4 → 1 → 0.5 → 0.25
-        assert!(search.gpu_coarse_step > search.gpu_medium_step,
-            "GPU coarse ({}) > medium ({})", search.gpu_coarse_step, search.gpu_medium_step);
-        assert!(search.gpu_medium_step > search.gpu_fine_step,
-            "GPU medium ({}) > fine ({})", search.gpu_medium_step, search.gpu_fine_step);
-        assert!(search.gpu_fine_step > search.gpu_ultra_fine_step,
-            "GPU fine ({}) > ultra_fine ({})", search.gpu_fine_step, search.gpu_ultra_fine_step);
-        
+        assert!(
+            search.gpu_coarse_step > search.gpu_medium_step,
+            "GPU coarse ({}) > medium ({})",
+            search.gpu_coarse_step,
+            search.gpu_medium_step
+        );
+        assert!(
+            search.gpu_medium_step > search.gpu_fine_step,
+            "GPU medium ({}) > fine ({})",
+            search.gpu_medium_step,
+            search.gpu_fine_step
+        );
+        assert!(
+            search.gpu_fine_step > search.gpu_ultra_fine_step,
+            "GPU fine ({}) > ultra_fine ({})",
+            search.gpu_fine_step,
+            search.gpu_ultra_fine_step
+        );
+
         // 🔥 核心属性：CPU 只做最终 0.1 精细化
-        assert!(search.gpu_ultra_fine_step > search.cpu_finest_step,
-            "GPU ultra_fine ({}) > CPU finest ({})", search.gpu_ultra_fine_step, search.cpu_finest_step);
-        
+        assert!(
+            search.gpu_ultra_fine_step > search.cpu_finest_step,
+            "GPU ultra_fine ({}) > CPU finest ({})",
+            search.gpu_ultra_fine_step,
+            search.cpu_finest_step
+        );
+
         // 验证具体值
-        assert!((search.gpu_coarse_step - 4.0).abs() < 0.01, "GPU coarse should be 4.0");
-        assert!((search.gpu_medium_step - 1.0).abs() < 0.01, "GPU medium should be 1.0");
-        assert!((search.gpu_fine_step - 0.5).abs() < 0.01, "GPU fine should be 0.5");
-        assert!((search.gpu_ultra_fine_step - 0.25).abs() < 0.01, "GPU ultra_fine should be 0.25");
-        assert!((search.cpu_finest_step - 0.1).abs() < 0.01, "CPU finest should be 0.1");
+        assert!(
+            (search.gpu_coarse_step - 4.0).abs() < 0.01,
+            "GPU coarse should be 4.0"
+        );
+        assert!(
+            (search.gpu_medium_step - 1.0).abs() < 0.01,
+            "GPU medium should be 1.0"
+        );
+        assert!(
+            (search.gpu_fine_step - 0.5).abs() < 0.01,
+            "GPU fine should be 0.5"
+        );
+        assert!(
+            (search.gpu_ultra_fine_step - 0.25).abs() < 0.01,
+            "GPU ultra_fine should be 0.25"
+        );
+        assert!(
+            (search.cpu_finest_step - 0.1).abs() < 0.01,
+            "CPU finest should be 0.1"
+        );
     }
 
     #[test]
@@ -376,7 +406,7 @@ mod three_phase_search_tests {
         assert_eq!(crf_to_cache_key(18.0), 180);
         assert_eq!(crf_to_cache_key(18.1), 181);
         assert_eq!(crf_to_cache_key(18.5), 185);
-        assert_eq!(crf_to_cache_key(18.25), 183);  // 18.25 × 10 = 182.5 → 183
+        assert_eq!(crf_to_cache_key(18.25), 183); // 18.25 × 10 = 182.5 → 183
 
         // 验证缓存键的唯一性（0.1精度）
         let crfs = vec![18.0, 18.1, 18.2, 18.3, 18.4, 18.5];
@@ -384,10 +414,12 @@ mod three_phase_search_tests {
 
         // 所有键应该不同
         for i in 0..keys.len() {
-            for j in (i+1)..keys.len() {
-                assert_ne!(keys[i], keys[j],
+            for j in (i + 1)..keys.len() {
+                assert_ne!(
+                    keys[i], keys[j],
                     "CRF {:.1} and {:.1} should have different cache keys",
-                    crfs[i], crfs[j]);
+                    crfs[i], crfs[j]
+                );
             }
         }
 
@@ -395,9 +427,13 @@ mod three_phase_search_tests {
         for &crf in &crfs {
             let key = crf_to_cache_key(crf);
             let reconstructed = cache_key_to_crf(key);
-            assert!((reconstructed - crf).abs() < 0.01,
+            assert!(
+                (reconstructed - crf).abs() < 0.01,
                 "Cache key round-trip failed: {:.1} → {} → {:.1}",
-                crf, key, reconstructed);
+                crf,
+                key,
+                reconstructed
+            );
         }
     }
 
@@ -407,7 +443,10 @@ mod three_phase_search_tests {
         assert_eq!(SearchPhase::GpuCoarse.next(), Some(SearchPhase::GpuMedium));
         assert_eq!(SearchPhase::GpuMedium.next(), Some(SearchPhase::GpuFine));
         assert_eq!(SearchPhase::GpuFine.next(), Some(SearchPhase::GpuUltraFine));
-        assert_eq!(SearchPhase::GpuUltraFine.next(), Some(SearchPhase::CpuFinest));
+        assert_eq!(
+            SearchPhase::GpuUltraFine.next(),
+            Some(SearchPhase::CpuFinest)
+        );
         assert_eq!(SearchPhase::CpuFinest.next(), None);
     }
 }
@@ -479,7 +518,6 @@ mod transparency_prop_tests {
     }
 }
 
-
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.74: PSNR 透明度数据属性测试
 // ═══════════════════════════════════════════════════════════════
@@ -516,7 +554,7 @@ mod psnr_transparency_tests {
 
             // 验证 PSNR 数据可以被存储和访问
             prop_assert_eq!(metrics.psnr, psnr);
-            
+
             // 验证 PSNR 值在有效范围内（如果存在）
             if let Some(p) = psnr {
                 prop_assert!(p >= 0.0 && p <= 100.0, "PSNR should be in valid range");
@@ -529,22 +567,21 @@ mod psnr_transparency_tests {
     #[test]
     fn test_psnr_ssim_mapping_integration() {
         use super::super::ssim_mapping::PsnrSsimMapping;
-        
+
         let mut mapping = PsnrSsimMapping::new();
-        
+
         // 模拟 GPU 阶段收集的数据
         mapping.insert(35.0, 0.92);
         mapping.insert(40.0, 0.95);
         mapping.insert(45.0, 0.97);
-        
+
         assert!(mapping.has_enough_points());
-        
+
         // 验证预测功能
         let predicted = mapping.predict_ssim(42.5).unwrap();
         assert!(predicted > 0.95 && predicted < 0.97);
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.74: Preset 一致性属性测试
@@ -573,11 +610,11 @@ mod preset_consistency_tests {
                 EncoderPreset::Veryslow,
             ];
             let preset = presets[preset_idx];
-            
+
             // 验证 preset 名称映射正确
             let name = preset.x26x_name();
             prop_assert!(!name.is_empty());
-            
+
             // 验证 SVT-AV1 preset 在有效范围内
             let svt_preset = preset.svtav1_preset();
             prop_assert!(svt_preset <= 13, "SVT-AV1 preset should be 0-13");
@@ -601,7 +638,6 @@ mod preset_consistency_tests {
         assert_eq!(EncoderPreset::Veryslow.x26x_name(), "veryslow");
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.74: Mock 测试支持
@@ -638,12 +674,12 @@ mod mock_tests {
     fn test_mock_cannot_compress_scenario() {
         // 场景：输入文件已经高度压缩，无法进一步压缩
         let input_size = 1000000_u64;
-        
+
         // 即使 CRF 51（最高），输出仍然大于输入
         let _output_at_max_crf = mock_encode(51.0, input_size);
         // 在这个 mock 中，CRF 51 时 ratio = 1.0 - (51-20)*0.05 = -0.55，被 clamp 到 0.1
         // 所以 output = 100000，小于输入
-        
+
         // 修改场景：假设输入已经很小
         let small_input = 50000_u64;
         let output = mock_encode(20.0, small_input);
@@ -654,7 +690,7 @@ mod mock_tests {
     fn test_mock_quality_never_passes_scenario() {
         // 场景：质量阈值设置过高，永远无法达到
         let min_ssim = 0.999; // 极高阈值
-        
+
         // 即使 CRF 10（最低），SSIM 也只有 0.99
         let ssim_at_min_crf = mock_ssim(10.0);
         assert!(ssim_at_min_crf < min_ssim);
@@ -665,10 +701,10 @@ mod mock_tests {
         // 场景：第一次尝试就成功
         let input_size = 1000000_u64;
         let initial_crf = 25.0;
-        
+
         let output = mock_encode(initial_crf, input_size);
         let ssim = mock_ssim(initial_crf);
-        
+
         // CRF 25 时：ratio = 1.0 - 5*0.05 = 0.75，output = 750000 < input
         assert!(output < input_size);
         // SSIM = 0.99 - 15*0.005 = 0.915
@@ -679,15 +715,15 @@ mod mock_tests {
     fn test_mock_psnr_ssim_mapping() {
         // 测试 PSNR→SSIM 映射的 mock 数据
         let mut mapping = PsnrSsimMapping::new();
-        
+
         for crf in [15.0, 20.0, 25.0, 30.0] {
             let psnr = mock_psnr(crf);
             let ssim = mock_ssim(crf);
             mapping.insert(psnr, ssim);
         }
-        
+
         assert!(mapping.has_enough_points());
-        
+
         // 验证预测功能
         let test_psnr = mock_psnr(22.5);
         let predicted = mapping.predict_ssim(test_psnr);
@@ -699,15 +735,15 @@ mod mock_tests {
         // 验证 mock 函数产生确定性结果
         let crf = 23.5;
         let input_size = 1000000_u64;
-        
+
         let output1 = mock_encode(crf, input_size);
         let output2 = mock_encode(crf, input_size);
         assert_eq!(output1, output2);
-        
+
         let ssim1 = mock_ssim(crf);
         let ssim2 = mock_ssim(crf);
         assert!((ssim1 - ssim2).abs() < 0.0001);
-        
+
         let psnr1 = mock_psnr(crf);
         let psnr2 = mock_psnr(crf);
         assert!((psnr1 - psnr2).abs() < 0.0001);
@@ -738,7 +774,7 @@ mod vmaf_ssim_synergy_tests {
                 force_ms_ssim_long: force_long,
                 ..Default::default()
             };
-            
+
             // 验证阈值正确传递
             prop_assert!((thresholds.min_ms_ssim - min_ms_ssim).abs() < 0.001,
                 "VMAF 阈值应正确传递: expected={}, actual={}", min_ms_ssim, thresholds.min_ms_ssim);
@@ -759,7 +795,6 @@ mod vmaf_ssim_synergy_tests {
         assert!(!thresholds.force_ms_ssim_long, "默认应跳过长视频 VMAF");
     }
 }
-
 
 #[cfg(test)]
 mod vmaf_long_video_tests {
@@ -782,9 +817,9 @@ mod vmaf_long_video_tests {
         ) {
             // 当 duration >= 300s 且 force_vmaf_long=false 时，应跳过 VMAF
             let should_skip = should_skip_vmaf(duration, false);
-            
+
             if duration >= LONG_VIDEO_THRESHOLD {
-                prop_assert!(should_skip, 
+                prop_assert!(should_skip,
                     "长视频 ({:.1}s >= {:.1}s) 应跳过 VMAF", duration, LONG_VIDEO_THRESHOLD);
             } else {
                 prop_assert!(!should_skip,
@@ -812,7 +847,6 @@ mod vmaf_long_video_tests {
     }
 }
 
-
 #[cfg(test)]
 mod vmaf_enable_condition_tests {
     use super::super::video_explorer::*;
@@ -827,11 +861,11 @@ mod vmaf_enable_condition_tests {
         if !vmaf_enabled {
             return false;
         }
-        
+
         match duration_secs {
             Some(d) if d >= LONG_VIDEO_THRESHOLD as f64 => force_vmaf_long,
-            Some(_) => true,  // 短视频，启用 VMAF
-            None => false,    // 无法检测时长，跳过
+            Some(_) => true, // 短视频，启用 VMAF
+            None => false,   // 无法检测时长，跳过
         }
     }
 
@@ -867,16 +901,15 @@ mod vmaf_enable_condition_tests {
         // 边界：刚好 5 分钟
         assert!(!should_enable_vmaf(true, Some(300.0), false));
         assert!(should_enable_vmaf(true, Some(299.9), false));
-        
+
         // 强制启用
         assert!(should_enable_vmaf(true, Some(600.0), true));
-        
+
         // 无法检测时长
         assert!(!should_enable_vmaf(true, None, false));
         assert!(!should_enable_vmaf(true, None, true));
     }
 }
-
 
 #[cfg(test)]
 mod quality_report_tests {
@@ -927,10 +960,10 @@ mod quality_report_tests {
                 let (_, has_vmaf_or_reason, skip_reason) = generate_quality_report(
                     Some(0.95), vmaf_val, vmaf_enabled, vmaf_skipped
                 );
-                
+
                 prop_assert!(has_vmaf_or_reason,
                     "VMAF 启用时应有 VMAF 值或跳过原因");
-                
+
                 if vmaf_skipped && vmaf_val.is_none() {
                     prop_assert!(skip_reason.is_some(),
                         "VMAF 跳过时应有跳过原因");
@@ -945,15 +978,15 @@ mod quality_report_tests {
         let (has_ssim, has_vmaf, _) = generate_quality_report(Some(0.95), Some(90.0), true, false);
         assert!(has_ssim);
         assert!(has_vmaf);
-        
+
         // 跳过 VMAF：有 SSIM 和跳过原因
-        let (has_ssim, has_reason, skip_reason) = generate_quality_report(Some(0.95), None, true, true);
+        let (has_ssim, has_reason, skip_reason) =
+            generate_quality_report(Some(0.95), None, true, true);
         assert!(has_ssim);
         assert!(has_reason);
         assert!(skip_reason.is_some());
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.93: 智能撞墙算法属性测试
@@ -974,7 +1007,9 @@ mod smart_wall_collision_tests {
 
     impl QualityWallDetector {
         fn new() -> Self {
-            Self { consecutive_zeros: 0 }
+            Self {
+                consecutive_zeros: 0,
+            }
         }
 
         fn record_gain(&mut self, gain: f64) {
@@ -1001,24 +1036,24 @@ mod smart_wall_collision_tests {
         ) {
             let mut detector = QualityWallDetector::new();
             let mut consecutive_count = 0_u32;
-            
+
             for gain in &gains {
                 detector.record_gain(*gain);
-                
+
                 if gain.abs() < ZERO_GAIN_THRESHOLD {
                     consecutive_count += 1;
                 } else {
                     consecutive_count = 0;
                 }
-                
+
                 // 验证检测器状态与手动计算一致
                 prop_assert_eq!(detector.consecutive_zeros, consecutive_count,
                     "连续零增益计数应一致");
-                
+
                 // 验证墙检测逻辑
                 let expected_wall = consecutive_count >= REQUIRED_ZERO_GAINS;
                 prop_assert_eq!(detector.is_wall_hit(), expected_wall,
-                    "质量墙检测应正确: consecutive={}, required={}", 
+                    "质量墙检测应正确: consecutive={}, required={}",
                     consecutive_count, REQUIRED_ZERO_GAINS);
             }
         }
@@ -1031,7 +1066,7 @@ mod smart_wall_collision_tests {
         // 验证步长递减序列
         let crf_range = 31.5_f32;
         let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);
-        
+
         let step_schedule: Vec<f32> = vec![
             initial_step,
             initial_step / 2.0,
@@ -1039,17 +1074,24 @@ mod smart_wall_collision_tests {
             (initial_step / 8.0).max(0.2),
             0.1,
         ];
-        
+
         // 验证步长严格递减
         for i in 1..step_schedule.len() {
-            assert!(step_schedule[i] < step_schedule[i-1],
+            assert!(
+                step_schedule[i] < step_schedule[i - 1],
                 "步长应递减: step[{}]={} >= step[{}]={}",
-                i, step_schedule[i], i-1, step_schedule[i-1]);
+                i,
+                step_schedule[i],
+                i - 1,
+                step_schedule[i - 1]
+            );
         }
-        
+
         // 验证最终步长为0.1
-        assert!((step_schedule.last().unwrap() - 0.1).abs() < 0.01,
-            "最终步长应为0.1");
+        assert!(
+            (step_schedule.last().unwrap() - 0.1).abs() < 0.01,
+            "最终步长应为0.1"
+        );
     }
 
     // **Feature: smart-wall-collision-v5.93, Property 3: 初始步长计算正确性**
@@ -1062,13 +1104,13 @@ mod smart_wall_collision_tests {
             crf_range in 10.0..50.0_f32,
         ) {
             let initial_step = (crf_range / 5.0).clamp(2.0, 10.0);
-            
+
             // 验证初始步长在 [2.0, 10.0] 范围内
             prop_assert!(initial_step >= 2.0,
                 "初始步长应 >= 2.0: range={}, step={}", crf_range, initial_step);
             prop_assert!(initial_step <= 10.0,
                 "初始步长应 <= 10.0: range={}, step={}", crf_range, initial_step);
-            
+
             // 验证计算公式
             let expected = (crf_range / 5.0).clamp(2.0, 10.0);
             prop_assert!((initial_step - expected).abs() < 0.01,
@@ -1079,13 +1121,13 @@ mod smart_wall_collision_tests {
     #[test]
     fn test_quality_wall_exact_threshold() {
         let mut detector = QualityWallDetector::new();
-        
+
         // 连续4次零增益 - 不应触发
         for _ in 0..4 {
             detector.record_gain(0.00001);
         }
         assert!(!detector.is_wall_hit(), "4次零增益不应触发质量墙");
-        
+
         // 第5次零增益 - 应触发
         detector.record_gain(0.00001);
         assert!(detector.is_wall_hit(), "5次零增益应触发质量墙");
@@ -1094,23 +1136,23 @@ mod smart_wall_collision_tests {
     #[test]
     fn test_quality_wall_reset_on_high_gain() {
         let mut detector = QualityWallDetector::new();
-        
+
         // 连续4次零增益
         for _ in 0..4 {
             detector.record_gain(0.00001);
         }
         assert_eq!(detector.consecutive_zeros, 4);
-        
+
         // 一次高增益重置计数
         detector.record_gain(0.001);
         assert_eq!(detector.consecutive_zeros, 0, "高增益应重置计数");
-        
+
         // 需要重新累积5次
         for _ in 0..4 {
             detector.record_gain(0.00001);
         }
         assert!(!detector.is_wall_hit(), "重置后4次不应触发");
-        
+
         detector.record_gain(0.00001);
         assert!(detector.is_wall_hit(), "重置后5次应触发");
     }
@@ -1118,17 +1160,16 @@ mod smart_wall_collision_tests {
     #[test]
     fn test_zero_gain_threshold_boundary() {
         let mut detector = QualityWallDetector::new();
-        
+
         // 刚好等于阈值 - 不算零增益
         detector.record_gain(ZERO_GAIN_THRESHOLD);
         assert_eq!(detector.consecutive_zeros, 0, "等于阈值不算零增益");
-        
+
         // 略小于阈值 - 算零增益
         detector.record_gain(ZERO_GAIN_THRESHOLD - 0.00001);
         assert_eq!(detector.consecutive_zeros, 1, "小于阈值算零增益");
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.3: 动态元数据余量测试（百分比 + 最小值策略）
@@ -1138,10 +1179,10 @@ mod smart_wall_collision_tests {
 mod metadata_margin_tests {
 
     use crate::video_explorer::{
-        calculate_metadata_margin, compression_target_size, can_compress_with_metadata,
-        verify_compression_precise, verify_compression_simple, detect_metadata_size, pure_video_size,
-        CompressionVerifyStrategy,
-        METADATA_MARGIN_MIN, METADATA_MARGIN_MAX, METADATA_MARGIN_PERCENT,
+        calculate_metadata_margin, can_compress_with_metadata, compression_target_size,
+        detect_metadata_size, pure_video_size, verify_compression_precise,
+        verify_compression_simple, CompressionVerifyStrategy, METADATA_MARGIN_MAX,
+        METADATA_MARGIN_MIN, METADATA_MARGIN_PERCENT,
     };
     use proptest::prelude::*;
 
@@ -1155,18 +1196,18 @@ mod metadata_margin_tests {
             input_size in 0u64..10_000_000_000u64,
         ) {
             let margin = calculate_metadata_margin(input_size);
-            
+
             // 🔥 v6.4.3: 百分比 + 最小值策略
             // 公式: max(input × 0.5%, 2KB).min(100KB)
             let expected = {
                 let percent_based = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
                 percent_based.max(METADATA_MARGIN_MIN).min(METADATA_MARGIN_MAX)
             };
-            
+
             prop_assert_eq!(margin, expected,
-                "余量应符合公式: input={}, expected={}, actual={}", 
+                "余量应符合公式: input={}, expected={}, actual={}",
                 input_size, expected, margin);
-            
+
             // 验证边界
             prop_assert!(margin >= METADATA_MARGIN_MIN,
                 "余量应 >= 最小值: margin={}, min={}", margin, METADATA_MARGIN_MIN);
@@ -1186,13 +1227,13 @@ mod metadata_margin_tests {
         ) {
             let target = compression_target_size(input_size);
             let margin = calculate_metadata_margin(input_size);
-            
+
             // 1. target = input - margin (saturating)
             let expected = input_size.saturating_sub(margin);
             prop_assert_eq!(target, expected,
                 "压缩目标应 = input - margin: input={}, margin={}, expected={}, actual={}",
                 input_size, margin, expected, target);
-            
+
             // 🔥 v6.4.3: 所有文件都有余量（至少 2KB）
             if input_size > margin {
                 prop_assert!(target < input_size,
@@ -1214,7 +1255,7 @@ mod metadata_margin_tests {
             let output_size = (input_size as f64 * output_ratio) as u64;
             let target = compression_target_size(input_size);
             let can_compress = can_compress_with_metadata(output_size, input_size);
-            
+
             // can_compress 应等价于 output_size < target
             let expected = output_size < target;
             prop_assert_eq!(can_compress, expected,
@@ -1229,21 +1270,30 @@ mod metadata_margin_tests {
         // 100KB → max(500, 2048) = 2KB
         let size_100kb = 100 * 1024;
         let margin = calculate_metadata_margin(size_100kb);
-        assert_eq!(margin, METADATA_MARGIN_MIN,
-            "100KB 应使用最小余量: expected={}, actual={}", METADATA_MARGIN_MIN, margin);
-        
+        assert_eq!(
+            margin, METADATA_MARGIN_MIN,
+            "100KB 应使用最小余量: expected={}, actual={}",
+            METADATA_MARGIN_MIN, margin
+        );
+
         // 1MB → max(5120, 2048) = 5KB
         let size_1mb = 1024 * 1024;
         let margin = calculate_metadata_margin(size_1mb);
         let expected = (size_1mb as f64 * METADATA_MARGIN_PERCENT) as u64;
-        assert_eq!(margin, expected,
-            "1MB 应使用百分比余量: expected={}, actual={}", expected, margin);
-        
+        assert_eq!(
+            margin, expected,
+            "1MB 应使用百分比余量: expected={}, actual={}",
+            expected, margin
+        );
+
         // 100MB → min(512000, 102400) = 100KB
         let size_100mb = 100 * 1024 * 1024;
         let margin = calculate_metadata_margin(size_100mb);
-        assert_eq!(margin, METADATA_MARGIN_MAX,
-            "100MB 应使用最大余量: expected={}, actual={}", METADATA_MARGIN_MAX, margin);
+        assert_eq!(
+            margin, METADATA_MARGIN_MAX,
+            "100MB 应使用最大余量: expected={}, actual={}",
+            METADATA_MARGIN_MAX, margin
+        );
     }
 
     #[test]
@@ -1251,16 +1301,19 @@ mod metadata_margin_tests {
         // 0 字节 → 最小余量
         assert_eq!(calculate_metadata_margin(0), METADATA_MARGIN_MIN);
         assert_eq!(compression_target_size(0), 0);
-        
+
         // 1 字节 → 最小余量
         assert_eq!(calculate_metadata_margin(1), METADATA_MARGIN_MIN);
         assert_eq!(compression_target_size(1), 0);
-        
+
         // 10GB → 最大余量
         let size_10gb = 10 * 1024 * 1024 * 1024;
         let margin = calculate_metadata_margin(size_10gb);
-        assert_eq!(margin, METADATA_MARGIN_MAX,
-            "10GB 应使用最大余量: expected={}, actual={}", METADATA_MARGIN_MAX, margin);
+        assert_eq!(
+            margin, METADATA_MARGIN_MAX,
+            "10GB 应使用最大余量: expected={}, actual={}",
+            METADATA_MARGIN_MAX, margin
+        );
     }
 
     // 🔥 v6.4.3: 精确压缩验证测试（统一逻辑）
@@ -1270,21 +1323,39 @@ mod metadata_margin_tests {
         let input_small = 5 * 1024 * 1024; // 5MB
         let output_total = 4800 * 1024; // 4.7MB 总大小
         let metadata = 50 * 1024; // 50KB 元数据
-        
-        let (can_compress, pure_size, strategy) = verify_compression_precise(output_total, input_small, metadata);
-        assert_eq!(strategy, CompressionVerifyStrategy::PureVideo, "小文件应使用纯视频策略");
+
+        let (can_compress, pure_size, strategy) =
+            verify_compression_precise(output_total, input_small, metadata);
+        assert_eq!(
+            strategy,
+            CompressionVerifyStrategy::PureVideo,
+            "小文件应使用纯视频策略"
+        );
         assert_eq!(pure_size, output_total - metadata, "纯视频大小应去除元数据");
-        assert!(can_compress, "纯视频 {} < 输入 {} 应可压缩", pure_size, input_small);
-        
+        assert!(
+            can_compress,
+            "纯视频 {} < 输入 {} 应可压缩",
+            pure_size, input_small
+        );
+
         // 大文件场景 (>=10MB)：直接对比总大小
         let input_large = 20 * 1024 * 1024; // 20MB
         let output_large = 18 * 1024 * 1024; // 18MB
         let metadata_large = 80 * 1024; // 80KB
-        
-        let (can_compress, compare_size, strategy) = verify_compression_precise(output_large, input_large, metadata_large);
-        assert_eq!(strategy, CompressionVerifyStrategy::TotalSize, "大文件应使用总大小策略");
+
+        let (can_compress, compare_size, strategy) =
+            verify_compression_precise(output_large, input_large, metadata_large);
+        assert_eq!(
+            strategy,
+            CompressionVerifyStrategy::TotalSize,
+            "大文件应使用总大小策略"
+        );
         assert_eq!(compare_size, output_large, "大文件应对比总大小");
-        assert!(can_compress, "输出 {} < 输入 {} 应可压缩", compare_size, input_large);
+        assert!(
+            can_compress,
+            "输出 {} < 输入 {} 应可压缩",
+            compare_size, input_large
+        );
     }
 
     #[test]
@@ -1315,14 +1386,17 @@ mod metadata_margin_tests {
         let input_small = 500 * 1024; // 500KB
         let target_small = compression_target_size(input_small);
         assert!(target_small < input_small, "应预留余量");
-        
+
         let input_large = 100 * 1024 * 1024; // 100MB
         let target_large = compression_target_size(input_large);
         assert!(target_large < input_large, "应预留余量");
-        assert_eq!(input_large - target_large, METADATA_MARGIN_MAX, "大文件余量应为最大值");
+        assert_eq!(
+            input_large - target_large,
+            METADATA_MARGIN_MAX,
+            "大文件余量应为最大值"
+        );
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.4.4: 边界测试增强
@@ -1339,8 +1413,11 @@ mod boundary_tests {
     fn test_metadata_margin_boundary_u64_max() {
         // u64::MAX 应该返回最大余量
         let margin = calculate_metadata_margin(u64::MAX);
-        assert_eq!(margin, METADATA_MARGIN_MAX,
-            "u64::MAX 应使用最大余量: expected={}, actual={}", METADATA_MARGIN_MAX, margin);
+        assert_eq!(
+            margin, METADATA_MARGIN_MAX,
+            "u64::MAX 应使用最大余量: expected={}, actual={}",
+            METADATA_MARGIN_MAX, margin
+        );
     }
 
     #[test]
@@ -1359,21 +1436,30 @@ mod boundary_tests {
         let just_below = SMALL_FILE_THRESHOLD - 1;
         let at_threshold = SMALL_FILE_THRESHOLD;
         let just_above = SMALL_FILE_THRESHOLD + 1;
-        
+
         // 小于阈值：使用 PureVideo 策略
         let (_, _, strategy_below) = verify_compression_precise(1000, just_below, 100);
-        assert_eq!(strategy_below, CompressionVerifyStrategy::PureVideo,
-            "刚好低于阈值应使用 PureVideo 策略");
-        
+        assert_eq!(
+            strategy_below,
+            CompressionVerifyStrategy::PureVideo,
+            "刚好低于阈值应使用 PureVideo 策略"
+        );
+
         // 等于阈值：使用 TotalSize 策略
         let (_, _, strategy_at) = verify_compression_precise(1000, at_threshold, 100);
-        assert_eq!(strategy_at, CompressionVerifyStrategy::TotalSize,
-            "刚好等于阈值应使用 TotalSize 策略");
-        
+        assert_eq!(
+            strategy_at,
+            CompressionVerifyStrategy::TotalSize,
+            "刚好等于阈值应使用 TotalSize 策略"
+        );
+
         // 大于阈值：使用 TotalSize 策略
         let (_, _, strategy_above) = verify_compression_precise(1000, just_above, 100);
-        assert_eq!(strategy_above, CompressionVerifyStrategy::TotalSize,
-            "刚好高于阈值应使用 TotalSize 策略");
+        assert_eq!(
+            strategy_above,
+            CompressionVerifyStrategy::TotalSize,
+            "刚好高于阈值应使用 TotalSize 策略"
+        );
     }
 
     // **Feature: dynamic-metadata-margin-v6.4, Property 5: 余量单调性**
@@ -1388,7 +1474,7 @@ mod boundary_tests {
         ) {
             let margin1 = calculate_metadata_margin(size1);
             let margin2 = calculate_metadata_margin(size2);
-            
+
             // 余量应该是单调非递减的（更大的文件 >= 更大的余量）
             if size1 <= size2 {
                 prop_assert!(margin1 <= margin2,
@@ -1400,7 +1486,7 @@ mod boundary_tests {
         #[test]
         fn prop_margin_bounded(size in 0u64..u64::MAX / 2) {
             let margin = calculate_metadata_margin(size);
-            
+
             // 余量应在 [MIN, MAX] 范围内
             prop_assert!(margin >= METADATA_MARGIN_MIN,
                 "余量 {} 应 >= 最小值 {}", margin, METADATA_MARGIN_MIN);
@@ -1414,18 +1500,21 @@ mod boundary_tests {
         // 输出 = 输入：不能压缩
         let (can_compress, _, _) = verify_compression_precise(1000, 1000, 0);
         assert!(!can_compress, "输出 = 输入时不应能压缩");
-        
+
         // 输出 > 输入：不能压缩
         let (can_compress, _, _) = verify_compression_precise(2000, 1000, 0);
         assert!(!can_compress, "输出 > 输入时不应能压缩");
-        
+
         // 输出 = 0：能压缩
         let (can_compress, _, _) = verify_compression_precise(0, 1000, 0);
         assert!(can_compress, "输出 = 0 时应能压缩");
-        
+
         // 元数据 > 输出：纯视频大小为 0
         let (can_compress, pure_size, _) = verify_compression_precise(100, 500, 200);
-        assert_eq!(pure_size, 0, "元数据 > 输出时纯视频大小应为 0 (saturating_sub)");
+        assert_eq!(
+            pure_size, 0,
+            "元数据 > 输出时纯视频大小应为 0 (saturating_sub)"
+        );
         assert!(can_compress, "纯视频 0 < 输入 500 应能压缩");
     }
 }
@@ -1437,7 +1526,7 @@ mod boundary_tests {
 #[cfg(test)]
 mod strategy_helper_tests {
     use super::super::explore_strategy::*;
-    use super::super::video_explorer::{ExploreConfig, VideoEncoder, EncoderPreset};
+    use super::super::video_explorer::{EncoderPreset, ExploreConfig, VideoEncoder};
     use std::path::PathBuf;
 
     fn create_test_context() -> ExploreContext {
@@ -1457,16 +1546,16 @@ mod strategy_helper_tests {
     #[test]
     fn test_build_result_basic() {
         let ctx = create_test_context();
-        
+
         let result = ctx.build_result(
-            20.0,           // crf
-            800_000,        // size (80% of input)
-            None,           // ssim_result
-            5,              // iterations
-            true,           // quality_passed
-            0.85,           // confidence
+            20.0,    // crf
+            800_000, // size (80% of input)
+            None,    // ssim_result
+            5,       // iterations
+            true,    // quality_passed
+            0.85,    // confidence
         );
-        
+
         assert_eq!(result.optimal_crf, 20.0);
         assert_eq!(result.output_size, 800_000);
         assert!((result.size_change_pct - (-20.0)).abs() < 0.1, "应为 -20%");
@@ -1479,17 +1568,10 @@ mod strategy_helper_tests {
     #[test]
     fn test_build_result_with_ssim() {
         let ctx = create_test_context();
-        
+
         let ssim_result = SsimResult::actual(0.98, Some(45.0));
-        let result = ctx.build_result(
-            18.0,
-            900_000,
-            Some(ssim_result),
-            3,
-            true,
-            0.9,
-        );
-        
+        let result = ctx.build_result(18.0, 900_000, Some(ssim_result), 3, true, 0.9);
+
         assert_eq!(result.ssim, Some(0.98));
         assert_eq!(result.psnr, Some(45.0));
     }
@@ -1497,15 +1579,15 @@ mod strategy_helper_tests {
     #[test]
     fn test_size_change_pct_calculation() {
         let ctx = create_test_context();
-        
+
         // 压缩 20%
         let pct = ctx.size_change_pct(800_000);
         assert!((pct - (-20.0)).abs() < 0.1);
-        
+
         // 膨胀 50%
         let pct = ctx.size_change_pct(1_500_000);
         assert!((pct - 50.0).abs() < 0.1);
-        
+
         // 无变化
         let pct = ctx.size_change_pct(1_000_000);
         assert!(pct.abs() < 0.1);
@@ -1514,7 +1596,7 @@ mod strategy_helper_tests {
     #[test]
     fn test_can_compress() {
         let ctx = create_test_context();
-        
+
         assert!(ctx.can_compress(999_999), "小于输入应能压缩");
         assert!(!ctx.can_compress(1_000_000), "等于输入不应能压缩");
         assert!(!ctx.can_compress(1_000_001), "大于输入不应能压缩");
@@ -1525,13 +1607,12 @@ mod strategy_helper_tests {
         let actual = SsimResult::actual(0.98, Some(45.0));
         assert!(actual.is_actual());
         assert!(!actual.is_predicted());
-        
+
         let predicted = SsimResult::predicted(0.95, 40.0);
         assert!(!predicted.is_actual());
         assert!(predicted.is_predicted());
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v6.8: 评价标准一致性测试
@@ -1539,8 +1620,8 @@ mod strategy_helper_tests {
 
 #[cfg(test)]
 mod evaluation_consistency_tests {
+    use crate::stream_size::{ExtractionMethod, StreamSizeInfo};
     use proptest::prelude::*;
-    use crate::stream_size::{StreamSizeInfo, ExtractionMethod};
 
     // **Feature: evaluation-consistency-v6.8, Property 2: 探索和验证阶段一致性**
     // **Validates: Requirements 1.2**
@@ -1557,10 +1638,10 @@ mod evaluation_consistency_tests {
         ) {
             // 模拟探索阶段的判断逻辑
             let exploration_can_compress = output_video_size < input_video_size;
-            
+
             // 模拟验证阶段的判断逻辑（应该使用相同标准）
             let verification_can_compress = output_video_size < input_video_size;
-            
+
             // 属性：两个阶段的判断应该一致
             prop_assert_eq!(exploration_can_compress, verification_can_compress,
                 "探索阶段和验证阶段的判断应一致: input={}, output={}, exploration={}, verification={}",
@@ -1582,7 +1663,7 @@ mod evaluation_consistency_tests {
         ) {
             // 模拟不可压缩场景：输出 >= 输入
             let output_video_size = input_video_size + (input_video_size as f64 * size_increase_percent / 100.0) as u64;
-            
+
             // 属性：输出 >= 输入时应该报告不能压缩
             let can_compress = output_video_size < input_video_size;
             prop_assert!(!can_compress,
@@ -1615,7 +1696,7 @@ mod evaluation_consistency_tests {
                 video_bitrate: None,
                 audio_bitrate: None,
             };
-            
+
             let info2 = StreamSizeInfo {
                 video_stream_size: video_size,
                 audio_stream_size: audio_size,
@@ -1626,7 +1707,7 @@ mod evaluation_consistency_tests {
                 video_bitrate: None,
                 audio_bitrate: None,
             };
-            
+
             // 属性：多次提取应该返回相同的视频流大小
             prop_assert_eq!(info1.video_stream_size, info2.video_stream_size,
                 "多次提取应返回相同的视频流大小");
@@ -1640,11 +1721,11 @@ mod evaluation_consistency_tests {
         let input_video = 1_000_000u64;
         let output_video = 900_000u64;
         assert!(output_video < input_video, "输出 < 输入应能压缩");
-        
+
         // 场景 2：输出视频流 == 输入视频流 → 不能压缩
         let output_video = 1_000_000u64;
         assert!(!(output_video < input_video), "输出 == 输入不应能压缩");
-        
+
         // 场景 3：输出视频流 > 输入视频流 → 不能压缩
         let output_video = 1_100_000u64;
         assert!(!(output_video < input_video), "输出 > 输入不应能压缩");
@@ -1654,15 +1735,15 @@ mod evaluation_consistency_tests {
     #[test]
     fn test_container_overhead_does_not_affect_compression() {
         let input_video = 1_000_000u64;
-        let output_video = 900_000u64;  // 视频流压缩了 10%
-        
+        let output_video = 900_000u64; // 视频流压缩了 10%
+
         // 即使容器开销导致总文件变大，只要视频流变小就算压缩成功
-        let output_total_with_overhead = output_video + 200_000;  // 总文件 1.1MB
-        let input_total = input_video + 50_000;  // 输入总文件 1.05MB
-        
+        let output_total_with_overhead = output_video + 200_000; // 总文件 1.1MB
+        let input_total = input_video + 50_000; // 输入总文件 1.05MB
+
         // 总文件变大了
         assert!(output_total_with_overhead > input_total, "总文件变大了");
-        
+
         // 但视频流变小了，所以应该算压缩成功
         assert!(output_video < input_video, "视频流变小，应算压缩成功");
     }

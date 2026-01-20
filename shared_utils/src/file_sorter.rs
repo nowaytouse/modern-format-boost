@@ -1,14 +1,14 @@
 //! File Sorting Module
-//! 
+//!
 //! 🎯 优先处理小文件策略：
 //! - 快速看到进度反馈
 //! - 小文件处理快，可以更早发现问题
 //! - 大文件留到后面，避免长时间卡住
-//! 
+//!
 //! 模块化设计，便于维护和测试
 
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 /// 文件信息结构体
 #[derive(Debug, Clone)]
@@ -52,10 +52,10 @@ impl FileSorter {
     }
 
     /// 对文件路径列表进行排序
-    /// 
+    ///
     /// # Arguments
     /// * `files` - 文件路径列表
-    /// 
+    ///
     /// # Returns
     /// 排序后的文件路径列表
     pub fn sort(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -69,10 +69,7 @@ impl FileSorter {
 
     /// 按文件大小升序排序（小文件优先）
     fn sort_by_size_ascending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
-        let mut file_infos: Vec<FileInfo> = files
-            .into_iter()
-            .filter_map(FileInfo::new)
-            .collect();
+        let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
         file_infos.sort_by_key(|f| f.size);
         file_infos.into_iter().map(|f| f.path).collect()
@@ -80,10 +77,7 @@ impl FileSorter {
 
     /// 按文件大小降序排序（大文件优先）
     fn sort_by_size_descending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
-        let mut file_infos: Vec<FileInfo> = files
-            .into_iter()
-            .filter_map(FileInfo::new)
-            .collect();
+        let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
         file_infos.sort_by(|a, b| b.size.cmp(&a.size));
         file_infos.into_iter().map(|f| f.path).collect()
@@ -151,7 +145,7 @@ mod tests {
     #[test]
     fn test_sort_by_size_ascending() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // 创建不同大小的文件
         let large = create_test_file(temp_dir.path(), "large.txt", 1000);
         let small = create_test_file(temp_dir.path(), "small.txt", 100);
@@ -170,7 +164,7 @@ mod tests {
     #[test]
     fn test_sort_by_size_descending() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         let large = create_test_file(temp_dir.path(), "large.txt", 1000);
         let small = create_test_file(temp_dir.path(), "small.txt", 100);
         let medium = create_test_file(temp_dir.path(), "medium.txt", 500);
@@ -188,7 +182,7 @@ mod tests {
     #[test]
     fn test_sort_by_name() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         let c = create_test_file(temp_dir.path(), "c.txt", 100);
         let a = create_test_file(temp_dir.path(), "a.txt", 100);
         let b = create_test_file(temp_dir.path(), "b.txt", 100);
@@ -206,7 +200,7 @@ mod tests {
     #[test]
     fn test_sort_strategy_none() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         let f1 = create_test_file(temp_dir.path(), "z.txt", 1000);
         let f2 = create_test_file(temp_dir.path(), "a.txt", 100);
         let f3 = create_test_file(temp_dir.path(), "m.txt", 500);
@@ -241,7 +235,7 @@ mod tests {
     #[test]
     fn test_same_size_files() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // 创建相同大小的文件
         let f1 = create_test_file(temp_dir.path(), "file1.txt", 100);
         let f2 = create_test_file(temp_dir.path(), "file2.txt", 100);
@@ -258,11 +252,11 @@ mod tests {
     #[test]
     fn test_strict_sorting_correctness() {
         let temp_dir = TempDir::new().unwrap();
-        
+
         // 创建多个不同大小的文件
         let sizes = vec![5000, 100, 3000, 200, 4000, 50, 1000];
         let mut files = Vec::new();
-        
+
         for (i, size) in sizes.iter().enumerate() {
             let file = create_test_file(temp_dir.path(), &format!("file{}.txt", i), *size);
             files.push(file);
@@ -274,9 +268,14 @@ mod tests {
         for i in 0..sorted.len() - 1 {
             let size1 = fs::metadata(&sorted[i]).unwrap().len();
             let size2 = fs::metadata(&sorted[i + 1]).unwrap().len();
-            assert!(size1 <= size2, 
-                "STRICT: File {} ({}B) should be <= file {} ({}B)", 
-                sorted[i].display(), size1, sorted[i+1].display(), size2);
+            assert!(
+                size1 <= size2,
+                "STRICT: File {} ({}B) should be <= file {} ({}B)",
+                sorted[i].display(),
+                size1,
+                sorted[i + 1].display(),
+                size2
+            );
         }
     }
 }

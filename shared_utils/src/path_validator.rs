@@ -31,10 +31,7 @@ const DANGEROUS_CHARS: &[char] = &[
 pub enum PathValidationError {
     /// Path contains a dangerous character
     /// 路径包含危险字符
-    DangerousCharacter {
-        character: char,
-        path: String,
-    },
+    DangerousCharacter { character: char, path: String },
     /// Path is empty
     /// 路径为空
     EmptyPath,
@@ -43,26 +40,35 @@ pub enum PathValidationError {
     NullByte(String),
     /// Input and output paths are the same
     /// 输入和输出路径相同
-    InputOutputConflict {
-        path: String,
-    },
+    InputOutputConflict { path: String },
 }
 
 impl fmt::Display for PathValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PathValidationError::DangerousCharacter { character, path } => {
-                write!(f, "❌ PATH SECURITY ERROR: Dangerous character '{}' found in path: {}", 
-                    character, path)
+                write!(
+                    f,
+                    "❌ PATH SECURITY ERROR: Dangerous character '{}' found in path: {}",
+                    character, path
+                )
             }
             PathValidationError::EmptyPath => {
                 write!(f, "❌ PATH SECURITY ERROR: Empty path provided")
             }
             PathValidationError::NullByte(path) => {
-                write!(f, "❌ PATH SECURITY ERROR: Null byte found in path: {}", path)
+                write!(
+                    f,
+                    "❌ PATH SECURITY ERROR: Null byte found in path: {}",
+                    path
+                )
             }
             PathValidationError::InputOutputConflict { path } => {
-                write!(f, "❌ PATH CONFLICT ERROR: Input and output paths are identical: {}", path)
+                write!(
+                    f,
+                    "❌ PATH CONFLICT ERROR: Input and output paths are identical: {}",
+                    path
+                )
             }
         }
     }
@@ -83,7 +89,11 @@ pub struct PathConversionError {
 
 impl fmt::Display for PathConversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "⚠️ PATH CONVERSION ERROR: {} (path: {})", self.reason, self.path_display)
+        write!(
+            f,
+            "⚠️ PATH CONVERSION ERROR: {} (path: {})",
+            self.reason, self.path_display
+        )
     }
 }
 
@@ -136,24 +146,27 @@ pub fn path_to_string_safe(path: &Path) -> Result<String, PathConversionError> {
 /// ```
 pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     let path_str = path.to_string_lossy();
-    
+
     // Check for empty path
     if path_str.is_empty() {
         eprintln!("⚠️ PATH VALIDATION FAILED: Empty path");
         return Err(PathValidationError::EmptyPath);
     }
-    
+
     // Check for dangerous characters
     for &c in DANGEROUS_CHARS {
         if path_str.contains(c) {
-            eprintln!("⚠️ PATH VALIDATION FAILED: Dangerous character '{}' in: {}", c, path_str);
+            eprintln!(
+                "⚠️ PATH VALIDATION FAILED: Dangerous character '{}' in: {}",
+                c, path_str
+            );
             return Err(PathValidationError::DangerousCharacter {
                 character: c,
                 path: path_str.to_string(),
             });
         }
     }
-    
+
     Ok(())
 }
 
@@ -170,10 +183,12 @@ pub fn validate_paths(paths: &[&Path]) -> Result<(), PathValidationError> {
 /// 检查输入和输出路径是否冲突（是否为同一文件）
 pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), PathValidationError> {
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
-    
+
     // 如果输出路径存在，获取规范路径；否则使用原始路径（尽力而为）
     let output_canonical = if output.exists() {
-        output.canonicalize().unwrap_or_else(|_| output.to_path_buf())
+        output
+            .canonicalize()
+            .unwrap_or_else(|_| output.to_path_buf())
     } else {
         // 尝试解析绝对路径即使文件不存在
         if output.is_relative() {
@@ -182,13 +197,13 @@ pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), Pa
             output.to_path_buf()
         }
     };
-    
+
     if input_canonical == output_canonical {
         return Err(PathValidationError::InputOutputConflict {
             path: input.display().to_string(),
         });
     }
-    
+
     Ok(())
 }
 
@@ -213,10 +228,14 @@ mod tests {
             "/中文路径/视频.mp4",
             "/日本語/ビデオ.mp4",
         ];
-        
+
         for path_str in &safe_paths {
             let path = Path::new(path_str);
-            assert!(validate_path(path).is_ok(), "Path should be safe: {}", path_str);
+            assert!(
+                validate_path(path).is_ok(),
+                "Path should be safe: {}",
+                path_str
+            );
         }
     }
 
@@ -322,8 +341,11 @@ mod tests {
         for &c in DANGEROUS_CHARS {
             let path_str = format!("/home/user/test{}file.mp4", c);
             let path = Path::new(&path_str);
-            assert!(validate_path(path).is_err(),
-                "Dangerous char '{}' should be detected", c);
+            assert!(
+                validate_path(path).is_err(),
+                "Dangerous char '{}' should be detected",
+                c
+            );
         }
     }
 }

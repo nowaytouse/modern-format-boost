@@ -24,10 +24,10 @@ pub struct SimpleIterationProgress {
     total_iterations: u64,
     current_iteration: AtomicU64,
     // 状态信息
-    current_crf: AtomicU64,         // f32 as bits
+    current_crf: AtomicU64, // f32 as bits
     current_size: AtomicU64,
-    current_ssim: AtomicU64,        // f64 as bits
-    best_crf: AtomicU64,            // f32 as bits
+    current_ssim: AtomicU64, // f64 as bits
+    best_crf: AtomicU64,     // f32 as bits
     // 时间追踪（保留以供将来使用）
     #[allow(dead_code)]
     start_time: Instant,
@@ -103,7 +103,8 @@ impl SimpleIterationProgress {
         let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
 
         // 原子更新状态
-        self.current_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
+        self.current_crf
+            .store(crf.to_bits() as u64, Ordering::Relaxed);
         self.current_size.store(size, Ordering::Relaxed);
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
@@ -132,7 +133,11 @@ impl SimpleIterationProgress {
             0.0
         };
 
-        let icon = if size < self.input_size { "💾" } else { "📈" };
+        let icon = if size < self.input_size {
+            "💾"
+        } else {
+            "📈"
+        };
 
         let ssim_str = if let Some(s) = ssim {
             format!("SSIM {:.4}", s)
@@ -275,8 +280,10 @@ impl RealtimeExploreProgress {
     }
 
     pub fn set_crf_range(&self, min_crf: f32, max_crf: f32) {
-        self.min_crf.store(min_crf.to_bits() as u64, Ordering::Relaxed);
-        self.max_crf.store(max_crf.to_bits() as u64, Ordering::Relaxed);
+        self.min_crf
+            .store(min_crf.to_bits() as u64, Ordering::Relaxed);
+        self.max_crf
+            .store(max_crf.to_bits() as u64, Ordering::Relaxed);
     }
 
     pub fn set_stage(&self, stage: &str) {
@@ -284,7 +291,8 @@ impl RealtimeExploreProgress {
     }
 
     pub fn update(&self, crf: f32, size: u64, ssim: Option<f64>) {
-        self.current_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
+        self.current_crf
+            .store(crf.to_bits() as u64, Ordering::Relaxed);
         self.current_size.store(size, Ordering::Relaxed);
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
@@ -318,7 +326,11 @@ impl RealtimeExploreProgress {
             0.0
         };
 
-        let icon = if size < self.input_size { "💾" } else { "📈" };
+        let icon = if size < self.input_size {
+            "💾"
+        } else {
+            "📈"
+        };
 
         let ssim_str = if ssim_bits != 0 {
             let ssim = f64::from_bits(ssim_bits);
@@ -389,7 +401,7 @@ pub struct RealtimeSpinner {
 impl RealtimeSpinner {
     pub fn new(message: &str) -> Self {
         let bar = ProgressBar::new_spinner();
-        
+
         // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
         if crate::progress_mode::is_quiet_mode() {
             bar.set_draw_target(ProgressDrawTarget::hidden());
@@ -398,7 +410,7 @@ impl RealtimeSpinner {
                 ProgressStyle::default_spinner()
                     .template("{spinner:.green} {msg}")
                     .expect("Invalid template")
-                    .tick_chars(progress_style::SPINNER_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_message(message.to_string());
             bar.enable_steady_tick(Duration::from_millis(80));
@@ -443,7 +455,6 @@ mod tests {
         progress.finish(22.0, 800, Some(0.98));
     }
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.72: 增强进度状态 - 更详细的透明度
@@ -528,18 +539,26 @@ impl DetailedProgressState {
 
     /// 格式化为显示字符串
     pub fn format_display(&self) -> String {
-        let ssim_str = self.current_ssim
+        let ssim_str = self
+            .current_ssim
             .map(|s| format!("{:.4}", s))
             .unwrap_or_else(|| "---".to_string());
-        
-        let eta_str = self.eta_seconds
+
+        let eta_str = self
+            .eta_seconds
             .map(|e| format!("{:.0}s", e))
             .unwrap_or_else(|| "---".to_string());
-        
+
         let trend_indicator = if self.ssim_trend.len() >= 2 {
             let last = self.ssim_trend.last().unwrap();
             let prev = self.ssim_trend[self.ssim_trend.len() - 2];
-            if *last > prev { "↑" } else if *last < prev { "↓" } else { "→" }
+            if *last > prev {
+                "↑"
+            } else if *last < prev {
+                "↓"
+            } else {
+                "→"
+            }
         } else {
             "→"
         };
@@ -582,7 +601,7 @@ mod detailed_progress_tests {
         state.update_crf(18.5, -15.3);
         state.update_ssim(0.9523);
         state.update_iteration(5, 20, 10.0);
-        
+
         assert!((state.current_crf - 18.5).abs() < 0.01);
         assert_eq!(state.current_ssim, Some(0.9523));
         assert_eq!(state.iteration, 5);
@@ -595,7 +614,7 @@ mod detailed_progress_tests {
         state.update_crf(20.0, -10.0);
         state.update_ssim(0.95);
         state.update_iteration(3, 10, 6.0);
-        
+
         let display = state.format_display();
         assert!(display.contains("Test"));
         assert!(display.contains("20.0"));

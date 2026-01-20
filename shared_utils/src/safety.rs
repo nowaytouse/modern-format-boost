@@ -1,5 +1,5 @@
 //! Safety Module
-//! 
+//!
 //! Provides safety checks to prevent accidental damage to system directories
 //! Reference: media/CONTRIBUTING.md - Robust Safety & Loud Errors requirement
 
@@ -17,9 +17,9 @@ const DANGEROUS_DIRS: &[&str] = &[
     "/private",
     "/Library",
     "/Applications",
-    "/Users",  // Root of all user directories
-    "/home",   // Linux home root
-    "/root",   // Root user home
+    "/Users", // Root of all user directories
+    "/home",  // Linux home root
+    "/root",  // Root user home
     "/boot",
     "/dev",
     "/proc",
@@ -29,28 +29,28 @@ const DANGEROUS_DIRS: &[&str] = &[
 ];
 
 /// Check if a path is within a dangerous directory
-/// 
+///
 /// # Arguments
 /// * `path` - The path to check
-/// 
+///
 /// # Returns
 /// * `Ok(())` if the path is safe
 /// * `Err(String)` with a descriptive error message if dangerous
-/// 
+///
 /// # Example
 /// ```
 /// use shared_utils::check_dangerous_directory;
 /// use std::path::Path;
-/// 
+///
 /// // Safe path
 /// assert!(check_dangerous_directory(Path::new("/Users/me/Documents/photos")).is_ok());
-/// 
+///
 /// // Dangerous path
 /// assert!(check_dangerous_directory(Path::new("/System")).is_err());
 /// ```
 pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     let path_str = path.to_string_lossy();
-    
+
     // Check exact matches
     for dangerous in DANGEROUS_DIRS {
         if path_str == *dangerous {
@@ -66,17 +66,17 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
             ));
         }
     }
-    
+
     // Check if path is a direct child of dangerous directories (e.g., /Users/username)
     // Allow deeper paths like /Users/username/Documents
-    // 
+    //
     // 注意：这里使用 unwrap_or_else 是合理的，因为：
     // 1. canonicalize 失败通常意味着路径不存在（新文件）
     // 2. 使用原路径进行安全检查是保守的策略
     // 3. 如果路径真的危险，后续检查仍会捕获
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let components: Vec<_> = canonical.components().collect();
-    
+
     // Special handling for user home directories
     if components.len() <= 3 {
         let path_str = canonical.to_string_lossy();
@@ -96,7 +96,7 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -105,22 +105,23 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
 pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), String> {
     // First do the basic dangerous directory check
     check_dangerous_directory(path)?;
-    
+
     // Additional checks for destructive operations
     // 注意：同上，canonicalize 失败时使用原路径是安全的
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let path_str = canonical.to_string_lossy();
-    
+
     // Warn about Desktop and Downloads (common accident locations)
     if path_str.contains("/Desktop") || path_str.contains("/Downloads") {
         eprintln!(
             "⚠️  WARNING: You are about to {} files in '{}'.\n\
              ⚠️  This is a common location for important files.\n\
              ⚠️  Make sure you have backups before proceeding.",
-            operation, path.display()
+            operation,
+            path.display()
         );
     }
-    
+
     Ok(())
 }
 
