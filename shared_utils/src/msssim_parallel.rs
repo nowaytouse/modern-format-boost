@@ -111,6 +111,16 @@ impl ParallelMsssimCalculator {
             return Ok(MsssimResult::skipped());
         }
 
+        // 🔥 v7.8: 检查文件格式兼容性
+        if let Some(ext) = self.original_path.extension().and_then(|e| e.to_str()) {
+            let ext_lower = ext.to_lowercase();
+            if matches!(ext_lower.as_str(), "gif") {
+                eprintln!("⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
+                eprintln!("📊 Using alternative quality metrics");
+                return Ok(MsssimResult::skipped());
+            }
+        }
+
         eprintln!("🔄 Calculating MS-SSIM (heartbeat active)");
 
         // 启动心跳检测
