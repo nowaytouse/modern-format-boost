@@ -7182,29 +7182,128 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     None
 }
 
-/// 🔥 v6.9.6: 计算三通道 MS-SSIM (Y+U+V 平均)
+/// 🔥 v7.5.1: 智能 MS-SSIM 计算 - 自动采样 + 并行计算 + 进度显示
 /// 
-/// 分别计算 Y/U/V 三个通道的 MS-SSIM，然后取平均值
-/// 这比单通道 MS-SSIM 更准确，能检测色度损失
+/// 策略：
+/// - ≤1分钟: 全量计算（100%帧）
+/// - 1-5分钟: 1/3采样（每3帧取1帧）- 速度提升3倍
+/// - 5-30分钟: 1/10采样（每10帧取1帧）- 速度提升10倍
+/// - >30分钟: 跳过 MS-SSIM，只用普通 SSIM
+/// 
+/// 并行计算：Y/U/V 三通道同时计算，总耗时 = max(Y, U, V) 而非 Y+U+V
 /// 
 /// 返回: (y_ms_ssim, u_ms_ssim, v_ms_ssim, average)
 pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
+    use std::thread;
+    use chrono::Local;
+    
+    // 获取视频时长
+    let duration = match get_video_duration(input) {
+        Some(d) => d,
+        None => {
+            eprintln!("   ⚠️  Cannot determine video duration, using full calculation");
+            60.0 // 默认1分钟
+        }
+    };
+    let duration_min = duration / 60.0;
+    
+    // 🔥 v7.5.1: 根据时长决定采样率和是否计算
+    let (sample_rate, should_calculate) = if duration_min <= 1.0 {
+        (1, true)  // ≤1分钟: 全量计算
+    } else if duration_min <= 5.0 {
+        (3, true)  // 1-5分钟: 1/3采样
+    } else if duration_min <= 30.0 {
+        (10, true) // 5-30分钟: 1/10采样
+    } else {
+        (0, false) // >30分钟: 跳过
+    };
+    
+    if !should_calculate {
+        eprintln!("   ⏭️  Video too long ({:.1}min), skipping MS-SSIM calculation", duration_min);
+        eprintln!("   📊 Using SSIM-only verification (faster & reliable)");
+        return None;
+    }
+    
+    // 显示计算信息
+    let beijing_time = Local::now().format("%Y-%m-%d %H:%M:%S");
     eprintln!("   📊 Calculating 3-channel MS-SSIM (Y+U+V)...");
+    eprintln!("   🕐 Start time: {} (Beijing)", beijing_time);
+    eprintln!("   📹 Video: {:.1}s ({:.1}min)", duration, duration_min);
     
-    // 计算 Y 通道 MS-SSIM
-    eprint!("      Y channel... ");
-    let y_ms_ssim = calculate_ms_ssim_channel(input, output, "y")?;
-    eprintln!("{:.4}", y_ms_ssim);
+    if sample_rate > 1 {
+        let estimated_time = (duration / sample_rate as f64 * 3.0) as u64; // 每秒约3秒处理时间
+        eprintln!("   ⚡ Sampling: 1/{} frames (est. {}s)", sample_rate, estimated_time);
+    } else {
+        let estimated_time = (duration * 3.0) as u64;
+        eprintln!("   🎯 Full calculation (est. {}s)", estimated_time);
+    }
+    eprintln!("   🔄 Parallel processing: Y+U+V channels simultaneously");
     
-    // 计算 U 通道 MS-SSIM
-    eprint!("      U channel... ");
-    let u_ms_ssim = calculate_ms_ssim_channel(input, output, "u")?;
-    eprintln!("{:.4}", u_ms_ssim);
+    // 🔥 v7.5.1: 并行计算三个通道
+    let input_y = input.to_path_buf();
+    let output_y = output.to_path_buf();
+    let input_u = input.to_path_buf();
+    let output_u = output.to_path_buf();
+    let input_v = input.to_path_buf();
+    let output_v = output.to_path_buf();
     
-    // 计算 V 通道 MS-SSIM
-    eprint!("      V channel... ");
-    let v_ms_ssim = calculate_ms_ssim_channel(input, output, "v")?;
-    eprintln!("{:.4}", v_ms_ssim);
+    let start_time = std::time::Instant::now();
+    
+    let y_handle = thread::spawn(move || {
+        eprint!("      Y channel... ");
+        let result = calculate_ms_ssim_channel_sampled(&input_y, &output_y, "y", sample_rate);
+        if let Some(score) = result {
+            eprintln!("{:.4} ✅", score);
+        }
+        result
+    });
+    
+    let u_handle = thread::spawn(move || {
+        eprint!("      U channel... ");
+        let result = calculate_ms_ssim_channel_sampled(&input_u, &output_u, "u", sample_rate);
+        if let Some(score) = result {
+            eprintln!("{:.4} ✅", score);
+        }
+        result
+    });
+    
+    let v_handle = thread::spawn(move || {
+        eprint!("      V channel... ");
+        let result = calculate_ms_ssim_channel_sampled(&input_v, &output_v, "v", sample_rate);
+        if let Some(score) = result {
+            eprintln!("{:.4} ✅", score);
+        }
+        result
+    });
+    
+    // 等待所有线程完成
+    let y_ms_ssim = match y_handle.join() {
+        Ok(Some(v)) => v,
+        _ => {
+            eprintln!("   ❌ Y channel calculation failed");
+            return None;
+        }
+    };
+    
+    let u_ms_ssim = match u_handle.join() {
+        Ok(Some(v)) => v,
+        _ => {
+            eprintln!("   ❌ U channel calculation failed");
+            return None;
+        }
+    };
+    
+    let v_ms_ssim = match v_handle.join() {
+        Ok(Some(v)) => v,
+        _ => {
+            eprintln!("   ❌ V channel calculation failed");
+            return None;
+        }
+    };
+    
+    let elapsed = start_time.elapsed().as_secs();
+    let beijing_time_end = Local::now().format("%Y-%m-%d %H:%M:%S");
+    eprintln!("   ⏱️  Completed in {}s (End: {} Beijing)", elapsed, beijing_time_end);
     
     // 计算加权平均 (Y:U:V = 6:1:1，与 SSIM All 权重一致)
     let weighted_avg = (y_ms_ssim * 6.0 + u_ms_ssim + v_ms_ssim) / 8.0;
@@ -7218,15 +7317,33 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
     Some((y_clamped, u_clamped, v_clamped, avg_clamped))
 }
 
-/// 计算单个通道的 MS-SSIM
-fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Option<f64> {
+/// 🔥 v7.5.1: 带智能采样的单通道 MS-SSIM 计算
+/// 
+/// sample_rate: 采样率
+/// - 1 = 全量计算（100%帧）
+/// - 3 = 每3帧取1帧（速度提升3倍）
+/// - 10 = 每10帧取1帧（速度提升10倍）
+fn calculate_ms_ssim_channel_sampled(
+    input: &Path,
+    output: &Path,
+    channel: &str,
+    sample_rate: usize,
+) -> Option<f64> {
     use std::process::Command;
     
-    // 🔥 v6.9.6: 先统一格式为 yuv420p，确保兼容性（大部分GIF/视频支持）
-    // 防止 "Pixel format incompatibility" 错误
+    // 🔥 v7.5.1: 构建采样 filter（如果需要）
+    let sample_filter = if sample_rate > 1 {
+        // select='not(mod(n\,N))' 表示每N帧取1帧
+        // setpts=N/FRAME_RATE/TB 重新计算时间戳
+        format!("select='not(mod(n\\,{}))',setpts=N/FRAME_RATE/TB,", sample_rate)
+    } else {
+        String::new()
+    };
+    
+    // 完整 filter：采样 + 格式转换 + 通道提取 + MS-SSIM
     let filter = format!(
-        "[0:v]format=yuv420p,extractplanes={}[c0];[1:v]format=yuv420p,extractplanes={}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
-        channel, channel
+        "[0:v]{}format=yuv420p,extractplanes={}[c0];[1:v]{}format=yuv420p,extractplanes={}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
+        sample_filter, channel, sample_filter, channel
     );
     
     let result = Command::new("ffmpeg")
@@ -7257,25 +7374,28 @@ fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Opti
             } else if stderr.contains("scale") || stderr.contains("resolution") {
                 eprintln!("         Cause: Resolution mismatch");
             } else {
-                // 显示前3行错误信息
+                // 显示前2行错误信息
                 let error_lines: Vec<&str> = stderr.lines()
                     .filter(|l| l.contains("Error") || l.contains("error") || l.contains("failed"))
-                    .take(3)
+                    .take(2)
                     .collect();
                 if !error_lines.is_empty() {
-                    eprintln!("         Error details:");
-                    for line in error_lines {
-                        eprintln!("           {}", line.trim());
-                    }
+                    eprintln!("         Error: {}", error_lines.join(" | "));
                 }
             }
             None
         }
         Err(e) => {
-            eprintln!("\n      ❌ Channel {} MS-SSIM command failed: {}", channel.to_uppercase(), e);
+            eprintln!("\n      ❌ Channel {} command failed: {}", channel.to_uppercase(), e);
             None
         }
     }
+}
+
+/// 计算单个通道的 MS-SSIM（旧版，保留用于向后兼容）
+fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Option<f64> {
+    // 直接调用采样版本，采样率为1（全量计算）
+    calculate_ms_ssim_channel_sampled(input, output, channel, 1)
 }
 
 /// 从 SSIM 输出行提取指定通道的值
