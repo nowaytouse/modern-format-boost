@@ -1022,15 +1022,15 @@ pub fn convert_to_hevc_mp4_matched(
         eprintln!("{}", log);
     }
 
-    // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多2%的大小增加
-    let tolerance_ratio = 1.02; // 2%容差
+    // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多1%的大小增加
+    let tolerance_ratio = 1.01; // 1%容差
     let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
     
     if explore_result.output_size > max_allowed_size {
         let size_increase_pct = ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         let _ = fs::remove_file(&output);
         eprintln!(
-            "   ⏭️  Skipping: HEVC output larger than input by {:.1}% (tolerance: 2.0%)",
+            "   ⏭️  Skipping: HEVC output larger than input by {:.1}% (tolerance: 1.0%)",
             size_increase_pct
         );
         eprintln!(
