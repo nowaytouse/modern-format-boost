@@ -165,6 +165,12 @@ fn calculate_directory_size_by_extensions(
 }
 
 fn main() -> anyhow::Result<()> {
+    // 🔥 v7.8: 初始化日志系统
+    let _ = shared_utils::logging::init_logging(
+        "imgquality_av1",
+        shared_utils::logging::LogConfig::default(),
+    );
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -788,7 +794,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     // - 小文件处理快，可以更早发现问题
     // - 大文件留到后面，避免长时间卡住
     let files =
-        shared_utils::collect_files_small_first(&input, &image_extensions, config.recursive);
+        shared_utils::collect_files_small_first(input, &image_extensions, config.recursive);
 
     let total = files.len();
     if total == 0 {
@@ -796,7 +802,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
         // 🔥 v7.4.9: 即使没有文件，也要保留目录元数据
         if let Some(output_dir) = config.output_dir.as_ref() {
-            if let Some(ref base_dir) = config.base_dir {
+            if let Some(base_dir) = config.base_dir {
                 println!("\n📁 Preserving directory metadata...");
                 if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
                     eprintln!("⚠️ Failed to preserve directory metadata: {}", e);

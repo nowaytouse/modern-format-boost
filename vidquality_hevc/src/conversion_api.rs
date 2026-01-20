@@ -293,7 +293,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     config.require_compression,
                     config.ultimate_mode,
                 )
-                .map_err(|e| VidQualityError::ConversionError(e))?;
+                .map_err(VidQualityError::ConversionError)?;
 
                 // 🔥 v4.15: 使用 GPU 控制变体支持 --cpu 模式
                 let use_gpu = config.use_gpu;
@@ -507,8 +507,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
                         warn!("   ⚠️  This may indicate codec compatibility issues (VP8/VP9/alpha channel)");
                         (
-                            format!("SSIM calculation failed"),
-                            format!("Skipped: SSIM calculation failed"),
+                            "SSIM calculation failed".to_string(),
+                            "Skipped: SSIM calculation failed".to_string(),
                         )
                     } else if actual_ssim < threshold {
                         // SSIM 阈值未达标
@@ -530,8 +530,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         // 其他未知原因（不应该到达这里）
                         warn!("   ⚠️  Quality validation FAILED: unknown reason");
                         (
-                            format!("Quality validation failed: unknown reason"),
-                            format!("Skipped: quality validation failed"),
+                            "Quality validation failed: unknown reason".to_string(),
+                            "Skipped: quality validation failed".to_string(),
                         )
                     };
                     warn!("   🛡️  Original file PROTECTED (quality too low to replace)");
@@ -1357,13 +1357,13 @@ mod tests {
         let crf = calculate_matched_crf(&det);
         // CRF should be in valid HEVC range [0, 35]
         assert!(
-            crf >= 0.0 && crf <= 35.0,
+            (0.0..=35.0).contains(&crf),
             "CRF {:.1} should be in [0, 35]",
             crf
         );
         // For 6Mbps 1080p, expect CRF ~18-28
         assert!(
-            crf >= 18.0 && crf <= 28.0,
+            (18.0..=28.0).contains(&crf),
             "CRF {:.1} should be ~18-28 for 6Mbps 1080p",
             crf
         );
@@ -1401,7 +1401,7 @@ mod tests {
         let crf = calculate_matched_crf(&det);
         // High bitrate should get lower CRF
         assert!(
-            crf >= 0.0 && crf <= 22.0,
+            (0.0..=22.0).contains(&crf),
             "High bitrate AV1 should get CRF <= 22, got {:.1}",
             crf
         );

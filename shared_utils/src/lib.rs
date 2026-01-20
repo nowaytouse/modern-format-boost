@@ -87,6 +87,9 @@ pub mod universal_heartbeat;
 // 🔥 v7.8: 统一日志系统
 pub mod logging;
 
+// 🔥 v7.8: 通用工具函数模块
+pub mod common_utils;
+
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
 
@@ -468,4 +471,26 @@ pub use universal_heartbeat::{HeartbeatConfig, HeartbeatGuard, UniversalHeartbea
 // 🔥 v7.8: 统一日志系统
 pub use logging::{
     flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start, LogConfig,
+};
+
+// 🔥 v7.8: 通用工具函数模块
+pub use common_utils::{
+    // 文件操作
+    compute_relative_path,
+    copy_file_with_context,
+    ensure_dir_exists,
+    ensure_parent_dir_exists,
+    get_extension_lowercase,
+    has_extension,
+    is_hidden_file,
+    // 字符串处理
+    extract_digits,
+    normalize_path_string,
+    parse_float_or_default,
+    truncate_string,
+    // 命令执行
+    execute_command_with_logging,
+    format_command_string,
+    get_command_version,
+    is_command_available,
 };
