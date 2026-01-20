@@ -1,12 +1,10 @@
 #!/bin/bash
-# 🔴 v7.5.1 安全副本测试 - 验证卡死修复
-# Safe Copy Test for v7.5.1 Freeze Fix
+# 🔴 v7.5.1 正确参数测试 - 使用与原始卡死相同的参数
 
 set -e
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🔴 v7.5.1 Freeze Fix - Safe Copy Test"
-echo "   使用副本测试，不影响原文件"
+echo "🔴 v7.5.1 修复验证 - 使用原始卡死时的确切参数"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
@@ -14,7 +12,7 @@ echo ""
 ORIGINAL_FILE="/Users/nyamiiko/Downloads/all/zz/鬼针草/OC14k60_1.mp4"
 
 # 创建临时测试目录
-TEST_DIR="/tmp/v7.5.1_test_$(date +%s)"
+TEST_DIR="/tmp/v7.5.1_correct_test_$(date +%s)"
 mkdir -p "$TEST_DIR"
 
 echo "📁 测试目录: $TEST_DIR"
@@ -32,7 +30,7 @@ ls -lh "$ORIGINAL_FILE"
 echo ""
 
 # 创建副本（安全操作）
-echo "📋 创建安全副本用于测试..."
+echo "📋 创建安全副本..."
 COPY_FILE="$TEST_DIR/test_video.mp4"
 cp "$ORIGINAL_FILE" "$COPY_FILE"
 
@@ -41,7 +39,7 @@ if [ ! -f "$COPY_FILE" ]; then
     exit 1
 fi
 
-echo "✅ 副本创建成功: $COPY_FILE"
+echo "✅ 副本创建: $COPY_FILE"
 echo ""
 
 # 获取视频信息
@@ -50,7 +48,7 @@ ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers
     awk '/duration/{printf "   时长: %.1f 秒 (%.1f 分钟)\n", $1, $1/60} /size/{printf "   大小: %.1f MB\n", $1/1024/1024}'
 echo ""
 
-# 检查二进制文件
+# 二进制文件
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BINARY="$PROJECT_ROOT/target/release/vidquality-hevc"
@@ -61,12 +59,15 @@ if [ ! -f "$BINARY" ]; then
     exit 1
 fi
 
-echo "✅ 二进制文件找到: $BINARY"
+echo "✅ 二进制文件: $BINARY"
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 开始测试"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "⚠️  使用与原始卡死相同的参数:"
+echo "   auto --explore --match-quality --compress --apple-compat --ultimate"
 echo ""
 echo "⚠️  这是v7.5.0中导致卡死的确切文件"
 echo "⚠️  如果v7.5.1修复有效，应在2-3分钟内完成"
@@ -86,10 +87,13 @@ LOG_FILE="$TEST_DIR/test.log"
 # 使用timeout保护（10分钟）
 TIMEOUT=600
 
-echo "执行命令: $BINARY simple $COPY_FILE --explore --match-quality --compress --ultimate"
+# 使用与原始卡死相同的参数
+# 原始命令: vidquality-hevc auto --explore --match-quality --compress --apple-compat --recursive --ultimate --in-place /path
+# 测试命令: 使用单个文件，不需要--recursive和--in-place
+echo "执行: $BINARY auto --explore --match-quality --compress --apple-compat --ultimate $COPY_FILE"
 echo ""
 
-if timeout $TIMEOUT "$BINARY" simple "$COPY_FILE" --explore --match-quality --compress --ultimate 2>&1 | tee "$LOG_FILE"; then
+if timeout $TIMEOUT "$BINARY" auto --explore --match-quality --compress --apple-compat --ultimate "$COPY_FILE" 2>&1 | tee "$LOG_FILE"; then
     # 成功完成
     END_TIME=$(date +%s)
     END_TIME_BEIJING=$(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M:%S")
@@ -111,7 +115,7 @@ if timeout $TIMEOUT "$BINARY" simple "$COPY_FILE" --explore --match-quality --co
     
     if grep -q "Sampling: 1/" "$LOG_FILE"; then
         SAMPLING=$(grep "Sampling:" "$LOG_FILE" | head -1)
-        echo "✅ 检测到智能采样:"
+        echo "✅ 智能采样已启用:"
         echo "   $SAMPLING"
     fi
     
@@ -124,9 +128,10 @@ if timeout $TIMEOUT "$BINARY" simple "$COPY_FILE" --explore --match-quality --co
     fi
     
     if grep -q "MS-SSIM" "$LOG_FILE"; then
+        echo "✅ MS-SSIM计算完成"
         echo ""
-        echo "📊 MS-SSIM 结果:"
-        grep -A3 "MS-SSIM Y/U/V:" "$LOG_FILE" | head -4 || echo "   (在日志中查找详细结果)"
+        echo "📊 MS-SSIM 详情:"
+        grep -A5 "MS-SSIM" "$LOG_FILE" | head -10
     fi
     
     echo ""

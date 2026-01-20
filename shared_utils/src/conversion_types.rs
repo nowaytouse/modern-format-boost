@@ -81,6 +81,14 @@ pub struct ConversionConfig {
     // HEVC specific flags (optional or defaulted for others)
     pub force_ms_ssim_long: bool,
     pub ultimate_mode: bool,
+    
+    // 🔥 v7.6: MS-SSIM优化配置
+    /// MS-SSIM采样率（1/N，例如3表示1/3采样）
+    pub ms_ssim_sampling: Option<u32>,
+    /// 强制全量MS-SSIM计算（禁用采样）
+    pub full_ms_ssim: bool,
+    /// 跳过MS-SSIM计算
+    pub skip_ms_ssim: bool,
 }
 
 impl Default for ConversionConfig {
@@ -103,6 +111,10 @@ impl Default for ConversionConfig {
             use_gpu: true,
             force_ms_ssim_long: false,
             ultimate_mode: false,
+            // 🔥 v7.6: MS-SSIM优化默认值
+            ms_ssim_sampling: None,  // 自动选择
+            full_ms_ssim: false,
+            skip_ms_ssim: false,
         }
     }
 }

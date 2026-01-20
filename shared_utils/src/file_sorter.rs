@@ -119,6 +119,7 @@ pub fn sort_by_name(files: Vec<PathBuf>) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::Path;
     use tempfile::TempDir;
 
     /// 创建测试文件
