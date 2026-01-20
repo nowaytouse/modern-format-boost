@@ -1,7 +1,7 @@
-# GIF和容差修复总结 - v7.8
+# GIF和容差修复总结 - v7.8 (1%容差优化版)
 
 **日期**: 2025-01-21  
-**修复状态**: ✅ **完成**
+**修复状态**: ✅ **完成** (1%容差优化)
 
 ## 🐛 发现的问题
 
@@ -22,16 +22,16 @@
 
 ## 🔧 修复方案
 
-### 1. 容差机制 (lossless_converter.rs)
+### 1. 容差机制 (lossless_converter.rs) - 1%精确容差
 ```rust
-// 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多2%的大小增加
-let tolerance_ratio = 1.02; // 2%容差
+// 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多1%的大小增加
+let tolerance_ratio = 1.01; // 1%容差 (精确控制)
 let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
 if explore_result.output_size > max_allowed_size {
     let size_increase_pct = ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
     eprintln!(
-        "   ⏭️  Skipping: HEVC output larger than input by {:.1}% (tolerance: 2.0%)",
+        "   ⏭️  Skipping: HEVC output larger than input by {:.1}% (tolerance: 1.0%)",
         size_increase_pct
     );
     // ... 详细报告
@@ -39,9 +39,10 @@ if explore_result.output_size > max_allowed_size {
 ```
 
 **效果**:
-- ✅ 允许最多2%的大小增加
+- ✅ 允许最多1%的大小增加（精确控制）
 - ✅ 详细的跳过原因报告
 - ✅ 降低不必要的跳过率
+- ✅ 符合"宽容但不影响预期目标"的理念
 
 ### 2. GIF格式检查 (video_explorer.rs)
 ```rust
@@ -89,8 +90,18 @@ if let Some(ext) = self.original_path.extension().and_then(|e| e.to_str()) {
 
 ### 容差机制效果
 - **修复前**: `if output_size > input_size` (严格判断)
-- **修复后**: `if output_size > max_allowed_size` (2%容差)
+- **修复后**: `if output_size > max_allowed_size` (1%容差)
 - **预期效果**: 跳过率从接近100%降低到合理水平
+
+**1%容差理念**:
+- 🎯 **宽容**: 允许1%的合理大小增长
+- 🎯 **精确**: 不偏离预期目标，避免过度宽松
+- 🎯 **平衡**: 减少不必要跳过，保持质量标准
+
+**容差对比**:
+- 1MB文件的1%容差: +10,485 bytes
+- 1MB文件的2%容差: +20,971 bytes  
+- 1%更精确: 减少10,486 bytes的宽松度
 
 ### GIF错误修复效果
 - **修复前**: 
@@ -150,7 +161,7 @@ if let Some(ext) = self.original_path.extension().and_then(|e| e.to_str()) {
 
 ### 容差计算公式
 ```rust
-let tolerance_ratio = 1.02; // 2%
+let tolerance_ratio = 1.01; // 1%容差 (精确控制)
 let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
 ```
@@ -195,6 +206,11 @@ v7.8修复完全解决了报告的问题：
 - GIF文件完全消除MS-SSIM错误日志
 - 统计信息准确反映：成功转换 + 智能跳过 + 失败处理
 - 用户体验显著改善
+
+**1%容差优势**:
+- 更精确的质量控制，避免过度宽松
+- 符合"宽容但不影响预期目标"的设计理念
+- 在减少跳过率和保持标准之间找到最佳平衡点
 
 ---
 
