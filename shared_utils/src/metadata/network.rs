@@ -1,7 +1,7 @@
 //! Network & Cloud metadata verification
 
-use std::path::Path;
 use std::io;
+use std::path::Path;
 
 pub fn verify_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     let critical_xattrs = [
@@ -13,7 +13,10 @@ pub fn verify_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     for &key in &critical_xattrs {
         if let Ok(Some(_)) = xattr::get(src, key) {
             if xattr::get(dst, key).ok().flatten().is_none() && key != "com.apple.quarantine" {
-                eprintln!("⚠️ [metadata] Network metadata '{}' missing on destination.", key);
+                eprintln!(
+                    "⚠️ [metadata] Network metadata '{}' missing on destination.",
+                    key
+                );
             }
         }
     }

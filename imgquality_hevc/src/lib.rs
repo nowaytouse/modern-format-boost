@@ -9,21 +9,31 @@ pub mod quality_core;
 pub mod recommender;
 
 // Separated API layers
-pub mod detection_api;
 pub mod conversion_api;
+pub mod detection_api;
 
 // Core exports
 pub use analyzer::{analyze_image, ImageAnalysis};
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
-pub use lossless_converter::{ConversionResult, ConvertOptions, convert_to_gif_apple_compat, is_high_quality_animated};
-pub use metrics::{calculate_psnr, calculate_ssim, calculate_ms_ssim, psnr_quality_description, ssim_quality_description};
-pub use quality_core::{QualityAnalysis, QualityParams, ConversionRecommendation};
+pub use lossless_converter::{
+    convert_to_gif_apple_compat, is_high_quality_animated, ConversionResult, ConvertOptions,
+};
+pub use metrics::{
+    calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,
+    ssim_quality_description,
+};
+pub use quality_core::{ConversionRecommendation, QualityAnalysis, QualityParams};
 pub use recommender::{get_recommendation, UpgradeRecommendation};
 
 // New API exports
-pub use detection_api::{detect_image, DetectionResult, DetectedFormat, ImageType, CompressionType};
-pub use conversion_api::{smart_convert, simple_convert, determine_strategy, ConversionConfig, ConversionOutput, TargetFormat};
+pub use conversion_api::{
+    determine_strategy, simple_convert, smart_convert, ConversionConfig, ConversionOutput,
+    TargetFormat,
+};
+pub use detection_api::{
+    detect_image, CompressionType, DetectedFormat, DetectionResult, ImageType,
+};
 
 use thiserror::Error;
 

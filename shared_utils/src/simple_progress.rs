@@ -38,16 +38,19 @@ pub fn progress_update(crf: f32, size_pct: f64, status: char) {
     if !PROGRESS_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    
+
     let iter = PROGRESS_ITER.fetch_add(1, Ordering::Relaxed) + 1;
-    let elapsed = PROGRESS_START.lock()
+    let elapsed = PROGRESS_START
+        .lock()
         .ok()
         .and_then(|s| s.map(|t| t.elapsed().as_secs_f64()))
         .unwrap_or(0.0);
-    
+
     // 固定底部单行: \r 回到行首, \x1b[K 清除到行尾
-    eprint!("\r\x1b[K[CRF {:.1}] {} {:+.1}% | iter {} | {:.1}s",
-        crf, status, size_pct, iter, elapsed);
+    eprint!(
+        "\r\x1b[K[CRF {:.1}] {} {:+.1}% | iter {} | {:.1}s",
+        crf, status, size_pct, iter, elapsed
+    );
     let _ = io::stderr().flush();
 }
 
@@ -56,19 +59,22 @@ pub fn progress_finish(final_crf: f32, final_size_pct: f64, ssim: Option<f64>) {
     if !PROGRESS_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    
+
     let iter = PROGRESS_ITER.load(Ordering::Relaxed);
-    let elapsed = PROGRESS_START.lock()
+    let elapsed = PROGRESS_START
+        .lock()
         .ok()
         .and_then(|s| s.map(|t| t.elapsed().as_secs_f64()))
         .unwrap_or(0.0);
-    
+
     // 清除进度行，打印最终结果
     eprint!("\r\x1b[K");
-    
+
     let ssim_str = ssim.map(|s| format!(" SSIM {:.4}", s)).unwrap_or_default();
-    eprintln!("✓ CRF {:.1} | {:+.1}%{} | {} iter | {:.1}s",
-        final_crf, final_size_pct, ssim_str, iter, elapsed);
+    eprintln!(
+        "✓ CRF {:.1} | {:+.1}%{} | {} iter | {:.1}s",
+        final_crf, final_size_pct, ssim_str, iter, elapsed
+    );
 }
 
 /// 进度条失败 - 显示错误信息
@@ -76,7 +82,7 @@ pub fn progress_fail(msg: &str) {
     if !PROGRESS_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    
+
     eprint!("\r\x1b[K");
     eprintln!("✗ {}", msg);
 }

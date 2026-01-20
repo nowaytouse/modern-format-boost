@@ -59,7 +59,7 @@ impl MsssimProgressMonitor {
         if let Some(val) = line.strip_prefix("out_time_us=") {
             if let Ok(time_us) = val.parse::<u64>() {
                 self.current_time_us.store(time_us, Ordering::Relaxed);
-                
+
                 // 计算进度百分比
                 let current_secs = time_us as f64 / 1_000_000.0;
                 let progress_pct = if self.duration_secs > 0.0 {
@@ -67,11 +67,11 @@ impl MsssimProgressMonitor {
                 } else {
                     0
                 };
-                
+
                 return Some(progress_pct);
             }
         }
-        
+
         None
     }
 
@@ -82,7 +82,7 @@ impl MsssimProgressMonitor {
     /// * `progress_pct` - 当前进度百分比
     pub fn print_progress(&self, channel: &str, progress_pct: u32) {
         let current_secs = self.current_time_us.load(Ordering::Relaxed) as f64 / 1_000_000.0;
-        
+
         // 计算ETA
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let eta_secs = if progress_pct > 0 {
@@ -91,7 +91,7 @@ impl MsssimProgressMonitor {
         } else {
             0.0
         };
-        
+
         eprintln!(
             "⏳ MS-SSIM Progress [{}]: {}% ({:.1}s/{:.1}s) ETA: {:.0}s",
             channel, progress_pct, current_secs, self.duration_secs, eta_secs
@@ -149,30 +149,37 @@ impl MsssimProgressMonitor {
     ///
     /// # Returns
     /// 成功返回Ok(())，失败返回错误信息
-    pub fn monitor_ffmpeg_process(&self, ffmpeg_args: &[&str], channel: &str) -> Result<(), String> {
+    pub fn monitor_ffmpeg_process(
+        &self,
+        ffmpeg_args: &[&str],
+        channel: &str,
+    ) -> Result<(), String> {
         // 构建ffmpeg命令，添加progress输出
         let mut cmd = Command::new("ffmpeg");
         cmd.args(ffmpeg_args)
             .arg("-progress")
-            .arg("pipe:1")  // 输出进度到stdout
+            .arg("pipe:1") // 输出进度到stdout
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());  // 抑制stderr噪音
-        
+            .stderr(Stdio::null()); // 抑制stderr噪音
+
         // 启动进程
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| format!("❌ Failed to spawn ffmpeg: {}", e))?;
-        
+
         // 获取stdout
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| "❌ Failed to capture ffmpeg stdout".to_string())?;
-        
+
         let reader = BufReader::new(stdout);
         let mut last_printed_pct = 0u32;
-        
+
         // 逐行读取进度
         for line in reader.lines() {
             let line = line.map_err(|e| format!("❌ Failed to read ffmpeg output: {}", e))?;
-            
+
             // 解析进度
             if let Some(progress_pct) = self.update_from_line(&line) {
                 // 每10%输出一次
@@ -182,15 +189,16 @@ impl MsssimProgressMonitor {
                 }
             }
         }
-        
+
         // 等待进程结束
-        let status = child.wait()
+        let status = child
+            .wait()
             .map_err(|e| format!("❌ Failed to wait for ffmpeg: {}", e))?;
-        
+
         if !status.success() {
             return Err(format!("❌ FFmpeg exited with status: {}", status));
         }
-        
+
         Ok(())
     }
 }
@@ -209,11 +217,11 @@ mod tests {
     #[test]
     fn test_update_from_line() {
         let monitor = MsssimProgressMonitor::new(120.0, 3000);
-        
+
         // 测试有效的进度行
         let progress = monitor.update_from_line("out_time_us=60000000");
         assert_eq!(progress, Some(50)); // 60秒 / 120秒 = 50%
-        
+
         // 测试无效的行
         let progress = monitor.update_from_line("frame=100");
         assert_eq!(progress, None);
@@ -222,23 +230,23 @@ mod tests {
     #[test]
     fn test_progress_calculation() {
         let monitor = MsssimProgressMonitor::new(100.0, 2500);
-        
+
         // 0%
         monitor.update_from_line("out_time_us=0");
         assert_eq!(monitor.current_progress(), 0);
-        
+
         // 25%
         monitor.update_from_line("out_time_us=25000000");
         assert_eq!(monitor.current_progress(), 25);
-        
+
         // 50%
         monitor.update_from_line("out_time_us=50000000");
         assert_eq!(monitor.current_progress(), 50);
-        
+
         // 100%
         monitor.update_from_line("out_time_us=100000000");
         assert_eq!(monitor.current_progress(), 100);
-        
+
         // 超过100%（应该被限制）
         monitor.update_from_line("out_time_us=150000000");
         assert_eq!(monitor.current_progress(), 100);
@@ -247,12 +255,12 @@ mod tests {
     #[test]
     fn test_channel_score_storage() {
         let monitor = MsssimProgressMonitor::new(120.0, 3000);
-        
+
         // 存储分数
         monitor.store_channel_score("Y", 0.9876);
         monitor.store_channel_score("U", 0.9543);
         monitor.store_channel_score("V", 0.9321);
-        
+
         // 获取分数
         assert_eq!(monitor.get_channel_score("Y"), Some(0.9876));
         assert_eq!(monitor.get_channel_score("U"), Some(0.9543));
@@ -263,7 +271,7 @@ mod tests {
     #[test]
     fn test_zero_duration() {
         let monitor = MsssimProgressMonitor::new(0.0, 0);
-        
+
         monitor.update_from_line("out_time_us=1000000");
         assert_eq!(monitor.current_progress(), 0); // 避免除以零
     }
@@ -272,7 +280,7 @@ mod tests {
     fn test_print_progress() {
         let monitor = MsssimProgressMonitor::new(120.0, 3000);
         monitor.update_from_line("out_time_us=60000000");
-        
+
         // 测试打印不会panic
         monitor.print_progress("Y", 50);
     }
@@ -280,7 +288,7 @@ mod tests {
     #[test]
     fn test_monitor_ffmpeg_process_invalid_command() {
         let monitor = MsssimProgressMonitor::new(10.0, 250);
-        
+
         // 测试无效命令会返回错误
         let result = monitor.monitor_ffmpeg_process(&["invalid_command"], "Y");
         assert!(result.is_err());
@@ -299,17 +307,17 @@ mod tests {
             fn prop_progress_parsing_correctness(time_us in 0u64..1_000_000_000u64) {
                 let duration_secs = 100.0;
                 let monitor = MsssimProgressMonitor::new(duration_secs, 2500);
-                
+
                 let line = format!("out_time_us={}", time_us);
                 let progress = monitor.update_from_line(&line);
-                
+
                 // 验证解析成功
                 prop_assert!(progress.is_some());
-                
+
                 let pct = progress.unwrap();
                 let expected_secs = time_us as f64 / 1_000_000.0;
                 let expected_pct = ((expected_secs / duration_secs * 100.0).min(100.0)) as u32;
-                
+
                 // 验证百分比计算正确
                 prop_assert_eq!(pct, expected_pct);
             }
@@ -322,7 +330,7 @@ mod tests {
                 time_us in 0u64..10_000_000_000u64
             ) {
                 let monitor = MsssimProgressMonitor::new(duration_secs, 1000);
-                
+
                 let line = format!("out_time_us={}", time_us);
                 if let Some(pct) = monitor.update_from_line(&line) {
                     // 验证百分比在0-100范围内
@@ -338,7 +346,7 @@ mod tests {
                 progress_pct in 0u32..=100u32
             ) {
                 let monitor = MsssimProgressMonitor::new(duration_secs, 1000);
-                
+
                 // 测试打印不会panic
                 monitor.print_progress("Y", progress_pct);
                 monitor.print_progress("U", progress_pct);

@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use tracing::info;
 use std::path::PathBuf;
+use tracing::info;
 
-use vidquality_av1::{detect_video, auto_convert, determine_strategy, ConversionConfig};
+use vidquality_av1::{auto_convert, detect_video, determine_strategy, ConversionConfig};
 
 // 🔥 使用 shared_utils 的统计报告功能（模块化）
-
 
 #[derive(Parser)]
 #[command(name = "vidquality")]
@@ -67,7 +66,7 @@ enum Commands {
         /// Use --match-quality true to enable, --match-quality false to disable
         #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         match_quality: bool,
-        
+
         /// 🔥 Require compression: output must be smaller than input
         /// Use with --explore --match-quality for precise quality match + guaranteed compression
         #[arg(long, default_value_t = false)]
@@ -128,7 +127,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Analyze { input, output } => {
             let result = detect_video(&input)?;
-            
+
             match output {
                 OutputFormat::Human => print_analysis_human(&result),
                 OutputFormat::Json => {
@@ -137,10 +136,27 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, compress, apple_compat, cpu } => {
+        Commands::Auto {
+            input,
+            output,
+            force,
+            recursive,
+            delete_original,
+            in_place,
+            explore,
+            lossless,
+            match_quality,
+            compress,
+            apple_compat,
+            cpu,
+        } => {
             // Determine base directory
             let base_dir = if recursive {
-                if input.is_dir() { Some(input.clone()) } else { input.parent().map(|p| p.to_path_buf()) }
+                if input.is_dir() {
+                    Some(input.clone())
+                } else {
+                    input.parent().map(|p| p.to_path_buf())
+                }
             } else {
                 input.parent().map(|p| p.to_path_buf())
             };
@@ -156,21 +172,21 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 in_place,
                 // 🔥 v3.5: 裁判机制增强参数
-                min_ssim: 0.95,       // 默认 SSIM 阈值
+                min_ssim: 0.95,          // 默认 SSIM 阈值
                 validate_ms_ssim: false, // 默认不启用 VMAF（较慢）
                 // 🔥 v7.6: MS-SSIM优化配置
-                ms_ssim_sampling: None,  // 自动选择
+                ms_ssim_sampling: None, // 自动选择
                 full_ms_ssim: false,
                 skip_ms_ssim: false,
-                min_ms_ssim: 85.0,       // 默认 VMAF 阈值
+                min_ms_ssim: 85.0,             // 默认 VMAF 阈值
                 require_compression: compress, // 🔥 v4.6
-                apple_compat,         // 🍎 v4.15
-                use_gpu: !cpu,        // 🔥 v4.15: CPU mode = no GPU
+                apple_compat,                  // 🍎 v4.15
+                use_gpu: !cpu,                 // 🔥 v4.15: CPU mode = no GPU
                 // HEVC flags (unused in AV1)
                 force_ms_ssim_long: false,
                 ultimate_mode: false,
             };
-            
+
             info!("🎬 Auto Mode Conversion (AV1)");
             info!("   Lossless sources → AV1 Lossless");
             info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
@@ -196,27 +212,35 @@ fn main() -> anyhow::Result<()> {
                 info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
             info!("");
-            
+
             shared_utils::cli_runner::run_auto_command(
                 shared_utils::cli_runner::CliRunnerConfig {
                     input: input.clone(),
                     output: output.clone(),
                     recursive,
                     label: "AV1 Video".to_string(),
-                    base_dir: if output.is_some() { Some(input.clone()) } else { None }, // 🔥 v7.4.5
+                    base_dir: if output.is_some() {
+                        Some(input.clone())
+                    } else {
+                        None
+                    }, // 🔥 v7.4.5
                 },
-                |file| auto_convert(file, &config).map_err(|e| e.into())
+                |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
         }
 
-        Commands::Simple { input, output, lossless: _ } => {
+        Commands::Simple {
+            input,
+            output,
+            lossless: _,
+        } => {
             info!("🎬 Simple Mode Conversion");
             info!("   ⚠️  ALL videos → AV1 MP4 (MATHEMATICAL LOSSLESS - VERY SLOW!)");
             info!("   (Note: Simple mode now enforces lossless conversion by default)");
             info!("");
-            
+
             let result = vidquality_av1::simple_convert(&input, output.as_deref())?;
-            
+
             info!("");
             info!("✅ Complete!");
             info!("   Output: {}", result.output_path);
@@ -226,11 +250,15 @@ fn main() -> anyhow::Result<()> {
         Commands::Strategy { input } => {
             let detection = detect_video(&input)?;
             let strategy = determine_strategy(&detection);
-            
+
             println!("\n🎯 Recommended Strategy (Auto Mode)");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("📁 File: {}", input.display());
-            println!("🎬 Codec: {} ({})", detection.codec.as_str(), detection.compression.as_str());
+            println!(
+                "🎬 Codec: {} ({})",
+                detection.codec.as_str(),
+                detection.compression.as_str()
+            );
             println!();
             println!("💡 Target: {}", strategy.target.as_str());
             println!("📝 Reason: {}", strategy.reason);
@@ -246,7 +274,11 @@ fn print_analysis_human(result: &vidquality_av1::VideoDetectionResult) {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📁 File: {}", result.file_path);
     println!("📦 Format: {}", result.format);
-    println!("🎬 Codec: {} ({})", result.codec.as_str(), result.codec_long);
+    println!(
+        "🎬 Codec: {} ({})",
+        result.codec.as_str(),
+        result.codec_long
+    );
     println!("🔍 Compression: {}", result.compression.as_str());
     println!();
     println!("📐 Resolution: {}x{}", result.width, result.height);
@@ -257,13 +289,23 @@ fn print_analysis_human(result: &vidquality_av1::VideoDetectionResult) {
     println!();
     println!("💾 File Size: {} bytes", result.file_size);
     println!("📊 Bitrate: {} bps", result.bitrate);
-    println!("🎵 Audio: {}", if result.has_audio { 
-        result.audio_codec.as_deref().unwrap_or("yes") 
-    } else { 
-        "no" 
-    });
+    println!(
+        "🎵 Audio: {}",
+        if result.has_audio {
+            result.audio_codec.as_deref().unwrap_or("yes")
+        } else {
+            "no"
+        }
+    );
     println!();
     println!("⭐ Quality Score: {}/100", result.quality_score);
-    println!("📦 Archival Candidate: {}", if result.archival_candidate { "✅ Yes" } else { "❌ No" });
+    println!(
+        "📦 Archival Candidate: {}",
+        if result.archival_candidate {
+            "✅ Yes"
+        } else {
+            "❌ No"
+        }
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }

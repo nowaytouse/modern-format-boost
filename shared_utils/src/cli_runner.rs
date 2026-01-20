@@ -1,10 +1,12 @@
 use crate::batch::BatchResult;
-use crate::file_copier::{SUPPORTED_VIDEO_EXTENSIONS, copy_unsupported_files, verify_output_completeness};
+use crate::file_copier::{
+    copy_unsupported_files, verify_output_completeness, SUPPORTED_VIDEO_EXTENSIONS,
+};
 use crate::report::print_summary_report;
 use anyhow::Result;
+use log::{error, info, warn};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-use log::{info, warn, error};
 
 /// Trait to unify result reporting from different tools
 pub trait CliProcessingResult {
@@ -19,13 +21,27 @@ pub trait CliProcessingResult {
 
 // Default impl for shared_utils::conversion::ConversionResult
 impl CliProcessingResult for crate::conversion::ConversionResult {
-    fn is_skipped(&self) -> bool { self.skipped }
-    fn skip_reason(&self) -> Option<&str> { self.skip_reason.as_deref() }
-    fn input_path(&self) -> &str { &self.input_path }
-    fn output_path(&self) -> Option<&str> { self.output_path.as_deref() }
-    fn input_size(&self) -> u64 { self.input_size }
-    fn output_size(&self) -> Option<u64> { self.output_size }
-    fn message(&self) -> &str { &self.message }
+    fn is_skipped(&self) -> bool {
+        self.skipped
+    }
+    fn skip_reason(&self) -> Option<&str> {
+        self.skip_reason.as_deref()
+    }
+    fn input_path(&self) -> &str {
+        &self.input_path
+    }
+    fn output_path(&self) -> Option<&str> {
+        self.output_path.as_deref()
+    }
+    fn input_size(&self) -> u64 {
+        self.input_size
+    }
+    fn output_size(&self) -> Option<u64> {
+        self.output_size
+    }
+    fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// Configuration for the CLI runner
@@ -33,15 +49,12 @@ pub struct CliRunnerConfig {
     pub input: PathBuf,
     pub output: Option<PathBuf>,
     pub recursive: bool,
-    pub label: String, // e.g. "AV1 Video" or "HEVC Video"
+    pub label: String,             // e.g. "AV1 Video" or "HEVC Video"
     pub base_dir: Option<PathBuf>, // 🔥 v7.4.5: For directory metadata preservation
 }
 
 /// Run the "Auto" command logic for batch processing
-pub fn run_auto_command<F, R>(
-    config: CliRunnerConfig,
-    converter: F,
-) -> Result<()>
+pub fn run_auto_command<F, R>(config: CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R>,
     R: CliProcessingResult,
@@ -89,19 +102,22 @@ where
         match converter(file) {
             Ok(result) => {
                 if result.is_skipped() {
-                    info!("⏭️ {} → SKIP ({})", 
+                    info!(
+                        "⏭️ {} → SKIP ({})",
                         file.file_name().unwrap_or_default().to_string_lossy(),
                         result.skip_reason().unwrap_or("unknown")
                     );
                     batch_result.skip();
                 } else if result.output_size().unwrap_or(0) == 0 && result.output_path().is_none() {
                     // Legacy "skip" signals (empty result)
-                    info!("⏭️ {} → SKIP (legacy signal)", 
+                    info!(
+                        "⏭️ {} → SKIP (legacy signal)",
                         file.file_name().unwrap_or_default().to_string_lossy()
                     );
                     batch_result.skip();
                 } else {
-                    info!("✅ {} → {} ({})", 
+                    info!(
+                        "✅ {} → {} ({})",
                         file.file_name().unwrap_or_default().to_string_lossy(),
                         result.output_path().unwrap_or("?"),
                         result.message() // Message already contains size reduction info if formatted correctly
@@ -114,7 +130,8 @@ where
             Err(e) => {
                 let error_msg = e.to_string();
                 if error_msg.contains("Output exists:") {
-                     info!("⏭️ {} → SKIP (output exists)", 
+                    info!(
+                        "⏭️ {} → SKIP (output exists)",
                         file.file_name().unwrap_or_default().to_string_lossy()
                     );
                     batch_result.skip();
@@ -185,12 +202,12 @@ where
     R: CliProcessingResult,
 {
     let input = &config.input;
-    
+
     // Check extension
     if let Some(ext) = input.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
         if !SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_str.as_str()) {
-             anyhow::bail!(
+            anyhow::bail!(
                 "❌ 不是视频文件: {}\n\
                  💡 文件扩展名: .{}\n\
                  💡 支持的视频格式: {}\n\
@@ -206,11 +223,19 @@ where
 
     info!("");
     info!("📊 Conversion Summary:");
-    info!("   Input:  {} ({} bytes)", result.input_path(), result.input_size());
+    info!(
+        "   Input:  {} ({} bytes)",
+        result.input_path(),
+        result.input_size()
+    );
     if let Some(out_path) = result.output_path() {
-        info!("   Output: {} ({} bytes)", out_path, result.output_size().unwrap_or(0));
+        info!(
+            "   Output: {} ({} bytes)",
+            out_path,
+            result.output_size().unwrap_or(0)
+        );
     }
     info!("   Result: {}", result.message());
-    
+
     Ok(())
 }

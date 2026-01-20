@@ -1,15 +1,15 @@
 //! CRF (Constant Rate Factor) Type-Safe Wrapper
 //!
 //! 提供编译期保证的 CRF 值范围验证。
-//! 
+//!
 //! ## 设计原理
 //! - 使用泛型 `Crf<E>` 区分不同编码器的 CRF 范围
 //! - `EncoderBounds` trait 定义编码器特定的边界
 //! - 创建时验证，运行时无需重复检查
 
-use std::marker::PhantomData;
-use std::fmt;
 use crate::float_compare::approx_eq_f32;
+use std::fmt;
+use std::marker::PhantomData;
 
 /// CRF 缓存键乘数（用于整数键生成）
 pub const CRF_CACHE_KEY_MULTIPLIER: f32 = 100.0;
@@ -42,7 +42,7 @@ pub struct X264Encoder;
 // ============================================================================
 
 /// 编码器边界约束 trait
-/// 
+///
 /// 定义每种编码器的 CRF 有效范围和默认值。
 pub trait EncoderBounds: Clone + Copy {
     /// 最小 CRF（最高质量，通常为 0 = 无损）
@@ -104,21 +104,25 @@ pub enum CrfError {
         encoder: &'static str,
     },
     /// 无效的缓存键
-    InvalidCacheKey {
-        key: u32,
-        encoder: &'static str,
-    },
+    InvalidCacheKey { key: u32, encoder: &'static str },
     /// NaN 或 Inf 值
-    InvalidFloat {
-        encoder: &'static str,
-    },
+    InvalidFloat { encoder: &'static str },
 }
 
 impl fmt::Display for CrfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CrfError::OutOfRange { value, min, max, encoder } => {
-                write!(f, "{} CRF {:.2} out of range [{:.1}, {:.1}]", encoder, value, min, max)
+            CrfError::OutOfRange {
+                value,
+                min,
+                max,
+                encoder,
+            } => {
+                write!(
+                    f,
+                    "{} CRF {:.2} out of range [{:.1}, {:.1}]",
+                    encoder, value, min, max
+                )
             }
             CrfError::InvalidCacheKey { key, encoder } => {
                 write!(f, "Invalid {} CRF cache key: {}", encoder, key)
@@ -137,21 +141,21 @@ impl std::error::Error for CrfError {}
 // ============================================================================
 
 /// 类型安全的 CRF 值
-/// 
+///
 /// 泛型参数 `E` 指定编码器类型，决定有效的 CRF 范围。
-/// 
+///
 /// # Examples
 /// ```
 /// use shared_utils::types::crf::{Crf, HevcEncoder, Av1Encoder};
-/// 
+///
 /// // HEVC CRF (0-51)
 /// let hevc_crf = Crf::<HevcEncoder>::new(23.0).unwrap();
 /// assert_eq!(hevc_crf.value(), 23.0);
-/// 
+///
 /// // AV1 CRF (0-63)
 /// let av1_crf = Crf::<Av1Encoder>::new(30.0).unwrap();
 /// assert_eq!(av1_crf.value(), 30.0);
-/// 
+///
 /// // 超出范围会返回错误
 /// assert!(Crf::<HevcEncoder>::new(60.0).is_err());
 /// ```
@@ -163,10 +167,10 @@ pub struct Crf<E: EncoderBounds> {
 
 impl<E: EncoderBounds> Crf<E> {
     /// 创建 CRF 值，验证范围
-    /// 
+    ///
     /// # Arguments
     /// * `value` - CRF 值
-    /// 
+    ///
     /// # Returns
     /// * `Ok(Crf)` - 如果值在有效范围内
     /// * `Err(CrfError)` - 如果值超出范围或为 NaN/Inf
@@ -175,7 +179,7 @@ impl<E: EncoderBounds> Crf<E> {
         if value.is_nan() || value.is_infinite() {
             return Err(CrfError::InvalidFloat { encoder: E::NAME });
         }
-        
+
         // 检查范围
         if value < E::MIN || value > E::MAX {
             return Err(CrfError::OutOfRange {
@@ -185,13 +189,13 @@ impl<E: EncoderBounds> Crf<E> {
                 encoder: E::NAME,
             });
         }
-        
+
         Ok(Self {
             value,
             _marker: PhantomData,
         })
     }
-    
+
     /// 创建默认 CRF 值
     pub fn default_value() -> Self {
         Self {
@@ -199,7 +203,7 @@ impl<E: EncoderBounds> Crf<E> {
             _marker: PhantomData,
         }
     }
-    
+
     /// 创建视觉无损 CRF 值
     pub fn visually_lossless() -> Self {
         Self {
@@ -207,27 +211,27 @@ impl<E: EncoderBounds> Crf<E> {
             _marker: PhantomData,
         }
     }
-    
+
     /// 获取原始 CRF 值
     #[inline]
     pub fn value(&self) -> f32 {
         self.value
     }
-    
+
     /// 转换为缓存键（处理精度）
-    /// 
+    ///
     /// 将 CRF 值乘以 100 并取整，用于 HashMap 键。
     /// 例如：CRF 23.5 → 2350
     #[inline]
     pub fn to_cache_key(&self) -> u32 {
         (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
     }
-    
+
     /// 从缓存键恢复 CRF 值
-    /// 
+    ///
     /// # Arguments
     /// * `key` - 缓存键
-    /// 
+    ///
     /// # Returns
     /// * `Ok(Crf)` - 如果恢复的值在有效范围内
     /// * `Err(CrfError)` - 如果恢复的值超出范围
@@ -238,29 +242,29 @@ impl<E: EncoderBounds> Crf<E> {
             encoder: E::NAME,
         })
     }
-    
+
     /// 近似相等比较
-    /// 
+    ///
     /// 使用 CRF_EPSILON 进行比较，处理浮点精度问题。
     #[inline]
     pub fn approx_eq(&self, other: &Self) -> bool {
         approx_eq_f32(self.value, other.value)
     }
-    
+
     /// 获取编码器名称
     #[inline]
     pub fn encoder_name(&self) -> &'static str {
         E::NAME
     }
-    
+
     /// 获取有效范围
     #[inline]
     pub fn valid_range() -> (f32, f32) {
         (E::MIN, E::MAX)
     }
-    
+
     /// 钳制到有效范围（不返回错误）
-    /// 
+    ///
     /// 用于需要保证有效值但不想处理错误的场景。
     pub fn clamped(value: f32) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
@@ -317,7 +321,7 @@ mod tests {
         assert!(Crf::<HevcEncoder>::new(0.0).is_ok());
         assert!(Crf::<HevcEncoder>::new(51.0).is_ok());
         assert!(Crf::<HevcEncoder>::new(23.0).is_ok());
-        
+
         // 超出范围
         assert!(Crf::<HevcEncoder>::new(-1.0).is_err());
         assert!(Crf::<HevcEncoder>::new(52.0).is_err());
@@ -328,7 +332,7 @@ mod tests {
         assert!(Crf::<Av1Encoder>::new(0.0).is_ok());
         assert!(Crf::<Av1Encoder>::new(63.0).is_ok());
         assert!(Crf::<Av1Encoder>::new(30.0).is_ok());
-        
+
         assert!(Crf::<Av1Encoder>::new(-1.0).is_err());
         assert!(Crf::<Av1Encoder>::new(64.0).is_err());
     }
@@ -352,7 +356,7 @@ mod tests {
     fn test_crf_default() {
         let hevc = Crf::<HevcEncoder>::default();
         assert_eq!(hevc.value(), 23.0);
-        
+
         let av1 = Crf::<Av1Encoder>::default();
         assert_eq!(av1.value(), 30.0);
     }
@@ -361,7 +365,7 @@ mod tests {
     fn test_crf_clamped() {
         let clamped = Crf::<HevcEncoder>::clamped(100.0);
         assert_eq!(clamped.value(), 51.0);
-        
+
         let clamped_nan = Crf::<HevcEncoder>::clamped(f32::NAN);
         assert_eq!(clamped_nan.value(), 23.0); // 默认值
     }

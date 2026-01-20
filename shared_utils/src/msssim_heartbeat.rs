@@ -8,9 +8,9 @@
 //! - 线程安全的启动和停止
 //! - RAII模式自动清理
 
-use chrono::{DateTime, FixedOffset, Utc};
 #[cfg(test)]
 use chrono::Timelike;
+use chrono::{DateTime, FixedOffset, Utc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -110,7 +110,7 @@ mod tests {
     fn test_beijing_time_format() {
         // 测试时间格式
         let time_str = Heartbeat::beijing_time_now();
-        
+
         // 验证格式：YYYY-MM-DD HH:MM:SS
         assert_eq!(time_str.len(), 19);
         assert_eq!(&time_str[4..5], "-");
@@ -126,10 +126,10 @@ mod tests {
         let utc_now = Utc::now();
         let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
         let beijing_time = utc_now.with_timezone(&beijing_offset);
-        
+
         // 验证时区偏移
         assert_eq!(beijing_offset.local_minus_utc(), 8 * 3600);
-        
+
         // 验证小时差（考虑跨天情况）
         let utc_hour = utc_now.hour();
         let beijing_hour = beijing_time.hour();

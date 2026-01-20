@@ -3,8 +3,8 @@
 //! Pure analysis layer - detects video properties using ffprobe.
 //! Determines codec type, compression level, and archival suitability.
 
-use crate::Result;
 use crate::ffprobe::probe_video;
+use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -60,29 +60,31 @@ impl DetectedCodec {
             _ => DetectedCodec::Unknown(codec_name.to_string()),
         }
     }
-    
+
     /// Check if codec is natively lossless
     pub fn is_lossless(&self) -> bool {
-        matches!(self,
-            DetectedCodec::FFV1 |
-            DetectedCodec::Uncompressed |
-            DetectedCodec::HuffYUV |
-            DetectedCodec::UTVideo
+        matches!(
+            self,
+            DetectedCodec::FFV1
+                | DetectedCodec::Uncompressed
+                | DetectedCodec::HuffYUV
+                | DetectedCodec::UTVideo
         )
     }
-    
+
     /// Check if codec can be lossless (like ProRes 4444 XQ)
     pub fn can_be_lossless(&self) -> bool {
-        matches!(self,
-            DetectedCodec::FFV1 |
-            DetectedCodec::Uncompressed |
-            DetectedCodec::HuffYUV |
-            DetectedCodec::UTVideo |
-            DetectedCodec::ProRes |
-            DetectedCodec::DNxHD
+        matches!(
+            self,
+            DetectedCodec::FFV1
+                | DetectedCodec::Uncompressed
+                | DetectedCodec::HuffYUV
+                | DetectedCodec::UTVideo
+                | DetectedCodec::ProRes
+                | DetectedCodec::DNxHD
         )
     }
-    
+
     pub fn as_str(&self) -> &str {
         match self {
             DetectedCodec::FFV1 => "FFV1",
@@ -197,17 +199,17 @@ fn determine_compression_type(
     if codec.is_lossless() {
         return CompressionType::Lossless;
     }
-    
+
     // ProRes and DNxHD are typically visually lossless
     if matches!(codec, DetectedCodec::ProRes | DetectedCodec::DNxHD) {
         return CompressionType::VisuallyLossless;
     }
-    
+
     // Estimate based on bits per pixel
     let pixels_per_second = (width as f64) * (height as f64) * fps;
     if pixels_per_second > 0.0 {
         let bits_per_pixel = (bitrate as f64 * 8.0) / pixels_per_second;
-        
+
         // High bits per pixel suggests high quality
         if bits_per_pixel > 2.0 {
             return CompressionType::VisuallyLossless;
@@ -217,7 +219,7 @@ fn determine_compression_type(
             return CompressionType::Standard;
         }
     }
-    
+
     CompressionType::LowQuality
 }
 
@@ -236,22 +238,26 @@ fn calculate_quality_score(
         CompressionType::Standard => 60,
         CompressionType::LowQuality => 40,
     };
-    
+
     // Adjust for bit depth
     let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
-    
+
     // Adjust for resolution (4K+ gets bonus)
-    let res_bonus = if width >= 3840 || height >= 2160 { 3 } else { 0 };
-    
+    let res_bonus = if width >= 3840 || height >= 2160 {
+        3
+    } else {
+        0
+    };
+
     (base_score + depth_bonus + res_bonus).min(100)
 }
 
 /// Detect video properties - main entry point
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult> {
     let probe = probe_video(path)?;
-    
+
     let codec = DetectedCodec::from_ffprobe(&probe.video_codec);
-    
+
     // Calculate bits per pixel for quality estimation
     let pixels_per_second = (probe.width as f64) * (probe.height as f64) * probe.frame_rate;
     let bits_per_pixel = if pixels_per_second > 0.0 {
@@ -259,7 +265,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult> {
     } else {
         0.0
     };
-    
+
     let compression = determine_compression_type(
         &codec,
         probe.bit_rate,
@@ -267,12 +273,13 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult> {
         probe.height,
         probe.frame_rate,
     );
-    
-    let color_space = probe.color_space
+
+    let color_space = probe
+        .color_space
         .as_ref()
         .map(|s| ColorSpace::parse(s))
         .unwrap_or(ColorSpace::Unknown("unknown".to_string()));
-    
+
     let quality_score = calculate_quality_score(
         &compression,
         probe.bit_depth,
@@ -280,12 +287,13 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult> {
         probe.width,
         probe.height,
     );
-    
+
     // Determine if suitable for archival (should use FFV1)
-    let archival_candidate = matches!(compression, 
+    let archival_candidate = matches!(
+        compression,
         CompressionType::Lossless | CompressionType::VisuallyLossless
     ) || codec.can_be_lossless();
-    
+
     Ok(VideoDetectionResult {
         file_path: path.display().to_string(),
         format: probe.format_name,

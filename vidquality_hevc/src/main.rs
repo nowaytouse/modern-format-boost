@@ -1,16 +1,14 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use tracing::info;
 use std::path::PathBuf;
-
+use tracing::info;
 
 // 使用 lib crate
 use vidquality_hevc::{
-    detect_video, auto_convert, simple_convert, determine_strategy, 
-    ConversionConfig, VideoDetectionResult
+    auto_convert, detect_video, determine_strategy, simple_convert, ConversionConfig,
+    VideoDetectionResult,
 };
 
 // 🔥 使用 shared_utils 的统计报告功能（模块化）
-
 
 #[derive(Parser)]
 #[command(name = "vidquality-hevc")]
@@ -135,15 +133,43 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, ms_ssim, ms_ssim_threshold, force_ms_ssim_long, ms_ssim_sampling, full_ms_ssim, skip_ms_ssim, ultimate } => {
+        Commands::Auto {
+            input,
+            output,
+            force,
+            recursive,
+            delete_original,
+            in_place,
+            explore,
+            lossless,
+            match_quality,
+            apple_compat,
+            compress,
+            ms_ssim,
+            ms_ssim_threshold,
+            force_ms_ssim_long,
+            ms_ssim_sampling,
+            full_ms_ssim,
+            skip_ms_ssim,
+            ultimate,
+        } => {
             // 🔥 v6.2: Validate flag combinations with ultimate support
-            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate) {
+            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
+                explore,
+                match_quality,
+                compress,
+                ultimate,
+            ) {
                 eprintln!("{}", e);
                 std::process::exit(1);
             }
 
             let base_dir = if recursive {
-                if input.is_dir() { Some(input.clone()) } else { input.parent().map(|p| p.to_path_buf()) }
+                if input.is_dir() {
+                    Some(input.clone())
+                } else {
+                    input.parent().map(|p| p.to_path_buf())
+                }
             } else {
                 input.parent().map(|p| p.to_path_buf())
             };
@@ -171,7 +197,7 @@ fn main() -> anyhow::Result<()> {
                 full_ms_ssim,
                 skip_ms_ssim,
             };
-            
+
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");
             if match_quality {
@@ -198,7 +224,10 @@ fn main() -> anyhow::Result<()> {
                 info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if ms_ssim {
-                info!("   📊 MS-SSIM Verification: ENABLED (threshold: {:.2})", ms_ssim_threshold);
+                info!(
+                    "   📊 MS-SSIM Verification: ENABLED (threshold: {:.2})",
+                    ms_ssim_threshold
+                );
                 if force_ms_ssim_long {
                     info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
                 }
@@ -216,26 +245,34 @@ fn main() -> anyhow::Result<()> {
                 info!("   ⏭️  MS-SSIM: SKIPPED");
             }
             info!("");
-            
+
             shared_utils::cli_runner::run_auto_command(
                 shared_utils::cli_runner::CliRunnerConfig {
                     input: input.clone(),
                     output: output.clone(),
                     recursive,
                     label: "HEVC Video".to_string(),
-                    base_dir: if output.is_some() { Some(input.clone()) } else { None }, // 🔥 v7.4.5
+                    base_dir: if output.is_some() {
+                        Some(input.clone())
+                    } else {
+                        None
+                    }, // 🔥 v7.4.5
                 },
-                |file| auto_convert(file, &config).map_err(|e| e.into())
+                |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
         }
 
-        Commands::Simple { input, output, lossless: _ } => {
+        Commands::Simple {
+            input,
+            output,
+            lossless: _,
+        } => {
             info!("🎬 Simple Mode Conversion (HEVC/H.265)");
             info!("   ALL videos → HEVC MP4 (CRF 18)");
             info!("");
-            
+
             let result = simple_convert(&input, output.as_deref())?;
-            
+
             info!("");
             info!("✅ Complete!");
             info!("   Output: {}", result.output_path);
@@ -245,11 +282,15 @@ fn main() -> anyhow::Result<()> {
         Commands::Strategy { input } => {
             let detection = detect_video(&input)?;
             let strategy = determine_strategy(&detection);
-            
+
             println!("\n🎯 Recommended Strategy (HEVC Auto Mode)");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("📁 File: {}", input.display());
-            println!("🎬 Codec: {} ({})", detection.codec.as_str(), detection.compression.as_str());
+            println!(
+                "🎬 Codec: {} ({})",
+                detection.codec.as_str(),
+                detection.compression.as_str()
+            );
             println!();
             println!("💡 Target: {}", strategy.target.as_str());
             println!("📝 Reason: {}", strategy.reason);
@@ -265,7 +306,11 @@ fn print_analysis_human(result: &VideoDetectionResult) {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📁 File: {}", result.file_path);
     println!("📦 Format: {}", result.format);
-    println!("🎬 Codec: {} ({})", result.codec.as_str(), result.codec_long);
+    println!(
+        "🎬 Codec: {} ({})",
+        result.codec.as_str(),
+        result.codec_long
+    );
     println!("🔍 Compression: {}", result.compression.as_str());
     println!();
     println!("📐 Resolution: {}x{}", result.width, result.height);
@@ -276,13 +321,23 @@ fn print_analysis_human(result: &VideoDetectionResult) {
     println!();
     println!("💾 File Size: {} bytes", result.file_size);
     println!("📊 Bitrate: {} bps", result.bitrate);
-    println!("🎵 Audio: {}", if result.has_audio { 
-        result.audio_codec.as_deref().unwrap_or("yes") 
-    } else { 
-        "no" 
-    });
+    println!(
+        "🎵 Audio: {}",
+        if result.has_audio {
+            result.audio_codec.as_deref().unwrap_or("yes")
+        } else {
+            "no"
+        }
+    );
     println!();
     println!("⭐ Quality Score: {}/100", result.quality_score);
-    println!("📦 Archival Candidate: {}", if result.archival_candidate { "✅ Yes" } else { "❌ No" });
+    println!(
+        "📦 Archival Candidate: {}",
+        if result.archival_candidate {
+            "✅ Yes"
+        } else {
+            "❌ No"
+        }
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }

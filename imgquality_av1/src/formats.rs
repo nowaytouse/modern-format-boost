@@ -2,9 +2,9 @@
 
 /// PNG format utilities
 pub mod png {
-    use std::path::Path;
     use std::fs;
     use std::io::Read;
+    use std::path::Path;
 
     /// Check if PNG uses optimal compression by analyzing IDAT chunk sizes
     pub fn is_optimally_compressed(path: &Path) -> bool {
@@ -30,9 +30,9 @@ pub mod png {
 
 /// JPEG format utilities
 pub mod jpeg {
-    use std::path::Path;
     use std::fs;
     use std::io::Read;
+    use std::path::Path;
 
     /// Estimate JPEG quality factor (0-100) by analyzing quantization tables
     pub fn estimate_quality(path: &Path) -> u8 {
@@ -40,19 +40,18 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB
-                        && i + 5 < buffer.len() {
-                            let q_value = buffer[i + 5] as u32;
-                            return match q_value {
-                                0..=2 => 98,
-                                3..=5 => 95,
-                                6..=10 => 90,
-                                11..=20 => 85,
-                                21..=40 => 75,
-                                41..=60 => 65,
-                                _ => 50,
-                            };
-                        }
+                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB && i + 5 < buffer.len() {
+                        let q_value = buffer[i + 5] as u32;
+                        return match q_value {
+                            0..=2 => 98,
+                            3..=5 => 95,
+                            6..=10 => 90,
+                            11..=20 => 85,
+                            21..=40 => 75,
+                            41..=60 => 65,
+                            _ => 50,
+                        };
+                    }
                 }
             }
         }
@@ -77,8 +76,8 @@ pub mod jpeg {
 
 /// WebP format utilities
 pub mod webp {
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
 
     /// Check if WebP is lossless
     pub fn is_lossless(path: &Path) -> bool {
@@ -101,8 +100,8 @@ pub mod webp {
 
 /// GIF format utilities
 pub mod gif {
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
 
     /// Check if GIF is animated
     pub fn is_animated(path: &Path) -> bool {
@@ -126,9 +125,9 @@ pub mod gif {
 
 /// JXL format utilities
 pub mod jxl {
-    use std::path::Path;
     use std::fs;
     use std::io::Read;
+    use std::path::Path;
 
     /// Verify JXL signature
     pub fn verify_signature(path: &Path) -> bool {
@@ -154,7 +153,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     // 🔥 v7.0: 修复假测试 - 使用真实文件数据
-    
+
     #[test]
     fn test_webp_lossless_detection() {
         let webp_lossless: Vec<u8> = {
@@ -167,10 +166,10 @@ mod tests {
         };
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(&webp_lossless).expect("写入失败");
-        
+
         assert!(webp::is_lossless(file.path()), "VP8L 应被检测为 lossless");
     }
-    
+
     #[test]
     fn test_gif_frame_count() {
         let gif_data: Vec<u8> = {
@@ -185,19 +184,19 @@ mod tests {
         };
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(&gif_data).expect("写入失败");
-        
+
         assert_eq!(gif::get_frame_count(file.path()), 2, "应检测到 2 帧");
     }
-    
+
     #[test]
     fn test_jxl_codestream_signature() {
         let jxl_data: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(jxl_data).expect("写入失败");
-        
+
         assert!(jxl::verify_signature(file.path()), "JXL 签名应被识别");
     }
-    
+
     #[test]
     fn test_error_handling_nonexistent() {
         let path = std::path::Path::new("/nonexistent/file.test");

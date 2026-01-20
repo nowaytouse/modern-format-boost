@@ -186,12 +186,30 @@ mod tests {
     #[test]
     fn test_sampling_strategy_boundaries() {
         // 测试边界值
-        assert_eq!(SamplingStrategy::from_duration(60.0), SamplingStrategy::Full);
-        assert_eq!(SamplingStrategy::from_duration(60.1), SamplingStrategy::OneThird);
-        assert_eq!(SamplingStrategy::from_duration(300.0), SamplingStrategy::OneThird);
-        assert_eq!(SamplingStrategy::from_duration(300.1), SamplingStrategy::OneTenth);
-        assert_eq!(SamplingStrategy::from_duration(1800.0), SamplingStrategy::OneTenth);
-        assert_eq!(SamplingStrategy::from_duration(1800.1), SamplingStrategy::Skip);
+        assert_eq!(
+            SamplingStrategy::from_duration(60.0),
+            SamplingStrategy::Full
+        );
+        assert_eq!(
+            SamplingStrategy::from_duration(60.1),
+            SamplingStrategy::OneThird
+        );
+        assert_eq!(
+            SamplingStrategy::from_duration(300.0),
+            SamplingStrategy::OneThird
+        );
+        assert_eq!(
+            SamplingStrategy::from_duration(300.1),
+            SamplingStrategy::OneTenth
+        );
+        assert_eq!(
+            SamplingStrategy::from_duration(1800.0),
+            SamplingStrategy::OneTenth
+        );
+        assert_eq!(
+            SamplingStrategy::from_duration(1800.1),
+            SamplingStrategy::Skip
+        );
     }
 
     #[test]
@@ -199,7 +217,10 @@ mod tests {
         // 测试极端值
         assert_eq!(SamplingStrategy::from_duration(0.0), SamplingStrategy::Full);
         assert_eq!(SamplingStrategy::from_duration(1.0), SamplingStrategy::Full);
-        assert_eq!(SamplingStrategy::from_duration(100000.0), SamplingStrategy::Skip);
+        assert_eq!(
+            SamplingStrategy::from_duration(100000.0),
+            SamplingStrategy::Skip
+        );
     }
 
     #[test]

@@ -9,9 +9,9 @@
 //! - 嵌套检测: 检测嵌套心跳(只显示最内层)
 //! - 线程安全: 使用原子操作
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::collections::HashMap;
 
 /// 全局心跳管理器
 pub struct HeartbeatManager;
@@ -49,16 +49,18 @@ impl HeartbeatManager {
     /// 注册心跳
     pub fn register_heartbeat(operation: &str) {
         ACTIVE_HEARTBEATS.fetch_add(1, Ordering::Relaxed);
-        
+
         // 更新注册表
         if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
             let map = registry.get_or_insert_with(HashMap::new);
             *map.entry(operation.to_string()).or_insert(0) += 1;
-            
+
             // 检测冲突(同名心跳)
             if map[operation] > 1 {
-                eprintln!("⚠️  Multiple heartbeats with same name: {} (count: {})", 
-                    operation, map[operation]);
+                eprintln!(
+                    "⚠️  Multiple heartbeats with same name: {} (count: {})",
+                    operation, map[operation]
+                );
             }
         }
     }
@@ -66,7 +68,7 @@ impl HeartbeatManager {
     /// 注销心跳
     pub fn unregister_heartbeat(operation: &str) {
         ACTIVE_HEARTBEATS.fetch_sub(1, Ordering::Relaxed);
-        
+
         // 更新注册表
         if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
             if let Some(map) = registry.as_mut() {
@@ -89,9 +91,7 @@ impl HeartbeatManager {
     pub fn get_active_heartbeats() -> Vec<(String, usize)> {
         if let Ok(registry) = HEARTBEAT_REGISTRY.lock() {
             if let Some(map) = registry.as_ref() {
-                return map.iter()
-                    .map(|(k, v)| (k.clone(), *v))
-                    .collect();
+                return map.iter().map(|(k, v)| (k.clone(), *v)).collect();
             }
         }
         Vec::new()
@@ -102,7 +102,7 @@ impl HeartbeatManager {
         // 重置计数器
         ACTIVE_HEARTBEATS.store(0, Ordering::Relaxed);
         ACTIVE_PROGRESS_BARS.store(0, Ordering::Relaxed);
-        
+
         // 清空注册表
         if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
             *registry = None;

@@ -15,8 +15,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use console::{style, Term};
 use indicatif::{ProgressBar, ProgressStyle};
-use shared_utils::{XmpMerger, XmpMergerConfig, MergeSummary};
 use shared_utils::checkpoint::CheckpointManager;
+use shared_utils::{MergeSummary, XmpMerger, XmpMergerConfig};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -70,25 +70,34 @@ fn main() -> Result<()> {
     // Initialize checkpoint manager for resume support
     let mut checkpoint = CheckpointManager::new(&args.directory)
         .context("Failed to initialize checkpoint manager")?;
-    
+
     // Check for existing lock
     if let Some(pid) = checkpoint.check_lock()? {
-        eprintln!("⚠️  Another process (PID {}) is already processing this directory", pid);
-        eprintln!("   If this is incorrect, delete: {}", checkpoint.progress_dir().join("processing.lock").display());
+        eprintln!(
+            "⚠️  Another process (PID {}) is already processing this directory",
+            pid
+        );
+        eprintln!(
+            "   If this is incorrect, delete: {}",
+            checkpoint.progress_dir().join("processing.lock").display()
+        );
         std::process::exit(1);
     }
-    
+
     // Clear progress if --fresh flag
     if args.fresh {
         checkpoint.clear_progress()?;
         println!("🔄 Starting fresh (cleared previous progress)");
     }
-    
+
     // Show resume info
     if checkpoint.is_resume_mode() {
-        println!("🔄 Resuming: {} files already completed", style(checkpoint.completed_count()).green());
+        println!(
+            "🔄 Resuming: {} files already completed",
+            style(checkpoint.completed_count()).green()
+        );
     }
-    
+
     // Acquire lock
     checkpoint.acquire_lock()?;
 
@@ -115,7 +124,7 @@ fn main() -> Result<()> {
     // Find XMP files
     println!("📊 Scanning for XMP files...");
     let xmp_files = merger.find_xmp_files(&args.directory)?;
-    
+
     if xmp_files.is_empty() {
         println!("{}", style("No XMP files found.").yellow());
         checkpoint.cleanup()?;
@@ -123,15 +132,19 @@ fn main() -> Result<()> {
     }
 
     // Filter out already completed files
-    let pending_files: Vec<_> = xmp_files.iter()
+    let pending_files: Vec<_> = xmp_files
+        .iter()
         .filter(|f| !checkpoint.is_completed(f))
         .collect();
-    
+
     let skipped_count = xmp_files.len() - pending_files.len();
-    
+
     println!("📁 Found: {} XMP files", style(xmp_files.len()).green());
     if skipped_count > 0 {
-        println!("⏭️  Skipping: {} already processed", style(skipped_count).yellow());
+        println!(
+            "⏭️  Skipping: {} already processed",
+            style(skipped_count).yellow()
+        );
     }
     println!();
 
@@ -155,17 +168,17 @@ fn main() -> Result<()> {
 
     // Process files with checkpoint tracking
     let mut results = Vec::with_capacity(pending_files.len());
-    
+
     for xmp_path in &pending_files {
         let result = merger.process_xmp(xmp_path);
-        
+
         // Print result
         let filename = xmp_path.file_name().unwrap_or_default().to_string_lossy();
-        
+
         if result.success {
             // Mark as completed ONLY on success
             checkpoint.mark_completed(xmp_path)?;
-            
+
             if let Some(ref media) = result.media_path {
                 let media_name = media.file_name().unwrap_or_default().to_string_lossy();
                 let strategy = result.match_strategy.as_deref().unwrap_or("unknown");
@@ -181,7 +194,7 @@ fn main() -> Result<()> {
             // No matching media - also mark as "completed" to skip on resume
             // (no point retrying if media doesn't exist)
             checkpoint.mark_completed(xmp_path)?;
-            
+
             pb.println(format!(
                 "  {} {} ({})",
                 style("⏭️").yellow(),
@@ -197,7 +210,7 @@ fn main() -> Result<()> {
                 style(&result.message).dim()
             ));
         }
-        
+
         results.push(result);
         pb.inc(1);
     }
@@ -206,17 +219,26 @@ fn main() -> Result<()> {
 
     // Print summary
     let summary = MergeSummary::from_results(&results);
-    
+
     println!();
     println!("╔══════════════════════════════════════════════╗");
     println!("║   📊 Merge Complete                          ║");
     println!("╠══════════════════════════════════════════════╣");
-    println!("║  ✅ Successful:    {:>20}       ║", style(summary.success).green());
-    println!("║  ❌ Failed:        {:>20}       ║", style(summary.failed).red());
-    println!("║  ⏭️  Skipped:       {:>20}       ║", style(summary.skipped).yellow());
+    println!(
+        "║  ✅ Successful:    {:>20}       ║",
+        style(summary.success).green()
+    );
+    println!(
+        "║  ❌ Failed:        {:>20}       ║",
+        style(summary.failed).red()
+    );
+    println!(
+        "║  ⏭️  Skipped:       {:>20}       ║",
+        style(summary.skipped).yellow()
+    );
     println!("╠══════════════════════════════════════════════╣");
     println!("║  📈 Match Strategies:                        ║");
-    
+
     for (strategy, count) in &summary.strategies {
         let strategy_name = match strategy.as_str() {
             "direct_match" => "Direct (.jpg.xmp → .jpg)",
@@ -228,7 +250,7 @@ fn main() -> Result<()> {
         };
         println!("║    • {:<25} {:>5}       ║", strategy_name, count);
     }
-    
+
     println!("╚══════════════════════════════════════════════╝");
 
     // Cleanup checkpoint on success (no failures that need retry)
@@ -238,7 +260,10 @@ fn main() -> Result<()> {
         // Keep progress for resume
         checkpoint.release_lock()?;
         println!();
-        println!("💡 {} failures - run again to retry failed files", summary.failed);
+        println!(
+            "💡 {} failures - run again to retry failed files",
+            summary.failed
+        );
         std::process::exit(1);
     }
 

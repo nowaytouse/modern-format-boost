@@ -1,7 +1,7 @@
 //! Media Date Analysis Module
 //!
 //! Deep EXIF/XMP date extraction and analysis for media files.
-//! 
+//!
 //! Priority order (most reliable to least):
 //! 1. XMP-photoshop:DateCreated - Photoshop original creation
 //! 2. XMP-xmp:CreateDate - XMP creation date
@@ -12,22 +12,22 @@
 //!
 //! ⚠️ FileModifyDate is EXCLUDED as it's unreliable (download/copy time)
 
+use chrono::{Datelike, NaiveDateTime};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use chrono::{NaiveDateTime, Datelike};
-use serde::{Deserialize, Serialize};
 
 /// Date source priority (higher = more reliable)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DateSource {
-    XmpPhotoshop,    // Priority 1: XMP-photoshop:DateCreated
-    XmpCreateDate,   // Priority 2: XMP-xmp:CreateDate
-    XmpHistory,      // Priority 3: XMP-xmpMM:HistoryWhen
-    ExifOriginal,    // Priority 4: EXIF:DateTimeOriginal
-    ExifCreateDate,  // Priority 5: EXIF:CreateDate
-    XmpMetadata,     // Priority 6: XMP-xmp:MetadataDate
-    None,            // No valid date found
+    XmpPhotoshop,   // Priority 1: XMP-photoshop:DateCreated
+    XmpCreateDate,  // Priority 2: XMP-xmp:CreateDate
+    XmpHistory,     // Priority 3: XMP-xmpMM:HistoryWhen
+    ExifOriginal,   // Priority 4: EXIF:DateTimeOriginal
+    ExifCreateDate, // Priority 5: EXIF:CreateDate
+    XmpMetadata,    // Priority 6: XMP-xmp:MetadataDate
+    None,           // No valid date found
 }
 
 impl DateSource {
@@ -42,7 +42,7 @@ impl DateSource {
             DateSource::None => 0,
         }
     }
-    
+
     pub fn name(&self) -> &'static str {
         match self {
             DateSource::XmpPhotoshop => "XMP-Photoshop",
@@ -95,10 +95,17 @@ impl Default for DateAnalysisConfig {
             min_valid_year: 1990,
             max_valid_year: current_year + 1,
             extensions: vec![
-                "jpg".to_string(), "jpeg".to_string(), "png".to_string(),
-                "gif".to_string(), "webp".to_string(), "mp4".to_string(),
-                "mov".to_string(), "jfif".to_string(), "heic".to_string(),
-                "avif".to_string(), "jxl".to_string(),
+                "jpg".to_string(),
+                "jpeg".to_string(),
+                "png".to_string(),
+                "gif".to_string(),
+                "webp".to_string(),
+                "mp4".to_string(),
+                "mov".to_string(),
+                "jfif".to_string(),
+                "heic".to_string(),
+                "avif".to_string(),
+                "jxl".to_string(),
             ],
         }
     }
@@ -131,11 +138,14 @@ struct ExiftoolOutput {
 }
 
 /// Analyze media dates in a directory
-pub fn analyze_directory(dir: &Path, config: &DateAnalysisConfig) -> Result<DateAnalysisResult, String> {
+pub fn analyze_directory(
+    dir: &Path,
+    config: &DateAnalysisConfig,
+) -> Result<DateAnalysisResult, String> {
     if !dir.is_dir() {
         return Err(format!("Not a directory: {}", dir.display()));
     }
-    
+
     // Build exiftool command
     let output = Command::new("exiftool")
         .arg("-r")
@@ -150,11 +160,16 @@ pub fn analyze_directory(dir: &Path, config: &DateAnalysisConfig) -> Result<Date
         .arg("-EXIF:CreateDate")
         .arg("-EXIF:ModifyDate")
         .arg("-FileName")
-        .args(config.extensions.iter().flat_map(|e| vec!["-ext".to_string(), e.clone()]))
+        .args(
+            config
+                .extensions
+                .iter()
+                .flat_map(|e| vec!["-ext".to_string(), e.clone()]),
+        )
         .arg(dir)
         .output()
         .map_err(|e| format!("Failed to run exiftool: {}", e))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // exiftool returns non-zero if no files found, which is OK
@@ -162,7 +177,7 @@ pub fn analyze_directory(dir: &Path, config: &DateAnalysisConfig) -> Result<Date
             return Err(format!("exiftool failed: {}", stderr));
         }
     }
-    
+
     let json_str = String::from_utf8_lossy(&output.stdout);
     if json_str.trim().is_empty() || json_str.trim() == "[]" {
         return Ok(DateAnalysisResult {
@@ -177,49 +192,51 @@ pub fn analyze_directory(dir: &Path, config: &DateAnalysisConfig) -> Result<Date
             files: Vec::new(),
         });
     }
-    
+
     let raw_data: Vec<ExiftoolOutput> = serde_json::from_str(&json_str)
         .map_err(|e| format!("Failed to parse exiftool JSON: {}", e))?;
-    
+
     // Process each file
     let mut files: Vec<FileDateInfo> = Vec::new();
     let mut by_source: HashMap<String, usize> = HashMap::new();
     let mut by_year: HashMap<i32, usize> = HashMap::new();
     let mut by_month: HashMap<String, usize> = HashMap::new();
-    
+
     for item in raw_data {
         let file_info = extract_best_date(&item, config);
-        
+
         // Update statistics
-        *by_source.entry(file_info.date_source.name().to_string()).or_insert(0) += 1;
-        
+        *by_source
+            .entry(file_info.date_source.name().to_string())
+            .or_insert(0) += 1;
+
         if let Some(date) = &file_info.best_date {
             *by_year.entry(date.year()).or_insert(0) += 1;
             let month_key = format!("{:04}-{:02}", date.year(), date.month());
             *by_month.entry(month_key).or_insert(0) += 1;
         }
-        
+
         files.push(file_info);
     }
-    
+
     // Find earliest and latest
-    let files_with_dates: Vec<_> = files.iter()
-        .filter(|f| f.best_date.is_some())
-        .collect();
-    
-    let earliest = files_with_dates.iter()
+    let files_with_dates: Vec<_> = files.iter().filter(|f| f.best_date.is_some()).collect();
+
+    let earliest = files_with_dates
+        .iter()
         .min_by_key(|f| f.best_date)
         .cloned()
         .cloned();
-    
-    let latest = files_with_dates.iter()
+
+    let latest = files_with_dates
+        .iter()
         .max_by_key(|f| f.best_date)
         .cloned()
         .cloned();
-    
+
     let files_with_dates_count = files_with_dates.len();
     let total = files.len();
-    
+
     Ok(DateAnalysisResult {
         total_files: total,
         files_with_dates: files_with_dates_count,
@@ -237,26 +254,38 @@ pub fn analyze_directory(dir: &Path, config: &DateAnalysisConfig) -> Result<Date
 fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> FileDateInfo {
     let filename = item.file_name.clone().unwrap_or_default();
     let path = item.source_file.clone().unwrap_or_default();
-    
+
     let mut all_dates = HashMap::new();
-    
+
     // Collect all dates
-    if let Some(d) = &item.xmp_ps_created { all_dates.insert("XMP-Photoshop".to_string(), d.clone()); }
-    if let Some(d) = &item.xmp_created { all_dates.insert("XMP-CreateDate".to_string(), d.clone()); }
-    if let Some(d) = &item.xmp_metadata { all_dates.insert("XMP-Metadata".to_string(), d.clone()); }
-    if let Some(d) = &item.exif_original { all_dates.insert("EXIF-Original".to_string(), d.clone()); }
-    if let Some(d) = &item.exif_created { all_dates.insert("EXIF-CreateDate".to_string(), d.clone()); }
-    
+    if let Some(d) = &item.xmp_ps_created {
+        all_dates.insert("XMP-Photoshop".to_string(), d.clone());
+    }
+    if let Some(d) = &item.xmp_created {
+        all_dates.insert("XMP-CreateDate".to_string(), d.clone());
+    }
+    if let Some(d) = &item.xmp_metadata {
+        all_dates.insert("XMP-Metadata".to_string(), d.clone());
+    }
+    if let Some(d) = &item.exif_original {
+        all_dates.insert("EXIF-Original".to_string(), d.clone());
+    }
+    if let Some(d) = &item.exif_created {
+        all_dates.insert("EXIF-CreateDate".to_string(), d.clone());
+    }
+
     // Handle XMP history (can be array)
     let xmp_history_str = match &item.xmp_history {
         Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(serde_json::Value::Array(arr)) => arr.first()
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string()),
+        Some(serde_json::Value::Array(arr)) => {
+            arr.first().and_then(|v| v.as_str()).map(|s| s.to_string())
+        }
         _ => None,
     };
-    if let Some(d) = &xmp_history_str { all_dates.insert("XMP-History".to_string(), d.clone()); }
-    
+    if let Some(d) = &xmp_history_str {
+        all_dates.insert("XMP-History".to_string(), d.clone());
+    }
+
     // Try each source in priority order
     let candidates = [
         (&item.xmp_ps_created, DateSource::XmpPhotoshop),
@@ -266,7 +295,7 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
         (&item.exif_created, DateSource::ExifCreateDate),
         (&item.xmp_metadata, DateSource::XmpMetadata),
     ];
-    
+
     for (date_opt, source) in candidates {
         if let Some(date_str) = date_opt {
             if let Some(parsed) = parse_date(date_str, config) {
@@ -280,7 +309,7 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
             }
         }
     }
-    
+
     FileDateInfo {
         filename,
         path,
@@ -295,11 +324,11 @@ fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTi
     if date_str.is_empty() || date_str == "-" || date_str.starts_with("0000") {
         return None;
     }
-    
+
     // Remove timezone suffix
     let clean = date_str.split('+').next().unwrap_or(date_str);
     let clean = clean.replace('T', " ");
-    
+
     // Try common formats
     let formats = [
         "%Y:%m:%d %H:%M:%S",
@@ -309,7 +338,7 @@ fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTi
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%dT%H:%M:%S%.f",
     ];
-    
+
     for fmt in formats {
         if let Ok(dt) = NaiveDateTime::parse_from_str(&clean, fmt) {
             let year = dt.year();
@@ -318,7 +347,7 @@ fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTi
             }
         }
     }
-    
+
     None
 }
 
@@ -326,19 +355,19 @@ fn parse_date(date_str: &str, config: &DateAnalysisConfig) -> Option<NaiveDateTi
 pub fn print_analysis(result: &DateAnalysisResult) {
     println!("\n📊 Deep Analysis Results");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
+
     println!("\n📈 Statistics:");
     println!("   Total files:           {}", result.total_files);
     println!("   With reliable dates:   {}", result.files_with_dates);
     println!("   Without dates:         {}", result.files_without_dates);
-    
+
     println!("\n📋 Date Source Distribution:");
     let mut sources: Vec<_> = result.by_source.iter().collect();
     sources.sort_by(|a, b| b.1.cmp(a.1));
     for (source, count) in sources {
         println!("   {}: {} files", source, count);
     }
-    
+
     if let Some(earliest) = &result.earliest {
         println!("\n📅 TRUE Date Range (Original Creation Time):");
         if let Some(date) = &earliest.best_date {
@@ -347,7 +376,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
             println!("   Source:   {}", earliest.date_source.name());
         }
     }
-    
+
     if let Some(latest) = &result.latest {
         if let Some(date) = &latest.best_date {
             println!();
@@ -356,7 +385,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
             println!("   Source:   {}", latest.date_source.name());
         }
     }
-    
+
     if !result.by_year.is_empty() {
         println!("\n📆 Distribution by Year:");
         let mut years: Vec<_> = result.by_year.iter().collect();
@@ -368,7 +397,7 @@ pub fn print_analysis(result: &DateAnalysisResult) {
             println!("   {}: {:4} files ({:2}%) {}", year, count, pct, bar);
         }
     }
-    
+
     if !result.by_month.is_empty() {
         println!("\n📆 Distribution by Month (Top 15):");
         let mut months: Vec<_> = result.by_month.iter().collect();
@@ -377,30 +406,30 @@ pub fn print_analysis(result: &DateAnalysisResult) {
             println!("   {}: {:4} files", month, count);
         }
     }
-    
+
     println!("\n✅ Deep analysis complete!");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_parse_date() {
         let config = DateAnalysisConfig::default();
-        
+
         // Valid dates
         assert!(parse_date("2023:05:15 10:30:00", &config).is_some());
         assert!(parse_date("2023-05-15 10:30:00", &config).is_some());
         assert!(parse_date("2023-05-15T10:30:00", &config).is_some());
-        
+
         // Invalid dates
         assert!(parse_date("", &config).is_none());
         assert!(parse_date("-", &config).is_none());
         assert!(parse_date("0000:00:00 00:00:00", &config).is_none());
         assert!(parse_date("1800:01:01 00:00:00", &config).is_none()); // Too old
     }
-    
+
     #[test]
     fn test_date_source_priority() {
         assert!(DateSource::XmpPhotoshop.priority() > DateSource::ExifOriginal.priority());

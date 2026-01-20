@@ -37,31 +37,31 @@ pub struct ImageAnalysis {
     pub width: u32,
     pub height: u32,
     pub file_size: u64,
-    
+
     // Color info
     pub color_depth: u8,
     pub color_space: String,
     pub has_alpha: bool,
     pub is_animated: bool,
-    
+
     // Animation duration in seconds (for animated images, None for static)
     pub duration_secs: Option<f32>,
-    
+
     // Core quality info
     pub is_lossless: bool,
-    
+
     // JPEG specific analysis (null for non-JPEG)
     pub jpeg_analysis: Option<JpegQualityAnalysis>,
-    
+
     // HEIC specific analysis (null for non-HEIC)
     pub heic_analysis: Option<HeicAnalysis>,
-    
+
     // Image features
     pub features: ImageFeatures,
-    
+
     // Simple JXL indicator
     pub jxl_indicator: JxlIndicator,
-    
+
     // Legacy fields (for compatibility)
     pub psnr: Option<f64>,
     pub ssim: Option<f64>,
@@ -80,21 +80,20 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
     // Get file size
     let file_size = std::fs::metadata(path)?.len();
-    
+
     // Check if HEIC - use libheif instead of image crate
     if is_heic_file(path) {
         return analyze_heic_image(path, file_size);
     }
-    
+
     // Check if JXL - image crate doesn't support JXL natively
     if is_jxl_file(path) {
         return analyze_jxl_image(path, file_size);
     }
 
     // Load the image
-    let img = image::open(path).map_err(|e| {
-        ImgQualityError::ImageReadError(format!("Failed to open image: {}", e))
-    })?;
+    let img = image::open(path)
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open image: {}", e)))?;
 
     // Detect format
     let format = detect_format(path)?;
@@ -123,12 +122,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     let features = calculate_image_features(&img, file_size);
 
     // Generate JXL indicator
-    let jxl_indicator = generate_jxl_indicator(
-        &format,
-        is_lossless,
-        &jpeg_analysis,
-        path,
-    );
+    let jxl_indicator = generate_jxl_indicator(&format, is_lossless, &jpeg_analysis, path);
 
     // Legacy PSNR/SSIM from JPEG analysis
     let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
@@ -142,7 +136,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
     // Extract metadata
     let metadata = extract_metadata(path)?;
-    
+
     // Get duration for animated images using ffprobe
     let duration_secs = if is_animated {
         get_animation_duration(path)
@@ -176,19 +170,39 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Try to analyze deeply, but fallback if it fails (e.g. MemoryAllocationError)
     // This allows the main loop to still see it as "HEIC" and skip it
-    let (width, height, has_alpha, color_depth, is_lossless, codec, features) = match analyze_heic_file(path) {
-        Ok((img, heic_analysis)) => {
-            let (w, h) = img.dimensions();
-            let feats = calculate_image_features(&img, file_size);
-            (w, h, heic_analysis.has_alpha, heic_analysis.bit_depth, heic_analysis.is_lossless, heic_analysis.codec, feats)
-        }
-        Err(e) => {
-            eprintln!("⚠️ Deep HEIC analysis failed (skipping to basic info): {}", e);
-            // Return dummy values so we can proceed to skip it
-            (0, 0, false, 8, false, "unknown".to_string(), ImageFeatures::default())
-        }
-    };
-    
+    let (width, height, has_alpha, color_depth, is_lossless, codec, features) =
+        match analyze_heic_file(path) {
+            Ok((img, heic_analysis)) => {
+                let (w, h) = img.dimensions();
+                let feats = calculate_image_features(&img, file_size);
+                (
+                    w,
+                    h,
+                    heic_analysis.has_alpha,
+                    heic_analysis.bit_depth,
+                    heic_analysis.is_lossless,
+                    heic_analysis.codec,
+                    feats,
+                )
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️ Deep HEIC analysis failed (skipping to basic info): {}",
+                    e
+                );
+                // Return dummy values so we can proceed to skip it
+                (
+                    0,
+                    0,
+                    false,
+                    8,
+                    false,
+                    "unknown".to_string(),
+                    ImageFeatures::default(),
+                )
+            }
+        };
+
     // HEIC is already efficient, similar to AVIF
     let jxl_indicator = JxlIndicator {
         should_convert: false,
@@ -196,10 +210,10 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         command: String::new(),
         benefit: String::new(),
     };
-    
+
     // Use unwrap_or_default for metadata to be safe
     let metadata = extract_metadata(path).unwrap_or_default();
-    
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "HEIC".to_string(),
@@ -231,7 +245,7 @@ fn generate_jxl_indicator(
 ) -> JxlIndicator {
     let file_path = path.display().to_string();
     let output_path = path.with_extension("jxl").display().to_string();
-    
+
     match format {
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::Tiff => {
             // Lossless formats -> strongly recommend JXL
@@ -253,20 +267,14 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: format!("JPEG图像 ({})，可无损转码至JXL", quality_info),
-                    command: format!(
-                        "cjxl '{}' '{}' --lossless_jpeg=1",
-                        file_path, output_path
-                    ),
+                    command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
                     benefit: "保留原始JPEG DCT系数，可逆转换，减少约20%体积".to_string(),
                 }
             } else {
                 JxlIndicator {
                     should_convert: true,
                     reason: "JPEG图像可无损转码至JXL".to_string(),
-                    command: format!(
-                        "cjxl '{}' '{}' --lossless_jpeg=1",
-                        file_path, output_path
-                    ),
+                    command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
                     benefit: "保留原始JPEG DCT系数，可逆转换".to_string(),
                 }
             }
@@ -301,14 +309,12 @@ fn generate_jxl_indicator(
                 benefit: String::new(),
             }
         }
-        _ => {
-            JxlIndicator {
-                should_convert: false,
-                reason: "不支持的格式或无需转换".to_string(),
-                command: String::new(),
-                benefit: String::new(),
-            }
-        }
+        _ => JxlIndicator {
+            should_convert: false,
+            reason: "不支持的格式或无需转换".to_string(),
+            command: String::new(),
+            benefit: String::new(),
+        },
     }
 }
 
@@ -322,25 +328,32 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
         _ => 4,
     };
     let bits_per_channel = match img.color() {
-        image::ColorType::L8 | image::ColorType::La8 | image::ColorType::Rgb8 | image::ColorType::Rgba8 => 8,
-        image::ColorType::L16 | image::ColorType::La16 | image::ColorType::Rgb16 | image::ColorType::Rgba16 => 16,
+        image::ColorType::L8
+        | image::ColorType::La8
+        | image::ColorType::Rgb8
+        | image::ColorType::Rgba8 => 8,
+        image::ColorType::L16
+        | image::ColorType::La16
+        | image::ColorType::Rgb16
+        | image::ColorType::Rgba16 => 16,
         image::ColorType::Rgb32F | image::ColorType::Rgba32F => 32,
         _ => 8,
     };
-    
+
     // Calculate raw size
-    let raw_size = (width as u64) * (height as u64) * (channels as u64) * (bits_per_channel as u64 / 8);
-    
+    let raw_size =
+        (width as u64) * (height as u64) * (channels as u64) * (bits_per_channel as u64 / 8);
+
     // Compression ratio
     let compression_ratio = if raw_size > 0 {
         file_size as f64 / raw_size as f64
     } else {
         1.0
     };
-    
+
     // Calculate entropy from histogram
     let entropy = calculate_entropy(img);
-    
+
     ImageFeatures {
         entropy,
         compression_ratio,
@@ -351,23 +364,23 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
 fn calculate_entropy(img: &DynamicImage) -> f64 {
     let gray = img.to_luma8();
     let pixels = gray.as_raw();
-    
+
     // Build histogram
     let mut histogram = [0u64; 256];
     for &pixel in pixels {
         histogram[pixel as usize] += 1;
     }
-    
+
     let total = pixels.len() as f64;
     let mut entropy = 0.0;
-    
+
     for &count in &histogram {
         if count > 0 {
             let p = count as f64 / total;
             entropy -= p * p.log2();
         }
     }
-    
+
     entropy
 }
 
@@ -456,9 +469,10 @@ fn detect_color_depth(img: &DynamicImage) -> u8 {
 /// Detect color space (simplified)
 fn detect_color_space(img: &DynamicImage) -> String {
     match img.color() {
-        image::ColorType::L8 | image::ColorType::L16 | image::ColorType::La8 | image::ColorType::La16 => {
-            "Grayscale".to_string()
-        }
+        image::ColorType::L8
+        | image::ColorType::L16
+        | image::ColorType::La8
+        | image::ColorType::La16 => "Grayscale".to_string(),
         _ => "sRGB".to_string(),
     }
 }
@@ -487,23 +501,25 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
 /// Get animation duration in seconds using ffprobe
 fn get_animation_duration(path: &Path) -> Option<f32> {
     use std::process::Command;
-    
+
     let output = Command::new("ffprobe")
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
-            path.to_str().unwrap_or("")
+            path.to_str().unwrap_or(""),
         ])
         .output()
         .ok()?;
-    
+
     if !output.status.success() {
         return None;
     }
-    
+
     let json_str = String::from_utf8_lossy(&output.stdout);
-    
+
     // Parse duration from JSON output
     // Look for "duration": "X.XXX"
     if let Some(duration_pos) = json_str.find("\"duration\"") {
@@ -516,24 +532,26 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
             }
         }
     }
-    
+
     None
 }
 
 /// Detect if compression is lossless
-/// 
+///
 /// 🔥 v3.7: PNG now uses advanced quantization detection
 /// PNG can be "lossy" if it was quantized by tools like pngquant
 fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
     match format {
         ImageFormat::Png => {
             // 🔥 Use the new PNG quantization detection system
-            use crate::detection_api::{detect_compression, detect_format_from_bytes, CompressionType};
-            
+            use crate::detection_api::{
+                detect_compression, detect_format_from_bytes, CompressionType,
+            };
+
             // First verify it's actually a PNG (not just by extension)
             let detected_format = detect_format_from_bytes(path)?;
             let compression = detect_compression(&detected_format, path)?;
-            
+
             Ok(compression == CompressionType::Lossless)
         }
         ImageFormat::Gif => Ok(true),
@@ -558,7 +576,7 @@ fn check_avif_lossless(path: &Path) -> Result<bool> {
     // True lossless AVIF is rare in practice
     // Could be improved by parsing AVIF headers for quantizer settings
     let _bytes = std::fs::read(path)?;
-    
+
     // Check for lossless indicators in AVIF
     // Look for 'ispe' (image spatial extent) and analyze
     // For now, return false as most AVIF are lossy
@@ -573,7 +591,7 @@ fn is_jxl_file(path: &Path) -> bool {
             return true;
         }
     }
-    
+
     // Check magic bytes: JXL has two signatures
     // 0xFF 0x0A (naked codestream) or 0x00 0x00 0x00 0x0C 0x4A 0x58 0x4C 0x20 (ISOBMFF container)
     if let Ok(bytes) = std::fs::read(path) {
@@ -588,19 +606,17 @@ fn is_jxl_file(path: &Path) -> bool {
 }
 
 /// Analyze JXL image using jxlinfo for metadata extraction
-/// 
+///
 /// 🔥 修复：djxl 不支持 --info 参数，使用 jxlinfo 代替
 /// jxlinfo 输出格式示例：
 ///   JPEG XL image, 1920x1080, (no alpha), 8-bit sRGB color
 fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     use std::process::Command;
-    
+
     // 🔥 使用 jxlinfo 获取 JXL 文件信息（比 djxl 更可靠）
     let (width, height, has_alpha, color_depth) = if which::which("jxlinfo").is_ok() {
-        let output = Command::new("jxlinfo")
-            .arg(path)
-            .output();
-        
+        let output = Command::new("jxlinfo").arg(path).output();
+
         if let Ok(out) = output {
             if out.status.success() {
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -623,10 +639,10 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             (0, 0, false, 8)
         }
     };
-    
+
     // JXL files are always considered lossless (they came from our own conversion)
     let metadata = extract_metadata(path)?;
-    
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "JXL".to_string(),
@@ -658,7 +674,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 }
 
 /// 解析 jxlinfo 输出以提取图像信息
-/// 
+///
 /// jxlinfo 输出格式示例：
 ///   JPEG XL image, 1920x1080, (no alpha), 8-bit sRGB color
 ///   JPEG XL image, 800x600, alpha, 16-bit linear color
@@ -667,12 +683,15 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
     let mut height = 0u32;
     let mut has_alpha = false;
     let mut color_depth = 8u8;
-    
+
     for line in output.lines() {
         let line = line.trim();
-        
+
         // 解析尺寸：查找 "WxH" 格式
-        if let Some(dims) = line.split(',').find(|s| s.contains('x') && s.chars().any(|c| c.is_ascii_digit())) {
+        if let Some(dims) = line
+            .split(',')
+            .find(|s| s.contains('x') && s.chars().any(|c| c.is_ascii_digit()))
+        {
             let dims = dims.trim();
             // 尝试解析 "1920x1080" 格式
             let parts: Vec<&str> = dims.split('x').collect();
@@ -684,12 +703,12 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
                 height = h_str.parse().unwrap_or(0);
             }
         }
-        
+
         // 解析 alpha 通道
         if line.contains("alpha") && !line.contains("no alpha") {
             has_alpha = true;
         }
-        
+
         // 解析色深
         if line.contains("16-bit") {
             color_depth = 16;
@@ -697,22 +716,28 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
             color_depth = 32;
         }
     }
-    
+
     (width, height, has_alpha, color_depth)
 }
 
 /// Extract metadata
 fn extract_metadata(path: &Path) -> Result<HashMap<String, String>> {
     let mut metadata = HashMap::new();
-    
+
     if let Some(filename) = path.file_name() {
-        metadata.insert("filename".to_string(), filename.to_string_lossy().to_string());
+        metadata.insert(
+            "filename".to_string(),
+            filename.to_string_lossy().to_string(),
+        );
     }
-    
+
     if let Some(extension) = path.extension() {
-        metadata.insert("extension".to_string(), extension.to_string_lossy().to_string());
+        metadata.insert(
+            "extension".to_string(),
+            extension.to_string_lossy().to_string(),
+        );
     }
-    
+
     Ok(metadata)
 }
 
@@ -726,32 +751,32 @@ mod tests {
         let psnr_high = estimate_psnr_from_quality(95);
         let psnr_mid = estimate_psnr_from_quality(75);
         let psnr_low = estimate_psnr_from_quality(50);
-        
+
         assert!(psnr_high > psnr_mid);
         assert!(psnr_mid > psnr_low);
         assert!(psnr_high >= 40.0); // Quality 95 should be excellent
-        assert!(psnr_low >= 25.0);  // Quality 50 should still be acceptable
+        assert!(psnr_low >= 25.0); // Quality 50 should still be acceptable
     }
-    
+
     #[test]
     fn test_ssim_estimation() {
         // Higher quality should yield higher SSIM
         let ssim_high = estimate_ssim_from_quality(95);
         let ssim_mid = estimate_ssim_from_quality(75);
         let ssim_low = estimate_ssim_from_quality(50);
-        
+
         assert!(ssim_high > ssim_mid);
         assert!(ssim_mid > ssim_low);
         assert!(ssim_high >= 0.95); // Quality 95 should be near-perfect
-        assert!(ssim_low >= 0.70);  // Quality 50 is lower quality
+        assert!(ssim_low >= 0.70); // Quality 50 is lower quality
     }
-    
+
     #[test]
     fn test_quality_boundaries() {
         // Test edge cases
         let psnr_max = estimate_psnr_from_quality(100);
         let psnr_min = estimate_psnr_from_quality(1);
-        
+
         assert!(psnr_max > psnr_min);
         assert!(psnr_max.is_finite());
         assert!(psnr_min.is_finite());

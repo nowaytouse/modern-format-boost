@@ -2,9 +2,9 @@
 
 /// PNG format utilities
 pub mod png {
-    use std::path::Path;
     use std::fs;
     use std::io::Read;
+    use std::path::Path;
 
     /// Check if PNG uses optimal compression by analyzing IDAT chunk sizes
     pub fn is_optimally_compressed(path: &Path) -> bool {
@@ -35,9 +35,9 @@ pub mod png {
 
 /// JPEG format utilities
 pub mod jpeg {
-    use std::path::Path;
     use std::fs;
     use std::io::Read;
+    use std::path::Path;
 
     /// Estimate JPEG quality factor (0-100) by analyzing quantization tables
     pub fn estimate_quality(path: &Path) -> u8 {
@@ -87,8 +87,8 @@ pub mod jpeg {
 
 /// WebP format utilities
 pub mod webp {
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
 
     /// Check if WebP is lossless
     pub fn is_lossless(path: &Path) -> bool {
@@ -113,8 +113,8 @@ pub mod webp {
 
 /// GIF format utilities
 pub mod gif {
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
 
     /// Check if GIF is animated
     pub fn is_animated(path: &Path) -> bool {
@@ -139,8 +139,8 @@ pub mod gif {
 
 /// JXL format utilities
 pub mod jxl {
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
 
     /// Verify JXL signature
     pub fn verify_signature(path: &Path) -> bool {
@@ -169,7 +169,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     // 🔥 v7.0: 修复假测试 - 使用真实文件数据测试实际功能
-    
+
     /// 测试 PNG 压缩级别估算 - 使用真实 PNG 数据
     #[test]
     fn test_png_compression_with_real_data() {
@@ -186,12 +186,12 @@ mod tests {
         ];
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(png_data).expect("写入失败");
-        
+
         let level = png::estimate_compression_level(file.path());
         // 验证返回值在有效范围内且函数正确执行
         assert!(level <= 9, "PNG 压缩级别应在 0-9 范围内，实际: {}", level);
     }
-    
+
     /// 测试 JPEG 质量估算 - 使用真实 JPEG 数据
     #[test]
     fn test_jpeg_quality_with_real_data() {
@@ -200,25 +200,22 @@ mod tests {
             0xFF, 0xD8, // SOI
             0xFF, 0xDB, // DQT marker
             0x00, 0x43, // length = 67
-            0x00,       // table ID = 0
+            0x00, // table ID = 0
             // 64 bytes 量化表 (低值 = 高质量)
-            0x02, 0x01, 0x01, 0x02, 0x01, 0x01, 0x02, 0x02,
-            0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x05,
-            0x03, 0x03, 0x03, 0x03, 0x03, 0x06, 0x04, 0x04,
-            0x03, 0x05, 0x07, 0x06, 0x07, 0x07, 0x07, 0x06,
-            0x07, 0x07, 0x08, 0x09, 0x0B, 0x09, 0x08, 0x08,
-            0x0A, 0x08, 0x07, 0x07, 0x0A, 0x0D, 0x0A, 0x0A,
-            0x0B, 0x0C, 0x0C, 0x0C, 0x0C, 0x07, 0x09, 0x0E,
+            0x02, 0x01, 0x01, 0x02, 0x01, 0x01, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+            0x03, 0x05, 0x03, 0x03, 0x03, 0x03, 0x03, 0x06, 0x04, 0x04, 0x03, 0x05, 0x07, 0x06,
+            0x07, 0x07, 0x07, 0x06, 0x07, 0x07, 0x08, 0x09, 0x0B, 0x09, 0x08, 0x08, 0x0A, 0x08,
+            0x07, 0x07, 0x0A, 0x0D, 0x0A, 0x0A, 0x0B, 0x0C, 0x0C, 0x0C, 0x0C, 0x07, 0x09, 0x0E,
             0x0F, 0x0D, 0x0C, 0x0E, 0x0B, 0x0C, 0x0C, 0x0C,
         ];
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(jpeg_data).expect("写入失败");
-        
+
         let quality = jpeg::estimate_quality(file.path());
         // 低量化值应该返回高质量估算
         assert!(quality >= 90, "低量化值应返回高质量，实际: {}", quality);
     }
-    
+
     /// 测试 WebP lossless 检测 - 使用真实 VP8L chunk
     #[test]
     fn test_webp_lossless_detection() {
@@ -233,10 +230,13 @@ mod tests {
         };
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(&webp_lossless).expect("写入失败");
-        
-        assert!(webp::is_lossless(file.path()), "VP8L chunk 应被检测为 lossless");
+
+        assert!(
+            webp::is_lossless(file.path()),
+            "VP8L chunk 应被检测为 lossless"
+        );
     }
-    
+
     /// 测试 WebP lossy 检测 - 无 VP8L chunk
     #[test]
     fn test_webp_lossy_detection() {
@@ -250,10 +250,13 @@ mod tests {
         };
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(&webp_lossy).expect("写入失败");
-        
-        assert!(!webp::is_lossless(file.path()), "VP8 chunk 应被检测为 lossy");
+
+        assert!(
+            !webp::is_lossless(file.path()),
+            "VP8 chunk 应被检测为 lossy"
+        );
     }
-    
+
     /// 测试 GIF 帧计数 - 使用真实 GIF 结构
     #[test]
     fn test_gif_frame_count() {
@@ -271,27 +274,30 @@ mod tests {
         };
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(&gif_data).expect("写入失败");
-        
+
         let count = gif::get_frame_count(file.path());
         assert_eq!(count, 2, "应检测到 2 帧，实际: {}", count);
         assert!(gif::is_animated(file.path()), "2 帧 GIF 应被检测为动画");
     }
-    
+
     /// 测试 JXL 签名验证 - codestream 格式
     #[test]
     fn test_jxl_codestream_signature() {
         let jxl_codestream: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
         let mut file = NamedTempFile::new().expect("创建临时文件失败");
         file.write_all(jxl_codestream).expect("写入失败");
-        
-        assert!(jxl::verify_signature(file.path()), "JXL codestream 签名应被识别");
+
+        assert!(
+            jxl::verify_signature(file.path()),
+            "JXL codestream 签名应被识别"
+        );
     }
-    
+
     /// 测试错误处理 - 文件不存在时应返回 false/0，不应 panic
     #[test]
     fn test_error_handling_nonexistent_file() {
         let path = std::path::Path::new("/nonexistent/file.test");
-        
+
         // 验证所有函数在文件不存在时正确处理错误
         assert!(!webp::is_lossless(path), "不存在的文件应返回 false");
         assert!(!webp::is_animated(path), "不存在的文件应返回 false");

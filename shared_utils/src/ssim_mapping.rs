@@ -1,5 +1,5 @@
 //! PSNR→SSIM 动态映射模块
-//! 
+//!
 //! v5.74: 用于透明度数据预测，不影响搜索目标
 
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ impl MappingPoint {
     // ═══════════════════════════════════════════════════════════════
     // 🔥 v7.1: 类型安全辅助方法
     // ═══════════════════════════════════════════════════════════════
-    
+
     /// 获取类型安全的 SSIM 值
     #[inline]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
@@ -38,7 +38,9 @@ impl PsnrSsimMapping {
     pub fn insert(&mut self, psnr: f64, ssim: f64) {
         // 按 PSNR 排序插入
         let point = MappingPoint { psnr, ssim };
-        let pos = self.points.iter()
+        let pos = self
+            .points
+            .iter()
             .position(|p| p.psnr > psnr)
             .unwrap_or(self.points.len());
         self.points.insert(pos, point);
@@ -59,12 +61,12 @@ impl PsnrSsimMapping {
         self.points.is_empty()
     }
 
-
     /// 使用线性插值预测 SSIM（类型安全版本）
-    /// 
+    ///
     /// 🔥 v7.1: 返回 Option<Ssim> 确保值在有效范围内
     pub fn predict_ssim_typed(&self, psnr: f64) -> Option<crate::types::Ssim> {
-        self.predict_ssim(psnr).and_then(|v| crate::types::Ssim::new(v).ok())
+        self.predict_ssim(psnr)
+            .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
     /// 使用线性插值预测 SSIM
@@ -126,8 +128,11 @@ impl PsnrSsimMapping {
     pub fn update(&mut self, psnr: f64, actual_ssim: f64) {
         // 查找是否已存在相近的点
         const PSNR_TOLERANCE: f64 = 0.5;
-        if let Some(point) = self.points.iter_mut()
-            .find(|p| (p.psnr - psnr).abs() < PSNR_TOLERANCE) {
+        if let Some(point) = self
+            .points
+            .iter_mut()
+            .find(|p| (p.psnr - psnr).abs() < PSNR_TOLERANCE)
+        {
             point.ssim = actual_ssim;
         } else {
             self.insert(psnr, actual_ssim);
@@ -139,7 +144,6 @@ impl PsnrSsimMapping {
         &self.points
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -178,12 +182,11 @@ mod tests {
         let mut mapping = PsnrSsimMapping::new();
         mapping.insert(30.0, 0.90);
         mapping.update(30.2, 0.91); // 应该更新现有点
-        
+
         assert_eq!(mapping.len(), 1);
         assert!((mapping.get_points()[0].ssim - 0.91).abs() < 0.001);
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

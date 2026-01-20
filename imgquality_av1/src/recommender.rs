@@ -17,7 +17,7 @@ pub struct UpgradeRecommendation {
 /// The real logic is now in analyzer.rs via JxlIndicator
 pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
     let indicator = &analysis.jxl_indicator;
-    
+
     if indicator.should_convert {
         UpgradeRecommendation {
             current_format: analysis.format.clone(),
@@ -46,8 +46,8 @@ pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::analyzer::{ImageFeatures, JxlIndicator};
+    use std::collections::HashMap;
 
     #[test]
     fn test_png_recommendation() {
@@ -61,7 +61,7 @@ mod tests {
             color_space: "sRGB".to_string(),
             has_alpha: false,
             is_animated: false,
-            duration_secs: None,  // 静态图像无时长
+            duration_secs: None, // 静态图像无时长
             is_lossless: true,
             jpeg_analysis: None,
             heic_analysis: None,

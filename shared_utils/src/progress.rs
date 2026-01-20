@@ -1,18 +1,21 @@
 //! Progress Bar Module v5.30
-//! 
+//!
 //! 🔥 统一进度条系统：
 //! - 全项目统一样式: ████████▓▓░░░░░░
 //! - 更粗更显眼的进度条
 //! - 固定在终端底部显示
 //! - 详细进度参数（当前文件、剩余时间、处理速度、SSIM、CRF等）
-//! 
+//!
 //! Reference: media/CONTRIBUTING.md - Visual Progress Bar requirement
 
-use indicatif::{ProgressBar, ProgressStyle, MultiProgress, ProgressDrawTarget};
 use crate::modern_ui::progress_style;
-use std::sync::{Arc, Mutex, atomic::{AtomicU64, AtomicUsize, AtomicBool, Ordering}};
-use std::time::{Duration, Instant};
+use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{self, Write};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.31: 固定位置粗进度条 - 真正不刷屏的实现
@@ -68,7 +71,8 @@ impl CoarseProgressBar {
     /// 增加进度
     pub fn inc(&self) {
         let current = self.current.fetch_add(1, Ordering::Relaxed) + 1;
-        if current % 10 == 0 {  // 每 10 次更新渲染一次
+        if current % 10 == 0 {
+            // 每 10 次更新渲染一次
             self.set(current);
         }
     }
@@ -121,14 +125,10 @@ impl CoarseProgressBar {
         let empty = bar_width.saturating_sub(filled);
 
         // 🔥 使用统一的进度条字符
-        let bar = format!(
-            "{}{}",
-            "█".repeat(filled),
-            "░".repeat(empty)
-        );
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
 
         // 🔥 使用 ANSI 颜色代码保持一致（绿色）
-        let color = "\x1b[32m";  // 统一绿色
+        let color = "\x1b[32m"; // 统一绿色
 
         // 计算 ETA
         let eta_str = if current > 0 && current < total {
@@ -140,7 +140,8 @@ impl CoarseProgressBar {
         };
 
         // 🔥 使用统一的边框字符（▕ ▏）
-        eprint!("\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {:.1}s • ETA: {}\x1b[0m",
+        eprint!(
+            "\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {:.1}s • ETA: {}\x1b[0m",
             color,
             self.prefix,
             progress_style::BAR_LEFT,
@@ -159,7 +160,7 @@ impl CoarseProgressBar {
     /// 完成进度条
     pub fn finish(&self) {
         if self.is_finished.swap(true, Ordering::Relaxed) {
-            return;  // 已经完成
+            return; // 已经完成
         }
 
         let total = self.total;
@@ -169,7 +170,8 @@ impl CoarseProgressBar {
         let bar_width: usize = progress_style::BAR_WIDTH;
         let bar = "█".repeat(bar_width);
 
-        eprint!("\r\x1b[K\x1b[32m{} {}{}{}{}▏ ✅ 100% • {}/{} • ⏱️ {:.1}s\x1b[0m\n",
+        eprint!(
+            "\r\x1b[K\x1b[32m{} {}{}{}{}▏ ✅ 100% • {}/{} • ⏱️ {:.1}s\x1b[0m\n",
             self.prefix,
             progress_style::BAR_LEFT,
             "\x1b[32m",
@@ -192,7 +194,7 @@ impl CoarseProgressBar {
         }
 
         eprint!("\r\x1b[K");
-        eprint!("\x1b[?25h");  // 恢复光标
+        eprint!("\x1b[?25h"); // 恢复光标
         let _ = io::stderr().flush();
     }
 }
@@ -228,10 +230,10 @@ pub struct DetailedCoarseProgressBar {
     current_iteration: AtomicU64,
     input_size: u64,
     // 状态信息
-    current_crf: AtomicU64,         // f32 as bits
+    current_crf: AtomicU64, // f32 as bits
     current_size: AtomicU64,
-    current_ssim: AtomicU64,        // f64 as bits
-    best_crf: AtomicU64,            // f32 as bits
+    current_ssim: AtomicU64, // f64 as bits
+    best_crf: AtomicU64,     // f32 as bits
     // 时间和刷新控制
     start_time: Instant,
     last_render: Arc<Mutex<Instant>>,
@@ -268,7 +270,8 @@ impl DetailedCoarseProgressBar {
         let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
 
         // 原子更新状态
-        self.current_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
+        self.current_crf
+            .store(crf.to_bits() as u64, Ordering::Relaxed);
         self.current_size.store(size, Ordering::Relaxed);
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
@@ -317,7 +320,11 @@ impl DetailedCoarseProgressBar {
         };
 
         // 图标
-        let icon = if size < self.input_size { "💾" } else { "📈" };
+        let icon = if size < self.input_size {
+            "💾"
+        } else {
+            "📈"
+        };
 
         // SSIM字符串
         let ssim_str = if let Some(s) = ssim {
@@ -335,7 +342,7 @@ impl DetailedCoarseProgressBar {
         };
 
         // 🔥 使用 ANSI 颜色和固定行渲染
-        let color = "\x1b[32m";  // 绿色
+        let color = "\x1b[32m"; // 绿色
         eprint!(
             "\r\x1b[K{}{} {}{}{}{}▏ {:.1}% • CRF {:.1} | {:+.1}% {} | {} | {} | {}/{} • ⏱️ {:.1}s\x1b[0m",
             color,
@@ -384,7 +391,7 @@ impl DetailedCoarseProgressBar {
 
         // 强制渲染（绕过限流）
         if let Ok(mut last) = self.last_render.lock() {
-            *last = Instant::now() - Duration::from_secs(1);  // 强制过期
+            *last = Instant::now() - Duration::from_secs(1); // 强制过期
         }
         self.render(iter, crf, size, ssim);
     }
@@ -444,7 +451,7 @@ impl DetailedCoarseProgressBar {
         }
 
         eprint!("\r\x1b[K❌ {} {}\n", self.prefix, error);
-        eprint!("\x1b[?25h");  // 恢复光标
+        eprint!("\x1b[?25h"); // 恢复光标
         let _ = io::stderr().flush();
     }
 }
@@ -453,7 +460,7 @@ impl Drop for DetailedCoarseProgressBar {
     fn drop(&mut self) {
         if !self.is_finished.load(Ordering::Relaxed) {
             eprint!("\r\x1b[K");
-            eprint!("\x1b[?25h");  // 恢复光标
+            eprint!("\x1b[?25h"); // 恢复光标
             let _ = io::stderr().flush();
         }
     }
@@ -478,7 +485,7 @@ fn format_eta_simple(seconds: u64) -> String {
 // ═══════════════════════════════════════════════════════════════
 
 /// 固定在终端底部的进度条
-/// 
+///
 /// 特点：
 /// - 始终显示在终端最后一行
 /// - 不会被其他输出覆盖
@@ -501,22 +508,22 @@ impl FixedBottomProgress {
     /// 创建固定底部进度条
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
-        
+
         // 🔥 v5.30: 统一进度条样式 - 更粗更显眼
         bar.set_style(
             ProgressStyle::default_bar()
                 .template(progress_style::BATCH_TEMPLATE)
                 .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS),
         );
         bar.set_prefix(prefix.to_string());
         // 🔥 v5.31: 降低刷新频率防止刷屏 (50ms → 100ms)
         bar.enable_steady_tick(Duration::from_millis(100));
-        
+
         // High refresh rate for responsiveness
         bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(20));
-        
+
         Self {
             bar,
             start_time: Instant::now(),
@@ -531,7 +538,7 @@ impl FixedBottomProgress {
             current_stage: Arc::new(Mutex::new(String::new())),
         }
     }
-    
+
     /// 设置当前处理的文件
     pub fn set_current_file(&self, filename: &str) {
         if let Ok(mut f) = self.current_file.lock() {
@@ -539,7 +546,7 @@ impl FixedBottomProgress {
         }
         self.update_message();
     }
-    
+
     /// 设置当前阶段（用于探索模式）
     pub fn set_stage(&self, stage: &str) {
         if let Ok(mut s) = self.current_stage.lock() {
@@ -550,9 +557,17 @@ impl FixedBottomProgress {
 
     /// 更新消息显示
     fn update_message(&self) {
-        let file = self.current_file.lock().map(|f| f.clone()).unwrap_or_default();
-        let stage = self.current_stage.lock().map(|s| s.clone()).unwrap_or_default();
-        
+        let file = self
+            .current_file
+            .lock()
+            .map(|f| f.clone())
+            .unwrap_or_default();
+        let stage = self
+            .current_stage
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default();
+
         let msg = if !stage.is_empty() && !file.is_empty() {
             format!("{} | {}", stage, truncate_filename(&file, 40))
         } else if !file.is_empty() {
@@ -562,10 +577,10 @@ impl FixedBottomProgress {
         } else {
             "Processing...".to_string()
         };
-        
+
         self.bar.set_message(msg);
     }
-    
+
     /// 记录成功
     pub fn success(&self, input_size: u64, output_size: u64) {
         self.processed.fetch_add(1, Ordering::Relaxed);
@@ -574,21 +589,21 @@ impl FixedBottomProgress {
         self.output_bytes.fetch_add(output_size, Ordering::Relaxed);
         self.bar.inc(1);
     }
-    
+
     /// 记录失败
     pub fn fail(&self) {
         self.processed.fetch_add(1, Ordering::Relaxed);
         self.failed.fetch_add(1, Ordering::Relaxed);
         self.bar.inc(1);
     }
-    
+
     /// 记录跳过
     pub fn skip(&self) {
         self.processed.fetch_add(1, Ordering::Relaxed);
         self.skipped.fetch_add(1, Ordering::Relaxed);
         self.bar.inc(1);
     }
-    
+
     /// 获取统计信息
     pub fn stats(&self) -> ProgressStats {
         let input = self.input_bytes.load(Ordering::Relaxed);
@@ -602,7 +617,11 @@ impl FixedBottomProgress {
             input_bytes: input,
             output_bytes: output,
             elapsed: self.start_time.elapsed(),
-            compression_ratio: if input > 0 { output as f64 / input as f64 } else { 1.0 },
+            compression_ratio: if input > 0 {
+                output as f64 / input as f64
+            } else {
+                1.0
+            },
         }
     }
 
@@ -614,14 +633,16 @@ impl FixedBottomProgress {
         } else {
             0
         };
-        
+
         self.bar.finish_with_message(format!(
             "✅ {} succeeded, {} failed, {} skipped | Saved: {}",
-            stats.succeeded, stats.failed, stats.skipped,
+            stats.succeeded,
+            stats.failed,
+            stats.skipped,
             format_bytes(saved)
         ));
     }
-    
+
     /// 获取内部 ProgressBar 引用
     pub fn bar(&self) -> &ProgressBar {
         &self.bar
@@ -647,7 +668,7 @@ pub struct ProgressStats {
 // ═══════════════════════════════════════════════════════════════
 
 /// 探索模式专用进度条
-/// 
+///
 /// 显示：
 /// - 当前 CRF 值
 /// - 当前 SSIM
@@ -681,16 +702,22 @@ impl ExploreProgress {
             best_ssim: Arc::new(Mutex::new(0.0)),
         }
     }
-    
+
     /// 更新当前测试的 CRF
     pub fn update_crf(&self, crf: f32, size: u64, ssim: Option<f64>) {
-        if let Ok(mut c) = self.current_crf.lock() { *c = crf; }
-        if let Ok(mut s) = self.current_size.lock() { *s = size; }
-        if let Ok(mut ss) = self.current_ssim.lock() { *ss = ssim; }
+        if let Ok(mut c) = self.current_crf.lock() {
+            *c = crf;
+        }
+        if let Ok(mut s) = self.current_size.lock() {
+            *s = size;
+        }
+        if let Ok(mut ss) = self.current_ssim.lock() {
+            *ss = ssim;
+        }
         self.iterations.fetch_add(1, Ordering::Relaxed);
         self.print_status();
     }
-    
+
     /// 设置搜索阶段
     pub fn set_stage(&self, stage: &str) {
         if let Ok(mut s) = self.stage.lock() {
@@ -698,13 +725,17 @@ impl ExploreProgress {
         }
         self.print_status();
     }
-    
+
     /// 更新最佳结果
     pub fn update_best(&self, crf: f32, ssim: f64) {
-        if let Ok(mut c) = self.best_crf.lock() { *c = crf; }
-        if let Ok(mut s) = self.best_ssim.lock() { *s = ssim; }
+        if let Ok(mut c) = self.best_crf.lock() {
+            *c = crf;
+        }
+        if let Ok(mut s) = self.best_ssim.lock() {
+            *s = ssim;
+        }
     }
-    
+
     /// 打印当前状态到固定位置
     fn print_status(&self) {
         let crf = self.current_crf.lock().map(|c| *c).unwrap_or(0.0);
@@ -714,17 +745,19 @@ impl ExploreProgress {
         let iter = self.iterations.load(Ordering::Relaxed);
         let best_crf = self.best_crf.lock().map(|c| *c).unwrap_or(0.0);
         let best_ssim = self.best_ssim.lock().map(|s| *s).unwrap_or(0.0);
-        
+
         let size_change = if self.input_size > 0 {
             ((size as f64 / self.input_size as f64) - 1.0) * 100.0
         } else {
             0.0
         };
-        
+
         let elapsed = self.start_time.elapsed();
-        let ssim_str = ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "---".to_string());
+        let ssim_str = ssim
+            .map(|s| format!("{:.4}", s))
+            .unwrap_or_else(|| "---".to_string());
         let compress_icon = if size < self.input_size { "✅" } else { "❌" };
-        
+
         // 🔥 Concise Explore Status
         eprint!("\r\x1b[K"); // Clear line
         eprint!(
@@ -743,10 +776,16 @@ impl ExploreProgress {
         };
         let elapsed = self.start_time.elapsed();
         let iter = self.iterations.load(Ordering::Relaxed);
-        
+
         eprintln!("\r\x1b[K"); // Clear progress line
-        eprintln!("✅ Explore Done: CRF {:.1} • SSIM {:.4} • Size {:+.1}% • {} iter in {:.1}s",
-            result_crf, result_ssim, size_change, iter, elapsed.as_secs_f64());
+        eprintln!(
+            "✅ Explore Done: CRF {:.1} • SSIM {:.4} • Size {:+.1}% • {} iter in {:.1}s",
+            result_crf,
+            result_ssim,
+            size_change,
+            iter,
+            elapsed.as_secs_f64()
+        );
     }
 }
 
@@ -755,7 +794,7 @@ impl ExploreProgress {
 // ═══════════════════════════════════════════════════════════════
 
 /// 实时探索日志器
-/// 
+///
 /// 在探索过程中实时显示：
 /// - 每次编码的 CRF、大小、SSIM
 /// - 搜索方向和决策
@@ -782,24 +821,27 @@ impl ExploreLogger {
             show_progress_bar,
         }
     }
-    
+
     /// 记录阶段开始
     pub fn stage(&mut self, name: &str) {
         if self.show_progress_bar {
             eprintln!("\n   📍 {}", name);
         }
     }
-    
+
     /// 记录编码测试
     pub fn test(&mut self, crf: f32, size: u64, ssim: Option<f64>) {
         self.iterations += 1;
         let size_change = self.calc_change(size);
         let compress_ok = size < self.input_size;
-        
+
         if self.show_progress_bar {
             let ssim_str = ssim.map(|s| format!("SSIM {:.4}", s)).unwrap_or_default();
             let icon = if compress_ok { "✅" } else { "❌" };
-            eprint!("\r\x1b[K   🔄 CRF {:.1}: {:+.1}% {} {}", crf, size_change, icon, ssim_str);
+            eprint!(
+                "\r\x1b[K   🔄 CRF {:.1}: {:+.1}% {} {}",
+                crf, size_change, icon, ssim_str
+            );
             let _ = io::stderr().flush();
         }
     }
@@ -809,26 +851,26 @@ impl ExploreLogger {
         self.best_crf = crf;
         self.best_size = size;
         self.best_ssim = ssim;
-        
+
         if self.show_progress_bar {
             eprintln!(" ← 🎯 New best!");
         }
     }
-    
+
     /// 记录搜索方向
     pub fn direction(&self, msg: &str) {
         if self.show_progress_bar {
             eprintln!("\r\x1b[K      {}", msg);
         }
     }
-    
+
     /// 记录提前终止
     pub fn early_stop(&self, reason: &str) {
         if self.show_progress_bar {
             eprintln!("\r\x1b[K   ⚡ Early stop: {}", reason);
         }
     }
-    
+
     fn calc_change(&self, size: u64) -> f64 {
         if self.input_size > 0 {
             ((size as f64 / self.input_size as f64) - 1.0) * 100.0
@@ -836,11 +878,13 @@ impl ExploreLogger {
             0.0
         }
     }
-    
+
     /// 完成并打印摘要
     pub fn finish(&self) {
-        if !self.show_progress_bar { return; }
-        
+        if !self.show_progress_bar {
+            return;
+        }
+
         let elapsed = self.start_time.elapsed();
         let size_change = self.calc_change(self.best_size);
         let saved = if self.best_size < self.input_size {
@@ -848,15 +892,25 @@ impl ExploreLogger {
         } else {
             0
         };
-        
+
         eprintln!("\r\x1b[K");
         eprintln!("   ═══════════════════════════════════════════════════");
-        eprintln!("   📊 Result: CRF {:.1} | SSIM {:.4} | {:+.1}%", 
-            self.best_crf, self.best_ssim, size_change);
+        eprintln!(
+            "   📊 Result: CRF {:.1} | SSIM {:.4} | {:+.1}%",
+            self.best_crf, self.best_ssim, size_change
+        );
         if saved > 0 {
-            eprintln!("   💾 Saved: {} ({:.2} MB)", format_bytes(saved), saved as f64 / 1024.0 / 1024.0);
+            eprintln!(
+                "   💾 Saved: {} ({:.2} MB)",
+                format_bytes(saved),
+                saved as f64 / 1024.0 / 1024.0
+            );
         }
-        eprintln!("   📈 Iterations: {} | Time: {:.1}s", self.iterations, elapsed.as_secs_f64());
+        eprintln!(
+            "   📈 Iterations: {} | Time: {:.1}s",
+            self.iterations,
+            elapsed.as_secs_f64()
+        );
     }
 }
 
@@ -867,7 +921,7 @@ impl ExploreLogger {
 /// 🔥 v5.30: 统一专业 Spinner
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
-    
+
     // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
     if crate::progress_mode::is_quiet_mode() {
         pb.set_draw_target(ProgressDrawTarget::hidden());
@@ -876,7 +930,7 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
             ProgressStyle::default_spinner()
                 .template(progress_style::SPINNER_TEMPLATE)
                 .expect("Invalid spinner template")
-                .tick_chars(progress_style::SPINNER_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
         // 🔥 v5.31: 降低刷新频率防止刷屏
@@ -886,11 +940,11 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
 }
 
 /// Create a styled progress bar for batch processing with improved ETA
-/// 
+///
 /// 🔥 v5.30: 统一进度条样式
 pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    
+
     // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
     if crate::progress_mode::is_quiet_mode() {
         pb.set_draw_target(ProgressDrawTarget::hidden());
@@ -900,7 +954,7 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
                 .template(progress_style::BATCH_TEMPLATE)
                 .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
         pb.enable_steady_tick(Duration::from_millis(100));
@@ -911,7 +965,7 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
 /// 🔥 v5.30: 创建详细进度条（带更多参数）- 统一样式
 pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    
+
     // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
     if crate::progress_mode::is_quiet_mode() {
         pb.set_draw_target(ProgressDrawTarget::hidden());
@@ -921,7 +975,7 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
                 .template(progress_style::BATCH_TEMPLATE)
                 .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
-                .tick_chars(progress_style::SPINNER_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS),
         );
         pb.set_prefix(prefix.to_string());
         pb.enable_steady_tick(Duration::from_millis(100));
@@ -933,7 +987,7 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
 /// 🔥 v5.30: 创建紧凑型进度条（单行，不刷屏）- 统一样式
 pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
-    
+
     // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
     if crate::progress_mode::is_quiet_mode() {
         pb.set_draw_target(ProgressDrawTarget::hidden());
@@ -942,7 +996,7 @@ pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
             ProgressStyle::default_bar()
                 .template(progress_style::COMPACT_TEMPLATE)
                 .expect("Invalid progress bar template")
-                .progress_chars(progress_style::PROGRESS_CHARS)
+                .progress_chars(progress_style::PROGRESS_CHARS),
         );
         pb.set_prefix(prefix.to_string());
         pb.enable_steady_tick(Duration::from_millis(200));
@@ -968,7 +1022,7 @@ pub struct SmartProgressBar {
 impl SmartProgressBar {
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
-        
+
         // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
         if crate::progress_mode::is_quiet_mode() {
             bar.set_draw_target(ProgressDrawTarget::hidden());
@@ -979,12 +1033,12 @@ impl SmartProgressBar {
                     .template(progress_style::BATCH_TEMPLATE)
                     .expect("Invalid progress bar template")
                     .progress_chars(progress_style::PROGRESS_CHARS)
-                    .tick_chars(progress_style::SPINNER_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
             bar.enable_steady_tick(Duration::from_millis(100));
         }
-        
+
         Self {
             bar,
             start_time: Instant::now(),
@@ -999,32 +1053,34 @@ impl SmartProgressBar {
     pub fn inc(&mut self, message: &str) {
         let elapsed = self.last_update.elapsed().as_secs_f64();
         self.last_update = Instant::now();
-        
+
         if self.recent_times.len() >= 10 {
             self.recent_times.remove(0);
         }
         self.recent_times.push(elapsed);
-        
+
         self.processed += 1;
         self.bar.inc(1);
-        
+
         let remaining = self.total.saturating_sub(self.processed);
         let eta = if !self.recent_times.is_empty() && remaining > 0 {
-            let avg_time: f64 = self.recent_times.iter().sum::<f64>() / self.recent_times.len() as f64;
+            let avg_time: f64 =
+                self.recent_times.iter().sum::<f64>() / self.recent_times.len() as f64;
             let eta_secs = avg_time * remaining as f64;
             format_eta(eta_secs)
         } else {
             "calculating...".to_string()
         };
-        
+
         self.bar.set_message(format!("{} | {}", eta, message));
     }
-    
+
     pub fn finish(&self) {
         let total_time = self.start_time.elapsed();
-        self.bar.finish_with_message(format!("Done in {}", format_duration(total_time)));
+        self.bar
+            .finish_with_message(format!("Done in {}", format_duration(total_time)));
     }
-    
+
     pub fn bar(&self) -> &ProgressBar {
         &self.bar
     }
@@ -1035,13 +1091,13 @@ fn format_eta(seconds: f64) -> String {
     if seconds.is_nan() || seconds.is_infinite() || seconds < 0.0 {
         return "unknown".to_string();
     }
-    
+
     let secs = seconds as u64;
-    
+
     if secs > 86400 {
         return ">24h".to_string();
     }
-    
+
     if secs >= 3600 {
         format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
     } else if secs >= 60 {
@@ -1054,7 +1110,7 @@ fn format_eta(seconds: f64) -> String {
 /// Create a spinner for indeterminate progress
 pub fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
-    
+
     // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
     if crate::progress_mode::is_quiet_mode() {
         spinner.set_draw_target(ProgressDrawTarget::hidden());
@@ -1064,7 +1120,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
             ProgressStyle::default_spinner()
                 .template("{spinner:.green} {msg}")
                 .expect("Invalid spinner template")
-                .tick_chars(progress_style::SPINNER_CHARS)
+                .tick_chars(progress_style::SPINNER_CHARS),
         );
         spinner.set_message(message.to_string());
         spinner.enable_steady_tick(Duration::from_millis(80));
@@ -1142,7 +1198,11 @@ fn truncate_filename(filename: &str, max_len: usize) -> String {
         filename.to_string()
     } else {
         let half = (max_len - 3) / 2;
-        format!("{}...{}", &filename[..half], &filename[filename.len()-half..])
+        format!(
+            "{}...{}",
+            &filename[..half],
+            &filename[filename.len() - half..]
+        )
     }
 }
 
@@ -1180,7 +1240,7 @@ pub fn format_duration(duration: Duration) -> String {
 // ═══════════════════════════════════════════════════════════════
 
 /// 全局进度管理器
-/// 
+///
 /// 用于在整个处理流程中维护一个统一的进度显示
 pub struct GlobalProgressManager {
     multi: MultiProgress,
@@ -1199,11 +1259,11 @@ impl GlobalProgressManager {
             _start_time: Instant::now(),
         }
     }
-    
+
     /// 创建主进度条（总体进度）- 🔥 v5.30 统一样式
     pub fn create_main(&mut self, total: u64, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new(total));
-        
+
         // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
         if crate::progress_mode::is_quiet_mode() {
             bar.set_draw_target(ProgressDrawTarget::hidden());
@@ -1213,7 +1273,7 @@ impl GlobalProgressManager {
                     .template(progress_style::BATCH_TEMPLATE)
                     .expect("Invalid template")
                     .progress_chars(progress_style::PROGRESS_CHARS)
-                    .tick_chars(progress_style::SPINNER_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
             bar.enable_steady_tick(Duration::from_millis(100));
@@ -1221,11 +1281,11 @@ impl GlobalProgressManager {
         self.main_bar = Some(bar);
         self.main_bar.as_ref().unwrap()
     }
-    
+
     /// 创建子进度条（当前文件进度）- 🔥 v5.30 统一样式
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
         let bar = self.multi.add(ProgressBar::new_spinner());
-        
+
         // 🔥 v7.4.4: 在 quiet_mode 下隐藏进度条
         if crate::progress_mode::is_quiet_mode() {
             bar.set_draw_target(ProgressDrawTarget::hidden());
@@ -1234,7 +1294,7 @@ impl GlobalProgressManager {
                 ProgressStyle::default_spinner()
                     .template("  {spinner:.green} {prefix:.dim}: {msg}")
                     .expect("Invalid template")
-                    .tick_chars(progress_style::SPINNER_CHARS)
+                    .tick_chars(progress_style::SPINNER_CHARS),
             );
             bar.set_prefix(prefix.to_string());
             bar.enable_steady_tick(Duration::from_millis(80));
@@ -1242,28 +1302,28 @@ impl GlobalProgressManager {
         self.sub_bar = Some(bar);
         self.sub_bar.as_ref().unwrap()
     }
-    
+
     /// 更新主进度
     pub fn inc_main(&self) {
         if let Some(bar) = &self.main_bar {
             bar.inc(1);
         }
     }
-    
+
     /// 设置主进度消息
     pub fn set_main_message(&self, msg: &str) {
         if let Some(bar) = &self.main_bar {
             bar.set_message(msg.to_string());
         }
     }
-    
+
     /// 设置子进度消息
     pub fn set_sub_message(&self, msg: &str) {
         if let Some(bar) = &self.sub_bar {
             bar.set_message(msg.to_string());
         }
     }
-    
+
     /// 完成所有进度条
     pub fn finish_all(&self, summary: &str) {
         if let Some(bar) = &self.sub_bar {
@@ -1299,14 +1359,18 @@ mod tests {
         assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
         assert_eq!(format_duration(Duration::from_secs(3661)), "1h 1m 1s");
     }
-    
+
     #[test]
     fn test_truncate_filename() {
         assert_eq!(truncate_filename("short.txt", 20), "short.txt");
         // 截断后长度 = 2 * half + 3，其中 half = (max_len - 3) / 2
         // 当 max_len = 20 时，half = 8，结果长度 = 19
         let truncated = truncate_filename("very_long_filename_that_needs_truncation.txt", 20);
-        assert!(truncated.len() <= 20, "truncated len {} > 20", truncated.len());
+        assert!(
+            truncated.len() <= 20,
+            "truncated len {} > 20",
+            truncated.len()
+        );
         assert!(truncated.contains("..."));
     }
 }

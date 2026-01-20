@@ -24,7 +24,7 @@ impl TargetVideoFormat {
             TargetVideoFormat::Skip => "",
         }
     }
-    
+
     pub fn as_str(&self) -> &str {
         match self {
             TargetVideoFormat::Ffv1Mkv => "FFV1 MKV (Archival)",
@@ -77,11 +77,11 @@ pub struct ConversionConfig {
     pub apple_compat: bool,
     /// Use GPU acceleration
     pub use_gpu: bool,
-    
+
     // HEVC specific flags (optional or defaulted for others)
     pub force_ms_ssim_long: bool,
     pub ultimate_mode: bool,
-    
+
     // 🔥 v7.6: MS-SSIM优化配置
     /// MS-SSIM采样率（1/N，例如3表示1/3采样）
     pub ms_ssim_sampling: Option<u32>,
@@ -112,7 +112,7 @@ impl Default for ConversionConfig {
             force_ms_ssim_long: false,
             ultimate_mode: false,
             // 🔥 v7.6: MS-SSIM优化默认值
-            ms_ssim_sampling: None,  // 自动选择
+            ms_ssim_sampling: None, // 自动选择
             full_ms_ssim: false,
             skip_ms_ssim: false,
         }
@@ -148,7 +148,7 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn is_skipped(&self) -> bool {
         self.output_size == 0 && self.output_path.is_empty()
     }
-    
+
     fn skip_reason(&self) -> Option<&str> {
         if self.is_skipped() {
             Some(&self.message)
@@ -156,14 +156,28 @@ impl crate::cli_runner::CliProcessingResult for ConversionOutput {
             None
         }
     }
-    
-    fn input_path(&self) -> &str { &self.input_path }
-    fn output_path(&self) -> Option<&str> { 
-        if self.output_path.is_empty() { None } else { Some(&self.output_path) }
+
+    fn input_path(&self) -> &str {
+        &self.input_path
     }
-    fn input_size(&self) -> u64 { self.input_size }
-    fn output_size(&self) -> Option<u64> { 
-        if self.output_size == 0 { None } else { Some(self.output_size) }
+    fn output_path(&self) -> Option<&str> {
+        if self.output_path.is_empty() {
+            None
+        } else {
+            Some(&self.output_path)
+        }
     }
-    fn message(&self) -> &str { &self.message }
+    fn input_size(&self) -> u64 {
+        self.input_size
+    }
+    fn output_size(&self) -> Option<u64> {
+        if self.output_size == 0 {
+            None
+        } else {
+            Some(self.output_size)
+        }
+    }
+    fn message(&self) -> &str {
+        &self.message
+    }
 }
