@@ -158,6 +158,10 @@ fn main() -> anyhow::Result<()> {
                 // 🔥 v3.5: 裁判机制增强参数
                 min_ssim: 0.95,       // 默认 SSIM 阈值
                 validate_ms_ssim: false, // 默认不启用 VMAF（较慢）
+                // 🔥 v7.6: MS-SSIM优化配置
+                ms_ssim_sampling: None,  // 自动选择
+                full_ms_ssim: false,
+                skip_ms_ssim: false,
                 min_ms_ssim: 85.0,       // 默认 VMAF 阈值
                 require_compression: compress, // 🔥 v4.6
                 apple_compat,         // 🍎 v4.15

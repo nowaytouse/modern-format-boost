@@ -91,8 +91,10 @@ impl HeartbeatConfig {
 
 /// 通用心跳检测器
 pub struct UniversalHeartbeat {
+    #[allow(dead_code)]
     config: HeartbeatConfig,
     running: Arc<AtomicBool>,
+    #[allow(dead_code)]
     start_time: Instant,
     handle: Option<JoinHandle<()>>,
 }

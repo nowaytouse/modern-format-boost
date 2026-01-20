@@ -1725,6 +1725,12 @@ impl VideoExplorer {
         // 🔥 v6.6: 使用 CrfCache 替代 HashMap
         let mut cache: CrfCache<(u64, Option<f64>)> = CrfCache::new();
 
+        // 🔥 v7.7: 心跳检测 - 二分搜索使用30秒间隔
+        let _heartbeat = crate::universal_heartbeat::HeartbeatGuard::new(
+            crate::universal_heartbeat::HeartbeatConfig::medium("Binary Search (Compress+Quality)")
+                .with_info(format!("CRF {:.1}-{:.1}", self.config.initial_crf, self.config.max_crf))
+        );
+
         // 🔥 v5.7: Unified Process
         let pb = crate::progress::create_professional_spinner("📦 Compress+Quality");
         
@@ -2120,6 +2126,12 @@ impl VideoExplorer {
         let mut size_cache: CrfCache<u64> = CrfCache::new();
         let mut quality_cache: CrfCache<(Option<f64>, Option<f64>, Option<f64>)> = CrfCache::new();
         let mut last_encoded_crf: Option<f32> = None;
+        
+        // 🔥 v7.7: 心跳检测 - 极限探索使用60秒间隔
+        let _heartbeat = crate::universal_heartbeat::HeartbeatGuard::new(
+            crate::universal_heartbeat::HeartbeatConfig::slow("Ultimate Exploration")
+                .with_info(format!("Precise Quality Match + Compression"))
+        );
         
         // 🔥 v6.4: 压缩目标大小（预留动态元数据余量）
         // 元数据复制会增加约 2-5KB，必须预留这个空间
@@ -2683,6 +2695,13 @@ impl VideoExplorer {
         use std::io::{BufRead, BufReader, Write};
         use std::process::Stdio;
 
+        // 🔥 v7.7: 启动心跳检测(30秒间隔)
+        use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
+        let _heartbeat = HeartbeatGuard::new(
+            HeartbeatConfig::medium("Video Encoding")
+                .with_info(format!("CRF {:.1}", crf))
+        );
+
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y");
 
@@ -3085,6 +3104,10 @@ impl VideoExplorer {
     /// - 失败时响亮报错
     /// - 🔥 v5.69: 增强检测 - 多种滤镜策略 + fallback 机制
     fn calculate_ssim(&self) -> Result<Option<f64>> {
+        // 🔥 v7.7: 启动心跳检测(10秒间隔)
+        use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
+        let _heartbeat = HeartbeatGuard::new(HeartbeatConfig::fast("SSIM Calculation"));
+        
         eprint!("      📊 Calculating SSIM...");
         use std::io::Write;
         let _ = std::io::stderr().flush();
@@ -3174,6 +3197,10 @@ impl VideoExplorer {
     /// - 更严格的解析逻辑
     /// - 支持 inf 值（无损情况）
     fn calculate_psnr(&self) -> Result<Option<f64>> {
+        // 🔥 v7.7: 启动心跳检测(10秒间隔)
+        use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
+        let _heartbeat = HeartbeatGuard::new(HeartbeatConfig::fast("PSNR Calculation"));
+        
         // 🔥 v3.2: 使用 scale 滤镜将输入缩放到输出分辨率
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr=stats_file=-";
         
