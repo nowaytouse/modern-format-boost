@@ -171,41 +171,47 @@ pub fn convert_to_jxl(
         let _ = fs::remove_file(temp);
     }
 
-    // 🔥 v7.4: Fallback - 使用 ImageMagick 管道重新编码
-    // 如果 cjxl 失败且报告 "Getting pixel data failed"
+    // 🔥 v7.8.2: Enhanced Fallback - 使用 FFmpeg 作为主要fallback，ImageMagick作为备用
+    // 如果 cjxl 失败且报告 "Getting pixel data failed" 或其他编码错误
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
+            if stderr.contains("Getting pixel data failed") 
+                || stderr.contains("Failed to decode") 
+                || stderr.contains("Decoding failed")
+                || stderr.contains("pixel data") {
                 eprintln!(
                     "   ⚠️  CJXL ENCODING FAILED: {}",
                     stderr.lines().next().unwrap_or("Unknown error")
                 );
-                eprintln!("   � FALLBACK: GUsing ImageMagick pipeline to re-encode PNG");
+                eprintln!("   🔄 FALLBACK: Using FFmpeg → CJXL pipeline (more reliable for large images)");
                 eprintln!(
-                    "   📋 Reason: PNG contains incompatible metadata/encoding (will be preserved)"
+                    "   📋 Reason: Image format/size incompatible with CJXL v0.11.1 (metadata will be preserved)"
                 );
 
-                // 🔥 v7.4: 使用管道避免临时文件
-                // ImageMagick → stdout → cjxl stdin
+                // 🔥 v7.8.2: Primary Fallback - FFmpeg pipeline (更可靠，支持更多格式)
+                // FFmpeg → PNG → cjxl (streaming, no temp files)
                 use std::process::Stdio;
 
-                eprintln!("   🔄 Pipeline: magick → cjxl (streaming, no temp files)");
+                eprintln!("   🔄 Pipeline: FFmpeg → cjxl (streaming, no temp files)");
 
-                // Step 1: 启动 ImageMagick 进程
-                let magick_result = Command::new("magick")
+                // Step 1: 启动 FFmpeg 进程 (更可靠的解码器)
+                let ffmpeg_result = Command::new("ffmpeg")
+                    .arg("-i")
                     .arg(input)
-                    .arg("-depth")
-                    .arg("16") // 保留位深
-                    .arg("png:-") // 输出到 stdout
+                    .arg("-f")
+                    .arg("png")
+                    .arg("-pix_fmt")
+                    .arg("rgba") // 确保支持透明度
+                    .arg("-") // 输出到 stdout
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
                     .spawn();
 
-                match magick_result {
-                    Ok(mut magick_proc) => {
+                match ffmpeg_result {
+                    Ok(mut ffmpeg_proc) => {
                         // Step 2: 启动 cjxl 进程，从 stdin 读取
-                        if let Some(magick_stdout) = magick_proc.stdout.take() {
+                        if let Some(ffmpeg_stdout) = ffmpeg_proc.stdout.take() {
                             let cjxl_result = Command::new("cjxl")
                                 .arg("-") // 从 stdin 读取
                                 .arg(&output)
@@ -215,25 +221,25 @@ pub fn convert_to_jxl(
                                 .arg("7")
                                 .arg("-j")
                                 .arg(max_threads.to_string())
-                                .stdin(magick_stdout)
+                                .stdin(ffmpeg_stdout)
                                 .stderr(Stdio::piped())
                                 .spawn();
 
                             match cjxl_result {
                                 Ok(mut cjxl_proc) => {
                                     // 等待两个进程完成
-                                    let magick_status = magick_proc.wait();
+                                    let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
 
-                                    // 检查 magick 进程
-                                    let magick_ok = match magick_status {
+                                    // 检查 FFmpeg 进程
+                                    let ffmpeg_ok = match ffmpeg_status {
                                         Ok(status) if status.success() => true,
                                         Ok(status) => {
                                             eprintln!(
-                                                "   ❌ ImageMagick failed with exit code: {:?}",
+                                                "   ❌ FFmpeg failed with exit code: {:?}",
                                                 status.code()
                                             );
-                                            if let Some(mut stderr) = magick_proc.stderr {
+                                            if let Some(mut stderr) = ffmpeg_proc.stderr {
                                                 use std::io::Read;
                                                 let mut err = String::new();
                                                 if stderr.read_to_string(&mut err).is_ok()
@@ -249,7 +255,7 @@ pub fn convert_to_jxl(
                                         }
                                         Err(e) => {
                                             eprintln!(
-                                                "   ❌ Failed to wait for ImageMagick: {}",
+                                                "   ❌ Failed to wait for FFmpeg: {}",
                                                 e
                                             );
                                             false
@@ -285,36 +291,45 @@ pub fn convert_to_jxl(
                                     };
 
                                     // 构造结果
-                                    if magick_ok && cjxl_ok {
-                                        eprintln!("   🎉 FALLBACK SUCCESS: Pipeline completed successfully");
+                                    if ffmpeg_ok && cjxl_ok {
+                                        eprintln!("   🎉 FALLBACK SUCCESS: FFmpeg pipeline completed successfully");
                                         Ok(std::process::Output {
                                             status: std::process::ExitStatus::default(),
                                             stdout: Vec::new(),
                                             stderr: Vec::new(),
                                         })
                                     } else {
-                                        eprintln!("   ❌ FALLBACK FAILED: Pipeline error (magick: {}, cjxl: {})", 
-                                            if magick_ok { "✓" } else { "✗" },
+                                        eprintln!("   ❌ FFmpeg pipeline failed (ffmpeg: {}, cjxl: {})", 
+                                            if ffmpeg_ok { "✓" } else { "✗" },
                                             if cjxl_ok { "✓" } else { "✗" });
-                                        result
+                                        
+                                        // 🔥 v7.8.2: Secondary Fallback - ImageMagick pipeline
+                                        eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                                        try_imagemagick_fallback(input, &output, distance, max_threads)
                                     }
                                 }
                                 Err(e) => {
                                     eprintln!("   ❌ Failed to start cjxl process: {}", e);
-                                    let _ = magick_proc.kill();
-                                    result
+                                    let _ = ffmpeg_proc.kill();
+                                    // 尝试 ImageMagick fallback
+                                    eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                                    try_imagemagick_fallback(input, &output, distance, max_threads)
                                 }
                             }
                         } else {
-                            eprintln!("   ❌ Failed to capture ImageMagick stdout");
-                            let _ = magick_proc.kill();
-                            result
+                            eprintln!("   ❌ Failed to capture FFmpeg stdout");
+                            let _ = ffmpeg_proc.kill();
+                            // 尝试 ImageMagick fallback
+                            eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                            try_imagemagick_fallback(input, &output, distance, max_threads)
                         }
                     }
                     Err(e) => {
-                        eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
-                        eprintln!("      💡 Install: brew install imagemagick");
-                        result
+                        eprintln!("   ❌ FFmpeg not available or failed to start: {}", e);
+                        eprintln!("      💡 Install: brew install ffmpeg");
+                        // 尝试 ImageMagick fallback
+                        eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                        try_imagemagick_fallback(input, &output, distance, max_threads)
                     }
                 }
             } else {
@@ -1561,6 +1576,125 @@ pub fn convert_to_hevc_mkv_lossless(
 // ============================================================
 // 🔧 cjxl 输入预处理
 // ============================================================
+
+/// 🔥 v7.8.2: ImageMagick fallback helper function
+/// 当FFmpeg fallback也失败时使用的备用方案
+fn try_imagemagick_fallback(
+    input: &Path,
+    output: &Path,
+    distance: f32,
+    max_threads: usize,
+) -> std::result::Result<std::process::Output, std::io::Error> {
+    use std::process::Stdio;
+    
+    eprintln!("   🔧 ImageMagick → cjxl pipeline");
+    
+    // Step 1: 启动 ImageMagick 进程
+    let magick_result = Command::new("magick")
+        .arg(input)
+        .arg("-depth")
+        .arg("16") // 保留位深
+        .arg("png:-") // 输出到 stdout
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    match magick_result {
+        Ok(mut magick_proc) => {
+            // Step 2: 启动 cjxl 进程，从 stdin 读取
+            if let Some(magick_stdout) = magick_proc.stdout.take() {
+                let cjxl_result = Command::new("cjxl")
+                    .arg("-") // 从 stdin 读取
+                    .arg(output)
+                    .arg("-d")
+                    .arg(format!("{:.1}", distance))
+                    .arg("-e")
+                    .arg("7")
+                    .arg("-j")
+                    .arg(max_threads.to_string())
+                    .stdin(magick_stdout)
+                    .stderr(Stdio::piped())
+                    .spawn();
+
+                match cjxl_result {
+                    Ok(mut cjxl_proc) => {
+                        // 等待两个进程完成
+                        let magick_status = magick_proc.wait();
+                        let cjxl_status = cjxl_proc.wait();
+
+                        // 检查 magick 进程
+                        let magick_ok = match magick_status {
+                            Ok(status) if status.success() => true,
+                            Ok(status) => {
+                                eprintln!(
+                                    "   ❌ ImageMagick failed with exit code: {:?}",
+                                    status.code()
+                                );
+                                false
+                            }
+                            Err(e) => {
+                                eprintln!("   ❌ Failed to wait for ImageMagick: {}", e);
+                                false
+                            }
+                        };
+
+                        // 检查 cjxl 进程
+                        let cjxl_ok = match cjxl_status {
+                            Ok(status) if status.success() => true,
+                            Ok(status) => {
+                                eprintln!(
+                                    "   ❌ cjxl failed with exit code: {:?}",
+                                    status.code()
+                                );
+                                false
+                            }
+                            Err(e) => {
+                                eprintln!("   ❌ Failed to wait for cjxl: {}", e);
+                                false
+                            }
+                        };
+
+                        // 构造结果
+                        if magick_ok && cjxl_ok {
+                            eprintln!("   🎉 SECONDARY FALLBACK SUCCESS: ImageMagick pipeline completed");
+                            Ok(std::process::Output {
+                                status: std::process::ExitStatus::default(),
+                                stdout: Vec::new(),
+                                stderr: Vec::new(),
+                            })
+                        } else {
+                            eprintln!("   ❌ SECONDARY FALLBACK FAILED: ImageMagick pipeline error (magick: {}, cjxl: {})", 
+                                if magick_ok { "✓" } else { "✗" },
+                                if cjxl_ok { "✓" } else { "✗" });
+                            // 返回原始错误
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                "All fallback methods failed"
+                            ))
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ Failed to start cjxl process: {}", e);
+                        let _ = magick_proc.kill();
+                        Err(e)
+                    }
+                }
+            } else {
+                eprintln!("   ❌ Failed to capture ImageMagick stdout");
+                let _ = magick_proc.kill();
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to capture ImageMagick stdout"
+                ))
+            }
+        }
+        Err(e) => {
+            eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
+            eprintln!("      💡 Install: brew install imagemagick");
+            Err(e)
+        }
+    }
+}
 
 /// 检测并预处理 cjxl 不能直接读取的格式
 ///
