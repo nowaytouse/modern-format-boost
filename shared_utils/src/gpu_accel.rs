@@ -24,11 +24,145 @@
 //! ```
 
 use std::process::Command;
-use std::sync::OnceLock;
-use std::io::Read;
+use std::sync::{OnceLock, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::thread::JoinHandle;
+use chrono::{DateTime, Utc, FixedOffset};
 
 // 🔥 v6.5: 使用统一的 CrfCache 替代 HashMap
 use crate::explore_strategy::CrfCache;
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v7.5.3: 北京时间工具函数
+// ═══════════════════════════════════════════════════════════════
+
+/// 获取当前北京时间字符串
+fn beijing_time_now() -> String {
+    let beijing = FixedOffset::east_opt(8 * 3600).unwrap();
+    let now: DateTime<Utc> = Utc::now();
+    now.with_timezone(&beijing)
+       .format("%Y-%m-%d %H:%M:%S")
+       .to_string()
+}
+
+/// 格式化日志消息（包含北京时间）
+#[allow(dead_code)]
+fn format_log(level: &str, component: &str, msg: &str) -> String {
+    format!("[{}] [{}] [{}] {}", 
+        beijing_time_now(), level, component, msg)
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v7.5.3: StderrCapture - 捕获ffmpeg stderr
+// ═══════════════════════════════════════════════════════════════
+
+struct StderrCapture {
+    lines: Arc<Mutex<VecDeque<String>>>,
+    max_lines: usize,
+}
+
+impl StderrCapture {
+    fn new(max_lines: usize) -> Self {
+        Self {
+            lines: Arc::new(Mutex::new(VecDeque::with_capacity(max_lines))),
+            max_lines,
+        }
+    }
+    
+    fn spawn_capture_thread(&self, stderr: std::process::ChildStderr) -> JoinHandle<()> {
+        use std::io::{BufRead, BufReader};
+        
+        let lines = Arc::clone(&self.lines);
+        let max = self.max_lines;
+        
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                let mut buf = lines.lock().unwrap();
+                if buf.len() >= max {
+                    buf.pop_front();
+                }
+                buf.push_back(line);
+            }
+        })
+    }
+    
+    fn get_lines(&self) -> Vec<String> {
+        self.lines.lock().unwrap().iter().cloned().collect()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 🔥 v7.5.3: HeartbeatMonitor - 心跳监控
+// ═══════════════════════════════════════════════════════════════
+
+struct HeartbeatMonitor {
+    last_activity: Arc<Mutex<std::time::Instant>>,
+    stop_signal: Arc<AtomicBool>,
+    child_pid: u32,
+    timeout: std::time::Duration,
+}
+
+impl HeartbeatMonitor {
+    fn new(
+        last_activity: Arc<Mutex<std::time::Instant>>,
+        stop_signal: Arc<AtomicBool>,
+        child_pid: u32,
+        timeout: std::time::Duration,
+    ) -> Self {
+        Self {
+            last_activity,
+            stop_signal,
+            child_pid,
+            timeout,
+        }
+    }
+    
+    fn spawn(self) -> JoinHandle<()> {
+        std::thread::spawn(move || {
+            const CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+            
+            loop {
+                std::thread::sleep(CHECK_INTERVAL);
+                
+                // 检查停止信号
+                if self.stop_signal.load(Ordering::Relaxed) {
+                    break;
+                }
+                
+                // 检查心跳超时
+                let elapsed = self.last_activity.lock().unwrap().elapsed();
+                let elapsed_secs = elapsed.as_secs();
+                
+                // 显示心跳状态
+                eprintln!("💓 Heartbeat: {}s ago (Beijing: {})", 
+                    elapsed_secs, beijing_time_now());
+                
+                if elapsed > self.timeout {
+                    eprintln!("⚠️  FREEZE DETECTED: No activity for {} seconds!", elapsed_secs);
+                    eprintln!("   Terminating frozen ffmpeg process (PID: {})...", self.child_pid);
+                    
+                    // 使用系统调用终止进程
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(self.child_pid as i32, libc::SIGKILL);
+                    }
+                    
+                    #[cfg(windows)]
+                    {
+                        // Windows: 使用taskkill
+                        let _ = std::process::Command::new("taskkill")
+                            .args(&["/PID", &self.child_pid.to_string(), "/F"])
+                            .output();
+                    }
+                    
+                    break;
+                }
+            }
+        })
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.3: 全局常量 - 避免硬编码
@@ -1929,51 +2063,98 @@ pub fn gpu_coarse_search_with_log(
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         let start_time = Instant::now();
-        // 🔥 v5.44: 仅保留底线超时 - 12 小时
         let absolute_timeout = Duration::from_secs(12 * 3600);
-
-        // 后台线程读取 stderr 防止死锁
+        let child_pid = child.id();
+        
+        // 🔥 v7.5.3: 启动stderr捕获
+        let stderr_capture = StderrCapture::new(100);
         let stderr_handle = if let Some(stderr) = child.stderr.take() {
-            Some(std::thread::spawn(move || {
-                let _ = std::io::Read::read_to_end(&mut std::io::BufReader::new(stderr).by_ref(), &mut vec![]);
-            }))
+            Some(stderr_capture.spawn_capture_thread(stderr))
         } else {
             None
         };
-
-        // 在主线程读取 stdout (进度数据)
+        
+        // 🔥 v7.5.3: 启动心跳监控
+        let last_activity = Arc::new(Mutex::new(Instant::now()));
+        let stop_signal = Arc::new(AtomicBool::new(false));
+        let heartbeat = HeartbeatMonitor::new(
+            Arc::clone(&last_activity),
+            Arc::clone(&stop_signal),
+            child_pid,
+            Duration::from_secs(300),  // 5分钟超时
+        );
+        let heartbeat_handle = heartbeat.spawn();
+        
+        // 🔥 v7.5.3: 启动检测（30秒内必须有首次输出）
+        let first_output = Arc::new(AtomicBool::new(false));
+        let first_output_clone = Arc::clone(&first_output);
+        let stop_clone = Arc::clone(&stop_signal);
+        let startup_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(30));
+            if !first_output_clone.load(Ordering::Relaxed) && !stop_clone.load(Ordering::Relaxed) {
+                eprintln!("❌ STARTUP FAILED: No output in 30s (Beijing: {})", beijing_time_now());
+                #[cfg(unix)]
+                unsafe {
+                    libc::kill(child_pid as i32, libc::SIGKILL);
+                }
+            }
+        });
+        
+        eprintln!("🔄 GPU Encoding started (heartbeat active) - Beijing: {}", beijing_time_now());
+        
+        // 🔥 v7.5.3: 解析进度并更新心跳
         let mut last_progress_time = Instant::now();
-        let mut fallback_logged = false;  // 🔥 v5.44: 记录是否已打印过 fallback 日志
+        let mut fallback_logged = false;
+        
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
 
             for line in reader.lines() {
+                // 首次输出
+                if !first_output.load(Ordering::Relaxed) {
+                    first_output.store(true, Ordering::Relaxed);
+                }
+                
+                // 更新心跳
+                *last_activity.lock().unwrap() = Instant::now();
+                
                 if let Ok(line) = line {
                     // 解析 out_time_us=XXXXX
                     if let Some(val) = line.strip_prefix("out_time_us=") {
                         if let Ok(time_us) = val.parse::<u64>() {
-                            // 每 1 秒更新一次进度条
+                            // 每 1 秒更新一次进度
                             if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
                                 let current_secs = time_us as f64 / 1_000_000.0;
                                 let pct = (current_secs / actual_sample_duration as f64 * 100.0).min(100.0);
+                                let eta = if pct > 0.1 {
+                                    ((actual_sample_duration as f64 - current_secs) / (current_secs / start_time.elapsed().as_secs_f64())).max(0.0) as u64
+                                } else {
+                                    0
+                                };
+                                let speed = if current_secs > 0.0 {
+                                    start_time.elapsed().as_secs_f64() / current_secs
+                                } else {
+                                    0.0
+                                };
 
                                 // 尝试获取实时文件大小
                                 let estimated_final_size = match std::fs::metadata(output) {
                                     Ok(metadata) => {
                                         let current_size = metadata.len();
-                                        // 🔥 v5.44: 重置 fallback 标志（成功获取时）
                                         fallback_logged = false;
                                         (current_size as f64 / pct.max(1.0) * 100.0) as u64
                                     }
                                     Err(_) => {
-                                        // 🔥 v5.44: metadata 失败，使用线性估算 + 响亮 fallback
                                         if !fallback_logged {
-                                            eprintln!("📍 Status: Using linear estimation (metadata unavailable)");
+                                            eprintln!("📍 Using linear estimation (metadata unavailable)");
                                             fallback_logged = true;
                                         }
                                         (sample_input_size as f64 * (1.0 / pct.max(0.1))).min(sample_input_size as f64 * 10.0) as u64
                                     }
                                 };
+                                
+                                eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x", 
+                                    pct, current_secs, actual_sample_duration, eta, speed);
 
                                 if let Some(cb) = progress_cb {
                                     cb(crf, estimated_final_size);
@@ -1986,23 +2167,34 @@ pub fn gpu_coarse_search_with_log(
             }
         }
 
-        // 等待编码完成，简单阻塞等待（防止死锁）
+        // 等待编码完成
         let status = child.wait().context("Failed to wait for ffmpeg")?;
-
-        // 等待 stderr 线程完成
+        
+        // 🔥 v7.5.3: 停止所有监控线程
+        stop_signal.store(true, Ordering::Relaxed);
+        let _ = heartbeat_handle.join();
+        let _ = startup_handle.join();
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
         }
 
-        // 🔥 v5.44: 编码完成后检查底线超时（12小时）
+        // 检查底线超时
         if start_time.elapsed() > absolute_timeout {
-            eprintln!("⏰ WARNING: GPU encoding took longer than 12 hours! Process was likely stuck.");
+            eprintln!("⏰ WARNING: GPU encoding took longer than 12 hours!");
             bail!("GPU encoding exceeded 12-hour timeout");
         }
 
         if !status.success() {
-            bail!("GPU encoding failed (exit code: {:?})", status.code());
+            let stderr_lines = stderr_capture.get_lines();
+            let stderr_text = if stderr_lines.is_empty() {
+                "No stderr output".to_string()
+            } else {
+                stderr_lines.join("\n")
+            };
+            bail!("GPU encoding failed (exit code: {:?})\nStderr:\n{}", status.code(), stderr_text);
         }
+        
+        eprintln!("✅ Encoding completed, heartbeat stopped - Beijing: {}", beijing_time_now());
 
         Ok(std::fs::metadata(output)?.len())
     };
