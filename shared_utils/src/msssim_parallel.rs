@@ -231,6 +231,7 @@ impl ParallelMsssimCalculator {
             args.push(&filter_str);
         }
 
+        // 🔥 v7.8.1: 改进MS-SSIM fallback机制 - 先尝试MS-SSIM，失败时fallback到SSIM
         // 添加libvmaf filter计算MS-SSIM
         let lavfi_str = format!("libvmaf=feature=name=ms_ssim:channel={}", channel);
         args.push("-lavfi");
@@ -240,15 +241,61 @@ impl ParallelMsssimCalculator {
         args.push("-");
 
         // 执行命令并监控进度
-        progress_monitor
+        let ms_ssim_result = progress_monitor
             .monitor_ffmpeg_process(&args, channel)
-            .map_err(|e| AppError::Other(anyhow::anyhow!(e)))?;
+            .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
 
-        // 获取通道分数
-        progress_monitor.get_channel_score(channel).ok_or_else(|| {
-            eprintln!("❌ Failed to get {} channel score", channel);
-            AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
-        })
+        match ms_ssim_result {
+            Ok(_) => {
+                // MS-SSIM成功，获取通道分数
+                progress_monitor.get_channel_score(channel).ok_or_else(|| {
+                    eprintln!("❌ Failed to get {} channel score", channel);
+                    AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
+                })
+            }
+            Err(_) => {
+                // 🔥 v7.8.1: MS-SSIM失败时fallback到SSIM
+                eprintln!("⚠️  MS-SSIM failed for channel {}, falling back to SSIM", channel);
+                
+                // 构建SSIM fallback命令
+                let mut ssim_args = vec![
+                    "-i",
+                    original_path.to_str().unwrap(),
+                    "-i",
+                    converted_path.to_str().unwrap(),
+                ];
+
+                // 添加select filter（如果需要）
+                let ssim_filter_str;
+                if let Some(filter) = config.strategy.ffmpeg_filter() {
+                    ssim_filter_str = format!("[0:v]{}[v0];[1:v]{}[v1]", filter, filter);
+                    ssim_args.push("-filter_complex");
+                    ssim_args.push(&ssim_filter_str);
+                }
+
+                // 使用SSIM作为fallback
+                let ssim_lavfi_str = format!("libvmaf=feature=name=ssim:channel={}", channel);
+                ssim_args.push("-lavfi");
+                ssim_args.push(&ssim_lavfi_str);
+                ssim_args.push("-f");
+                ssim_args.push("null");
+                ssim_args.push("-");
+
+                // 执行SSIM fallback
+                progress_monitor
+                    .monitor_ffmpeg_process(&ssim_args, channel)
+                    .map_err(|e| {
+                        eprintln!("❌ Both MS-SSIM and SSIM failed for channel {}", channel);
+                        AppError::Other(anyhow::anyhow!("Both MS-SSIM and SSIM failed: {}", e))
+                    })?;
+
+                // 获取SSIM分数
+                progress_monitor.get_channel_score(channel).ok_or_else(|| {
+                    eprintln!("❌ Failed to get {} channel SSIM score", channel);
+                    AppError::Other(anyhow::anyhow!("Failed to get {} channel SSIM score", channel))
+                })
+            }
+        }
     }
 }
 
