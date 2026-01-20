@@ -1,0 +1,125 @@
+🔍 深度日志分析报告
+分析时间: Wed Jan 21 03:36:30 CST 2026
+日志文件: ../check
+总行数:     4444
+========================================
+
+1. GIF像素格式不兼容错误分析:
+----------------------------------------
+总计GIF像素格式错误: 47 次
+
+具体GIF错误详情:
+⠇ Converting ▕███▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏   9% • 228/2541 • ⏱️ 00:01:58 (ETA: 00:35:19) • 闷茶子- 116.png                                              
+      ❌ Channel V MS-SSIM failed!
+         Cause: Pixel format incompatibility
+         Input: /Users/user/Downloads/all/闷茶子新/[2022-12-19][Pixiv Twitter] Menthako (@Menthak0) (5373467)/247_twitter_Menthak0_20210705_110633_1412004970958782477_gif.gif
+
+      ❌ Channel U MS-SSIM failed!
+         Cause: Pixel format incompatibility
+         Input: /Users/user/Downloads/all/闷茶子新/[2022-12-19][Pixiv Twitter] Menthako (@Menthak0) (5373467)/247_twitter_Menthak0_20210705_110633_141200497⠇ Converting ▕███▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏   9% • 229/2541 • ⏱️ 00:01:59 (ETA: 00:34:52) • 497_83013738_p0.png                                          0.9986 ✅
+⠙ Converting ▕███▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏   9% • 229/2541 • ⏱️ 00:01:59 (ETA: 00:34:59) • 497_83013738_p0.png                                             ═══════════════════════════════════════════════════
+--
+
+      ❌ Channel U MS-SSIM failed!
+         Cause: Pixel format incompatibility
+         Input: /Users/user/Downloads/all/闷茶子新/Menthako/247_twitter_Menthak0_20210705_110633_1412004970958782477_gif (3).gif
+         Cause: Pixel format incompatibility
+         Input: /Users/user/Downloads/all/闷茶子新/Menthako/247_twitter_Menthak0_20210705_110633_1412004970958782477_gif (3).gif
+⠙ Converting ▕███▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏  11% • 271/2541 • ⏱️ 00:02:46 (ETA: 00:47:27) • 546_81328277_p0.png                                                                                                                              0.9986 ✅
+--
+      Y channel...       U channel...       V channel... 
+      ❌ Channel U MS-SSIM failed!
+
+2. MS-SSIM质量计算失败分析:
+----------------------------------------
+MS-SSIM完全失败次数: 13 次
+单通道MS-SSIM失败次数: 47 次
+
+3. 质量验证失败分析:
+----------------------------------------
+质量验证失败次数: 8 次
+原文件保护次数: 12 次
+
+4. 压缩失败分析:
+----------------------------------------
+无法压缩文件数: 2 次
+输出大于输入跳过: 4 次
+
+5. 心跳系统警告:
+----------------------------------------
+心跳重复警告: 2 次
+
+6. HEIC文件分析失败:
+----------------------------------------
+HEIC分析失败: 2 次
+HEIC错误详情:
+⠼ Converting ▕█████▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏  16% • 411/2541 • ⏱️ 00:03:19 (ETA: 00:08:42) • 129_FDwEI3UVQAI_Kd_.jfif.jpg                                                                                                                     ⚠️ Deep HEIC analysis failed (skipping to basic info): Failed to read image: Failed to read HEIC: MemoryAllocationError(SecurityLimitExceeded) Memory allocation error: Security limit exceeded: Maximum number of child boxes (100) in 'ipco' box exceeded.
+⠋ Converting ▕██████▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░▏  19% • 481/2541 • ⏱️ 00:03:36 (ETA: 00:08:24) • 461_84148764_p1.jpg                                                                                                                              ✅ Encoding completed, heartbeat stopped - Beijing: 2026-01-21 01:31:09
+--
+⠼ Converting ▕██████████████████████▓░░░░░░░░░░░░▏  64% • 1621/2541 • ⏱️ 00:10:09 (ETA: 00:07:58) • 418_85458137_p1.jpg                                                                                                                             ⚠️ Deep HEIC analysis failed (skipping to basic info): Failed to read image: Failed to read HEIC: MemoryAllocationError(SecurityLimitExceeded) Memory allocation error: Security limit exceeded: Maximum number of child boxes (100) in 'ipco' box exceeded.
+⠇ Converting ▕██████████████████████▓░░░░░░░░░░░░▏  65% • 1658/2541 • ⏱️ 00:10:22 (ETA: 00:05:49) • 572_03.png                                                                                                                                      ✅ Encoding completed, heartbeat stopped - Beijing: 2026-01-21 01:37:54
+
+7. 转换统计分析:
+----------------------------------------
+总文件数: 2545
+图片文件: 2541
+视频文件: 4
+
+8. 成功转换分析:
+----------------------------------------
+成功转换次数: 22 次
+压缩率分布:
+   1 Size +0.2%
+   1 Size +0.4%
+   1 Size +21.1%
+   1 Size +22.9%
+   1 Size -0.2%
+   1 Size -0.6%
+   1 Size -0.7%
+   1 Size -0.8%
+   2 Size -32.5%
+   1 Size -33.9%
+   1 Size -39.9%
+   2 Size -55.8%
+   1 Size -66.8%
+   1 Size -71.7%
+   1 Size -81.4%
+   2 Size -82.0%
+   1 Size -88.5%
+   1 Size -91.2%
+   1 Size -92.5%
+
+9. 错误模式总结:
+----------------------------------------
+主要问题:
+- GIF文件像素格式不兼容: 47 次
+- MS-SSIM质量计算失败: 13 次
+- 质量验证失败保护原文件: 8 次
+- 无法压缩的文件: 2 次
+- HEIC分析失败: 2 次
+- 心跳重复警告: 2 次
+
+10. 建议修复措施:
+----------------------------------------
+1. GIF像素格式问题:
+   - 已修复: 在video_explorer.rs和msssim_parallel.rs中添加GIF格式检测
+   - 建议: 为GIF文件使用替代质量指标
+
+2. MS-SSIM计算失败:
+   - 原因: libvmaf不可用或像素格式不兼容
+   - 建议: 改进fallback机制，使用更可靠的质量指标
+
+3. 质量验证过于严格:
+   - 问题: SSIM阈值0.95可能过高
+   - 建议: 根据文件类型调整质量阈值
+
+4. 心跳重复警告:
+   - 问题: x265 CLI编码时出现重复心跳
+   - 建议: 改进心跳管理机制
+
+5. HEIC内存限制:
+   - 问题: SecurityLimitExceeded错误
+   - 建议: 增加HEIC解析的内存限制或使用替代解析器
+
+========================================
+分析完成时间: Wed Jan 21 03:36:30 CST 2026
