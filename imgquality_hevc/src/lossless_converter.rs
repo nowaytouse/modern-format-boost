@@ -329,16 +329,21 @@ pub fn convert_to_jxl(
             let output_size = fs::metadata(&output)?.len();
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
-            // 🔥 智能回退：如果转换后文件变大，删除输出并跳过
-            // 这对于小型PNG或已高度优化的图片很常见
-            if output_size > input_size {
+            // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多1%的大小增加
+            let tolerance_ratio = 1.01; // 1%容差 (精确控制)
+            let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+            
+            if output_size > max_allowed_size {
+                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
                 let _ = fs::remove_file(&output);
                 if options.verbose {
                     eprintln!(
-                        "   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)",
-                        input_size,
-                        output_size,
-                        (output_size as f64 / input_size as f64 - 1.0) * 100.0
+                        "   ⏭️  Skipping: JXL output larger than input by {:.1}% (tolerance: 1.0%)",
+                        size_increase_pct
+                    );
+                    eprintln!(
+                        "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+                        input_size, output_size, size_increase_pct
                     );
                 }
                 // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
@@ -352,11 +357,11 @@ pub fn convert_to_jxl(
                     output_size: None,
                     size_reduction: None,
                     message: format!(
-                        "Skipped: JXL would be larger (+{:.1}%)",
-                        (output_size as f64 / input_size as f64 - 1.0) * 100.0
+                        "Skipped: JXL output larger than input by {:.1}% (tolerance exceeded)",
+                        size_increase_pct
                     ),
                     skipped: true,
-                    skip_reason: Some("size_increase".to_string()),
+                    skip_reason: Some("size_increase_beyond_tolerance".to_string()),
                 });
             }
 
@@ -1336,14 +1341,20 @@ pub fn convert_to_jxl_matched(
             let output_size = fs::metadata(&output)?.len();
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
-            // 🔥 智能回退：如果转换后文件变大，删除输出并跳过
-            if output_size > input_size {
+            // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多1%的大小增加
+            let tolerance_ratio = 1.01; // 1%容差 (精确控制)
+            let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+            
+            if output_size > max_allowed_size {
+                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
                 let _ = fs::remove_file(&output);
                 eprintln!(
-                    "   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)",
-                    input_size,
-                    output_size,
-                    (output_size as f64 / input_size as f64 - 1.0) * 100.0
+                    "   ⏭️  Skipping: JXL output larger than input by {:.1}% (tolerance: 1.0%)",
+                    size_increase_pct
+                );
+                eprintln!(
+                    "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+                    input_size, output_size, size_increase_pct
                 );
                 // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
                 copy_original_on_skip(input, options);
@@ -1356,11 +1367,11 @@ pub fn convert_to_jxl_matched(
                     output_size: None,
                     size_reduction: None,
                     message: format!(
-                        "Skipped: JXL would be larger (+{:.1}%)",
-                        (output_size as f64 / input_size as f64 - 1.0) * 100.0
+                        "Skipped: JXL output larger than input by {:.1}% (tolerance exceeded)",
+                        size_increase_pct
                     ),
                     skipped: true,
-                    skip_reason: Some("size_increase".to_string()),
+                    skip_reason: Some("size_increase_beyond_tolerance".to_string()),
                 });
             }
 
@@ -1870,14 +1881,20 @@ pub fn convert_to_gif_apple_compat(
             let output_size = fs::metadata(&output)?.len();
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
-            // 🔥 v3.8: 智能回退 - 如果输出比输入大，删除输出并跳过
-            if output_size > input_size {
+            // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多1%的大小增加
+            let tolerance_ratio = 1.01; // 1%容差 (精确控制)
+            let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+            
+            if output_size > max_allowed_size {
+                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
                 let _ = fs::remove_file(&output);
                 eprintln!(
-                    "   ⏭️  Rollback: GIF larger than original ({} → {} bytes, +{:.1}%)",
-                    input_size,
-                    output_size,
-                    (output_size as f64 / input_size as f64 - 1.0) * 100.0
+                    "   ⏭️  Skipping: GIF output larger than input by {:.1}% (tolerance: 1.0%)",
+                    size_increase_pct
+                );
+                eprintln!(
+                    "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+                    input_size, output_size, size_increase_pct
                 );
                 // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
                 copy_original_on_skip(input, options);
@@ -1890,11 +1907,11 @@ pub fn convert_to_gif_apple_compat(
                     output_size: None,
                     size_reduction: None,
                     message: format!(
-                        "Skipped: GIF would be larger (+{:.1}%)",
-                        (output_size as f64 / input_size as f64 - 1.0) * 100.0
+                        "Skipped: GIF output larger than input by {:.1}% (tolerance exceeded)",
+                        size_increase_pct
                     ),
                     skipped: true,
-                    skip_reason: Some("size_increase".to_string()),
+                    skip_reason: Some("size_increase_beyond_tolerance".to_string()),
                 });
             }
 
