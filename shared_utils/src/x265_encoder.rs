@@ -66,6 +66,13 @@ pub fn encode_with_x265(
 ) -> Result<u64> {
     eprintln!("🖥️  CPU Encoding with x265 CLI (CRF {:.1})", config.crf);
     
+    // 🔥 v7.7: 启动心跳检测(30秒间隔)
+    use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
+    let _heartbeat = HeartbeatGuard::new(
+        HeartbeatConfig::medium("x265 CLI Encoding")
+            .with_info(format!("CRF {:.1}", config.crf))
+    );
+    
     // 临时文件路径
     let temp_dir = std::env::temp_dir();
     let hevc_file = temp_dir.join(format!("temp_{}.hevc", std::process::id()));

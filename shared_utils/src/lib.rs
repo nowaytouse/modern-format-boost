@@ -80,6 +80,10 @@ pub mod msssim_progress;
 // 🔥 v7.6: MS-SSIM并行计算模块
 pub mod msssim_parallel;
 
+// 🔥 v7.7: 通用心跳系统
+pub mod universal_heartbeat;
+pub mod heartbeat_manager;
+
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
 
@@ -374,3 +378,8 @@ pub use msssim_progress::MsssimProgressMonitor;
 
 // 🔥 v7.6: MS-SSIM并行计算
 pub use msssim_parallel::{ParallelMsssimCalculator, MsssimResult};
+
+// 🔥 v7.7: 通用心跳系统
+pub use universal_heartbeat::{UniversalHeartbeat, HeartbeatConfig, HeartbeatGuard};
+pub use heartbeat_manager::{HeartbeatManager, ProgressBarGuard};
+
