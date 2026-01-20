@@ -7393,6 +7393,7 @@ fn calculate_ms_ssim_channel_sampled(
 }
 
 /// 计算单个通道的 MS-SSIM（旧版，保留用于向后兼容）
+#[allow(dead_code)]
 fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Option<f64> {
     // 直接调用采样版本，采样率为1（全量计算）
     calculate_ms_ssim_channel_sampled(input, output, channel, 1)

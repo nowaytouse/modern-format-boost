@@ -68,6 +68,18 @@ pub mod progress_mode;
 // 🔥 v7.5: 文件排序模块（优先处理小文件）
 pub mod file_sorter;
 
+// 🔥 v7.6: MS-SSIM智能采样模块
+pub mod msssim_sampling;
+
+// 🔥 v7.6: MS-SSIM心跳检测模块
+pub mod msssim_heartbeat;
+
+// 🔥 v7.6: MS-SSIM进度监控模块
+pub mod msssim_progress;
+
+// 🔥 v7.6: MS-SSIM并行计算模块
+pub mod msssim_parallel;
+
 // 🔥 v6.9.17: x265 CPU编码器模块
 pub mod x265_encoder;
 
@@ -348,3 +360,17 @@ pub use file_sorter::{
     FileSorter, SortStrategy, FileInfo,
     sort_by_size_ascending, sort_by_size_descending, sort_by_name,
 };
+
+// 🔥 v7.6: MS-SSIM智能采样
+pub use msssim_sampling::{
+    SamplingStrategy, SamplingConfig,
+};
+
+// 🔥 v7.6: MS-SSIM心跳检测
+pub use msssim_heartbeat::Heartbeat;
+
+// 🔥 v7.6: MS-SSIM进度监控
+pub use msssim_progress::MsssimProgressMonitor;
+
+// 🔥 v7.6: MS-SSIM并行计算
+pub use msssim_parallel::{ParallelMsssimCalculator, MsssimResult};
