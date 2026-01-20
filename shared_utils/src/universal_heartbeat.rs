@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use std::io::Write;
 
 /// 心跳配置
 #[derive(Debug, Clone)]
@@ -107,6 +108,9 @@ impl UniversalHeartbeat {
         let config_clone = config.clone();
         let start_time = Instant::now();
 
+        // 🔥 v7.7: 注册心跳到全局管理器
+        crate::heartbeat_manager::HeartbeatManager::register_heartbeat(&config.operation);
+
         // 检查是否应该显示
         let should_display = config.force_display 
             || !crate::heartbeat_manager::HeartbeatManager::has_active_progress();
@@ -129,23 +133,37 @@ impl UniversalHeartbeat {
 
     /// 心跳循环
     fn heartbeat_loop(running: Arc<AtomicBool>, config: HeartbeatConfig, start_time: Instant) {
-        while running.load(Ordering::Relaxed) {
-            thread::sleep(Duration::from_secs(config.interval_secs));
+        // 🔥 v7.7: 使用 catch_unwind 捕获 panic
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            while running.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_secs(config.interval_secs));
 
-            if running.load(Ordering::Relaxed) {
-                let elapsed = start_time.elapsed();
-                let elapsed_str = Self::format_elapsed(elapsed);
-                let beijing_time = Self::get_beijing_time();
-                
-                let extra = config.extra_info.as_ref()
-                    .map(|s| format!(" - {}", s))
-                    .unwrap_or_default();
-                
-                eprintln!(
-                    "💓 [{}] Active (elapsed: {}, Beijing Time: {}){}",
-                    config.operation, elapsed_str, beijing_time, extra
-                );
+                if running.load(Ordering::Relaxed) {
+                    let elapsed = start_time.elapsed();
+                    let elapsed_str = Self::format_elapsed(elapsed);
+                    
+                    // 🔥 v7.7: 时间获取失败时使用 fallback
+                    let beijing_time = Self::get_beijing_time()
+                        .unwrap_or_else(|_| "N/A".to_string());
+                    
+                    let extra = config.extra_info.as_ref()
+                        .map(|s| format!(" - {}", s))
+                        .unwrap_or_default();
+                    
+                    // 🔥 v7.7: 输出失败时静默跳过(不中断主流程)
+                    let _ = std::io::stderr().write_fmt(format_args!(
+                        "💓 [{}] Active (elapsed: {}, Beijing Time: {}){}",
+                        config.operation, elapsed_str, beijing_time, extra
+                    ));
+                    let _ = std::io::stderr().write(b"\n");
+                    let _ = std::io::stderr().flush();
+                }
             }
+        }));
+
+        // 🔥 v7.7: panic 捕获 - 记录错误但不影响主流程
+        if let Err(e) = result {
+            eprintln!("❌ Heartbeat thread panicked: {:?}", e);
         }
     }
 
@@ -162,11 +180,12 @@ impl UniversalHeartbeat {
     }
 
     /// 获取北京时间(UTC+8)
-    fn get_beijing_time() -> String {
+    fn get_beijing_time() -> Result<String, Box<dyn std::error::Error>> {
         let utc_now: DateTime<Utc> = Utc::now();
-        let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
+        let beijing_offset = FixedOffset::east_opt(8 * 3600)
+            .ok_or("Failed to create Beijing timezone offset")?;
         let beijing_time = utc_now.with_timezone(&beijing_offset);
-        beijing_time.format("%Y-%m-%d %H:%M:%S").to_string()
+        Ok(beijing_time.format("%Y-%m-%d %H:%M:%S").to_string())
     }
 
     /// 停止心跳
@@ -175,6 +194,8 @@ impl UniversalHeartbeat {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+        // 🔥 v7.7: 注销心跳
+        crate::heartbeat_manager::HeartbeatManager::unregister_heartbeat(&self.config.operation);
     }
 }
 
@@ -184,6 +205,8 @@ impl Drop for UniversalHeartbeat {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
+        // 🔥 v7.7: 注销心跳
+        crate::heartbeat_manager::HeartbeatManager::unregister_heartbeat(&self.config.operation);
     }
 }
 
