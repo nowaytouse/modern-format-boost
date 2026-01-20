@@ -22,7 +22,7 @@ pub enum VidQualityError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
-    
+
     // Allow converting other errors to string for general failures
     #[error("General error: {0}")]
     GeneralError(String),

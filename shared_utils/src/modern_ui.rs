@@ -21,7 +21,7 @@ pub mod colors {
     pub const BOLD: &str = "\x1b[1m";
     pub const DIM: &str = "\x1b[2m";
     pub const ITALIC: &str = "\x1b[3m";
-    
+
     // 前景色
     pub const RED: &str = "\x1b[31m";
     pub const GREEN: &str = "\x1b[32m";
@@ -30,7 +30,7 @@ pub mod colors {
     pub const MAGENTA: &str = "\x1b[35m";
     pub const CYAN: &str = "\x1b[36m";
     pub const WHITE: &str = "\x1b[37m";
-    
+
     // 亮色
     pub const BRIGHT_RED: &str = "\x1b[91m";
     pub const BRIGHT_GREEN: &str = "\x1b[92m";
@@ -78,28 +78,30 @@ pub mod progress_style {
     /// indicatif 需要 3 个字符: (filled, current, empty)
     /// 视觉效果: ████████▓░░░░░░░
     pub const PROGRESS_CHARS: &str = "█▓░";
-    
+
     /// 进度条宽度 - 统一 35 字符，足够显眼
     pub const BAR_WIDTH: usize = 35;
-    
+
     /// 进度条边框字符
     pub const BAR_LEFT: &str = "▕";
     pub const BAR_RIGHT: &str = "▏";
-    
+
     /// Spinner 字符序列 - 统一使用 Braille 点阵
     pub const SPINNER_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
-    
+
     /// 统一模板 - 批量处理进度条
     pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta_precise}) • {msg}";
-    
+
     /// 统一模板 - 探索进度条（迭代次数在 msg 中显示）
     pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • ⏱️ {elapsed_precise} • {msg}";
-    
+
     /// 统一模板 - 简洁进度条
-    pub const COMPACT_TEMPLATE: &str = "{prefix:.cyan} ▕{bar:30.green/black}▏ {percent:>3}% ({pos}/{len}) {msg:.dim}";
-    
+    pub const COMPACT_TEMPLATE: &str =
+        "{prefix:.cyan} ▕{bar:30.green/black}▏ {percent:>3}% ({pos}/{len}) {msg:.dim}";
+
     /// 统一模板 - Spinner
-    pub const SPINNER_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed_precise} • {msg}";
+    pub const SPINNER_TEMPLATE: &str =
+        "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed_precise} • {msg}";
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -151,7 +153,7 @@ pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) ->
     let progress = progress.clamp(0.0, 1.0);
     let filled = (progress * width as f64).round() as usize;
     let empty = width.saturating_sub(filled);
-    
+
     match style {
         ProgressStyle::Classic => {
             format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
@@ -194,10 +196,10 @@ pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) ->
 /// 带颜色的进度条
 pub fn render_colored_progress(progress: f64, width: usize) -> String {
     use colors::*;
-    
+
     let bar = render_progress_bar(progress, width, ProgressStyle::Modern);
     let pct = (progress * 100.0) as u32;
-    
+
     // 根据进度选择颜色
     let color = if pct >= 80 {
         BRIGHT_GREEN
@@ -208,8 +210,8 @@ pub fn render_colored_progress(progress: f64, width: usize) -> String {
     } else {
         BRIGHT_RED
     };
-    
-    format!("{}{}{}",color, bar, RESET)
+
+    format!("{}{}{}", color, bar, RESET)
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -239,71 +241,80 @@ impl ExploreProgressState {
             start_time: Instant::now(),
         }
     }
-    
+
     /// 更新并显示进度
     pub fn update(&mut self, crf: f32, size_pct: f64, ssim: Option<f64>) {
         self.crf = crf;
         self.size_pct = size_pct;
         self.ssim = ssim;
         self.iteration += 1;
-        
+
         if size_pct < 0.0 {
             self.best_crf = Some(crf);
         }
-        
+
         self.display();
     }
-    
+
     /// 显示当前进度
     pub fn display(&self) {
         use colors::*;
         use symbols::*;
-        
+
         let elapsed = self.start_time.elapsed().as_secs_f64();
-        
+
         // 大小变化图标和颜色
         let (_size_icon, size_color) = if self.size_pct < 0.0 {
             (SAVE, BRIGHT_GREEN)
         } else {
             (WARNING, BRIGHT_YELLOW)
         };
-        
+
         // SSIM 显示
-        let ssim_str = self.ssim
+        let ssim_str = self
+            .ssim
             .map(|s| format!(" {}SSIM {:.4}{}", DIM, s, RESET))
             .unwrap_or_default();
-        
+
         // 最佳 CRF
-        let best_str = self.best_crf
+        let best_str = self
+            .best_crf
             .map(|b| format!(" {}Best: {:.1}{}", DIM, b, RESET))
             .unwrap_or_default();
-        
+
         // 固定底部单行显示
-        eprint!("\r\x1b[K{} {}{}{} {} CRF {:.1} {} {}{:+.1}%{}{}{} {} {}{:.1}s{}",
+        eprint!(
+            "\r\x1b[K{} {}{}{} {} CRF {:.1} {} {}{:+.1}%{}{}{} {} {}{:.1}s{}",
             spinner_frame(),
-            CYAN, self.stage, RESET,
+            CYAN,
+            self.stage,
+            RESET,
             BULLET,
             self.crf,
             BULLET,
-            size_color, self.size_pct, RESET,
+            size_color,
+            self.size_pct,
+            RESET,
             ssim_str,
             best_str,
             BULLET,
-            DIM, elapsed, RESET
+            DIM,
+            elapsed,
+            RESET
         );
         let _ = io::stderr().flush();
     }
-    
+
     /// 完成并显示结果
     pub fn finish(&self, final_crf: f32, final_size_pct: f64, final_ssim: Option<f64>) {
         use colors::*;
         use symbols::*;
-        
+
         let elapsed = self.start_time.elapsed().as_secs_f64();
-        
+
         // 清除进度行
         eprint!("\r\x1b[K");
-        
+
         // SSIM 评级
         let (ssim_str, ssim_rating) = match final_ssim {
             Some(s) if s >= 0.99 => (format!("SSIM {:.4}", s), format!("{} Excellent", SUCCESS)),
@@ -312,18 +323,20 @@ impl ExploreProgressState {
             Some(s) => (format!("SSIM {:.4}", s), format!("{}  Fair", WARNING)),
             None => (String::new(), String::new()),
         };
-        
+
         // 大小变化
         let size_str = if final_size_pct < 0.0 {
             format!("{}{:+.1}%{} {}", BRIGHT_GREEN, final_size_pct, RESET, SAVE)
         } else {
             format!("{}{:+.1}%{}", BRIGHT_YELLOW, final_size_pct, RESET)
         };
-        
+
         // 结果行
-        eprintln!("{} {}Result:{} CRF {:.1} {} {} {} {} {} {} iter {} {:.1}s",
+        eprintln!(
+            "{} {}Result:{} CRF {:.1} {} {} {} {} {} {} iter {} {:.1}s",
             SUCCESS,
-            BOLD, RESET,
+            BOLD,
+            RESET,
             final_crf,
             BULLET,
             size_str,
@@ -344,43 +357,52 @@ impl ExploreProgressState {
 /// 显示结果框
 pub fn print_result_box(title: &str, lines: &[&str]) {
     use colors::*;
-    
+
     // 计算最大宽度
-    let max_width = lines.iter()
+    let max_width = lines
+        .iter()
         .map(|l| strip_ansi(l).len())
         .max()
         .unwrap_or(40)
         .max(strip_ansi(title).len())
         .max(40);
-    
+
     let box_width = max_width + 4;
-    
+
     // 顶部边框
     eprintln!("{}╭{}╮{}", CYAN, "─".repeat(box_width), RESET);
-    
+
     // 标题
     let title_padding = box_width - strip_ansi(title).len() - 2;
-    eprintln!("{}│{} {}{}{} {}{}│{}",
-        CYAN, RESET,
-        BOLD, title, RESET,
+    eprintln!(
+        "{}│{} {}{}{} {}{}│{}",
+        CYAN,
+        RESET,
+        BOLD,
+        title,
+        RESET,
         " ".repeat(title_padding),
-        CYAN, RESET
+        CYAN,
+        RESET
     );
-    
+
     // 分隔线
     eprintln!("{}├{}┤{}", CYAN, "─".repeat(box_width), RESET);
-    
+
     // 内容行
     for line in lines {
         let padding = box_width - strip_ansi(line).len() - 2;
-        eprintln!("{}│{} {}{} {}│{}",
-            CYAN, RESET,
+        eprintln!(
+            "{}│{} {}{} {}│{}",
+            CYAN,
+            RESET,
             line,
             " ".repeat(padding),
-            CYAN, RESET
+            CYAN,
+            RESET
         );
     }
-    
+
     // 底部边框
     eprintln!("{}╰{}╯{}", CYAN, "─".repeat(box_width), RESET);
 }
@@ -389,7 +411,7 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
 fn strip_ansi(s: &str) -> String {
     let mut result = String::new();
     let mut in_escape = false;
-    
+
     for c in s.chars() {
         if c == '\x1b' {
             in_escape = true;
@@ -401,7 +423,7 @@ fn strip_ansi(s: &str) -> String {
             result.push(c);
         }
     }
-    
+
     result
 }
 
@@ -459,7 +481,7 @@ pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
-    
+
     if bytes >= GB {
         format!("{:.2} GB", bytes as f64 / GB as f64)
     } else if bytes >= MB {
@@ -490,7 +512,7 @@ pub fn format_duration(secs: f64) -> String {
 /// 格式化百分比变化
 pub fn format_size_change(pct: f64) -> String {
     use colors::*;
-    
+
     if pct < -50.0 {
         format!("{}{:+.1}%{} {}", BRIGHT_GREEN, pct, RESET, symbols::SPARKLE)
     } else if pct < 0.0 {
@@ -507,10 +529,10 @@ pub fn format_size_change(pct: f64) -> String {
 pub fn format_size_diff(diff_bytes: i64) -> String {
     let abs_diff = diff_bytes.abs() as u64;
     let sign = if diff_bytes >= 0 { "+" } else { "-" };
-    
+
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
-    
+
     if abs_diff >= MB {
         format!("{}{:.1} MB", sign, abs_diff as f64 / MB as f64)
     } else if abs_diff >= KB {
@@ -523,27 +545,27 @@ pub fn format_size_diff(diff_bytes: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_progress_bar() {
         let bar = render_progress_bar(0.5, 20, ProgressStyle::Modern);
         assert_eq!(bar.chars().count(), 20);
     }
-    
+
     #[test]
     fn test_format_size() {
         assert_eq!(format_size(500), "500 B");
         assert_eq!(format_size(1500), "1.5 KB");
         assert_eq!(format_size(1_500_000), "1.43 MB");
     }
-    
+
     #[test]
     fn test_format_duration() {
         assert_eq!(format_duration(5.5), "5.5s");
         assert_eq!(format_duration(65.0), "1m 05s");
         assert_eq!(format_duration(3665.0), "1h 01m 05s");
     }
-    
+
     #[test]
     fn test_strip_ansi() {
         let s = "\x1b[31mRed\x1b[0m Text";

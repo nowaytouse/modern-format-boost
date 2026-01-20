@@ -1,5 +1,5 @@
 //! Conversion API Module
-//! 
+//!
 //! Pure conversion layer - transforms images based on detection results.
 //! Takes DetectionResult as input and performs smart conversions.
 
@@ -73,7 +73,11 @@ pub struct ConversionOutput {
 
 /// Determine optimal conversion strategy based on detection result
 pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
-    match (&detection.image_type, &detection.compression, &detection.format) {
+    match (
+        &detection.image_type,
+        &detection.compression,
+        &detection.format,
+    ) {
         // JPEG (static) -> JXL lossless transcode
         (ImageType::Static, _, DetectedFormat::JPEG) => {
             let input_path = &detection.file_path;
@@ -89,7 +93,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                 expected_reduction: 15.0,
             }
         }
-        
+
         // Static lossless (PNG, GIF single frame, etc.) -> JXL
         (ImageType::Static, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
@@ -105,7 +109,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                 expected_reduction: 45.0,
             }
         }
-        
+
         // Animated lossless (GIF, APNG, animated WebP lossless) -> AV1 MP4 Q=100
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
@@ -113,7 +117,8 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
             let fps = detection.fps.unwrap_or(10.0);
             ConversionStrategy {
                 target: TargetFormat::AV1MP4,
-                reason: "Animated lossless image, recommend AV1 MP4 with CRF 0 (visually lossless)".to_string(),
+                reason: "Animated lossless image, recommend AV1 MP4 with CRF 0 (visually lossless)"
+                    .to_string(),
                 command: format!(
                     "ffmpeg -i '{}' -c:v libsvtav1 -crf 0 -preset 6 -r {} '{}'",
                     input_path,
@@ -123,17 +128,15 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                 expected_reduction: 30.0,
             }
         }
-        
+
         // Animated lossy -> Skip (don't re-encode lossy animation)
-        (ImageType::Animated, CompressionType::Lossy, _) => {
-            ConversionStrategy {
-                target: TargetFormat::NoConversion,
-                reason: "Animated lossy image, skipping to avoid further quality loss".to_string(),
-                command: String::new(),
-                expected_reduction: 0.0,
-            }
-        }
-        
+        (ImageType::Animated, CompressionType::Lossy, _) => ConversionStrategy {
+            target: TargetFormat::NoConversion,
+            reason: "Animated lossy image, skipping to avoid further quality loss".to_string(),
+            command: String::new(),
+            expected_reduction: 0.0,
+        },
+
         // Static lossy (non-JPEG) -> AVIF
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
@@ -141,7 +144,8 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
             let quality = detection.estimated_quality.unwrap_or(85);
             ConversionStrategy {
                 target: TargetFormat::AVIF,
-                reason: "Static lossy image (non-JPEG), recommend AVIF for better compression".to_string(),
+                reason: "Static lossy image (non-JPEG), recommend AVIF for better compression"
+                    .to_string(),
                 command: format!(
                     "avifenc '{}' '{}' -q {}",
                     input_path,
@@ -161,7 +165,7 @@ pub fn execute_conversion(
     config: &ConversionConfig,
 ) -> Result<ConversionOutput> {
     let input_path = Path::new(&detection.file_path);
-    
+
     // Skip if no conversion needed
     if strategy.target == TargetFormat::NoConversion {
         // 🔥 v7.4.4: 使用 smart_file_copier 保留目录结构
@@ -170,7 +174,7 @@ pub fn execute_conversion(
                 input_path,
                 Some(out_dir),
                 config.base_dir.as_deref(),
-                false
+                false,
             );
         }
 
@@ -184,21 +188,26 @@ pub fn execute_conversion(
             size_reduction: None,
         });
     }
-    
+
     // Determine output path
     let extension = match strategy.target {
         TargetFormat::JXL => "jxl",
         TargetFormat::AVIF => "avif",
         TargetFormat::AV1MP4 => "mp4",
-        TargetFormat::NoConversion => return Err(ImgQualityError::ConversionError("No conversion".to_string())),
+        TargetFormat::NoConversion => {
+            return Err(ImgQualityError::ConversionError(
+                "No conversion".to_string(),
+            ))
+        }
     };
-    
+
     let output_path = if let Some(ref dir) = config.output_dir {
-        dir.join(input_path.file_stem().unwrap()).with_extension(extension)
+        dir.join(input_path.file_stem().unwrap())
+            .with_extension(extension)
     } else {
         input_path.with_extension(extension)
     };
-    
+
     // Check if output exists and not forcing
     if output_path.exists() && !config.force {
         return Ok(ConversionOutput {
@@ -211,51 +220,56 @@ pub fn execute_conversion(
             size_reduction: None,
         });
     }
-    
+
     // Build and execute command
     let result = match strategy.target {
         TargetFormat::JXL => convert_to_jxl(input_path, &output_path, &detection.format),
-        TargetFormat::AVIF => convert_to_avif(input_path, &output_path, detection.estimated_quality),
+        TargetFormat::AVIF => {
+            convert_to_avif(input_path, &output_path, detection.estimated_quality)
+        }
         TargetFormat::AV1MP4 => convert_to_av1_mp4(input_path, &output_path, detection.fps),
         TargetFormat::NoConversion => unreachable!(),
     };
-    
+
     if let Err(e) = result {
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
-    
+
     // Get output file size
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| {
-        100.0 * (1.0 - s as f32 / detection.file_size as f32)
-    });
-    
+    let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
+
     // 🔥 顺序很重要！先 metadata，后 timestamps
     // exiftool -overwrite_original 会修改文件，从而更新时间戳
     // 因此必须在 metadata 之后设置 timestamps
-    
+
     // Preserve metadata if requested (exiftool will modify file timestamps!)
     if config.preserve_metadata {
         preserve_metadata(input_path, &output_path)?;
     }
-    
+
     // Preserve timestamps if requested (must be AFTER metadata!)
     if config.preserve_timestamps {
         preserve_timestamps(input_path, &output_path)?;
     }
-    
+
     // 🔥 Safe delete with integrity check (断电保护)
     if config.delete_original {
-        if let Err(e) = shared_utils::conversion::safe_delete_original(input_path, &output_path, 100) {
+        if let Err(e) =
+            shared_utils::conversion::safe_delete_original(input_path, &output_path, 100)
+        {
             eprintln!("   ⚠️  Safe delete failed: {}", e);
         }
     }
-    
+
     Ok(ConversionOutput {
         original_path: detection.file_path.clone(),
         output_path: output_path.display().to_string(),
         skipped: false,
-        message: format!("Conversion successful: size reduced {:.1}%", size_reduction.unwrap_or(0.0)),
+        message: format!(
+            "Conversion successful: size reduced {:.1}%",
+            size_reduction.unwrap_or(0.0)
+        ),
         original_size: detection.file_size,
         output_size,
         size_reduction,
@@ -276,42 +290,38 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
         vec![
             input.to_str().unwrap(),
             output.to_str().unwrap(),
-            "-d", "0.0",
-            "-e", "7",  // cjxl v0.11+ 范围是 1-10，默认 7
+            "-d",
+            "0.0",
+            "-e",
+            "7", // cjxl v0.11+ 范围是 1-10，默认 7
         ]
     };
-    
-    let status = Command::new("cjxl")
-        .args(&args)
-        .output()?;
-    
+
+    let status = Command::new("cjxl").args(&args).output()?;
+
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string()
+            String::from_utf8_lossy(&status.stderr).to_string(),
         ));
     }
-    
+
     Ok(())
 }
 
 /// Convert to AVIF
 fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
     let q = quality.unwrap_or(85).to_string();
-    
+
     let status = Command::new("avifenc")
-        .args([
-            input.to_str().unwrap(),
-            output.to_str().unwrap(),
-            "-q", &q,
-        ])
+        .args([input.to_str().unwrap(), output.to_str().unwrap(), "-q", &q])
         .output()?;
-    
+
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string()
+            String::from_utf8_lossy(&status.stderr).to_string(),
         ));
     }
-    
+
     Ok(())
 }
 
@@ -321,29 +331,37 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
     let fps_str = fps.unwrap_or(10.0).to_string();
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
-    
+
     // SVT-AV1 with CRF 0 = 视觉无损最高质量
     let status = Command::new("ffmpeg")
         .args([
             "-y",
-            "-threads", &max_threads.to_string(),
-            "-i", input.to_str().unwrap(),
-            "-c:v", "libsvtav1",  // 🔥 使用 SVT-AV1
-            "-crf", "0",          // CRF 0 = 视觉无损最高质量
-            "-preset", "6",       // 0-13, 6 是平衡点
-            "-svtav1-params", &svt_params,
-            "-r", &fps_str,
-            "-pix_fmt", "yuv420p",
+            "-threads",
+            &max_threads.to_string(),
+            "-i",
+            input.to_str().unwrap(),
+            "-c:v",
+            "libsvtav1", // 🔥 使用 SVT-AV1
+            "-crf",
+            "0", // CRF 0 = 视觉无损最高质量
+            "-preset",
+            "6", // 0-13, 6 是平衡点
+            "-svtav1-params",
+            &svt_params,
+            "-r",
+            &fps_str,
+            "-pix_fmt",
+            "yuv420p",
             output.to_str().unwrap(),
         ])
         .output()?;
-    
+
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string()
+            String::from_utf8_lossy(&status.stderr).to_string(),
         ));
     }
-    
+
     Ok(())
 }
 
@@ -352,12 +370,12 @@ fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     let status = Command::new("touch")
         .args(["-r", source.to_str().unwrap(), dest.to_str().unwrap()])
         .output()?;
-    
+
     if !status.status.success() {
         // Non-fatal, just log
         eprintln!("⚠️ Warning: Failed to preserve timestamps");
     }
-    
+
     Ok(())
 }
 
@@ -367,62 +385,64 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
     if which::which("exiftool").is_err() {
         return Ok(()); // Skip if not available
     }
-    
+
     let status = Command::new("exiftool")
         .args([
             "-overwrite_original",
-            "-TagsFromFile", source.to_str().unwrap(),
+            "-TagsFromFile",
+            source.to_str().unwrap(),
             "-All:All",
             dest.to_str().unwrap(),
         ])
         .output()?;
-    
+
     if !status.status.success() {
         // Non-fatal, just log
         eprintln!("⚠️ Warning: Failed to preserve metadata");
     }
-    
+
     Ok(())
 }
 
 /// High-level smart conversion function
 pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     use crate::detection_api::detect_image;
-    
+
     // Step 1: Detect image properties
     let detection = detect_image(path)?;
-    
+
     // Step 2: Determine strategy
     let strategy = determine_strategy(&detection);
-    
+
     // Step 3: Execute conversion
     execute_conversion(&detection, &strategy, config)
 }
 
 /// Simple mode conversion - Always use JXL for static, AV1 MP4 for animated
-/// 
+///
 /// Strategy:
 /// - Any static image → JXL mathematical lossless
 /// - Any animated image → AV1 MP4 CRF 0 (visually lossless)
 pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     use crate::detection_api::detect_image;
-    
+
     let detection = detect_image(path)?;
     let input_path = Path::new(&detection.file_path);
-    
+
     // Determine output path
     let (extension, is_animated) = match detection.image_type {
         ImageType::Static => ("jxl", false),
         ImageType::Animated => ("mp4", true),
     };
-    
+
     let output_path = if let Some(dir) = output_dir {
         std::fs::create_dir_all(dir)?;
-        dir.join(input_path.file_stem().unwrap()).with_extension(extension)
+        dir.join(input_path.file_stem().unwrap())
+            .with_extension(extension)
     } else {
         input_path.with_extension(extension)
     };
-    
+
     // Skip if output exists
     if output_path.exists() {
         return Ok(ConversionOutput {
@@ -435,7 +455,7 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
             size_reduction: None,
         });
     }
-    
+
     // Execute conversion
     let result = if is_animated {
         // Animated → AV1 MP4 CRF 0
@@ -444,17 +464,15 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
         // Static → JXL lossless
         convert_to_jxl_lossless(input_path, &output_path, &detection.format)
     };
-    
+
     if let Err(e) = result {
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
-    
+
     // Get output size
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| {
-        100.0 * (1.0 - s as f32 / detection.file_size as f32)
-    });
-    
+    let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
+
     Ok(ConversionOutput {
         original_path: detection.file_path.clone(),
         output_path: output_path.display().to_string(),
@@ -485,29 +503,29 @@ fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat)
         vec![
             input.to_str().unwrap(),
             output.to_str().unwrap(),
-            "-d", "0.0",
+            "-d",
+            "0.0",
             "--modular=1",
-            "-e", "9",
+            "-e",
+            "9",
         ]
     };
-    
-    let status = Command::new("cjxl")
-        .args(&args)
-        .output()?;
-    
+
+    let status = Command::new("cjxl").args(&args).output()?;
+
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string()
+            String::from_utf8_lossy(&status.stderr).to_string(),
         ));
     }
-    
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_jpeg_strategy() {
         let detection = DetectionResult {
@@ -526,12 +544,12 @@ mod tests {
             estimated_quality: Some(85),
             entropy: 7.0,
         };
-        
+
         let strategy = determine_strategy(&detection);
         assert_eq!(strategy.target, TargetFormat::JXL);
         assert!(strategy.command.contains("--lossless_jpeg=1"));
     }
-    
+
     #[test]
     fn test_gif_animated_strategy() {
         let detection = DetectionResult {
@@ -550,7 +568,7 @@ mod tests {
             estimated_quality: None,
             entropy: 5.0,
         };
-        
+
         let strategy = determine_strategy(&detection);
         assert_eq!(strategy.target, TargetFormat::AV1MP4);
     }

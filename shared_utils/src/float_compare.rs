@@ -73,7 +73,7 @@ pub const PSNR_EPSILON: f64 = 0.1;
 // ============================================================================
 
 /// 比较两个 SSIM 值是否近似相等
-/// 
+///
 /// 使用 SSIM_EPSILON (1e-4) 进行比较。
 #[inline]
 pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
@@ -81,7 +81,7 @@ pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
 }
 
 /// 比较两个 CRF 值是否近似相等
-/// 
+///
 /// 使用 CRF_EPSILON (0.01) 进行比较。
 #[inline]
 pub fn approx_eq_crf(a: f32, b: f32) -> bool {
@@ -89,7 +89,7 @@ pub fn approx_eq_crf(a: f32, b: f32) -> bool {
 }
 
 /// 比较两个 PSNR 值是否近似相等
-/// 
+///
 /// 使用 PSNR_EPSILON (0.1 dB) 进行比较。
 #[inline]
 pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
@@ -97,7 +97,7 @@ pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
 }
 
 /// 检查 SSIM 是否达到阈值
-/// 
+///
 /// 使用 SSIM_EPSILON 进行容差比较。
 /// 例如：ssim_meets_threshold(0.9499, 0.95) 返回 true
 #[inline]
@@ -106,7 +106,7 @@ pub fn ssim_meets_threshold(ssim: f64, threshold: f64) -> bool {
 }
 
 /// 检查 SSIM 是否严格低于阈值
-/// 
+///
 /// 使用 SSIM_EPSILON 进行容差比较。
 #[inline]
 pub fn ssim_below_threshold(ssim: f64, threshold: f64) -> bool {
@@ -114,7 +114,7 @@ pub fn ssim_below_threshold(ssim: f64, threshold: f64) -> bool {
 }
 
 /// 检查 CRF 是否在有效范围内
-/// 
+///
 /// # Arguments
 /// * `crf` - CRF 值
 /// * `min` - 最小值（包含）
@@ -211,8 +211,13 @@ mod tests {
         let values = [0.0, 1.0, -1.0, 0.5, 100.0, -100.0, 1e-7, 1e-5];
         for &a in &values {
             for &b in &values {
-                assert_eq!(approx_eq_f64(a, b), approx_eq_f64(b, a),
-                    "Symmetry failed for {} and {}", a, b);
+                assert_eq!(
+                    approx_eq_f64(a, b),
+                    approx_eq_f64(b, a),
+                    "Symmetry failed for {} and {}",
+                    a,
+                    b
+                );
             }
         }
     }
@@ -220,7 +225,16 @@ mod tests {
     // Property test: reflexivity
     #[test]
     fn test_approx_eq_reflexivity() {
-        let values = [0.0, 1.0, -1.0, 0.5, 100.0, -100.0, f64::MIN_POSITIVE, f64::MAX / 2.0];
+        let values = [
+            0.0,
+            1.0,
+            -1.0,
+            0.5,
+            100.0,
+            -100.0,
+            f64::MIN_POSITIVE,
+            f64::MAX / 2.0,
+        ];
         for &a in &values {
             assert!(approx_eq_f64(a, a), "Reflexivity failed for {}", a);
         }
@@ -278,7 +292,7 @@ mod property_tests {
     // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
-        
+
         #[test]
         fn float_comparison_symmetry_property(a in -1000.0f64..1000.0f64, b in -1000.0f64..1000.0f64) {
             prop_assert_eq!(
@@ -287,7 +301,7 @@ mod property_tests {
                 "Symmetry failed for {} and {}", a, b
             );
         }
-        
+
         #[test]
         fn ssim_comparison_symmetry_property(a in 0.0f64..1.0f64, b in 0.0f64..1.0f64) {
             prop_assert_eq!(
@@ -296,7 +310,7 @@ mod property_tests {
                 "SSIM symmetry failed for {} and {}", a, b
             );
         }
-        
+
         #[test]
         fn crf_comparison_symmetry_property(a in 0.0f32..63.0f32, b in 0.0f32..63.0f32) {
             prop_assert_eq!(
@@ -314,7 +328,7 @@ mod property_tests {
     // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
-        
+
         #[test]
         fn float_comparison_reflexivity_property(a in -1000.0f64..1000.0f64) {
             prop_assert!(
@@ -322,7 +336,7 @@ mod property_tests {
                 "Reflexivity failed for {}", a
             );
         }
-        
+
         #[test]
         fn ssim_comparison_reflexivity_property(a in 0.0f64..1.0f64) {
             prop_assert!(
@@ -330,7 +344,7 @@ mod property_tests {
                 "SSIM reflexivity failed for {}", a
             );
         }
-        
+
         #[test]
         fn crf_comparison_reflexivity_property(a in 0.0f32..63.0f32) {
             prop_assert!(

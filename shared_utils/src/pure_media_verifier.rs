@@ -39,18 +39,18 @@ impl PureMediaVerifyResult {
     pub fn video_size_change_percent(&self) -> f64 {
         (self.video_compression_ratio - 1.0) * 100.0
     }
-    
+
     /// 获取总文件压缩百分比
     pub fn total_size_change_percent(&self) -> f64 {
         (self.total_compression_ratio - 1.0) * 100.0
     }
-    
+
     /// 检查是否因容器开销导致总文件未压缩
     pub fn is_container_overhead_issue(&self) -> bool {
         // 纯视频压缩成功，但总文件未压缩
         self.video_compressed && self.total_compression_ratio >= 1.0
     }
-    
+
     /// 获取压缩结果描述
     pub fn description(&self) -> String {
         if self.video_compressed {
@@ -98,27 +98,27 @@ pub fn verify_pure_media_compression(
 ) -> PureMediaVerifyResult {
     let input_video = input_info.video_stream_size;
     let output_video = output_info.video_stream_size;
-    
+
     // 核心判断：纯视频流是否变小
     let video_compressed = output_video < input_video;
-    
+
     // 计算压缩率
     let video_compression_ratio = if input_video > 0 {
         output_video as f64 / input_video as f64
     } else {
         1.0
     };
-    
+
     let total_compression_ratio = if input_info.total_file_size > 0 {
         output_info.total_file_size as f64 / input_info.total_file_size as f64
     } else {
         1.0
     };
-    
+
     // 计算容器开销差异
-    let container_overhead_diff = output_info.container_overhead as i64 
-        - input_info.container_overhead as i64;
-    
+    let container_overhead_diff =
+        output_info.container_overhead as i64 - input_info.container_overhead as i64;
+
     PureMediaVerifyResult {
         video_compressed,
         input_video_size: input_video,
@@ -187,9 +187,9 @@ mod tests {
     fn test_video_compressed_success() {
         let input = make_stream_info(1000, 100, 50);
         let output = make_stream_info(800, 100, 50);
-        
+
         let result = verify_pure_media_compression(&input, &output);
-        
+
         assert!(result.video_compressed);
         assert!(result.video_compression_ratio < 1.0);
     }
@@ -198,9 +198,9 @@ mod tests {
     fn test_video_not_compressed() {
         let input = make_stream_info(1000, 100, 50);
         let output = make_stream_info(1100, 100, 50);
-        
+
         let result = verify_pure_media_compression(&input, &output);
-        
+
         assert!(!result.video_compressed);
         assert!(result.video_compression_ratio > 1.0);
     }
@@ -208,11 +208,11 @@ mod tests {
     #[test]
     fn test_container_overhead_issue() {
         // 视频压缩成功，但容器开销导致总文件更大
-        let input = make_stream_info(1000, 100, 50);   // 总: 1150
-        let output = make_stream_info(900, 100, 200);  // 总: 1200
-        
+        let input = make_stream_info(1000, 100, 50); // 总: 1150
+        let output = make_stream_info(900, 100, 200); // 总: 1200
+
         let result = verify_pure_media_compression(&input, &output);
-        
+
         assert!(result.video_compressed);
         assert!(result.is_container_overhead_issue());
         assert!(result.total_compression_ratio > 1.0);
@@ -269,14 +269,14 @@ mod prop_tests {
         ) {
             let input = make_stream_info(input_video, audio, overhead);
             let output = make_stream_info(output_video, audio, overhead);
-            
+
             let result = verify_pure_media_compression(&input, &output);
-            
+
             // 属性 3: 当 output_video < input_video 时，video_compressed 应为 true
             let expected_compressed = output_video < input_video;
             prop_assert_eq!(result.video_compressed, expected_compressed,
                 "当 output {} {} input {} 时，video_compressed 应为 {}",
-                output_video, if expected_compressed { "<" } else { ">=" }, 
+                output_video, if expected_compressed { "<" } else { ">=" },
                 input_video, expected_compressed);
         }
     }
@@ -290,7 +290,7 @@ mod prop_tests {
         ) {
             let ratio = video_compression_ratio(input_video, output_video);
             let expected = output_video as f64 / input_video as f64;
-            
+
             prop_assert!((ratio - expected).abs() < 0.0001,
                 "压缩率 {} 应接近预期 {}", ratio, expected);
         }
@@ -307,20 +307,20 @@ mod prop_tests {
         ) {
             let output_video = input_video * (100 - compression_percent) / 100;
             let output_overhead = input_overhead + extra_overhead;
-            
+
             let input = make_stream_info(input_video, 0, input_overhead);
             let output = make_stream_info(output_video, 0, output_overhead);
-            
+
             let result = verify_pure_media_compression(&input, &output);
-            
+
             // 视频应该压缩成功
             prop_assert!(result.video_compressed,
                 "视频从 {} 压缩到 {} 应该成功", input_video, output_video);
-            
+
             // 如果额外开销足够大，应该检测到容器开销问题
             let input_total = input.total_file_size;
             let output_total = output.total_file_size;
-            
+
             if output_total >= input_total {
                 prop_assert!(result.is_container_overhead_issue(),
                     "当总文件 {} >= {} 但视频压缩成功时，应检测到容器开销问题",

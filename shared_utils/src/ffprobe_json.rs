@@ -34,11 +34,18 @@ pub struct ColorInfo {
 /// 🔥 v6.5: 使用 serde_json 解析 ffprobe 输出
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
-    
+
     let output = match Command::new("ffprobe")
-        .args(["-v", "quiet", "-print_format", "json",
-               "-show_streams", "-select_streams", "v:0",
-               input_str.as_ref()])
+        .args([
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-select_streams",
+            "v:0",
+            input_str.as_ref(),
+        ])
         .output()
     {
         Ok(o) if o.status.success() => o,
@@ -74,11 +81,14 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         None => return ColorInfo::default(),
     };
 
-    let bit_depth = stream.bits_per_raw_sample
+    let bit_depth = stream
+        .bits_per_raw_sample
         .as_ref()
         .and_then(|s| s.parse::<u8>().ok());
 
-    let color_space = stream.color_space.clone()
+    let color_space = stream
+        .color_space
+        .clone()
         .filter(|s| !s.is_empty() && s != "unknown");
 
     ColorInfo {
@@ -87,7 +97,6 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         bit_depth,
     }
 }
-
 
 #[cfg(test)]
 mod tests {

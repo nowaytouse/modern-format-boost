@@ -21,7 +21,7 @@
 //
 // ============================================================================
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,13 +33,44 @@ const EXCLUDED_EXTENSIONS: &[&str] = &[
     // XMP itself
     "xmp",
     // Text/config files
-    "txt", "md", "json", "xml", "yaml", "yml", "toml", "ini", "cfg", "conf", "log",
+    "txt",
+    "md",
+    "json",
+    "xml",
+    "yaml",
+    "yml",
+    "toml",
+    "ini",
+    "cfg",
+    "conf",
+    "log",
     // Code files
-    "rs", "py", "js", "ts", "html", "css", "sh", "bash", "zsh", "c", "cpp", "h", "hpp", "java",
+    "rs",
+    "py",
+    "js",
+    "ts",
+    "html",
+    "css",
+    "sh",
+    "bash",
+    "zsh",
+    "c",
+    "cpp",
+    "h",
+    "hpp",
+    "java",
     // Archives
-    "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+    "zip",
+    "tar",
+    "gz",
+    "bz2",
+    "xz",
+    "7z",
+    "rar",
     // System files
-    "ds_store", "thumbs.db", "desktop.ini",
+    "ds_store",
+    "thumbs.db",
+    "desktop.ini",
 ];
 
 /// Check if extension is a potential media file (not in blacklist)
@@ -103,7 +134,7 @@ impl XmpMerger {
             .arg("-ver")
             .output()
             .context("ExifTool not found. Install with: brew install exiftool")?;
-        
+
         if !output.status.success() {
             bail!("ExifTool check failed");
         }
@@ -113,7 +144,7 @@ impl XmpMerger {
     /// Find all XMP files in directory
     pub fn find_xmp_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut xmp_files = Vec::new();
-        
+
         for entry in WalkDir::new(dir)
             .follow_links(true)
             .into_iter()
@@ -128,14 +159,20 @@ impl XmpMerger {
                 }
             }
         }
-        
+
         Ok(xmp_files)
     }
 
     /// Extract metadata from XMP file using exiftool
     fn extract_xmp_metadata(&self, xmp_path: &Path) -> Result<XmpFile> {
         let output = Command::new("exiftool")
-            .args(["-s3", "-DocumentID", "-DerivedFrom", "-Source", "-OriginalDocumentID"])
+            .args([
+                "-s3",
+                "-DocumentID",
+                "-DerivedFrom",
+                "-Source",
+                "-OriginalDocumentID",
+            ])
             .arg(xmp_path)
             .output()
             .context("Failed to run exiftool")?;
@@ -145,9 +182,18 @@ impl XmpMerger {
 
         Ok(XmpFile {
             path: xmp_path.to_path_buf(),
-            document_id: lines.first().map(|s| s.to_string()).filter(|s| !s.is_empty()),
-            derived_from: lines.get(1).map(|s| s.to_string()).filter(|s| !s.is_empty()),
-            source: lines.get(2).map(|s| s.to_string()).filter(|s| !s.is_empty()),
+            document_id: lines
+                .first()
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty()),
+            derived_from: lines
+                .get(1)
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty()),
+            source: lines
+                .get(2)
+                .map(|s| s.to_string())
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -159,9 +205,10 @@ impl XmpMerger {
             return false;
         }
         let expected_lens = [8, 4, 4, 4, 12];
-        parts.iter().zip(expected_lens.iter()).all(|(part, &len)| {
-            part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit())
-        })
+        parts
+            .iter()
+            .zip(expected_lens.iter())
+            .all(|(part, &len)| part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit()))
     }
 
     /// Strategy 1: Direct match (photo.jpg.xmp → photo.jpg)
@@ -182,26 +229,26 @@ impl XmpMerger {
     fn find_same_name_different_ext(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
-        
+
         // Scan directory for files with same stem
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
-            
+
             let file_stem = match path.file_stem() {
                 Some(s) => s.to_string_lossy(),
                 None => continue,
             };
-            
+
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
             };
-            
+
             // Exact stem match + not in blacklist
             if file_stem == stem && is_potential_media(&ext) {
                 return Some(path);
@@ -214,18 +261,18 @@ impl XmpMerger {
     fn find_case_insensitive(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
-        
+
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
-            
+
             let file_stem = path.file_stem()?.to_string_lossy().to_lowercase();
             let ext = path.extension()?.to_string_lossy().to_lowercase();
-            
+
             if file_stem == stem && is_potential_media(&ext) {
                 return Some(path);
             }
@@ -237,10 +284,10 @@ impl XmpMerger {
     fn find_fuzzy_match(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
-        
+
         // Normalize: remove special chars, lowercase
         let normalized_stem = Self::normalize_filename(&stem);
-        
+
         if normalized_stem.is_empty() {
             return None;
         }
@@ -248,23 +295,23 @@ impl XmpMerger {
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
-            
+
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
             };
-            
+
             if !is_potential_media(&ext) {
                 continue;
             }
-            
+
             let file_stem = path.file_stem()?.to_string_lossy();
             let normalized_file = Self::normalize_filename(&file_stem);
-            
+
             if normalized_file == normalized_stem {
                 return Some(path);
             }
@@ -284,32 +331,32 @@ impl XmpMerger {
     fn find_by_xmp_reference_scan(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let xmp_filename = xmp_path.file_name()?.to_string_lossy();
-        
+
         // Search all media files and check if they reference this XMP
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
-            
+
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
             };
-            
+
             if !is_potential_media(&ext) {
                 continue;
             }
-            
+
             // Check if media file has SidecarForExtension or similar tag pointing to this XMP
             let output = Command::new("exiftool")
                 .args(["-s3", "-SidecarForExtension", "-XMPFileRef"])
                 .arg(&path)
                 .output()
                 .ok()?;
-            
+
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.contains(&*xmp_filename) {
                 return Some(path);
@@ -322,7 +369,7 @@ impl XmpMerger {
     fn find_partial_match(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
-        
+
         // Skip very short names to avoid false positives
         if stem.len() < 4 {
             return None;
@@ -331,22 +378,22 @@ impl XmpMerger {
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
-            
+
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
             };
-            
+
             if !is_potential_media(&ext) {
                 continue;
             }
-            
+
             let file_stem = path.file_stem()?.to_string_lossy();
-            
+
             // Check if one contains the other (handles suffixes like _edited, (1), etc.)
             if file_stem.contains(&*stem) || stem.contains(&*file_stem) {
                 // Verify it's a reasonable match (at least 70% overlap)
@@ -364,7 +411,7 @@ impl XmpMerger {
     fn find_in_subdirectories(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
-        
+
         // Search up to 2 levels deep
         for entry in WalkDir::new(parent)
             .max_depth(2)
@@ -375,16 +422,16 @@ impl XmpMerger {
             if !path.is_file() || path == xmp_path {
                 continue;
             }
-            
+
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
             };
-            
+
             if !is_potential_media(&ext) {
                 continue;
             }
-            
+
             let file_stem = path.file_stem()?.to_string_lossy();
             if file_stem.to_lowercase() == stem.to_lowercase() {
                 return Some(path.to_path_buf());
@@ -396,7 +443,7 @@ impl XmpMerger {
     /// Strategy 3: Extract original filename from XMP metadata
     fn find_by_xmp_metadata(&self, xmp_path: &Path, xmp_info: &XmpFile) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
-        
+
         // Try DerivedFrom field
         if let Some(ref derived) = xmp_info.derived_from {
             if !derived.contains("uuid:") {
@@ -406,7 +453,7 @@ impl XmpMerger {
                 }
             }
         }
-        
+
         // Try Source field
         if let Some(ref source) = xmp_info.source {
             let candidate = parent.join(source);
@@ -414,7 +461,7 @@ impl XmpMerger {
                 return Some(candidate);
             }
         }
-        
+
         None
     }
 
@@ -422,7 +469,7 @@ impl XmpMerger {
     fn find_by_document_id(&self, xmp_path: &Path, xmp_info: &XmpFile) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let xmp_doc_id = xmp_info.document_id.as_ref()?;
-        
+
         // Only use this strategy for UUID-like filenames
         let stem = xmp_path.file_stem()?.to_string_lossy();
         if !Self::is_uuid_filename(&stem) {
@@ -437,11 +484,11 @@ impl XmpMerger {
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
             let path = entry.path();
-            
+
             if !path.is_file() {
                 continue;
             }
-            
+
             let ext = path.extension()?.to_string_lossy().to_lowercase();
             if !is_potential_media(&ext) {
                 continue;
@@ -455,7 +502,7 @@ impl XmpMerger {
                 .ok()?;
 
             let media_doc_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            
+
             if !media_doc_id.is_empty() && media_doc_id == *xmp_doc_id {
                 if self.config.verbose {
                     eprintln!("  ✅ Found match: {}", path.display());
@@ -463,7 +510,7 @@ impl XmpMerger {
                 return Some(path);
             }
         }
-        
+
         None
     }
 
@@ -559,14 +606,14 @@ impl XmpMerger {
         // Save original timestamps before merge
         let original_timestamps = self.get_file_timestamps(media_path);
         let xmp_timestamps = self.get_file_timestamps(xmp_path);
-        
+
         // Build exiftool command with proper escaping
         let mut args = vec!["-P".to_string()];
-        
+
         if self.config.overwrite_original {
             args.push("-overwrite_original".to_string());
         }
-        
+
         args.push("-tagsfromfile".to_string());
         args.push(xmp_path.to_string_lossy().to_string());
         args.push("-all:all".to_string());
@@ -586,7 +633,7 @@ impl XmpMerger {
             // This is informational, not an actual error - XMP data is still written successfully
             let is_minor_warning = stderr.contains("[minor]");
             let is_real_error = stderr.contains("Error:") && !is_minor_warning;
-            
+
             if is_real_error {
                 bail!("ExifTool merge failed: {}", stderr);
             }
@@ -634,7 +681,11 @@ impl XmpMerger {
         // ALWAYS restore original media timestamp (not XMP timestamp)
         if let Some((atime, mtime)) = original {
             if let Err(e) = filetime::set_file_times(media_path, *atime, *mtime) {
-                eprintln!("⚠️ Failed to restore timestamp for {}: {}", media_path.display(), e);
+                eprintln!(
+                    "⚠️ Failed to restore timestamp for {}: {}",
+                    media_path.display(),
+                    e
+                );
             }
         }
     }
@@ -670,7 +721,7 @@ impl XmpMerger {
                 if self.config.delete_xmp_after_merge {
                     let _ = std::fs::remove_file(xmp_path);
                 }
-                
+
                 MergeResult {
                     xmp_path: xmp_path.to_path_buf(),
                     media_path: Some(media),
@@ -692,7 +743,7 @@ impl XmpMerger {
     /// Process all XMP files in directory
     pub fn process_directory(&self, dir: &Path) -> Result<Vec<MergeResult>> {
         Self::check_exiftool()?;
-        
+
         let xmp_files = self.find_xmp_files(dir)?;
         let mut results = Vec::with_capacity(xmp_files.len());
 
@@ -700,7 +751,7 @@ impl XmpMerger {
         let _heartbeat = if xmp_files.len() > 10 {
             Some(crate::universal_heartbeat::HeartbeatGuard::new(
                 crate::universal_heartbeat::HeartbeatConfig::medium("XMP Batch Merge")
-                    .with_info(format!("{} files", xmp_files.len()))
+                    .with_info(format!("{} files", xmp_files.len())),
             ))
         } else {
             None
@@ -729,7 +780,7 @@ impl MergeSummary {
     pub fn from_results(results: &[MergeResult]) -> Self {
         let mut summary = Self::default();
         summary.total = results.len();
-        
+
         for result in results {
             if result.success {
                 summary.success += 1;
@@ -738,12 +789,12 @@ impl MergeSummary {
             } else {
                 summary.failed += 1;
             }
-            
+
             if let Some(ref strategy) = result.match_strategy {
                 *summary.strategies.entry(strategy.clone()).or_insert(0) += 1;
             }
         }
-        
+
         summary
     }
 }
@@ -751,13 +802,17 @@ impl MergeSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_is_uuid_filename() {
-        assert!(XmpMerger::is_uuid_filename("6cdf1517-be7d-4f85-b519-f4aeaac45fdd"));
-        assert!(XmpMerger::is_uuid_filename("A1B2C3D4-E5F6-7890-ABCD-EF1234567890"));
+        assert!(XmpMerger::is_uuid_filename(
+            "6cdf1517-be7d-4f85-b519-f4aeaac45fdd"
+        ));
+        assert!(XmpMerger::is_uuid_filename(
+            "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+        ));
         assert!(!XmpMerger::is_uuid_filename("photo"));
         assert!(!XmpMerger::is_uuid_filename("photo-2024"));
         assert!(!XmpMerger::is_uuid_filename("123-456-789"));
@@ -769,14 +824,14 @@ mod tests {
         let xmp1 = temp_dir.path().join("photo1.xmp");
         let xmp2 = temp_dir.path().join("photo2.jpg.xmp");
         let jpg = temp_dir.path().join("photo1.jpg");
-        
+
         fs::write(&xmp1, "").unwrap();
         fs::write(&xmp2, "").unwrap();
         fs::write(&jpg, "").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let xmp_files = merger.find_xmp_files(temp_dir.path()).unwrap();
-        
+
         assert_eq!(xmp_files.len(), 2);
     }
 
@@ -785,13 +840,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let jpg = temp_dir.path().join("photo.jpg");
         let xmp = temp_dir.path().join("photo.jpg.xmp");
-        
+
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_direct_match(&xmp);
-        
+
         assert!(result.is_some());
         assert_eq!(result.unwrap(), jpg);
     }
@@ -801,13 +856,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let jpg = temp_dir.path().join("photo.jpg");
         let xmp = temp_dir.path().join("photo.xmp");
-        
+
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_same_name_different_ext(&xmp);
-        
+
         assert!(result.is_some());
         assert_eq!(result.unwrap(), jpg);
     }
@@ -817,13 +872,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let jpg = temp_dir.path().join("PHOTO.JPG");
         let xmp = temp_dir.path().join("photo.xmp");
-        
+
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_case_insensitive(&xmp);
-        
+
         assert!(result.is_some());
     }
 
@@ -832,20 +887,23 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let jpg = temp_dir.path().join("photo (1).jpg");
         let xmp = temp_dir.path().join("photo(1).xmp");
-        
+
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_fuzzy_match(&xmp);
-        
+
         assert!(result.is_some());
     }
 
     #[test]
     fn test_normalize_filename() {
         assert_eq!(XmpMerger::normalize_filename("Photo (1)"), "photo1");
-        assert_eq!(XmpMerger::normalize_filename("IMG_2024-01-01"), "img20240101");
+        assert_eq!(
+            XmpMerger::normalize_filename("IMG_2024-01-01"),
+            "img20240101"
+        );
         assert_eq!(XmpMerger::normalize_filename("测试文件"), "测试文件");
         assert_eq!(XmpMerger::normalize_filename("photo.test"), "phototest");
     }
@@ -855,13 +913,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let jpg = temp_dir.path().join("照片2024.jpg");
         let xmp = temp_dir.path().join("照片2024.xmp");
-        
+
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_same_name_different_ext(&xmp);
-        
+
         assert!(result.is_some());
         assert_eq!(result.unwrap(), jpg);
     }
@@ -871,13 +929,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let jpg = temp_dir.path().join("my photo 2024.jpg");
         let xmp = temp_dir.path().join("my photo 2024.xmp");
-        
+
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let result = merger.find_same_name_different_ext(&xmp);
-        
+
         assert!(result.is_some());
         assert_eq!(result.unwrap(), jpg);
     }
@@ -887,13 +945,13 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let raw = temp_dir.path().join("DSC_0001.NEF");
         let xmp = temp_dir.path().join("DSC_0001.xmp");
-        
+
         fs::write(&raw, "fake raw").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
-        
+
         let merger = XmpMerger::new(XmpMergerConfig::default());
         let (result, strategy) = merger.find_media_file(&xmp).unwrap();
-        
+
         assert!(result.is_some());
         // Should match via same_name or case_insensitive
         assert!(strategy == "same_name" || strategy == "case_insensitive");
@@ -905,14 +963,14 @@ mod tests {
 // ============================================================================
 
 /// 🔥 v6.9.11: 复制文件到目标目录，同时查找并合并XMP边车
-/// 
+///
 /// 当文件被跳过（短动画、现代格式、质量失败等）时使用此函数，
 /// 确保XMP元数据也被正确处理。
-/// 
+///
 /// # Arguments
 /// * `input` - 源文件路径
 /// * `dest` - 目标文件路径（已复制的文件）
-/// 
+///
 /// # Returns
 /// * `Ok(true)` - XMP找到并成功合并
 /// * `Ok(false)` - 没有找到XMP边车
@@ -922,18 +980,18 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
     let parent = input.parent().unwrap_or(Path::new("."));
-    
+
     // 尝试多种XMP命名方式
     let xmp_candidates = [
-        parent.join(format!("{}.xmp", stem)),           // photo.xmp
-        parent.join(format!("{}.{}.xmp", stem, ext)),   // photo.jpg.xmp
-        parent.join(format!("{}.XMP", stem)),           // photo.XMP (大写)
+        parent.join(format!("{}.xmp", stem)),         // photo.xmp
+        parent.join(format!("{}.{}.xmp", stem, ext)), // photo.jpg.xmp
+        parent.join(format!("{}.XMP", stem)),         // photo.XMP (大写)
     ];
-    
+
     for xmp_path in &xmp_candidates {
         if xmp_path.exists() {
             eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
-            
+
             // 使用 exiftool 合并 XMP 到目标文件
             let output = Command::new("exiftool")
                 .arg("-overwrite_original")
@@ -943,7 +1001,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
                 .arg(dest)
                 .output()
                 .context("Failed to run exiftool")?;
-            
+
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 // [minor] 警告是可接受的（如JXL容器包装）
@@ -955,12 +1013,12 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
                     bail!("ExifTool error: {}", stderr);
                 }
             }
-            
+
             eprintln!("✅ XMP sidecar merged successfully");
             return Ok(true);
         }
     }
-    
+
     // 没有找到XMP边车
     Ok(false)
 }
