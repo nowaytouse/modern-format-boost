@@ -34,6 +34,8 @@ pub struct SimpleIterationProgress {
     #[allow(dead_code)]
     last_update: std::sync::Mutex<Instant>,
     is_finished: AtomicBool,
+    // 🔥 v7.7: 进度条守卫(自动注册/注销)
+    _progress_guard: Option<crate::heartbeat_manager::ProgressBarGuard>,
 }
 
 impl SimpleIterationProgress {
@@ -65,6 +67,13 @@ impl SimpleIterationProgress {
             bar.set_draw_target(ProgressDrawTarget::stderr_with_hz(100));
         }
 
+        // 🔥 v7.7: 注册进度条(用于心跳静默检测)
+        let progress_guard = if !crate::progress_mode::is_quiet_mode() {
+            Some(crate::heartbeat_manager::ProgressBarGuard::new())
+        } else {
+            None
+        };
+
         Arc::new(Self {
             bar,
             input_size,
@@ -77,6 +86,7 @@ impl SimpleIterationProgress {
             start_time: Instant::now(),
             last_update: std::sync::Mutex::new(Instant::now()),
             is_finished: AtomicBool::new(false),
+            _progress_guard: progress_guard,
         })
     }
 
