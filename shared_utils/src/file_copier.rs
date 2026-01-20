@@ -108,6 +108,30 @@ pub fn copy_unsupported_files(
         WalkDir::new(input_dir).max_depth(1)
     };
     
+    // 🔥 v7.7: 预扫描文件数量,决定是否启用心跳
+    let total_files: usize = walker.into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| should_copy_file(e.path()))
+        .count();
+    
+    // 🔥 v7.7: 心跳检测 - 仅当文件数>10时启用
+    let _heartbeat = if total_files > 10 {
+        Some(crate::universal_heartbeat::HeartbeatGuard::new(
+            crate::universal_heartbeat::HeartbeatConfig::medium("Batch File Copy")
+                .with_info(format!("{} files", total_files))
+        ))
+    } else {
+        None
+    };
+    
+    // 重新创建walker进行实际复制
+    let walker = if recursive {
+        WalkDir::new(input_dir).follow_links(true)
+    } else {
+        WalkDir::new(input_dir).max_depth(1)
+    };
+    
     for entry in walker.into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
