@@ -74,6 +74,16 @@ enum Commands {
         /// By default, MS-SSIM is skipped for long videos to avoid slow processing
         #[arg(long, default_value_t = false)]
         force_ms_ssim_long: bool,
+        /// 🔥 v7.6: MS-SSIM sampling rate (1/N, e.g., 3 for 1/3 sampling)
+        /// Auto-selected by default based on video duration
+        #[arg(long)]
+        ms_ssim_sampling: Option<u32>,
+        /// 🔥 v7.6: Force full MS-SSIM calculation (disable sampling)
+        #[arg(long, default_value_t = false)]
+        full_ms_ssim: bool,
+        /// 🔥 v7.6: Skip MS-SSIM calculation entirely
+        #[arg(long, default_value_t = false)]
+        skip_ms_ssim: bool,
         /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
         /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
         /// ⚠️ MUST be used with --explore --match-quality --compress
@@ -125,7 +135,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, ms_ssim, ms_ssim_threshold, force_ms_ssim_long, ultimate } => {
+        Commands::Auto { input, output, force, recursive, delete_original, in_place, explore, lossless, match_quality, apple_compat, compress, ms_ssim, ms_ssim_threshold, force_ms_ssim_long, ms_ssim_sampling, full_ms_ssim, skip_ms_ssim, ultimate } => {
             // 🔥 v6.2: Validate flag combinations with ultimate support
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(explore, match_quality, compress, ultimate) {
                 eprintln!("{}", e);
@@ -156,6 +166,10 @@ fn main() -> anyhow::Result<()> {
                 min_ssim: 0.95,
                 force_ms_ssim_long,
                 ultimate_mode: ultimate,
+                // 🔥 v7.6: MS-SSIM优化参数
+                ms_ssim_sampling,
+                full_ms_ssim,
+                skip_ms_ssim,
             };
             
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -188,6 +202,18 @@ fn main() -> anyhow::Result<()> {
                 if force_ms_ssim_long {
                     info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
                 }
+                // 🔥 v7.6: MS-SSIM优化信息
+                if skip_ms_ssim {
+                    eprintln!("⚠️  Warning: --skip-ms-ssim conflicts with --ms-ssim, MS-SSIM will be skipped");
+                } else if full_ms_ssim {
+                    info!("   🔥 Full MS-SSIM: ENABLED (no sampling)");
+                } else if let Some(rate) = ms_ssim_sampling {
+                    info!("   📊 MS-SSIM Sampling: 1/{} frames", rate);
+                } else {
+                    info!("   📊 MS-SSIM Sampling: AUTO (based on video duration)");
+                }
+            } else if skip_ms_ssim {
+                info!("   ⏭️  MS-SSIM: SKIPPED");
             }
             info!("");
             
