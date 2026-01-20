@@ -410,13 +410,14 @@ impl UniversalHeartbeat {
     ///
     /// # 示例
     ///
-    /// ```rust
+    /// ```ignore
+    /// // This is a private function, example for documentation only
     /// use std::time::Duration;
     /// use shared_utils::universal_heartbeat::UniversalHeartbeat;
     ///
-    /// assert_eq!(UniversalHeartbeat::format_elapsed(Duration::from_secs(30)), "30s");
-    /// assert_eq!(UniversalHeartbeat::format_elapsed(Duration::from_secs(90)), "1m30s");
-    /// assert_eq!(UniversalHeartbeat::format_elapsed(Duration::from_secs(3700)), "1h01m");
+    /// // format_elapsed(Duration::from_secs(30)) => "30s"
+    /// // format_elapsed(Duration::from_secs(90)) => "1m30s"
+    /// // format_elapsed(Duration::from_secs(3700)) => "1h01m"
     /// ```
     fn format_elapsed(duration: Duration) -> String {
         let secs = duration.as_secs();

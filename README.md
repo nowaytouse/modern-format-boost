@@ -2,7 +2,44 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.6.0)
+## 🔥 Latest Updates (v7.8.0)
+
+### Code Quality Improvements - Enhanced Reliability & Maintainability
+- **✅ Unified Logging System**: Structured logging to system temp directory with rotation
+- **✅ Enhanced Error Handling**: Context-rich errors with transparent reporting
+- **✅ Modular Architecture**: video_explorer split into logical submodules
+- **✅ Common Utilities**: 15 reusable utility functions extracted
+- **✅ Clean Dependencies**: Removed unused dependencies, workspace-level management
+- **✅ Zero Warnings**: All clippy warnings fixed, code formatted with rustfmt
+- **✅ 735 Tests Passing**: Comprehensive test coverage with property-based testing
+
+**Logging Features:**
+- Automatic log rotation (100MB per file, keep 5 files)
+- Logs stored in system temp directory (e.g., `/tmp` or `%TEMP%`)
+- Structured logging with tracing framework
+- External command logging (ffmpeg, x265, etc.)
+
+**Log File Locations:**
+```bash
+# macOS/Linux
+/tmp/imgquality_hevc_*.log
+/tmp/vidquality_hevc_*.log
+
+# Windows
+%TEMP%\imgquality_hevc_*.log
+%TEMP%\vidquality_hevc_*.log
+```
+
+**Debugging:**
+```bash
+# View logs
+tail -f /tmp/imgquality_hevc_*.log
+
+# Check for errors
+grep ERROR /tmp/vidquality_hevc_*.log
+```
+
+### Previous (v7.6.0)
 
 ### MS-SSIM Performance Optimization - 10x Faster Quality Verification
 - **✅ Intelligent Sampling**: Duration-based frame sampling (1/1, 1/3, 1/10, or skip)

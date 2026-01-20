@@ -47,6 +47,12 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    // 🔥 v7.8: 初始化日志系统
+    let _ = shared_utils::logging::init_logging(
+        "xmp_merger",
+        shared_utils::logging::LogConfig::default(),
+    );
+
     let args = Args::parse();
     let term = Term::stdout();
 

@@ -90,11 +90,9 @@ impl FfmpegProcess {
         let stderr_thread = thread::spawn(move || {
             let mut buf = String::new();
             let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    buf.push_str(&line);
-                    buf.push('\n');
-                }
+            for line in reader.lines().map_while(Result::ok) {
+                buf.push_str(&line);
+                buf.push('\n');
             }
             buf
         });
@@ -251,21 +249,21 @@ impl FfmpegProgressParser {
     pub fn parse_line(&mut self, line: &str) -> Option<f64> {
         // 解析 frame=
         if let Some(frame_str) = line.strip_prefix("frame=") {
-            if let Ok(frame) = frame_str.trim().split_whitespace().next()?.parse::<u64>() {
+            if let Ok(frame) = frame_str.split_whitespace().next()?.parse::<u64>() {
                 self.current_frame = frame;
             }
         }
 
         // 解析 fps=
         if let Some(fps_str) = line.strip_prefix("fps=") {
-            if let Ok(fps) = fps_str.trim().split_whitespace().next()?.parse::<f64>() {
+            if let Ok(fps) = fps_str.split_whitespace().next()?.parse::<f64>() {
                 self.current_fps = fps;
             }
         }
 
         // 解析 time=
         if let Some(time_str) = line.strip_prefix("time=") {
-            if let Some(time) = Self::parse_time(time_str.trim().split_whitespace().next()?) {
+            if let Some(time) = Self::parse_time(time_str.split_whitespace().next()?) {
                 self.current_time = time;
             }
         }

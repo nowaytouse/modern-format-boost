@@ -254,7 +254,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         // 创建多个不同大小的文件
-        let sizes = vec![5000, 100, 3000, 200, 4000, 50, 1000];
+        let sizes = [5000, 100, 3000, 200, 4000, 50, 1000];
         let mut files = Vec::new();
 
         for (i, size) in sizes.iter().enumerate() {

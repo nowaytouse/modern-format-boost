@@ -527,7 +527,7 @@ pub fn format_size_change(pct: f64) -> String {
 /// 🔥 v6.2: 格式化大小差异（自动选择合适单位）
 /// 根据差异大小自动选择 B/KB/MB 单位，避免小文件显示 +0.0 MB
 pub fn format_size_diff(diff_bytes: i64) -> String {
-    let abs_diff = diff_bytes.abs() as u64;
+    let abs_diff = diff_bytes.unsigned_abs();
     let sign = if diff_bytes >= 0 { "+" } else { "-" };
 
     const KB: u64 = 1024;

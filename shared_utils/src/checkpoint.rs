@@ -404,12 +404,10 @@ impl CheckpointManager {
         let reader = BufReader::new(file);
         let mut completed = HashSet::new();
 
-        for line in reader.lines() {
-            if let Ok(path) = line {
-                let trimmed = path.trim();
-                if !trimmed.is_empty() {
-                    completed.insert(trimmed.to_string());
-                }
+        for path in reader.lines().map_while(Result::ok) {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                completed.insert(trimmed.to_string());
             }
         }
 

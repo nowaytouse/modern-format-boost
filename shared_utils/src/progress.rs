@@ -71,7 +71,7 @@ impl CoarseProgressBar {
     /// 增加进度
     pub fn inc(&self) {
         let current = self.current.fetch_add(1, Ordering::Relaxed) + 1;
-        if current % 10 == 0 {
+        if current.is_multiple_of(10) {
             // 每 10 次更新渲染一次
             self.set(current);
         }
@@ -171,12 +171,10 @@ impl CoarseProgressBar {
         let bar = "█".repeat(bar_width);
 
         eprint!(
-            "\r\x1b[K\x1b[32m{} {}{}{}{}▏ ✅ 100% • {}/{} • ⏱️ {:.1}s\x1b[0m\n",
+            "\r\x1b[K\x1b[32m{} {}\x1b[32m{}\x1b[32m▏ ✅ 100% • {}/{} • ⏱️ {:.1}s\x1b[0m\n",
             self.prefix,
             progress_style::BAR_LEFT,
-            "\x1b[32m",
             bar,
-            "\x1b[32m",
             total,
             total,
             elapsed.as_secs_f64()
@@ -628,11 +626,7 @@ impl FixedBottomProgress {
     /// 完成进度条
     pub fn finish(&self) {
         let stats = self.stats();
-        let saved = if stats.input_bytes > stats.output_bytes {
-            stats.input_bytes - stats.output_bytes
-        } else {
-            0
-        };
+        let saved = stats.input_bytes.saturating_sub(stats.output_bytes);
 
         self.bar.finish_with_message(format!(
             "✅ {} succeeded, {} failed, {} skipped | Saved: {}",
@@ -887,11 +881,7 @@ impl ExploreLogger {
 
         let elapsed = self.start_time.elapsed();
         let size_change = self.calc_change(self.best_size);
-        let saved = if self.best_size < self.input_size {
-            self.input_size - self.best_size
-        } else {
-            0
-        };
+        let saved = self.input_size.saturating_sub(self.best_size);
 
         eprintln!("\r\x1b[K");
         eprintln!("   ═══════════════════════════════════════════════════");

@@ -170,6 +170,12 @@ fn calculate_directory_size_by_extensions(
 }
 
 fn main() -> anyhow::Result<()> {
+    // 🔥 v7.8: 初始化日志系统
+    let _ = shared_utils::logging::init_logging(
+        "imgquality_hevc",
+        shared_utils::logging::LogConfig::default(),
+    );
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -884,7 +890,7 @@ fn auto_convert_directory(
     // - 快速看到进度反馈
     // - 小文件处理快，可以更早发现问题
     // - 大文件留到后面，避免长时间卡住
-    let files = shared_utils::collect_files_small_first(&input, &image_extensions, recursive);
+    let files = shared_utils::collect_files_small_first(input, &image_extensions, recursive);
 
     let total = files.len();
     if total == 0 {

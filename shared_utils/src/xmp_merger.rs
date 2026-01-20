@@ -778,8 +778,10 @@ pub struct MergeSummary {
 
 impl MergeSummary {
     pub fn from_results(results: &[MergeResult]) -> Self {
-        let mut summary = Self::default();
-        summary.total = results.len();
+        let mut summary = Self {
+            total: results.len(),
+            ..Default::default()
+        };
 
         for result in results {
             if result.success {
@@ -797,6 +799,71 @@ impl MergeSummary {
 
         summary
     }
+}
+
+// ============================================================================
+// 🔥 v6.9.11: 便捷辅助函数 - 用于复制文件时合并XMP
+// ============================================================================
+
+/// 🔥 v6.9.11: 复制文件到目标目录，同时查找并合并XMP边车
+///
+/// 当文件被跳过（短动画、现代格式、质量失败等）时使用此函数，
+/// 确保XMP元数据也被正确处理。
+///
+/// # Arguments
+/// * `input` - 源文件路径
+/// * `dest` - 目标文件路径（已复制的文件）
+///
+/// # Returns
+/// * `Ok(true)` - XMP找到并成功合并
+/// * `Ok(false)` - 没有找到XMP边车
+/// * `Err(_)` - XMP合并失败
+pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
+    // 查找XMP边车文件（多种命名方式）
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let parent = input.parent().unwrap_or(Path::new("."));
+
+    // 尝试多种XMP命名方式
+    let xmp_candidates = [
+        parent.join(format!("{}.xmp", stem)),         // photo.xmp
+        parent.join(format!("{}.{}.xmp", stem, ext)), // photo.jpg.xmp
+        parent.join(format!("{}.XMP", stem)),         // photo.XMP (大写)
+    ];
+
+    for xmp_path in &xmp_candidates {
+        if xmp_path.exists() {
+            eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
+
+            // 使用 exiftool 合并 XMP 到目标文件
+            let output = Command::new("exiftool")
+                .arg("-overwrite_original")
+                .arg("-tagsfromfile")
+                .arg(xmp_path)
+                .arg("-all:all")
+                .arg(dest)
+                .output()
+                .context("Failed to run exiftool")?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                // [minor] 警告是可接受的（如JXL容器包装）
+                if stderr.contains("[minor]") {
+                    eprintln!("✅ XMP sidecar merged successfully");
+                    return Ok(true);
+                }
+                if stderr.contains("Error:") {
+                    bail!("ExifTool error: {}", stderr);
+                }
+            }
+
+            eprintln!("✅ XMP sidecar merged successfully");
+            return Ok(true);
+        }
+    }
+
+    // 没有找到XMP边车
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -956,69 +1023,4 @@ mod tests {
         // Should match via same_name or case_insensitive
         assert!(strategy == "same_name" || strategy == "case_insensitive");
     }
-}
-
-// ============================================================================
-// 🔥 v6.9.11: 便捷辅助函数 - 用于复制文件时合并XMP
-// ============================================================================
-
-/// 🔥 v6.9.11: 复制文件到目标目录，同时查找并合并XMP边车
-///
-/// 当文件被跳过（短动画、现代格式、质量失败等）时使用此函数，
-/// 确保XMP元数据也被正确处理。
-///
-/// # Arguments
-/// * `input` - 源文件路径
-/// * `dest` - 目标文件路径（已复制的文件）
-///
-/// # Returns
-/// * `Ok(true)` - XMP找到并成功合并
-/// * `Ok(false)` - 没有找到XMP边车
-/// * `Err(_)` - XMP合并失败
-pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
-    // 查找XMP边车文件（多种命名方式）
-    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let parent = input.parent().unwrap_or(Path::new("."));
-
-    // 尝试多种XMP命名方式
-    let xmp_candidates = [
-        parent.join(format!("{}.xmp", stem)),         // photo.xmp
-        parent.join(format!("{}.{}.xmp", stem, ext)), // photo.jpg.xmp
-        parent.join(format!("{}.XMP", stem)),         // photo.XMP (大写)
-    ];
-
-    for xmp_path in &xmp_candidates {
-        if xmp_path.exists() {
-            eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
-
-            // 使用 exiftool 合并 XMP 到目标文件
-            let output = Command::new("exiftool")
-                .arg("-overwrite_original")
-                .arg("-tagsfromfile")
-                .arg(xmp_path)
-                .arg("-all:all")
-                .arg(dest)
-                .output()
-                .context("Failed to run exiftool")?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // [minor] 警告是可接受的（如JXL容器包装）
-                if stderr.contains("[minor]") {
-                    eprintln!("✅ XMP sidecar merged successfully");
-                    return Ok(true);
-                }
-                if stderr.contains("Error:") {
-                    bail!("ExifTool error: {}", stderr);
-                }
-            }
-
-            eprintln!("✅ XMP sidecar merged successfully");
-            return Ok(true);
-        }
-    }
-
-    // 没有找到XMP边车
-    Ok(false)
 }

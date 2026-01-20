@@ -1,0 +1,90 @@
+向后兼容性测试报告
+==================
+
+测试时间: 2026-01-21 00:03:41
+项目路径: /Users/nyamiiko/Downloads/GitHub/modern_format_boost
+
+测试统计
+--------
+总测试数: 22
+通过: 12
+失败: 48
+通过率: 54%
+
+详细结果
+--------
+✅ PASS: imgquality-hevc 存在于 /Users/nyamiiko/Downloads/GitHub/modern_format_boost/target/release/imgquality-hevc
+✅ PASS: imgquality-av1 存在于 /Users/nyamiiko/Downloads/GitHub/modern_format_boost/target/release/imgquality-av1
+✅ PASS: vidquality-hevc 存在于 /Users/nyamiiko/Downloads/GitHub/modern_format_boost/target/release/vidquality-hevc
+✅ PASS: vidquality-av1 存在于 /Users/nyamiiko/Downloads/GitHub/modern_format_boost/target/release/vidquality-av1
+✅ PASS: --help 参数正常工作
+❌ FAIL: 参数 --output 缺失或名称改变
+❌ FAIL: 参数 --force 缺失或名称改变
+❌ FAIL: 参数 --recursive 缺失或名称改变
+❌ FAIL: 参数 --delete-original 缺失或名称改变
+❌ FAIL: 参数 --in-place 缺失或名称改变
+❌ FAIL: 参数 --explore 缺失或名称改变
+❌ FAIL: 参数 --match-quality 缺失或名称改变
+❌ FAIL: 参数 --compress 缺失或名称改变
+❌ FAIL: 参数 --apple-compat 缺失或名称改变
+✅ PASS: --help 参数正常工作
+❌ FAIL: 参数 --output 缺失或名称改变
+❌ FAIL: 参数 --force 缺失或名称改变
+❌ FAIL: 参数 --recursive 缺失或名称改变
+❌ FAIL: 参数 --delete-original 缺失或名称改变
+❌ FAIL: 参数 --in-place 缺失或名称改变
+❌ FAIL: 参数 --explore 缺失或名称改变
+❌ FAIL: 参数 --match-quality 缺失或名称改变
+❌ FAIL: 参数 --compress 缺失或名称改变
+❌ FAIL: 参数 --apple-compat 缺失或名称改变
+✅ PASS: --help 参数正常工作
+❌ FAIL: 参数 --output 缺失或名称改变
+❌ FAIL: 参数 --force 缺失或名称改变
+❌ FAIL: 参数 --recursive 缺失或名称改变
+❌ FAIL: 参数 --delete-original 缺失或名称改变
+❌ FAIL: 参数 --in-place 缺失或名称改变
+❌ FAIL: 参数 --explore 缺失或名称改变
+❌ FAIL: 参数 --match-quality 缺失或名称改变
+❌ FAIL: 参数 --compress 缺失或名称改变
+❌ FAIL: 参数 --apple-compat 缺失或名称改变
+✅ PASS: --help 参数正常工作
+❌ FAIL: 参数 --output 缺失或名称改变
+❌ FAIL: 参数 --force 缺失或名称改变
+❌ FAIL: 参数 --recursive 缺失或名称改变
+❌ FAIL: 参数 --delete-original 缺失或名称改变
+❌ FAIL: 参数 --in-place 缺失或名称改变
+❌ FAIL: 参数 --explore 缺失或名称改变
+❌ FAIL: 参数 --match-quality 缺失或名称改变
+❌ FAIL: 参数 --compress 缺失或名称改变
+❌ FAIL: 参数 --apple-compat 缺失或名称改变
+✅ PASS: 测试PNG文件创建成功
+❌ FAIL: 基本转换命令执行失败
+❌ FAIL: 输出格式可能已改变
+✅ PASS: 无错误输出
+❌ FAIL: 工作流程 1 执行失败
+❌ FAIL: 工作流程 2 (探索模式) 执行失败
+❌ FAIL: 工作流程 3 (压缩模式) 执行失败
+❌ FAIL: 参数组合失败或超时
+❌ FAIL: 参数组合失败或超时
+❌ FAIL: 参数组合失败或超时
+❌ FAIL: 参数组合失败或超时
+❌ FAIL: 参数组合失败或超时
+❌ FAIL: 参数组合失败或超时
+❌ FAIL: 参数组合失败或超时
+✅ PASS: 正确处理不存在的文件
+✅ PASS: 正确处理无效参数
+
+测试范围
+--------
+1. 二进制文件存在性检查
+2. 命令行接口完整性检查
+3. 基本功能测试
+4. 输出格式验证
+5. 工作流程兼容性测试
+6. 参数组合兼容性测试
+7. 错误处理兼容性测试
+
+结论
+----
+❌ 多个测试失败，存在严重的兼容性问题
+

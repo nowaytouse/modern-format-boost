@@ -113,12 +113,11 @@ enum OutputFormat {
 }
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
-        .init();
+    // 🔥 v7.8: 使用统一的日志系统
+    let _ = shared_utils::logging::init_logging(
+        "vidquality_hevc",
+        shared_utils::logging::LogConfig::default(),
+    );
 
     let cli = Cli::parse();
 

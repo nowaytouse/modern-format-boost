@@ -271,7 +271,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     config.match_quality,
                     config.require_compression,
                 )
-                .map_err(|e| VidQualityError::ConversionError(e))?;
+                .map_err(VidQualityError::ConversionError)?;
 
                 let explore_result = match flag_mode {
                     shared_utils::FlagMode::UltimateExplore => {
@@ -438,10 +438,10 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
 /// 4. 自校准：如果初始 CRF 不满足质量，向下搜索
 ///
 /// ## 评价标准 (Evaluation Criteria)
-// 🔥 v4.8: 已删除重复实现
-// explore_precise_quality_match_av1 → 使用 shared_utils::explore_precise_quality_match
-// explore_smaller_size → 使用 shared_utils::explore_size_only
-
+/// 🔥 v4.8: 已删除重复实现
+/// explore_precise_quality_match_av1 → 使用 shared_utils::explore_precise_quality_match
+/// explore_smaller_size → 使用 shared_utils::explore_size_only
+///
 /// Execute FFV1 conversion
 fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path) -> Result<u64> {
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿

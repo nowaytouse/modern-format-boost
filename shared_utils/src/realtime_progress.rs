@@ -220,7 +220,7 @@ impl Drop for SimpleIterationProgress {
 /// 🔥 v5.31: 实时探索进度条 - 基于 CRF 范围的真实进度映射
 ///
 /// 保留以确保向后兼容，但优先使用 SimpleIterationProgress
-#[deprecated(since = "5.34", note = "使用 SimpleIterationProgress 替代")]
+#[deprecated(since = "5.34.0", note = "使用 SimpleIterationProgress 替代")]
 pub struct RealtimeExploreProgress {
     pub bar: ProgressBar,
     input_size: u64,

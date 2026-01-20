@@ -8,23 +8,20 @@ mod constants_tests {
 
     #[test]
     fn test_crf_bounds() {
-        assert!(ABSOLUTE_MIN_CRF >= 0.0);
-        assert!(ABSOLUTE_MIN_CRF < ABSOLUTE_MAX_CRF);
-        assert!(ABSOLUTE_MAX_CRF <= 63.0); // CRF max for most codecs
+        // 常量断言已移除（clippy::assertions_on_constants）
+        assert_eq!(ABSOLUTE_MAX_CRF, 51.0);
     }
 
     #[test]
     fn test_iteration_limits() {
-        assert!(STAGE_B1_MAX_ITERATIONS > 0);
-        assert!(STAGE_B2_MAX_ITERATIONS > 0);
-        assert!(GLOBAL_MAX_ITERATIONS >= 50);
-        assert!(GLOBAL_MAX_ITERATIONS <= 100); // Reasonable upper bound
+        // 常量断言已移除（clippy::assertions_on_constants）
+        assert_eq!(GLOBAL_MAX_ITERATIONS, 60);
     }
 
     #[test]
     fn test_binary_search_iterations() {
-        assert!(BINARY_SEARCH_MAX_ITERATIONS >= 8);
-        assert!(BINARY_SEARCH_MAX_ITERATIONS <= 20);
+        // 常量断言已移除（clippy::assertions_on_constants）
+        assert_eq!(BINARY_SEARCH_MAX_ITERATIONS, 12);
     }
 }
 
@@ -209,11 +206,11 @@ mod dynamic_iteration_tests {
 
         // 中等范围
         let mid = calc_max_iter(25.0);
-        assert!(mid >= 7 && mid <= 10);
+        assert!((7..=10).contains(&mid));
 
         // 大范围
         let large = calc_max_iter(50.0);
-        assert!(large >= 8 && large <= 12);
+        assert!((8..=12).contains(&large));
     }
 
     #[test]
@@ -236,7 +233,7 @@ mod edge_case_tests {
         // 输入大小为 0 的边缘情况
         let input_size = 0_u64;
         let size_pct = if input_size > 0 {
-            ((100_u64 as f64 / input_size as f64) - 1.0) * 100.0
+            ((100_f64 / input_size as f64) - 1.0) * 100.0
         } else {
             0.0
         };
@@ -256,15 +253,16 @@ mod edge_case_tests {
         // SSIM 边界测试
         let ssim_values = [0.0, 0.5, 0.9, 0.95, 0.99, 1.0];
         for ssim in ssim_values {
-            assert!(ssim >= 0.0 && ssim <= 1.0);
+            assert!((0.0..=1.0).contains(&ssim));
         }
     }
 
     #[test]
     fn test_extreme_crf_values() {
         // 极端 CRF 值测试
-        assert!(ABSOLUTE_MIN_CRF >= 0.0);
-        assert!(ABSOLUTE_MAX_CRF <= 63.0);
+        // 常量断言已移除（clippy::assertions_on_constants）
+        assert_eq!(ABSOLUTE_MIN_CRF, 10.0);
+        assert_eq!(ABSOLUTE_MAX_CRF, 51.0);
 
         // 确保范围有效
         let range = ABSOLUTE_MAX_CRF - ABSOLUTE_MIN_CRF;
@@ -557,7 +555,7 @@ mod psnr_transparency_tests {
 
             // 验证 PSNR 值在有效范围内（如果存在）
             if let Some(p) = psnr {
-                prop_assert!(p >= 0.0 && p <= 100.0, "PSNR should be in valid range");
+                prop_assert!((0.0..=100.0).contains(&p), "PSNR should be in valid range");
             }
         }
     }
@@ -1201,7 +1199,7 @@ mod metadata_margin_tests {
             // 公式: max(input × 0.5%, 2KB).min(100KB)
             let expected = {
                 let percent_based = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
-                percent_based.max(METADATA_MARGIN_MIN).min(METADATA_MARGIN_MAX)
+                percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
             };
 
             prop_assert_eq!(margin, expected,
@@ -1724,11 +1722,11 @@ mod evaluation_consistency_tests {
 
         // 场景 2：输出视频流 == 输入视频流 → 不能压缩
         let output_video = 1_000_000u64;
-        assert!(!(output_video < input_video), "输出 == 输入不应能压缩");
+        assert!((output_video >= input_video), "输出 == 输入不应能压缩");
 
         // 场景 3：输出视频流 > 输入视频流 → 不能压缩
         let output_video = 1_100_000u64;
-        assert!(!(output_video < input_video), "输出 > 输入不应能压缩");
+        assert!((output_video >= input_video), "输出 > 输入不应能压缩");
     }
 
     // 单元测试：验证容器开销不影响压缩判断

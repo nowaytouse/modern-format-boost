@@ -40,7 +40,7 @@ mod property_tests {
         #[test]
         fn crf_hevc_validation_property(value in -100.0f32..100.0f32) {
             let result = Crf::<HevcEncoder>::new(value);
-            let in_range = value >= 0.0 && value <= 51.0;
+            let in_range = (0.0..=51.0).contains(&value);
             prop_assert_eq!(result.is_ok(), in_range,
                 "HEVC CRF {} should be {} but was {}",
                 value,
@@ -52,7 +52,7 @@ mod property_tests {
         #[test]
         fn crf_av1_validation_property(value in -100.0f32..100.0f32) {
             let result = Crf::<Av1Encoder>::new(value);
-            let in_range = value >= 0.0 && value <= 63.0;
+            let in_range = (0.0..=63.0).contains(&value);
             prop_assert_eq!(result.is_ok(), in_range,
                 "AV1 CRF {} should be {} but was {}",
                 value,
@@ -111,7 +111,7 @@ mod property_tests {
         #[test]
         fn ssim_validation_property(value in -2.0f64..2.0f64) {
             let result = Ssim::new(value);
-            let in_range = value >= 0.0 && value <= 1.0;
+            let in_range = (0.0..=1.0).contains(&value);
             prop_assert_eq!(result.is_ok(), in_range,
                 "SSIM {} should be {} but was {}",
                 value,

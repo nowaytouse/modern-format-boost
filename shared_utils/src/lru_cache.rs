@@ -451,7 +451,7 @@ mod prop_tests {
         use std::io::Write;
 
         // 测试损坏的缓存文件能正常恢复
-        let corrupted_jsons = vec![
+        let corrupted_jsons = [
             "",                                             // 空文件
             "{",                                            // 不完整JSON
             "null",                                         // null值

@@ -2,6 +2,151 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.7.0] - 2026-01-21
+
+### 🏗️ Code Quality Improvement - Comprehensive Refactoring
+
+#### Overview
+Major code quality improvement initiative focusing on error handling, logging, code organization, and maintainability across the entire modern_format_boost project (~9000 lines of Rust code).
+
+#### New Features
+
+**1. Enhanced Error Handling System** (增强错误处理系统)
+- **Unified error types** using `thiserror` for consistent error definitions
+- **Context-rich errors** with file paths, operations, and command details
+- **Loud error reporting** (响亮报错) - no silent failures allowed
+- **Complete error chains** preserved during error propagation
+- **Panic handler** that logs before exit for better debugging
+
+**Key Improvements:**
+- All errors include operation context (file path, command, parameters)
+- Timeout errors include operation name and duration
+- External tool failures include full command line and output
+- Error reporting to both stderr and log files
+
+**2. Comprehensive Logging System** (全面日志系统)
+- **Structured logging** using `tracing` framework across all modules
+- **System temp directory** storage (`/tmp` or `%TEMP%`)
+- **Log rotation** with size limits (100MB per file, keep 5 files)
+- **External tool logging** - all ffmpeg/x265 commands and outputs recorded
+- **Performance metrics** - timing, file sizes, memory usage logged
+- **Heartbeat detection** - status updates every 30 seconds for long operations
+
+**Log Features:**
+- Separate log files per binary program
+- Automatic log file cleanup (size and count limits)
+- Structured fields (timestamp, module, operation, context)
+- Debug mode for verbose output (`--debug` flag)
+- Log flush on program exit (no data loss)
+
+**3. Optimized Heartbeat System** (优化心跳系统)
+- **Reduced memory allocations** - use `Arc` instead of cloning
+- **Simplified state management** - cleaner internal logic
+- **Enhanced timeout messages** - include operation details and last heartbeat time
+- **Comprehensive documentation** - usage examples and best practices
+- **Resource optimization** - fewer allocations in hot paths
+
+**4. Code Organization Improvements** (代码组织改进)
+- **Modular structure** - better separation of concerns
+- **Reduced code duplication** - extracted common utilities
+- **Cleaner interfaces** - consistent API patterns
+- **Better documentation** - module-level and function-level docs
+- **Type safety** - domain-specific types for CRF, SSIM, FileSize, Iteration
+
+**5. Binary Program Enhancements** (二进制程序增强)
+- **Logging initialization** in all 4 binary programs
+- **CLI options** for log control (`--log-level`, `--debug`)
+- **Standardized error output** - consistent formatting across programs
+- **Performance metrics** - automatic logging of operation timing and sizes
+
+#### Technical Implementation
+
+**New Modules:**
+- `shared_utils/src/logging.rs` - Centralized logging configuration
+- `shared_utils/src/error_handler.rs` - Enhanced error reporting utilities
+- Enhanced `shared_utils/src/app_error.rs` - Rich error types with context
+- Enhanced `shared_utils/src/universal_heartbeat.rs` - Optimized heartbeat system
+
+**Modified Modules:**
+- `shared_utils/src/ffmpeg_process.rs` - Added comprehensive logging
+- `shared_utils/src/x265_encoder.rs` - Added command logging and error context
+- `shared_utils/src/file_copier.rs` - Enhanced error handling with file paths
+- All binary programs (`imgquality_hevc`, `imgquality_av1`, `vidquality_hevc`, `vidquality_av1`)
+
+**Workspace Dependencies:**
+Added centralized dependency management in root `Cargo.toml`:
+- `anyhow = "1.0"` - Error handling with context
+- `thiserror = "2.0"` - Custom error type derivation
+- `tracing = "0.1"` - Structured logging framework
+- `tracing-subscriber = "0.3"` - Log formatting and filtering
+- `tracing-appender = "0.2"` - File appender with rotation
+
+#### Code Quality Metrics
+
+**Before:**
+- ❌ Inconsistent error handling across modules
+- ❌ Limited logging (mostly `println!`)
+- ❌ No log file persistence
+- ❌ Silent failures in some code paths
+- ❌ Scattered error reporting patterns
+
+**After:**
+- ✅ Unified error handling with `thiserror` + `anyhow`
+- ✅ Comprehensive structured logging with `tracing`
+- ✅ Persistent log files with rotation
+- ✅ Loud error reporting (响亮报错) everywhere
+- ✅ Consistent error patterns across all modules
+- ✅ Zero clippy warnings
+- ✅ Improved code documentation
+
+#### User Experience Improvements
+
+**Debugging & Troubleshooting:**
+- ✅ Log files in system temp directory (easy to find)
+- ✅ All external commands logged (ffmpeg, x265)
+- ✅ Complete error context (file paths, operations, parameters)
+- ✅ Performance metrics for all operations
+- ✅ Debug mode for verbose output (`--debug`)
+
+**Error Messages:**
+- ✅ Clear, actionable error messages
+- ✅ Full error chains preserved
+- ✅ Timeout errors include operation details
+- ✅ External tool failures include command and output
+
+**Reliability:**
+- ✅ No silent failures
+- ✅ Batch operations continue on partial failure
+- ✅ Automatic log rotation prevents disk space issues
+- ✅ Heartbeat system prevents timeout confusion
+
+#### Breaking Changes
+None. All changes are backward compatible. Existing functionality preserved.
+
+#### Migration Guide
+No migration needed. New features are automatic or opt-in via CLI flags:
+- `--debug` - Enable verbose logging
+- `--log-level <LEVEL>` - Set log level (trace/debug/info/warn/error)
+
+Log files are automatically created in system temp directory:
+- **macOS/Linux**: `/tmp/modern_format_boost_<program>.log`
+- **Windows**: `%TEMP%\modern_format_boost_<program>.log`
+
+#### Documentation Updates
+- Enhanced module documentation with usage examples
+- Function-level documentation for all public APIs
+- Inline comments for complex algorithms (中文)
+- README updated with logging and debugging information
+
+#### Testing
+- All existing tests pass
+- Enhanced error handling tested
+- Log rotation tested
+- Heartbeat system tested
+- Backward compatibility verified
+
+---
+
 ## [7.6.0] - 2026-01-20
 
 ### 🚀 MS-SSIM Performance Optimization - 10x Faster Quality Verification

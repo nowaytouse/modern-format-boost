@@ -290,6 +290,7 @@ pub struct VideoRoutingDecision {
 /// # 🔥 Quality Manifesto
 /// - All metrics from actual ffprobe data
 /// - Fails loudly on invalid input
+#[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
     codec: &str,
     width: u32,

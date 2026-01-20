@@ -135,7 +135,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
     };
     let duration = time
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map_err(|e| io::Error::other(e))?;
+        .map_err(io::Error::other)?;
     let mut buf = Timespec {
         tv_sec: duration.as_secs() as i64,
         tv_nsec: duration.subsec_nanos() as i64,

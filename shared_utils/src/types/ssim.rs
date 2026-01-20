@@ -91,7 +91,7 @@ impl Ssim {
         }
 
         // 检查范围
-        if value < SSIM_MIN || value > SSIM_MAX {
+        if !(SSIM_MIN..=SSIM_MAX).contains(&value) {
             return Err(SsimError::OutOfRange { value });
         }
 

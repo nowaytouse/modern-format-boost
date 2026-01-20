@@ -401,8 +401,7 @@ mod tests {
     #[test]
     fn test_error_chain_reporting() {
         // 创建一个带有错误链的错误
-        let outer_error: Box<dyn std::error::Error> = Box::new(io::Error::new(
-            io::ErrorKind::Other,
+        let outer_error: Box<dyn std::error::Error> = Box::new(io::Error::other(
             "outer error with inner cause",
         ));
 
@@ -433,7 +432,7 @@ mod prop_tests {
         ];
 
         for (category, should_continue) in test_cases {
-            let error = io::Error::new(io::ErrorKind::Other, "test error");
+            let error = io::Error::other("test error");
             let action = handle_error(category, "test context", error, None);
 
             let is_continue = matches!(action, ErrorAction::Continue);

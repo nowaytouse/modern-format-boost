@@ -135,9 +135,7 @@ impl FileSize {
     /// 公式: max(input × 0.5%, 2KB).min(100KB)
     pub fn metadata_margin(&self) -> FileSize {
         let percent_based = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
-        let margin = percent_based
-            .max(METADATA_MARGIN_MIN)
-            .min(METADATA_MARGIN_MAX);
+        let margin = percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX);
         FileSize(margin)
     }
 

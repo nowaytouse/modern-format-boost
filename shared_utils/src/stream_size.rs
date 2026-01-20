@@ -663,11 +663,11 @@ mod prop_tests {
             }
 
             // 属性：output == input 时不应该能压缩
-            prop_assert!(!(output_equal < input_video_size),
+            prop_assert!((output_equal >= input_video_size),
                 "当 output {} == input {} 时不应该能压缩", output_equal, input_video_size);
 
             // 属性：output > input 时不应该能压缩
-            prop_assert!(!(output_larger < input_video_size),
+            prop_assert!((output_larger >= input_video_size),
                 "当 output {} > input {} 时不应该能压缩", output_larger, input_video_size);
         }
     }
