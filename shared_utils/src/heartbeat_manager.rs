@@ -55,10 +55,10 @@ impl HeartbeatManager {
             let map = registry.get_or_insert_with(HashMap::new);
             *map.entry(operation.to_string()).or_insert(0) += 1;
 
-            // 检测冲突(同名心跳)
-            if map[operation] > 1 {
+            // 🔥 v7.8.1: 改进重复心跳检测 - 只在调试模式下警告
+            if map[operation] > 1 && std::env::var("IMGQUALITY_DEBUG").is_ok() {
                 eprintln!(
-                    "⚠️  Multiple heartbeats with same name: {} (count: {})",
+                    "🔍 Debug: Multiple heartbeats with same name: {} (count: {})",
                     operation, map[operation]
                 );
             }

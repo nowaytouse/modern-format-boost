@@ -30,8 +30,17 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     // Initialize libheif
     let lib_heif = LibHeif::new();
 
+    // 🔥 v7.8.1: 增强HEIC错误处理，特别是SecurityLimitExceeded错误
     let ctx = HeifContext::read_from_file(path.to_string_lossy().as_ref())
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e)))?;
+        .map_err(|e| {
+            let error_msg = format!("{}", e);
+            if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
+                eprintln!("⚠️  HEIC SecurityLimitExceeded: {} - using fallback analysis", path.display());
+                ImgQualityError::ImageReadError(format!("HEIC security limit exceeded (ipco box limit): {}", e))
+            } else {
+                ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
+            }
+        })?;
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgQualityError::ImageReadError(format!("Failed to get primary image: {}", e))

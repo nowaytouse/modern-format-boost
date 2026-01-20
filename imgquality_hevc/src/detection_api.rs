@@ -193,6 +193,7 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
     }
 
     // HEIC/HEIF - ftyp box with heic, heix, hevc, hevx, mif1
+    // 🔥 v7.8.1: 增加HEIC内存限制配置以避免SecurityLimitExceeded错误
     if header[4..8] == *b"ftyp" {
         let brand = &header[8..12];
         if brand == b"heic" || brand == b"heix" || brand == b"mif1" {
