@@ -8110,6 +8110,16 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
     use chrono::Local;
     use std::thread;
 
+    // 🔥 v7.8: 检查文件格式兼容性
+    if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        if matches!(ext_lower.as_str(), "gif") {
+            eprintln!("   ⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
+            eprintln!("   📊 Using SSIM-only verification (compatible with GIF)");
+            return None;
+        }
+    }
+
     // 获取视频时长
     let duration = match get_video_duration(input) {
         Some(d) => d,
@@ -8252,6 +8262,15 @@ fn calculate_ms_ssim_channel_sampled(
     sample_rate: usize,
 ) -> Option<f64> {
     use std::process::Command;
+
+    // 🔥 v7.8: 检查文件格式兼容性
+    if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
+        let ext_lower = ext.to_lowercase();
+        if matches!(ext_lower.as_str(), "gif") {
+            eprintln!("      ❌ GIF format not compatible with YUV channel analysis");
+            return None;
+        }
+    }
 
     // 🔥 v7.5.1: 构建采样 filter（如果需要）
     let sample_filter = if sample_rate > 1 {

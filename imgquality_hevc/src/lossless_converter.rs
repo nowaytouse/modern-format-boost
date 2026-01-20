@@ -1022,12 +1022,20 @@ pub fn convert_to_hevc_mp4_matched(
         eprintln!("{}", log);
     }
 
-    // 🔥 如果最终输出仍然比输入大，跳过转换
-    if explore_result.output_size > input_size {
+    // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多2%的大小增加
+    let tolerance_ratio = 1.02; // 2%容差
+    let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+    
+    if explore_result.output_size > max_allowed_size {
+        let size_increase_pct = ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         let _ = fs::remove_file(&output);
         eprintln!(
-            "   ⏭️  Skipping: HEVC output larger than input even at CRF {:.1} ({} > {} bytes)",
-            explore_result.optimal_crf, explore_result.output_size, input_size
+            "   ⏭️  Skipping: HEVC output larger than input by {:.1}% (tolerance: 2.0%)",
+            size_increase_pct
+        );
+        eprintln!(
+            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+            input_size, explore_result.output_size, size_increase_pct
         );
         // 🔥 v6.9.14: 复制原始文件到输出目录（相邻目录模式）
         copy_original_on_skip(input, options);
@@ -1039,11 +1047,11 @@ pub fn convert_to_hevc_mp4_matched(
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: HEVC output larger than GIF input (low resolution {}x{})",
-                width, height
+                "Skipped: HEVC output larger than input by {:.1}% ({}x{}, tolerance exceeded)",
+                size_increase_pct, width, height
             ),
             skipped: true,
-            skip_reason: Some("size_increase".to_string()),
+            skip_reason: Some("size_increase_beyond_tolerance".to_string()),
         });
     }
 
