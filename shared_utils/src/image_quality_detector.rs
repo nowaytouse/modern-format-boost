@@ -820,7 +820,7 @@ mod tests {
         let mut data = Vec::with_capacity((width as usize) * (height as usize) * 4);
         for y in 0..height {
             for x in 0..width {
-                let is_white = ((x / block_size) + (y / block_size)) % 2 == 0;
+                let is_white = ((x / block_size) + (y / block_size)).is_multiple_of(2);
                 let color = if is_white { 255 } else { 0 };
                 data.extend_from_slice(&[color, color, color, 255]);
             }

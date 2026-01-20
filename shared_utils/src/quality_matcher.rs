@@ -2499,7 +2499,7 @@ mod tests {
         // Animation should allow ~4 higher CRF
         let crf_diff = anim_result.crf as i32 - base_result.crf as i32;
         assert!(
-            crf_diff >= 2 && crf_diff <= 6,
+            (2..=6).contains(&crf_diff),
             "Animation CRF adjustment: expected +2 to +6, got {:+}",
             crf_diff
         );

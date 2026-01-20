@@ -7,6 +7,9 @@
 //! - Result builders: Reduce boilerplate code
 //! - Size formatting: Unified message formatting
 
+// 测试代码中的字段赋值是合理的测试模式
+#![cfg_attr(test, allow(clippy::field_reassign_with_default))]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
@@ -69,7 +72,7 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     let reader = BufReader::new(file);
     let mut processed = PROCESSED_FILES.lock().unwrap();
 
-    for path in reader.lines().flatten() {
+    for path in reader.lines().map_while(Result::ok) {
         processed.insert(path);
     }
 

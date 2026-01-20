@@ -486,6 +486,7 @@ impl ExploreContext {
     /// # Example
     /// - 输入 1MB，输出 800KB → -20.0%
     /// - 输入 1MB，输出 1.2MB → +20.0%
+    ///
     /// 计算大小变化百分比
     ///
     /// # Returns
@@ -826,7 +827,7 @@ impl ExploreContext {
                     .unwrap_or(value_str.len());
                 if end > 0 {
                     if let Ok(ssim) = value_str[..end].parse::<f64>() {
-                        if ssim >= 0.0 && ssim <= 1.0 {
+                        if (0.0..=1.0).contains(&ssim) {
                             return Some(ssim);
                         }
                     }
@@ -1416,7 +1417,7 @@ mod prop_tests {
         fn prop_psnr_to_ssim_mapping_valid(psnr in 20.0f64..60.0f64) {
             // 使用 ExploreContext 中的 PSNR→SSIM 公式
             let ssim = (1.0 - 10_f64.powf(-psnr / 20.0)).min(0.9999);
-            prop_assert!(ssim >= 0.0 && ssim <= 1.0,
+            prop_assert!((0.0..=1.0).contains(&ssim),
                 "SSIM {} out of range for PSNR {}", ssim, psnr);
             // 更高的 PSNR 应该产生更高的 SSIM
             let ssim_higher = (1.0 - 10_f64.powf(-(psnr + 5.0) / 20.0)).min(0.9999);
@@ -1594,7 +1595,7 @@ mod prop_tests {
             let _ = cache.contains_key(crf);
 
             // 如果 CRF 在有效范围内，应该能获取到值
-            if crf >= 0.0 && crf < 64.0 {
+            if (0.0..64.0).contains(&crf) {
                 prop_assert_eq!(cache.get(crf), Some(&value));
             } else {
                 prop_assert_eq!(cache.get(crf), None);
