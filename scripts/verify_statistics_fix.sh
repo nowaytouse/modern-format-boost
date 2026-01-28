@@ -24,7 +24,7 @@ ORIGINAL_DIR="/Users/nyamiiko/Downloads/all/闷茶子新"
 
 if [ -d "$ORIGINAL_DIR" ]; then
     # 复制前10个JPEG文件进行测试
-    find "$ORIGINAL_DIR" -name "*.jpg" -o -name "*.jpeg" | head -10 | while read file; do
+    find "$ORIGINAL_DIR" -iname "*.jpg" -o -iname "*.jpeg" | head -10 | while read file; do
         cp "$file" "$TEST_DIR/"
     done
     
@@ -112,7 +112,7 @@ if [ -f "$CONVERSION_LOG" ]; then
         fi
         
         # 检查实际输出文件
-        JXL_COUNT=$(find "$OUTPUT_DIR" -name "*.jxl" 2>/dev/null | wc -l || echo 0)
+        JXL_COUNT=$(find "$OUTPUT_DIR" -iname "*.jxl" 2>/dev/null | wc -l || echo 0)
         echo "   • 实际生成JXL文件: $JXL_COUNT 个"
         
         if [ $JXL_COUNT -gt 0 ] && [ "$SUCCEEDED" -gt 0 ]; then

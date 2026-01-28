@@ -825,10 +825,12 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     let parent = input.parent().unwrap_or(Path::new("."));
 
     // 尝试多种XMP命名方式
+    let ext_lower = ext.to_lowercase();
     let xmp_candidates = [
-        parent.join(format!("{}.xmp", stem)),         // photo.xmp
-        parent.join(format!("{}.{}.xmp", stem, ext)), // photo.jpg.xmp
-        parent.join(format!("{}.XMP", stem)),         // photo.XMP (大写)
+        parent.join(format!("{}.xmp", stem)),                // photo.xmp
+        parent.join(format!("{}.{}.xmp", stem, ext)),        // photo.jpg.xmp (match original)
+        parent.join(format!("{}.{}.xmp", stem, ext_lower)),  // photo.jpg.xmp (normalized)
+        parent.join(format!("{}.XMP", stem)),                // photo.XMP (uppercase)
     ];
 
     for xmp_path in &xmp_candidates {

@@ -44,11 +44,11 @@ fi
 echo ""
 echo "📊 Test 1: 文件统计分析"
 TOTAL_FILES=$(find "$TARGET_DIR" -type f | wc -l | tr -d ' ')
-HEIC_FILES=$(find "$TARGET_DIR" -name "*.heic" | wc -l | tr -d ' ')
-MP4_FILES=$(find "$TARGET_DIR" -name "*.mp4" | wc -l | tr -d ' ')
-MOV_FILES=$(find "$TARGET_DIR" -name "*.mov" | wc -l | tr -d ' ')
-JPG_FILES=$(find "$TARGET_DIR" -name "*.jpg" -o -name "*.jpeg" | wc -l | tr -d ' ')
-PNG_FILES=$(find "$TARGET_DIR" -name "*.png" | wc -l | tr -d ' ')
+HEIC_FILES=$(find "$TARGET_DIR" -iname "*.heic" | wc -l | tr -d ' ')
+MP4_FILES=$(find "$TARGET_DIR" -iname "*.mp4" | wc -l | tr -d ' ')
+MOV_FILES=$(find "$TARGET_DIR" -iname "*.mov" | wc -l | tr -d ' ')
+JPG_FILES=$(find "$TARGET_DIR" -iname "*.jpg" -o -iname "*.jpeg" | wc -l | tr -d ' ')
+PNG_FILES=$(find "$TARGET_DIR" -iname "*.png" | wc -l | tr -d ' ')
 
 echo "   总文件数: $TOTAL_FILES"
 echo "   HEIC文件: $HEIC_FILES"
@@ -68,7 +68,7 @@ echo ""
 echo "🖼️ Test 2: HEIC文件质量检查"
 if [ "$HEIC_FILES" -gt 0 ]; then
     # 随机选择3个HEIC文件进行检查
-    SAMPLE_HEIC=$(find "$TARGET_DIR" -name "*.heic" | head -3)
+    SAMPLE_HEIC=$(find "$TARGET_DIR" -iname "*.heic" | head -3)
     HEIC_CHECK_COUNT=0
     HEIC_PASS_COUNT=0
     
@@ -116,7 +116,7 @@ fi
 # 3. 随机抽检视频文件
 echo ""
 echo "🎬 Test 3: 视频文件质量检查"
-VIDEO_FILES=$(find "$TARGET_DIR" -name "*.mp4" -o -name "*.mov" | head -3)
+VIDEO_FILES=$(find "$TARGET_DIR" -iname "*.mp4" -o -iname "*.mov" | head -3)
 if [ -n "$VIDEO_FILES" ]; then
     VIDEO_CHECK_COUNT=0
     VIDEO_PASS_COUNT=0
@@ -257,7 +257,7 @@ echo "🏷️ Test 7: 元数据保留验证"
 
 if command -v exiftool >/dev/null 2>&1; then
     # 随机选择一个图片文件检查元数据
-    SAMPLE_IMAGE=$(find "$TARGET_DIR" -name "*.jpg" -o -name "*.png" | head -1)
+    SAMPLE_IMAGE=$(find "$TARGET_DIR" -iname "*.jpg" -o -iname "*.png" | head -1)
     if [ -n "$SAMPLE_IMAGE" ]; then
         METADATA_COUNT=$(exiftool "$SAMPLE_IMAGE" 2>/dev/null | grep -v "ExifTool Version" | wc -l | tr -d ' ')
         if [ "$METADATA_COUNT" -gt 10 ]; then
@@ -280,7 +280,7 @@ echo "🔐 Test 8: 文件完整性验证"
 
 # 检查是否有损坏的文件
 CORRUPTED_COUNT=0
-SAMPLE_FILES=$(find "$TARGET_DIR" -type f \( -name "*.jpg" -o -name "*.png" -o -name "*.heic" \) | head -5)
+SAMPLE_FILES=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.heic" \) | head -5)
 
 for sample_file in $SAMPLE_FILES; do
     if ! file "$sample_file" | grep -qE "(JPEG|PNG|HEIF)"; then
