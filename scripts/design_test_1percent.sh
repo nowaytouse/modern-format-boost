@@ -115,7 +115,7 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
             test_pass "成功转换（未超出1%容差）"
             
             # 检查输出文件大小
-            OUTPUT_FILE=$(find "$OUTPUT_DIR" -name "*.heic" | head -1)
+            OUTPUT_FILE=$(find "$OUTPUT_DIR" -iname "*.heic" | head -1)
             if [ -n "$OUTPUT_FILE" ] && [ -f "$OUTPUT_FILE" ]; then
                 OUTPUT_SIZE=$(stat -f%z "$OUTPUT_FILE" 2>/dev/null || stat -c%s "$OUTPUT_FILE" 2>/dev/null)
                 echo "   📏 输出大小: $OUTPUT_SIZE bytes"

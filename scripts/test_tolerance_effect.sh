@@ -15,7 +15,7 @@ trap "rm -rf $SAFE_DIR" EXIT
 echo "📁 安全测试目录: $SAFE_DIR"
 
 # 查找一个JPG文件进行测试
-JPG_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.jpg" -size +100k -size -1M | head -1)
+JPG_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.jpg" -size +100k -size -1M | head -1)
 
 if [ -z "$JPG_FILE" ]; then
     echo "⚠️ 未找到合适的JPG测试文件，跳过测试"
