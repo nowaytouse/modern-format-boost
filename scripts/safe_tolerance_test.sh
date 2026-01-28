@@ -21,9 +21,9 @@ echo ""
 echo "🔍 查找测试文件..."
 
 # 查找JPG文件
-JPG_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.jpg" | head -1)
-PNG_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.png" | head -1)
-GIF_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.gif" | grep -v "(" | head -1)
+JPG_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.jpg" | head -1)
+PNG_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.png" | head -1)
+GIF_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.gif" | grep -v "(" | head -1)
 
 # 复制到安全目录
 SAFE_JPG=""
@@ -87,7 +87,7 @@ if [ -n "$SAFE_JPG" ]; then
         test_pass "JPG处理完成"
         
         # 检查是否有输出文件
-        if find "$OUTPUT_DIR" -name "*.heic" | head -1 | read; then
+        if find "$OUTPUT_DIR" -iname "*.heic" | head -1 | read; then
             test_pass "JPG成功转换为HEIC"
         else
             # 检查是否是智能跳过

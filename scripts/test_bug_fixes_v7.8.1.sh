@@ -34,7 +34,7 @@ echo "🧪 测试1: HEIC内存限制错误修复"
 echo "----------------------------------------"
 
 # 查找HEIC文件进行测试
-HEIC_FILES=$(find "$TEST_DIR" -name "*.heic" -o -name "*.HEIC" 2>/dev/null | head -3)
+HEIC_FILES=$(find "$TEST_DIR" -iname "*.heic" -o -iname "*.HEIC" 2>/dev/null | head -3)
 
 if [[ -n "$HEIC_FILES" ]]; then
     echo "📁 找到HEIC测试文件:"
@@ -67,7 +67,7 @@ echo "🧪 测试3: MS-SSIM fallback机制"
 echo "----------------------------------------"
 
 # 查找图片文件测试MS-SSIM fallback
-IMG_FILES=$(find "$TEST_DIR" -name "*.jpg" -o -name "*.png" 2>/dev/null | head -2)
+IMG_FILES=$(find "$TEST_DIR" -iname "*.jpg" -o -iname "*.png" 2>/dev/null | head -2)
 
 if [[ -n "$IMG_FILES" ]]; then
     echo "📁 找到图片测试文件:"

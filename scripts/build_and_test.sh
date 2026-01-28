@@ -18,7 +18,7 @@ TEST_DIR="/tmp/quality_test_$$"
 mkdir -p "$TEST_DIR"
 
 # 找一个测试视频并复制
-SOURCE_VIDEO=$(find ~/Downloads -name "*.mp4" -o -name "*.mov" 2>/dev/null | head -1)
+SOURCE_VIDEO=$(find ~/Downloads -iname "*.mp4" -o -iname "*.mov" 2>/dev/null | head -1)
 
 if [ -z "$SOURCE_VIDEO" ]; then
     echo "⚠️  No test video found, creating synthetic test..."
