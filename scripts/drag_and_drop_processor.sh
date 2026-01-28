@@ -347,11 +347,13 @@ main() {
         
         # Rsync is best for this - exclude media extensions we processed
         # Calculate exclusions
+        # 🔥 Fixed case sensitivity issues by using bracket patterns
         local excludes=(
-            --exclude="*.jpg" --exclude="*.jpeg" --exclude="*.png" --exclude="*.webp" 
-            --exclude="*.heic" --exclude="*.avif" --exclude="*.gif" --exclude="*.tiff"
-            --exclude="*.mp4" --exclude="*.mov" --exclude="*.mkv" --exclude="*.avi" 
-            --exclude="*.webm" --exclude="*.xmp"
+            --exclude="*.[jJ][pP][gG]" --exclude="*.[jJ][pP][eE][gG]" --exclude="*.[pP][nN][gG]" --exclude="*.[wW][eE][bB][pP]"
+            --exclude="*.[hH][eE][iI][cC]" --exclude="*.[hH][eE][iI][fF]" --exclude="*.[aA][vV][iI][fF]" --exclude="*.[gG][iI][fF]"
+            --exclude="*.[tT][iI][fF]" --exclude="*.[tT][iI][fF][fF]" --exclude="*.[jJ][pP][eE]" --exclude="*.[jJ][fF][iI][fF]"
+            --exclude="*.[mM][pP]4" --exclude="*.[mM][oO][vV]" --exclude="*.[mM][kK][vV]" --exclude="*.[aA][vV][iI]"
+            --exclude="*.[wW][eE][bB][mM]" --exclude="*.[xX][mM][pP]"
         )
         
         rsync -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
