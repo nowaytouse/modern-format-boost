@@ -49,9 +49,9 @@ echo ""
 echo "🧪 Step 3: 安全文件准备"
 
 # 查找小文件（更容易触发容差）
-SMALL_JPG=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.jpg" -size +50k -size -200k | head -1)
-MEDIUM_JPG=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.jpg" -size +200k -size -500k | head -1)
-GIF_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.gif" | head -1)
+SMALL_JPG=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.jpg" -size +50k -size -200k | head -1)
+MEDIUM_JPG=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.jpg" -size +200k -size -500k | head -1)
+GIF_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.gif" | head -1)
 
 # 安全复制到隔离环境
 TEST_FILES=()

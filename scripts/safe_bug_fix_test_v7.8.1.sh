@@ -49,7 +49,7 @@ for source_dir in "${TEST_SOURCES[@]}"; do
                 echo "📋 复制HEIC: $(basename "$file") -> heic_test_$HEIC_COUNT.heic"
                 ((HEIC_COUNT++))
             fi
-        done < <(find "$source_dir" -name "*.heic" -o -name "*.HEIC" 2>/dev/null | head -3 | tr '\n' '\0')
+        done < <(find "$source_dir" -iname "*.heic" -o -iname "*.HEIC" 2>/dev/null | head -3 | tr '\n' '\0')
     fi
 done
 
@@ -64,7 +64,7 @@ for source_dir in "${TEST_SOURCES[@]}"; do
                 echo "📋 复制图片: $(basename "$file") -> img_test_$IMG_COUNT.$ext"
                 ((IMG_COUNT++))
             fi
-        done < <(find "$source_dir" -name "*.jpg" -o -name "*.png" -o -name "*.jpeg" 2>/dev/null | head -3 | tr '\n' '\0')
+        done < <(find "$source_dir" -iname "*.jpg" -o -iname "*.png" -o -iname "*.jpeg" 2>/dev/null | head -3 | tr '\n' '\0')
     fi
 done
 
@@ -78,7 +78,7 @@ for source_dir in "${TEST_SOURCES[@]}"; do
                 echo "📋 复制GIF: $(basename "$file") -> gif_test_$GIF_COUNT.gif"
                 ((GIF_COUNT++))
             fi
-        done < <(find "$source_dir" -name "*.gif" 2>/dev/null | head -2 | tr '\n' '\0')
+        done < <(find "$source_dir" -iname "*.gif" 2>/dev/null | head -2 | tr '\n' '\0')
     fi
 done
 

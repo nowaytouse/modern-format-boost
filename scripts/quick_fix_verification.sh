@@ -39,7 +39,7 @@ fi
 # 测试3: 查找一个安全的测试文件
 echo ""
 echo "🧪 Test 3: 查找测试文件"
-TEST_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -name "*.jpg" | head -1)
+TEST_FILE=$(find "/Users/user/Downloads/all/闷茶子新" -iname "*.jpg" | head -1)
 
 if [ -n "$TEST_FILE" ]; then
     echo "✅ 找到测试文件: $(basename "$TEST_FILE")"

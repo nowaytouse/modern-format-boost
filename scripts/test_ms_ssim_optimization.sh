@@ -34,7 +34,7 @@ if [ ! -d "$TEST_DIR" ]; then
 fi
 
 echo "🔍 Looking for test videos..."
-TEST_VIDEOS=$(find "$TEST_DIR" -type f \( -name "*.mp4" -o -name "*.mov" -o -name "*.gif" \) | head -5)
+TEST_VIDEOS=$(find "$TEST_DIR" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.gif" \) | head -5)
 
 if [ -z "$TEST_VIDEOS" ]; then
     echo "⚠️  No test videos found in $TEST_DIR"
