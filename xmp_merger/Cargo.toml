@@ -12,6 +12,6 @@ path = "src/main.rs"
 [dependencies]
 shared_utils = { path = "../shared_utils" }
 anyhow = "1.0"
-clap = { version = "4.4", features = ["derive"] }
-console = "0.15"
-indicatif = "0.17"
+clap = { version = "4.5", features = ["derive", "cargo"] }
+console = "0.16"
+indicatif = { version = "0.18", features = ["rayon"] }
