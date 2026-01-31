@@ -1760,7 +1760,7 @@ fn prepare_input_for_cjxl(
             ));
 
             let result = Command::new("dwebp")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                // .arg("--") // 🔥 v7.9: dwebp does not support '--' as delimiter
                 .arg(input)
                 .arg("-o")
                 .arg(&temp_png)
@@ -1855,7 +1855,7 @@ fn prepare_input_for_cjxl(
                 .arg("-s")
                 .arg("format")
                 .arg("png")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                // .arg("--") // 🔥 v7.9: sips does not support '--' as delimiter
                 .arg(input)
                 .arg("--out")
                 .arg(&temp_png)

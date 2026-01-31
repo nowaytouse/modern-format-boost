@@ -960,7 +960,7 @@ pub fn calculate_smart_sample(
         .arg("-t")
         .arg("10") // 只测试前 10 秒
         .arg("-i")
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
         .arg(input)
         .arg("-vf")
         .arg(format!("select='{}',showinfo", select_expr))
@@ -1480,7 +1480,7 @@ impl Default for GpuCoarseConfig {
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     let psnr_output = Command::new("ffmpeg")
         .arg("-i")
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -2036,7 +2036,7 @@ pub fn gpu_coarse_search_with_log(
             .arg("-t")
             .arg(format!("{}", warmup_duration))
             .arg("-i")
-            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
             .arg(input)
             .arg("-c:v")
             .arg(gpu_encoder.name);
@@ -2134,7 +2134,7 @@ pub fn gpu_coarse_search_with_log(
         }
 
         cmd.arg("-i")
-            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
             .arg(input)
             .arg("-c:v")
             .arg(gpu_encoder.name);
@@ -3092,7 +3092,7 @@ pub fn gpu_coarse_search_with_log(
                 // 🔥 v5.80: 并行计算SSIM和PSNR
                 let ssim_output = Command::new("ffmpeg")
                     .arg("-i")
-                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                    // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
                     .arg(input)
                     .arg("-i")
                     .arg(output)

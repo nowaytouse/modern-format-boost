@@ -5807,7 +5807,7 @@ pub mod dynamic_mapping {
                 .arg("-t")
                 .arg(format!("{}", sample_duration.min(10.0))) // 只用10秒
                 .arg("-i")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
                 .arg(input)
                 .arg("-c:v")
                 .arg(gpu_encoder)
@@ -5869,7 +5869,7 @@ pub mod dynamic_mapping {
                     .arg("-t")
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
-                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                    // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
                     .arg(input)
                     .arg("-f")
                     .arg("yuv4mpegpipe")
@@ -5922,7 +5922,7 @@ pub mod dynamic_mapping {
                     .arg("-t")
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
-                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                    // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
                     .arg(input)
                     .arg("-c:v")
                     .arg(encoder.ffmpeg_name())
@@ -6912,7 +6912,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-progress").arg("pipe:1");
 
         cmd.arg("-i")
-            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
             .arg(input)
             .arg("-c:v")
             .arg(encoder.ffmpeg_name())
@@ -8077,7 +8077,7 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
 
     let result = Command::new("ffmpeg")
         .arg("-i")
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -8303,7 +8303,7 @@ fn calculate_ms_ssim_channel_sampled(
 
     let result = Command::new("ffmpeg")
         .arg("-i")
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -8405,7 +8405,7 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     // 正确语法: feature='name=float_ms_ssim'
     let result = Command::new("ffmpeg")
         .arg("-i")
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -8548,7 +8548,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .args(["-v", "error"])
         .args(["-show_entries", "format=duration"])
         .args(["-of", "default=noprint_wrappers=1:nokey=1"])
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
         .arg(input)
         .output()
         .ok()?;
@@ -10304,3 +10304,4 @@ mod prop_tests_v69 {
         }
     }
 }
+ 
