@@ -2,6 +2,35 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.9.1] - 2026-01-31
+
+### 🚀 Dependency Updates & Code Quality Improvements
+
+#### Major Updates
+- **Dependency Version Bump**: Updated all project dependencies to their latest compatible versions
+  - `indicatif` from v0.17 to v0.18 (progress bars)
+  - `console` from v0.15 to v0.16 (terminal colors)
+  - `which` from v6.0 to v8.0 (command execution)
+  - `libheif-rs` from v1.0 to v2.6 (HEIC/HEIF support)
+  - `num_cpus` from v1.16 to v1.17 (CPU detection)
+  - And many other dependencies across the workspace
+- **Workspace-Level Dependency Management**: Consolidated dependency versions in root `Cargo.toml` for consistent versioning across all packages
+- **Build Compatibility**: Ensured all sub-packages (imgquality_av1, imgquality_hevc, vidquality_av1, vidquality_hevc, shared_utils, xmp_merger) use updated dependencies
+
+#### Code Quality Fixes
+- **Unused Import Warning**: Fixed `std::path::PathBuf` import in `shared_utils/src/path_safety.rs` that was causing compiler warnings
+- **Documentation Formatting**: Fixed doc comment formatting in `shared_utils/src/conversion.rs` to comply with clippy standards
+- **IO Error Creation**: Updated deprecated `std::io::Error::new(ErrorKind::Other, msg)` to modern `std::io::Error::other(msg)` in `imgquality_hevc/src/lossless_converter.rs`
+- **Code Cleanup**: Removed redundant braces in error handling code
+
+#### Verification
+- ✅ All 831 tests pass (`cargo test`)
+- ✅ Clippy warnings eliminated (`cargo clippy` clean)
+- ✅ Successful release build (`cargo build --release`)
+- ✅ Dependency updates verified across all workspace members
+
+---
+
 ## [7.8.1] - 2026-01-31
 
 ### 🔧 CJXL Core Optimization & Security Hardening

@@ -2,7 +2,23 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.9.0)
+## 🔥 Latest Updates (v7.9.1)
+
+### Dependency Updates & Code Quality Improvements
+- **🚀 Major Dependency Updates**: All project dependencies updated to latest versions
+  - `indicatif` from v0.17 to v0.18 (progress bars)
+  - `console` from v0.15 to v0.16 (terminal colors)
+  - `which` from v6.0 to v8.0 (command execution)
+  - `libheif-rs` from v1.0 to v2.6 (HEIC/HEIF support)
+  - `num_cpus` from v1.16 to v1.17 (CPU detection)
+  - And many other dependencies across the workspace
+- **🔧 Code Quality Fixes**: Resolved all compiler and clippy warnings
+  - Fixed unused import warnings
+  - Improved documentation formatting
+  - Updated deprecated IO error creation patterns
+- **🏗️ Workspace-Level Dependency Management**: Consolidated dependency versions in root `Cargo.toml` for consistent versioning
+
+### Previous (v7.9.0)
 
 ### Complete Dash Vulnerability Fix - 100% Coverage
 - **✅ CJXL Commands**: All `cjxl` calls now use `cjxl [flags] -- input output` syntax with `--` separator
