@@ -261,7 +261,7 @@ pub struct ConvertOptions {
     /// 🔥 v7.8.3: 允许大小容差（1%）
     /// - true: 允许输出比输入大最多1%（提高转换率，避免高跳过率）
     /// - false: 严格要求输出必须小于输入（哪怕只有1KB）
-    /// 默认: true（保持高转换率）
+    ///   默认: true（保持高转换率）
     pub allow_size_tolerance: bool,
     /// Verbose output (informational messages)
     pub verbose: bool,
