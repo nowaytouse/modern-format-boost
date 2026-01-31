@@ -258,6 +258,11 @@ pub struct ConvertOptions {
     /// 持续搜索直到 SSIM 完全饱和（领域墙）
     /// 只能与 --explore --match-quality --compress 组合使用
     pub ultimate: bool,
+    /// 🔥 v7.8.3: 允许大小容差（1%）
+    /// - true: 允许输出比输入大最多1%（提高转换率，避免高跳过率）
+    /// - false: 严格要求输出必须小于输入（哪怕只有1KB）
+    /// 默认: true（保持高转换率）
+    pub allow_size_tolerance: bool,
     /// Verbose output (informational messages)
     pub verbose: bool,
 }
@@ -276,6 +281,7 @@ impl Default for ConvertOptions {
             compress: false,
             use_gpu: true,   // 🔥 v4.15: GPU by default
             ultimate: false, // 🔥 v6.2: 默认关闭极限模式
+            allow_size_tolerance: true, // 🔥 v7.8.3: 默认允许1%容差（提高转换率）
             verbose: false,
         }
     }
