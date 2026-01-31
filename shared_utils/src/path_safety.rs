@@ -21,7 +21,7 @@ pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     #[test]
     fn test_safe_path_arg() {
