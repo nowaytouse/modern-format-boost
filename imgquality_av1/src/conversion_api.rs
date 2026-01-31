@@ -86,7 +86,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "JPEG lossless transcode to JXL, preserving DCT coefficients".to_string(),
                 command: format!(
-                    "cjxl '{}' '{}' --lossless_jpeg=1",
+                    "cjxl --lossless_jpeg=1 '{}' '{}'",
                     input_path,
                     output_path.display()
                 ),
@@ -281,9 +281,9 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
     let args = if *format == DetectedFormat::JPEG {
         // JPEG lossless transcode
         vec![
+            "--lossless_jpeg=1",
             input.to_str().unwrap(),
             output.to_str().unwrap(),
-            "--lossless_jpeg=1",
         ]
     } else {
         // Lossless modular encoding
@@ -493,9 +493,9 @@ fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat)
     let args = if *format == DetectedFormat::JPEG {
         // JPEG: use lossless_jpeg transcode
         vec![
+            "--lossless_jpeg=1",
             input.to_str().unwrap(),
             output.to_str().unwrap(),
-            "--lossless_jpeg=1",
         ]
     } else {
         // Non-JPEG: use -d 0.0 for mathematical lossless

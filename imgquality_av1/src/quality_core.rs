@@ -190,7 +190,7 @@ pub fn generate_recommendation(
             target_format: Some("JXL".to_string()),
             reason: "JPEG lossless transcode to JXL, preserving DCT coefficients".to_string(),
             command: Some(format!(
-                "cjxl '{}' '{}' --lossless_jpeg=1",
+                "cjxl --lossless_jpeg=1 '{}' '{}'",
                 file_path, output
             )),
         };
