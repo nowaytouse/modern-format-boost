@@ -235,6 +235,9 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
     match format {
         DetectedFormat::GIF => {
             // GIF: check for NETSCAPE extension or multiple image blocks
+            // 🔥 v7.9: 限制大小防止 OOM
+            shared_utils::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let frame_count = count_gif_frames(&data);
             let is_animated = frame_count > 1;
@@ -243,6 +246,9 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
         }
         DetectedFormat::WebP => {
             // WebP: check for ANIM chunk
+            // 🔥 v7.9: 限制大小防止 OOM
+            shared_utils::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let is_animated = data.windows(4).any(|w| w == b"ANIM");
             let frame_count = if is_animated {
@@ -255,6 +261,9 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
         }
         DetectedFormat::PNG => {
             // APNG: check for acTL chunk
+            // 🔥 v7.9: 限制大小防止 OOM
+            shared_utils::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let is_animated = data.windows(4).any(|w| w == b"acTL");
             Ok((is_animated, if is_animated { 2 } else { 1 }, None))
@@ -317,6 +326,9 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
 
         // WebP can be either - check VP8L chunk for lossless
         DetectedFormat::WebP => {
+            // 🔥 v7.9: 限制大小防止 OOM
+            shared_utils::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+                .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
             let is_lossless = data.windows(4).any(|w| w == b"VP8L");
             Ok(if is_lossless {
@@ -399,6 +411,9 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
 ///
 /// Returns detailed analysis with confidence score and factor breakdown
 pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> {
+    // 🔥 v7.9: 限制大小防止 OOM
+    shared_utils::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
     let data = std::fs::read(path)?;
 
     // Validate PNG signature

@@ -871,7 +871,7 @@ fn execute_hevc_conversion(
     crf: u8,
 ) -> Result<u64> {
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let x265_params = format!("log-level=error:pools={}", max_threads);
 
     // 🔥 偶数分辨率处理：HEVC 编码器要求宽高为偶数
@@ -929,7 +929,7 @@ fn execute_hevc_lossless(detection: &VideoDetectionResult, output: &Path) -> Res
     warn!("⚠️  HEVC Lossless encoding - this will be slow and produce large files!");
 
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let x265_params = format!("lossless=1:log-level=error:pools={}", max_threads);
 
     // 🔥 偶数分辨率处理：HEVC 编码器要求宽高为偶数

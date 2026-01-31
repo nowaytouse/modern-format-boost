@@ -333,6 +333,12 @@ fn analyze_directory(
         let path = entry.path();
         if let Some(ext) = path.extension() {
             if image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
+                // 🔥 v7.9: Validate file integrity first
+                if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
+                    eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
+                    continue;
+                }
+
                 match analyze_image(path) {
                     Ok(analysis) => {
                         count += 1;
@@ -836,8 +842,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     // 🔥 性能优化：限制并发数，避免系统卡顿
     // - 使用 CPU 核心数的一半，留出资源给系统和编码器内部线程
     // - 最少 1 个，最多 4 个并发任务
-    let num_cpus = num_cpus::get();
-    let max_threads = (num_cpus / 2).clamp(1, 4);
+    // 🔥 性能优化：限制并发数，避免系统卡顿
+    // - 使用智能线程管理器计算最优并发数
+    // - 针对 Apple Silicon 优化，防止过载
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
 
     // 创建自定义线程池
     let pool = rayon::ThreadPoolBuilder::new()
@@ -852,7 +860,8 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     println!(
         "🔧 Using {} parallel threads (CPU cores: {})",
-        max_threads, num_cpus
+        max_threads,
+        num_cpus::get()
     );
 
     // Process files in parallel using custom thread pool
