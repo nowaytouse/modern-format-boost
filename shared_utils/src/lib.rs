@@ -47,6 +47,8 @@ pub mod ffmpeg_process;
 pub mod crf_constants;
 pub mod float_compare;
 pub mod path_validator;
+// 🔥 v7.9: Smart thread management for Apple Silicon
+pub mod thread_manager;
 // 🔥 v6.5: FFprobe JSON 解析模块
 pub mod ffprobe_json;
 // 🔥 v6.7: 纯视频流大小提取模块
@@ -494,3 +496,17 @@ pub use common_utils::{
     get_command_version,
     is_command_available,
 };
+
+// 🔥 v7.9: Smart thread management for Apple Silicon
+pub use thread_manager::{
+    calculate_optimal_threads,
+    disable_multi_instance_mode,
+    enable_multi_instance_mode,
+    get_ffmpeg_threads,
+    get_optimal_threads,
+    get_rsync_path,
+    get_rsync_version,
+    is_multi_instance,
+    ThreadConfig,
+};
+

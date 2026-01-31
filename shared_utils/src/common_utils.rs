@@ -458,6 +458,42 @@ pub fn format_command_string(command: &str, args: &[&str]) -> String {
 // 测试 (Tests)
 // ═══════════════════════════════════════════════════════════════
 
+// 🔥 v7.9: Validate file integrity (size checks)
+// 防止处理空文件或过小的损坏文件导致 panic
+pub fn validate_file_integrity(path: &std::path::Path) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+    let size = metadata.len();
+
+    // 1. 空文件检查
+    if size == 0 {
+        anyhow::bail!("File is empty (0 bytes)");
+    }
+
+    // 2. 过小文件检查 (最小 GIF 头是 13 字节)
+    // 很多图片格式头至少都有几十字节
+    if size < 12 {
+        anyhow::bail!("File is too small (< 12 bytes) to be a valid image");
+    }
+
+    Ok(())
+}
+
+// 🔥 v7.9: Validate max file size (prevent OOM)
+pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+    let size = metadata.len();
+
+    if size > max_bytes {
+        anyhow::bail!(
+            "File is too large ({} bytes > {} max allowed)",
+            size,
+            max_bytes
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
