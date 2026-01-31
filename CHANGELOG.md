@@ -2,6 +2,23 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.8.1] - 2026-01-31
+
+### 🔧 CJXL Core Optimization & Security Hardening
+
+#### Improvements
+- **Corrected CJXL Argument Order**: Fixed improper parameter ordering in `imgquality_hevc` and `imgquality_av1`. Now strictly follows `cjxl [flags] [input] [output]` to comply with cjxl v0.11+ requirements.
+- **Restored Official Lossless Flag**: Re-enabled `--lossless_jpeg=1` to ensure explicit lossless transcoding mode is correctly declared.
+- **Dash Filename Protection**: Implemented `--` separator in all tool calls (cjxl, ffmpeg, etc.) to prevent command injection via filenames starting with a dash (`-`).
+- **Tool Consistency Audit**: Verified argument ordering for FFmpeg, Avifenc, and Magick across all modules.
+
+#### Verification
+- ✅ `cjxl --lossless_jpeg=1 -- input.jpg output.jxl` -> Success
+- ✅ All workspace tests passed (`cargo test --workspace`)
+- ✅ Verified compilation for all image/video modules
+
+---
+
 ## [7.7.0] - 2026-01-21
 
 ### 🏗️ Code Quality Improvement - Comprehensive Refactoring
