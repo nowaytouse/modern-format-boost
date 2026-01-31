@@ -4943,7 +4943,7 @@ pub mod precheck {
         // 🔴 所有方法都失败 - 响亮报错
         eprintln!("   🔴 DURATION DETECTION FAILED - Cannot determine video duration");
         eprintln!("   🔴 File: {}", input.display());
-        bail!("无法检测视频时长 - 所有方法都失败")
+        bail!("Failed to detect video duration - all methods failed")
     }
 
     /// 🔥 v6.9: 兼容包装 - 供旧代码调用
@@ -5002,7 +5002,7 @@ pub mod precheck {
     /// 使用 ffprobe 快速提取视频元数据
     pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         let file_size = std::fs::metadata(input)
-            .context("无法读取文件元数据")?
+            .context("Failed to read file metadata")?
             .len();
 
         // 🔥 v5.70: 获取编解码器
@@ -5026,24 +5026,24 @@ pub mod precheck {
             .context("ffprobe执行失败")?;
 
         if !output.status.success() {
-            bail!("ffprobe获取视频信息失败");
+            bail!("ffprobe failed to get video info");
         }
 
         let info_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = info_str.trim().split(',').collect();
 
         if parts.len() < 2 {
-            bail!("ffprobe输出格式异常: {}", info_str);
+            bail!("ffprobe output format abnormal: {}", info_str);
         }
 
         // 解析宽高
         let width: u32 = parts.first()
             .and_then(|s| s.parse().ok())
-            .context("无法解析视频宽度")?;
+            .context("Failed to parse video width")?;
         let height: u32 = parts
             .get(1)
             .and_then(|s| s.parse().ok())
-            .context("无法解析视频高度")?;
+            .context("Failed to parse video height")?;
 
         // 🔥 v6.9: 精确提前检测时长、帧率、帧数（一次性完成所有方法）
         let (duration, fps, frame_count_raw, _method) = detect_duration_comprehensive(input)?;
@@ -5177,12 +5177,12 @@ pub mod precheck {
         // 1.1 检查分辨率异常（只检查极端情况）
         if width < 16 || height < 16 {
             return ProcessingRecommendation::CannotProcess {
-                reason: format!("分辨率过小 {}x{} (< 16px)", width, height),
+                reason: format!("Resolution too small {}x{} (< 16px)", width, height),
             };
         }
         if width > 16384 || height > 16384 {
             return ProcessingRecommendation::CannotProcess {
-                reason: format!("分辨率超大 {}x{} (> 16K)", width, height),
+                reason: format!("Resolution too large {}x{} (> 16K)", width, height),
             };
         }
 
@@ -5191,7 +5191,7 @@ pub mod precheck {
         if duration < 0.001 {
             return ProcessingRecommendation::CannotProcess {
                 reason: format!(
-                    "时长读取为 {:.3}s（可能是元数据问题，将尝试转换）",
+                    "Duration read as {:.3}s (possible metadata issue, will attempt conversion)",
                     duration
                 ),
             };
@@ -5205,13 +5205,13 @@ pub mod precheck {
         // - >10000: 异常（元数据错误）
         if fps <= 0.0 {
             return ProcessingRecommendation::CannotProcess {
-                reason: format!("FPS无效 ({:.2})", fps),
+                reason: format!("Invalid FPS ({:.2})", fps),
             };
         }
         if fps > FPS_THRESHOLD_INVALID {
             return ProcessingRecommendation::CannotProcess {
                 reason: format!(
-                    "FPS异常 ({:.0} > {}，可能是元数据错误)",
+                    "Abnormal FPS ({:.0} > {}, likely metadata error)",
                     fps, FPS_THRESHOLD_INVALID
                 ),
             };
@@ -5231,31 +5231,31 @@ pub mod precheck {
         {
             // 识别具体的古老编解码器类别
             let codec_category = if codec_lower.contains("theora") {
-                "Theora（开源视频，WebM前身）"
+                "Theora (Open Source, WebM predecessor)"
             } else if codec_lower.contains("rv") || codec_lower.contains("real") {
-                "RealVideo（曾经的流媒体标准）"
+                "RealVideo (Legacy streaming standard)"
             } else if codec_lower.contains("vp6") || codec_lower.contains("vp7") {
-                "VP6/VP7（Flash Video时代）"
+                "VP6/VP7 (Flash Video era)"
             } else if codec_lower.contains("wmv") {
                 "Windows Media Video"
             } else if codec_lower.contains("cinepak") {
-                "Cinepak（CD-ROM时代）"
+                "Cinepak (CD-ROM era)"
             } else if codec_lower.contains("indeo") || codec_lower.contains("iv") {
                 "Intel Indeo"
             } else if codec_lower.contains("svq") {
-                "Sorenson Video（QuickTime）"
+                "Sorenson Video (QuickTime)"
             } else if codec_lower.contains("flv") {
                 "Flash Video H.263"
             } else if codec_lower.contains("mjpeg") {
-                "Motion JPEG（每帧独立，效率极低）"
+                "Motion JPEG (Inefficient intra-frame only)"
             } else {
-                "古老编解码器"
+                "Legacy codec"
             };
 
             return ProcessingRecommendation::StronglyRecommended {
                 codec: codec.to_string(),
                 reason: format!(
-                    "检测到{}，强烈建议升级到现代编解码器（可获得10-50倍压缩率提升）",
+                    "Detected {}, strongly recommended to upgrade to modern codec (expect 10-50x better compression)",
                     codec_category
                 ),
             };
@@ -5313,23 +5313,22 @@ pub mod precheck {
             && bitrate_kbps < expected_min_bitrate * 0.5
             && bpp < bpp_threshold_very_low
         {
-            return ProcessingRecommendation::Optional {
-                reason: format!(
-                    "文件已高度压缩（bitrate: {:.0} kbps < {:.0} kbps, BPP: {:.4} < {:.4}），\
-                     转换收益有限，但仍可尝试现代编解码器获得边际改善",
-                    bitrate_kbps,
-                    expected_min_bitrate * 0.5,
-                    bpp,
-                    bpp_threshold_very_low
-                ),
-            };
-        }
+                        return ProcessingRecommendation::Optional {
+                            reason: format!(
+                                "File already highly compressed (bitrate: {:.0} kbps < {:.0} kbps, BPP: {:.4} < {:.4}), \
+                                limited gain expected",
+                                bitrate_kbps,
+                                expected_min_bitrate * 0.5,
+                                bpp,
+                                bpp_threshold_very_low
+                            ),
+                        };        }
 
         // 4.2 低bitrate + 低BPP → Recommended（中等压缩，有一定提升空间）
         if bitrate_kbps > 0.0 && bitrate_kbps < expected_min_bitrate && bpp < bpp_threshold_low {
             return ProcessingRecommendation::Recommended {
                 reason: format!(
-                    "文件已有一定压缩（bitrate: {:.0} kbps），但现代编解码器可进一步优化",
+                    "File has some compression (bitrate: {:.0} kbps), but modern codecs can optimize further",
                     bitrate_kbps
                 ),
             };
@@ -5343,7 +5342,7 @@ pub mod precheck {
         // 建议转换到现代编解码器
         ProcessingRecommendation::Recommended {
             reason: format!(
-                "标准编解码器（{}），建议升级到HEVC/AV1以获得更好的压缩率和质量",
+                "Standard codec ({}), suggest upgrading to HEVC/AV1 for better compression and quality",
                 codec
             ),
         }
@@ -5497,8 +5496,8 @@ pub mod precheck {
             // ⚠️ 检测到异常：可能是元数据问题 → 警告但继续尝试
             ProcessingRecommendation::CannotProcess { reason } => {
                 eprintln!("⚠️  PRECHECK WARNING: {}", reason);
-                eprintln!("    → 可能是元数据读取问题，将继续尝试转换...");
-                eprintln!("    → 如果转换失败，请检查源文件是否损坏");
+                eprintln!("    → Possible metadata issue, attempting conversion anyway...");
+                eprintln!("    → If conversion fails, check source file integrity");
             }
 
             // ⚠️ 不建议处理：已是现代编解码器 → 警告但允许继续
@@ -5579,16 +5578,16 @@ pub mod calibration {
             // 根据压缩比例调整 CPU 起点
             let (adjustment, confidence, reason) = if size_ratio < 0.95 {
                 // GPU 压缩余量大，CPU 可以更激进
-                (1.0, 0.85, "GPU压缩余量大，CPU可更激进")
+                (1.0, 0.85, "GPU compression margin large, CPU can be more aggressive")
             } else if size_ratio < 1.0 {
                 // GPU 刚好压缩，CPU 小幅调整
-                (0.5, 0.90, "GPU刚好压缩，CPU小幅调整")
+                (0.5, 0.90, "GPU barely compressed, CPU slight adjustment")
             } else if size_ratio < 1.05 {
                 // GPU 略微超出，CPU 需要稍低 CRF
-                (-0.5, 0.80, "GPU略超，CPU需稍低CRF")
+                (-0.5, 0.80, "GPU slightly oversize, CPU needs lower CRF")
             } else {
                 // GPU 没压缩，CPU 需要更低 CRF
-                (-1.0, 0.70, "GPU未压缩，CPU需更低CRF")
+                (-1.0, 0.70, "GPU not compressed, CPU needs lower CRF")
             };
 
             // 计算预测的 CPU CRF

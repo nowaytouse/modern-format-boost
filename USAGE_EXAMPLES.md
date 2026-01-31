@@ -1,8 +1,8 @@
-# 🎯 v7.8.3 容差功能使用示例
+# 🎯 v7.8.3 Tolerance Feature Usage Examples
 
-## 快速开始
+## Quick Start
 
-### 1. 查看帮助信息
+### 1. Check Help
 
 ```bash
 ./target/release/imgquality-hevc auto --help | grep -A 3 "allow-size-tolerance"
@@ -19,17 +19,17 @@
 
 ---
 
-## 2. 实际使用场景
+## 2. Practical Scenarios
 
-### 场景 A：日常批量转换（推荐默认模式）
+### Scenario A: Daily Batch Conversion (Recommended)
 
-**目标**：最大化转换率，接受微小的大小增加
+**Goal**: Maximize conversion rate, accept minimal size increase
 
 ```bash
-# 使用双击应用（已默认启用容差）
-# 直接拖拽文件夹到 "Modern Format Boost.app"
+# Use double-click app (tolerance enabled by default)
+# Drag and drop folder to "Modern Format Boost.app"
 
-# 或使用命令行
+# Or use command line
 ./target/release/imgquality-hevc auto \
   --explore --match-quality --compress \
   --apple-compat --recursive \
@@ -37,17 +37,17 @@
   --output ~/Pictures/MyPhotos_optimized
 ```
 
-**预期结果**：
-- PNG 减小 30%：✅ 保存
-- PNG 增大 0.5%：✅ 保存（容差内）
-- PNG 增大 1.5%：❌ 跳过，复制原文件
-- JPEG 减小 20%：✅ 保存
+**Expected Result**:
+- PNG reduced 30%: ✅ Saved
+- PNG increased 0.5%: ✅ Saved (within tolerance)
+- PNG increased 1.5%: ❌ Skipped, copy original
+- JPEG reduced 20%: ✅ Saved
 
 ---
 
-### 场景 B：存储空间紧张（严格模式）
+### Scenario B: Tight Storage Space (Strict Mode)
 
-**目标**：只保留真正压缩的文件，拒绝任何增大
+**Goal**: Only keep truly compressed files, reject any increase
 
 ```bash
 ./target/release/imgquality-hevc auto \
@@ -58,32 +58,32 @@
   --output ~/Pictures/MyPhotos_strict
 ```
 
-**预期结果**：
-- PNG 减小 30%：✅ 保存
-- PNG 增大 0.5%：❌ 跳过，复制原文件
-- PNG 增大 1.5%：❌ 跳过，复制原文件
-- JPEG 减小 20%：✅ 保存
+**Expected Result**:
+- PNG reduced 30%: ✅ Saved
+- PNG increased 0.5%: ❌ Skipped, copy original
+- PNG increased 1.5%: ❌ Skipped, copy original
+- JPEG reduced 20%: ✅ Saved
 
 ---
 
-### 场景 C：对比测试
+### Scenario C: Comparison Test
 
-**目标**：对比两种模式的转换率差异
+**Goal**: Compare conversion rates between two modes
 
 ```bash
-# 准备测试数据
+# Prepare test data
 TEST_DIR=~/Pictures/test_batch
 mkdir -p "$TEST_DIR"
 cp ~/Pictures/sample_photos/* "$TEST_DIR/"
 
-# 测试1：默认模式
+# Test 1: Default Mode
 ./target/release/imgquality-hevc auto \
   --explore --match-quality --compress \
   --verbose \
   "$TEST_DIR" \
   --output "${TEST_DIR}_default"
 
-# 测试2：严格模式
+# Test 2: Strict Mode
 ./target/release/imgquality-hevc auto \
   --no-allow-size-tolerance \
   --explore --match-quality --compress \
@@ -91,42 +91,42 @@ cp ~/Pictures/sample_photos/* "$TEST_DIR/"
   "$TEST_DIR" \
   --output "${TEST_DIR}_strict"
 
-# 对比结果
-echo "=== 默认模式统计 ==="
+# Compare Results
+echo "=== Default Mode Stats ==="
 du -sh "${TEST_DIR}_default"
 find "${TEST_DIR}_default" -type f | wc -l
 
-echo "=== 严格模式统计 ==="
+echo "=== Strict Mode Stats ==="
 du -sh "${TEST_DIR}_strict"
 find "${TEST_DIR}_strict" -type f | wc -l
 ```
 
 ---
 
-## 3. 双击应用使用
+## 3. Double-Click App Usage
 
-### 当前行为（v7.8.3）
+### Current Behavior (v7.8.3)
 
-双击 `Modern Format Boost.app` 后：
-- ✅ 默认启用 `--allow-size-tolerance`
-- ✅ 使用 `--explore --match-quality --compress --ultimate`
-- ✅ 最大化转换率
+After double-clicking `Modern Format Boost.app`:
+- ✅ Default enables `--allow-size-tolerance`
+- ✅ Uses `--explore --match-quality --compress --ultimate`
+- ✅ Maximizes conversion rate
 
-### 如何使用严格模式？
+### How to use Strict Mode?
 
-**方法1：修改脚本**（永久生效）
+**Method 1: Modify Script** (Permanent)
 
-编辑 `scripts/drag_and_drop_processor.sh`：
+Edit `scripts/drag_and_drop_processor.sh`:
 
 ```bash
-# 找到这一行（约第240行）
+# Find this line (around line 240)
 local args=(auto --explore --match-quality --compress --apple-compat --recursive --allow-size-tolerance)
 
-# 改为
+# Change to
 local args=(auto --explore --match-quality --compress --apple-compat --recursive --no-allow-size-tolerance)
 ```
 
-**方法2：使用命令行**（临时使用）
+**Method 2: Use Command Line** (Temporary)
 
 ```bash
 cd /Users/user/Downloads/GitHub/modern_format_boost
@@ -141,9 +141,9 @@ cd /Users/user/Downloads/GitHub/modern_format_boost
 
 ---
 
-## 4. 日志解读
+## 4. Log Interpretation
 
-### 默认模式日志示例
+### Default Mode Log Example
 
 ```
 🖼️  Processing: photo1.png
@@ -160,11 +160,11 @@ cd /Users/user/Downloads/GitHub/modern_format_boost
    ✅ JXL conversion successful: size reduced 30.0%
 ```
 
-**解读**：
-- `photo1.png`：增大 0.8%，在容差内，但仍然跳过（因为增大了）
-- `photo2.png`：减小 30%，成功转换
+**Interpretation**:
+- `photo1.png`: Increased 0.8%, within tolerance, but still skipped (because it grew)
+- `photo2.png`: Reduced 30%, conversion successful
 
-### 严格模式日志示例
+### Strict Mode Log Example
 
 ```
 🖼️  Processing: photo1.png
@@ -181,50 +181,50 @@ cd /Users/user/Downloads/GitHub/modern_format_boost
    ✅ JXL conversion successful: size reduced 30.0%
 ```
 
-**解读**：
-- `photo1.png`：增大 0.5%，严格模式下跳过
-- `photo2.png`：减小 30%，成功转换
+**Interpretation**:
+- `photo1.png`: Increased 0.5%, skipped in strict mode
+- `photo2.png`: Reduced 30%, conversion successful
 
 ---
 
-## 5. 常见问题
+## 5. FAQ
 
-### Q1: 为什么 JPEG → JXL 有时会变大？
+### Q1: Why does JPEG → JXL sometimes grow?
 
-**A**: JPEG → JXL 使用无损转码（`--lossless_jpeg=1`），理论上应该减小 20-30%。如果变大，可能是：
-1. 原始 JPEG 已经高度优化
-2. JXL 容器元数据开销
-3. 编码器版本差异
+**A**: JPEG → JXL uses lossless transcoding (`--lossless_jpeg=1`), theoretically reducing size by 20-30%. If it grows, it might be:
+1. Original JPEG is already highly optimized
+2. JXL container metadata overhead
+3. Encoder version differences
 
-**建议**：使用严格模式 `--no-allow-size-tolerance` 确保只保留真正压缩的文件。
+**Suggestion**: Use strict mode `--no-allow-size-tolerance` to ensure keeping only compressed files.
 
-### Q2: 为什么动图转 HEVC 有时会变大？
+### Q2: Why does Animated → HEVC sometimes grow?
 
-**A**: 动图 → HEVC 使用智能质量匹配，可能因为：
-1. 原始动图已经高度压缩（如 WebP lossy）
-2. HEVC 编码器无法进一步压缩
-3. 质量匹配算法保守估计
+**A**: Animated → HEVC uses smart quality matching, possibly because:
+1. Original animation is highly compressed (e.g. WebP lossy)
+2. HEVC encoder cannot compress further
+3. Quality matching algorithm estimates conservatively
 
-**建议**：
-- 使用 `--ultimate` 模式进行更深入的探索
-- 使用 `--no-allow-size-tolerance` 严格要求压缩
+**Suggestion**:
+- Use `--ultimate` mode for deeper exploration
+- Use `--no-allow-size-tolerance` to require strict compression
 
-### Q3: 1% 容差是否可以调整？
+### Q3: Can 1% tolerance be adjusted?
 
-**A**: 当前版本硬编码为 1%。如果需要调整，可以修改源码：
+**A**: Current version hardcodes 1%. If adjustment is needed, modify source:
 
 ```rust
-// 在 lossless_converter.rs 中
+// In lossless_converter.rs
 let tolerance_ratio = if options.allow_size_tolerance {
-    1.02 // 改为 2% 容差
+    1.02 // Change to 2% tolerance
 } else {
     1.0
 };
 ```
 
-### Q4: 如何查看跳过的文件？
+### Q4: How to view skipped files?
 
-**A**: 使用 `--verbose` 参数：
+**A**: Use `--verbose` argument:
 
 ```bash
 ./target/release/imgquality-hevc auto \
@@ -233,48 +233,48 @@ let tolerance_ratio = if options.allow_size_tolerance {
   input_dir \
   --output output_dir 2>&1 | tee conversion.log
 
-# 查看跳过的文件
+# View skipped files
 grep "Skipping" conversion.log
 ```
 
 ---
 
-## 6. 性能对比
+## 6. Performance Comparison
 
-### 测试环境
-- 系统：macOS 14.x
-- CPU：Apple M1/M2
-- 测试数据：100 张混合格式图片（PNG/JPEG/WebP）
+### Test Environment
+- System: macOS 14.x
+- CPU: Apple M1/M2
+- Test Data: 100 mixed format images (PNG/JPEG/WebP)
 
-### 结果对比
+### Results
 
-| 模式 | 转换成功 | 跳过 | 总大小变化 | 转换率 |
-|------|---------|------|-----------|--------|
-| 默认模式（启用容差） | 85 | 15 | -25% | 85% |
-| 严格模式（禁用容差） | 78 | 22 | -28% | 78% |
+| Mode | Success | Skipped | Total Size | Rate |
+|------|---------|---------|------------|------|
+| Default (Tolerance) | 85 | 15 | -25% | 85% |
+| Strict (No Tolerance) | 78 | 22 | -28% | 78% |
 
-**结论**：
-- 默认模式：更高的转换率（85%），略小的压缩率（-25%）
-- 严格模式：更低的转换率（78%），更高的压缩率（-28%）
+**Conclusion**:
+- Default: Higher conversion rate (85%), slightly less compression (-25%)
+- Strict: Lower conversion rate (78%), higher compression (-28%)
 
 ---
 
-## 7. 最佳实
+## 7. Best Practices
 
-### 推荐配置
+### Recommended Config
 
-**日常使用**：
+**Daily Use**:
 ```bash
-# 使用默认模式，最大化转换率
+# Use default mode, maximize conversion rate
 ./target/release/imgquality-hevc auto \
   --explore --match-quality --compress --ultimate \
   --apple-compat --recursive \
   input_dir --output output_dir
 ```
 
-**存储优化**：
+**Storage Optimization**:
 ```bash
-# 使用严格模式，确保压缩
+# Use strict mode, ensure compression
 ./target/release/imgquality-hevc auto \
   --no-allow-size-tolerance \
   --explore --match-quality --compress --ultimate \
@@ -282,9 +282,9 @@ grep "Skipping" conversion.log
   input_dir --output output_dir
 ```
 
-**快速测试**：
+**Quick Test**:
 ```bash
-# 不使用 --ultimate，加快速度
+# No --ultimate, faster speed
 ./target/release/imgquality-hevc auto \
   --explore --match-quality --compress \
   --verbose \
@@ -293,37 +293,37 @@ grep "Skipping" conversion.log
 
 ---
 
-## 8. 故障排查
+## 8. Troubleshooting
 
-### 问题：所有文件都被跳过
+### Issue: All files skipped
 
-**可能原因**：
-1. 输入文件已经高度优化
-2. 使用了严格模式但文件无法进一步压缩
+**Possible Reasons**:
+1. Input files already highly optimized
+2. Using strict mode but files cannot be compressed further
 
-**解决方案**：
+**Solution**:
 ```bash
-# 尝试默认模式
+# Try default mode
 ./target/release/imgquality-hevc auto \
   --allow-size-tolerance \
   --verbose \
   input_dir --output output_dir
 
-# 查看详细日志
+# Check detailed logs
 ./target/release/imgquality-hevc auto \
   --verbose \
   input_dir --output output_dir 2>&1 | less
 ```
 
-### 问题：输出目录比输入大
+### Issue: Output directory larger than input
 
-**可能原因**：
-1. 启用了容差，部分文件在容差范围内被保留
-2. 元数据和容器开销
+**Possible Reasons**:
+1. Tolerance enabled, some files preserved within tolerance range
+2. Metadata and container overhead
 
-**解决方案**：
+**Solution**:
 ```bash
-# 使用严格模式
+# Use strict mode
 ./target/release/imgquality-hevc auto \
   --no-allow-size-tolerance \
   --explore --match-quality --compress \
@@ -332,18 +332,18 @@ grep "Skipping" conversion.log
 
 ---
 
-## 9. 总结
+## 9. Summary
 
-| 使用场景 | 推荐模式 | 命令行参数 |
-|---------|---------|-----------|
-| 日常批量转换 | 默认模式 | 无需指定（默认启用） |
-| 存储空间紧张 | 严格模式 | `--no-allow-size-tolerance` |
-| 质量验证测试 | 严格模式 | `--no-allow-size-tolerance` |
-| 最大化转换率 | 默认模式 | `--allow-size-tolerance` |
+| Scenario | Recommended Mode | CLI Argument |
+|----------|------------------|--------------|
+| Daily Batch | Default Mode | None (Default) |
+| Tight Storage | Strict Mode | `--no-allow-size-tolerance` |
+| Quality Test | Strict Mode | `--no-allow-size-tolerance` |
+| Max Rate | Default Mode | `--allow-size-tolerance` |
 
-**记住**：
-- ✅ 默认模式 = 高转换率 + 1% 容差
-- ✅ 严格模式 = 严格压缩 + 0% 容差
-- ✅ 双击应用默认使用默认模式
-- ✅ 使用 `--verbose` 查看详细日志
+**Remember**:
+- ✅ Default Mode = High conversion rate + 1% tolerance
+- ✅ Strict Mode = Strict compression + 0% tolerance
+- ✅ Double-click app uses Default Mode
+- ✅ Use `--verbose` for detailed logs
 

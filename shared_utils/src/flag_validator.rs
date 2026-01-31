@@ -63,14 +63,14 @@ impl FlagMode {
     /// 获取模式的中文描述
     pub fn description_cn(&self) -> &'static str {
         match self {
-            FlagMode::Default => "默认模式",
-            FlagMode::CompressOnly => "仅压缩（输出 < 输入）",
-            FlagMode::ExploreOnly => "探索最小输出",
-            FlagMode::QualityOnly => "粗略质量匹配",
-            FlagMode::CompressWithQuality => "压缩 + 粗略质量验证",
-            FlagMode::PreciseQuality => "精确质量匹配（最高 SSIM）",
-            FlagMode::PreciseQualityWithCompress => "精确质量匹配 + 必须压缩",
-            FlagMode::UltimateExplore => "🔥 极限探索（SSIM 饱和）",
+            FlagMode::Default => "Default mode",
+            FlagMode::CompressOnly => "Compress only (output < input)",
+            FlagMode::ExploreOnly => "Explore smallest output",
+            FlagMode::QualityOnly => "Rough quality match",
+            FlagMode::CompressWithQuality => "Compress + rough quality validation",
+            FlagMode::PreciseQuality => "Precise quality match (highest SSIM)",
+            FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
+            FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation)",
         }
     }
 
@@ -154,11 +154,11 @@ pub fn validate_flags_with_ultimate(
             return FlagValidation::Valid(FlagMode::UltimateExplore);
         } else {
             return FlagValidation::Invalid(
-                "❌ 无效的 flag 组合: --ultimate 只能与 --explore --match-quality --compress 组合使用！\n\
-                 💡 --ultimate 是极限探索模式，持续搜索直到 SSIM 完全饱和\n\
-                 💡 正确用法:\n\
+                "❌ Invalid flag combination: --ultimate can only be used with --explore --match-quality --compress!\n\
+                 💡 --ultimate is the ultimate exploration mode, searching continuously until SSIM is fully saturated\n\
+                 💡 Correct usage:\n\
                     • --explore --match-quality --compress --ultimate\n\
-                 💡 --ultimate 不能单独使用，也不能与其他不完整组合搭配".to_string()
+                 💡 --ultimate cannot be used alone or with other incomplete combinations".to_string()
             );
         }
     }
@@ -166,12 +166,12 @@ pub fn validate_flags_with_ultimate(
     match (explore, match_quality, compress) {
         // 无效组合：--explore --compress（没有 --match-quality）
         (true, false, true) => FlagValidation::Invalid(
-            "❌ 无效的 flag 组合: --explore --compress\n\
-             💡 --explore 寻找最小输出，--compress 只要更小即可，两者目标冲突\n\
-             💡 有效组合:\n\
-                • --compress 单独：只要输出 < 输入\n\
-                • --explore 单独：寻找尽可能更小的输出\n\
-                • --explore --match-quality --compress：精确质量匹配 + 必须压缩"
+            "❌ Invalid flag combination: --explore --compress\n\
+             💡 --explore seeks minimal output, --compress just needs smaller output; goals conflict\n\
+             💡 Valid combinations:\n\
+                • --compress alone: Just output < input\n\
+                • --explore alone: Find the smallest possible output\n\
+                • --explore --match-quality --compress: Precise quality match + must compress"
                 .to_string(),
         ),
 
