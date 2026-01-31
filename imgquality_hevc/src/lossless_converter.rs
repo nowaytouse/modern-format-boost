@@ -1824,7 +1824,11 @@ fn prepare_input_for_cjxl(
                 input.file_stem().unwrap_or_default().to_string_lossy()
             ));
 
-            let result = Command::new("magick").arg(input).arg(&temp_png).output();
+            let result = Command::new("magick")
+                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                .arg(input)
+                .arg(&temp_png)
+                .output();
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
