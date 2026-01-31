@@ -4780,6 +4780,7 @@ pub mod precheck {
                 "stream=codec_name",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output()
@@ -4812,6 +4813,7 @@ pub mod precheck {
                 "stream=bit_rate",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output()
@@ -4858,6 +4860,7 @@ pub mod precheck {
                 "format=duration",
                 "-of",
                 "json",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output()
@@ -4956,6 +4959,7 @@ pub mod precheck {
                 "format=duration",
                 "-of",
                 "csv=p=0",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output();
@@ -5015,6 +5019,7 @@ pub mod precheck {
                 "stream=width,height",
                 "-of",
                 "csv=p=0",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output()
@@ -5803,6 +5808,7 @@ pub mod dynamic_mapping {
                 .arg("-t")
                 .arg(format!("{}", sample_duration.min(10.0))) // 只用10秒
                 .arg("-i")
+                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                 .arg(input)
                 .arg("-c:v")
                 .arg(gpu_encoder)
@@ -5864,6 +5870,7 @@ pub mod dynamic_mapping {
                     .arg("-t")
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
+                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                     .arg(input)
                     .arg("-f")
                     .arg("yuv4mpegpipe")
@@ -5916,6 +5923,7 @@ pub mod dynamic_mapping {
                     .arg("-t")
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
+                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                     .arg(input)
                     .arg("-c:v")
                     .arg(encoder.ffmpeg_name())
@@ -6132,6 +6140,7 @@ pub fn explore_with_gpu_coarse_search(
                     "format=duration",
                     "-of",
                     "default=noprint_wrappers=1:nokey=1",
+                    "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                 ])
                 .arg(input)
                 .output();
@@ -6778,6 +6787,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 "format=duration",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output();
@@ -6903,6 +6913,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-progress").arg("pipe:1");
 
         cmd.arg("-i")
+            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             .arg(input)
             .arg("-c:v")
             .arg(encoder.ffmpeg_name())
@@ -8067,6 +8078,7 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
 
     let result = Command::new("ffmpeg")
         .arg("-i")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -8292,6 +8304,7 @@ fn calculate_ms_ssim_channel_sampled(
 
     let result = Command::new("ffmpeg")
         .arg("-i")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -8374,12 +8387,26 @@ fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     use std::process::Command;
 
+    // 🔥 v7.9: Check dimensions first to avoid "scale below 1x1" crash in MS-SSIM
+    // MS-SSIM downscales the image 4-5 times. If image is too small (e.g. < 64px),
+    // the smallest scale becomes < 1px, causing libvmaf to crash (Exit 234).
+    if let Ok(info) = crate::ffprobe::probe_video(input) {
+        if info.width < 64 || info.height < 64 {
+            eprintln!(
+                "   ⚠️  Skipping MS-SSIM: Image too small ({}x{}) for multi-scale analysis",
+                info.width, info.height
+            );
+            return None; // Fallback to standard SSIM
+        }
+    }
+
     eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
 
     // 🔥 v7.3: 优先使用 ffmpeg libvmaf（现已安装）
     // 正确语法: feature='name=float_ms_ssim'
     let result = Command::new("ffmpeg")
         .arg("-i")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -8522,6 +8549,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .args(["-v", "error"])
         .args(["-show_entries", "format=duration"])
         .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .output()
         .ok()?;

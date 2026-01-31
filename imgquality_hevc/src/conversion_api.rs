@@ -294,7 +294,10 @@ fn path_to_str(path: &Path) -> Result<&str> {
 
 /// Convert to JXL
 fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_str = path_to_str(input)?;
+    // 🔥 Fix filename trap: Canonicalize input to absolute path
+    // This prevents filenames starting with "-" from being misinterpreted as flags
+    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+    let input_str = path_to_str(&input_abs)?;
     let output_str = path_to_str(output)?;
 
     let args = if *format == DetectedFormat::JPEG {
@@ -319,8 +322,17 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
 /// Convert to AVIF
 fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
     let q = quality.unwrap_or(85).to_string();
-    let input_str = path_to_str(input)?;
-    let output_str = path_to_str(output)?;
+    
+    // 🔥 Fix filename trap: Ensure paths are safe (absolute)
+    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+    let output_abs = if output.is_absolute() {
+        output.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(output)
+    };
+
+    let input_str = path_to_str(&input_abs)?;
+    let output_str = path_to_str(&output_abs)?;
 
     let status = Command::new("avifenc")
         .args([input_str, output_str, "-q", &q])
@@ -352,12 +364,15 @@ fn convert_to_hevc_mp4(
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
     let x265_params = format!("log-level=error:pools={}", max_threads);
 
+    // 🔥 Fix filename trap: Ensure input is absolute
+    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-threads")
         .arg(max_threads.to_string())
         .arg("-i")
-        .arg(input)
+        .arg(&input_abs) // Use absolute path
         .arg("-c:v")
         .arg("libx265")
         .arg("-crf")
@@ -376,7 +391,14 @@ fn convert_to_hevc_mp4(
         cmd.arg("-vf").arg(&vf_args);
     }
     cmd.arg("-pix_fmt").arg("yuv420p");
-    cmd.arg(output);
+    
+    // 🔥 Fix filename trap: Ensure output is absolute
+    let output_abs = if output.is_absolute() {
+        output.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(output)
+    };
+    cmd.arg(&output_abs);
 
     let status = cmd.output()?;
 
@@ -435,8 +457,16 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
         return Ok(()); // Skip if not available
     }
 
-    let source_str = path_to_str(source)?;
-    let dest_str = path_to_str(dest)?;
+    // 🔥 Fix filename trap: Ensure paths are safe (absolute)
+    let source_abs = std::fs::canonicalize(source).unwrap_or(source.to_path_buf());
+    let dest_abs = if dest.is_absolute() {
+        dest.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(dest)
+    };
+
+    let source_str = path_to_str(&source_abs)?;
+    let dest_str = path_to_str(&dest_abs)?;
 
     let status = Command::new("exiftool")
         .args([
@@ -551,7 +581,9 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
 
 /// JXL lossless conversion (always mathematical lossless)
 fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_str = path_to_str(input)?;
+    // 🔥 Fix filename trap: Canonicalize input to absolute path
+    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+    let input_str = path_to_str(&input_abs)?;
     let output_str = path_to_str(output)?;
 
     let args = if *format == DetectedFormat::JPEG {

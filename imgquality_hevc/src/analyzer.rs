@@ -498,8 +498,51 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     Ok(bytes.windows(4).any(|w| w == anim_marker))
 }
 
-/// Get animation duration in seconds using ffprobe
+/// Get animation duration in seconds using multiple detection methods
+///
+/// 🔥 v3.8: Enhanced with fallback mechanisms for better reliability
+/// - Primary: ffprobe with JSON format parsing
+/// - Fallback 1: ffprobe with default format
+/// - Fallback 2: Frame count analysis (for static GIFs)
 fn get_animation_duration(path: &Path) -> Option<f32> {
+    // Method 1: Try ffprobe with JSON format (most reliable)
+    if let Some(duration) = try_ffprobe_json(path) {
+        return Some(duration);
+    }
+
+    // Method 2: Try ffprobe with default format (fallback)
+    if let Some(duration) = try_ffprobe_default(path) {
+        return Some(duration);
+    }
+
+    // Method 3: For GIF files, check if it's actually animated
+    // If it's a static GIF (1 frame), return a very small duration to indicate "static"
+    if let Some(ext) = path.extension() {
+        if ext.to_str().unwrap_or("").to_lowercase() == "gif" {
+            if let Some(frame_count) = try_get_frame_count(path) {
+                if frame_count <= 1 {
+                    // Static GIF detected - return 0.0 to indicate it's not animated
+                    eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
+                    return Some(0.0);
+                } else {
+                    // Animated GIF but duration unknown - estimate from frame count
+                    // Assume 10 FPS as default
+                    let estimated_duration = frame_count as f32 / 10.0;
+                    eprintln!(
+                        "📊 Estimated duration from frame count: {:.2}s ({} frames)",
+                        estimated_duration, frame_count
+                    );
+                    return Some(estimated_duration);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Try to get duration using ffprobe with JSON format
+fn try_ffprobe_json(path: &Path) -> Option<f32> {
     use std::process::Command;
 
     let output = Command::new("ffprobe")
@@ -534,6 +577,59 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     }
 
     None
+}
+
+/// Try to get duration using ffprobe with default format (fallback)
+fn try_ffprobe_default(path: &Path) -> Option<f32> {
+    use std::process::Command;
+
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path.to_str().unwrap_or(""),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let duration_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    duration_str.parse::<f32>().ok()
+}
+
+/// Try to get frame count using ffprobe (for static GIF detection)
+fn try_get_frame_count(path: &Path) -> Option<u32> {
+    use std::process::Command;
+
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_packets",
+            "-show_entries",
+            "stream=nb_read_packets",
+            "-of",
+            "csv=p=0",
+            path.to_str().unwrap_or(""),
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let count_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    count_str.parse::<u32>().ok()
 }
 
 /// Detect if compression is lossless
