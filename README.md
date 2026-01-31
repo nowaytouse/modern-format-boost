@@ -2,7 +2,16 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.8.0)
+## 🔥 Latest Updates (v7.8.1)
+
+### CJXL Optimization & Security Hardening
+- **✅ Corrected CJXL Arguments**: Fixed parameter ordering to `cjxl [flags] [input] [output]` for compatibility with latest cjxl versions.
+- **✅ Lossless Mode Restored**: Explicitly re-enabled `--lossless_jpeg=1` for guaranteed lossless JPEG transcoding.
+- **✅ Dash Vulnerability Fix**: Added `--` separator to all external tool calls to prevent command injection from malicious filenames.
+- **✅ Smart Threading**: Apple Silicon optimized (75% core usage) via new smart thread manager.
+- **✅ GIF parsing fix**: Proper block parsing (Image Descriptors) eliminates static GIF false positives.
+
+### Previous (v7.7.0)
 
 ### Code Quality Improvements - Enhanced Reliability & Maintainability
 - **✅ Unified Logging System**: Structured logging to system temp directory with rotation
