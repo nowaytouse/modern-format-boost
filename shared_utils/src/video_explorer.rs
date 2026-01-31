@@ -5846,7 +5846,7 @@ pub mod dynamic_mapping {
             }
 
             // 🔥 v6.9.17: CPU 采样编码 - 使用 x265 CLI 工具
-            let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+            let max_threads = crate::thread_manager::get_ffmpeg_threads();
 
             let cpu_size = if encoder == super::VideoEncoder::Hevc {
                 // 使用 x265 CLI 工具进行 CPU 校准
@@ -6822,7 +6822,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         }};
     }
 
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = crate::thread_manager::get_ffmpeg_threads();
 
     // 🔥 v5.60: 全片编码（带实时进度显示）
     // 🔥 v6.9.1: 智能音频转码策略

@@ -419,7 +419,15 @@ main() {
             --exclude="*.[wW][eE][bB][mM]" --exclude="*.[xX][mM][pP]"
         )
         
-        rsync -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
+        # Try to use brew rsync if available
+        RSYNC_CMD="rsync"
+        if [ -x "/opt/homebrew/opt/rsync/bin/rsync" ]; then
+            RSYNC_CMD="/opt/homebrew/opt/rsync/bin/rsync"
+        elif [ -x "/usr/local/opt/rsync/bin/rsync" ]; then
+            RSYNC_CMD="/usr/local/opt/rsync/bin/rsync"
+        fi
+
+        "$RSYNC_CMD" -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
         echo -e "\r   ${GREEN}✅ Non-media files synced.${RESET}         "
         
         # 🔥 v7.4.9: rsync 会修改目录时间戳，需要在最后再次修复

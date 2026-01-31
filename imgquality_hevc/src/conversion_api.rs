@@ -361,7 +361,7 @@ fn convert_to_hevc_mp4(
     let vf_args = build_even_dimension_filter(width, height);
 
     // 🔥 性能优化：限制线程数
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let x265_params = format!("log-level=error:pools={}", max_threads);
 
     // 🔥 Fix filename trap: Ensure input is absolute

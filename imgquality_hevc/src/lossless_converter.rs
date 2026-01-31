@@ -1362,7 +1362,7 @@ pub fn convert_to_jxl_matched(
     // Note: For JPEG input with non-zero distance, we need to disable lossless_jpeg
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let mut cmd = Command::new("cjxl");
     cmd.arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)

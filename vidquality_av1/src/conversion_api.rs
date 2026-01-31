@@ -445,7 +445,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
 /// Execute FFV1 conversion
 fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path) -> Result<u64> {
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
 
     // 🔥 偶数分辨率处理：确保宽高为偶数
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -500,7 +500,7 @@ fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path) -> R
 fn execute_av1_conversion(detection: &VideoDetectionResult, output: &Path, crf: u8) -> Result<u64> {
     // 使用 SVT-AV1 编码器 (libsvtav1) - 比 libaom-av1 快 10-20 倍
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
 
     // 🔥 偶数分辨率处理：AV1 编码器要求宽高为偶数
@@ -557,7 +557,7 @@ fn execute_av1_lossless(detection: &VideoDetectionResult, output: &Path) -> Resu
 
     // SVT-AV1 无损模式: crf=0 + lossless=1
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let svt_params = format!("lossless=1:lp={}", max_threads);
 
     // 🔥 偶数分辨率处理：AV1 编码器要求宽高为偶数

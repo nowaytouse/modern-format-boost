@@ -486,10 +486,111 @@ fn is_animated_format(path: &Path, format: &ImageFormat) -> Result<bool> {
     }
 }
 
+/// Check if GIF is animated by properly parsing the GIF structure
+/// 
+/// GIF structure:
+/// - Header (6 bytes): "GIF87a" or "GIF89a"
+/// - Logical Screen Descriptor (7 bytes)
+/// - Optional Global Color Table
+/// - Image Descriptors (start with 0x2C) for each frame
+/// - Optional Extension Blocks (start with 0x21)
+/// - Trailer (0x3B)
+// 🔥 v7.9: 修复 GIF 检测逻辑，增加大小限制防止 OOM
 fn check_gif_animation(path: &Path) -> Result<bool> {
+    // 限制 GIF 大小为 512MB
+    shared_utils::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+
     let bytes = std::fs::read(path)?;
-    let descriptor_count = bytes.windows(1).filter(|w| w[0] == 0x2C).count();
-    Ok(descriptor_count > 1)
+    
+    // Minimum valid GIF size: header(6) + LSD(7) + image descriptor(10) + trailer(1) = 24 bytes
+    if bytes.len() < 24 {
+        return Ok(false); // Too small to be valid GIF
+    }
+    
+    // Verify GIF header
+    if &bytes[0..3] != b"GIF" {
+        return Ok(false);
+    }
+    
+    // Parse GIF structure properly
+    let mut pos = 6; // Skip header
+    
+    // Skip Logical Screen Descriptor (7 bytes)
+    if pos + 7 > bytes.len() {
+        return Ok(false);
+    }
+    let packed = bytes[pos + 4];
+    let has_gct = (packed & 0x80) != 0;
+    let gct_size = if has_gct { 3 * (1 << ((packed & 0x07) + 1)) } else { 0 };
+    pos += 7 + gct_size;
+    
+    // Count actual image frames
+    let mut frame_count = 0;
+    
+    while pos < bytes.len() {
+        match bytes[pos] {
+            0x2C => {
+                // Image Descriptor - this is a frame
+                frame_count += 1;
+                if frame_count > 1 {
+                    return Ok(true); // Found multiple frames = animated
+                }
+                
+                // Skip Image Descriptor (10 bytes minimum)
+                if pos + 10 > bytes.len() {
+                    break;
+                }
+                let img_packed = bytes[pos + 9];
+                let has_lct = (img_packed & 0x80) != 0;
+                let lct_size = if has_lct { 3 * (1 << ((img_packed & 0x07) + 1)) } else { 0 };
+                pos += 10 + lct_size;
+                
+                // Skip LZW data
+                if pos >= bytes.len() {
+                    break;
+                }
+                pos += 1; // LZW minimum code size
+                
+                // Skip sub-blocks
+                while pos < bytes.len() {
+                    let block_size = bytes[pos] as usize;
+                    pos += 1;
+                    if block_size == 0 {
+                        break;
+                    }
+                    pos += block_size;
+                }
+            }
+            0x21 => {
+                // Extension Block
+                if pos + 2 >= bytes.len() {
+                    break;
+                }
+                pos += 2; // Skip extension introducer and label
+                
+                // Skip sub-blocks
+                while pos < bytes.len() {
+                    let block_size = bytes[pos] as usize;
+                    pos += 1;
+                    if block_size == 0 {
+                        break;
+                    }
+                    pos += block_size;
+                }
+            }
+            0x3B => {
+                // Trailer - end of file
+                break;
+            }
+            _ => {
+                // Unknown block, try to skip
+                pos += 1;
+            }
+        }
+    }
+    
+    Ok(frame_count > 1)
 }
 
 fn check_webp_animation(path: &Path) -> Result<bool> {

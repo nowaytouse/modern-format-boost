@@ -40,7 +40,7 @@ impl Default for X265Config {
         Self {
             crf: 23.0,
             preset: "medium".to_string(),
-            threads: (num_cpus::get() / 2).clamp(1, 4),
+            threads: crate::thread_manager::get_optimal_threads(),
             container: "mp4".to_string(),
             preserve_audio: true,
         }

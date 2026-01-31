@@ -329,7 +329,7 @@ fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<(
 /// 使用 SVT-AV1 编码器 (libsvtav1) - 比 libaom-av1 快 10-20 倍
 fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<()> {
     let fps_str = fps.unwrap_or(10.0).to_string();
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
 
     // SVT-AV1 with CRF 0 = 视觉无损最高质量

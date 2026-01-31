@@ -65,7 +65,8 @@ pub fn convert_to_jxl(
     // Execute cjxl (v0.11+ syntax)
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let result = Command::new("cjxl")
         .arg(&actual_input)
         .arg(&output)
@@ -364,7 +365,8 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     // Execute cjxl with --lossless_jpeg=1 for lossless JPEG transcode
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let result = Command::new("cjxl")
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
@@ -586,7 +588,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
 
     // AV1 with CRF 0 for visually lossless (使用 SVT-AV1 编码器)
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y") // Overwrite
@@ -1066,7 +1069,8 @@ pub fn convert_to_jxl_matched(
     // Note: For JPEG input with non-zero distance, we need to disable lossless_jpeg
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let mut cmd = Command::new("cjxl");
     cmd.arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
@@ -1218,7 +1222,8 @@ pub fn convert_to_av1_mp4_lossless(
 
     // Mathematical lossless AV1 (使用 SVT-AV1 编码器)
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let svt_params = format!("lossless=1:lp={}", max_threads); // 数学无损 + 限制线程数
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
