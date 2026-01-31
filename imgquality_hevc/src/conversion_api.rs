@@ -302,10 +302,10 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
 
     let args = if *format == DetectedFormat::JPEG {
         // JPEG lossless transcode
-        vec![input_str, output_str, "--lossless_jpeg=1"]
+        vec!["--lossless_jpeg=1", "--", input_str, output_str]
     } else {
         // Lossless modular encoding
-        vec![input_str, output_str, "-d", "0.0", "-e", "7"] // cjxl v0.11+ 范围是 1-10，默认 7
+        vec!["-d", "0.0", "-e", "7", "--", input_str, output_str] // cjxl v0.11+ 范围是 1-10，默认 7
     };
 
     let status = Command::new("cjxl").args(&args).output()?;
@@ -588,11 +588,11 @@ fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat)
 
     let args = if *format == DetectedFormat::JPEG {
         // JPEG: use lossless_jpeg transcode
-        vec![input_str, output_str, "--lossless_jpeg=1"]
+        vec!["--lossless_jpeg=1", "--", input_str, output_str]
     } else {
         // Non-JPEG: use -d 0.0 for mathematical lossless
         // cjxl v0.11+: --modular=1 强制使用 modular 模式，-e 范围 1-10
-        vec![input_str, output_str, "-d", "0.0", "--modular=1", "-e", "9"]
+        vec!["-d", "0.0", "--modular=1", "-e", "9", "--", input_str, output_str]
     };
 
     let status = Command::new("cjxl").args(&args).output()?;
