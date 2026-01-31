@@ -2,12 +2,26 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.8.1)
+## 🔥 Latest Updates (v7.9.0)
+
+### Complete Dash Vulnerability Fix - 100% Coverage
+- **✅ CJXL Commands**: All `cjxl` calls now use `cjxl [flags] -- input output` syntax with `--` separator
+- **✅ ImageMagick Commands**: All `magick` calls protected with `--` separator
+- **✅ FFmpeg Commands**: All `ffmpeg` calls use `safe_path_arg()` to prepend `./` to dash-prefixed paths
+- **✅ Comprehensive Testing**: Added `test_dash_fix.sh` script to verify protection against malicious filenames
+- **✅ Security Documentation**: Added `SECURITY_FIX_SUMMARY.md` with detailed fix information
+
+**What's Fixed:**
+- Filenames starting with `-` or `--` (e.g., `-test.jpg`, `--help.png`) are now handled safely
+- Prevents command injection attacks via crafted filenames
+- Consistent protection across all external tool invocations (cjxl, ffmpeg, magick, x265)
+
+### Previous (v7.8.1)
 
 ### CJXL Optimization & Security Hardening
 - **✅ Corrected CJXL Arguments**: Fixed parameter ordering to `cjxl [flags] [input] [output]` for compatibility with latest cjxl versions.
 - **✅ Lossless Mode Restored**: Explicitly re-enabled `--lossless_jpeg=1` for guaranteed lossless JPEG transcoding.
-- **✅ Dash Vulnerability Fix**: Added `--` separator to all external tool calls to prevent command injection from malicious filenames.
+- **⚠️ Partial Dash Fix**: Initial `--` separator added (now completed in v7.9.0)
 - **✅ Smart Threading**: Apple Silicon optimized (75% core usage) via new smart thread manager.
 - **✅ GIF parsing fix**: Proper block parsing (Image Descriptors) eliminates static GIF false positives.
 
