@@ -63,14 +63,14 @@ impl FlagMode {
     /// 获取模式的中文描述
     pub fn description_cn(&self) -> &'static str {
         match self {
-            FlagMode::Default => "Default mode",
-            FlagMode::CompressOnly => "Compress only (output < input)",
-            FlagMode::ExploreOnly => "Explore smallest output",
-            FlagMode::QualityOnly => "Rough quality match",
-            FlagMode::CompressWithQuality => "Compress + rough quality validation",
-            FlagMode::PreciseQuality => "Precise quality match (highest SSIM)",
-            FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
-            FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation)",
+            FlagMode::Default => "默认模式",
+            FlagMode::CompressOnly => "仅压缩（输出小于输入）",
+            FlagMode::ExploreOnly => "探索最小输出",
+            FlagMode::QualityOnly => "粗略质量匹配",
+            FlagMode::CompressWithQuality => "压缩+粗略质量验证",
+            FlagMode::PreciseQuality => "精确质量匹配（最高SSIM）",
+            FlagMode::PreciseQualityWithCompress => "精确质量匹配+必须压缩",
+            FlagMode::UltimateExplore => "🔥 极限探索（SSIM饱和）",
         }
     }
 
@@ -322,7 +322,7 @@ mod tests {
                 "错误信息应包含无效组合"
             );
             assert!(
-                err.contains("目标冲突") || err.contains("冲突"),
+                err.contains("goals conflict") || err.contains("conflict"),
                 "错误信息应说明冲突原因"
             );
             assert!(
@@ -411,7 +411,7 @@ mod tests {
             .is_empty());
 
         // 验证描述内容合理
-        assert!(FlagMode::CompressOnly.description_cn().contains("压缩"));
+        assert!(FlagMode::CompressOnly.description_cn().contains("仅压缩"));
         assert!(
             FlagMode::ExploreOnly.description_cn().contains("探索")
                 || FlagMode::ExploreOnly.description_cn().contains("最小")
