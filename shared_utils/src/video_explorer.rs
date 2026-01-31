@@ -5808,7 +5808,7 @@ pub mod dynamic_mapping {
                 .arg(format!("{}", sample_duration.min(10.0))) // 只用10秒
                 .arg("-i")
                 // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-                .arg(input)
+                .arg(crate::safe_path_arg(input).as_ref())
                 .arg("-c:v")
                 .arg(gpu_encoder)
                 .arg("-crf")
@@ -5870,7 +5870,7 @@ pub mod dynamic_mapping {
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
                     // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-                    .arg(input)
+                    .arg(crate::safe_path_arg(input).as_ref())
                     .arg("-f")
                     .arg("yuv4mpegpipe")
                     .arg("-pix_fmt")
@@ -5923,7 +5923,7 @@ pub mod dynamic_mapping {
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
                     // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-                    .arg(input)
+                    .arg(crate::safe_path_arg(input).as_ref())
                     .arg("-c:v")
                     .arg(encoder.ffmpeg_name())
                     .arg("-crf")
@@ -6913,7 +6913,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         cmd.arg("-i")
             // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .arg("-c:v")
             .arg(encoder.ffmpeg_name())
             .arg("-crf")
@@ -8078,9 +8078,9 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     let result = Command::new("ffmpeg")
         .arg("-i")
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-i")
-        .arg(output)
+        .arg(crate::safe_path_arg(output).as_ref())
         .arg("-lavfi")
         .arg("[0:v][1:v]ssim")
         .arg("-f")
@@ -8406,9 +8406,9 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     let result = Command::new("ffmpeg")
         .arg("-i")
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-i")
-        .arg(output)
+        .arg(crate::safe_path_arg(output).as_ref())
         .arg("-lavfi")
         .arg("[0:v][1:v]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'")
         .arg("-f")
@@ -8549,7 +8549,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .args(["-show_entries", "format=duration"])
         .args(["-of", "default=noprint_wrappers=1:nokey=1"])
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .output()
         .ok()?;
 
