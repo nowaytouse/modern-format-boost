@@ -597,7 +597,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         .arg("-threads")
         .arg(max_threads.to_string()) // 限制线程数
         .arg("-i")
-        .arg(input)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-c:v")
         .arg("libsvtav1") // 🔥 使用 SVT-AV1 (比 libaom-av1 快 10-20 倍)
         .arg("-crf")
@@ -1232,7 +1232,7 @@ pub fn convert_to_av1_mp4_lossless(
         .arg("-threads")
         .arg(max_threads.to_string()) // 限制线程数
         .arg("-i")
-        .arg(input)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-c:v")
         .arg("libsvtav1") // 🔥 使用 SVT-AV1 (比 libaom-av1 快 10-20 倍)
         .arg("-crf")

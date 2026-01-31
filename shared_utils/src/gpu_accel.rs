@@ -961,7 +961,7 @@ pub fn calculate_smart_sample(
         .arg("10") // 只测试前 10 秒
         .arg("-i")
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-vf")
         .arg(format!("select='{}',showinfo", select_expr))
         .arg("-f")
@@ -1481,9 +1481,9 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     let psnr_output = Command::new("ffmpeg")
         .arg("-i")
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(std::path::Path::new(input)).as_ref())
         .arg("-i")
-        .arg(output)
+        .arg(crate::safe_path_arg(std::path::Path::new(output)).as_ref())
         .arg("-lavfi")
         .arg("psnr")
         .arg("-f")
@@ -2037,7 +2037,7 @@ pub fn gpu_coarse_search_with_log(
             .arg(format!("{}", warmup_duration))
             .arg("-i")
             // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .arg("-c:v")
             .arg(gpu_encoder.name);
 
@@ -2135,7 +2135,7 @@ pub fn gpu_coarse_search_with_log(
 
         cmd.arg("-i")
             // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .arg("-c:v")
             .arg(gpu_encoder.name);
 
@@ -3093,9 +3093,9 @@ pub fn gpu_coarse_search_with_log(
                 let ssim_output = Command::new("ffmpeg")
                     .arg("-i")
                     // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-                    .arg(input)
+                    .arg(crate::safe_path_arg(input).as_ref())
                     .arg("-i")
-                    .arg(output)
+                    .arg(crate::safe_path_arg(output).as_ref())
                     .arg("-lavfi")
                     .arg("ssim")
                     .arg("-f")

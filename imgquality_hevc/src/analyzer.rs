@@ -653,8 +653,8 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
             "-print_format",
             "json",
             "-show_format",
-            path.to_str().unwrap_or(""),
         ])
+        .arg(shared_utils::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 
@@ -692,8 +692,8 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            path.to_str().unwrap_or(""),
         ])
+        .arg(shared_utils::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 
