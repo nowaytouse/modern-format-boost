@@ -146,7 +146,13 @@ pub struct ConversionOutput {
 // Implement CliProcessingResult for ConversionOutput
 impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn is_skipped(&self) -> bool {
-        self.output_size == 0 && self.output_path.is_empty()
+        // 🔥 v7.9: 修复统计逻辑 - 只有成功且输出为空时才算跳过
+        self.success && (self.output_size == 0 && self.output_path.is_empty())
+    }
+
+    fn is_success(&self) -> bool {
+        // 🔥 v7.9: 成功且未跳过才算真正的成功转换
+        self.success && !(self.output_size == 0 && self.output_path.is_empty())
     }
 
     fn skip_reason(&self) -> Option<&str> {

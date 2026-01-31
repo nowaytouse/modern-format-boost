@@ -165,7 +165,8 @@ fn main() -> Result<()> {
     let pb = ProgressBar::new(pending_files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta_precise}) • {msg}")
+            // 🔥 v7.9.1: 使用 {eta} 替代 {eta_precise}，避免溢出
+            .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta}) • {msg}")
             .unwrap()
             .progress_chars("██▓░")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),

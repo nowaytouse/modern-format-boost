@@ -77,6 +77,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .args(["-v", "error"])
         .args(["-show_entries", "format=duration"])
         .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .output()
         .ok()?;
@@ -105,6 +106,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     for (name, filter) in filters {
         let result = Command::new("ffmpeg")
             .arg("-i")
+            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             .arg(input)
             .arg("-i")
             .arg(output)
@@ -151,6 +153,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
     let result = Command::new("ffmpeg")
         .arg("-i")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg("-i")
         .arg(output)

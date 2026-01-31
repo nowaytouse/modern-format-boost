@@ -117,6 +117,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         ultimate: bool,
 
+        /// 🔥 v7.8.3: Allow 1% size tolerance (default: enabled)
+        /// When enabled, output can be up to 1% larger than input (improves conversion rate).
+        /// When disabled, output MUST be smaller than input (even by 1KB).
+        /// Use --no-allow-size-tolerance to disable.
+        #[arg(long, default_value_t = true)]
+        allow_size_tolerance: bool,
+
         /// Verbose output (show skipped files and success messages)
         #[arg(short, long)]
         verbose: bool,
@@ -208,6 +215,7 @@ fn main() -> anyhow::Result<()> {
             compress,
             apple_compat,
             ultimate,
+            allow_size_tolerance,
             verbose,
         } => {
             // in_place implies delete_original
@@ -250,6 +258,9 @@ fn main() -> anyhow::Result<()> {
             if ultimate {
                 eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
+            if !allow_size_tolerance {
+                eprintln!("📏 Size Tolerance: DISABLED (output must be strictly smaller than input)");
+            }
             let config = AutoConvertConfig {
                 output_dir: output.clone(),
                 base_dir: None, // 🔥 v6.9.15: Will be set in auto_convert_directory
@@ -263,6 +274,7 @@ fn main() -> anyhow::Result<()> {
                 apple_compat,
                 use_gpu: true, // 🔥 v6.2: Always use GPU for coarse search
                 ultimate,      // 🔥 v6.2: 极限探索模式
+                allow_size_tolerance, // 🔥 v7.8.3: 容差开关
                 verbose,
             };
 
@@ -623,6 +635,8 @@ struct AutoConvertConfig {
     use_gpu: bool,
     /// 🔥 v6.2: 极限探索模式
     ultimate: bool,
+    /// 🔥 v7.8.3: 允许大小容差（1%）
+    allow_size_tolerance: bool,
     /// Verbose output
     verbose: bool,
 }
@@ -641,13 +655,29 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
     Ok(())
 }
 
+use imgquality_hevc::conversion_api::ConversionOutput;
+
+/// 🔥 v7.9: 将 ConversionResult 转换为 ConversionOutput
+fn convert_result_to_output(result: shared_utils::ConversionResult) -> ConversionOutput {
+    let input_path = result.input_path.clone();
+    ConversionOutput {
+        original_path: result.input_path,
+        output_path: result.output_path.unwrap_or(input_path),
+        skipped: result.skipped,
+        message: result.message,
+        original_size: result.input_size,
+        output_size: result.output_size,
+        size_reduction: result.size_reduction.map(|r| r as f32),
+    }
+}
+
 /// Smart auto-convert a single file based on format detection
 ///
 /// 🔥 动态图片/视频转换默认使用智能质量匹配（非 lossless 模式时）：
 /// - 二分搜索找到最优 CRF
 /// - SSIM 裁判验证确保质量 (≥0.95)
 /// - 输出大于输入时自动跳过
-fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
+fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<ConversionOutput> {
     use imgquality_hevc::lossless_converter::{
         convert_jpeg_to_jxl, convert_to_hevc_mkv_lossless, convert_to_hevc_mp4_matched,
         convert_to_jxl, ConvertOptions,
@@ -667,6 +697,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         apple_compat: config.apple_compat,
         use_gpu: config.use_gpu,
         ultimate: config.ultimate, // 🔥 v6.2: 极限探索模式
+        allow_size_tolerance: config.allow_size_tolerance, // 🔥 v7.8.3: 容差开关
         verbose: config.verbose,
     };
 
@@ -678,6 +709,19 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
             }
         };
     }
+
+    // Helper to return a skipped result
+    let make_skipped = |msg: &str| -> ConversionOutput {
+        ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(), // Dummy output path
+            skipped: true,
+            message: msg.to_string(),
+            original_size: analysis.file_size,
+            output_size: None,
+            size_reduction: None,
+        }
+    };
 
     // Smart conversion based on format and lossless status
     let result = match (
@@ -708,7 +752,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
             );
             // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
             copy_original_if_adjacent_mode(input, config)?;
-            return Ok(());
+            return Ok(make_skipped("Skipping modern lossy format"));
         }
 
         // JPEG → JXL (always lossless transcode, match_quality does NOT apply to static images)
@@ -747,21 +791,34 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
                 );
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
-                return Ok(());
+                return Ok(make_skipped("Skipping modern lossy animated format"));
             }
 
             // 获取时长
+            // 🔥 v3.8: Enhanced duration detection with fallback mechanisms
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
+                Some(0.0) => {
+                    // Static GIF detected (1 frame) - treat as static image
+                    verbose_log!(
+                        "⏭️ Detected static GIF (1 frame), treating as static image: {}",
+                        input.display()
+                    );
+                    // Convert to JXL as a static lossless image
+                    verbose_log!("🔄 Static GIF→JXL: {}", input.display());
+                    let conv_result = convert_to_jxl(input, &options, 0.0)?;
+                    return Ok(convert_result_to_output(conv_result));
+                }
                 _ => {
                     eprintln!(
                         "⚠️  Cannot get animation duration, skipping conversion: {}",
                         input.display()
                     );
                     eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                    eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
                     // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                     copy_original_if_adjacent_mode(input, config)?;
-                    return Ok(());
+                    return Ok(make_skipped("Cannot get animation duration"));
                 }
             };
 
@@ -810,7 +867,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
                 );
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
-                return Ok(());
+                return Ok(make_skipped("Skipping short animation"));
             } else if config.lossless {
                 // 用户显式要求数学无损
                 verbose_log!(
@@ -838,7 +895,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
                 verbose_log!("⏭️ Skipping modern lossy format: {}", input.display());
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
-                return Ok(());
+                return Ok(make_skipped("Skipping modern lossy format"));
             }
 
             // 🔥 静态有损图片使用高质量转换（distance 0.1 ≈ Q100）
@@ -848,14 +905,17 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         }
     };
 
-    if result.skipped {
-        verbose_log!("⏭️ {}", result.message);
+    // 🔥 v7.9: 将 ConversionResult 转换为 ConversionOutput
+    let output = convert_result_to_output(result);
+
+    if output.skipped {
+        verbose_log!("⏭️ {}", output.message);
     } else {
         // 🔥 修复：message 已经包含了正确的 size reduction/increase 信息
-        verbose_log!("✅ {}", result.message);
+        verbose_log!("✅ {}", output.message);
     }
 
-    Ok(())
+    Ok(output)
 }
 
 /// Smart auto-convert a directory with parallel processing and progress bar
@@ -960,40 +1020,19 @@ fn auto_convert_directory(
     // Process files in parallel using custom thread pool
     pool.install(|| {
         files.par_iter().for_each(|path| {
-            // 获取输入文件大小
-            let input_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-
             match auto_convert_single_file(path, config) {
-                Ok(_) => {
-                    // 🔥 修复：检查是否真的生成了输出文件
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let parent_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    let out_dir = config.output_dir.as_ref().unwrap_or(&parent_dir);
-
-                    // 检查可能的输出文件
-                    // 🔥 v6.4.8: 添加 MOV 格式（苹果兼容模式）
-                    let possible_outputs = [
-                        out_dir.join(format!("{}.jxl", stem)),
-                        out_dir.join(format!("{}.mp4", stem)),
-                        out_dir.join(format!("{}.mov", stem)),
-                        out_dir.join(format!("{}.mkv", stem)),
-                    ];
-
-                    let output_size: u64 = possible_outputs
-                        .iter()
-                        .filter_map(|p| std::fs::metadata(p).ok())
-                        .map(|m| m.len())
-                        .next()
-                        .unwrap_or(0);
-
-                    if output_size > 0 {
-                        // 真正成功的转换
-                        success.fetch_add(1, Ordering::Relaxed);
-                        actual_input_bytes.fetch_add(input_size, Ordering::Relaxed);
-                        actual_output_bytes.fetch_add(output_size, Ordering::Relaxed);
-                    } else {
-                        // 跳过的文件（没有生成输出）- 已在 auto_convert_single_file 中复制
+                Ok(result) => {
+                    if result.skipped {
+                        // 跳过（或者只是复制了原文件）
                         skipped.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        // 成功转换
+                        success.fetch_add(1, Ordering::Relaxed);
+                        // 累加实际输入/输出大小
+                        actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
+                        if let Some(out_size) = result.output_size {
+                            actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
+                        }
                     }
                 }
                 Err(e) => {
@@ -1056,26 +1095,12 @@ fn auto_convert_directory(
         "Image Conversion",
     );
 
-    // 🔥 v6.9.13: 无遗漏设计 - 复制不支持的文件
+    // 🔥 v7.9: 移除 copy_unsupported_files 和 verify_output_completeness
+    // imgquality_hevc 只负责处理图片。视频文件的处理、未支持文件的复制以及最终完整性校验
+    // 将由后续的 vidquality 工具或主控脚本负责。避免在此阶段误报"文件缺失"。
+
+    // 🔥 v7.4.9: 保留目录元数据（时间戳、权限、xattr）
     if let Some(ref output_dir) = config.output_dir {
-        println!("\n📦 Copying unsupported files...");
-        let copy_result = shared_utils::copy_unsupported_files(input, output_dir, recursive);
-        if copy_result.copied > 0 {
-            println!("📦 Copied {} unsupported files", copy_result.copied);
-        }
-        if copy_result.failed > 0 {
-            eprintln!("❌ Failed to copy {} files", copy_result.failed);
-        }
-
-        // 🔥 验证输出完整性
-        println!("\n🔍 Verifying output completeness...");
-        let verify = shared_utils::verify_output_completeness(input, output_dir, recursive);
-        println!("{}", verify.message);
-        if !verify.passed {
-            eprintln!("⚠️  Some files may be missing from output!");
-        }
-
-        // 🔥 v7.4.9: 保留目录元数据（时间戳、权限、xattr）
         if let Some(ref base_dir) = config.base_dir {
             println!("\n📁 Preserving directory metadata...");
             if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {

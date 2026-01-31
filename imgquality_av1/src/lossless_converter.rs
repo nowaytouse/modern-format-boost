@@ -105,6 +105,7 @@ pub fn convert_to_jxl(
 
                 // Step 1: 启动 ImageMagick 进程
                 let magick_result = Command::new("magick")
+                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                     .arg(input)
                     .arg("-depth")
                     .arg("16") // 保留位深
@@ -365,6 +366,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
     let result = Command::new("cjxl")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg(&output)
         .arg("--lossless_jpeg=1") // Lossless JPEG transcode - preserves DCT coefficients
@@ -482,6 +484,7 @@ pub fn convert_to_avif(
         .arg("all") // Use all CPU cores
         .arg("-q")
         .arg(q.to_string())
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg(&output)
         .output();
@@ -709,6 +712,7 @@ pub fn convert_to_avif_lossless(
         .arg("4")
         .arg("-j")
         .arg("all")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg(&output)
         .output();
@@ -1064,7 +1068,8 @@ pub fn convert_to_jxl_matched(
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
     let mut cmd = Command::new("cjxl");
-    cmd.arg(input)
+    cmd.arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+        .arg(input)
         .arg(&output)
         .arg("-d")
         .arg(format!("{:.2}", distance))
@@ -1328,6 +1333,7 @@ fn prepare_input_for_cjxl(
             ));
 
             let result = Command::new("dwebp")
+                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                 .arg(input)
                 .arg("-o")
                 .arg(&temp_png)
@@ -1359,6 +1365,7 @@ fn prepare_input_for_cjxl(
             ));
 
             let result = Command::new("magick")
+                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                 .arg(input)
                 .arg("-depth")
                 .arg("16") // 保留位深
@@ -1421,6 +1428,7 @@ fn prepare_input_for_cjxl(
                 .arg("-s")
                 .arg("format")
                 .arg("png")
+                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                 .arg(input)
                 .arg("--out")
                 .arg(&temp_png)
@@ -1434,7 +1442,11 @@ fn prepare_input_for_cjxl(
                 _ => {
                     eprintln!("   ⚠️  sips failed, trying ImageMagick...");
                     // 尝试 ImageMagick
-                    let result = Command::new("magick").arg(input).arg(&temp_png).output();
+                    let result = Command::new("magick")
+                        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                        .arg(input)
+                        .arg(&temp_png)
+                        .output();
 
                     match result {
                         Ok(output) if output.status.success() && temp_png.exists() => {

@@ -960,6 +960,7 @@ pub fn calculate_smart_sample(
         .arg("-t")
         .arg("10") // 只测试前 10 秒
         .arg("-i")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg("-vf")
         .arg(format!("select='{}',showinfo", select_expr))
@@ -1479,6 +1480,7 @@ impl Default for GpuCoarseConfig {
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     let psnr_output = Command::new("ffmpeg")
         .arg("-i")
+        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
         .arg(input)
         .arg("-i")
         .arg(output)
@@ -1908,6 +1910,7 @@ pub fn gpu_coarse_search_with_log(
                 "format=duration",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
+                "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
             .arg(input)
             .output();
@@ -2033,6 +2036,7 @@ pub fn gpu_coarse_search_with_log(
             .arg("-t")
             .arg(format!("{}", warmup_duration))
             .arg("-i")
+            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             .arg(input)
             .arg("-c:v")
             .arg(gpu_encoder.name);
@@ -2129,7 +2133,11 @@ pub fn gpu_coarse_search_with_log(
             cmd.arg("-t").arg(format!("{}", actual_sample_duration));
         }
 
-        cmd.arg("-i").arg(input).arg("-c:v").arg(gpu_encoder.name);
+        cmd.arg("-i")
+            .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            .arg(input)
+            .arg("-c:v")
+            .arg(gpu_encoder.name);
 
         // 🔥 v5.64: 长视频使用 select 滤镜多段采样
         if use_multi_segment {
@@ -3084,6 +3092,7 @@ pub fn gpu_coarse_search_with_log(
                 // 🔥 v5.80: 并行计算SSIM和PSNR
                 let ssim_output = Command::new("ffmpeg")
                     .arg("-i")
+                    .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                     .arg(input)
                     .arg("-i")
                     .arg(output)

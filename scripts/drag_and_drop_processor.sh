@@ -232,23 +232,26 @@ count_files() {
 # 🖼️  Process Images
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
-    
+
     draw_separator "Processing Images ($IMG_COUNT)"
-    
+
     # 🔥 v6.9.16: 修复参数顺序，确保 --recursive 正确传递以保留目录结构
-    local args=(auto --explore --match-quality --compress --apple-compat --recursive)
+    # 🔥 v7.8.3: 默认启用 --allow-size-tolerance（提高转换率）
+    local args=(auto --explore --match-quality --compress --apple-compat --recursive --allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    
+
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
     else
         # 相邻目录模式：必须先传目录，再传 --output
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
-    
-    # Execution
-    "$IMGQUALITY_HEVC" "${args[@]}"
+
+    # Execution - capture output for statistics parsing
+    local output
+    output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty)
+    parse_tool_stats "$output" "img"
     echo ""
 }
 
@@ -270,17 +273,77 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
     
-    # Execution
-    "$VIDQUALITY_HEVC" "${args[@]}"
+    # Execution - capture output for statistics parsing
+    local output
+    output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty)
+    parse_tool_stats "$output" "vid"
     echo ""
+}
+
+# 📊 Merged Statistics Variables
+IMG_SUCCEEDED=0
+IMG_SKIPPED=0
+IMG_FAILED=0
+VID_SUCCEEDED=0
+VID_SKIPPED=0
+VID_FAILED=0
+
+# 📊 Parse tool output for statistics
+parse_tool_stats() {
+    local output="$1"
+    local tool_type="$2"  # "img" or "vid"
+    
+    # Parse "Succeeded: X" pattern
+    local succeeded=$(echo "$output" | grep -oE 'Succeeded:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    local skipped=$(echo "$output" | grep -oE 'Skipped:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    local failed=$(echo "$output" | grep -oE 'Failed:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    
+    if [[ "$tool_type" == "img" ]]; then
+        IMG_SUCCEEDED=${succeeded:-0}
+        IMG_SKIPPED=${skipped:-0}
+        IMG_FAILED=${failed:-0}
+    else
+        VID_SUCCEEDED=${succeeded:-0}
+        VID_SKIPPED=${skipped:-0}
+        VID_FAILED=${failed:-0}
+    fi
 }
 
 # 🎉 Final Summary
 show_summary() {
     draw_separator "Task Completed"
     
+    # Calculate totals
+    local total_succeeded=$((IMG_SUCCEEDED + VID_SUCCEEDED))
+    local total_skipped=$((IMG_SKIPPED + VID_SKIPPED))
+    local total_failed=$((IMG_FAILED + VID_FAILED))
+    local total_processed=$((total_succeeded + total_skipped + total_failed))
+    
     echo -e "   ${GREEN}✅ Optimization Finished Successfully${RESET}"
     echo -e "   ${DIM}All files have been processed without omission.${RESET}"
+    echo ""
+    
+    # Merged Statistics Report
+    echo -e "   ${BOLD}📊 Merged Statistics Report${RESET}"
+    echo -e "   ${DIM}───────────────────────────────────${RESET}"
+    
+    if [[ $IMG_COUNT -gt 0 ]]; then
+        echo -e "   ${CYAN}🖼️  Images:${RESET} ${GREEN}$IMG_SUCCEEDED${RESET} succeeded, ${YELLOW}$IMG_SKIPPED${RESET} skipped, ${RED}$IMG_FAILED${RESET} failed"
+    fi
+    
+    if [[ $VID_COUNT -gt 0 ]]; then
+        echo -e "   ${MAGENTA}🎬 Videos:${RESET} ${GREEN}$VID_SUCCEEDED${RESET} succeeded, ${YELLOW}$VID_SKIPPED${RESET} skipped, ${RED}$VID_FAILED${RESET} failed"
+    fi
+    
+    echo -e "   ${DIM}───────────────────────────────────${RESET}"
+    echo -e "   ${WHITE}📦 Total:${RESET}  ${GREEN}$total_succeeded${RESET} succeeded, ${YELLOW}$total_skipped${RESET} skipped, ${RED}$total_failed${RESET} failed"
+    
+    if [[ $total_processed -gt 0 ]]; then
+        local success_rate=$(( (total_succeeded * 100) / total_processed ))
+        echo -e "   ${WHITE}📈 Success Rate:${RESET} ${GREEN}${success_rate}%${RESET}"
+    fi
+    
+    echo ""
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         echo -e "   ${BLUE}📂 Output: $OUTPUT_DIR${RESET}"
