@@ -109,6 +109,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
             "json",
             "-show_format",
             "-show_streams",
+            "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             path_str,
         ])
         .output()?;
@@ -261,6 +262,7 @@ pub fn get_duration(path: &Path) -> Option<f64> {
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
+            "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             path.to_str()?,
         ])
         .output()
@@ -289,6 +291,7 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
             "stream=nb_read_frames",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
+            "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             path.to_str()?,
         ])
         .output()

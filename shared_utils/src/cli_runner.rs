@@ -11,6 +11,7 @@ use std::time::Instant;
 /// Trait to unify result reporting from different tools
 pub trait CliProcessingResult {
     fn is_skipped(&self) -> bool;
+    fn is_success(&self) -> bool; // 🔥 v7.9: 新增成功判断方法
     fn skip_reason(&self) -> Option<&str>;
     fn input_path(&self) -> &str;
     fn output_path(&self) -> Option<&str>;
@@ -23,6 +24,9 @@ pub trait CliProcessingResult {
 impl CliProcessingResult for crate::conversion::ConversionResult {
     fn is_skipped(&self) -> bool {
         self.skipped
+    }
+    fn is_success(&self) -> bool {
+        self.success && !self.skipped
     }
     fn skip_reason(&self) -> Option<&str> {
         self.skip_reason.as_deref()
@@ -108,14 +112,8 @@ where
                         result.skip_reason().unwrap_or("unknown")
                     );
                     batch_result.skip();
-                } else if result.output_size().unwrap_or(0) == 0 && result.output_path().is_none() {
-                    // Legacy "skip" signals (empty result)
-                    info!(
-                        "⏭️ {} → SKIP (legacy signal)",
-                        file.file_name().unwrap_or_default().to_string_lossy()
-                    );
-                    batch_result.skip();
-                } else {
+                } else if result.is_success() {
+                    // 🔥 v7.9: 使用 is_success() 判断真正的成功转换
                     info!(
                         "✅ {} → {} ({})",
                         file.file_name().unwrap_or_default().to_string_lossy(),
@@ -125,6 +123,14 @@ where
                     batch_result.success();
                     total_input_bytes += result.input_size();
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
+                } else {
+                    // 🔥 v7.9: 转换失败（success=false）
+                    info!(
+                        "❌ {} → FAILED ({})",
+                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        result.message()
+                    );
+                    batch_result.fail(file.clone(), result.message().to_string());
                 }
             }
             Err(e) => {

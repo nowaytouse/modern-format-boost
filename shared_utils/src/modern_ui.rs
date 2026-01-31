@@ -90,7 +90,8 @@ pub mod progress_style {
     pub const SPINNER_CHARS: &str = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 
     /// 统一模板 - 批量处理进度条
-    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta_precise}) • {msg}";
+    /// 🔥 v7.9.1: 使用 {eta} 替代 {eta_precise}，避免溢出显示天文数字
+    pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta}) • {msg}";
 
     /// 统一模板 - 探索进度条（迭代次数在 msg 中显示）
     pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • ⏱️ {elapsed_precise} • {msg}";
