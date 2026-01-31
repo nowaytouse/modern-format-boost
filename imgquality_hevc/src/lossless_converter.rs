@@ -1700,8 +1700,7 @@ fn try_imagemagick_fallback(
                                 if magick_ok { "✓" } else { "✗" },
                                 if cjxl_ok { "✓" } else { "✗" });
                             // 返回原始错误
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
+                            Err(std::io::Error::other(
                                 "All fallback methods failed"
                             ))
                         }
@@ -1715,8 +1714,7 @@ fn try_imagemagick_fallback(
             } else {
                 eprintln!("   ❌ Failed to capture ImageMagick stdout");
                 let _ = magick_proc.kill();
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Err(std::io::Error::other(
                     "Failed to capture ImageMagick stdout"
                 ))
             }
