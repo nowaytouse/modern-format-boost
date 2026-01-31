@@ -372,7 +372,7 @@ fn convert_to_hevc_mp4(
         .arg("-threads")
         .arg(max_threads.to_string())
         .arg("-i")
-        .arg(&input_abs) // Use absolute path
+        .arg(shared_utils::safe_path_arg(&input_abs).as_ref()) // Use absolute path with safety wrapper
         .arg("-c:v")
         .arg("libx265")
         .arg("-crf")
