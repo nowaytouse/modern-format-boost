@@ -610,8 +610,8 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
             "-print_format",
             "json",
             "-show_format",
-            path.to_str().unwrap_or(""),
         ])
+        .arg(shared_utils::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 

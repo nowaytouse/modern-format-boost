@@ -78,7 +78,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .args(["-show_entries", "format=duration"])
         .args(["-of", "default=noprint_wrappers=1:nokey=1"])
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .output()
         .ok()?;
 
@@ -107,9 +107,9 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
         let result = Command::new("ffmpeg")
             .arg("-i")
             // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .arg("-i")
-            .arg(output)
+            .arg(crate::safe_path_arg(output).as_ref())
             .arg("-lavfi")
             .arg(*filter)
             .arg("-f")
@@ -154,9 +154,9 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
     let result = Command::new("ffmpeg")
         .arg("-i")
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-i")
-        .arg(output)
+        .arg(crate::safe_path_arg(output).as_ref())
         .arg("-lavfi")
         .arg("[0:v][1:v]ssim")
         .arg("-f")

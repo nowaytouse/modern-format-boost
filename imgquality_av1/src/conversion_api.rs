@@ -333,13 +333,14 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
 
     // SVT-AV1 with CRF 0 = 视觉无损最高质量
+    let safe_input = shared_utils::safe_path_arg(input);
     let status = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-threads")
+        .arg(max_threads.to_string())
+        .arg("-i")
+        .arg(safe_input.as_ref())
         .args([
-            "-y",
-            "-threads",
-            &max_threads.to_string(),
-            "-i",
-            input.to_str().unwrap(),
             "-c:v",
             "libsvtav1", // 🔥 使用 SVT-AV1
             "-crf",

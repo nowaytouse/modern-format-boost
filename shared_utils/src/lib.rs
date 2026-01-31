@@ -49,6 +49,9 @@ pub mod float_compare;
 pub mod path_validator;
 // 🔥 v7.9: Smart thread management for Apple Silicon
 pub mod thread_manager;
+
+pub mod path_safety;
+pub use path_safety::safe_path_arg;
 // 🔥 v6.5: FFprobe JSON 解析模块
 pub mod ffprobe_json;
 // 🔥 v6.7: 纯视频流大小提取模块

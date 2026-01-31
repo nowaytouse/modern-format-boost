@@ -199,7 +199,7 @@ pub fn convert_to_jxl(
                 // Step 1: 启动 FFmpeg 进程 (更可靠的解码器)
                 let ffmpeg_result = Command::new("ffmpeg")
                     .arg("-i")
-                    .arg(input)
+                    .arg(shared_utils::safe_path_arg(input).as_ref())
                     .arg("-f")
                     .arg("png")
                     .arg("-pix_fmt")
@@ -722,7 +722,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         .arg("-threads")
         .arg(max_threads.to_string()) // 限制线程数
         .arg("-i")
-        .arg(input)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-c:v")
         .arg("libx265")
         .arg("-crf")
@@ -1532,7 +1532,7 @@ pub fn convert_to_hevc_mkv_lossless(
         .arg("-threads")
         .arg(max_threads.to_string()) // 限制线程数
         .arg("-i")
-        .arg(input)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-c:v")
         .arg("libx265")
         .arg("-x265-params")
@@ -2015,7 +2015,7 @@ pub fn convert_to_gif_apple_compat(
     let palette_result = Command::new("ffmpeg")
         .arg("-y")
         .arg("-i")
-        .arg(input) // 使用 .arg() 而不是字符串拼接，避免特殊字符问题
+        .arg(shared_utils::safe_path_arg(input).as_ref()) // 使用 .arg() 而不是字符串拼接，避免特殊字符问题
         .arg("-vf")
         .arg(format!(
             "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
@@ -2036,7 +2036,7 @@ pub fn convert_to_gif_apple_compat(
     let result = Command::new("ffmpeg")
         .arg("-y")
         .arg("-i")
-        .arg(input)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-i")
         .arg(&palette_path)
         .arg("-lavfi")
