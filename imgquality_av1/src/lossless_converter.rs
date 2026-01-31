@@ -1073,10 +1073,7 @@ pub fn convert_to_jxl_matched(
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let mut cmd = Command::new("cjxl");
-    cmd.arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
-        .arg(&output)
-        .arg("-d")
+    cmd.arg("-d")
         .arg(format!("{:.2}", distance))
         .arg("-e")
         .arg("7") // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
@@ -1087,6 +1084,10 @@ pub fn convert_to_jxl_matched(
     if distance > 0.0 {
         cmd.arg("--lossless_jpeg=0");
     }
+
+    cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
+        .arg(input)
+        .arg(&output);
 
     let result = cmd.output();
 
@@ -1339,7 +1340,7 @@ fn prepare_input_for_cjxl(
             ));
 
             let result = Command::new("dwebp")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                // .arg("--") // 🔥 v7.9: dwebp does not support '--' as delimiter
                 .arg(input)
                 .arg("-o")
                 .arg(&temp_png)
@@ -1434,7 +1435,7 @@ fn prepare_input_for_cjxl(
                 .arg("-s")
                 .arg("format")
                 .arg("png")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                // .arg("--") // 🔥 v7.9: sips does not support '--' as delimiter
                 .arg(input)
                 .arg("--out")
                 .arg(&temp_png)
