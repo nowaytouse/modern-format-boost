@@ -841,9 +841,9 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
                         format,
                         duration,
                         if is_high_quality {
-                            "高质量"
+                            "High Quality"
                         } else {
-                            "长动画"
+                            "Long Animation"
                         },
                         input.display()
                     );

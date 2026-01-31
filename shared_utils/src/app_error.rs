@@ -165,16 +165,16 @@ impl AppError {
     pub fn user_message(&self) -> String {
         match self {
             AppError::FileNotFound { path, operation } => {
-                let mut msg = format!("❌ 文件不存在: {}", path.display());
+                let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   操作: {}", op));
+                    msg.push_str(&format!("\n   Operation: {}", op));
                 }
                 msg
             }
             AppError::DirectoryNotFound { path, operation } => {
-                let mut msg = format!("❌ 目录不存在: {}", path.display());
+                let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   操作: {}", op));
+                    msg.push_str(&format!("\n   Operation: {}", op));
                 }
                 msg
             }
@@ -183,9 +183,9 @@ impl AppError {
                 source,
                 operation,
             } => {
-                let mut msg = format!("❌ 无法读取文件 {}: {}", path.display(), source);
+                let mut msg = format!("❌ Failed to read file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   操作: {}", op));
+                    msg.push_str(&format!("\n   Operation: {}", op));
                 }
                 msg
             }
@@ -194,20 +194,20 @@ impl AppError {
                 source,
                 operation,
             } => {
-                let mut msg = format!("❌ 无法写入文件 {}: {}", path.display(), source);
+                let mut msg = format!("❌ Failed to write file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   操作: {}", op));
+                    msg.push_str(&format!("\n   Operation: {}", op));
                 }
                 msg
             }
             AppError::InvalidCrf(e) => {
-                format!("❌ 无效的 CRF 值: {}", e)
+                format!("❌ Invalid CRF value: {}", e)
             }
             AppError::InvalidSsim(e) => {
-                format!("❌ 无效的 SSIM 值: {}", e)
+                format!("❌ Invalid SSIM value: {}", e)
             }
             AppError::IterationLimitExceeded(e) => {
-                format!("⚠️ 迭代次数超限: {}", e)
+                format!("⚠️ Iteration limit exceeded: {}", e)
             }
             AppError::FfmpegError {
                 message,
@@ -219,15 +219,15 @@ impl AppError {
                 let code_str = exit_code
                     .map(|c| format!(" (exit code: {})", c))
                     .unwrap_or_default();
-                let mut msg = format!("❌ FFmpeg 失败{}: {}", code_str, message);
+                let mut msg = format!("❌ FFmpeg failed{}: {}", code_str, message);
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   文件: {}", path.display()));
+                    msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   命令: {}", cmd));
+                    msg.push_str(&format!("\n   Command: {}", cmd));
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   错误输出: {}", stderr));
+                    msg.push_str(&format!("\n   Error output: {}", stderr));
                 }
                 msg
             }
@@ -237,15 +237,15 @@ impl AppError {
                 command,
                 file_path,
             } => {
-                let mut msg = format!("❌ FFprobe 失败: {}", message);
+                let mut msg = format!("❌ FFprobe failed: {}", message);
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   文件: {}", path.display()));
+                    msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   命令: {}", cmd));
+                    msg.push_str(&format!("\n   Command: {}", cmd));
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   错误输出: {}", stderr));
+                    msg.push_str(&format!("\n   Error output: {}", stderr));
                 }
                 msg
             }
@@ -254,11 +254,11 @@ impl AppError {
                 operation,
             } => {
                 let mut msg = format!(
-                    "❌ 未找到工具: {}\n💡 请确保 {} 已安装并在 PATH 中",
+                    "❌ Tool not found: {}\n💡 Please ensure {} is installed and in PATH",
                     tool_name, tool_name
                 );
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   需要用于: {}", op));
+                    msg.push_str(&format!("\n   Needed for: {}", op));
                 }
                 msg
             }
@@ -269,11 +269,11 @@ impl AppError {
             } => {
                 let ratio = *output_size as f64 / *input_size as f64 * 100.0;
                 let mut msg = format!(
-                    "❌ 压缩失败: 输出 ({} bytes) >= 输入 ({} bytes), 比率 {:.1}%",
+                    "❌ Compression failed: output ({} bytes) >= input ({} bytes), ratio {:.1}%",
                     output_size, input_size, ratio
                 );
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   文件: {}", path.display()));
+                    msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 msg
             }
@@ -283,26 +283,26 @@ impl AppError {
                 file_path,
             } => {
                 let mut msg = format!(
-                    "❌ 质量验证失败: 期望 SSIM >= {:.4}, 实际 {:.4}",
+                    "❌ Quality validation failed: expected SSIM >= {:.4}, actual {:.4}",
                     expected_ssim, actual_ssim
                 );
                 if let Some(path) = file_path {
-                    msg.push_str(&format!("\n   文件: {}", path.display()));
+                    msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 msg
             }
             AppError::OutputExists { path, operation } => {
-                let mut msg = format!("⏭️ 输出文件已存在: {}", path.display());
+                let mut msg = format!("⏭️ Output file exists: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   操作: {}", op));
+                    msg.push_str(&format!("\n   Operation: {}", op));
                 }
                 msg
             }
             AppError::Io(e) => {
-                format!("❌ IO 错误: {}", e)
+                format!("❌ IO error: {}", e)
             }
             AppError::Other(e) => {
-                format!("❌ 错误: {}", e)
+                format!("❌ Error: {}", e)
             }
         }
     }

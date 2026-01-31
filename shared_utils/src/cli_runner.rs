@@ -86,9 +86,9 @@ where
 
     if files.is_empty() {
         anyhow::bail!(
-            "❌ 目录中没有找到视频文件: {}\n\
-             💡 支持的视频格式: {}\n\
-             💡 如果要处理图像，请使用 imgquality 工具",
+            "❌ No video files found in directory: {}\n\
+             💡 Supported video formats: {}\n\
+             💡 Use imgquality tool for images",
             input.display(),
             SUPPORTED_VIDEO_EXTENSIONS.join(", ")
         );
@@ -214,10 +214,10 @@ where
         let ext_str = ext.to_string_lossy().to_lowercase();
         if !SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_str.as_str()) {
             anyhow::bail!(
-                "❌ 不是视频文件: {}\n\
-                 💡 文件扩展名: .{}\n\
-                 💡 支持的视频格式: {}\n\
-                 💡 如果要处理图像，请使用 imgquality 工具",
+                "❌ Not a video file: {}\n\
+                 💡 Extension: .{}\n\
+                 💡 Supported video formats: {}\n\
+                 💡 Use imgquality tool for images",
                 input.display(),
                 ext_str,
                 SUPPORTED_VIDEO_EXTENSIONS.join(", ")
