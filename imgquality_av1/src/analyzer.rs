@@ -267,14 +267,14 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: format!("JPEG图像 ({})，可无损转码至JXL", quality_info),
-                    command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
+                    command: format!("cjxl --lossless_jpeg=1 '{}' '{}'", file_path, output_path),
                     benefit: "保留原始JPEG DCT系数，可逆转换，减少约20%体积".to_string(),
                 }
             } else {
                 JxlIndicator {
                     should_convert: true,
                     reason: "JPEG图像可无损转码至JXL".to_string(),
-                    command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
+                    command: format!("cjxl --lossless_jpeg=1 '{}' '{}'", file_path, output_path),
                     benefit: "保留原始JPEG DCT系数，可逆转换".to_string(),
                 }
             }

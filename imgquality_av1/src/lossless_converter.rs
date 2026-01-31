@@ -68,14 +68,15 @@ pub fn convert_to_jxl(
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let result = Command::new("cjxl")
-        .arg(&actual_input)
-        .arg(&output)
         .arg("-d")
         .arg(format!("{:.1}", distance)) // Distance parameter
         .arg("-e")
         .arg("7") // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
         .arg("-j")
         .arg(max_threads.to_string()) // 限制线程数
+        .arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
+        .arg(&actual_input)
+        .arg(&output)
         .output();
 
     // 清理临时文件
@@ -368,12 +369,12 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let result = Command::new("cjxl")
-        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
-        .arg(&output)
         .arg("--lossless_jpeg=1") // Lossless JPEG transcode - preserves DCT coefficients
         .arg("-j")
-        .arg(max_threads.to_string()) // 限制线程数
+        .arg(max_threads.to_string())
+        .arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
+        .arg(input)
+        .arg(&output)
         .output();
 
     match result {
