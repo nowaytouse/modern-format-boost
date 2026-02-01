@@ -37,23 +37,38 @@ pub fn is_vmaf_available() -> bool {
 ///
 /// Even with extractplanes filter, U/V channels cannot detect chroma degradation.
 pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Result<f64> {
-    // 步骤 1: 转换为 Y4M 格式（vmaf 需要）
-    // 🔥 v7.9.1: 使用 "ref"/"dist" 前缀避免同名文件覆盖（SSIM=1 bug）
-    let ref_y4m = convert_to_y4m(reference, "ref")?;
-    let dist_y4m = convert_to_y4m(distorted, "dist")?;
+    // 步骤 1: 创建临时文件 (RAII guards ensure cleanup)
+    let ref_y4m_file = tempfile::Builder::new()
+        .prefix("vmaf_ref_")
+        .suffix(".y4m")
+        .tempfile()
+        .context("Failed to create ref temp file")?;
+    let dist_y4m_file = tempfile::Builder::new()
+        .prefix("vmaf_dist_")
+        .suffix(".y4m")
+        .tempfile()
+        .context("Failed to create dist temp file")?;
+    let json_file = tempfile::Builder::new()
+        .prefix("vmaf_result_")
+        .suffix(".json")
+        .tempfile()
+        .context("Failed to create json temp file")?;
+
+    // 转换为 Y4M (ffmpeg writes to these paths)
+    convert_to_y4m(reference, ref_y4m_file.path())?;
+    convert_to_y4m(distorted, dist_y4m_file.path())?;
 
     // 步骤 2: 运行 vmaf 计算
-    let output_json = format!("/tmp/vmaf_result_{}.json", std::process::id());
-
+    // vmaf writes JSON result to output path
     let status = Command::new("vmaf")
         .arg("--reference")
-        .arg(&ref_y4m)
+        .arg(ref_y4m_file.path())
         .arg("--distorted")
-        .arg(&dist_y4m)
+        .arg(dist_y4m_file.path())
         .arg("--feature")
         .arg("float_ms_ssim")
         .arg("--output")
-        .arg(&output_json)
+        .arg(json_file.path())
         .arg("--json")
         .status()
         .context("Failed to run vmaf")?;
@@ -63,26 +78,16 @@ pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Resul
     }
 
     // 步骤 3: 解析结果
-    let result = parse_vmaf_json(&output_json)?;
+    // Read from the temp file path while the guard is still alive
+    let result = parse_vmaf_json(json_file.path())?;
 
-    // 清理临时文件
-    let _ = std::fs::remove_file(&ref_y4m);
-    let _ = std::fs::remove_file(&dist_y4m);
-    let _ = std::fs::remove_file(&output_json);
-
+    // Cleanup happens automatically when guards drop
     Ok(result)
 }
 
 /// 转换视频为 Y4M 格式
-/// `role` 用于区分 reference 和 distorted，避免同名文件覆盖
-fn convert_to_y4m(input: &Path, role: &str) -> Result<String> {
-    let output = format!(
-        "/tmp/vmaf_{}_{}_{}.y4m",
-        role,
-        input.file_stem().unwrap().to_string_lossy(),
-        std::process::id()
-    );
-
+fn convert_to_y4m(input: &Path, output_path: &Path) -> Result<()> {
+    // ⚠️ Important: We must overwrite the empty temp file created by Builder
     let status = Command::new("ffmpeg")
         .arg("-i")
         .arg(input)
@@ -90,8 +95,8 @@ fn convert_to_y4m(input: &Path, role: &str) -> Result<String> {
         .arg("yuv420p")
         .arg("-f")
         .arg("yuv4mpegpipe")
-        .arg("-y")
-        .arg(&output)
+        .arg("-y") // Overwrite existing file
+        .arg(output_path)
         .stderr(std::process::Stdio::null())
         .status()
         .context("Failed to convert to Y4M")?;
@@ -100,11 +105,11 @@ fn convert_to_y4m(input: &Path, role: &str) -> Result<String> {
         anyhow::bail!("Y4M conversion failed");
     }
 
-    Ok(output)
+    Ok(())
 }
 
 /// 解析 vmaf JSON 输出
-fn parse_vmaf_json(path: &str) -> Result<f64> {
+fn parse_vmaf_json(path: &Path) -> Result<f64> {
     let content = std::fs::read_to_string(path).context("Failed to read vmaf output")?;
 
     let json: Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
