@@ -130,7 +130,11 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     // Always AV1 MP4 with LOSSLESS mode (as requested: corresponding to image JXL lossless)
     // Note: This produces large files but is mathematically lossless.
-    let output_size = execute_av1_lossless(&detection, &output_path)?;
+    // 🔥 Calculate balanced threads for simple mode (single file = Video workload)
+    let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Video,
+    );
+    let output_size = execute_av1_lossless(&detection, &output_path, thread_config.child_threads)?;
 
     // Preserve metadata (complete copy)
     shared_utils::copy_metadata(input, &output_path);
@@ -249,13 +253,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let (output_size, final_crf, attempts) = match strategy.target {
         TargetVideoFormat::Ffv1Mkv => {
             // Legacy/Fallback catch-all
-            let size = execute_ffv1_conversion(&detection, &output_path)?;
+            let size = execute_ffv1_conversion(&detection, &output_path, config.child_threads)?;
             (size, 0.0, 0)
         }
         TargetVideoFormat::Av1Mp4 => {
             if strategy.lossless {
                 info!("   🚀 Using AV1 Mathematical Lossless Mode");
-                let size = execute_av1_lossless(&detection, &output_path)?;
+                let size = execute_av1_lossless(&detection, &output_path, config.child_threads)?;
                 (size, 0.0, 0)
             } else {
                 // 🔥 v4.6: 使用模块化的 flag 验证器
@@ -275,13 +279,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
                 let explore_result = match flag_mode {
                     shared_utils::FlagMode::UltimateExplore => {
-                        // 🔥 v6.2: AV1 暂不支持极限模式，降级为 PreciseQualityWithCompress
-                        warn!("   ⚠️  AV1 does not support --ultimate yet, using PreciseQualityWithCompress");
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔬 {}: CRF {}", shared_utils::FlagMode::PreciseQualityWithCompress.description_cn(), initial_crf);
                         shared_utils::explore_precise_quality_match_with_compression(
                             input_path, &output_path, shared_utils::VideoEncoder::Av1, vf_args,
-                            initial_crf as f32, 50.0, config.min_ssim
+                            initial_crf as f32, 50.0, config.min_ssim, config.child_threads
                         )
                     }
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
@@ -289,35 +291,35 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         info!("   🔬 {}: CRF {}", flag_mode.description_cn(), initial_crf);
                         shared_utils::explore_precise_quality_match_with_compression(
                             input_path, &output_path, shared_utils::VideoEncoder::Av1, vf_args,
-                            initial_crf as f32, 50.0, config.min_ssim
+                            initial_crf as f32, 50.0, config.min_ssim, config.child_threads
                         )
                     }
                     shared_utils::FlagMode::PreciseQuality => {
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   🔬 {}: CRF {}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_av1(input_path, &output_path, vf_args, initial_crf as f32)
+                        shared_utils::explore_av1(input_path, &output_path, vf_args, initial_crf as f32, config.child_threads)
                     }
                     shared_utils::FlagMode::CompressWithQuality => {
                         let matched_crf = calculate_matched_crf(&detection);
                         info!("   📦 {}: CRF {}", flag_mode.description_cn(), matched_crf);
-                        shared_utils::explore_av1_compress_with_quality(input_path, &output_path, vf_args, matched_crf as f32)
+                        shared_utils::explore_av1_compress_with_quality(input_path, &output_path, vf_args, matched_crf as f32, config.child_threads)
                     }
                     shared_utils::FlagMode::QualityOnly => {
                         let matched_crf = calculate_matched_crf(&detection);
                         info!("   🎯 {}: CRF {}", flag_mode.description_cn(), matched_crf);
-                        shared_utils::explore_av1_quality_match(input_path, &output_path, vf_args, matched_crf as f32)
+                        shared_utils::explore_av1_quality_match(input_path, &output_path, vf_args, matched_crf as f32, config.child_threads)
                     }
                     shared_utils::FlagMode::ExploreOnly => {
                         info!("   🔍 {}", flag_mode.description_cn());
-                        shared_utils::explore_av1_size_only(input_path, &output_path, vf_args, 30.0)
+                        shared_utils::explore_av1_size_only(input_path, &output_path, vf_args, 30.0, config.child_threads)
                     }
                     shared_utils::FlagMode::CompressOnly => {
                         let initial_crf = calculate_matched_crf(&detection);
                         info!("   📦 {}: CRF {}", flag_mode.description_cn(), initial_crf);
-                        shared_utils::explore_av1_compress_only(input_path, &output_path, vf_args, initial_crf as f32)
+                        shared_utils::explore_av1_compress_only(input_path, &output_path, vf_args, initial_crf as f32, config.child_threads)
                     }
                     shared_utils::FlagMode::Default => {
-                        let size = execute_av1_conversion(&detection, &output_path, 0)?;
+                        let size = execute_av1_conversion(&detection, &output_path, 0, config.child_threads)?;
                         return Ok(ConversionOutput {
                             input_path: input.display().to_string(),
                             output_path: output_path.display().to_string(),
@@ -443,9 +445,10 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
 /// explore_smaller_size → 使用 shared_utils::explore_size_only
 ///
 /// Execute FFV1 conversion
-fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path) -> Result<u64> {
+fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path, max_threads: usize) -> Result<u64> {
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
+    // let max_threads = shared_utils::thread_manager::get_ffmpeg_threads(); // Deprecated
+    // max_threads passed in arguments
 
     // 🔥 偶数分辨率处理：确保宽高为偶数
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -497,10 +500,10 @@ fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path) -> R
 }
 
 /// Execute AV1 conversion with specified CRF (using SVT-AV1 for better performance)
-fn execute_av1_conversion(detection: &VideoDetectionResult, output: &Path, crf: u8) -> Result<u64> {
+fn execute_av1_conversion(detection: &VideoDetectionResult, output: &Path, crf: u8, max_threads: usize) -> Result<u64> {
     // 使用 SVT-AV1 编码器 (libsvtav1) - 比 libaom-av1 快 10-20 倍
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
+    // max_threads passed in arguments
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
 
     // 🔥 偶数分辨率处理：AV1 编码器要求宽高为偶数
@@ -552,12 +555,12 @@ fn execute_av1_conversion(detection: &VideoDetectionResult, output: &Path, crf: 
 }
 
 /// Execute mathematical lossless AV1 conversion using SVT-AV1 (⚠️ SLOW, huge files)
-fn execute_av1_lossless(detection: &VideoDetectionResult, output: &Path) -> Result<u64> {
+fn execute_av1_lossless(detection: &VideoDetectionResult, output: &Path, max_threads: usize) -> Result<u64> {
     warn!("⚠️  Mathematical lossless AV1 encoding (SVT-AV1) - this will be SLOW!");
 
     // SVT-AV1 无损模式: crf=0 + lossless=1
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
+    // max_threads passed in arguments
     let svt_params = format!("lossless=1:lp={}", max_threads);
 
     // 🔥 偶数分辨率处理：AV1 编码器要求宽高为偶数

@@ -89,6 +89,9 @@ pub struct ConversionConfig {
     pub full_ms_ssim: bool,
     /// 跳过MS-SSIM计算
     pub skip_ms_ssim: bool,
+
+    /// 🔥 v7.9: Max threads for child processes
+    pub child_threads: usize,
 }
 
 impl Default for ConversionConfig {
@@ -115,6 +118,7 @@ impl Default for ConversionConfig {
             ms_ssim_sampling: None, // 自动选择
             full_ms_ssim: false,
             skip_ms_ssim: false,
+            child_threads: 0,
         }
     }
 }
