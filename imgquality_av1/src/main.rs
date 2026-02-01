@@ -28,6 +28,8 @@ struct AutoConvertConfig<'a> {
     verbose: bool,
     /// Base directory for relative path preservation
     base_dir: Option<&'a Path>,
+    /// 🔥 v7.9: Balanced thread config
+    child_threads: usize,
 }
 
 #[derive(Parser)]
@@ -242,6 +244,14 @@ fn main() -> anyhow::Result<()> {
                 input.parent().map(|p| p.to_path_buf())
             };
 
+            // 🔥 v7.9: Calculate balanced thread configuration
+            let workload = if input.is_dir() {
+                shared_utils::thread_manager::WorkloadType::Image
+            } else {
+                shared_utils::thread_manager::WorkloadType::Video
+            };
+            let thread_config = shared_utils::thread_manager::get_balanced_thread_config(workload);
+
             let config = AutoConvertConfig {
                 output_dir: output.as_deref(),
                 force,
@@ -255,6 +265,7 @@ fn main() -> anyhow::Result<()> {
                 use_gpu: !cpu, // 🔥 v4.15: CPU mode = no GPU
                 verbose,
                 base_dir: base_dir.as_deref(),
+                child_threads: thread_config.child_threads,
             };
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -623,6 +634,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         ultimate: false,         // 🔥 v6.2: AV1 暂不支持极限模式
         allow_size_tolerance: true, // 🔥 v7.8.3: AV1 默认启用容差
         verbose: config.verbose,
+        child_threads: config.child_threads,
     };
 
     // Smart conversion based on format and lossless status
@@ -841,16 +853,16 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     let pb = shared_utils::create_progress_bar(total as u64, "Converting");
 
     // 🔥 性能优化：限制并发数，避免系统卡顿
-    // - 使用 CPU 核心数的一半，留出资源给系统和编码器内部线程
-    // - 最少 1 个，最多 4 个并发任务
-    // 🔥 性能优化：限制并发数，避免系统卡顿
     // - 使用智能线程管理器计算最优并发数
     // - 针对 Apple Silicon 优化，防止过载
-    let max_threads = shared_utils::thread_manager::get_optimal_threads();
+    let balanced_config = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Image
+    );
+    let pool_size = balanced_config.parallel_tasks;
 
     // 创建自定义线程池
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(max_threads)
+        .num_threads(pool_size)
         .build()
         .unwrap_or_else(|_| {
             rayon::ThreadPoolBuilder::new()
@@ -860,9 +872,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         });
 
     println!(
-        "🔧 Using {} parallel threads (CPU cores: {})",
-        max_threads,
-        num_cpus::get()
+        "🔧 Using {} parallel threads (CPU cores: {}) with {} threads per task",
+        pool_size,
+        num_cpus::get(),
+        balanced_config.child_threads
     );
 
     // Process files in parallel using custom thread pool

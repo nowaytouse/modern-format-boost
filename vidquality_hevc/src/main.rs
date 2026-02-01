@@ -195,6 +195,10 @@ fn main() -> anyhow::Result<()> {
                 ms_ssim_sampling,
                 full_ms_ssim,
                 skip_ms_ssim,
+                // 🔥 v7.9: Balanced Thread Strategy (Video Mode)
+                child_threads: shared_utils::thread_manager::get_balanced_thread_config(
+                    shared_utils::thread_manager::WorkloadType::Video
+                ).child_threads,
             };
 
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
