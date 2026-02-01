@@ -265,6 +265,9 @@ pub struct ConvertOptions {
     pub allow_size_tolerance: bool,
     /// Verbose output (informational messages)
     pub verbose: bool,
+    /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
+    /// 0 means use default (or calculated optimal)
+    pub child_threads: usize,
 }
 
 impl Default for ConvertOptions {
@@ -283,6 +286,7 @@ impl Default for ConvertOptions {
             ultimate: false, // 🔥 v6.2: 默认关闭极限模式
             allow_size_tolerance: true, // 🔥 v7.8.3: 默认允许1%容差（提高转换率）
             verbose: false,
+            child_threads: 0,
         }
     }
 }

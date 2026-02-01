@@ -66,7 +66,7 @@ pub fn convert_to_jxl(
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_optimal_threads();
+    let max_threads = if options.child_threads > 0 { options.child_threads } else { shared_utils::thread_manager::get_optimal_threads() };
     let result = Command::new("cjxl")
         .arg("-d")
         .arg(format!("{:.1}", distance)) // Distance parameter
@@ -587,7 +587,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     // AV1 with CRF 0 for visually lossless (使用 SVT-AV1 编码器)
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_optimal_threads();
+    let max_threads = if options.child_threads > 0 { options.child_threads } else { shared_utils::thread_manager::get_optimal_threads() };
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y") // Overwrite
@@ -841,6 +841,7 @@ pub fn convert_to_av1_mp4_matched(
                 initial_crf,
                 50.0,
                 0.91,
+                options.child_threads,
             )
         }
         shared_utils::FlagMode::PreciseQualityWithCompress => {
@@ -852,25 +853,26 @@ pub fn convert_to_av1_mp4_matched(
                 initial_crf,
                 50.0,
                 0.91,
+                options.child_threads,
             )
         }
         shared_utils::FlagMode::PreciseQuality => {
-            shared_utils::explore_av1(input, &output, vf_args, initial_crf)
+            shared_utils::explore_av1(input, &output, vf_args, initial_crf, options.child_threads)
         }
         shared_utils::FlagMode::CompressWithQuality => {
-            shared_utils::explore_av1_compress_with_quality(input, &output, vf_args, initial_crf)
+            shared_utils::explore_av1_compress_with_quality(input, &output, vf_args, initial_crf, options.child_threads)
         }
         shared_utils::FlagMode::QualityOnly => {
-            shared_utils::explore_av1_quality_match(input, &output, vf_args, initial_crf)
+            shared_utils::explore_av1_quality_match(input, &output, vf_args, initial_crf, options.child_threads)
         }
         shared_utils::FlagMode::ExploreOnly => {
-            shared_utils::explore_av1_size_only(input, &output, vf_args, initial_crf)
+            shared_utils::explore_av1_size_only(input, &output, vf_args, initial_crf, options.child_threads)
         }
         shared_utils::FlagMode::CompressOnly => {
-            shared_utils::explore_av1_compress_only(input, &output, vf_args, initial_crf)
+            shared_utils::explore_av1_compress_only(input, &output, vf_args, initial_crf, options.child_threads)
         }
         shared_utils::FlagMode::Default => {
-            shared_utils::explore_av1_quality_match(input, &output, vf_args, initial_crf)
+            shared_utils::explore_av1_quality_match(input, &output, vf_args, initial_crf, options.child_threads)
         }
     }
     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
