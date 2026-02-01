@@ -111,14 +111,17 @@ impl ParallelMsssimCalculator {
             return Ok(MsssimResult::skipped());
         }
 
-        // 🔥 v7.8: 检查文件格式兼容性
-        if let Some(ext) = self.original_path.extension().and_then(|e| e.to_str()) {
-            let ext_lower = ext.to_lowercase();
-            if matches!(ext_lower.as_str(), "gif") {
+        // 🔥 v7.9.2: Check file format compatibility (Robust GIF detection)
+        if let Ok(probe) = crate::ffprobe::probe_video(&self.original_path) {
+            if probe.format_name.eq_ignore_ascii_case("gif") {
                 eprintln!("⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
                 eprintln!("📊 Using alternative quality metrics");
                 return Ok(MsssimResult::skipped());
             }
+        } else {
+            // If probe fails (e.g. file missing?), we might fail later or just proceed.
+            // Original logic implicitly proceeded if extension checks failed/absent.
+            // We'll proceed and let ffmpeg handle/fail.
         }
 
         eprintln!("🔄 Calculating MS-SSIM (heartbeat active)");

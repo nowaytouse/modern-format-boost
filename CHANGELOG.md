@@ -1,6 +1,9 @@
 # Changelog
 
-All notable changes to Modern Format Boost will be documented in this file.
+## [v7.9.3] - 2026-02-01
+### Security & Robustness
+- **Video Explorer**: Replaced unreliable extension-based GIF detection with robust content-based detection using `ffprobe`. This prevents misidentification of files (e.g., mismatched extensions) (Critical).
+- **MS-SSIM Parallel**: Updated GIF detection to use content-based probing, ensuring palette-based formats are correctly skipped even if renamed.
 
 ## [7.9.2] - 2026-02-01
 

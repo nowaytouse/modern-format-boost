@@ -6457,7 +6457,10 @@ pub fn explore_with_gpu_coarse_search(
     eprintln!("📊 Phase 3: Quality Verification");
 
     // 获取视频时长
-    if let Some(duration) = get_video_duration(input) {
+    // 🔥 v7.9.2: Use full probe to robustly detect format and duration
+    // Replace extension check with content-based detection
+    if let Ok(probe_result) = crate::ffprobe::probe_video(input) {
+        let duration = probe_result.duration;
         eprintln!(
             "   📹 Video duration: {:.1}s ({:.1} min)",
             duration,
@@ -6466,12 +6469,9 @@ pub fn explore_with_gpu_coarse_search(
 
         const VMAF_DURATION_THRESHOLD: f64 = 300.0; // 5分钟 = 300秒
 
-        // 🔥 v7.9.1: 检查是否是 GIF 格式（不支持 MS-SSIM）
-        let is_gif_format = input
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("gif"))
-            .unwrap_or(false);
+        // 🔥 v7.9.2: Check if format is GIF (robustly via ffprobe)
+        // format_name for GIF is usually "gif"
+        let is_gif_format = probe_result.format_name.eq_ignore_ascii_case("gif");
 
         // 🔥 v6.9: 检查是否应该运行 MS-SSIM
         // 短视频（≤5分钟）自动启用，长视频需要 force_ms_ssim_long 参数
