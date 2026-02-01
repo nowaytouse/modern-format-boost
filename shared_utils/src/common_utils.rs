@@ -203,6 +203,62 @@ pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
     })
 }
 
+/// Detect real extension from file header magic bytes
+///
+/// 🔥 v7.9.5: Support for JPEG, PNG, GIF, TIFF, WEBP, HEIC/AVIF, MOV/MP4
+/// Inspects the first few bytes of the file to identify its true format.
+pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = [0u8; 12];
+    let bytes_read = file.read(&mut buffer).ok()?;
+    
+    if bytes_read < 4 {
+        return None;
+    }
+
+    // JPEG: FF D8 FF
+    if buffer[0] == 0xFF && buffer[1] == 0xD8 && buffer[2] == 0xFF {
+        return Some("jpg");
+    }
+
+    // PNG: 89 50 4E 47
+    if buffer[0] == 0x89 && buffer[1] == 0x50 && buffer[2] == 0x4E && buffer[3] == 0x47 {
+        return Some("png");
+    }
+
+    // GIF: 47 49 46 38 (GIF8)
+    if buffer[0] == 0x47 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x38 {
+        return Some("gif");
+    }
+
+    // TIFF: 49 49 2A 00 or 4D 4D 00 2A
+    if (buffer[0] == 0x49 && buffer[1] == 0x49 && buffer[2] == 0x2A && buffer[3] == 0x00) ||
+       (buffer[0] == 0x4D && buffer[1] == 0x4D && buffer[2] == 0x00 && buffer[3] == 0x2A) {
+        return Some("tif");
+    }
+
+    // WEBP: RIFF....WEBP (RIFF at 0, WEBP at 8)
+    if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46 {
+        if bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
+            return Some("webp");
+        }
+    }
+
+    // QuickTime (MOV/MP4) Container Signatures
+    // ftyp box at offset 4
+    if bytes_read >= 8 && buffer[4] == 0x66 && buffer[5] == 0x74 && buffer[6] == 0x79 && buffer[7] == 0x70 {
+        // Since we only read 12 bytes, we can't check the brand effectively (brand is at 8-11)
+        // However, ftyp appearing at offset 4 is a very strong indicator of ISO Base Media File Format
+        
+        // For fallback purposes, "mov" is a safe bet for ExifTool to treat it as a video container
+        // ExifTool handles mov/mp4/m4v very similarly regarding structure
+        return Some("mov");
+    }
+
+    None
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 字符串处理工具 (String Processing)
 // ═══════════════════════════════════════════════════════════════

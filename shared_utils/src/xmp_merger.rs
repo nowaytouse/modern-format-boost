@@ -118,6 +118,18 @@ impl Default for XmpMergerConfig {
     }
 }
 
+/// Extract suggested extension from ExifTool error message
+/// Example: "Error: Not a valid JPEG (looks more like a PNG)" -> Some("png")
+fn extract_suggested_extension(error_msg: &str) -> Option<String> {
+    if let Some(start) = error_msg.find("looks more like a ") {
+        let rest = &error_msg[start + "looks more like a ".len()..];
+        if let Some(end) = rest.find(')') {
+             return Some(rest[..end].trim().to_lowercase());
+        }
+    }
+    None
+}
+
 /// XMP Metadata Merger
 pub struct XmpMerger {
     config: XmpMergerConfig,
@@ -601,56 +613,6 @@ impl XmpMerger {
         Ok((None, "no_match".to_string()))
     }
 
-    /// Detect real extension from file header magic bytes
-    fn detect_real_extension(path: &Path) -> Option<&'static str> {
-        use std::io::Read;
-        let mut file = std::fs::File::open(path).ok()?;
-        let mut buffer = [0u8; 12];
-        let bytes_read = file.read(&mut buffer).ok()?;
-        
-        if bytes_read < 4 {
-            return None;
-        }
-
-        // JPEG: FF D8 FF
-        if buffer[0] == 0xFF && buffer[1] == 0xD8 && buffer[2] == 0xFF {
-            return Some("jpg");
-        }
-
-        // PNG: 89 50 4E 47
-        if buffer[0] == 0x89 && buffer[1] == 0x50 && buffer[2] == 0x4E && buffer[3] == 0x47 {
-            return Some("png");
-        }
-
-        // GIF: 47 49 46 38 (GIF8)
-        if buffer[0] == 0x47 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x38 {
-            return Some("gif");
-        }
-
-        // TIFF: 49 49 2A 00 or 4D 4D 00 2A
-        if (buffer[0] == 0x49 && buffer[1] == 0x49 && buffer[2] == 0x2A && buffer[3] == 0x00) ||
-           (buffer[0] == 0x4D && buffer[1] == 0x4D && buffer[2] == 0x00 && buffer[3] == 0x2A) {
-            return Some("tif");
-        }
-
-        // WEBP: RIFF....WEBP (RIFF at 0, WEBP at 8)
-        if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46 {
-            if bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
-                return Some("webp");
-            }
-        }
-
-        // HEIC/AVIF: ....ftyp (ftyp at 4)
-        if bytes_read >= 8 && buffer[4] == 0x66 && buffer[5] == 0x74 && buffer[6] == 0x79 && buffer[7] == 0x70 {
-            // Check compatible brands (simplified)
-            // mif1, heic, heix, avif, etc.
-            // This is a broad guess, but usually sufficient for "ftyp" container identification
-            return Some("heic"); // Default to heic for ftyp box, exiftool handles heic/avif similarly for structure
-        }
-
-        None
-    }
-
     /// Merge XMP metadata into media file
     ///
     /// 🔥 v7.9.5: Implements "Loud Fallback" strategy
@@ -659,12 +621,20 @@ impl XmpMerger {
     /// to bypass exiftool's format checks, then renames it back.
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
         // Try standard merge first (Fast path)
-        if let Ok(()) = self.merge_xmp_core(xmp_path, media_path) {
-            return Ok(());
-        }
+        match self.merge_xmp_core(xmp_path, media_path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let err_str = e.to_string();
+                let hint = extract_suggested_extension(&err_str);
+                
+                if let Some(ref h) = hint {
+                    eprintln!("💡 ExifTool suggests content is: {}", h);
+                }
 
-        // Standard merge failed, try fallback strategy
-        self.merge_xmp_fallback(xmp_path, media_path)
+                // Standard merge failed, try fallback strategy with hint
+                self.merge_xmp_fallback(xmp_path, media_path, hint.as_deref())
+            }
+        }
     }
 
     /// Core merge logic - direct ExifTool call
@@ -715,12 +685,16 @@ impl XmpMerger {
     }
 
     /// Fallback strategy: Temporary extension correction
-    fn merge_xmp_fallback(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
+    fn merge_xmp_fallback(&self, xmp_path: &Path, media_path: &Path, hint_ext: Option<&str>) -> Result<()> {
         let xmp_filename = xmp_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         
         // Strategy 1: Smart Content Detection (Magic Bytes)
         // Check if the file content matches a specific format explicitly
-        let detected_ext = Self::detect_real_extension(media_path);
+        let detected_ext = if let Some(hint) = hint_ext {
+            Some(hint.to_string())
+        } else {
+             crate::common_utils::detect_real_extension(media_path).map(|s| s.to_string())
+        };
 
         // Strategy 2: Implied extension from XMP filename (Legacy fallback)
         let implied_ext = if xmp_filename.to_lowercase().ends_with(".xmp") {
@@ -731,11 +705,12 @@ impl XmpMerger {
         };
 
         // Decide which extension to force
-        // Priority: Detected Content > Implied XMP Extension
-        let target_ext = detected_ext.or(implied_ext);
+        // Priority: Detected Content (includes Hint) > Implied XMP Extension
+        let target_ext = detected_ext.or(implied_ext.map(|s| s.to_string()));
 
         let Some(original_ext) = target_ext else {
              // No extension determined, cannot use fallback
+             // Retry core to return the original error if we can't find a fallback
              return self.merge_xmp_core(xmp_path, media_path); 
         };
 
@@ -752,7 +727,7 @@ impl XmpMerger {
         );
 
         // Construct temporary path
-        let temp_path = media_path.with_extension(original_ext);
+        let temp_path = media_path.with_extension(&original_ext);
 
         // Safety check: Don't overwrite existing files
         if temp_path.exists() {
@@ -978,26 +953,21 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
         if xmp_path.exists() {
             eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
 
-            // 使用 exiftool 合并 XMP 到目标文件
-            let output = Command::new("exiftool")
-                .arg("-overwrite_original")
-                .arg("-tagsfromfile")
-                .arg(xmp_path)
-                .arg("-all:all")
-                .arg(dest)
-                .output()
-                .context("Failed to run exiftool")?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                // [minor] 警告是可接受的（如JXL容器包装）
-                if stderr.contains("[minor]") {
-                    eprintln!("✅ XMP sidecar merged successfully");
-                    return Ok(true);
-                }
-                if stderr.contains("Error:") {
-                    bail!("ExifTool error: {}", stderr);
-                }
+            // Use XmpMerger for robust merging (handles fallback, etc.)
+            let config = XmpMergerConfig {
+                delete_xmp_after_merge: false, // Don't delete in this context
+                overwrite_original: true,
+                preserve_timestamps: true, // Preserve destination timestamps if needed (usually dest is new)
+                verbose: false,
+            };
+            
+            let merger = XmpMerger::new(config);
+            
+            // Call merge_xmp which includes the fallback logic
+            if let Err(e) = merger.merge_xmp(xmp_path, dest) {
+                // If merge fails, we log it but don't fail the whole process
+                // unless it's critical, but here we return Err to let caller decide
+                 bail!("Failed to merge XMP: {}", e);
             }
 
             eprintln!("✅ XMP sidecar merged successfully");
@@ -1165,5 +1135,68 @@ mod tests {
         assert!(result.is_some());
         // Should match via same_name or case_insensitive
         assert!(strategy == "same_name" || strategy == "case_insensitive");
+    }
+
+    #[test]
+    fn test_merge_xmp_mismatch_fallback() {
+        // This test requires exiftool
+        if Command::new("exiftool").arg("-ver").output().is_err() {
+            eprintln!("ExifTool not found, skipping test");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        // Create a real PNG file but name it .jpg
+        let jpg_path = temp_dir.path().join("mismatch.jpg");
+        let xmp_path = temp_dir.path().join("mismatch.xmp");
+
+        // 1x1 PNG data
+        let png_data = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+            0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+            0x44, 0xAE, 0x42, 0x60, 0x82
+        ];
+        fs::write(&jpg_path, &png_data).unwrap();
+
+        // Create a valid XMP sidecar
+        let xmp_content = r#"<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>
+<x:xmpmeta xmlns:x='adobe:ns:meta/' x:xmptk='Image::ExifTool 12.00'>
+<rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about=''
+  xmlns:dc='http://purl.org/dc/elements/1.1/'>
+  <dc:Description>
+   <rdf:Alt>
+    <rdf:li xml:lang='x-default'>Test Description</rdf:li>
+   </rdf:Alt>
+  </dc:Description>
+ </rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end='w'?>"#;
+        fs::write(&xmp_path, xmp_content).unwrap();
+
+        let config = XmpMergerConfig {
+            verbose: true,
+            ..Default::default()
+        };
+        let merger = XmpMerger::new(config);
+
+        // This should trigger the fallback because ExifTool will complain about PNG vs JPG
+        let result = merger.merge_xmp(&xmp_path, &jpg_path);
+        
+        if let Err(e) = &result {
+            println!("Merge failed with error: {}", e);
+        }
+        assert!(result.is_ok(), "XMP merge failed for mismatched extension");
+
+        // Verify the file still exists and is named .jpg
+        assert!(jpg_path.exists());
+        assert!(!jpg_path.with_extension("png").exists()); // Should be restored
     }
 }
