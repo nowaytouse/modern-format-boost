@@ -38,8 +38,9 @@ pub fn is_vmaf_available() -> bool {
 /// Even with extractplanes filter, U/V channels cannot detect chroma degradation.
 pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Result<f64> {
     // 步骤 1: 转换为 Y4M 格式（vmaf 需要）
-    let ref_y4m = convert_to_y4m(reference)?;
-    let dist_y4m = convert_to_y4m(distorted)?;
+    // 🔥 v7.9.1: 使用 "ref"/"dist" 前缀避免同名文件覆盖（SSIM=1 bug）
+    let ref_y4m = convert_to_y4m(reference, "ref")?;
+    let dist_y4m = convert_to_y4m(distorted, "dist")?;
 
     // 步骤 2: 运行 vmaf 计算
     let output_json = format!("/tmp/vmaf_result_{}.json", std::process::id());
@@ -73,9 +74,11 @@ pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Resul
 }
 
 /// 转换视频为 Y4M 格式
-fn convert_to_y4m(input: &Path) -> Result<String> {
+/// `role` 用于区分 reference 和 distorted，避免同名文件覆盖
+fn convert_to_y4m(input: &Path, role: &str) -> Result<String> {
     let output = format!(
-        "/tmp/vmaf_{}_{}.y4m",
+        "/tmp/vmaf_{}_{}_{}.y4m",
+        role,
         input.file_stem().unwrap().to_string_lossy(),
         std::process::id()
     );
