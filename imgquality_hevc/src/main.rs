@@ -463,15 +463,19 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
 
     if is_jxl {
         use std::process::Command;
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let temp_path = std::env::temp_dir().join(format!("imgquality_verify_{}.png", timestamp));
+        
+        // 🔥 Secure temp file creation
+        let temp_png_file = tempfile::Builder::new()
+            .suffix(".png")
+            .tempfile()
+            .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
+            
+        let temp_path = temp_png_file.path();
 
         // Decode JXL to PNG using djxl
         let status = Command::new("djxl")
             .arg(path)
-            .arg(&temp_path)
+            .arg(temp_path)
             .status()
             .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {}", e))?;
 
@@ -480,14 +484,11 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
         }
 
         // Load the temp PNG
-        let img = image::open(&temp_path).map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path);
+        let img = image::open(temp_path).map_err(|e| {
             anyhow::anyhow!("Failed to open decoded PNG: {}", e)
         })?;
 
-        // Cleanup
-        let _ = std::fs::remove_file(&temp_path);
-
+        // Cleanup is automatic via NamedTempFile guard drop
         Ok(img)
     } else {
         Ok(image::open(path)?)

@@ -7016,15 +7016,15 @@ fn cpu_fine_tune_from_gpu_boundary(
         // 🔥 v6.9: 改进错误处理 - 使用临时文件捕获stderr，避免死锁同时保留错误信息
         // 原因：直接pipe stderr会导致死锁（缓冲区满），但丢弃stderr会丢失错误信息
         // 解决方案：将stderr重定向到临时文件，编码失败时读取错误信息
-        let stderr_temp = tempfile::Builder::new()
+        // 🔥 v7.9.2: Use safer tempfile creation (remove insecure pid-based fallback)
+        let stderr_temp_val = tempfile::Builder::new()
             .suffix(".log")
             .tempfile()
-            .ok();
+            .context("Failed to create stderr temp file")?;
         
-        // Keep the path for reading later
-        let stderr_file = stderr_temp.as_ref()
-            .map(|t| t.path().to_path_buf())
-            .unwrap_or_else(|| std::env::temp_dir().join(format!("ffmpeg_stderr_{}.log", std::process::id())));
+        let stderr_file = stderr_temp_val.path().to_path_buf();
+        // Wrap in Option to maintain compatibility with existing reading logic downstream
+        let stderr_temp = Some(stderr_temp_val);
 
         if let Some(ref temp) = stderr_temp {
             // Reopen the file to get a handle for Command
