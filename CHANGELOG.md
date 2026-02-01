@@ -2,6 +2,27 @@
 
 All notable changes to Modern Format Boost will be documented in this file.
 
+## [7.9.2] - 2026-02-01
+
+### 🔒 Security & Stability Fix - Temporary File Handling
+
+#### Critical Fixes
+- **Secure Temporary Files**: Replaced insecure `std::process::id()` based temporary file naming with the robust `tempfile` crate across the entire codebase.
+- **Race Condition Elimination**: Resolved potential filename collision race conditions when running multiple instances or multi-threaded encoding.
+- **Automatic Cleanup**: Temporary files are now guaranteed to be cleaned up automatically using RAII guards (drop trait), preventing disk clutter even on partial failures.
+- **Affected Modules**:
+  - `shared_utils/src/x265_encoder.rs`: HEVC intermediate files
+  - `shared_utils/src/video_explorer.rs`: GPU/CPU calibration files and ffmpeg stderr logs
+  - `imgquality_hevc/src/lossless_converter.rs`: Intermediate PNGs for WebP/TIFF/HEIC conversion
+  - `imgquality_av1/src/lossless_converter.rs`: Intermediate PNGs for WebP/TIFF/HEIC conversion
+
+#### Verification
+- ✅ `cargo check` passes with no errors
+- ✅ All temporary file creation uses `tempfile::Builder` or `NamedTempFile`
+- ✅ Compilation verified for all 4 binary tools
+
+---
+
 ## [7.9.1] - 2026-01-31
 
 ### 🚀 Dependency Updates & Code Quality Improvements

@@ -60,7 +60,7 @@ pub fn convert_to_jxl(
     }
 
     // 🔥 预处理：检测 cjxl 不能直接读取的格式，先转换为中间格式
-    let (actual_input, temp_file) = prepare_input_for_cjxl(input)?;
+    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input)?;
 
     // Execute cjxl (v0.11+ syntax)
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
@@ -79,10 +79,7 @@ pub fn convert_to_jxl(
         .arg(&output)
         .output();
 
-    // 清理临时文件
-    if let Some(ref temp) = temp_file {
-        let _ = fs::remove_file(temp);
-    }
+    // 清理临时文件 (Automatically handled by _temp_file_guard drop)
 
     // 🔥 v7.4: Fallback - 使用 ImageMagick 管道重新编码
     // 如果 cjxl 失败且报告 "Getting pixel data failed"
@@ -1319,7 +1316,7 @@ pub fn convert_to_av1_mp4_lossless(
 /// 返回: (实际输入路径, 临时文件路径 Option)
 fn prepare_input_for_cjxl(
     input: &Path,
-) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>)> {
+) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     let ext = input
         .extension()
         .map(|e| e.to_ascii_lowercase())
@@ -1333,11 +1330,10 @@ fn prepare_input_for_cjxl(
                 "   🔧 PRE-PROCESSING: WebP detected, using dwebp for ICC profile compatibility"
             );
 
-            let temp_png = std::env::temp_dir().join(format!(
-                "mfb_cjxl_{}_{}.png",
-                std::process::id(),
-                input.file_stem().unwrap_or_default().to_string_lossy()
-            ));
+            let temp_png_file = tempfile::Builder::new()
+                .suffix(".png")
+                .tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("dwebp")
                 // .arg("--") // 🔥 v7.9: dwebp does not support '--' as delimiter
@@ -1349,11 +1345,11 @@ fn prepare_input_for_cjxl(
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
                     eprintln!("   ✅ dwebp pre-processing successful");
-                    Ok((temp_png.clone(), Some(temp_png)))
+                    Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
                     eprintln!("   ⚠️  dwebp pre-processing failed, trying direct cjxl");
-                    let _ = fs::remove_file(&temp_png);
+                    // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1365,11 +1361,10 @@ fn prepare_input_for_cjxl(
                 "   🔧 PRE-PROCESSING: TIFF detected, using ImageMagick for cjxl compatibility"
             );
 
-            let temp_png = std::env::temp_dir().join(format!(
-                "mfb_cjxl_{}_{}.png",
-                std::process::id(),
-                input.file_stem().unwrap_or_default().to_string_lossy()
-            ));
+            let temp_png_file = tempfile::Builder::new()
+                .suffix(".png")
+                .tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
                 .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
@@ -1382,11 +1377,11 @@ fn prepare_input_for_cjxl(
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
                     eprintln!("   ✅ ImageMagick TIFF pre-processing successful");
-                    Ok((temp_png.clone(), Some(temp_png)))
+                    Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
                     eprintln!("   ⚠️  ImageMagick TIFF pre-processing failed, trying direct cjxl");
-                    let _ = fs::remove_file(&temp_png);
+                    // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1398,22 +1393,21 @@ fn prepare_input_for_cjxl(
                 "   🔧 PRE-PROCESSING: BMP detected, using ImageMagick for cjxl compatibility"
             );
 
-            let temp_png = std::env::temp_dir().join(format!(
-                "mfb_cjxl_{}_{}.png",
-                std::process::id(),
-                input.file_stem().unwrap_or_default().to_string_lossy()
-            ));
+            let temp_png_file = tempfile::Builder::new()
+                .suffix(".png")
+                .tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick").arg(input).arg(&temp_png).output();
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
                     eprintln!("   ✅ ImageMagick BMP pre-processing successful");
-                    Ok((temp_png.clone(), Some(temp_png)))
+                    Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
                     eprintln!("   ⚠️  ImageMagick BMP pre-processing failed, trying direct cjxl");
-                    let _ = fs::remove_file(&temp_png);
+                    // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1423,11 +1417,10 @@ fn prepare_input_for_cjxl(
         "heic" | "heif" => {
             eprintln!("   🔧 PRE-PROCESSING: HEIC/HEIF detected, using sips/ImageMagick for cjxl compatibility");
 
-            let temp_png = std::env::temp_dir().join(format!(
-                "mfb_cjxl_{}_{}.png",
-                std::process::id(),
-                input.file_stem().unwrap_or_default().to_string_lossy()
-            ));
+            let temp_png_file = tempfile::Builder::new()
+                .suffix(".png")
+                .tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
 
             // 优先使用 sips (macOS 原生)
             eprintln!("   🍎 Trying macOS sips first...");
@@ -1444,7 +1437,7 @@ fn prepare_input_for_cjxl(
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
                     eprintln!("   ✅ sips HEIC pre-processing successful");
-                    Ok((temp_png.clone(), Some(temp_png)))
+                    Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
                     eprintln!("   ⚠️  sips failed, trying ImageMagick...");
@@ -1458,13 +1451,13 @@ fn prepare_input_for_cjxl(
                     match result {
                         Ok(output) if output.status.success() && temp_png.exists() => {
                             eprintln!("   ✅ ImageMagick HEIC pre-processing successful");
-                            Ok((temp_png.clone(), Some(temp_png)))
+                            Ok((temp_png, Some(temp_png_file)))
                         }
                         _ => {
                             eprintln!(
                                 "   ⚠️  Both sips and ImageMagick failed, trying direct cjxl"
                             );
-                            let _ = fs::remove_file(&temp_png);
+                            // temp_png_file dropped automatically
                             Ok((input.to_path_buf(), None))
                         }
                     }

@@ -2,7 +2,15 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.9.1)
+## 🔥 Latest Updates (v7.9.2)
+
+### 🔒 Security & Stability Fix - Temporary File Handling
+- **✅ Secure Temporary Files**: Replaced insecure temporary file naming with `tempfile` crate
+- **✅ Race Condition Fix**: Eliminated filename collisions in multi-threaded/multi-instance scenarios
+- **✅ Auto Cleanup**: Guaranteed cleanup of temporary files via RAII guards
+- **✅ Coverage**: Fixed critical issues in X265 encoding, video exploration, and lossless conversion modules
+
+### Previous (v7.9.1)
 
 ### Dependency Updates & Code Quality Improvements
 - **🚀 Major Dependency Updates**: All project dependencies updated to latest versions
