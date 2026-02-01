@@ -35,8 +35,9 @@ which = "8.0"
 # Thread-safe global state
 lazy_static = "1.5"
 
-[dev-dependencies]
 tempfile = "3.10"
+
+[dev-dependencies]
 proptest = "1.4"
 
 [features]

@@ -80,13 +80,17 @@ pub fn encode_with_x265(
     );
 
     // 临时文件路径
-    let temp_dir = std::env::temp_dir();
-    let hevc_file = temp_dir.join(format!("temp_{}.hevc", std::process::id()));
+    // 🔥 Fix: Use tempfile for secure temporary file creation
+    let hevc_temp = tempfile::Builder::new()
+        .suffix(".hevc")
+        .tempfile()
+        .context("Failed to create temporary HEVC file")?;
+    let hevc_file = hevc_temp.path().to_path_buf();
 
     debug!(hevc_temp_file = ?hevc_file, "Using temporary HEVC file");
 
-    // 清理旧的临时文件
-    let _ = std::fs::remove_file(&hevc_file);
+    // hevc_temp (NamedTempFile) handles cleanup automatically when dropped
+    // so we don't need manual remove_file calls
 
     // Step 1: FFmpeg解码 → Y4M → x265编码 → HEVC
     info!("Step 1/2: Decode + x265 encode...");
@@ -101,8 +105,8 @@ pub fn encode_with_x265(
     info!("Step 2/2: Mux HEVC + audio...");
     mux_hevc_to_container(input, &hevc_file, output, config)?;
 
-    // 清理临时文件
-    let _ = std::fs::remove_file(&hevc_file);
+    // 清理临时文件 (handled by hevc_temp drop, but we can drop explicitly if we want)
+    drop(hevc_temp);
 
     // 返回输出文件大小
     let output_size = std::fs::metadata(output)

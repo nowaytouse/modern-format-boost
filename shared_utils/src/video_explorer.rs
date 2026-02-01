@@ -5638,7 +5638,7 @@ pub mod calibration {
 ///
 /// 通过实际测量建立精确的映射关系，而非依赖静态偏移量
 pub mod dynamic_mapping {
-    use anyhow::Result;
+    use anyhow::{Context, Result};
     use std::path::Path;
 
     /// 校准锚点数据
@@ -5798,8 +5798,17 @@ pub mod dynamic_mapping {
             );
 
             // 创建临时文件
-            let temp_gpu = std::env::temp_dir().join(format!("calibrate_gpu_{}.mp4", attempt));
-            let temp_cpu = std::env::temp_dir().join(format!("calibrate_cpu_{}.mp4", attempt));
+            // 🔥 Fix: Use tempfile for secure temporary file creation
+            let temp_gpu_file = tempfile::Builder::new()
+                .suffix(".mp4")
+                .tempfile()
+                .context("Failed to create temp file")?;
+            let temp_cpu_file = tempfile::Builder::new()
+                .suffix(".mp4")
+                .tempfile()
+                .context("Failed to create temp file")?;
+            let temp_gpu = temp_gpu_file.path().to_path_buf();
+            let temp_cpu = temp_cpu_file.path().to_path_buf();
 
             // GPU 采样编码
             let gpu_result = Command::new("ffmpeg")
@@ -5862,8 +5871,11 @@ pub mod dynamic_mapping {
 
                 // 创建临时输入文件（截取前 10 秒）
                 // 🔥 v7.6: 使用 Y4M 中间格式避免 GIF 等不支持 stream copy 的格式错误
-                let temp_input =
-                    std::env::temp_dir().join(format!("calibrate_input_{}.y4m", attempt));
+                let temp_input_file = tempfile::Builder::new()
+                    .suffix(".y4m")
+                    .tempfile()
+                    .context("Failed to create temp file")?;
+                let temp_input = temp_input_file.path().to_path_buf();
                 let extract_result = Command::new("ffmpeg")
                     .arg("-y")
                     .arg("-t")
@@ -6454,11 +6466,50 @@ pub fn explore_with_gpu_coarse_search(
 
         const VMAF_DURATION_THRESHOLD: f64 = 300.0; // 5分钟 = 300秒
 
+        // 🔥 v7.9.1: 检查是否是 GIF 格式（不支持 MS-SSIM）
+        let is_gif_format = input
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("gif"))
+            .unwrap_or(false);
+
         // 🔥 v6.9: 检查是否应该运行 MS-SSIM
         // 短视频（≤5分钟）自动启用，长视频需要 force_ms_ssim_long 参数
-        let should_run_vmaf = duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long;
+        // 🔥 v7.9.1: GIF 格式跳过 MS-SSIM（不支持调色板格式）
+        let should_run_vmaf = !is_gif_format && (duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long);
 
-        if should_run_vmaf {
+        if is_gif_format {
+            // 🔥 v7.9.1: GIF 格式专用路径 - 只使用 SSIM All
+            eprintln!("   ⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
+            eprintln!("   🎯 Using SSIM-only verification (compatible with GIF)...");
+
+            let quality_target = result.actual_min_ssim.max(0.90);
+
+            if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
+                eprintln!("   📊 SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
+
+                if all < quality_target {
+                    eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, quality_target);
+                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_score = Some(all);
+                } else {
+                    eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, quality_target);
+                    result.ms_ssim_passed = Some(true);
+                    result.ms_ssim_score = Some(all);
+                }
+            } else {
+                // GIF 的 SSIM All 也失败了
+                eprintln!("   ⚠️  SSIM calculation failed for GIF");
+                eprintln!("   📊 Using explore SSIM as fallback: {}", result.ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()));
+                if let Some(ssim) = result.ssim {
+                    result.ms_ssim_passed = Some(ssim >= quality_target);
+                    result.ms_ssim_score = Some(ssim);
+                } else {
+                    result.ms_ssim_passed = None;
+                    result.ms_ssim_score = None;
+                }
+            }
+        } else if should_run_vmaf {
             // 短视频（≤5分钟）或强制启用，开启精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
             eprintln!("   🎯 Enabling fusion quality verification (MS-SSIM + SSIM)...");
@@ -6588,9 +6639,9 @@ pub fn explore_with_gpu_coarse_search(
                     result.ms_ssim_score = Some(score);
                 }
             } else {
-                // 🔥 Fallback: 所有质量计算都失败，响亮报错！
+                // 🔥 v7.9.1: 修复错误消息 - 区分 MS-SSIM 失败和全部失败
                 eprintln!("   ════════════════════════════════════════════════════");
-                eprintln!("   ⚠️⚠️⚠️  ALL QUALITY CALCULATIONS FAILED!  ⚠️⚠️⚠️");
+                eprintln!("   ⚠️  MS-SSIM + SSIM All calculation failed");
                 eprintln!("   ════════════════════════════════════════════════════");
                 eprintln!("      Possible causes:");
                 eprintln!("         - libvmaf not available in ffmpeg");
@@ -6621,16 +6672,25 @@ pub fn explore_with_gpu_coarse_search(
                     }
                 } else {
                     eprintln!("   ════════════════════════════════════════════════════");
-                    eprintln!("   ❌❌❌  ALL MS-SSIM CALCULATIONS FAILED!  ❌❌❌");
+                    eprintln!("   ⚠️  All MS-SSIM calculations failed");
                     eprintln!("   ════════════════════════════════════════════════════");
-                    eprintln!("      Cannot verify output quality!");
-                    eprintln!("      Possible causes:");
-                    eprintln!("         - ffmpeg libvmaf not installed");
-                    eprintln!("         - Corrupted video file");
-                    eprintln!("         - Unsupported codec/format");
-                    eprintln!("   ════════════════════════════════════════════════════");
-                    result.ms_ssim_passed = None;
-                    result.ms_ssim_score = None;
+                    eprintln!("      Using explore SSIM as final fallback...");
+                    let ssim_str = result.ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string());
+                    eprintln!("      SSIM (explore): {}", ssim_str);
+                    if let Some(ssim) = result.ssim {
+                        if ssim < quality_target {
+                            eprintln!("   ❌ SSIM BELOW TARGET! {:.4} < {:.2}", ssim, quality_target);
+                            result.ms_ssim_passed = Some(false);
+                        } else {
+                            eprintln!("   ✅ SSIM TARGET MET: {:.4} ≥ {:.2}", ssim, quality_target);
+                            result.ms_ssim_passed = Some(true);
+                        }
+                        result.ms_ssim_score = Some(ssim);
+                    } else {
+                        eprintln!("      ⚠️  No quality metric available!");
+                        result.ms_ssim_passed = None;
+                        result.ms_ssim_score = None;
+                    }
                 }
             }
         } else {
@@ -6956,13 +7016,30 @@ fn cpu_fine_tune_from_gpu_boundary(
         // 🔥 v6.9: 改进错误处理 - 使用临时文件捕获stderr，避免死锁同时保留错误信息
         // 原因：直接pipe stderr会导致死锁（缓冲区满），但丢弃stderr会丢失错误信息
         // 解决方案：将stderr重定向到临时文件，编码失败时读取错误信息
-        let stderr_file =
-            std::env::temp_dir().join(format!("ffmpeg_stderr_{}.log", std::process::id()));
-        let stderr_handle = std::fs::File::create(&stderr_file).ok();
-        if let Some(file) = stderr_handle {
-            cmd.stderr(file);
+        let stderr_temp = tempfile::Builder::new()
+            .suffix(".log")
+            .tempfile()
+            .ok();
+        
+        // Keep the path for reading later
+        let stderr_file = stderr_temp.as_ref()
+            .map(|t| t.path().to_path_buf())
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("ffmpeg_stderr_{}.log", std::process::id())));
+
+        if let Some(ref temp) = stderr_temp {
+            // Reopen the file to get a handle for Command
+             if let Ok(file) = temp.reopen() {
+                cmd.stderr(file);
+            } else {
+                cmd.stderr(Stdio::null());
+            }
         } else {
-            cmd.stderr(Stdio::null());
+             // Fallback to manual file creation if tempfile failed (though unlikely)
+             if let Ok(file) = std::fs::File::create(&stderr_file) {
+                 cmd.stderr(file);
+             } else {
+                 cmd.stderr(Stdio::null());
+             }
         }
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;

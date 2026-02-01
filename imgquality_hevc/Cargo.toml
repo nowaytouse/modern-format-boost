@@ -48,7 +48,9 @@ shared_utils = { path = "../shared_utils" }
 # CPU detection for performance optimization
 num_cpus = "1.16"
 
-[dev-dependencies]
+# Temporary file management
 tempfile = "3.10"
+
+[dev-dependencies]
 
 
