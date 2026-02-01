@@ -1280,9 +1280,11 @@ pub struct VideoExplorer {
     output_path: std::path::PathBuf,
     input_size: u64,
     vf_args: Vec<String>,
-    max_threads: usize,
+    // max_threads: usize, // Removed duplicate
     /// 🔥 v4.9: GPU 加速选项
     use_gpu: bool,
+    /// 🔥 v7.9: Max threads for encoder process
+    max_threads: usize,
     /// 🔥 v5.74: 编码器 preset（探索和最终编码必须一致）
     preset: EncoderPreset,
     /// 🔥 v6.7: 输入视频流大小（纯媒体，不含容器开销）
@@ -1304,6 +1306,7 @@ impl VideoExplorer {
         encoder: VideoEncoder,
         vf_args: Vec<String>,
         config: ExploreConfig,
+        max_threads: usize,
     ) -> Result<Self> {
         // 🔥 v6.4.9: 路径安全验证（防止命令注入）
         crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -1313,8 +1316,8 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        // 🔥 v6.2.1: 使用统一的线程数计算函数
-        let max_threads = calculate_max_threads(num_cpus::get(), None);
+        // 🔥 v6.2.1: 使用传入的线程数 (Removed automatic calculation here)
+        // let max_threads = calculate_max_threads(num_cpus::get(), None);
 
         // 🔥 v4.9: 自动检测并启用 GPU 加速
         let gpu = crate::gpu_accel::GpuAccel::detect();
@@ -1355,6 +1358,7 @@ impl VideoExplorer {
         vf_args: Vec<String>,
         config: ExploreConfig,
         use_gpu: bool,
+        max_threads: usize,
     ) -> Result<Self> {
         // 🔥 v6.4.9: 路径安全验证
         crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -1364,8 +1368,8 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        // 🔥 v6.2.1: 使用统一的线程数计算函数
-        let max_threads = calculate_max_threads(num_cpus::get(), None);
+        // 🔥 v6.2.1: 使用传入的线程数 (Removed automatic calculation here)
+        // let max_threads = calculate_max_threads(num_cpus::get(), None);
 
         // 🔥 v6.7: 提取输入视频流大小（纯媒体对比）
         let input_video_stream_size = if config.use_pure_media_comparison {
@@ -1401,6 +1405,7 @@ impl VideoExplorer {
         vf_args: Vec<String>,
         config: ExploreConfig,
         preset: EncoderPreset,
+        max_threads: usize,
     ) -> Result<Self> {
         // 🔥 v6.4.9: 路径安全验证
         crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -1410,8 +1415,8 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        // 🔥 v6.2.1: 使用统一的线程数计算函数
-        let max_threads = calculate_max_threads(num_cpus::get(), None);
+        // 🔥 v6.2.1: 使用传入的线程数 (Removed automatic calculation here)
+        // let max_threads = calculate_max_threads(num_cpus::get(), None);
 
         let gpu = crate::gpu_accel::GpuAccel::detect();
         let use_gpu = gpu.is_available()
@@ -3779,9 +3784,10 @@ pub fn explore_size_only(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
 
 /// 仅匹配输入质量（--match-quality 单独使用）
@@ -3794,9 +3800,10 @@ pub fn explore_quality_match(
     encoder: VideoEncoder,
     vf_args: Vec<String>,
     predicted_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
 
 /// 精确质量匹配探索（--explore + --match-quality 组合）
@@ -3811,9 +3818,10 @@ pub fn explore_precise_quality_match(
     initial_crf: f32,
     max_crf: f32,
     min_ssim: f64,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
 
 /// 🔥 v4.5: 精确质量匹配 + 压缩
@@ -3826,10 +3834,11 @@ pub fn explore_precise_quality_match_with_compression(
     initial_crf: f32,
     max_crf: f32,
     min_ssim: f64,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
 
 /// 🔥 v4.6: 仅压缩（--compress 单独使用）
@@ -3843,9 +3852,10 @@ pub fn explore_compress_only(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
 
 /// 🔥 v4.6: 压缩 + 粗略质量验证（--compress --match-quality 组合）
@@ -3858,9 +3868,10 @@ pub fn explore_compress_with_quality(
     vf_args: Vec<String>,
     initial_crf: f32,
     max_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3881,10 +3892,11 @@ pub fn explore_precise_quality_match_with_compression_gpu(
     max_crf: f32,
     min_ssim: f64,
     use_gpu: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
 }
 
 /// 🔥 v4.15: 精确质量匹配（带 GPU 控制）
@@ -3897,9 +3909,10 @@ pub fn explore_precise_quality_match_gpu(
     max_crf: f32,
     min_ssim: f64,
     use_gpu: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
 }
 
 /// 🔥 v4.15: 仅压缩（带 GPU 控制）
@@ -3911,9 +3924,10 @@ pub fn explore_compress_only_gpu(
     initial_crf: f32,
     max_crf: f32,
     use_gpu: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
 }
 
 /// 🔥 v4.15: 压缩 + 质量验证（带 GPU 控制）
@@ -3925,9 +3939,10 @@ pub fn explore_compress_with_quality_gpu(
     initial_crf: f32,
     max_crf: f32,
     use_gpu: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
 }
 
 /// 🔥 v4.15: 仅探索大小（带 GPU 控制）
@@ -3939,9 +3954,10 @@ pub fn explore_size_only_gpu(
     initial_crf: f32,
     max_crf: f32,
     use_gpu: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
 }
 
 /// 🔥 v4.15: 仅匹配质量（带 GPU 控制）
@@ -3952,9 +3968,10 @@ pub fn explore_quality_match_gpu(
     vf_args: Vec<String>,
     predicted_crf: f32,
     use_gpu: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu)?.explore()
+    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
 }
 
 /// 快速探索（仅基于大小，不验证质量）- 兼容旧 API
@@ -3967,7 +3984,9 @@ pub fn quick_explore(
     initial_crf: f32,
     max_crf: f32,
 ) -> Result<ExploreResult> {
-    explore_size_only(input, output, encoder, vf_args, initial_crf, max_crf)
+    // 🔥 v7.9: Backward compatibility shim - calculate optimal threads
+    let max_threads = crate::thread_manager::get_optimal_threads();
+    explore_size_only(input, output, encoder, vf_args, initial_crf, max_crf, max_threads)
 }
 
 /// 完整探索（包含 SSIM 质量验证）- 兼容旧 API
@@ -3981,6 +4000,8 @@ pub fn full_explore(
     max_crf: f32,
     min_ssim: f64,
 ) -> Result<ExploreResult> {
+    // 🔥 v7.9: Backward compatibility shim - calculate optimal threads
+    let max_threads = crate::thread_manager::get_optimal_threads();
     explore_precise_quality_match(
         input,
         output,
@@ -3989,6 +4010,7 @@ pub fn full_explore(
         initial_crf,
         max_crf,
         min_ssim,
+        max_threads,
     )
 }
 
@@ -4066,6 +4088,7 @@ pub fn explore_hevc(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_precise_quality_match(
@@ -4076,6 +4099,7 @@ pub fn explore_hevc(
         initial_crf,
         max_crf,
         min_ssim,
+        max_threads,
     )
 }
 
@@ -4087,6 +4111,7 @@ pub fn explore_hevc_size_only(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_size_only(
@@ -4096,6 +4121,7 @@ pub fn explore_hevc_size_only(
         vf_args,
         initial_crf,
         max_crf,
+        max_threads,
     )
 }
 
@@ -4105,8 +4131,9 @@ pub fn explore_hevc_quality_match(
     output: &Path,
     vf_args: Vec<String>,
     predicted_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_quality_match(input, output, VideoEncoder::Hevc, vf_args, predicted_crf)
+    explore_quality_match(input, output, VideoEncoder::Hevc, vf_args, predicted_crf, max_threads)
 }
 
 /// 🔥 v4.6: HEVC 仅压缩（--compress 单独使用）
@@ -4117,6 +4144,7 @@ pub fn explore_hevc_compress_only(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_compress_only(
@@ -4126,6 +4154,7 @@ pub fn explore_hevc_compress_only(
         vf_args,
         initial_crf,
         max_crf,
+        max_threads,
     )
 }
 
@@ -4137,6 +4166,7 @@ pub fn explore_hevc_compress_with_quality(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_compress_with_quality(
@@ -4146,6 +4176,7 @@ pub fn explore_hevc_compress_with_quality(
         vf_args,
         initial_crf,
         max_crf,
+        max_threads,
     )
 }
 
@@ -4157,6 +4188,7 @@ pub fn explore_av1(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_precise_quality_match(
@@ -4167,6 +4199,7 @@ pub fn explore_av1(
         initial_crf,
         max_crf,
         min_ssim,
+        max_threads,
     )
 }
 
@@ -4178,6 +4211,7 @@ pub fn explore_av1_size_only(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_size_only(
@@ -4187,6 +4221,7 @@ pub fn explore_av1_size_only(
         vf_args,
         initial_crf,
         max_crf,
+        max_threads,
     )
 }
 
@@ -4196,8 +4231,9 @@ pub fn explore_av1_quality_match(
     output: &Path,
     vf_args: Vec<String>,
     predicted_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_quality_match(input, output, VideoEncoder::Av1, vf_args, predicted_crf)
+    explore_quality_match(input, output, VideoEncoder::Av1, vf_args, predicted_crf, max_threads)
 }
 
 /// 🔥 v4.6: AV1 仅压缩（--compress 单独使用）
@@ -4208,6 +4244,7 @@ pub fn explore_av1_compress_only(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_compress_only(
@@ -4217,6 +4254,7 @@ pub fn explore_av1_compress_only(
         vf_args,
         initial_crf,
         max_crf,
+        max_threads,
     )
 }
 
@@ -4228,6 +4266,7 @@ pub fn explore_av1_compress_with_quality(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_compress_with_quality(
@@ -4237,6 +4276,7 @@ pub fn explore_av1_compress_with_quality(
         vf_args,
         initial_crf,
         max_crf,
+        max_threads,
     )
 }
 
@@ -6068,6 +6108,7 @@ pub fn explore_with_gpu_coarse_search(
     min_ssim: f64,
     ultimate_mode: bool,      // 🔥 v6.2: 极限探索模式
     force_ms_ssim_long: bool, // 🔥 v6.9: 强制长视频 MS-SSIM
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
     // 🔥 v5.35: 简化流程 - 完全移除旧的RealtimeExploreProgress
@@ -6442,6 +6483,7 @@ pub fn explore_with_gpu_coarse_search(
         cpu_max_crf,
         min_ssim,
         ultimate_mode,
+        max_threads,
     )?;
 
     // 🔥 v5.1.4: 清空日志，避免 conversion_api.rs 重复打印
@@ -6814,6 +6856,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     max_crf: f32,
     min_ssim: f64,
     ultimate_mode: bool, // 🔥 v6.2: 极限探索模式
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     #[allow(unused_mut)]
     let mut log = Vec::new();
@@ -6882,7 +6925,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         }};
     }
 
-    let max_threads = crate::thread_manager::get_ffmpeg_threads();
+    // let max_threads = crate::thread_manager::get_ffmpeg_threads(); // 🔥 v7.9: Use passed max_threads
 
     // 🔥 v5.60: 全片编码（带实时进度显示）
     // 🔥 v6.9.1: 智能音频转码策略
@@ -8644,8 +8687,9 @@ pub fn explore_hevc_with_gpu_coarse(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, false, false)
+    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, false, false, max_threads)
 }
 
 /// 🔥 v6.2: HEVC GPU+CPU 智能探索（极限模式）
@@ -8658,8 +8702,9 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     vf_args: Vec<String>,
     initial_crf: f32,
     ultimate_mode: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, ultimate_mode, false)
+    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, ultimate_mode, false, max_threads)
 }
 
 /// 🔥 v6.9: HEVC GPU+CPU 智能探索（完整参数版本）
@@ -8674,6 +8719,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
     initial_crf: f32,
     ultimate_mode: bool,
     force_ms_ssim_long: bool,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_with_gpu_coarse_search(
@@ -8686,6 +8732,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
         min_ssim,
         ultimate_mode,
         force_ms_ssim_long,
+        max_threads,
     )
 }
 
@@ -8697,6 +8744,7 @@ pub fn explore_av1_with_gpu_coarse(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
     explore_with_gpu_coarse_search(
@@ -8709,6 +8757,7 @@ pub fn explore_av1_with_gpu_coarse(
         min_ssim,
         false,
         false,
+        max_threads,
     )
 }
 

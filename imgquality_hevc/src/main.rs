@@ -276,7 +276,22 @@ fn main() -> anyhow::Result<()> {
                 ultimate,      // 🔥 v6.2: 极限探索模式
                 allow_size_tolerance, // 🔥 v7.8.3: 容差开关
                 verbose,
+                // 🔥 v7.9: Pass down thread limit
+                child_threads: 0,
             };
+
+            // 🔥 v7.9: Calculate balanced thread configuration
+            let workload = if input.is_dir() {
+                shared_utils::thread_manager::WorkloadType::Image
+            } else {
+                shared_utils::thread_manager::WorkloadType::Video
+            };
+            let thread_config = shared_utils::thread_manager::get_balanced_thread_config(workload);
+            // We can update the config now, or construct it with the value.
+            // Re-constructing config is cleaner but it's immutable here.
+            // Let's create a mutable copy or just shadow it.
+            let mut config = config;
+            config.child_threads = thread_config.child_threads;
 
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -646,6 +661,8 @@ struct AutoConvertConfig {
     allow_size_tolerance: bool,
     /// Verbose output
     verbose: bool,
+    /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl)
+    child_threads: usize,
 }
 
 /// 🔥 v6.5.2: 在"输出到相邻目录"模式下复制原始文件
@@ -706,6 +723,13 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         ultimate: config.ultimate, // 🔥 v6.2: 极限探索模式
         allow_size_tolerance: config.allow_size_tolerance, // 🔥 v7.8.3: 容差开关
         verbose: config.verbose,
+        // 🔥 v7.9: Pass down thread limit
+        child_threads: if config.child_threads > 0 {
+             config.child_threads
+        } else {
+             // Fallback for single file mode (conservative default)
+             2 
+        },
     };
 
     // Helper macro for verbose logging
@@ -946,6 +970,20 @@ fn auto_convert_directory(
     if config_with_base.output_dir.is_some() {
         config_with_base.base_dir = Some(input.to_path_buf());
     }
+    // config.child_threads is already set by caller (Commands::Auto)
+    // But for directory processing, we want to ensure we use Image workload pool size
+    
+    // 🔥 性能优化：使用新的平衡线程策略
+    // - 避免系统卡死 (防止 N 个任务 * M 个线程的 CPU 过载)
+    // - Image Mode: 多任务并发 (宽)，每任务少线程 (浅)
+    let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Image,
+    );
+    let pool_size = thread_config.parallel_tasks; // Use calculated pool size
+    
+    // Override child_threads in config if needed (should match Image workload)
+    config_with_base.child_threads = thread_config.child_threads;
+    
     let config = &config_with_base;
 
     let start_time = Instant::now();
@@ -1000,13 +1038,9 @@ fn auto_convert_directory(
     // 🔥 v7.3.2: 启用安静模式，避免并行线程的进度条互相干扰
     shared_utils::progress_mode::enable_quiet_mode();
 
-    // 🔥 性能优化：限制并发数，避免系统卡顿
-    // - 使用 CPU 核心数的一半，留出资源给系统和编码器内部线程
-    // - 最少 1 个，最多 4 个并发任务
-    // 🔥 性能优化：限制并发数，避免系统卡顿
-    // - 使用智能线程管理器计算最优并发数
-    // - 针对 Apple Silicon 优化，防止过载
-    let max_threads = shared_utils::thread_manager::get_optimal_threads();
+    // Thread config calculated above
+    let max_threads = pool_size;
+    let child_threads = thread_config.child_threads;
 
     // 创建自定义线程池
     let pool = rayon::ThreadPoolBuilder::new()
@@ -1021,11 +1055,17 @@ fn auto_convert_directory(
 
     if config.verbose {
         println!(
-            "🔧 Using {} parallel threads (CPU cores: {})",
+            "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
+            child_threads,
             num_cpus::get()
         );
     }
+    
+    // 🔥 Store child_threads in config or a thread-local static? 
+    // Ideally pass it down. But config struct is fixed.
+    // For now we'll update the config struct or use a global setting.
+    // Let's check AutoConvertConfig structure again.
 
     // Process files in parallel using custom thread pool
     pool.install(|| {

@@ -160,6 +160,11 @@ fn main() -> anyhow::Result<()> {
                 input.parent().map(|p| p.to_path_buf())
             };
 
+            // 🔥 v7.9: Balanced thread config (AV1 always uses Video workload)
+            let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
+                shared_utils::thread_manager::WorkloadType::Video,
+            );
+
             let config = ConversionConfig {
                 output_dir: output.clone(),
                 base_dir,
@@ -184,6 +189,8 @@ fn main() -> anyhow::Result<()> {
                 // HEVC flags (unused in AV1)
                 force_ms_ssim_long: false,
                 ultimate_mode: false,
+                // 🔥 v7.9: Pass down thread limit
+                child_threads: thread_config.child_threads,
             };
 
             info!("🎬 Auto Mode Conversion (AV1)");

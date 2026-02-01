@@ -601,8 +601,74 @@ impl XmpMerger {
         Ok((None, "no_match".to_string()))
     }
 
+    /// Detect real extension from file header magic bytes
+    fn detect_real_extension(path: &Path) -> Option<&'static str> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path).ok()?;
+        let mut buffer = [0u8; 12];
+        let bytes_read = file.read(&mut buffer).ok()?;
+        
+        if bytes_read < 4 {
+            return None;
+        }
+
+        // JPEG: FF D8 FF
+        if buffer[0] == 0xFF && buffer[1] == 0xD8 && buffer[2] == 0xFF {
+            return Some("jpg");
+        }
+
+        // PNG: 89 50 4E 47
+        if buffer[0] == 0x89 && buffer[1] == 0x50 && buffer[2] == 0x4E && buffer[3] == 0x47 {
+            return Some("png");
+        }
+
+        // GIF: 47 49 46 38 (GIF8)
+        if buffer[0] == 0x47 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x38 {
+            return Some("gif");
+        }
+
+        // TIFF: 49 49 2A 00 or 4D 4D 00 2A
+        if (buffer[0] == 0x49 && buffer[1] == 0x49 && buffer[2] == 0x2A && buffer[3] == 0x00) ||
+           (buffer[0] == 0x4D && buffer[1] == 0x4D && buffer[2] == 0x00 && buffer[3] == 0x2A) {
+            return Some("tif");
+        }
+
+        // WEBP: RIFF....WEBP (RIFF at 0, WEBP at 8)
+        if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46 {
+            if bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
+                return Some("webp");
+            }
+        }
+
+        // HEIC/AVIF: ....ftyp (ftyp at 4)
+        if bytes_read >= 8 && buffer[4] == 0x66 && buffer[5] == 0x74 && buffer[6] == 0x79 && buffer[7] == 0x70 {
+            // Check compatible brands (simplified)
+            // mif1, heic, heix, avif, etc.
+            // This is a broad guess, but usually sufficient for "ftyp" container identification
+            return Some("heic"); // Default to heic for ftyp box, exiftool handles heic/avif similarly for structure
+        }
+
+        None
+    }
+
     /// Merge XMP metadata into media file
+    ///
+    /// 🔥 v7.9.5: Implements "Loud Fallback" strategy
+    /// If standard merge fails, it attempts to temporarily rename the target file
+    /// to the extension implied by the XMP filename (e.g. .jpg.xmp -> .jpg)
+    /// to bypass exiftool's format checks, then renames it back.
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
+        // Try standard merge first (Fast path)
+        if let Ok(()) = self.merge_xmp_core(xmp_path, media_path) {
+            return Ok(());
+        }
+
+        // Standard merge failed, try fallback strategy
+        self.merge_xmp_fallback(xmp_path, media_path)
+    }
+
+    /// Core merge logic - direct ExifTool call
+    fn merge_xmp_core(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
         // Save original timestamps before merge
         let original_timestamps = self.get_file_timestamps(media_path);
         let xmp_timestamps = self.get_file_timestamps(xmp_path);
@@ -646,6 +712,81 @@ impl XmpMerger {
         }
 
         Ok(())
+    }
+
+    /// Fallback strategy: Temporary extension correction
+    fn merge_xmp_fallback(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
+        let xmp_filename = xmp_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        
+        // Strategy 1: Smart Content Detection (Magic Bytes)
+        // Check if the file content matches a specific format explicitly
+        let detected_ext = Self::detect_real_extension(media_path);
+
+        // Strategy 2: Implied extension from XMP filename (Legacy fallback)
+        let implied_ext = if xmp_filename.to_lowercase().ends_with(".xmp") {
+             let stem = &xmp_filename[..xmp_filename.len() - 4];
+             Path::new(stem).extension().and_then(|e| e.to_str())
+        } else {
+             None
+        };
+
+        // Decide which extension to force
+        // Priority: Detected Content > Implied XMP Extension
+        let target_ext = detected_ext.or(implied_ext);
+
+        let Some(original_ext) = target_ext else {
+             // No extension determined, cannot use fallback
+             return self.merge_xmp_core(xmp_path, media_path); 
+        };
+
+        let current_ext = media_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // If extensions match (ignoring case), fallback won't help
+        if original_ext.eq_ignore_ascii_case(current_ext) {
+             return self.merge_xmp_core(xmp_path, media_path);
+        }
+
+        eprintln!(
+             "⚠️ Merge failed, attempting fallback: Temporary rename to .{} for merge...",
+             original_ext
+        );
+
+        // Construct temporary path
+        let temp_path = media_path.with_extension(original_ext);
+
+        // Safety check: Don't overwrite existing files
+        if temp_path.exists() {
+             eprintln!("⚠️ Fallback aborted: Temporary target {} already exists", temp_path.display());
+             return self.merge_xmp_core(xmp_path, media_path);
+        }
+
+        // 1. Rename to original extension
+        std::fs::rename(media_path, &temp_path)
+             .context("Fallback: Failed to rename for temporary merge")?;
+
+        // 2. Perform merge on temporary file
+        // We use a scope guard-like pattern ensures we rename back even if merge fails
+        let merge_result = self.merge_xmp_core(xmp_path, &temp_path);
+
+        // 3. Rename back to current extension (Critical!)
+        if let Err(e) = std::fs::rename(&temp_path, media_path) {
+             // This is bad - we're left with the temp filename
+             eprintln!("❌ CRITICAL: Failed to restore filename from {} to {}", temp_path.display(), media_path.display());
+             eprintln!("❌ Error: {}", e);
+             // If merge succeeded but rename back failed, we still report error because system state is potentially inconsistent
+             bail!("Critical: Failed to restore filename after fallback merge");
+        }
+
+        match merge_result {
+             Ok(()) => {
+                 eprintln!("✅ Fallback merge successful");
+                 Ok(())
+             }
+             Err(e) => {
+                 eprintln!("❌ Fallback merge failed: {}", e);
+                 Err(e)
+             }
+        }
     }
 
     /// Get file timestamps

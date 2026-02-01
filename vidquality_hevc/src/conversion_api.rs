@@ -139,7 +139,12 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     info!("🎬 Simple Mode: {} → HEVC MP4 (CRF 18)", input.display());
 
-    let output_size = execute_hevc_conversion(&detection, &output_path, 18)?;
+    // 🔥 v7.9: Auto-calculate threads for simple mode (Video workload)
+    let max_threads = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Video
+    ).child_threads;
+
+    let output_size = execute_hevc_conversion(&detection, &output_path, 18, max_threads)?;
 
     shared_utils::copy_metadata(input, &output_path);
 
@@ -269,13 +274,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
         TargetVideoFormat::HevcLosslessMkv => {
             info!("   🚀 Using HEVC Lossless Mode");
-            let size = execute_hevc_lossless(&detection, &output_path)?;
+            let size = execute_hevc_lossless(&detection, &output_path, config.child_threads)?;
             (size, 0.0, 0, None) // 🔥 v3.4: CRF is now f32
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
                 info!("   🚀 Using HEVC Lossless Mode (forced)");
-                let size = execute_hevc_lossless(&detection, &output_path)?;
+                let size = execute_hevc_lossless(&detection, &output_path, config.child_threads)?;
                 (size, 0.0, 0, None) // 🔥 v3.4: CRF is now f32
             } else {
                 // 🔥 统一使用 shared_utils::video_explorer 处理所有探索模式
@@ -317,6 +322,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             initial_crf,
                             true,
                             config.force_ms_ssim_long,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::PreciseQualityWithCompress => {
@@ -335,6 +341,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             initial_crf,
                             false,
                             config.force_ms_ssim_long,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::PreciseQuality => {
@@ -353,6 +360,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             initial_crf,
                             false,
                             config.force_ms_ssim_long,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::CompressWithQuality => {
@@ -375,6 +383,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             matched_crf,
                             max_crf,
                             use_gpu,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::QualityOnly => {
@@ -392,6 +401,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             vf_args,
                             matched_crf,
                             use_gpu,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::ExploreOnly => {
@@ -409,6 +419,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             strategy.crf,
                             max_crf,
                             use_gpu,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::CompressOnly => {
@@ -431,6 +442,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             initial_crf,
                             max_crf,
                             use_gpu,
+                            config.child_threads,
                         )
                     }
                     shared_utils::FlagMode::Default => {
@@ -447,6 +459,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             vf_args,
                             strategy.crf,
                             use_gpu,
+                            config.child_threads,
                         )
                     }
                 }
@@ -869,9 +882,10 @@ fn execute_hevc_conversion(
     detection: &VideoDetectionResult,
     output: &Path,
     crf: u8,
+    max_threads: usize,
 ) -> Result<u64> {
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
+    // let max_threads = shared_utils::thread_manager::get_ffmpeg_threads(); // Use passed threads
     let x265_params = format!("log-level=error:pools={}", max_threads);
 
     // 🔥 偶数分辨率处理：HEVC 编码器要求宽高为偶数
@@ -925,11 +939,11 @@ fn execute_hevc_conversion(
 }
 
 /// Execute HEVC lossless conversion (x265 lossless mode)
-fn execute_hevc_lossless(detection: &VideoDetectionResult, output: &Path) -> Result<u64> {
+fn execute_hevc_lossless(detection: &VideoDetectionResult, output: &Path, max_threads: usize) -> Result<u64> {
     warn!("⚠️  HEVC Lossless encoding - this will be slow and produce large files!");
 
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
+    // let max_threads = shared_utils::thread_manager::get_ffmpeg_threads(); // Use passed threads
     let x265_params = format!("lossless=1:log-level=error:pools={}", max_threads);
 
     // 🔥 偶数分辨率处理：HEVC 编码器要求宽高为偶数

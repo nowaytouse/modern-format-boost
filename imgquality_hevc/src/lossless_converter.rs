@@ -154,7 +154,13 @@ pub fn convert_to_jxl(
     // Execute cjxl (v0.11+ syntax)
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 优先使用 options 中的配置，否则使用默认计算值
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        (num_cpus::get() / 2).clamp(1, 4)
+    };
+
     let result = Command::new("cjxl")
         .arg("-d")
         .arg(format!("{:.1}", distance)) // Distance parameter
@@ -195,6 +201,8 @@ pub fn convert_to_jxl(
 
                 // Step 1: 启动 FFmpeg 进程 (更可靠的解码器)
                 let ffmpeg_result = Command::new("ffmpeg")
+                    .arg("-threads")
+                    .arg(max_threads.to_string()) // 🔥 Limit FFmpeg threads
                     .arg("-i")
                     .arg(shared_utils::safe_path_arg(input).as_ref())
                     .arg("-f")
@@ -712,7 +720,11 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
     // HEVC with CRF 0 for visually lossless (与 AV1 CRF 0 对应)
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        (num_cpus::get() / 2).clamp(1, 4)
+    };
     let x265_params = format!("log-level=error:pools={}", max_threads);
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y") // Overwrite
@@ -987,11 +999,18 @@ pub fn convert_to_hevc_mp4_matched(
                 vf_args,
                 initial_crf,
                 true,
+                options.child_threads,
             )
         }
         shared_utils::FlagMode::PreciseQualityWithCompress => {
             // 🔥 v5.1: 使用 GPU 粗略搜索 + CPU 精细搜索智能化处理
-            shared_utils::explore_hevc_with_gpu_coarse(input, &output, vf_args, initial_crf)
+            shared_utils::explore_hevc_with_gpu_coarse(
+                input,
+                &output,
+                vf_args,
+                initial_crf,
+                options.child_threads,
+            )
         }
         shared_utils::FlagMode::PreciseQuality => shared_utils::explore_precise_quality_match_gpu(
             input,
@@ -1002,6 +1021,7 @@ pub fn convert_to_hevc_mp4_matched(
             max_crf,
             min_ssim,
             use_gpu,
+            options.child_threads,
         ),
         shared_utils::FlagMode::CompressWithQuality => {
             shared_utils::explore_compress_with_quality_gpu(
@@ -1012,6 +1032,7 @@ pub fn convert_to_hevc_mp4_matched(
                 initial_crf,
                 max_crf,
                 use_gpu,
+                options.child_threads,
             )
         }
         shared_utils::FlagMode::QualityOnly => shared_utils::explore_quality_match_gpu(
@@ -1021,6 +1042,7 @@ pub fn convert_to_hevc_mp4_matched(
             vf_args,
             initial_crf,
             use_gpu,
+            options.child_threads,
         ),
         shared_utils::FlagMode::ExploreOnly => shared_utils::explore_size_only_gpu(
             input,
@@ -1030,6 +1052,7 @@ pub fn convert_to_hevc_mp4_matched(
             initial_crf,
             max_crf,
             use_gpu,
+            options.child_threads,
         ),
         shared_utils::FlagMode::CompressOnly => shared_utils::explore_compress_only_gpu(
             input,
@@ -1039,6 +1062,7 @@ pub fn convert_to_hevc_mp4_matched(
             initial_crf,
             max_crf,
             use_gpu,
+            options.child_threads,
         ),
         shared_utils::FlagMode::Default => shared_utils::explore_quality_match_gpu(
             input,
@@ -1047,6 +1071,7 @@ pub fn convert_to_hevc_mp4_matched(
             vf_args,
             initial_crf,
             use_gpu,
+            options.child_threads,
         ),
     }
     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
@@ -1360,7 +1385,12 @@ pub fn convert_to_jxl_matched(
     // Note: For JPEG input with non-zero distance, we need to disable lossless_jpeg
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = shared_utils::thread_manager::get_optimal_threads();
+    // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        (num_cpus::get() / 2).clamp(1, 4)
+    };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
         .arg(format!("{:.2}", distance))
@@ -1522,7 +1552,12 @@ pub fn convert_to_hevc_mkv_lossless(
 
     // Mathematical lossless HEVC
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        (num_cpus::get() / 2).clamp(1, 4)
+    };
     let x265_params = format!("lossless=1:log-level=error:pools={}", max_threads);
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")

@@ -94,10 +94,92 @@ pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
     calculated.clamp(config.min_threads, config.max_threads)
 }
 
+/// Thread allocation result
+#[derive(Debug, Clone, Copy)]
+pub struct ThreadAllocation {
+    /// Number of parallel tasks to run (for rayon / job queue)
+    pub parallel_tasks: usize,
+    /// Number of threads to assign to each child process (ffmpeg, cjxl, x265)
+    pub child_threads: usize,
+}
+
+/// Workload type for thread balancing
+#[derive(Debug, Clone, Copy)]
+pub enum WorkloadType {
+    /// Image mode: Many small files. High parallelism favored.
+    /// Child processes are short-lived.
+    Image,
+    /// Video mode: Few large files. Low parallelism favored.
+    /// Child processes are long-lived and CPU intensive.
+    Video,
+}
+
+/// Calculate a balanced thread configuration to prevent system freeze
+///
+/// This treats CPU cores as a fixed budget and splits them between:
+/// 1. Width (Parallel Tasks)
+/// 2. Depth (Threads per Task)
+///
+/// Formula: parallel_tasks * child_threads <= total_available_cores
+pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
+    let total_cores = num_cpus::get();
+    
+    // Always leave some breathing room for the OS and UI
+    // Reserve 20% of cores, minimum 1, maximum 2
+    let reserved = (total_cores as f64 * 0.2).ceil() as usize;
+    let reserved = reserved.clamp(1, 2);
+    
+    let available_cores = total_cores.saturating_sub(reserved).max(1);
+    
+    match workload {
+        WorkloadType::Image => {
+            // Image Mode: Favor parallelism (Width)
+            // Goal: Run multiple cjxl instances, each using few threads.
+            // This is usually faster for batch image processing.
+            
+            // Allocate 2 threads per child process (sufficient for cjxl/image encoders)
+            let child_threads = 2;
+            
+            // Calculate how many parallel tasks fit
+            let parallel_tasks = (available_cores / child_threads).max(1);
+            
+            // Cap parallel tasks to avoid excessive IO/Context switching
+            // On a 10-core machine: 8 available / 2 = 4 tasks.
+            let parallel_tasks = parallel_tasks.clamp(1, 8);
+            
+            ThreadAllocation {
+                parallel_tasks,
+                child_threads,
+            }
+        }
+        WorkloadType::Video => {
+            // Video Mode: Favor intensity (Depth)
+            // Goal: Run few ffmpeg instances, each using many threads.
+            // Video encoding scales well with threads.
+            
+            // Limit parallel tasks to 1 or 2 to prevent thrashing
+            let parallel_tasks = if available_cores >= 8 {
+                2 // enough room for 2 heavy tasks
+            } else {
+                1 // focus on one task
+            };
+            
+            let child_threads = (available_cores / parallel_tasks).max(1);
+            
+            ThreadAllocation {
+                parallel_tasks,
+                child_threads,
+            }
+        }
+    }
+}
+
 /// Get optimal threads for general processing (cached)
 pub fn get_optimal_threads() -> usize {
     *OPTIMAL_THREADS.get_or_init(|| {
-        calculate_optimal_threads(&ThreadConfig::default())
+         // Default to conservative general usage if specific strategy isn't requested
+         // Use Image strategy as a balanced default
+         get_balanced_thread_config(WorkloadType::Image).parallel_tasks
     })
 }
 
