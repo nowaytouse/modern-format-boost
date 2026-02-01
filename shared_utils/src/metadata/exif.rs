@@ -14,6 +14,7 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use anyhow::Context;
 
 /// Cached exiftool availability (checked once per process)
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -70,6 +71,18 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
     None
 }
 
+/// Extract suggested extension from ExifTool error message
+/// Example: "Error: Not a valid JPEG (looks more like a PNG)" -> Some("png")
+fn extract_suggested_extension(error_msg: &str) -> Option<String> {
+    if let Some(start) = error_msg.find("looks more like a ") {
+        let rest = &error_msg[start + "looks more like a ".len()..];
+        if let Some(end) = rest.find(')') {
+             return Some(rest[..end].trim().to_lowercase());
+        }
+    }
+    None
+}
+
 /// Preserve internal metadata via ExifTool
 ///
 /// Performance: ~50-200ms per file depending on metadata complexity
@@ -78,6 +91,81 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
 /// - 复制所有元数据后，检查 QuickTime 日期是否为空
 /// - 如果为空，从源文件的 XMP/EXIF 日期或文件修改时间设置
 pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+    match preserve_internal_metadata_core(src, dst) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // Check for content/extension mismatch
+            // Error typically looks like "Error: Not a valid JPEG (looks more like a MOV)"
+            let err_str = e.to_string();
+            if err_str.contains("Not a valid") || err_str.contains("looks more like") {
+                eprintln!("⚠️ Metadata preservation failed: {}", err_str);
+                eprintln!("⚠️ Attempting content-aware fallback...");
+                
+                let hint = extract_suggested_extension(&err_str);
+                if let Some(ref h) = hint {
+                     eprintln!("💡 ExifTool suggests content is: {}", h);
+                }
+
+                match preserve_internal_metadata_fallback(src, dst, hint.as_deref()) {
+                    Ok(_) => {
+                        eprintln!("✅ Metadata fallback successful for {}", dst.display());
+                        return Ok(());
+                    }
+                    Err(fallback_err) => {
+                        eprintln!("❌ Metadata fallback failed: {}", fallback_err);
+                        // Return original error as it is likely more descriptive for the user
+                    }
+                }
+            }
+            // Return original error if fallback fails or isn't applicable
+            Err(e)
+        }
+    }
+}
+
+/// Fallback strategy: Rename file to match its content and retry
+fn preserve_internal_metadata_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) -> io::Result<()> {
+    // 1. Detect real extension
+    // Priority: Hint > Detection
+    let detected_ext = if let Some(hint) = hint_ext {
+        hint.to_string()
+    } else {
+        crate::common_utils::detect_real_extension(dst)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Cannot detect file content"))?
+            .to_string()
+    };
+    
+    let current_ext = crate::common_utils::get_extension_lowercase(dst);
+    
+    // If extensions match, fallback is useless
+    if detected_ext.eq_ignore_ascii_case(&current_ext) {
+        return Err(io::Error::new(io::ErrorKind::Other, format!("Extension matches content ({}), fallback skipped", detected_ext)));
+    }
+
+    eprintln!("⚠️ Temporary rename to .{} for metadata preservation...", detected_ext);
+
+    // 2. Temporary rename
+    let temp_path = dst.with_extension(&detected_ext);
+    if temp_path.exists() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("Temporary fallback path exists: {}", temp_path.display())));
+    }
+
+    std::fs::rename(dst, &temp_path)?;
+
+    // 3. Retry operation (use scope guard pattern logic)
+    let result = preserve_internal_metadata_core(src, &temp_path);
+
+    // 4. Restore filename (Critical!)
+    if let Err(e) = std::fs::rename(&temp_path, dst) {
+        eprintln!("❌ CRITICAL: Failed to restore filename from {} to {}", temp_path.display(), dst.display());
+        return Err(e);
+    }
+
+    result
+}
+
+/// Core implementation of metadata preservation
+fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
         // Only warn once per process
         static WARNED: OnceLock<()> = OnceLock::new();
@@ -171,4 +259,51 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_preserve_metadata_mismatch() {
+        if !is_exiftool_available() {
+            eprintln!("ExifTool not available, skipping test");
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        // Create a complex directory structure
+        let complex_dir = temp.path().join("测试 dir/来源/小红书");
+        fs::create_dir_all(&complex_dir).unwrap();
+
+        // Create a real PNG
+        let src_path = complex_dir.join("src_image.png");
+        // 1x1 PNG data
+        let png_data = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
+            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+            0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+            0x44, 0xAE, 0x42, 0x60, 0x82
+        ];
+        fs::write(&src_path, &png_data).unwrap();
+        
+        // Create dst as PNG but named .jpeg
+        let dst_path = complex_dir.join("dst_image.jpeg");
+        fs::write(&dst_path, &png_data).unwrap();
+        
+        // Run preserve
+        let result = preserve_internal_metadata(&src_path, &dst_path);
+        
+        if let Err(e) = &result {
+            println!("Test failed with error: {}", e);
+        }
+        assert!(result.is_ok(), "Metadata preservation failed for mismatched extension with complex path");
+    }
 }
