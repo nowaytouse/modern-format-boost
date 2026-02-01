@@ -1059,7 +1059,7 @@ fn auto_convert_directory(
                                 path,
                                 Some(output_dir),
                                 config.base_dir.as_deref(),
-                                false,
+                                config.verbose, // 🔥 v7.9: Use verbose flag to show copy action
                             );
                         }
                     }
