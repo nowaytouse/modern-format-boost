@@ -150,7 +150,7 @@ where
                         file,
                         config.output.as_deref(),
                         config.base_dir.as_deref(),
-                        false,
+                        true, // 🔥 v7.9: Always show fallback copy message (it's important)
                     ) {
                         error!("❌ Failed to copy original: {}", copy_err);
                     } else {
