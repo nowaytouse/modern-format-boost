@@ -992,7 +992,7 @@ fn auto_convert_directory(
 
     // 🔥 v6.9.15: 克隆 config 并设置 base_dir 以保留目录结构
     let mut config_with_base = config.clone();
-    if config_with_base.output_dir.is_some() {
+    if config_with_base.output_dir.is_some() && config_with_base.base_dir.is_none() {
         config_with_base.base_dir = Some(input.to_path_buf());
     }
     // config.child_threads is already set by caller (Commands::Auto)

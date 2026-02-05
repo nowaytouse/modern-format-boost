@@ -685,7 +685,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
     // 🔥 v6.7: 使用纯视频流大小判断压缩成功
     // 只要纯视频流变小就算成功，无论总文件大小如何
-    let can_compress = verify_result.video_compressed;
+    // 🔥 v8.0: 增加 1% 容差支持
+    let can_compress = if config.allow_size_tolerance {
+        verify_result.video_compression_ratio < 1.01
+    } else {
+        verify_result.video_compressed
+    };
 
     if config.require_compression && !can_compress {
         // 纯视频流未压缩
