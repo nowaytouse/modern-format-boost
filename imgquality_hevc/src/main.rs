@@ -42,7 +42,7 @@ enum Commands {
         output: OutputFormat,
 
         /// Include upgrade recommendation
-        #[arg(short = 'r', long)]
+        #[arg(short = 'R', long)]
         recommend: bool,
     },
 
@@ -53,13 +53,17 @@ enum Commands {
     /// - SSIM 裁判验证确保质量 (≥0.95)
     /// - 输出大于输入时自动跳过
     Auto {
-        /// Input file or directory
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
         /// Output directory (default: same as input)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Base directory for preserving directory structure (optional)
+        #[arg(long)]
+        base_dir: Option<PathBuf>,
+
+        /// Input file or directory
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
 
         /// Force conversion even if already processed
         #[arg(short, long)]
@@ -217,33 +221,30 @@ fn main() -> anyhow::Result<()> {
             ultimate,
             allow_size_tolerance,
             verbose,
+            base_dir,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
 
             // 🔥 v6.2: 使用模块化的 flag 验证器（含 ultimate 支持）
-            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
+            let flag_mode = match shared_utils::validate_flags_result_with_ultimate(
                 explore,
                 match_quality,
                 compress,
                 ultimate,
             ) {
-                eprintln!("{}", e);
-                std::process::exit(1);
-            }
+                Ok(mode) => mode,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            };
 
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
                 eprintln!("   Smart quality matching: DISABLED");
             } else if verbose {
                 // 显示探索模式信息
-                let flag_mode = shared_utils::validate_flags_result_with_ultimate(
-                    explore,
-                    match_quality,
-                    compress,
-                    ultimate,
-                )
-                .unwrap();
                 eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
@@ -263,7 +264,7 @@ fn main() -> anyhow::Result<()> {
             }
             let config = AutoConvertConfig {
                 output_dir: output.clone(),
-                base_dir: None, // 🔥 v6.9.15: Will be set in auto_convert_directory
+                base_dir: base_dir.clone(), // 🔥 v7.9.6: Use explicit base_dir if provided
                 force,
                 delete_original: should_delete,
                 in_place,
@@ -730,6 +731,8 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
              // Fallback for single file mode (conservative default)
              2 
         },
+        // 🔥 v7.9.8: Inject detected format to handle misleading extensions
+        input_format: Some(analysis.format.clone()),
     };
 
     // Helper macro for verbose logging
@@ -812,14 +815,35 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
             // 🍎 Check if this is a modern animated format (NOT including GIF!)
             // GIF 本身就是 Apple 兼容格式，不属于"现代格式"
             let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
-            if is_modern_animated && !is_lossless && !config.apple_compat {
+            let is_apple_native = matches!(format, "HEIC" | "HEIF");
+
+            // 🔥 v7.9.7: Apple native formats (HEIC/HEIF) should be skipped even in apple_compat mode
+            // because they are already natively supported and re-encoding causes quality loss.
+            let should_skip_modern = if is_modern_animated && !is_lossless {
+                if config.apple_compat {
+                    // In apple_compat mode, only WebP/AVIF/JXL need conversion to HEVC.
+                    // HEIC/HEIF are natively supported by Apple.
+                    is_apple_native
+                } else {
+                    // Not in apple_compat mode: skip all modern lossy formats to avoid generational loss
+                    true
+                }
+            } else {
+                false
+            };
+
+            if should_skip_modern {
                 verbose_log!(
                     "⏭️ Skipping modern lossy animated format (avoid generation loss): {}",
                     input.display()
                 );
-                verbose_log!(
-                    "   💡 Use --apple-compat to convert to HEVC for Apple device compatibility"
-                );
+                if is_apple_native && config.apple_compat {
+                    verbose_log!("   💡 Reason: {} is already a native Apple format", format);
+                } else {
+                    verbose_log!(
+                        "   💡 Use --apple-compat to convert to HEVC for Apple device compatibility"
+                    );
+                }
                 // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
                 copy_original_if_adjacent_mode(input, config)?;
                 return Ok(make_skipped("Skipping modern lossy animated format"));
@@ -864,7 +888,8 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
             };
 
             // 🍎 Apple 兼容模式下的现代动态图片处理策略
-            if config.apple_compat && is_modern_animated {
+            // 🔥 v7.9.7: Only convert non-native formats (WebP, AVIF, JXL) to HEVC
+            if config.apple_compat && is_modern_animated && !is_apple_native {
                 if duration >= 3.0 || is_high_quality {
                     // 长动画或高质量 → HEVC MP4
                     verbose_log!(
@@ -1050,7 +1075,7 @@ fn auto_convert_directory(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(2)
                 .build()
-                .unwrap()
+                .expect("Failed to create fallback thread pool")
         });
 
     if config.verbose {

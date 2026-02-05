@@ -104,8 +104,11 @@ impl MsssimProgressMonitor {
     /// * `channel` - 通道名称
     /// * `score` - MS-SSIM分数
     pub fn store_channel_score(&self, channel: &str, score: f64) {
-        let mut scores = self.channel_scores.lock().unwrap();
-        scores.insert(channel.to_string(), score);
+        if let Ok(mut scores) = self.channel_scores.lock() {
+            scores.insert(channel.to_string(), score);
+        } else {
+            eprintln!("❌ Failed to acquire lock for channel scores (poisoned)");
+        }
     }
 
     /// 获取通道分数
@@ -116,7 +119,7 @@ impl MsssimProgressMonitor {
     /// # Returns
     /// 通道的MS-SSIM分数，如果不存在返回None
     pub fn get_channel_score(&self, channel: &str) -> Option<f64> {
-        let scores = self.channel_scores.lock().unwrap();
+        let scores = self.channel_scores.lock().ok()?;
         scores.get(channel).copied()
     }
 

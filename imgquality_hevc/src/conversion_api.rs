@@ -450,39 +450,12 @@ fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Preserve metadata using exiftool
+/// Preserve metadata using unified shared_utils (with content-aware fallback)
 fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
-    // Check if exiftool is available
-    if which::which("exiftool").is_err() {
-        return Ok(()); // Skip if not available
-    }
-
-    // 🔥 Fix filename trap: Ensure paths are safe (absolute)
-    let source_abs = std::fs::canonicalize(source).unwrap_or(source.to_path_buf());
-    let dest_abs = if dest.is_absolute() {
-        dest.to_path_buf()
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(dest)
-    };
-
-    let source_str = path_to_str(&source_abs)?;
-    let dest_str = path_to_str(&dest_abs)?;
-
-    let status = Command::new("exiftool")
-        .args([
-            "-overwrite_original",
-            "-TagsFromFile",
-            source_str,
-            "-All:All",
-            dest_str,
-        ])
-        .output()?;
-
-    if !status.status.success() {
-        // Non-fatal, just log
-        eprintln!("⚠️ Warning: Failed to preserve metadata");
-    }
-
+    // 🔥 v7.9.8: Use shared_utils which has robust content-aware fallback
+    // If exiftool fails due to extension mismatch, it will temporarily rename 
+    // the file to its real content type and retry.
+    shared_utils::metadata::copy_metadata(source, dest);
     Ok(())
 }
 

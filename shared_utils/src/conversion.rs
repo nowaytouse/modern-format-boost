@@ -268,6 +268,9 @@ pub struct ConvertOptions {
     /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
     /// 0 means use default (or calculated optimal)
     pub child_threads: usize,
+    /// 🔥 v7.9.8: Explicitly injected input format (e.g. "JPEG", "PNG")
+    /// Useful when file content does not match its extension
+    pub input_format: Option<String>,
 }
 
 impl Default for ConvertOptions {
@@ -287,6 +290,7 @@ impl Default for ConvertOptions {
             allow_size_tolerance: true, // 🔥 v7.8.3: 默认允许1%容差（提高转换率）
             verbose: false,
             child_threads: 0,
+            input_format: None,
         }
     }
 }

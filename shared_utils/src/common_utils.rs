@@ -239,10 +239,9 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     }
 
     // WEBP: RIFF....WEBP (RIFF at 0, WEBP at 8)
-    if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46 {
-        if bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
-            return Some("webp");
-        }
+    if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46 
+        && bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
+        return Some("webp");
     }
 
     // QuickTime (MOV/MP4) Container Signatures
