@@ -219,11 +219,13 @@ impl ParallelMsssimCalculator {
         progress_monitor: Arc<MsssimProgressMonitor>,
     ) -> Result<f64, AppError> {
         // 构建ffmpeg命令参数
+        let original_path_str = original_path.to_string_lossy();
+        let converted_path_str = converted_path.to_string_lossy();
         let mut args = vec![
             "-i",
-            original_path.to_str().unwrap(),
+            original_path_str.as_ref(),
             "-i",
-            converted_path.to_str().unwrap(),
+            converted_path_str.as_ref(),
         ];
 
         // 添加select filter（如果需要）
@@ -263,9 +265,9 @@ impl ParallelMsssimCalculator {
                 // 构建SSIM fallback命令
                 let mut ssim_args = vec![
                     "-i",
-                    original_path.to_str().unwrap(),
+                    original_path_str.as_ref(),
                     "-i",
-                    converted_path.to_str().unwrap(),
+                    converted_path_str.as_ref(),
                 ];
 
                 // 添加select filter（如果需要）

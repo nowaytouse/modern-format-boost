@@ -60,7 +60,7 @@ pub fn convert_to_jxl(
     }
 
     // 🔥 预处理：检测 cjxl 不能直接读取的格式，先转换为中间格式
-    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input)?;
+    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
 
     // Execute cjxl (v0.11+ syntax)
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
@@ -1318,12 +1318,18 @@ pub fn convert_to_av1_mp4_lossless(
 /// 返回: (实际输入路径, 临时文件路径 Option)
 fn prepare_input_for_cjxl(
     input: &Path,
+    options: &ConvertOptions,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    let ext = input
-        .extension()
-        .map(|e| e.to_ascii_lowercase())
-        .and_then(|e| e.to_str().map(|s| s.to_string()))
-        .unwrap_or_default();
+    // 🔥 v7.9.8: 优先使用注入的真实格式
+    let ext = if let Some(ref format) = options.input_format {
+        format.to_lowercase()
+    } else {
+        input
+            .extension()
+            .map(|e| e.to_ascii_lowercase())
+            .and_then(|e| e.to_str().map(|s| s.to_string()))
+            .unwrap_or_default()
+    };
 
     match ext.as_str() {
         // WebP: 使用 dwebp 解码（处理 ICC profile 问题）
