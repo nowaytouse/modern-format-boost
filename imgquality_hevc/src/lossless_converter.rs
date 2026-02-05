@@ -209,6 +209,8 @@ pub fn convert_to_jxl(
                     .arg("png")
                     .arg("-pix_fmt")
                     .arg("rgba") // 确保支持透明度
+                    .arg("-frames:v")
+                    .arg("1") // 🔥 v7.9.9: Force single frame to avoid cjxl crash on animations
                     .arg("-") // 输出到 stdout
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -1758,7 +1760,6 @@ fn try_imagemagick_fallback(
         }
     }
 }
-
 /// 检测并预处理 cjxl 不能直接读取的格式
 ///
 /// cjxl 已知问题：
@@ -1795,7 +1796,6 @@ fn prepare_input_for_cjxl(
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("dwebp")
-                // .arg("--") // 🔥 v7.9: dwebp does not support '--' as delimiter
                 .arg(input)
                 .arg("-o")
                 .arg(&temp_png)
@@ -1808,7 +1808,6 @@ fn prepare_input_for_cjxl(
                 }
                 _ => {
                     eprintln!("   ⚠️  dwebp pre-processing failed, trying direct cjxl");
-                    // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1826,10 +1825,10 @@ fn prepare_input_for_cjxl(
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                .arg("--")
                 .arg(input)
                 .arg("-depth")
-                .arg("16") // 保留位深
+                .arg("16")
                 .arg(&temp_png)
                 .output();
 
@@ -1840,7 +1839,6 @@ fn prepare_input_for_cjxl(
                 }
                 _ => {
                     eprintln!("   ⚠️  ImageMagick TIFF pre-processing failed, trying direct cjxl");
-                    // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1858,7 +1856,7 @@ fn prepare_input_for_cjxl(
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
-                .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                .arg("--")
                 .arg(input)
                 .arg(&temp_png)
                 .output();
@@ -1870,7 +1868,6 @@ fn prepare_input_for_cjxl(
                 }
                 _ => {
                     eprintln!("   ⚠️  ImageMagick BMP pre-processing failed, trying direct cjxl");
-                    // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1885,13 +1882,11 @@ fn prepare_input_for_cjxl(
                 .tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
-            // 优先使用 sips (macOS 原生)
             eprintln!("   🍎 Trying macOS sips first...");
             let result = Command::new("sips")
                 .arg("-s")
                 .arg("format")
                 .arg("png")
-                // .arg("--") // 🔥 v7.9: sips does not support '--' as delimiter
                 .arg(input)
                 .arg("--out")
                 .arg(&temp_png)
@@ -1904,9 +1899,8 @@ fn prepare_input_for_cjxl(
                 }
                 _ => {
                     eprintln!("   ⚠️  sips failed, trying ImageMagick...");
-                    // 尝试 ImageMagick
                     let result = Command::new("magick")
-                        .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+                        .arg("--")
                         .arg(input)
                         .arg(&temp_png)
                         .output();
@@ -1920,7 +1914,6 @@ fn prepare_input_for_cjxl(
                             eprintln!(
                                 "   ⚠️  Both sips and ImageMagick failed, trying direct cjxl"
                             );
-                            // temp_png_file dropped automatically
                             Ok((input.to_path_buf(), None))
                         }
                     }
@@ -1928,10 +1921,68 @@ fn prepare_input_for_cjxl(
             }
         }
 
-        // 其他格式：直接使用
-        _ => Ok((input.to_path_buf(), None)),
+        // GIF: 使用 FFmpeg 转换为 PNG（处理动图转静图逻辑）
+        "gif" => {
+            eprintln!(
+                "   🔧 PRE-PROCESSING: GIF detected, using FFmpeg for static frame extraction"
+            );
+
+            let temp_png_file = tempfile::Builder::new()
+                .suffix(".png")
+                .tempfile()?;
+            let temp_png = temp_png_file.path().to_path_buf();
+
+            let result = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg("-frames:v")
+                .arg("1")
+                .arg(&temp_png)
+                .output();
+
+            match result {
+                Ok(output) if output.status.success() && temp_png.exists() => {
+                    eprintln!("   ✅ FFmpeg GIF pre-processing successful");
+                    Ok((temp_png, Some(temp_png_file)))
+                }
+                _ => {
+                    eprintln!("   ⚠️  FFmpeg GIF pre-processing failed, trying direct cjxl");
+                    Ok((input.to_path_buf(), None))
+                }
+            }
+        }
+
+        // 其他格式：核对后缀是否匹配
+        _ => {
+            if let Some(actual_ext) = input.extension().and_then(|e| e.to_str()) {
+                if actual_ext.to_lowercase() != ext {
+                    eprintln!(
+                        "   🔧 PRE-PROCESSING: Extension mismatch detected (.{} vs {}), creating aligned temp file",
+                        actual_ext, ext
+                    );
+                    
+                    let temp_aligned_file = tempfile::Builder::new()
+                        .suffix(&format!(".{}", ext))
+                        .tempfile()?;
+                    let temp_path = temp_aligned_file.path().to_path_buf();
+                    
+                    if std::fs::copy(input, &temp_path).is_ok() {
+                        Ok((temp_path, Some(temp_aligned_file)))
+                    } else {
+                        Ok((input.to_path_buf(), None))
+                    }
+                } else {
+                    Ok((input.to_path_buf(), None))
+                }
+            } else {
+                Ok((input.to_path_buf(), None))
+            }
+        }
     }
 }
+
+
 
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
 fn get_output_path(

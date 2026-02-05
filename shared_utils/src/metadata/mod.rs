@@ -334,40 +334,50 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
 
 /// 查找源文件对应的XMP边车文件
 fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
-    // 策略1: photo.jpg.xmp
-    let xmp_full = src.with_extension(format!("{}.xmp", src.extension()?.to_str()?));
-    if xmp_full.exists() {
-        return Some(xmp_full);
+    // 策略1: 绝对路径直接匹配 (photo.jpg.xmp)
+    if let Some(ext) = src.extension() {
+        let xmp_full = src.with_extension(format!("{}.xmp", ext.to_str()?));
+        if xmp_full.exists() {
+            return Some(xmp_full);
+        }
     }
 
-    // 策略2: photo.xmp
+    // 策略2: 同名匹配 (photo.xmp)
     let xmp_stem = src.with_extension("xmp");
     if xmp_stem.exists() {
         return Some(xmp_stem);
     }
 
-    // 策略3: 大小写不敏感 (photo.XMP, photo.Xmp)
+    // 策略3: 深度扫描与 Stem 解耦匹配 (处理重命名或误导后缀的情况)
     if let Some(parent) = src.parent() {
-        if let Some(stem) = src.file_stem() {
-            let stem_str = stem.to_string_lossy();
+        if let Some(src_stem_raw) = src.file_stem() {
+            let src_stem = src_stem_raw.to_string_lossy().to_lowercase();
+            // 如果 src_stem 本身包含点（如 image.jpg），取最左侧部分作为 root_stem
+            let src_root_stem = src_stem.split('.').next().unwrap_or(&src_stem);
 
-            // 扫描目录查找匹配的XMP文件
             if let Ok(entries) = std::fs::read_dir(parent) {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
-                    if let Some(ext) = path.extension() {
-                        if ext.to_string_lossy().to_lowercase() == "xmp" {
-                            if let Some(file_stem) = path.file_stem() {
-                                let file_stem_str = file_stem.to_string_lossy();
-                                // photo.jpg.xmp 或 photo.xmp
-                                if file_stem_str.to_lowercase() == stem_str.to_lowercase()
-                                    || file_stem_str.to_lowercase()
-                                        == format!("{}.{}", stem_str, src.extension()?.to_str()?)
-                                            .to_lowercase()
-                                {
-                                    return Some(path);
-                                }
-                            }
+                    
+                    // 必须是以 .xmp 结尾的文件
+                    if !path.extension().map_or(false, |e| e.to_string_lossy().eq_ignore_ascii_case("xmp")) {
+                        continue;
+                    }
+
+                    if let Some(xmp_stem_raw) = path.file_stem() {
+                        let xmp_stem = xmp_stem_raw.to_string_lossy().to_lowercase();
+                        // 剥离 XMP stem 中可能存在的原始扩展名 (image.jpg -> image)
+                        let xmp_root_stem = xmp_stem.split('.').next().unwrap_or(&xmp_stem);
+
+                        // 匹配逻辑：
+                        // 1. 完全匹配 stem (忽略大小写): photo.xmp vs photo.jpg
+                        // 2. 匹配双重扩展名 stem: photo.jpg.xmp vs photo.jpg
+                        // 3. 匹配 Root Stem (终极回退): photo.jpg.xmp vs photo.png
+                        if xmp_stem == src_stem 
+                            || xmp_stem == format!("{}.{}", src_stem, src.extension().and_then(|e| e.to_str()).unwrap_or(""))
+                            || xmp_root_stem == src_root_stem 
+                        {
+                            return Some(path);
                         }
                     }
                 }

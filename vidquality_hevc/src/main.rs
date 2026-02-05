@@ -87,6 +87,15 @@ enum Commands {
         /// ⚠️ MUST be used with --explore --match-quality --compress
         #[arg(long, default_value_t = false)]
         ultimate: bool,
+        /// 🔥 v8.0: Base directory for output path generation (preserves directory structure)
+        #[arg(long)]
+        base_dir: Option<PathBuf>,
+        /// 🔥 v8.0: Allow 1% size tolerance (default: enabled)
+        #[arg(long, default_value_t = true)]
+        allow_size_tolerance: bool,
+        /// Verbose output (show skipped files and success messages)
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Simple mode: ALL videos → HEVC MP4
@@ -151,6 +160,9 @@ fn main() -> anyhow::Result<()> {
             full_ms_ssim,
             skip_ms_ssim,
             ultimate,
+            base_dir,
+            allow_size_tolerance,
+            verbose,
         } => {
             // 🔥 v6.2: Validate flag combinations with ultimate support
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
@@ -163,7 +175,9 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
-            let base_dir = if recursive {
+            let base_dir = if let Some(explicit_base) = base_dir {
+                Some(explicit_base)
+            } else if recursive {
                 if input.is_dir() {
                     Some(input.clone())
                 } else {
@@ -175,7 +189,7 @@ fn main() -> anyhow::Result<()> {
 
             let config = ConversionConfig {
                 output_dir: output.clone(),
-                base_dir,
+                base_dir: base_dir.clone(),
                 force,
                 delete_original,
                 preserve_metadata: true,
@@ -199,6 +213,8 @@ fn main() -> anyhow::Result<()> {
                 child_threads: shared_utils::thread_manager::get_balanced_thread_config(
                     shared_utils::thread_manager::WorkloadType::Video
                 ).child_threads,
+                allow_size_tolerance,
+                verbose,
             };
 
             info!("🎬 Auto Mode Conversion (HEVC/H.265)");
@@ -255,11 +271,13 @@ fn main() -> anyhow::Result<()> {
                     output: output.clone(),
                     recursive,
                     label: "HEVC Video".to_string(),
-                    base_dir: if output.is_some() {
-                        Some(input.clone())
-                    } else {
-                        None
-                    }, // 🔥 v7.4.5
+                    base_dir: base_dir.or_else(|| {
+                        if output.is_some() {
+                            Some(input.clone())
+                        } else {
+                            None
+                        }
+                    }), // 🔥 v8.0: Prefer explicit base_dir, fallback to input for adjacent mode
                 },
                 |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;

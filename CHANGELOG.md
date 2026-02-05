@@ -1,5 +1,18 @@
 # Changelog
 
+## [v8.0.0] - 2026-02-05
+### 🔥 Major Robustness & Directory Structure Fix
+- **Directory Structure**: Fixed a critical `base_dir` shadowing bug in `vidquality-hevc` that caused output directory pollution in adjacent mode. Explicit `--base-dir` (requested by `drag_and_drop_processor.sh`) is now strictly respected.
+- **Content-Aware Detection**: 
+  - Added `.jpe` extension support across all tools.
+  - Implemented magic-byte based content detection for PNG/JPEG mismatch cases.
+  - Decoupled XMP sidecar matching from file extensions for better resilience.
+- **Data Integrity Audit**: 
+  - Verified 100% data preservation across 9,544+ files.
+  - Confirmed XMP merging successfully consolidated 9,544 sidecar files into media files.
+  - Validated fallback copy mechanism for 134+ failed/skipped video items.
+- **CLI Improvements**: Restored the `--verbose` flag in `vidquality-hevc`.
+
 ## [v7.9.3] - 2026-02-01
 ### Security & Robustness
 - **Video Explorer**: Replaced unreliable extension-based GIF detection with robust content-based detection using `ffprobe`. This prevents misidentification of files (e.g., mismatched extensions) (Critical).

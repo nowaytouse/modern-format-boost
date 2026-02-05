@@ -240,7 +240,10 @@ impl XmpMerger {
     /// Scans directory for any file with matching stem (blacklist approach)
     fn find_same_name_different_ext(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
-        let stem = xmp_path.file_stem()?.to_string_lossy();
+        let xmp_stem_raw = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
+        
+        // Root stem: "image.jpg" -> "image"
+        let xmp_root_stem = xmp_stem_raw.split('.').next().unwrap_or(&xmp_stem_raw);
 
         // Scan directory for files with same stem
         for entry in std::fs::read_dir(parent).ok()? {
@@ -251,18 +254,21 @@ impl XmpMerger {
                 continue;
             }
 
-            let file_stem = match path.file_stem() {
-                Some(s) => s.to_string_lossy(),
+            let file_stem_raw = match path.file_stem() {
+                Some(s) => s.to_string_lossy().to_lowercase(),
                 None => continue,
             };
+            
+            // Media root stem: "image.png" -> "image"
+            let file_root_stem = file_stem_raw.split('.').next().unwrap_or(&file_stem_raw);
 
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
             };
 
-            // Exact stem match + not in blacklist
-            if file_stem == stem && is_potential_media(&ext) {
+            // Match logic: root stem match or exact stem match
+            if (file_stem_raw == xmp_stem_raw || file_root_stem == xmp_root_stem) && is_potential_media(&ext) {
                 return Some(path);
             }
         }
@@ -272,7 +278,7 @@ impl XmpMerger {
     /// Strategy 2.5: Case-insensitive filename match
     fn find_case_insensitive(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
-        let stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
+        let xmp_stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
 
         for entry in std::fs::read_dir(parent).ok()? {
             let entry = entry.ok()?;
@@ -283,9 +289,12 @@ impl XmpMerger {
             }
 
             let file_stem = path.file_stem()?.to_string_lossy().to_lowercase();
-            let ext = path.extension()?.to_string_lossy().to_lowercase();
+            let ext = match path.extension() {
+                Some(e) => e.to_string_lossy().to_lowercase(),
+                None => continue,
+            };
 
-            if file_stem == stem && is_potential_media(&ext) {
+            if file_stem == xmp_stem && is_potential_media(&ext) {
                 return Some(path);
             }
         }
@@ -299,6 +308,7 @@ impl XmpMerger {
 
         // Normalize: remove special chars, lowercase
         let normalized_stem = Self::normalize_filename(&stem);
+        let root_normalized_stem = Self::normalize_filename(stem.split('.').next().unwrap_or(&stem));
 
         if normalized_stem.is_empty() {
             return None;
@@ -323,8 +333,9 @@ impl XmpMerger {
 
             let file_stem = path.file_stem()?.to_string_lossy();
             let normalized_file = Self::normalize_filename(&file_stem);
+            let root_normalized_file = Self::normalize_filename(file_stem.split('.').next().unwrap_or(&file_stem));
 
-            if normalized_file == normalized_stem {
+            if normalized_file == normalized_stem || root_normalized_file == root_normalized_stem {
                 return Some(path);
             }
         }
