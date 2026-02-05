@@ -92,6 +92,10 @@ pub struct ConversionConfig {
 
     /// 🔥 v7.9: Max threads for child processes
     pub child_threads: usize,
+    /// 🔥 v8.0: Allow 1% size tolerance (output can be up to 1.01x input)
+    pub allow_size_tolerance: bool,
+    /// Verbose output
+    pub verbose: bool,
 }
 
 impl Default for ConversionConfig {
@@ -119,6 +123,8 @@ impl Default for ConversionConfig {
             full_ms_ssim: false,
             skip_ms_ssim: false,
             child_threads: 0,
+            allow_size_tolerance: true,
+            verbose: false,
         }
     }
 }

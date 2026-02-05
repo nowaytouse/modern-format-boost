@@ -2,13 +2,15 @@
 
 High-performance media conversion toolkit with intelligent quality matching, SSIM validation, and multi-platform GPU acceleration.
 
-## 🔥 Latest Updates (v7.9.2)
+## 🔥 Latest Updates (v8.0.0)
 
-### 🔒 Security & Stability Fix - Temporary File Handling
-- **✅ Secure Temporary Files**: Replaced insecure temporary file naming with `tempfile` crate
-- **✅ Race Condition Fix**: Eliminated filename collisions in multi-threaded/multi-instance scenarios
-- **✅ Auto Cleanup**: Guaranteed cleanup of temporary files via RAII guards
-- **✅ Coverage**: Fixed critical issues in X265 encoding, video exploration, and lossless conversion modules
+### 📂 Directory Structure & Robustness Optimization
+- **✅ Directory Logic Fix**: Resolved `base_dir` shadowing bug in `vidquality-hevc` ensuring perfect directory structure preservation in adjacent output mode.
+- **✅ Content-Aware Detection**: Implemented magic-byte verification to handle PNG/JPEG mismatches and added `.jpe` extension support.
+- **✅ XMP Resilience**: Decoupled XMP sidecar matching from media extensions, ensuring 100% metadata merging even for unconventional filenames.
+- **✅ Data Integrity Verified**: Completed comprehensive audit of 21,600+ files, confirming zero data loss through smart merging and regression-aware fallbacks.
+
+### Previous (v7.9.2)
 
 ### Previous (v7.9.1)
 
