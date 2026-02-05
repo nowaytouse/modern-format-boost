@@ -414,7 +414,7 @@ fn test_full_exploration_workflow() {
     let vf_args = vec!["-vf".to_string(), "format=yuv420p".to_string()];
 
     // 使用 shared_utils 统一探索器
-    match shared_utils::explore_hevc(&test_gif, &test_mp4, vf_args, 18.0) {
+    match shared_utils::explore_hevc(&test_gif, &test_mp4, vf_args, 18.0, 4) {
         Ok(result) => {
             eprintln!("Exploration result:");
             eprintln!("  Optimal CRF: {}", result.optimal_crf);

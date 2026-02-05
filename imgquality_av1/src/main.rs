@@ -57,19 +57,23 @@ enum Commands {
         output: OutputFormat,
 
         /// Include upgrade recommendation
-        #[arg(short = 'r', long)]
+        #[arg(short = 'R', long)]
         recommend: bool,
     },
 
     /// Auto-convert based on format detection (JPEG→JXL, PNG→JXL, Animated→AV1 MP4)
     Auto {
-        /// Input file or directory
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
         /// Output directory (default: same as input)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Base directory for preserving directory structure (optional)
+        #[arg(long)]
+        base_dir: Option<PathBuf>,
+
+        /// Input file or directory
+        #[arg(value_name = "INPUT")]
+        input: PathBuf,
 
         /// Force conversion even if already processed
         #[arg(short, long)]
@@ -117,6 +121,10 @@ enum Commands {
         /// Verbose output
         #[arg(long)]
         verbose: bool,
+
+        /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
+        #[arg(long, default_value_t = 0)]
+        child_threads: usize,
     },
 
     /// Verify conversion quality
@@ -204,22 +212,25 @@ fn main() -> anyhow::Result<()> {
             match_quality,
             compress,
             cpu,
+            base_dir,
             verbose,
+            child_threads,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
 
             // 🔥 v4.6: 使用模块化的 flag 验证器
-            if let Err(e) = shared_utils::validate_flags_result(explore, match_quality, compress) {
-                eprintln!("{}", e);
-                std::process::exit(1);
-            }
+            let flag_mode = match shared_utils::validate_flags_result(explore, match_quality, compress) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            };
 
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
             } else {
-                let flag_mode =
-                    shared_utils::validate_flags_result(explore, match_quality, compress).unwrap();
                 eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
             }
             if in_place {
@@ -232,7 +243,10 @@ fn main() -> anyhow::Result<()> {
             }
 
             // Determine base directory
-            let base_dir = if recursive {
+            // 🔥 v7.9.6: If explicitly provided via CLI, use it. Otherwise calculate based on input.
+            let base_dir = if let Some(explicit_base) = base_dir {
+                Some(explicit_base)
+            } else if recursive {
                 // Recursive: base is the input directory (or parent if input is file)
                 if input.is_dir() {
                     Some(input.clone())
@@ -265,7 +279,11 @@ fn main() -> anyhow::Result<()> {
                 use_gpu: !cpu, // 🔥 v4.15: CPU mode = no GPU
                 verbose,
                 base_dir: base_dir.as_deref(),
-                child_threads: thread_config.child_threads,
+                child_threads: if child_threads > 0 {
+                    child_threads
+                } else {
+                    thread_config.child_threads
+                },
             };
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -635,6 +653,8 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         allow_size_tolerance: true, // 🔥 v7.8.3: AV1 默认启用容差
         verbose: config.verbose,
         child_threads: config.child_threads,
+        // 🔥 v7.9.8: Inject detected format to handle misleading extensions
+        input_format: Some(analysis.format.clone()),
     };
 
     // Smart conversion based on format and lossless status
@@ -868,7 +888,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
             rayon::ThreadPoolBuilder::new()
                 .num_threads(2)
                 .build()
-                .unwrap()
+                .expect("Failed to create fallback thread pool")
         });
 
     println!(
