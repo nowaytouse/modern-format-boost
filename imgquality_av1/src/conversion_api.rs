@@ -278,13 +278,16 @@ pub fn execute_conversion(
 
 /// Convert to JXL
 fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
+    let input_str = input.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input)))?;
+    let output_str = output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?;
+
     let args = if *format == DetectedFormat::JPEG {
         // JPEG lossless transcode
         vec![
             "--lossless_jpeg=1",
             "--",
-            input.to_str().unwrap(),
-            output.to_str().unwrap(),
+            input_str,
+            output_str,
         ]
     } else {
         // Lossless modular encoding
@@ -294,8 +297,8 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
             "-e",
             "7", // cjxl v0.11+ 范围是 1-10，默认 7
             "--",
-            input.to_str().unwrap(),
-            output.to_str().unwrap(),
+            input_str,
+            output_str,
         ]
     };
 
@@ -313,9 +316,11 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
 /// Convert to AVIF
 fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
     let q = quality.unwrap_or(85).to_string();
+    let input_str = input.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input)))?;
+    let output_str = output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?;
 
     let status = Command::new("avifenc")
-        .args([input.to_str().unwrap(), output.to_str().unwrap(), "-q", &q])
+        .args([input_str, output_str, "-q", &q])
         .output()?;
 
     if !status.status.success() {
@@ -355,7 +360,7 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
             &fps_str,
             "-pix_fmt",
             "yuv420p",
-            output.to_str().unwrap(),
+            output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?,
         ])
         .output()?;
 
@@ -370,8 +375,11 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
 
 /// Preserve file timestamps (modification time, access time)
 fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
+    let source_str = source.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid source path: {:?}", source)))?;
+    let dest_str = dest.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid dest path: {:?}", dest)))?;
+
     let status = Command::new("touch")
-        .args(["-r", source.to_str().unwrap(), dest.to_str().unwrap()])
+        .args(["-r", source_str, dest_str])
         .output()?;
 
     if !status.status.success() {
@@ -389,13 +397,16 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
         return Ok(()); // Skip if not available
     }
 
+    let source_str = source.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid source path: {:?}", source)))?;
+    let dest_str = dest.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid dest path: {:?}", dest)))?;
+
     let status = Command::new("exiftool")
         .args([
             "-overwrite_original",
             "-TagsFromFile",
-            source.to_str().unwrap(),
+            source_str,
             "-All:All",
-            dest.to_str().unwrap(),
+            dest_str,
         ])
         .output()?;
 
@@ -493,13 +504,16 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
 
 /// JXL lossless conversion (always mathematical lossless)
 fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
+    let input_str = input.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input)))?;
+    let output_str = output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?;
+
     let args = if *format == DetectedFormat::JPEG {
         // JPEG: use lossless_jpeg transcode
         vec![
             "--lossless_jpeg=1",
             "--",
-            input.to_str().unwrap(),
-            output.to_str().unwrap(),
+            input_str,
+            output_str,
         ]
     } else {
         // Non-JPEG: use -d 0.0 for mathematical lossless
@@ -511,8 +525,8 @@ fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat)
             "-e",
             "9",
             "--",
-            input.to_str().unwrap(),
-            output.to_str().unwrap(),
+            input_str,
+            output_str,
         ]
     };
 

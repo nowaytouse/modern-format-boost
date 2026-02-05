@@ -14,7 +14,6 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
-use anyhow::Context;
 
 /// Cached exiftool availability (checked once per process)
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -139,7 +138,7 @@ fn preserve_internal_metadata_fallback(src: &Path, dst: &Path, hint_ext: Option<
     
     // If extensions match, fallback is useless
     if detected_ext.eq_ignore_ascii_case(&current_ext) {
-        return Err(io::Error::new(io::ErrorKind::Other, format!("Extension matches content ({}), fallback skipped", detected_ext)));
+        return Err(io::Error::other(format!("Extension matches content ({}), fallback skipped", detected_ext)));
     }
 
     eprintln!("⚠️ Temporary rename to .{} for metadata preservation...", detected_ext);
@@ -292,11 +291,11 @@ mod tests {
             0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
             0x44, 0xAE, 0x42, 0x60, 0x82
         ];
-        fs::write(&src_path, &png_data).unwrap();
+        fs::write(&src_path, png_data).unwrap();
         
         // Create dst as PNG but named .jpeg
         let dst_path = complex_dir.join("dst_image.jpeg");
-        fs::write(&dst_path, &png_data).unwrap();
+        fs::write(&dst_path, png_data).unwrap();
         
         // Run preserve
         let result = preserve_internal_metadata(&src_path, &dst_path);

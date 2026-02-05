@@ -91,13 +91,23 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         return analyze_jxl_image(path, file_size);
     }
 
-    // Load the image
-    let img = image::open(path)
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open image: {}", e)))?;
+    // Load the image and detect format - magic byte detection
+    // 🔥 v7.9.6: Use ImageReader with guessed format to support all JPEG extensions (e.g. .jpe)
+    let reader = image::ImageReader::open(path)
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {}", e)))?
+        .with_guessed_format()
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to guess format: {}", e)))?;
 
-    // Detect format
-    let format = detect_format(path)?;
+    let format = reader.format().ok_or_else(|| {
+        ImgQualityError::UnsupportedFormat(format!(
+            "Could not detect format for {}",
+            path.display()
+        ))
+    })?;
     let format_str = format_to_string(&format);
+
+    let img = reader.decode()
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {}", e)))?;
 
     // Get basic image properties
     let (width, height) = img.dimensions();
@@ -411,20 +421,6 @@ fn estimate_ssim_from_quality(quality: u8) -> f64 {
 // ============================================================================
 // Helper functions (unchanged from original)
 // ============================================================================
-
-/// Detect image format from file
-fn detect_format(path: &Path) -> Result<ImageFormat> {
-    let format = image::ImageReader::open(path)
-        .map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?
-        .format();
-
-    format.ok_or_else(|| {
-        ImgQualityError::UnsupportedFormat(format!(
-            "Could not detect format for {}",
-            path.display()
-        ))
-    })
-}
 
 /// Convert ImageFormat to string
 fn format_to_string(format: &ImageFormat) -> String {
