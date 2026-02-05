@@ -136,7 +136,7 @@ fn encode_to_hevc(
     ffmpeg_cmd
         .arg("-y")
         .arg("-i")
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-f")
         .arg("yuv4mpegpipe");
 
@@ -150,12 +150,12 @@ fn encode_to_hevc(
         .arg("yuv420p")
         .arg("-")
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped()); // 🔥 v7.9.9: Capture stderr for better error reporting
 
     // 记录FFmpeg命令
     let ffmpeg_cmd_str = format!(
-        "ffmpeg -y -i {:?} -f yuv4mpegpipe {} -pix_fmt yuv420p -",
-        input,
+        "ffmpeg -y -i {} -f yuv4mpegpipe {} -pix_fmt yuv420p -",
+        crate::safe_path_arg(input),
         vf_args.join(" ")
     );
     info!(command = %ffmpeg_cmd_str, "Executing FFmpeg decode command");
@@ -215,12 +215,25 @@ fn encode_to_hevc(
         let duration = start_time.elapsed();
 
         if !ffmpeg_status.success() {
+            // 🔥 v7.9.9: Read FFmpeg error output
+            let stderr_output = if let Some(mut stderr) = ffmpeg_child.stderr.take() {
+                let mut buf = String::new();
+                std::io::Read::read_to_string(&mut stderr, &mut buf).ok();
+                buf
+            } else {
+                String::new()
+            };
+
             error!(
                 command = %ffmpeg_cmd_str,
                 exit_code = ?ffmpeg_status.code(),
                 duration_secs = duration.as_secs_f64(),
+                stderr = %stderr_output,
                 "FFmpeg decode failed"
             );
+            if !stderr_output.is_empty() {
+                eprintln!("FFmpeg error output:\n{}", stderr_output);
+            }
             bail!("FFmpeg decode failed");
         }
 

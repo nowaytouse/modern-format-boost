@@ -81,6 +81,18 @@ enum Commands {
         /// Use --cpu for maximum quality (higher SSIM)
         #[arg(long, default_value_t = false)]
         cpu: bool,
+
+        /// 🔥 v8.0: Base directory for output path generation (preserves directory structure)
+        #[arg(long)]
+        base_dir: Option<PathBuf>,
+
+        /// 🔥 v8.0: Allow 1% size tolerance (default: enabled)
+        #[arg(long, default_value_t = true)]
+        allow_size_tolerance: bool,
+
+        /// Verbose output (show skipped files and success messages)
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Simple mode: ALL videos → AV1 MP4
@@ -148,9 +160,14 @@ fn main() -> anyhow::Result<()> {
             compress,
             apple_compat,
             cpu,
+            base_dir,
+            allow_size_tolerance,
+            verbose,
         } => {
             // Determine base directory
-            let base_dir = if recursive {
+            let base_dir = if let Some(explicit_base) = base_dir {
+                Some(explicit_base)
+            } else if recursive {
                 if input.is_dir() {
                     Some(input.clone())
                 } else {
@@ -191,6 +208,8 @@ fn main() -> anyhow::Result<()> {
                 ultimate_mode: false,
                 // 🔥 v7.9: Pass down thread limit
                 child_threads: thread_config.child_threads,
+                allow_size_tolerance,
+                verbose,
             };
 
             info!("🎬 Auto Mode Conversion (AV1)");
