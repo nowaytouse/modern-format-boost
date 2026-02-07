@@ -73,6 +73,21 @@ pub struct ConversionOutput {
 
 /// Determine optimal conversion strategy based on detection result
 pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
+    // 🔥 v7.9.9: Skip modern formats (HEIC, HEIF, AVIF, JXL)
+    // These are already highly optimized and shouldn't be re-processed.
+    // Prevents SecurityLimitExceeded errors from HEIC processing.
+    if detection.format.is_modern_format() {
+        return ConversionStrategy {
+            target: TargetFormat::NoConversion,
+            reason: format!(
+                "Skipping modern format ({}) - already optimized, no conversion needed",
+                detection.format.as_str()
+            ),
+            command: String::new(),
+            expected_reduction: 0.0,
+        };
+    }
+
     match (
         &detection.image_type,
         &detection.compression,
@@ -355,6 +370,9 @@ fn convert_to_hevc_mp4(
     width: u32,
     height: u32,
 ) -> Result<()> {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    
     let fps_str = fps.unwrap_or(10.0).to_string();
 
     // 🔥 偶数分辨率填充：HEVC 编码器要求宽高为偶数
@@ -396,19 +414,62 @@ fn convert_to_hevc_mp4(
     let output_abs = if output.is_absolute() {
         output.to_path_buf()
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(output)
+        std::env::current_dir().unwrap_or_else(|_ | PathBuf::from(".")).join(output)
     };
     cmd.arg(&output_abs);
 
-    let status = cmd.output()?;
+    // 🔥 v7.9.9: Use spawn + timeout instead of blocking output()
+    // Prevents FFmpeg from hanging indefinitely
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
+    
+    let mut child = cmd.spawn().map_err(|e| {
+        ImgQualityError::ConversionError(format!("Failed to spawn FFmpeg: {}", e))
+    })?;
 
-    if !status.status.success() {
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
+    // 🔥 v7.9.9: 30-minute timeout for animated image encoding
+    // Animated GIFs > animated HEVC MP4 should not take more than 30 minutes
+    const FFMPEG_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
+    let start_time = Instant::now();
+    let timeout = Duration::from_secs(FFMPEG_TIMEOUT_SECS);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process completed
+                if !status.success() {
+                    // Try to get stderr
+                    let stderr = child.stderr.take()
+                        .map(|mut s| {
+                            let mut buf = String::new();
+                            use std::io::Read;
+                            let _ = s.read_to_string(&mut buf);
+                            buf
+                        })
+                        .unwrap_or_else(|| "No stderr output".to_string());
+                    return Err(ImgQualityError::ConversionError(stderr));
+                }
+                return Ok(());
+            }
+            Ok(None) => {
+                // Still running, check timeout
+                if start_time.elapsed() > timeout {
+                    eprintln!("⚠️ FFmpeg timeout (30min) - killing process");
+                    let _ = child.kill();
+                    let _ = child.wait(); // Reap zombie
+                    return Err(ImgQualityError::ConversionError(
+                        "FFmpeg encoding timed out after 30 minutes".to_string()
+                    ));
+                }
+                // Sleep briefly before checking again
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            Err(e) => {
+                return Err(ImgQualityError::ConversionError(format!(
+                    "Error waiting for FFmpeg: {}", e
+                )));
+            }
+        }
     }
-
-    Ok(())
 }
 
 /// 构建偶数分辨率滤镜
