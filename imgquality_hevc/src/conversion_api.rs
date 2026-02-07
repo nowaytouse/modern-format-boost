@@ -362,7 +362,7 @@ fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<(
     Ok(())
 }
 
-/// Convert animated image to HEVC MP4 with CRF 0 (visually lossless, 与 AV1 CRF 0 对应)
+/// Convert animated image to HEVC MP4 with CRF 0 (visually lossless)
 fn convert_to_hevc_mp4(
     input: &Path,
     output: &Path,
@@ -370,58 +370,46 @@ fn convert_to_hevc_mp4(
     width: u32,
     height: u32,
 ) -> Result<()> {
-    use std::process::Stdio;
-    use shared_utils::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
+    use shared_utils::ffmpeg_process::FfmpegProcess;
     
     let fps_str = fps.unwrap_or(10.0).to_string();
 
-    // 🔥 偶数分辨率填充：HEVC 编码器要求宽高为偶数
+    // Even dimension padding: HEVC encoder requires even width/height
     let vf_args = build_even_dimension_filter(width, height);
 
-    // 🔥 性能优化：限制线程数
+    // Performance optimization: limit thread count
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let x265_params = format!("log-level=error:pools={}", max_threads);
 
-    // 🔥 Fix filename trap: Ensure input is absolute
+    // Fix filename trap: Ensure input is absolute
     let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
-    
-    // 🔥 v7.9.10: 心跳检测（替代粗暴超时机制）
-    // 定期输出心跳信号，让用户知道FFmpeg仍在运行
-    let filename = input.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-    let _heartbeat_guard = HeartbeatGuard::new(
-        HeartbeatConfig::medium("GIF→HEVC编码")
-            .with_info(filename.to_string())
-            .force() // 强制显示心跳，即使有进度条
-    );
 
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-threads")
         .arg(max_threads.to_string())
         .arg("-i")
-        .arg(shared_utils::safe_path_arg(&input_abs).as_ref()) // Use absolute path with safety wrapper
+        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
         .arg("-c:v")
         .arg("libx265")
         .arg("-crf")
-        .arg("0") // Visually lossless (与 AV1 CRF 0 对应)
+        .arg("0") // Visually lossless
         .arg("-preset")
         .arg("medium")
         .arg("-tag:v")
-        .arg("hvc1") // Apple 兼容性
+        .arg("hvc1") // Apple compatibility
         .arg("-x265-params")
         .arg(&x265_params)
         .arg("-r")
         .arg(&fps_str);
 
-    // 添加视频滤镜（偶数分辨率 + 像素格式）
+    // Add video filter (even dimensions + pixel format)
     if !vf_args.is_empty() {
         cmd.arg("-vf").arg(&vf_args);
     }
     cmd.arg("-pix_fmt").arg("yuv420p");
     
-    // 🔥 Fix filename trap: Ensure output is absolute
+    // Fix filename trap: Ensure output is absolute
     let output_abs = if output.is_absolute() {
         output.to_path_buf()
     } else {
@@ -429,19 +417,19 @@ fn convert_to_hevc_mp4(
     };
     cmd.arg(&output_abs);
 
-    // 🔥 v7.9.10: 使用阻塞output()，心跳守卫会定期显示进度
-    // 心跳检测会每30秒输出一次"仍在运行"信号
-    // 如果FFmpeg真的卡住，用户会看到心跳停止，可手动干预
-    cmd.stderr(Stdio::piped());
-    let status = cmd.output()?;
+    // 🔥 v7.9.11: Use FfmpegProcess to prevent pipe deadlock
+    // Root cause: OS pipe buffer is only 64KB. If FFmpeg outputs lots of stderr
+    // while we only read stdout, stderr buffer fills up → FFmpeg blocks → deadlock
+    // Solution: FfmpegProcess uses a separate thread to consume stderr continuously
+    let process = FfmpegProcess::spawn(&mut cmd)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+    let (status, stderr) = process.wait_with_output()
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
-    if !status.status.success() {
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
+    if !status.success() {
+        return Err(ImgQualityError::ConversionError(stderr));
     }
 
-    // 心跳守卫在此处自动Drop停止
     Ok(())
 }
 
