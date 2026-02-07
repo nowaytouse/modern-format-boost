@@ -371,7 +371,7 @@ fn convert_to_hevc_mp4(
     height: u32,
 ) -> Result<()> {
     use std::process::Stdio;
-    use std::time::{Duration, Instant};
+    use shared_utils::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
     
     let fps_str = fps.unwrap_or(10.0).to_string();
 
@@ -384,6 +384,17 @@ fn convert_to_hevc_mp4(
 
     // 🔥 Fix filename trap: Ensure input is absolute
     let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+    
+    // 🔥 v7.9.10: 心跳检测（替代粗暴超时机制）
+    // 定期输出心跳信号，让用户知道FFmpeg仍在运行
+    let filename = input.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+    let _heartbeat_guard = HeartbeatGuard::new(
+        HeartbeatConfig::medium("GIF→HEVC编码")
+            .with_info(filename.to_string())
+            .force() // 强制显示心跳，即使有进度条
+    );
 
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
@@ -414,62 +425,24 @@ fn convert_to_hevc_mp4(
     let output_abs = if output.is_absolute() {
         output.to_path_buf()
     } else {
-        std::env::current_dir().unwrap_or_else(|_ | PathBuf::from(".")).join(output)
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(output)
     };
     cmd.arg(&output_abs);
 
-    // 🔥 v7.9.9: Use spawn + timeout instead of blocking output()
-    // Prevents FFmpeg from hanging indefinitely
-    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
-    
-    let mut child = cmd.spawn().map_err(|e| {
-        ImgQualityError::ConversionError(format!("Failed to spawn FFmpeg: {}", e))
-    })?;
+    // 🔥 v7.9.10: 使用阻塞output()，心跳守卫会定期显示进度
+    // 心跳检测会每30秒输出一次"仍在运行"信号
+    // 如果FFmpeg真的卡住，用户会看到心跳停止，可手动干预
+    cmd.stderr(Stdio::piped());
+    let status = cmd.output()?;
 
-    // 🔥 v7.9.9: 30-minute timeout for animated image encoding
-    // Animated GIFs > animated HEVC MP4 should not take more than 30 minutes
-    const FFMPEG_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
-    let start_time = Instant::now();
-    let timeout = Duration::from_secs(FFMPEG_TIMEOUT_SECS);
-
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Process completed
-                if !status.success() {
-                    // Try to get stderr
-                    let stderr = child.stderr.take()
-                        .map(|mut s| {
-                            let mut buf = String::new();
-                            use std::io::Read;
-                            let _ = s.read_to_string(&mut buf);
-                            buf
-                        })
-                        .unwrap_or_else(|| "No stderr output".to_string());
-                    return Err(ImgQualityError::ConversionError(stderr));
-                }
-                return Ok(());
-            }
-            Ok(None) => {
-                // Still running, check timeout
-                if start_time.elapsed() > timeout {
-                    eprintln!("⚠️ FFmpeg timeout (30min) - killing process");
-                    let _ = child.kill();
-                    let _ = child.wait(); // Reap zombie
-                    return Err(ImgQualityError::ConversionError(
-                        "FFmpeg encoding timed out after 30 minutes".to_string()
-                    ));
-                }
-                // Sleep briefly before checking again
-                std::thread::sleep(Duration::from_millis(500));
-            }
-            Err(e) => {
-                return Err(ImgQualityError::ConversionError(format!(
-                    "Error waiting for FFmpeg: {}", e
-                )));
-            }
-        }
+    if !status.status.success() {
+        return Err(ImgQualityError::ConversionError(
+            String::from_utf8_lossy(&status.stderr).to_string(),
+        ));
     }
+
+    // 心跳守卫在此处自动Drop停止
+    Ok(())
 }
 
 /// 构建偶数分辨率滤镜
