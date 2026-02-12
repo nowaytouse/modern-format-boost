@@ -2804,7 +2804,8 @@ impl VideoExplorer {
         progress_done!();
 
         // 🔥 v6.6: CrfCache 直接用 crf 获取
-        let final_size = *size_cache.get(boundary_crf).unwrap();
+        // 🔥 v8.0: 更稳健的缓存访问，避免 panic
+        let final_size = size_cache.get(boundary_crf).copied().unwrap_or(0);
 
         let size_change_pct = self.calc_change_pct(final_size);
         let status = if ssim >= 0.999 {
@@ -6217,10 +6218,8 @@ pub fn explore_with_gpu_coarse_search(
             max_iterations: crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS, // 🔥 v5.52: 使用保底上限 500
         };
 
-        // 🔥 v5.88: GPU 阶段使用详细粗进度条（原生ANSI，不依赖indicatif）
-        // 保持CoarseProgressBar的优点：固定行、不刷屏、不受按键污染、持续刷新
-        // 🔥 v5.45: 使用采样输入大小来正确计算压缩率
-        let gpu_progress = crate::DetailedCoarseProgressBar::new(
+        // 🔥 v8.0: GPU 阶段使用统一进度条
+        let gpu_progress = crate::UnifiedProgressBar::new_iteration(
             "🔍 GPU Search",
             gpu_sample_input_size,
             gpu_config.max_iterations as u64,
@@ -6253,7 +6252,7 @@ pub fn explore_with_gpu_coarse_search(
             }
             _ => (gpu_config.max_crf, input_size), // 失败时使用 max_crf 和输入大小
         };
-        gpu_progress.finish(final_crf, final_size, None);
+        gpu_progress.finish_iteration(final_crf, final_size, None);
 
         match gpu_result {
             Ok(gpu_result) => {
@@ -6910,7 +6909,8 @@ fn cpu_fine_tune_from_gpu_boundary(
     } else {
         15 // 普通模式：GPU 已定位范围，CPU 迭代次数少（5-15次）
     };
-    let cpu_progress = crate::DetailedCoarseProgressBar::new(
+    // 🔥 v8.0: 切换到统一进度条
+    let cpu_progress = crate::UnifiedProgressBar::new_iteration(
         "🔬 CPU Fine-Tune",
         input_size, // 🔥 v5.60: 使用真实输入大小
         estimated_iterations,
@@ -8067,7 +8067,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     confidence_detail.print_report();
 
-    cpu_progress.finish(final_crf, final_full_size, ssim);
+    cpu_progress.finish_iteration(final_crf, final_full_size, ssim);
 
     Ok(ExploreResult {
         optimal_crf: final_crf,
