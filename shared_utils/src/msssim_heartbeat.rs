@@ -78,7 +78,7 @@ impl Heartbeat {
     /// 格式化的北京时间字符串："YYYY-MM-DD HH:MM:SS"
     fn get_beijing_time() -> String {
         let utc_now: DateTime<Utc> = Utc::now();
-        let beijing_offset = FixedOffset::east_opt(8 * 3600).unwrap();
+        let beijing_offset = FixedOffset::east_opt(8 * 3600).expect("Invalid timezone offset");
         let beijing_time = utc_now.with_timezone(&beijing_offset);
         beijing_time.format("%Y-%m-%d %H:%M:%S").to_string()
     }
