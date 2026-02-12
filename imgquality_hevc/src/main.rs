@@ -1058,7 +1058,7 @@ fn auto_convert_directory(
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
 
     // 🔥 Progress bar with ETA
-    let pb = shared_utils::create_progress_bar(total as u64, "Converting");
+    let pb = shared_utils::UnifiedProgressBar::new(total as u64, "Converting");
 
     // 🔥 v7.3.2: 启用安静模式，避免并行线程的进度条互相干扰
     shared_utils::progress_mode::enable_quiet_mode();
