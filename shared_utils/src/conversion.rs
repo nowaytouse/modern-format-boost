@@ -33,7 +33,7 @@ pub fn is_already_processed(path: &Path) -> bool {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let processed = PROCESSED_FILES.lock().unwrap();
+    let processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
     processed.contains(&canonical)
 }
 
@@ -45,13 +45,13 @@ pub fn mark_as_processed(path: &Path) {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let mut processed = PROCESSED_FILES.lock().unwrap();
+    let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
     processed.insert(canonical);
 }
 
 /// Clear processed files list
 pub fn clear_processed_list() {
-    let mut processed = PROCESSED_FILES.lock().unwrap();
+    let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
     processed.clear();
 }
 
@@ -70,7 +70,7 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 
     let file = fs::File::open(list_path)?;
     let reader = BufReader::new(file);
-    let mut processed = PROCESSED_FILES.lock().unwrap();
+    let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
 
     for path in reader.lines().map_while(Result::ok) {
         processed.insert(path);
@@ -81,7 +81,7 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 
 /// Save processed files list to disk
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let processed = PROCESSED_FILES.lock().unwrap();
+    let processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
     let mut file = fs::File::create(list_path)?;
 
     for path in processed.iter() {

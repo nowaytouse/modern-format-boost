@@ -70,6 +70,10 @@ pub mod smart_file_copier;
 // 🔥 v7.3.2: 进度条模式控制（解决并行输出混乱）
 pub mod progress_mode;
 
+// 🔥 v8.0: 统一进度条系统
+pub mod unified_progress;
+pub use unified_progress::UnifiedProgressBar;
+
 // 🔥 v7.5: 文件排序模块（优先处理小文件）
 pub mod file_sorter;
 
