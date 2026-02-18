@@ -197,6 +197,40 @@ fn encode_to_hevc(
         .spawn()
         .context("Failed to spawn x265 encode process")?;
 
+    // 🔥 CRITICAL FIX: Drain stderr in background threads to prevent pipe deadlock.
+    //
+    // OS pipe buffers are ~64KB. If ffmpeg/x265 write enough stderr to fill the buffer,
+    // they block on the write, which stops stdout/stdin data flow, causing the entire
+    // ffmpeg→x265 pipeline to deadlock forever. This is the same fix applied in
+    // FfmpegProcess::spawn() and encode_with_ffmpeg().
+    //
+    // The stderr must be drained BEFORE calling .wait(), not after.
+    let ffmpeg_stderr_thread = ffmpeg_child.stderr.take().map(|stderr| {
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stderr);
+            let mut output = String::new();
+            for line in reader.lines().map_while(Result::ok) {
+                output.push_str(&line);
+                output.push('\n');
+            }
+            output
+        })
+    });
+
+    let x265_stderr_thread = x265_child.stderr.take().map(|stderr| {
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stderr);
+            let mut output = String::new();
+            for line in reader.lines().map_while(Result::ok) {
+                output.push_str(&line);
+                output.push('\n');
+            }
+            output
+        })
+    });
+
     // 连接FFmpeg stdout → x265 stdin
     if let (Some(mut ffmpeg_out), Some(mut x265_in)) =
         (ffmpeg_child.stdout.take(), x265_child.stdin.take())
@@ -206,57 +240,48 @@ fn encode_to_hevc(
             std::thread::spawn(move || std::io::copy(&mut ffmpeg_out, &mut x265_in));
 
         // 等待两个进程完成
-        let ffmpeg_status = ffmpeg_child.wait().context("Failed to wait for ffmpeg")?;
+        // Wait for x265 (consumer) first, then ffmpeg (producer)
         let x265_status = x265_child.wait().context("Failed to wait for x265")?;
+        let ffmpeg_status = ffmpeg_child.wait().context("Failed to wait for ffmpeg")?;
 
         // 等待数据传输完成
         let _ = transfer_thread.join();
 
         let duration = start_time.elapsed();
 
-        if !ffmpeg_status.success() {
-            // 🔥 v7.9.9: Read FFmpeg error output
-            let stderr_output = if let Some(mut stderr) = ffmpeg_child.stderr.take() {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut stderr, &mut buf).ok();
-                buf
-            } else {
-                String::new()
-            };
+        // Collect stderr from background threads (safe now, processes are done)
+        let ffmpeg_stderr = ffmpeg_stderr_thread
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let x265_stderr = x265_stderr_thread
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
 
+        if !ffmpeg_status.success() {
             error!(
                 command = %ffmpeg_cmd_str,
                 exit_code = ?ffmpeg_status.code(),
                 duration_secs = duration.as_secs_f64(),
-                stderr = %stderr_output,
+                stderr = %ffmpeg_stderr,
                 "FFmpeg decode failed"
             );
-            if !stderr_output.is_empty() {
-                eprintln!("FFmpeg error output:\n{}", stderr_output);
+            if !ffmpeg_stderr.is_empty() {
+                eprintln!("FFmpeg error output:\n{}", ffmpeg_stderr);
             }
             bail!("FFmpeg decode failed");
         }
 
         if !x265_status.success() {
-            // 读取x265错误信息
-            let stderr_output = if let Some(mut stderr) = x265_child.stderr.take() {
-                let mut buf = String::new();
-                std::io::Read::read_to_string(&mut stderr, &mut buf).ok();
-                buf
-            } else {
-                String::new()
-            };
-
             error!(
                 command = %x265_cmd_str,
                 exit_code = ?x265_status.code(),
                 duration_secs = duration.as_secs_f64(),
-                stderr = %stderr_output,
+                stderr = %x265_stderr,
                 "x265 encode failed"
             );
 
-            if !stderr_output.is_empty() {
-                eprintln!("x265 error output:\n{}", stderr_output);
+            if !x265_stderr.is_empty() {
+                eprintln!("x265 error output:\n{}", x265_stderr);
             }
 
             bail!("x265 encode failed with exit code {:?}", x265_status.code());
