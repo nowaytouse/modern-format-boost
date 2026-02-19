@@ -309,6 +309,26 @@ parse_tool_stats() {
     fi
 }
 
+# 🔥 v7.10: Fix JXL Containers for iCloud Photos
+fix_jxl_containers() {
+    local target_path="$TARGET_DIR"
+    [[ "$OUTPUT_MODE" == "adjacent" ]] && target_path="$OUTPUT_DIR"
+    
+    # Check if there are any JXL files
+    local jxl_count=$(find "$target_path" -type f -iname "*.jxl" 2>/dev/null | wc -l | tr -d ' ')
+    [[ $jxl_count -eq 0 ]] && return 0
+    
+    draw_separator "JXL Container Fix"
+    echo -e "   ${CYAN}🔍 Checking JXL files for iCloud compatibility...${RESET}"
+    echo ""
+    
+    # Run the fixer
+    source "$SCRIPT_DIR/fix_jxl_containers.sh"
+    process_directory "$target_path"
+    
+    echo ""
+}
+
 # 🎉 Final Summary
 show_summary() {
     draw_separator "Task Completed"
@@ -436,6 +456,9 @@ main() {
         echo -e "\r   ${GREEN}✅ Directory timestamps restored.${RESET}  "
         echo ""
     fi
+    
+    # 🔥 v7.10: Auto-fix JXL containers for iCloud Photos compatibility
+    fix_jxl_containers
     
     show_summary
 }
