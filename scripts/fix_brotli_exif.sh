@@ -37,17 +37,18 @@ while IFS= read -r -d '' file; do
         mtime=$(stat -f%m "$file")
         btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
         
-        # Rebuild metadata
+        # Rebuild metadata (exiftool will update mtime, we'll restore it after)
         if exiftool -all= -tagsfromfile @ -all:all -overwrite_original "$file" 2>/dev/null; then
-            # Restore xattr
             backup="$BACKUP_DIR/$filename.backup"
-            for attr in com.apple.metadata:kMDItemWhereFroms com.apple.metadata:_kMDItemUserTags com.apple.FinderInfo; do
+            
+            # Restore xattr
+            for attr in com.apple.metadata:kMDItemWhereFroms com.apple.metadata:_kMDItemUserTags com.apple.FinderInfo com.apple.metadata:kMDItemDateAdded; do
                 val=$(xattr -px "$attr" "$backup" 2>/dev/null || echo "")
                 [[ -n "$val" ]] && xattr -wx "$attr" "$val" "$file" 2>/dev/null || true
             done
             
-            # Restore timestamps
-            touch -mt "$(date -r "$mtime" +%Y%m%d%H%M.%S)" "$file"
+            # Restore timestamps (CRITICAL: must be after exiftool to prevent overwrite)
+            touch -mt "$(date -r "$mtime" +%Y%m%d%H%M.%S)" "$file" 2>/dev/null || true
             [[ "$btime" != "0" ]] && SetFile -d "$(date -r "$btime" +%m/%d/%Y\ %H:%M:%S)" "$file" 2>/dev/null || true
             
             # Verify
