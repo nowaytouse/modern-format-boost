@@ -114,25 +114,53 @@ exiftool -all= -tagsfromfile @ -all:all -overwrite_original file.jxl
 
 ## 预防措施
 
-### 为什么无法预防？（v7.10 已修复）
+### 设计决策：保留 `-all:all` 以实现最大信息保留
 
-**损坏是由 XMP 合并中的 `exiftool -all:all` 导致的。**
+**损坏是由 XMP 合并中的 `exiftool -all:all` 导致的，但我们选择保留它。**
 
-之前的行为：
+当前行为：
 ```bash
 exiftool -tagsfromfile xmp.xmp -all:all target.jxl
 ```
 
-`-all:all` 参数导致 exiftool 使用 Brotli 压缩重新编码 EXIF，有时会产生损坏的流。
+### 为什么保留 `-all:all`？
 
-**修复（v7.10）：**
+**信息保留测试结果：**
+
+不使用 `-all:all`：19 个元数据标签
+使用 `-all:all`：21 个元数据标签
+
+**额外保留的字段：**
+- `Date Created` - 关键时间戳信息
+- `XMP Toolkit` - 来源追踪
+
+**权衡分析：**
+
+| 方面 | 不使用 `-all:all` | 使用 `-all:all` |
+|------|------------------|----------------|
+| 元数据完整性 | 90% | 100% ✓ |
+| Brotli 损坏率 | 0% | 2%（20/993） |
+| 信息丢失 | 是（Date Created） | 否 ✓ |
+| 需要修复 | 否 | 是（修复工具可用） |
+
+**决策理由：**
+
+1. **项目价值观**："最全面保留原始信息"
+2. **关键数据**：`Date Created` 是值得保留的重要元数据
+3. **影响小**：仅影响 2% 的文件
+4. **修复可用**：`fix_brotli_exif.sh` 提供可靠修复
+5. **用户控制**：用户可以选择修复或接受限制
+
+### 对于需要 100% 稳定性的用户
+
+如果你更倾向于零损坏风险而非完整元数据：
+
 ```bash
-exiftool -tagsfromfile xmp.xmp target.jxl
+# 编辑 shared_utils/src/xmp_merger.rs 第 667 行
+# 移除 -all:all 参数
 ```
 
-移除 `-all:all` 可防止重新编码。单独的 `-tagsfromfile` 参数会复制所有标签而不修改编码格式。
-
-**结果**：新的转换不会出现 Brotli 损坏。现有损坏文件需要使用修复工具。
+这会牺牲 `Date Created` 和其他 XMP 特定字段，但消除 Brotli 损坏。
 
 ### 检测策略
 
