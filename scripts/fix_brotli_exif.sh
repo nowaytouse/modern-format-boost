@@ -1,0 +1,78 @@
+#!/bin/bash
+# Fix corrupted Brotli EXIF data in JXL files
+# 修复 JXL 文件中损坏的 Brotli EXIF 数据
+
+set -euo pipefail
+
+TARGET_DIR="${1:-.}"
+BACKUP_DIR="$TARGET_DIR/.brotli_exif_backups"
+
+echo "╔════════════════════════════════════════════════════════════════╗"
+echo "║          JXL Brotli EXIF Repair Tool                          ║"
+echo "╚════════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Target: $TARGET_DIR"
+echo "Backup: $BACKUP_DIR"
+echo ""
+
+mkdir -p "$BACKUP_DIR"
+
+total=0
+fixed=0
+failed=0
+
+echo "🔍 Scanning for corrupted files..."
+echo ""
+
+while IFS= read -r -d '' file; do
+    if exiftool -validate "$file" 2>&1 | grep -q "Corrupted Brotli"; then
+        ((total++))
+        filename=$(basename "$file")
+        echo "📦 $filename"
+        
+        # Backup
+        cp -p "$file" "$BACKUP_DIR/$filename.backup"
+        
+        # Save timestamps
+        mtime=$(stat -f%m "$file")
+        btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
+        
+        # Rebuild metadata
+        if exiftool -all= -tagsfromfile @ -all:all -overwrite_original "$file" 2>/dev/null; then
+            # Restore xattr
+            backup="$BACKUP_DIR/$filename.backup"
+            for attr in com.apple.metadata:kMDItemWhereFroms com.apple.metadata:_kMDItemUserTags com.apple.FinderInfo; do
+                val=$(xattr -px "$attr" "$backup" 2>/dev/null || echo "")
+                [[ -n "$val" ]] && xattr -wx "$attr" "$val" "$file" 2>/dev/null || true
+            done
+            
+            # Restore timestamps
+            touch -mt "$(date -r "$mtime" +%Y%m%d%H%M.%S)" "$file"
+            [[ "$btime" != "0" ]] && SetFile -d "$(date -r "$btime" +%m/%d/%Y\ %H:%M:%S)" "$file" 2>/dev/null || true
+            
+            # Verify
+            if exiftool -validate "$file" 2>&1 | grep -q "Corrupted Brotli"; then
+                echo "   ❌ Failed, restored backup"
+                cp -p "$backup" "$file"
+                ((failed++))
+            else
+                echo "   ✓ Fixed"
+                ((fixed++))
+            fi
+        else
+            echo "   ❌ exiftool failed"
+            ((failed++))
+        fi
+        echo ""
+    fi
+done < <(find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" -print0 2>/dev/null)
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📊 Summary"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "  Detected: $total files"
+echo "  Fixed: $fixed files"
+echo "  Failed: $failed files"
+echo ""
+[[ $fixed -gt 0 ]] && echo "✅ Fixed files should now import to iCloud Photos"
