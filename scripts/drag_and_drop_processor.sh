@@ -124,8 +124,8 @@ select_mode() {
     SELECTED=0
     hide_cursor
     
-    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder")
-    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched.")
+    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder" "🔧 JXL Container Fix Only")
+    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched." "Only fix JXL containers for iCloud Photos.")
     
     while true; do
         clear_screen
@@ -144,16 +144,16 @@ select_mode() {
             echo ""
         done
         
-        echo -e "${DIM}(Use ↑/↓ to navigate, Enter to select)${RESET}"
+        echo -e "${DIM}(Use ↑/↓ to navigate, Enter to select, q to quit)${RESET}"
         
         # Read input
         read -rsn1 key
         if [[ "$key" == $'\x1b' ]]; then
             read -rsn2 key
             if [[ "$key" == "[A" ]]; then # Up
-                SELECTED=$(( (SELECTED - 1 + 2) % 2 ))
+                SELECTED=$(( (SELECTED - 1 + 3) % 3 ))
             elif [[ "$key" == "[B" ]]; then # Down
-                SELECTED=$(( (SELECTED + 1) % 2 ))
+                SELECTED=$(( (SELECTED + 1) % 3 ))
             fi
         elif [[ "$key" == "" ]]; then # Enter
             break
@@ -172,7 +172,7 @@ select_mode() {
         echo -ne "   ${BOLD}Are you sure? (y/N): ${RESET}"
         read -r confirm
         [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
-    else
+    elif [[ $SELECTED -eq 1 ]]; then
         OUTPUT_MODE="adjacent"
         local base_name=$(basename "$TARGET_DIR")
         OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_optimized"
@@ -183,6 +183,11 @@ select_mode() {
         # Create output structure
         echo -e "   ${DIM}Creating directory structure...${RESET}"
         create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
+    else
+        OUTPUT_MODE="jxl_fix_only"
+        echo -e "\n${CYAN}🔧 JXL CONTAINER FIX MODE${RESET}"
+        echo -e "${DIM}   Only JXL container files will be processed.${RESET}"
+        echo ""
     fi
 }
 
@@ -403,6 +408,20 @@ main() {
     
     safety_check
     select_mode
+    
+    # 🔥 JXL Fix Only Mode - Skip normal processing
+    if [[ "$OUTPUT_MODE" == "jxl_fix_only" ]]; then
+        source "$SCRIPT_DIR/fix_jxl_containers.sh"
+        process_directory "$TARGET_DIR"
+        
+        echo ""
+        echo -e "${GREEN}✅ JXL Container Fix Completed${RESET}"
+        echo ""
+        echo -e "${DIM}Press any key to exit...${RESET}"
+        read -rsn1
+        exit 0
+    fi
+    
     count_files
     
     # Logic
