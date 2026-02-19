@@ -45,13 +45,15 @@ Warning: Corrupted Brotli 'Exif' data
 
 ### Root Cause Analysis
 
-The issue occurs when:
-- `cjxl` (JPEG XL encoder) writes EXIF with Brotli compression
-- The Brotli compression stream is malformed during encoding
-- Modern Format Boost's metadata preservation copies this as-is
-- iCloud Photos rejects the corrupted Brotli data on re-import
+The issue occurs during XMP sidecar merge:
 
-**Key finding**: Original JPEG files were clean (validated OK). Corruption happened during format conversion, not from upstream sources.
+1. **Input**: JPEG file + XMP sidecar (from iCloud Photos export)
+2. **Conversion**: `cjxl` converts JPEG to JXL (clean, no corruption)
+3. **XMP merge**: `exiftool -tagsfromfile xmp.xmp -all:all target.jxl`
+4. **Problem**: `-all:all` causes exiftool to re-encode EXIF with Brotli compression
+5. **Result**: Brotli compression stream becomes corrupted
+
+**Key finding**: The `-all:all` parameter is the culprit. When used with JXL files, exiftool re-encodes metadata with Brotli compression, which sometimes produces malformed streams that iCloud Photos rejects.
 
 ## Solution: Metadata Rebuild
 
@@ -112,27 +114,25 @@ Total: 20 files detected, 20 fixed, 0 failed
 
 ## Prevention
 
-### Why Can't We Prevent This?
+### Why Can't We Prevent This? (FIXED in v7.10)
 
-**The corruption is introduced by `cjxl` (JPEG XL encoder), not by Modern Format Boost.**
+**The corruption was caused by `exiftool -all:all` in XMP merge.**
 
-When `cjxl` converts JPEG to JXL, it:
-1. Reads EXIF from source JPEG
-2. Compresses it with Brotli for space efficiency
-3. Sometimes produces malformed Brotli streams (encoder bug)
+Previous behavior:
+```bash
+exiftool -tagsfromfile xmp.xmp -all:all target.jxl
+```
 
-Modern Format Boost cannot prevent this because:
-- We use the official `cjxl` encoder (libjxl)
-- The corruption happens inside the encoder
-- We have no control over its internal Brotli compression
+The `-all:all` parameter caused exiftool to re-encode EXIF with Brotli compression, which sometimes produced corrupted streams.
 
-### Potential Solutions
+**Fix (v7.10):**
+```bash
+exiftool -tagsfromfile xmp.xmp target.jxl
+```
 
-1. **Disable Brotli in cjxl** (if possible via flags)
-2. **Post-conversion validation** (detect and rebuild)
-3. **Use alternative JXL encoder** (if available)
+Removing `-all:all` prevents re-encoding. The `-tagsfromfile` parameter alone copies all tags without modifying the encoding format.
 
-Currently, the repair tool is the most reliable solution.
+**Result**: New conversions will not have Brotli corruption. Existing corrupted files need repair using the fix tool.
 
 ### Detection Strategy
 

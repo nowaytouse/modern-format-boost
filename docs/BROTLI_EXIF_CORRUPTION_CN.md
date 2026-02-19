@@ -45,13 +45,15 @@ Warning: Corrupted Brotli 'Exif' data
 
 ### 根本原因分析
 
-问题发生在：
-- `cjxl`（JPEG XL 编码器）使用 Brotli 压缩写入 EXIF
-- Brotli 压缩流在编码过程中格式错误
-- Modern Format Boost 的元数据保留功能按原样复制
-- iCloud Photos 在重新导入时拒绝损坏的 Brotli 数据
+问题发生在 XMP 边车文件合并过程中：
 
-**关键发现**：原始 JPEG 文件是干净的（验证通过）。损坏发生在格式转换过程中，而非来自上游源。
+1. **输入**：JPEG 文件 + XMP 边车文件（从 iCloud Photos 导出）
+2. **转换**：`cjxl` 将 JPEG 转换为 JXL（干净，无损坏）
+3. **XMP 合并**：`exiftool -tagsfromfile xmp.xmp -all:all target.jxl`
+4. **问题**：`-all:all` 导致 exiftool 使用 Brotli 压缩重新编码 EXIF
+5. **结果**：Brotli 压缩流损坏
+
+**关键发现**：`-all:all` 参数是罪魁祸首。在 JXL 文件上使用时，exiftool 会用 Brotli 压缩重新编码元数据，有时会产生格式错误的流，导致 iCloud Photos 拒绝。
 
 ## 解决方案：元数据重建
 
@@ -112,27 +114,25 @@ exiftool -all= -tagsfromfile @ -all:all -overwrite_original file.jxl
 
 ## 预防措施
 
-### 为什么无法预防？
+### 为什么无法预防？（v7.10 已修复）
 
-**损坏是由 `cjxl`（JPEG XL 编码器）引入的，而非 Modern Format Boost。**
+**损坏是由 XMP 合并中的 `exiftool -all:all` 导致的。**
 
-当 `cjxl` 将 JPEG 转换为 JXL 时：
-1. 从源 JPEG 读取 EXIF
-2. 使用 Brotli 压缩以节省空间
-3. 有时会产生格式错误的 Brotli 流（编码器 bug）
+之前的行为：
+```bash
+exiftool -tagsfromfile xmp.xmp -all:all target.jxl
+```
 
-Modern Format Boost 无法预防，因为：
-- 我们使用官方 `cjxl` 编码器（libjxl）
-- 损坏发生在编码器内部
-- 我们无法控制其内部的 Brotli 压缩
+`-all:all` 参数导致 exiftool 使用 Brotli 压缩重新编码 EXIF，有时会产生损坏的流。
 
-### 潜在解决方案
+**修复（v7.10）：**
+```bash
+exiftool -tagsfromfile xmp.xmp target.jxl
+```
 
-1. **在 cjxl 中禁用 Brotli**（如果有相关标志）
-2. **转换后验证**（检测并重建）
-3. **使用替代 JXL 编码器**（如果有）
+移除 `-all:all` 可防止重新编码。单独的 `-tagsfromfile` 参数会复制所有标签而不修改编码格式。
 
-目前，修复工具是最可靠的解决方案。
+**结果**：新的转换不会出现 Brotli 损坏。现有损坏文件需要使用修复工具。
 
 ### 检测策略
 
