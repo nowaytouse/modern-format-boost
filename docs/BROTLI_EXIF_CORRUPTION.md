@@ -34,7 +34,24 @@ Warning: Corrupted Brotli 'Exif' data
 
 ## Why This Happened
 
-The corruption was introduced by upstream tools (likely image converters or downloaders) before Modern Format Boost processed the files. Modern Format Boost's metadata preservation (`exiftool -tagsfromfile`) copies metadata as-is, including the corrupted Brotli stream.
+**The corruption was introduced during JPEG → JXL conversion by Modern Format Boost.**
+
+### Conversion Flow
+
+1. **Input**: JPEG file + XMP sidecar (from iCloud Photos export)
+2. **Process**: Modern Format Boost converts JPEG to JXL
+3. **Metadata merge**: XMP sidecar merged into JXL using exiftool
+4. **Result**: JXL file with Brotli-compressed EXIF (corrupted)
+
+### Root Cause Analysis
+
+The issue occurs when:
+- `cjxl` (JPEG XL encoder) writes EXIF with Brotli compression
+- The Brotli compression stream is malformed during encoding
+- Modern Format Boost's metadata preservation copies this as-is
+- iCloud Photos rejects the corrupted Brotli data on re-import
+
+**Key finding**: Original JPEG files were clean (validated OK). Corruption happened during format conversion, not from upstream sources.
 
 ## Solution: Metadata Rebuild
 
@@ -97,12 +114,25 @@ Total: 20 files detected, 20 fixed, 0 failed
 
 ### Why Can't We Prevent This?
 
-**We cannot prevent upstream corruption.** The files arrive already corrupted from:
-- Image download tools
-- Format converters
-- Cloud sync services
+**The corruption is introduced by `cjxl` (JPEG XL encoder), not by Modern Format Boost.**
 
-Modern Format Boost's metadata preservation copies data as-is to maintain fidelity.
+When `cjxl` converts JPEG to JXL, it:
+1. Reads EXIF from source JPEG
+2. Compresses it with Brotli for space efficiency
+3. Sometimes produces malformed Brotli streams (encoder bug)
+
+Modern Format Boost cannot prevent this because:
+- We use the official `cjxl` encoder (libjxl)
+- The corruption happens inside the encoder
+- We have no control over its internal Brotli compression
+
+### Potential Solutions
+
+1. **Disable Brotli in cjxl** (if possible via flags)
+2. **Post-conversion validation** (detect and rebuild)
+3. **Use alternative JXL encoder** (if available)
+
+Currently, the repair tool is the most reliable solution.
 
 ### Detection Strategy
 
