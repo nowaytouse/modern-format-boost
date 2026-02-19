@@ -37,8 +37,9 @@ while IFS= read -r -d '' file; do
         mtime=$(stat -f%m "$file")
         btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
         
-        # Rebuild metadata (exiftool will update mtime, we'll restore it after)
-        if exiftool -all= -tagsfromfile @ -all:all -overwrite_original "$file" 2>/dev/null; then
+        # Rebuild metadata with explicit DateCreated preservation
+        # Avoids -all:all to prevent Brotli re-compression, but preserves critical fields
+        if exiftool -all= -tagsfromfile @ -DateCreated -XMP:DateCreated -overwrite_original "$file" 2>/dev/null; then
             backup="$BACKUP_DIR/$filename.backup"
             
             # Restore xattr
