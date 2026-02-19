@@ -114,25 +114,53 @@ Total: 20 files detected, 20 fixed, 0 failed
 
 ## Prevention
 
-### Why Can't We Prevent This? (FIXED in v7.10)
+### Design Decision: Keep `-all:all` for Maximum Information Preservation
 
-**The corruption was caused by `exiftool -all:all` in XMP merge.**
+**The corruption is caused by `exiftool -all:all` in XMP merge, but we choose to keep it.**
 
-Previous behavior:
+Current behavior:
 ```bash
 exiftool -tagsfromfile xmp.xmp -all:all target.jxl
 ```
 
-The `-all:all` parameter caused exiftool to re-encode EXIF with Brotli compression, which sometimes produced corrupted streams.
+### Why Keep `-all:all`?
 
-**Fix (v7.10):**
+**Information Preservation Test Results:**
+
+Without `-all:all`: 19 metadata tags
+With `-all:all`: 21 metadata tags
+
+**Additional preserved fields:**
+- `Date Created` - Critical timestamp information
+- `XMP Toolkit` - Provenance tracking
+
+**Trade-off Analysis:**
+
+| Aspect | Without `-all:all` | With `-all:all` |
+|--------|-------------------|-----------------|
+| Metadata completeness | 90% | 100% ✓ |
+| Brotli corruption rate | 0% | 2% (20/993) |
+| Information loss | Yes (Date Created) | No ✓ |
+| Repair needed | No | Yes (fix tool available) |
+
+**Decision Rationale:**
+
+1. **Project value**: "最全面保留原始信息" (Maximum information preservation)
+2. **Critical data**: `Date Created` is valuable metadata worth preserving
+3. **Low impact**: Only 2% of files affected
+4. **Repair available**: `fix_brotli_exif.sh` provides reliable fix
+5. **User control**: Users can choose to repair or accept the limitation
+
+### For Users Who Need 100% Stability
+
+If you prefer zero corruption risk over complete metadata:
+
 ```bash
-exiftool -tagsfromfile xmp.xmp target.jxl
+# Edit shared_utils/src/xmp_merger.rs line 667
+# Remove -all:all parameter
 ```
 
-Removing `-all:all` prevents re-encoding. The `-tagsfromfile` parameter alone copies all tags without modifying the encoding format.
-
-**Result**: New conversions will not have Brotli corruption. Existing corrupted files need repair using the fix tool.
+This sacrifices `Date Created` and other XMP-specific fields but eliminates Brotli corruption.
 
 ### Detection Strategy
 

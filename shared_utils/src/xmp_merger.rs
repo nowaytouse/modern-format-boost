@@ -663,9 +663,7 @@ impl XmpMerger {
 
         args.push("-tagsfromfile".to_string());
         args.push(xmp_path.to_string_lossy().to_string());
-        // 🔥 v7.10: Removed -all:all to prevent Brotli EXIF corruption in JXL files
-        // -tagsfromfile alone copies all tags without re-encoding metadata
-        // -all:all causes exiftool to re-encode EXIF with Brotli, which can corrupt the stream
+        args.push("-all:all".to_string());
         // Don't overwrite certain critical tags
         args.push("-FileModifyDate<FileModifyDate".to_string());
         args.push(media_path.to_string_lossy().to_string());
