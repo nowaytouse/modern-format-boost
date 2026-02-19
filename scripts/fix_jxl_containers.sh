@@ -164,7 +164,12 @@ process_directory() {
     if [[ $fixed -gt 0 ]]; then
         echo ""
         echo -e "${GREEN}✓ Container files converted to bare codestream${RESET}"
-        echo -e "${DIM}  Backups saved with .container.backup extension${RESET}"
+        echo -e "${DIM}  Original containers backed up with .container.backup extension${RESET}"
+        echo ""
+        echo -e "${YELLOW}📋 Backup Management:${RESET}"
+        echo -e "   ${DIM}• Backups are kept for safety (can restore if needed)${RESET}"
+        echo -e "   ${DIM}• To remove backups after verification:${RESET}"
+        echo -e "     ${CYAN}find \"$target_dir\" -name \"*.container.backup\" -delete${RESET}"
     fi
 }
 

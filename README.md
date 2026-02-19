@@ -17,7 +17,17 @@ Automatically converts JXL ISOBMFF containers to bare codestream format for iClo
 - Detects container format JXL files
 - Extracts codestream without re-encoding (preserves quality and size)
 - Maintains all metadata and timestamps
-- Creates backups before modification
+- Creates backups before modification (`.container.backup`)
+- Original files preserved as backups (can be cleaned up after verification)
+
+### Backup Management
+
+After conversion, original container files are saved with `.container.backup` extension.
+
+To remove backups after verifying converted files work:
+```bash
+./scripts/cleanup_jxl_backups.sh /path/to/directory
+```
 
 ## Usage
 
