@@ -73,6 +73,11 @@ fix_jxl_file() {
         return 1
     fi
     
+    # 🔥 Step 1: 保存源文件的所有时间戳（必须在任何操作前）
+    local src_mtime=$(stat -f%m "$input" 2>/dev/null || stat -c%Y "$input" 2>/dev/null)
+    local src_atime=$(stat -f%a "$input" 2>/dev/null || stat -c%X "$input" 2>/dev/null)
+    local src_birthtime=$(stat -f%B "$input" 2>/dev/null)
+    
     # Extract codestream
     if ! "$FIXER_TOOL" "$input" "$temp_output" 2>/dev/null; then
         echo -e "   ${RED}✗ Extraction failed${RESET}"
@@ -87,27 +92,36 @@ fix_jxl_file() {
         return 1
     fi
     
-    # Preserve metadata using shared_utils approach
-    # 1. Copy EXIF metadata
-    if command -v exiftool &> /dev/null; then
-        exiftool -overwrite_original -TagsFromFile "$input" -all:all "$temp_output" 2>/dev/null
-    fi
-    
-    # 2. Copy file timestamps (atime, mtime)
-    touch -r "$input" "$temp_output"
-    
-    # 3. Copy macOS extended attributes
+    # 🔥 Step 2: 复制扩展属性（在 exiftool 之前）
     if command -v xattr &> /dev/null; then
         for attr in $(xattr "$input" 2>/dev/null); do
             xattr -wx "$attr" "$(xattr -px "$attr" "$input" 2>/dev/null)" "$temp_output" 2>/dev/null
         done
     fi
     
-    # 4. Copy macOS creation time and Date Added
-    if command -v SetFile &> /dev/null && command -v GetFileInfo &> /dev/null; then
-        local creation_date=$(GetFileInfo -d "$input" 2>/dev/null)
-        if [[ -n "$creation_date" ]]; then
-            SetFile -d "$creation_date" "$temp_output" 2>/dev/null
+    # 🔥 Step 3: 复制 EXIF 元数据（会修改文件时间戳）
+    if command -v exiftool &> /dev/null; then
+        exiftool -overwrite_original -TagsFromFile "$input" -all:all "$temp_output" 2>/dev/null 1>/dev/null
+    fi
+    
+    # 🔥 Step 4: 恢复文件时间戳（必须在 exiftool 之后！）
+    if [[ -n "$src_mtime" ]] && [[ -n "$src_atime" ]]; then
+        touch -t $(date -r "$src_mtime" +%Y%m%d%H%M.%S) "$temp_output" 2>/dev/null
+    fi
+    
+    # 🔥 Step 5: 恢复 macOS 创建时间（Birth time）
+    if [[ -n "$src_birthtime" ]] && command -v SetFile &> /dev/null; then
+        local birth_date=$(date -r "$src_birthtime" "+%m/%d/%Y %H:%M:%S" 2>/dev/null)
+        if [[ -n "$birth_date" ]]; then
+            SetFile -d "$birth_date" "$temp_output" 2>/dev/null
+        fi
+    fi
+    
+    # 🔥 Step 6: 复制 Date Added 属性（macOS specific）
+    if command -v xattr &> /dev/null; then
+        local date_added=$(xattr -p com.apple.metadata:kMDItemDateAdded "$input" 2>/dev/null)
+        if [[ -n "$date_added" ]]; then
+            echo -n "$date_added" | xattr -w com.apple.metadata:kMDItemDateAdded "$temp_output" 2>/dev/null
         fi
     fi
     
