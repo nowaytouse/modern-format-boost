@@ -176,13 +176,11 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
     // 🚀 Performance: Use minimal argument set
     // -all:all copies everything, individual date tags are redundant
-    // 🔥 v7.10: Add -fixBase to prevent Brotli EXIF corruption (iCloud Photos compatibility)
     let output = Command::new("exiftool")
         .arg("-tagsfromfile")
         .arg(src)
         .arg("-all:all") // Copy all metadata
         .arg("-ICC_Profile<ICC_Profile") // Ensure ICC is copied
-        .arg("-fixBase") // 🔥 Fix EXIF IFD offsets to prevent corruption
         .arg("-use")
         .arg("MWG") // Metadata Working Group standard
         .arg("-api")
@@ -201,50 +199,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
 
-    // 🔥 v7.10: Validate metadata integrity after copy (detect Brotli corruption early)
-    // This prevents iCloud Photos import failures
-    validate_metadata_integrity(dst)?;
-
     // 🔥 视频文件特殊处理：修复 QuickTime 日期
     if is_video_file(dst) {
         fix_quicktime_dates(src, dst)?;
-    }
-
-    Ok(())
-}
-
-/// 🔥 v7.10: Validate metadata integrity to detect corruption early
-/// 
-/// Checks for common metadata issues that cause iCloud Photos import failures:
-/// - Corrupted Brotli EXIF data
-/// - Invalid EXIF IFD offsets
-/// - Malformed XMP structures
-/// 
-/// 响亮报错原则：发现问题立即报告，不静默！
-fn validate_metadata_integrity(path: &Path) -> io::Result<()> {
-    let output = Command::new("exiftool")
-        .arg("-validate")
-        .arg("-warning")
-        .arg("-q")
-        .arg(path)
-        .output()?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    // Check for critical errors (not minor warnings)
-    if stderr.contains("Corrupted Brotli") || stdout.contains("Corrupted Brotli") {
-        eprintln!("❌ CRITICAL: Brotli EXIF corruption detected in {}", path.display());
-        eprintln!("   This will cause iCloud Photos import failure!");
-        eprintln!("   File: {}", path.display());
-        return Err(io::Error::other("Brotli EXIF corruption detected - metadata rebuild required"));
-    }
-    
-    // Check for other critical metadata errors (响亮报错)
-    if stderr.contains("Invalid") && !stderr.contains("[minor]") {
-        eprintln!("⚠️  WARNING: Metadata validation issue in {}", path.display());
-        eprintln!("   Details: {}", stderr.trim());
-        // Don't fail on non-Brotli issues, but report loudly
     }
 
     Ok(())
