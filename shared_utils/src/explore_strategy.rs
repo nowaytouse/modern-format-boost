@@ -811,9 +811,12 @@ impl ExploreContext {
             return Ok(SsimResult::predicted(ssim, psnr));
         }
 
-        // 都失败了，返回默认值
-        eprintln!("   ⚠️ Both SSIM and PSNR failed, using default");
-        Ok(SsimResult::actual(0.95, None))
+        // 都失败了，返回错误而不是伪造值
+        eprintln!("   ⚠️ Both SSIM and PSNR measurement failed");
+        Err(anyhow::anyhow!(
+            "Both SSIM and PSNR calculation failed for {}",
+            self.output_path.display()
+        ))
     }
 
     /// 解析 SSIM 值

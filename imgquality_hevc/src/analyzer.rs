@@ -952,7 +952,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     // 🔥 使用 jxlinfo 获取 JXL 文件信息（比 djxl 更可靠）
     let (width, height, has_alpha, color_depth) = if which::which("jxlinfo").is_ok() {
-        let output = Command::new("jxlinfo").arg(path).output();
+        let output = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
 
         if let Ok(out) = output {
             if out.status.success() {

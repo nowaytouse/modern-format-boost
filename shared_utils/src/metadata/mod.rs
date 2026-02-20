@@ -360,7 +360,7 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
                     let path = entry.path();
                     
                     // 必须是以 .xmp 结尾的文件
-                    if !path.extension().map_or(false, |e| e.to_string_lossy().eq_ignore_ascii_case("xmp")) {
+                    if !path.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp")) {
                         continue;
                     }
 
