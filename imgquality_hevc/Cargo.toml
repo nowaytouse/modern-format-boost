@@ -49,10 +49,10 @@ shared_utils = { path = "../shared_utils" }
 num_cpus = "1.16"
 
 # Temporary file management
-tempfile = "3.10"
+tempfile = "3.20"
 
 # Terminal colors
-console = "0.15"
+console = "0.16"
 
 [dev-dependencies]
 
