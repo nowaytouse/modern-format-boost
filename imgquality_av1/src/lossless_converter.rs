@@ -1341,22 +1341,89 @@ fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    // 🔥 v7.9.8: 优先使用注入的真实格式
-    let ext = if let Some(ref format) = options.input_format {
+    // 🔥 v8.2: 不再信任字面扩展名，优先探测真实格式
+    let detected_ext = shared_utils::common_utils::detect_real_extension(input);
+    let literal_ext = input
+        .extension()
+        .map(|e| e.to_ascii_lowercase())
+        .and_then(|e| e.to_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    let ext = if let Some(real) = detected_ext {
+        if !literal_ext.is_empty() && real != literal_ext {
+            // 允许 jpg/jpeg 互换
+            if !((real == "jpg" && literal_ext == "jpeg") || (real == "jpeg" && literal_ext == "jpg")) {
+                eprintln!(
+                    "   ⚠️  EXTENSION MISMATCH: {} is actually {}, adjusting pre-processing...",
+                    input.display(),
+                    real
+                );
+            }
+        }
+        real.to_string()
+    } else if let Some(ref format) = options.input_format {
         format.to_lowercase()
     } else {
-        input
-            .extension()
-            .map(|e| e.to_ascii_lowercase())
-            .and_then(|e| e.to_str().map(|s| s.to_string()))
-            .unwrap_or_default()
+        literal_ext
     };
 
     match ext.as_str() {
+        // JPEG: 检查头部完整性，如果损坏则通过 magick 预处理
+        "jpg" | "jpeg" => {
+            // 快速检查文件头是否为 FF D8
+            let is_header_valid = std::fs::File::open(input)
+                .and_then(|mut f| {
+                    use std::io::Read;
+                    let mut buf = [0u8; 2];
+                    f.read_exact(&mut buf)?;
+                    Ok(buf == [0xFF, 0xD8])
+                })
+                .unwrap_or(false);
+
+            if !is_header_valid {
+                use console::style;
+                eprintln!("   {} {}", 
+                    style("🔧 PRE-PROCESSING:").yellow().bold(), 
+                    style("Corrupted JPEG header detected, using ImageMagick to sanitize").yellow()
+                );
+                
+                let temp_png_file = tempfile::Builder::new()
+                    .suffix(".png")
+                    .tempfile()?;
+                let temp_png = temp_png_file.path().to_path_buf();
+
+                let result = Command::new("magick")
+                    .arg(input)
+                    .arg(&temp_png)
+                    .output();
+
+                match result {
+                    Ok(output) if output.status.success() && temp_png.exists() => {
+                        eprintln!("   {} {}", 
+                            style("✅").green(),
+                            style("ImageMagick JPEG sanitization successful").green().bold()
+                        );
+                        Ok((temp_png, Some(temp_png_file)))
+                    }
+                    _ => {
+                        eprintln!("   {} {}", 
+                            style("⚠️").red(),
+                            style("ImageMagick sanitization failed, trying direct input").dim()
+                        );
+                        Ok((input.to_path_buf(), None))
+                    }
+                }
+            } else {
+                Ok((input.to_path_buf(), None))
+            }
+        }
+
         // WebP: 使用 dwebp 解码（处理 ICC profile 问题）
         "webp" => {
-            eprintln!(
-                "   🔧 PRE-PROCESSING: WebP detected, using dwebp for ICC profile compatibility"
+            use console::style;
+            eprintln!("   {} {}", 
+                style("🔧 PRE-PROCESSING:").cyan().bold(),
+                style("WebP detected, using dwebp for ICC profile compatibility").dim()
             );
 
             let temp_png_file = tempfile::Builder::new()
@@ -1373,11 +1440,17 @@ fn prepare_input_for_cjxl(
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!("   ✅ dwebp pre-processing successful");
+                    eprintln!("   {} {}", 
+                        style("✅").green(),
+                        style("dwebp pre-processing successful").green()
+                    );
                     Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
-                    eprintln!("   ⚠️  dwebp pre-processing failed, trying direct cjxl");
+                    eprintln!("   {} {}", 
+                        style("⚠️").yellow(),
+                        style("dwebp pre-processing failed, trying direct cjxl").dim()
+                    );
                     // temp_png_file dropped automatically
                     Ok((input.to_path_buf(), None))
                 }
