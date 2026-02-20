@@ -681,7 +681,7 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     Ok(bytes.windows(4).any(|w| w == anim_marker))
 }
 
-/// Get animation duration in seconds using ffprobe
+/// Get animation duration in seconds using ffprobe with ImageMagick fallback
 fn get_animation_duration(path: &Path) -> Option<f32> {
     use std::process::Command;
 
@@ -697,26 +697,59 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         .output()
         .ok()?;
 
-    if !output.status.success() {
-        return None;
-    }
-
-    let json_str = String::from_utf8_lossy(&output.stdout);
-
-    // Parse duration from JSON output
-    // Look for "duration": "X.XXX"
-    if let Some(duration_pos) = json_str.find("\"duration\"") {
-        let after_key = &json_str[duration_pos + 11..];
-        if let Some(quote_start) = after_key.find('"') {
-            let after_quote = &after_key[quote_start + 1..];
-            if let Some(quote_end) = after_quote.find('"') {
-                let duration_str = &after_quote[..quote_end];
-                return duration_str.parse::<f32>().ok();
+    if output.status.success() {
+        let json_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(duration_pos) = json_str.find("\"duration\"") {
+            let after_key = &json_str[duration_pos + 11..];
+            if let Some(quote_start) = after_key.find('"') {
+                let after_quote = &after_key[quote_start + 1..];
+                if let Some(quote_end) = after_quote.find('"') {
+                    let duration_str = &after_quote[..quote_end];
+                    if let Ok(d) = duration_str.parse::<f32>() {
+                        return Some(d);
+                    }
+                }
             }
         }
     }
 
-    None
+    // Fallback: ImageMagick identify for WebP/GIF animation
+    // Try IM7 (magick identify) first, then IM6 standalone (identify)
+    let safe_path = shared_utils::safe_path_arg(path);
+    let im_output = Command::new("magick")
+        .args(["identify", "-format", "%T\n"])
+        .arg(safe_path.as_ref())
+        .output()
+        .or_else(|_| {
+            Command::new("identify")
+                .args(["-format", "%T\n"])
+                .arg(safe_path.as_ref())
+                .output()
+        })
+        .ok()?;
+
+    if !im_output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&im_output.stdout);
+    let mut total_cs = 0u32;
+    let mut frame_count = 0u32;
+    for line in stdout.lines() {
+        if let Ok(delay_cs) = line.trim().parse::<u32>() {
+            total_cs += delay_cs;
+            frame_count += 1;
+        }
+    }
+    if frame_count == 0 {
+        return None;
+    }
+    let duration = total_cs as f32 / 100.0;
+    eprintln!(
+        "📊 ImageMagick: WebP/GIF animation detected ({} frames, {} centiseconds = {:.2}s)",
+        frame_count, total_cs, duration
+    );
+    Some(duration)
 }
 
 /// Detect if compression is lossless

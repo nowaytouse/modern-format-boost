@@ -163,6 +163,15 @@ get_newest_source_mtime() {
             [[ $mtime -gt $newest ]] && newest=$mtime
         done < <(find "shared_utils/src" -type f -name "*.rs" -print0 2>/dev/null)
     fi
+
+    # 🔥 v8.2.4: Also check shared_utils/Cargo.toml and workspace Cargo.lock
+    for dep_file in "shared_utils/Cargo.toml" "Cargo.lock"; do
+        if [[ -f "$dep_file" ]]; then
+            local mtime
+            mtime=$(stat -f %m "$dep_file" 2>/dev/null || stat -c %Y "$dep_file" 2>/dev/null || echo 0)
+            [[ $mtime -gt $newest ]] && newest=$mtime
+        fi
+    done
     
     echo "$newest"
 }

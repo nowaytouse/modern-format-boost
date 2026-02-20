@@ -51,11 +51,25 @@ fn detect_content_format(path: &Path) -> Option<String> {
         if matches!(brand, "heic" | "heix" | "heim" | "heis" | "mif1" | "msf1") {
             return Some("heic".to_string());
         }
+        // AVIF: brand avif or avis
+        if matches!(brand, "avif" | "avis") {
+            return Some("avif".to_string());
+        }
     }
     
     // TIFF: II* (little-endian) or MM* (big-endian)
     if buffer.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || buffer.starts_with(&[0x4D, 0x4D, 0x00, 0x2A]) {
         return Some("tiff".to_string());
+    }
+
+    // JXL codestream: FF 0A
+    if buffer.starts_with(&[0xFF, 0x0A]) {
+        return Some("jxl".to_string());
+    }
+
+    // JXL container: 00 00 00 0C 4A 58 4C 20 0D 0A 87 0A
+    if buffer.starts_with(&[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A]) {
+        return Some("jxl".to_string());
     }
     
     None
@@ -67,7 +81,7 @@ fn detect_content_format(path: &Path) -> Option<String> {
 /// 这对于处理"伪装"文件（如 HEIC 内容但 .jpeg 扩展名）很重要
 /// 
 /// 返回：如果扩展名被修正，返回新路径；否则返回原路径
-fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
+pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
     let current_ext = path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
@@ -81,22 +95,38 @@ fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
             "webp" => current_ext != "webp",
             "gif" => current_ext != "gif",
             "heic" => !matches!(current_ext.as_str(), "heic" | "heif" | "hif"),
+            "avif" => current_ext != "avif",
+            "jxl" => current_ext != "jxl",
             "tiff" => !matches!(current_ext.as_str(), "tiff" | "tif"),
             _ => false,
         };
         
         if is_mismatch {
-            eprintln!("⚠️  [Extension Fix] {} -> .{} (content does not match extension)", 
-                     path.display(), content_format);
-            
             // Create new path
             let new_path = path.with_extension(&content_format);
 
-            // Remove destination file if it already exists
+            // 🔥 v8.2.4: Safety — refuse to overwrite a DIFFERENT file that already exists
             if new_path.exists() {
-                fs::remove_file(&new_path)
-                    .with_context(|| format!("Failed to remove existing file: {}", new_path.display()))?;
+                // Check if it's the same inode (hard link) or truly different
+                let src_meta = fs::metadata(path);
+                let dst_meta = fs::metadata(&new_path);
+                let same_file = match (src_meta, dst_meta) {
+                    #[cfg(unix)]
+                    (Ok(s), Ok(d)) => {
+                        use std::os::unix::fs::MetadataExt;
+                        s.ino() == d.ino() && s.dev() == d.dev()
+                    }
+                    _ => false,
+                };
+                if !same_file {
+                    eprintln!("⚠️  [Extension Fix] SKIPPED: {} -> .{} (target {} already exists)",
+                        path.display(), content_format, new_path.display());
+                    return Ok(path.to_path_buf());
+                }
             }
+
+            eprintln!("⚠️  [Extension Fix] {} -> .{} (content does not match extension)",
+                     path.display(), content_format);
 
             // Rename file
             fs::rename(path, &new_path)

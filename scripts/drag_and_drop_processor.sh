@@ -218,8 +218,8 @@ count_files() {
     printf "${DIM}   Analyzing directory structure...${RESET}\r"
     
     TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" | wc -l | tr -d ' ')
-    IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.bmp" \) | wc -l | tr -d ' ')
-    VID_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" \) | wc -l | tr -d ' ')
+    IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" \) | wc -l | tr -d ' ')
+    VID_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \) | wc -l | tr -d ' ')
     XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" | wc -l | tr -d ' ')
     OTHER_COUNT=$((TOTAL_FILES - IMG_COUNT - VID_COUNT - XMP_COUNT))
     
@@ -319,19 +319,31 @@ parse_tool_stats() {
 fix_jxl_containers() {
     local target_path="$TARGET_DIR"
     [[ "$OUTPUT_MODE" == "adjacent" ]] && target_path="$OUTPUT_DIR"
-    
+
     # Check if there are any JXL files
     local jxl_count=$(find "$target_path" -type f -iname "*.jxl" 2>/dev/null | wc -l | tr -d ' ')
     [[ $jxl_count -eq 0 ]] && return 0
-    
+
     draw_separator "JXL Container Fix"
-    echo -e "   ${CYAN}🔍 Checking JXL files for iCloud compatibility...${RESET}"
+    echo -e "   ${CYAN}🔍 Checking $jxl_count JXL files for iCloud compatibility...${RESET}"
     echo ""
-    
-    # Run the fixer
-    source "$SCRIPT_DIR/fix_jxl_containers.sh"
-    process_directory "$target_path"
-    
+
+    local fixed=0
+    local failed=0
+    while IFS= read -r -d '' jxl_file; do
+        local tmp_out="${jxl_file}.tmp.jxl"
+        if python3 "$SCRIPT_DIR/jxl_container_fixer.py" "$jxl_file" "$tmp_out" 2>/dev/null; then
+            if [[ -f "$tmp_out" ]]; then
+                mv "$tmp_out" "$jxl_file"
+                ((fixed++))
+            fi
+        else
+            rm -f "$tmp_out"
+            ((failed++))
+        fi
+    done < <(find "$target_path" -type f -iname "*.jxl" -print0)
+
+    echo -e "   ${GREEN}✅ JXL Container Fix: $fixed fixed, $failed skipped/already-codestream${RESET}"
     echo ""
 }
 
@@ -454,8 +466,10 @@ main() {
             --exclude="*.[jJ][pP][gG]" --exclude="*.[jJ][pP][eE][gG]" --exclude="*.[pP][nN][gG]" --exclude="*.[wW][eE][bB][pP]"
             --exclude="*.[hH][eE][iI][cC]" --exclude="*.[hH][eE][iI][fF]" --exclude="*.[aA][vV][iI][fF]" --exclude="*.[gG][iI][fF]"
             --exclude="*.[tT][iI][fF]" --exclude="*.[tT][iI][fF][fF]" --exclude="*.[jJ][pP][eE]" --exclude="*.[jJ][fF][iI][fF]"
+            --exclude="*.[bB][mM][pP]" --exclude="*.[jJ][xX][lL]"
             --exclude="*.[mM][pP]4" --exclude="*.[mM][oO][vV]" --exclude="*.[mM][kK][vV]" --exclude="*.[aA][vV][iI]"
-            --exclude="*.[wW][eE][bB][mM]" --exclude="*.[xX][mM][pP]"
+            --exclude="*.[wW][eE][bB][mM]" --exclude="*.[mM]4[vV]" --exclude="*.[wW][mM][vV]" --exclude="*.[fF][lL][vV]"
+            --exclude="*.[xX][mM][pP]"
         )
         
         # Try to use brew rsync if available
@@ -471,7 +485,13 @@ main() {
         
         # 🔥 v7.4.9: rsync 会修改目录时间戳，需要在最后再次修复
         echo -ne "   ${DIM}Restoring directory timestamps...${RESET}"
-        "$SCRIPT_DIR/fix_directory_timestamps.sh" "$TARGET_DIR" "$OUTPUT_DIR" >/dev/null 2>&1
+        # 内联恢复目录时间戳，不依赖外部脚本
+        find "$TARGET_DIR" -type d -print0 | while IFS= read -r -d '' src_dir; do
+            local rel="${src_dir#$TARGET_DIR}"
+            rel="${rel#/}"
+            local dst_dir="$OUTPUT_DIR${rel:+/$rel}"
+            [[ -d "$dst_dir" ]] && touch -r "$src_dir" "$dst_dir" 2>/dev/null
+        done
         echo -e "\r   ${GREEN}✅ Directory timestamps restored.${RESET}  "
         echo ""
     fi
