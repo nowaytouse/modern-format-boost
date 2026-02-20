@@ -4,8 +4,8 @@ members = [
     "vidquality_hevc",
     "imgquality_hevc",
     "imgquality_av1",
-    "shared_utils", 
-    "xmp_merger" 
+    "shared_utils",
+    "xmp_merger"
 ]
 resolver = "2"
 
@@ -54,8 +54,8 @@ image = { version = "0.25", features = ["png", "jpeg", "webp", "gif", "tiff", "a
 libheif-rs = "2.6"
 
 # Testing
-tempfile = "3.10"
-proptest = "1.4"
+tempfile = "3.20"
+proptest = "1.7"
 
 [profile.release]
 lto = true
