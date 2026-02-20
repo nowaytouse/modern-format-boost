@@ -24,7 +24,8 @@ failed=0
 echo "🔍 Scanning for corrupted files..."
 echo ""
 
-while IFS= read -r -d '' file; do
+# Use a more reliable file iteration method
+find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" 2>/dev/null | while IFS= read -r file; do
     if exiftool -validate "$file" 2>&1 | grep -q "Corrupted Brotli"; then
         ((total++))
         filename=$(basename "$file")
@@ -67,7 +68,7 @@ while IFS= read -r -d '' file; do
         fi
         echo ""
     fi
-done < <(find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" -print0 2>/dev/null)
+done
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📊 Summary"
