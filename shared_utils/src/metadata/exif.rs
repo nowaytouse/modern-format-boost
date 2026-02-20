@@ -151,12 +151,23 @@ fn preserve_internal_metadata_fallback(src: &Path, dst: &Path, hint_ext: Option<
 
     std::fs::rename(dst, &temp_path)?;
 
-    // 3. Retry operation (use scope guard pattern logic)
+    // 3. Retry operation — ALWAYS restore filename even on panic/error
     let result = preserve_internal_metadata_core(src, &temp_path);
 
-    // 4. Restore filename (Critical!)
+    // 4. Restore filename (Critical! Must succeed regardless of metadata result)
     if let Err(e) = std::fs::rename(&temp_path, dst) {
-        eprintln!("❌ CRITICAL: Failed to restore filename from {} to {}", temp_path.display(), dst.display());
+        eprintln!("❌ CRITICAL: Failed to restore filename from {} to {}: {}", temp_path.display(), dst.display(), e);
+        // 🔥 v8.2.4: Emergency recovery — try harder
+        // If temp_path still exists but dst doesn't, the file is stranded
+        if temp_path.exists() && !dst.exists() {
+            eprintln!("   🔧 Attempting emergency recovery via copy...");
+            if let Ok(()) = std::fs::copy(&temp_path, dst).map(|_| ()) {
+                let _ = std::fs::remove_file(&temp_path);
+                eprintln!("   ✅ Emergency recovery succeeded");
+            } else {
+                eprintln!("   ❌ Emergency recovery FAILED. File stranded at: {}", temp_path.display());
+            }
+        }
         return Err(e);
     }
 

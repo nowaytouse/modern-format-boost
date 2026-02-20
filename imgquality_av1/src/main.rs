@@ -636,6 +636,11 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         convert_to_av1_mp4_matched, convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
 
+    // 🔥 v8.2.3: Fix extension BEFORE analysis/conversion so get_input_dimensions
+    // can correctly read files with mismatched extensions (e.g. WebP disguised as .jpeg)
+    let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
+    let input = fixed_input.as_path();
+
     let analysis = analyze_image(input)?;
 
     let options = ConvertOptions {

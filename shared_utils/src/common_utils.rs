@@ -239,19 +239,36 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     }
 
     // WEBP: RIFF....WEBP (RIFF at 0, WEBP at 8)
-    if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46 
+    if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46
         && bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
         return Some("webp");
     }
 
-    // QuickTime (MOV/MP4) Container Signatures
-    // ftyp box at offset 4
-    if bytes_read >= 8 && buffer[4] == 0x66 && buffer[5] == 0x74 && buffer[6] == 0x79 && buffer[7] == 0x70 {
-        // Since we only read 12 bytes, we can't check the brand effectively (brand is at 8-11)
-        // However, ftyp appearing at offset 4 is a very strong indicator of ISO Base Media File Format
-        
-        // For fallback purposes, "mov" is a safe bet for ExifTool to treat it as a video container
-        // ExifTool handles mov/mp4/m4v very similarly regarding structure
+    // JXL codestream: FF 0A
+    if bytes_read >= 2 && buffer[0] == 0xFF && buffer[1] == 0x0A {
+        return Some("jxl");
+    }
+
+    // JXL container: 00 00 00 0C 4A 58 4C 20 0D 0A 87 0A
+    if bytes_read >= 12
+        && buffer[0] == 0x00 && buffer[1] == 0x00 && buffer[2] == 0x00 && buffer[3] == 0x0C
+        && buffer[4] == 0x4A && buffer[5] == 0x58 && buffer[6] == 0x4C && buffer[7] == 0x20
+        && buffer[8] == 0x0D && buffer[9] == 0x0A && buffer[10] == 0x87 && buffer[11] == 0x0A
+    {
+        return Some("jxl");
+    }
+
+    // QuickTime/ISO Base Media File Format: ftyp box at offset 4
+    // Brand at bytes 8-11 distinguishes HEIC from MOV/MP4
+    if bytes_read >= 12 && buffer[4] == 0x66 && buffer[5] == 0x74 && buffer[6] == 0x79 && buffer[7] == 0x70 {
+        let brand = &buffer[8..12];
+        if matches!(brand, b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1") {
+            return Some("heic");
+        }
+        if matches!(brand, b"avif" | b"avis") {
+            return Some("avif");
+        }
+        // MOV/MP4/M4V and other ISO BMFF containers
         return Some("mov");
     }
 

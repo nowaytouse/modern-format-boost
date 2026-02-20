@@ -801,10 +801,18 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
     use std::process::Command;
 
     // Get all frame delays
-    let output = Command::new("identify")
-        .args(["-format", "%T\n"])
-        .arg(path.to_str().unwrap_or(""))
+    // Try ImageMagick 7 (magick identify) first, fall back to IM6 standalone (identify)
+    let safe_path = shared_utils::safe_path_arg(path);
+    let output = Command::new("magick")
+        .args(["identify", "-format", "%T\n"])
+        .arg(safe_path.as_ref())
         .output()
+        .or_else(|_| {
+            Command::new("identify")
+                .args(["-format", "%T\n"])
+                .arg(safe_path.as_ref())
+                .output()
+        })
         .ok()?;
 
     if !output.status.success() {
