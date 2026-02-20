@@ -124,8 +124,8 @@ select_mode() {
     SELECTED=0
     hide_cursor
     
-    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder" "🔧 JXL Container Fix Only" "🩹 Brotli EXIF Fix Only")
-    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched." "Only fix JXL containers for iCloud Photos." "Fix corrupted Brotli EXIF metadata (2% of files).")
+    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder" "🩹 Brotli EXIF Fix Only")
+    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched." "Fix corrupted Brotli EXIF metadata (iCloud import errors).")
     
     while true; do
         clear_screen
@@ -151,9 +151,9 @@ select_mode() {
         if [[ "$key" == $'\x1b' ]]; then
             read -rsn2 key
             if [[ "$key" == "[A" ]]; then # Up
-                SELECTED=$(( (SELECTED - 1 + 4) % 4 ))
+                SELECTED=$(( (SELECTED - 1 + 3) % 3 ))
             elif [[ "$key" == "[B" ]]; then # Down
-                SELECTED=$(( (SELECTED + 1) % 4 ))
+                SELECTED=$(( (SELECTED + 1) % 3 ))
             fi
         elif [[ "$key" == "" ]]; then # Enter
             break
@@ -183,11 +183,6 @@ select_mode() {
         # Create output structure
         echo -e "   ${DIM}Creating directory structure...${RESET}"
         create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
-    elif [[ $SELECTED -eq 2 ]]; then
-        OUTPUT_MODE="jxl_fix_only"
-        echo -e "\n${CYAN}🔧 JXL CONTAINER FIX MODE${RESET}"
-        echo -e "${DIM}   Only JXL container files will be processed.${RESET}"
-        echo ""
     else
         OUTPUT_MODE="brotli_fix_only"
         echo -e "\n${MAGENTA}🩹 BROTLI EXIF FIX MODE${RESET}"
@@ -413,19 +408,6 @@ main() {
     
     safety_check
     select_mode
-    
-    # 🔥 JXL Fix Only Mode - Skip normal processing
-    if [[ "$OUTPUT_MODE" == "jxl_fix_only" ]]; then
-        source "$SCRIPT_DIR/fix_jxl_containers.sh"
-        process_directory "$TARGET_DIR"
-        
-        echo ""
-        echo -e "${GREEN}✅ JXL Container Fix Completed${RESET}"
-        echo ""
-        echo -e "${DIM}Press any key to exit...${RESET}"
-        read -rsn1
-        exit 0
-    fi
     
     # 🩹 Brotli EXIF Fix Only Mode - Skip normal processing
     if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
