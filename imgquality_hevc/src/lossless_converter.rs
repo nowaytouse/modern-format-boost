@@ -199,7 +199,7 @@ pub fn convert_to_jxl(
                 );
                 eprintln!("   {} {}", style("🔄 FALLBACK:").cyan(), style("Using FFmpeg → CJXL pipeline (more reliable for large images)").dim());
                 eprintln!(
-                    "   📋 Reason: Image format/size incompatible with CJXL v0.11.1 (metadata will be preserved)"
+                    "   📋 Reason: Image format/size incompatible with installed CJXL version (metadata will be preserved)"
                 );
 
                 // 🔥 v7.8.2: Primary Fallback - FFmpeg pipeline (更可靠，支持更多格式)
@@ -214,12 +214,12 @@ pub fn convert_to_jxl(
                     .arg(max_threads.to_string()) // 🔥 Limit FFmpeg threads
                     .arg("-i")
                     .arg(shared_utils::safe_path_arg(input).as_ref())
-                    .arg("-f")
-                    .arg("png")
-                    .arg("-pix_fmt")
-                    .arg("rgba") // 确保支持透明度
                     .arg("-frames:v")
                     .arg("1") // 🔥 v7.9.9: Force single frame to avoid cjxl crash on animations
+                    .arg("-vcodec")
+                    .arg("png") // 明确指定 PNG 编解码器
+                    .arg("-f")
+                    .arg("image2pipe") // image2pipe: 输出完整 PNG 文件流，cjxl stdin 可识别
                     .arg("-") // 输出到 stdout
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -249,9 +249,25 @@ pub fn convert_to_jxl(
 
                             match cjxl_result {
                                 Ok(mut cjxl_proc) => {
+                                    // 🔥 v8.2.4: Drain ffmpeg stderr in background thread
+                                    // to prevent deadlock when pipe buffer fills
+                                    let ffmpeg_stderr_thread = ffmpeg_proc.stderr.take().map(|stderr| {
+                                        std::thread::spawn(move || {
+                                            use std::io::Read;
+                                            let mut buf = String::new();
+                                            let mut reader = stderr;
+                                            let _ = reader.read_to_string(&mut buf);
+                                            buf
+                                        })
+                                    });
+
                                     // 等待两个进程完成
                                     let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
+
+                                    let ffmpeg_stderr_str = ffmpeg_stderr_thread
+                                        .and_then(|h| h.join().ok())
+                                        .unwrap_or_default();
 
                                     // 检查 FFmpeg 进程
                                     let ffmpeg_ok = match ffmpeg_status {
@@ -261,17 +277,11 @@ pub fn convert_to_jxl(
                                                 "   ❌ FFmpeg failed with exit code: {:?}",
                                                 status.code()
                                             );
-                                            if let Some(mut stderr) = ffmpeg_proc.stderr {
-                                                use std::io::Read;
-                                                let mut err = String::new();
-                                                if stderr.read_to_string(&mut err).is_ok()
-                                                    && !err.is_empty()
-                                                {
-                                                    eprintln!(
-                                                        "      Error: {}",
-                                                        err.lines().next().unwrap_or("Unknown")
-                                                    );
-                                                }
+                                            if !ffmpeg_stderr_str.is_empty() {
+                                                eprintln!(
+                                                    "      Error: {}",
+                                                    ffmpeg_stderr_str.lines().next().unwrap_or("Unknown")
+                                                );
                                             }
                                             false
                                         }
@@ -2415,23 +2425,48 @@ fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
     }
 
     // Fallback to image crate (for static images)
-    match image::image_dimensions(input) {
-        Ok((w, h)) => Ok((w, h)),
-        Err(e) => {
-            // 🔥 Fail loudly! Never silently degrade！
-            Err(ImgQualityError::ConversionError(format!(
-                "❌ Failed to get file dimensions: {}\n\
-                 Error: {}\n\
-                 💡 Possible causes:\n\
-                 - File corrupted or format not supported\n\
-                 - ffprobe not installed or unavailable\n\
-                 - File is not a valid image/video\n\
-                 Please check file integrity or install ffprobe: brew install ffmpeg",
-                input.display(),
-                e
-            )))
+    if let Ok((w, h)) = image::image_dimensions(input) {
+        return Ok((w, h));
+    }
+
+    // 🔥 v8.2.4: Last resort — ImageMagick identify
+    {
+        use std::process::Command;
+        let safe_path = shared_utils::safe_path_arg(input);
+        let output = Command::new("magick")
+            .args(["identify", "-format", "%w %h\n"])
+            .arg(safe_path.as_ref())
+            .output()
+            .or_else(|_| {
+                Command::new("identify")
+                    .args(["-format", "%w %h\n"])
+                    .arg(safe_path.as_ref())
+                    .output()
+            });
+        if let Ok(out) = output {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                // Take only the first line (first frame for animations)
+                if let Some(line) = s.lines().next() {
+                    let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                            if w > 0 && h > 0 {
+                                return Ok((w, h));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+
+    Err(ImgQualityError::ConversionError(format!(
+        "❌ 无法获取文件尺寸: {}\n\
+         💡 ffprobe, image crate, ImageMagick identify 均失败\n\
+         请检查文件是否完整，或安装 ffmpeg/ImageMagick",
+        input.display(),
+    )))
 }
 
 /// Verify that JXL file is valid using signature and jxlinfo (if available)

@@ -453,7 +453,7 @@ pub use file_copier::{
     FileStats, VerifyResult, SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
 };
-pub use smart_file_copier::{copy_on_skip_or_fail, smart_copy_with_structure};
+pub use smart_file_copier::{copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure};
 
 // 🔥 v7.5: 文件排序
 pub use file_sorter::{

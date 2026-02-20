@@ -1606,23 +1606,47 @@ fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
     }
 
     // Fallback to image crate (for static images)
-    match image::image_dimensions(input) {
-        Ok((w, h)) => Ok((w, h)),
-        Err(e) => {
-            // 🔥 Fail loudly! Never silently degrade！
-            Err(ImgQualityError::ConversionError(format!(
-                "❌ Failed to get file dimensions: {}\n\
-                 Error: {}\n\
-                 💡 Possible causes:\n\
-                 - File corrupted or format not supported\n\
-                 - ffprobe not installed or unavailable\n\
-                 - File is not a valid image/video\n\
-                 Please check file integrity or install ffprobe: brew install ffmpeg",
-                input.display(),
-                e
-            )))
+    if let Ok((w, h)) = image::image_dimensions(input) {
+        return Ok((w, h));
+    }
+
+    // 🔥 v8.2.4: Last resort — ImageMagick identify
+    {
+        use std::process::Command;
+        let safe_path = shared_utils::safe_path_arg(input);
+        let output = Command::new("magick")
+            .args(["identify", "-format", "%w %h\n"])
+            .arg(safe_path.as_ref())
+            .output()
+            .or_else(|_| {
+                Command::new("identify")
+                    .args(["-format", "%w %h\n"])
+                    .arg(safe_path.as_ref())
+                    .output()
+            });
+        if let Ok(out) = output {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = s.lines().next() {
+                    let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+                            if w > 0 && h > 0 {
+                                return Ok((w, h));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+
+    Err(ImgQualityError::ConversionError(format!(
+        "❌ 无法获取文件尺寸: {}\n\
+         💡 ffprobe, image crate, ImageMagick identify 均失败\n\
+         请检查文件是否完整，或安装 ffmpeg/ImageMagick",
+        input.display(),
+    )))
 }
 
 /// Verify that JXL file is valid using signature and jxlinfo (if available)
