@@ -161,18 +161,23 @@ pub fn convert_to_jxl(
         (num_cpus::get() / 2).clamp(1, 4)
     };
 
-    let result = Command::new("cjxl")
-        .arg("-d")
+    let mut cmd = Command::new("cjxl");
+    cmd.arg("-d")
         .arg(format!("{:.1}", distance)) // Distance parameter
         .arg("-e")
         .arg("7") // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
         .arg("-j")
-        .arg(max_threads.to_string()) // 限制线程数
-        .arg("--compress_boxes=0") // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
-        .arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
+        .arg(max_threads.to_string()); // 限制线程数
+
+    if options.apple_compat {
+        cmd.arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
+    }
+
+    cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
         .arg(&actual_input)
-        .arg(&output)
-        .output();
+        .arg(&output);
+
+    let result = cmd.output();
 
     // 清理临时文件 (Automatically handled by _temp_file_guard drop)
 
@@ -221,17 +226,21 @@ pub fn convert_to_jxl(
                     Ok(mut ffmpeg_proc) => {
                         // Step 2: 启动 cjxl 进程，从 stdin 读取
                         if let Some(ffmpeg_stdout) = ffmpeg_proc.stdout.take() {
-                            let cjxl_result = Command::new("cjxl")
-                                .arg("-") // 从 stdin 读取
+                            let mut cmd = Command::new("cjxl");
+                            cmd.arg("-") // 从 stdin 读取
                                 .arg(&output)
                                 .arg("-d")
                                 .arg(format!("{:.1}", distance))
                                 .arg("-e")
                                 .arg("7")
                                 .arg("-j")
-                                .arg(max_threads.to_string())
-                                .arg("--compress_boxes=0") // 🔥 v7.11: Disable metadata compression
-                                .stdin(ffmpeg_stdout)
+                                .arg(max_threads.to_string());
+
+                            if options.apple_compat {
+                                cmd.arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression
+                            }
+
+                            let cjxl_result = cmd.stdin(ffmpeg_stdout)
                                 .stderr(Stdio::piped())
                                 .spawn();
 
@@ -500,15 +509,20 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     let max_threads = (num_cpus::get() / 2).clamp(1, 4);
-    let result = Command::new("cjxl")
-        .arg("--lossless_jpeg=1") // Lossless JPEG transcode - preserves DCT coefficients
+    let mut cmd = Command::new("cjxl");
+    cmd.arg("--lossless_jpeg=1") // Lossless JPEG transcode - preserves DCT coefficients
         .arg("-j")
-        .arg(max_threads.to_string())
-        .arg("--compress_boxes=0") // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
-        .arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
+        .arg(max_threads.to_string());
+
+    if options.apple_compat {
+        cmd.arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
+    }
+
+    cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
         .arg(input)
-        .arg(&output)
-        .output();
+        .arg(&output);
+
+    let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -1402,8 +1416,11 @@ pub fn convert_to_jxl_matched(
         .arg("-e")
         .arg("7") // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
         .arg("-j")
-        .arg(max_threads.to_string()) // 限制线程数
-        .arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
+        .arg(max_threads.to_string()); // 限制线程数
+
+    if options.apple_compat {
+        cmd.arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
+    }
 
     // If distance > 0, disable lossless_jpeg (which is enabled by default for JPEG input)
     if distance > 0.0 {
