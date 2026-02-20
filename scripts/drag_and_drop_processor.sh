@@ -51,6 +51,52 @@ show_cursor() { printf '\033[?25h'; }
 # Clear screen
 clear_screen() { printf '\033[2J\033[H'; }
 
+# 📝 Log directory and file
+LOG_DIR="$PROJECT_ROOT/logs"
+LOG_FILE=""
+SESSION_START_TIME=""
+
+# Initialize log file
+init_log() {
+    SESSION_START_TIME=$(date +"%Y-%m-%d_%H-%M-%S")
+    mkdir -p "$LOG_DIR"
+    LOG_FILE="$LOG_DIR/drag_drop_${SESSION_START_TIME}.log"
+}
+
+# Save log to file (called automatically at exit)
+save_log() {
+    [[ -z "$LOG_FILE" ]] && return
+    [[ ! -f "$LOG_FILE" ]] && return
+    
+    # Append statistics footer to log
+    {
+        echo ""
+        echo "========================================"
+        echo "📊 Final Statistics"
+        echo "========================================"
+        echo "End Time: $(date +"%Y-%m-%d_%H-%M-%S")"
+        echo ""
+        echo "Images:  $IMG_SUCCEEDED succeeded, $IMG_SKIPPED skipped, $IMG_FAILED failed"
+        echo "Videos:  $VID_SUCCEEDED succeeded, $VID_SKIPPED skipped, $VID_FAILED failed"
+        echo ""
+        local total_succeeded=$((IMG_SUCCEEDED + VID_SUCCEEDED))
+        local total_skipped=$((IMG_SKIPPED + VID_SKIPPED))
+        local total_failed=$((IMG_FAILED + VID_FAILED))
+        local total_processed=$((total_succeeded + total_skipped + total_failed))
+        echo "Total:   $total_succeeded succeeded, $total_skipped skipped, $total_failed failed"
+        if [[ $total_processed -gt 0 ]]; then
+            local success_rate=$(( (total_succeeded * 100) / total_processed ))
+            echo "Success Rate: ${success_rate}%"
+        fi
+        echo ""
+        echo "========================================"
+        echo "Session completed."
+        echo "========================================"
+    } >> "$LOG_FILE"
+    
+    echo -e "   ${DIM}📝 Log saved to: $LOG_FILE${RESET}"
+}
+
 # Draw a centered header
 draw_header() {
     local width=70
@@ -391,12 +437,15 @@ show_summary() {
     echo ""
     echo -e "${DIM}Press any key to exit...${RESET}"
     read -rsn1
+    
+    # 📝 Save session log
+    save_log
 }
 
 # Main Execution Flow
-main() {
+_main() {
     clear_screen
-    
+
     # Argument Parsing
     for arg in "$@"; do
         if [[ "$arg" == "--ultimate" ]]; then
@@ -407,10 +456,10 @@ main() {
             TARGET_DIR="$arg"
         fi
     done
-    
+
     check_tools
     get_target_directory
-    
+
     # 🔥 显示配置信息
     echo ""
     echo -e "${CYAN}📋 Configuration:${RESET}"
@@ -418,14 +467,14 @@ main() {
     [[ "$ULTIMATE_MODE" == true ]] && echo -e "   ${MAGENTA}🔥 Ultimate Mode: ${RESET}${GREEN}ENABLED${RESET}"
     [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}" || echo -e "   ${DIM}💬 Verbose: DISABLED (use --verbose for details)${RESET}"
     echo ""
-    
+
     safety_check
     select_mode
-    
+
     # 🩹 Brotli EXIF Fix Only Mode - Skip normal processing
     if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
         "$SCRIPT_DIR/fix_brotli_exif.sh" "$TARGET_DIR"
-        
+
         echo ""
         echo -e "${GREEN}✅ Brotli EXIF Fix Completed${RESET}"
         echo ""
@@ -433,7 +482,7 @@ main() {
         read -rsn1
         exit 0
     fi
-    
+
     count_files
     
     # Logic
@@ -500,6 +549,17 @@ main() {
     fix_jxl_containers
     
     show_summary
+}
+
+# Wrapper function with full session logging
+main() {
+    init_log
+    
+    # Use script command to capture full terminal session (including ANSI colors)
+    script -q -f "$LOG_FILE" -c '_main "$@"' -- "$@"
+    
+    # Show log location after script exits
+    save_log
 }
 
 main "$@"
