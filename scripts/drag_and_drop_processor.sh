@@ -123,9 +123,9 @@ safety_check() {
 select_mode() {
     SELECTED=0
     hide_cursor
-    
-    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder" "🩹 Brotli EXIF Fix Only")
-    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched." "Fix corrupted Brotli EXIF metadata (iCloud import errors).")
+
+    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder" "🩹 Fix iCloud Import Errors")
+    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.")
     
     while true; do
         clear_screen
@@ -185,8 +185,9 @@ select_mode() {
         create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
     else
         OUTPUT_MODE="brotli_fix_only"
-        echo -e "\n${MAGENTA}🩹 BROTLI EXIF FIX MODE${RESET}"
+        echo -e "\n${MAGENTA}🩹 ICLOUD IMPORT FIX MODE${RESET}"
         echo -e "${DIM}   Only files with corrupted Brotli EXIF will be fixed.${RESET}"
+        echo -e "${DIM}   This resolves 'Unable to import to iCloud Photos' errors.${RESET}"
         echo ""
     fi
 }
