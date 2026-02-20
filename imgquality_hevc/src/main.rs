@@ -250,6 +250,7 @@ fn main() -> anyhow::Result<()> {
             }
             if apple_compat {
                 eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
+                std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if in_place {
                 eprintln!(

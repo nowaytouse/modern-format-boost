@@ -661,17 +661,24 @@ impl XmpMerger {
             args.push("-overwrite_original".to_string());
         }
 
+        let is_jxl = media_path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("jxl"));
+        let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
+
         // 🔥 Nuclear Rebuild Strategy (Standardize Metadata & Prevent Brotli Corruption)
-        // -all= clears everything, then we restore from the file itself (@) 
-        // and finally merge the XMP sidecar. This ensures the metadata block 
-        // is rewritten cleanly without compression anomalies.
-        args.push("-all=".to_string());
-        
-        args.push("-tagsfromfile".to_string());
-        args.push("@".to_string());
-        args.push("-all:all".to_string());
-        args.push("-unsafe".to_string());
-        args.push("-icc_profile".to_string());
+        // Only run for JXL files when apple compatibility is actively requested.
+        // Otherwise, defer to 100% data preservation and avoid stripping un-recognized metadata.
+        if is_jxl && apple_compat {
+            // -all= clears everything, then we restore from the file itself (@) 
+            // and finally merge the XMP sidecar. This ensures the metadata block 
+            // is rewritten cleanly without compression anomalies.
+            args.push("-all=".to_string());
+            
+            args.push("-tagsfromfile".to_string());
+            args.push("@".to_string());
+            args.push("-all:all".to_string());
+            args.push("-unsafe".to_string());
+            args.push("-icc_profile".to_string());
+        }
 
         args.push("-tagsfromfile".to_string());
         args.push(xmp_path.to_string_lossy().to_string());

@@ -176,22 +176,35 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
     // 🚀 Performance: Use minimal argument set
     // -all:all copies everything, individual date tags are redundant
-    // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20)
-    // This clears any existing corrupted/compressed block and rebuilds it cleanly.
-    // -all= clears everything, then we restore standard tags (-all:all),
-    // plus proprietary/unsafe tags (-unsafe) and color profiles (-icc_profile)
-    let output = Command::new("exiftool")
-        .arg("-all=") // Nuclear clear (Standardizes format)
-        .arg("-tagsfromfile")
-        .arg("@") // Restore from self first
-        .arg("-all:all")
-        .arg("-unsafe")
-        .arg("-icc_profile")
-        .arg("-tagsfromfile")
-        .arg(src) // Then copy from source
-        .arg("-all:all")
-        .arg("-unsafe")
-        .arg("-icc_profile")
+    // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20) ONLY when Apple Compatibility mode is active for JXL files.
+    // This clears any existing corrupted/compressed block and rebuilds it cleanly, avoiding Brotli corruption.
+    // If not in apple_compat mode, we fallback to 100% data preservation (no forced nuclear rebuild).
+    let is_jxl = dst.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("jxl"));
+    let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
+
+    let mut output = Command::new("exiftool");
+    if is_jxl && apple_compat {
+        output
+            .arg("-all=") // Nuclear clear (Standardizes format)
+            .arg("-tagsfromfile")
+            .arg("@") // Restore from self first
+            .arg("-all:all")
+            .arg("-unsafe")
+            .arg("-icc_profile")
+            .arg("-tagsfromfile")
+            .arg(src) // Then copy from source
+            .arg("-all:all")
+            .arg("-unsafe")
+            .arg("-icc_profile");
+    } else {
+        output
+            .arg("-tagsfromfile")
+            .arg(src) // Then copy from source
+            .arg("-all:all")
+            .arg("-ICC_Profile<ICC_Profile"); // Keep ICC explicit for safety
+    }
+
+    let output = output
         .arg("-use")
         .arg("MWG") // Metadata Working Group standard
         .arg("-api")
