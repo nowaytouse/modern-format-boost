@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/zsh
 # Fix corrupted Brotli EXIF data in JXL files
 # 修复 JXL 文件中损坏的 Brotli EXIF 数据
 
@@ -24,11 +24,21 @@ failed=0
 echo "🔍 Scanning for corrupted files..."
 echo ""
 
+echo "🗂️  Saving directory timestamps to prevent metadata loss..."
+typeset -A dir_mtimes
+typeset -A dir_btimes
+while IFS= read -r d; do
+    abs_d=$(realpath "$d")
+    dir_mtimes["$abs_d"]=$(stat -f%m "$abs_d")
+    dir_btimes["$abs_d"]=$(stat -f%B "$abs_d" 2>/dev/null || echo "0")
+done < <(find "$TARGET_DIR" -type d 2>/dev/null)
+
+
 # Use a more reliable file iteration method with process substitution
 # to ensure the variables total, fixed, failed are updated in the current shell
 while IFS= read -r file; do
     if exiftool -validate -warning "$file" 2>&1 | grep -q "Corrupted Brotli"; then
-        ((total++))
+        total=$((total+1))
         filename=$(basename "$file")
         echo "📦 $filename"
         
@@ -60,18 +70,31 @@ while IFS= read -r file; do
             if exiftool -validate -warning "$file" 2>&1 | grep -q "Corrupted Brotli"; then
                 echo "   ❌ Failed, restored backup"
                 cp -p "$backup" "$file"
-                ((failed++))
+                failed=$((failed+1))
             else
                 echo "   ✓ Fixed"
-                ((fixed++))
+                fixed=$((fixed+1))
             fi
         else
             echo "   ❌ exiftool failed"
-            ((failed++))
+            failed=$((failed+1))
         fi
         echo ""
     fi
 done < <(find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" 2>/dev/null)
+
+echo "🗂️  Restoring directory timestamps..."
+# Use an array to store keys and sort them by length descending (deepest directories first)
+keys=("${(@k)dir_mtimes}")
+for d in ${(f)"$(printf '%s\n' "${keys[@]}" | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"}; do
+    [[ -z "$d" ]] && continue
+    m="${dir_mtimes[$d]}"
+    b="${dir_btimes[$d]}"
+    if [[ -d "$d" ]]; then
+        touch -mt "$(date -r "$m" +%Y%m%d%H%M.%S)" "$d" 2>/dev/null || true
+        [[ "$b" != "0" ]] && SetFile -d "$(date -r "$b" +%m/%d/%Y\ %H:%M:%S)" "$d" 2>/dev/null || true
+    fi
+done
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📊 Summary"

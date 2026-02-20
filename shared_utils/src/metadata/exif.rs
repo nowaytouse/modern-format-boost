@@ -174,16 +174,24 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    // 🚀 Performance: Use minimal argument set
-    // -all:all copies everything, individual date tags are redundant
-    // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20) ONLY when Apple Compatibility mode is active for JXL files.
-    // This clears any existing corrupted/compressed block and rebuilds it cleanly, avoiding Brotli corruption.
-    // If not in apple_compat mode, we fallback to 100% data preservation (no forced nuclear rebuild).
-    let is_jxl = dst.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("jxl"));
+    // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20) ONLY when Apple Compatibility mode is active.
+    // This clears any existing corrupted/compressed/incompatible blocks and rebuilds them cleanly.
+    // 针对 JXL, JPEG, WEBP 开启核弹级重构以确保苹果设备兼容性。
+    let ext = dst.extension().map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
+    let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
+    // 🔥 v8.2: 结构性强制修复 (Structural Repair)
+    // 对于 JPEG，如果开启了苹果兼容模式，先尝试用 magick 重建结构
+    if apple_compat && (ext == "jpg" || ext == "jpeg") {
+        let _ = Command::new("magick")
+            .arg(dst)
+            .arg(dst) // 原地重写结构
+            .output();
+    }
+
     let mut output = Command::new("exiftool");
-    if is_jxl && apple_compat {
+    if is_nuclear_format && apple_compat {
         output
             .arg("-all=") // Nuclear clear (Standardizes format)
             .arg("-tagsfromfile")
