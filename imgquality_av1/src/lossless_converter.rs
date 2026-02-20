@@ -254,7 +254,9 @@ pub fn convert_to_jxl(
             // 🔥 智能回退：如果转换后文件变大，删除输出并跳过
             // 这对于小型PNG或已高度优化的图片很常见
             if output_size > input_size {
-                let _ = fs::remove_file(&output);
+                if let Err(e) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
+                }
                 eprintln!(
                     "   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)",
                     input_size,
@@ -280,7 +282,9 @@ pub fn convert_to_jxl(
 
             // Validate output
             if let Err(e) = verify_jxl_health(&output) {
-                let _ = fs::remove_file(&output);
+                if let Err(re) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
+                }
                 return Err(e);
             }
 
@@ -398,7 +402,9 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
             // Validate output
             if let Err(e) = verify_jxl_health(&output) {
-                let _ = fs::remove_file(&output);
+                if let Err(re) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
+                }
                 return Err(e);
             }
 
@@ -1118,7 +1124,9 @@ pub fn convert_to_jxl_matched(
 
             // 🔥 智能回退：如果转换后文件变大，删除输出并跳过
             if output_size > input_size {
-                let _ = fs::remove_file(&output);
+                if let Err(e) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
+                }
                 eprintln!(
                     "   ⏭️  Rollback: JXL larger than original ({} → {} bytes, +{:.1}%)",
                     input_size,
@@ -1144,7 +1152,9 @@ pub fn convert_to_jxl_matched(
 
             // Validate output
             if let Err(e) = verify_jxl_health(&output) {
-                let _ = fs::remove_file(&output);
+                if let Err(re) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
+                }
                 return Err(e);
             }
 
@@ -1628,7 +1638,7 @@ fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout);
                 if let Some(line) = s.lines().next() {
-                    let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                    let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 2 {
                         if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
                             if w > 0 && h > 0 {
@@ -1667,7 +1677,7 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
     // 🔥 使用 jxlinfo 进行更可靠的验证（如果可用）
     // jxlinfo 比 djxl 更适合验证，因为它只读取元数据，不需要完整解码
     if which::which("jxlinfo").is_ok() {
-        let result = Command::new("jxlinfo").arg(path).output();
+        let result = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
 
         if let Ok(output) = result {
             if !output.status.success() {

@@ -388,7 +388,9 @@ pub fn convert_to_jxl(
 
             if output_size > max_allowed_size {
                 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
-                let _ = fs::remove_file(&output);
+                if let Err(e) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
+                }
                 if options.verbose {
                     if options.allow_size_tolerance {
                         eprintln!(
@@ -427,7 +429,9 @@ pub fn convert_to_jxl(
 
             // Validate output
             if let Err(e) = verify_jxl_health(&output) {
-                let _ = fs::remove_file(&output);
+                if let Err(re) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
+                }
                 return Err(e);
             }
 
@@ -544,7 +548,9 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
             // Validate output
             if let Err(e) = verify_jxl_health(&output) {
-                let _ = fs::remove_file(&output);
+                if let Err(re) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
+                }
                 return Err(e);
             }
 
@@ -1178,7 +1184,9 @@ pub fn convert_to_hevc_mp4_matched(
 
     if explore_result.output_size > max_allowed_size {
         let size_increase_pct = ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
-        let _ = fs::remove_file(&output);
+        if let Err(e) = fs::remove_file(&output) {
+            eprintln!("⚠️ [cleanup] Failed to remove oversized HEVC output: {}", e);
+        }
         if options.allow_size_tolerance {
             eprintln!(
                 "   ⏭️  Skipping: HEVC output larger than input by {:.1}% (tolerance: 1.0%)",
@@ -1254,8 +1262,11 @@ pub fn convert_to_hevc_mp4_matched(
 
         // 删除低质量的输出文件
         if output.exists() {
-            let _ = fs::remove_file(&output);
-            eprintln!("   🗑️  Low-quality output deleted");
+            if let Err(e) = fs::remove_file(&output) {
+                eprintln!("⚠️ [cleanup] Failed to remove low-quality output: {}", e);
+            } else {
+                eprintln!("   🗑️  Low-quality output deleted");
+            }
         }
 
         // 🔥 v6.5.2: 相邻目录模式下，复制原始文件到输出目录
@@ -1510,7 +1521,9 @@ pub fn convert_to_jxl_matched(
             
             if output_size > max_allowed_size {
                 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
-                let _ = fs::remove_file(&output);
+                if let Err(e) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
+                }
                 eprintln!(
                     "   ⏭️  Skipping: JXL output larger than input by {:.1}% (tolerance: 1.0%)",
                     size_increase_pct
@@ -1540,7 +1553,9 @@ pub fn convert_to_jxl_matched(
 
             // Validate output
             if let Err(e) = verify_jxl_health(&output) {
-                let _ = fs::remove_file(&output);
+                if let Err(re) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
+                }
                 return Err(e);
             }
 
@@ -1872,10 +1887,9 @@ fn prepare_input_for_cjxl(
             // 允许 jpg/jpeg 互换
             if !((real == "jpg" && literal_ext == "jpeg") || (real == "jpeg" && literal_ext == "jpg")) {
                 use console::style;
-                eprintln!("   {} {}", 
+                eprintln!("   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
                     style("⚠️  [智能修正] 扩展名不匹配:").yellow().bold(),
-                    format!("'{}' (disguised as .{}) -> actually {}, will process as actual format", 
-                        input.display(), literal_ext, real.to_uppercase())
+                    input.display(), literal_ext, real.to_uppercase()
                 );
             }
         }
@@ -2306,7 +2320,11 @@ pub fn convert_to_gif_apple_compat(
         .output();
 
     // 清理调色板文件
-    let _ = fs::remove_file(&palette_path);
+    if let Err(e) = fs::remove_file(&palette_path) {
+        if palette_path.exists() {
+            eprintln!("⚠️ [cleanup] Failed to remove temp palette file: {}", e);
+        }
+    }
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -2325,7 +2343,9 @@ pub fn convert_to_gif_apple_compat(
 
             if output_size > max_allowed_size {
                 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
-                let _ = fs::remove_file(&output);
+                if let Err(e) = fs::remove_file(&output) {
+                    eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
+                }
                 if options.allow_size_tolerance {
                     eprintln!(
                         "   ⏭️  Skipping: GIF output larger than input by {:.1}% (tolerance: 1.0%)",
@@ -2448,7 +2468,7 @@ fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
                 let s = String::from_utf8_lossy(&out.stdout);
                 // Take only the first line (first frame for animations)
                 if let Some(line) = s.lines().next() {
-                    let parts: Vec<&str> = line.trim().split_whitespace().collect();
+                    let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 2 {
                         if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
                             if w > 0 && h > 0 {
@@ -2487,7 +2507,7 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
     // 🔥 使用 jxlinfo 进行更可靠的验证（如果可用）
     // jxlinfo 比 djxl 更适合验证，因为它只读取元数据，不需要完整解码
     if which::which("jxlinfo").is_ok() {
-        let result = Command::new("jxlinfo").arg(path).output();
+        let result = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
 
         if let Ok(output) = result {
             if !output.status.success() {

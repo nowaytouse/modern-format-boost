@@ -389,17 +389,14 @@ impl GpuAccel {
         eprintln!("🔍 Detecting GPU acceleration...");
         if self.enabled {
             eprintln!("   ✅ GPU: {} detected", self.gpu_type);
-            if self.hevc_encoder.is_some() {
-                eprintln!("      • HEVC: {}", self.hevc_encoder.as_ref().unwrap().name);
+            if let Some(enc) = &self.hevc_encoder {
+                eprintln!("      • HEVC: {}", enc.name);
             }
-            if self.av1_encoder.is_some() {
-                eprintln!("      • AV1: {}", self.av1_encoder.as_ref().unwrap().name);
+            if let Some(enc) = &self.av1_encoder {
+                eprintln!("      • AV1: {}", enc.name);
             }
-            if self.h264_encoder.is_some() {
-                eprintln!(
-                    "      • H.264: {}",
-                    self.h264_encoder.as_ref().unwrap().name
-                );
+            if let Some(enc) = &self.h264_encoder {
+                eprintln!("      • H.264: {}", enc.name);
             }
         } else {
             eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");

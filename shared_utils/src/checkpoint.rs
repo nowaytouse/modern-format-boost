@@ -219,14 +219,18 @@ impl CheckpointManager {
         if let Ok(lock_info) = serde_json::from_str::<LockInfo>(&content) {
             // 检查是否是自己的进程
             if lock_info.pid == std::process::id() {
-                let _ = fs::remove_file(&self.lock_file);
+                if let Err(e) = fs::remove_file(&self.lock_file) {
+                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {}", e);
+                }
                 return Ok(None);
             }
 
             // 🔥 v6.5: 检查锁是否超时 (24小时)
             if lock_info.is_stale() {
                 eprintln!("⚠️ LOCK STALE: Lock file older than 24 hours, removing");
-                let _ = fs::remove_file(&self.lock_file);
+                if let Err(e) = fs::remove_file(&self.lock_file) {
+                    eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                }
                 return Ok(None);
             }
 
@@ -245,7 +249,9 @@ impl CheckpointManager {
                         "⚠️ LOCK STALE: PID {} no longer exists, removing",
                         lock_info.pid
                     );
-                    let _ = fs::remove_file(&self.lock_file);
+                    if let Err(e) = fs::remove_file(&self.lock_file) {
+                        eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                    }
                     return Ok(None);
                 }
 
@@ -257,7 +263,9 @@ impl CheckpointManager {
                             "⚠️ LOCK STALE: PID {} reused (start time mismatch), removing",
                             lock_info.pid
                         );
-                        let _ = fs::remove_file(&self.lock_file);
+                        if let Err(e) = fs::remove_file(&self.lock_file) {
+                            eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                        }
                         return Ok(None);
                     }
                 }
@@ -274,7 +282,9 @@ impl CheckpointManager {
         // 🔥 向后兼容：旧格式 (纯 PID)
         if let Ok(pid) = content.trim().parse::<u32>() {
             if pid == std::process::id() {
-                let _ = fs::remove_file(&self.lock_file);
+                if let Err(e) = fs::remove_file(&self.lock_file) {
+                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {}", e);
+                }
                 return Ok(None);
             }
             // 旧格式无法验证启动时间，检查文件年龄
@@ -282,7 +292,9 @@ impl CheckpointManager {
                 if let Ok(modified) = meta.modified() {
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS {
-                            let _ = fs::remove_file(&self.lock_file);
+                            if let Err(e) = fs::remove_file(&self.lock_file) {
+                                eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                            }
                             return Ok(None);
                         }
                     }
@@ -293,7 +305,9 @@ impl CheckpointManager {
 
         // 无效锁文件，删除
         eprintln!("⚠️ LOCK INVALID: Cannot parse lock file, removing");
-        let _ = fs::remove_file(&self.lock_file);
+        if let Err(e) = fs::remove_file(&self.lock_file) {
+            eprintln!("⚠️ [checkpoint] Failed to remove invalid lock file: {}", e);
+        }
         Ok(None)
     }
 

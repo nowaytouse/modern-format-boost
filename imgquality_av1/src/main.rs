@@ -481,7 +481,7 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
 
         // Decode JXL to PNG using djxl
         let status = Command::new("djxl")
-            .arg(path)
+            .arg(shared_utils::safe_path_arg(path).as_ref())
             .arg(temp_path)
             .status()
             .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {}", e))?;

@@ -661,7 +661,7 @@ impl XmpMerger {
             args.push("-overwrite_original".to_string());
         }
 
-        let is_jxl = media_path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("jxl"));
+        let is_jxl = media_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"));
         let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
         // 🔥 Nuclear Rebuild Strategy (Standardize Metadata & Prevent Brotli Corruption)
