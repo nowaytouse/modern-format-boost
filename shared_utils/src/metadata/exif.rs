@@ -181,14 +181,14 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
-    // 🔥 v8.2.2: 按需结构修复 (On-Demand Structural Repair)
-    // 只在 exiftool 检测到元数据损坏/不兼容时才执行 magick 修复
+    // 🔥 v8.2.2: 按需Structural Repair (On-Demand Structural Repair)
+    // 只在 exiftool detected metadata corruption/不兼容时才执行 magick 修复
     // 不对每个文件都执行，避免不必要的重编码和质量损失
     // 
     // 流程：
     // 1. 先尝试正常 exiftool 元数据复制
     // 2. 如果 exiftool 失败（检测到损坏/不兼容）
-    // 3. 才执行 magick 结构修复
+    // 3. 才执行 magick Structural Repair
     // 4. 修复后重试 exiftool
     //
     // 注意：smart_file_copier 已经修正了扩展名，所以这里 ext 应该匹配内容
@@ -222,7 +222,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                             stderr.contains("Not a valid");
             
             if is_corrupt {
-                eprintln!("⚠️  [结构修复] {} 检测到元数据损坏：{}", dst.display(), 
+                eprintln!("⚠️  [Structural Repair] {} detected metadata corruption：{}", dst.display(), 
                          stderr.lines().next().unwrap_or("unknown error"));
             }
             
@@ -231,8 +231,8 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     };
 
     if needs_repair {
-        // 第二步：执行 magick 结构修复
-        eprintln!("🔧  [结构修复] 执行 ImageMagick 重建...");
+        // 第二步：执行 magick Structural Repair
+        eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
         
         let magick_result = Command::new("magick")
             .arg(dst)
@@ -242,7 +242,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         match magick_result {
             Ok(out) => {
                 if out.status.success() {
-                    eprintln!("✅  [结构修复] 完成：{}", dst.display());
+                    eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
                     
                     // 第三步：修复后重试 exiftool（使用核弹级重构确保兼容性）
                     output = Command::new("exiftool")
@@ -266,9 +266,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg(dst)
                         .output()?;
                 } else {
-                    eprintln!("⚠️  [结构修复] magick 失败：{}", 
+                    eprintln!("⚠️  [Structural Repair] magick failed：{}", 
                              String::from_utf8_lossy(&out.stderr));
-                    // magick 失败，返回原始 exiftool 错误
+                    // magick failed，返回原始 exiftool 错误
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     if !stderr.contains("Warning") {
                         return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
@@ -276,8 +276,8 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                 }
             }
             Err(e) => {
-                eprintln!("⚠️  [结构修复] magick 不可用：{}", e);
-                // magick 不可用，返回原始 exiftool 错误
+                eprintln!("⚠️  [Structural Repair] magick unavailable：{}", e);
+                // magick unavailable，返回原始 exiftool 错误
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 if !stderr.contains("Warning") {
                     return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));

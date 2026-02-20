@@ -1864,7 +1864,7 @@ fn prepare_input_for_cjxl(
                 use console::style;
                 eprintln!("   {} {}", 
                     style("⚠️  [智能修正] 扩展名不匹配:").yellow().bold(),
-                    format!("'{}' (伪装为 .{}) -> 实际为 {}, 将按实际格式处理", 
+                    format!("'{}' (disguised as .{}) -> actually {}, will process as actual format", 
                         input.display(), literal_ext, real.to_uppercase())
                 );
             }

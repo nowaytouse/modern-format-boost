@@ -86,24 +86,24 @@ fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
         };
         
         if is_mismatch {
-            eprintln!("⚠️  [扩展名修正] {} -> .{} (内容与实际扩展名不符)", 
+            eprintln!("⚠️  [Extension Fix] {} -> .{} (content does not match extension)", 
                      path.display(), content_format);
             
-            // 创建新路径
+            // Create new path
             let new_path = path.with_extension(&content_format);
-            
-            // 如果目标文件已存在，先删除
+
+            // Remove destination file if it already exists
             if new_path.exists() {
                 fs::remove_file(&new_path)
                     .with_context(|| format!("Failed to remove existing file: {}", new_path.display()))?;
             }
-            
-            // 重命名文件
+
+            // Rename file
             fs::rename(path, &new_path)
                 .with_context(|| format!("Failed to rename {} to {}", path.display(), new_path.display()))?;
-            
-            eprintln!("✅  [扩展名修正] 完成：{}", new_path.display());
-            
+
+            eprintln!("✅  [Extension Fix] Complete: {}", new_path.display());
+
             return Ok(new_path);
         }
     }
