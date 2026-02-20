@@ -597,7 +597,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     }
 
     // 🔥 健壮性：获取输入尺寸并生成视频滤镜链
-    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" 错误
+    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" Error
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -1238,7 +1238,7 @@ pub fn convert_to_av1_mp4_lossless(
     }
 
     // 🔥 健壮性：获取输入尺寸并生成视频滤镜链
-    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" 错误
+    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" Error
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -1594,30 +1594,30 @@ fn get_output_path(
 
 /// 获取输入文件的尺寸（宽度和高度）
 ///
-/// 使用 ffprobe 获取视频/动画的尺寸，或使用 image crate 获取静态图片的尺寸
+/// Use ffprobe to get video/animation dimensions, or image crate for static images
 ///
-/// 🔥 遵循质量宣言：失败就响亮报错，绝不静默降级！
+/// 🔥 Follow quality manifesto: fail loudly, never silently degrade！
 fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    // 首先尝试使用 ffprobe（适用于视频和动画）
+    // First try ffprobe (for videos and animations)
     if let Ok(probe) = shared_utils::probe_video(input) {
         if probe.width > 0 && probe.height > 0 {
             return Ok((probe.width, probe.height));
         }
     }
 
-    // 回退到 image crate（适用于静态图片）
+    // Fallback to image crate (for static images)
     match image::image_dimensions(input) {
         Ok((w, h)) => Ok((w, h)),
         Err(e) => {
-            // 🔥 响亮报错！绝不静默降级！
+            // 🔥 Fail loudly! Never silently degrade！
             Err(ImgQualityError::ConversionError(format!(
-                "❌ 无法获取文件尺寸: {}\n\
-                 错误: {}\n\
-                 💡 可能原因:\n\
-                 - 文件损坏或格式不支持\n\
-                 - ffprobe 未安装或不可用\n\
-                 - 文件不是有效的图像/视频格式\n\
-                 请检查文件完整性或安装 ffprobe: brew install ffmpeg",
+                "❌ Failed to get file dimensions: {}\n\
+                 Error: {}\n\
+                 💡 Possible causes:\n\
+                 - File corrupted or format not supported\n\
+                 - ffprobe not installed or unavailable\n\
+                 - File is not a valid image/video\n\
+                 Please check file integrity or install ffprobe: brew install ffmpeg",
                 input.display(),
                 e
             )))
