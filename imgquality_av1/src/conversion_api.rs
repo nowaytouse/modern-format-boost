@@ -201,9 +201,14 @@ pub fn execute_conversion(
         }
     };
 
+    let stem = input_path.file_stem().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!(
+            "Invalid input path (no file stem): {}",
+            input_path.display()
+        ))
+    })?;
     let output_path = if let Some(ref dir) = config.output_dir {
-        dir.join(input_path.file_stem().unwrap())
-            .with_extension(extension)
+        dir.join(stem).with_extension(extension)
     } else {
         input_path.with_extension(extension)
     };
@@ -449,10 +454,15 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
         ImageType::Animated => ("mp4", true),
     };
 
+    let stem = input_path.file_stem().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!(
+            "Invalid input path (no file stem): {}",
+            input_path.display()
+        ))
+    })?;
     let output_path = if let Some(dir) = output_dir {
         std::fs::create_dir_all(dir)?;
-        dir.join(input_path.file_stem().unwrap())
-            .with_extension(extension)
+        dir.join(stem).with_extension(extension)
     } else {
         input_path.with_extension(extension)
     };
