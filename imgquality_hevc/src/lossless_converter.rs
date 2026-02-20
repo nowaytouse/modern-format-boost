@@ -76,7 +76,7 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
         options.base_dir.as_deref(),
         options.verbose,
     )
-    .unwrap_or_default() // 错误已经在 copy_on_skip_or_fail 中响亮报告
+    .unwrap_or_default() // Error已经在 copy_on_skip_or_fail 中响亮报告
 }
 
 /// Convert static image to JXL with specified distance/quality
@@ -182,7 +182,7 @@ pub fn convert_to_jxl(
     // 清理临时文件 (Automatically handled by _temp_file_guard drop)
 
     // 🔥 v7.8.2: Enhanced Fallback - 使用 FFmpeg 作为主要fallback，ImageMagick作为备用
-    // 如果 cjxl 失败且报告 "Getting pixel data failed" 或其他编码错误
+    // 如果 cjxl 失败且报告 "Getting pixel data failed" 或其他编码Error
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -789,7 +789,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 
     // 🔥 健壮性：获取输入尺寸并生成视频滤镜链
-    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" 错误
+    // 解决 "Picture height must be an integer multiple of the specified chroma subsampling" Error
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -1204,7 +1204,7 @@ pub fn convert_to_hevc_mp4_matched(
 
     // 🔥 v3.8: 质量验证失败时，保护原文件！
     // 🔥 v5.69: 使用实际的 min_ssim 阈值，响亮报错
-    // 🔥 v6.9.10: 修复错误信息 - 区分压缩失败、SSIM 计算失败、SSIM 阈值未达标
+    // 🔥 v6.9.10: 修复Error信息 - 区分压缩失败、SSIM 计算失败、SSIM 阈值未达标
     if !explore_result.quality_passed {
         let actual_ssim = explore_result.ssim.unwrap_or(0.0);
         let threshold = explore_result.actual_min_ssim;
@@ -1810,7 +1810,7 @@ fn try_imagemagick_fallback(
                             eprintln!("   ❌ SECONDARY FALLBACK FAILED: ImageMagick pipeline error (magick: {}, cjxl: {})", 
                                 if magick_ok { "✓" } else { "✗" },
                                 if cjxl_ok { "✓" } else { "✗" });
-                            // 返回原始错误
+                            // 返回原始Error
                             Err(std::io::Error::other(
                                 "All fallback methods failed"
                             ))
@@ -2259,7 +2259,7 @@ pub fn convert_to_gif_apple_compat(
     let palette_path = output.with_extension("palette.png");
 
     // Step 1: 生成调色板
-    // 🔥 v6.9.17: 修复文件名以 - 开头导致的 FFmpeg 参数解析错误
+    // 🔥 v6.9.17: 修复文件名以 - 开头导致的 FFmpeg 参数解析Error
     let palette_result = Command::new("ffmpeg")
         .arg("-y")
         .arg("-i")
@@ -2280,7 +2280,7 @@ pub fn convert_to_gif_apple_compat(
     }
 
     // Step 2: 使用调色板转换
-    // 🔥 v6.9.17: 修复文件名以 - 开头导致的 FFmpeg 参数解析错误
+    // 🔥 v6.9.17: 修复文件名以 - 开头导致的 FFmpeg 参数解析Error
     let result = Command::new("ffmpeg")
         .arg("-y")
         .arg("-i")
@@ -2403,30 +2403,30 @@ pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
 
 /// 获取输入文件的尺寸（宽度和高度）
 ///
-/// 使用 ffprobe 获取视频/动画的尺寸，或使用 image crate 获取静态图片的尺寸
+/// Use ffprobe to get video/animation dimensions, or image crate for static images
 ///
-/// 🔥 遵循质量宣言：失败就响亮报错，绝不静默降级！
+/// 🔥 Follow quality manifesto: fail loudly, never silently degrade！
 fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    // 首先尝试使用 ffprobe（适用于视频和动画）
+    // First try ffprobe (for videos and animations)
     if let Ok(probe) = shared_utils::probe_video(input) {
         if probe.width > 0 && probe.height > 0 {
             return Ok((probe.width, probe.height));
         }
     }
 
-    // 回退到 image crate（适用于静态图片）
+    // Fallback to image crate (for static images)
     match image::image_dimensions(input) {
         Ok((w, h)) => Ok((w, h)),
         Err(e) => {
-            // 🔥 响亮报错！绝不静默降级！
+            // 🔥 Fail loudly! Never silently degrade！
             Err(ImgQualityError::ConversionError(format!(
-                "❌ 无法获取文件尺寸: {}\n\
-                 错误: {}\n\
-                 💡 可能原因:\n\
-                 - 文件损坏或格式不支持\n\
-                 - ffprobe 未安装或不可用\n\
-                 - 文件不是有效的图像/视频格式\n\
-                 请检查文件完整性或安装 ffprobe: brew install ffmpeg",
+                "❌ Failed to get file dimensions: {}\n\
+                 Error: {}\n\
+                 💡 Possible causes:\n\
+                 - File corrupted or format not supported\n\
+                 - ffprobe not installed or unavailable\n\
+                 - File is not a valid image/video\n\
+                 Please check file integrity or install ffprobe: brew install ffmpeg",
                 input.display(),
                 e
             )))
@@ -2642,7 +2642,7 @@ mod tests {
         for fmt in &preprocess_formats {
             assert!(
                 !direct_formats.contains(fmt),
-                "格式 '{}' 同时出现在预处理和直接格式列表中，这是配置错误",
+                "格式 '{}' 同时出现在预处理和直接格式列表中，这是配置Error",
                 fmt
             );
         }
