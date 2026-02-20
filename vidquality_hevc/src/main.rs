@@ -235,6 +235,7 @@ fn main() -> anyhow::Result<()> {
             }
             if apple_compat {
                 info!("   🍎 Apple Compatibility: ENABLED (AV1/VP9 → HEVC)");
+                std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if recursive {
                 info!("   📂 Recursive: ENABLED");
