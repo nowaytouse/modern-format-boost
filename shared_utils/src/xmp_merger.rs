@@ -661,9 +661,22 @@ impl XmpMerger {
             args.push("-overwrite_original".to_string());
         }
 
+        // 🔥 Nuclear Rebuild Strategy (Standardize Metadata & Prevent Brotli Corruption)
+        // -all= clears everything, then we restore from the file itself (@) 
+        // and finally merge the XMP sidecar. This ensures the metadata block 
+        // is rewritten cleanly without compression anomalies.
+        args.push("-all=".to_string());
+        
+        args.push("-tagsfromfile".to_string());
+        args.push("@".to_string());
+        args.push("-all:all".to_string());
+        args.push("-unsafe".to_string());
+        args.push("-icc_profile".to_string());
+
         args.push("-tagsfromfile".to_string());
         args.push(xmp_path.to_string_lossy().to_string());
         args.push("-all:all".to_string());
+
         // Don't overwrite certain critical tags
         args.push("-FileModifyDate<FileModifyDate".to_string());
         args.push(media_path.to_string_lossy().to_string());

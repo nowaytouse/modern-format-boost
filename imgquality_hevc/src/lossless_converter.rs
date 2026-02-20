@@ -168,6 +168,7 @@ pub fn convert_to_jxl(
         .arg("7") // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
         .arg("-j")
         .arg(max_threads.to_string()) // 限制线程数
+        .arg("--compress_boxes=0") // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
         .arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
         .arg(&actual_input)
         .arg(&output)
@@ -229,6 +230,7 @@ pub fn convert_to_jxl(
                                 .arg("7")
                                 .arg("-j")
                                 .arg(max_threads.to_string())
+                                .arg("--compress_boxes=0") // 🔥 v7.11: Disable metadata compression
                                 .stdin(ffmpeg_stdout)
                                 .stderr(Stdio::piped())
                                 .spawn();
@@ -502,6 +504,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         .arg("--lossless_jpeg=1") // Lossless JPEG transcode - preserves DCT coefficients
         .arg("-j")
         .arg(max_threads.to_string())
+        .arg("--compress_boxes=0") // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
         .arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
         .arg(input)
         .arg(&output)
@@ -1399,7 +1402,8 @@ pub fn convert_to_jxl_matched(
         .arg("-e")
         .arg("7") // Effort 7 (cjxl v0.11+ 范围是 1-10，默认 7)
         .arg("-j")
-        .arg(max_threads.to_string()); // 限制线程数
+        .arg(max_threads.to_string()) // 限制线程数
+        .arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression (fix Brotli corruption)
 
     // If distance > 0, disable lossless_jpeg (which is enabled by default for JPEG input)
     if distance > 0.0 {
