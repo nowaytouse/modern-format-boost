@@ -83,12 +83,12 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
     // Check if HEIC - use libheif instead of image crate
     if is_heic_file(path) {
-        // 🔥 v8.1.5 [精致策略]: 智能诊断 HEIC 扩展名不匹配
+        // 🔥 v8.1.5 [Refined Strategy]: Smart diagnosis HEIC Extension mismatch
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if !["heic", "heif", "hif"].contains(&ext_str.as_str()) {
                 eprintln!(
-                    "⚠️  [智能修正] 扩展名不匹配: '{}' (伪装为 .{}) -> 实际为 HEIC, 将按实际格式处理", 
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually HEIC, will process as actual format", 
                     path.display(), 
                     ext_str
                 );
@@ -99,12 +99,12 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
     // Check if JXL - image crate doesn't support JXL natively
     if is_jxl_file(path) {
-        // 🔥 v8.1.5 [精致策略]: 智能诊断 JXL 扩展名不匹配
+        // 🔥 v8.1.5 [Refined Strategy]: Smart diagnosis JXL Extension mismatch
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str != "jxl" {
                 eprintln!(
-                    "⚠️  [智能修正] 扩展名不匹配: '{}' (伪装为 .{}) -> 实际为 JXL, 将按实际格式处理", 
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually JXL, will process as actual format", 
                     path.display(), 
                     ext_str
                 );
@@ -128,15 +128,15 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     })?;
     let format_str = format_to_string(&format);
 
-    // 🔥 v8.1 [精致策略]: 智能扩展名诊断与兼容性标记
-    // 不再粗暴报错，而是智能识别真实格式，并标记兼容性风险
+    // 🔥 v8.1 [Refined Strategy]: Smart extension diagnosis and compatibility marking
+    // Instead of crashing, smartly identify actual format and mark compatibility risks
     let mut extension_mismatch = false;
     let mut real_extension_suggestion = String::new();
     let mut apple_warning = String::new();
 
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
-        // 定义各格式的标准扩展名池
+        // Define standard extension pools for each format
         let (is_valid, suggested) = match format {
             ImageFormat::Jpeg => (
                 ["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), 
@@ -162,23 +162,23 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
                 ext_str == "avif", 
                 "avif"
             ),
-            _ => (true, ""), // 其他格式暂不做严格检查
+            _ => (true, ""), // Other formats: skip strict check for now
         };
 
         if !is_valid && !suggested.is_empty() {
              extension_mismatch = true;
              real_extension_suggestion = suggested.to_string();
              
-             // 仅在控制台输出友好的处理日志
+             // Output friendly processing log to console only
              eprintln!(
-                 "⚠️  [智能修正] 扩展名不匹配: '{}' (伪装为 .{}) -> 实际为 {}, 将按实际格式处理", 
+                 "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format", 
                  path.display(), 
                  ext_str, 
                  format_str
              );
              
              apple_warning = format!(
-                 "⚠️ 扩展名与内容不符 (.{} vs {})。这会导致 Apple 相册无法导入。建议运行 repair_apple_photos.sh 修复。",
+                 "⚠️ Extension mismatch (.{} vs {})。This will prevent Apple Photos import. Run repair_apple_photos.sh to fix.",
                  ext_str, format_str
              );
         }
