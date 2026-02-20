@@ -26,7 +26,7 @@ echo ""
 
 # Use a more reliable file iteration method
 find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" 2>/dev/null | while IFS= read -r file; do
-    if exiftool -validate "$file" 2>&1 | grep -q "Corrupted Brotli"; then
+    if exiftool -validate -warning "$file" 2>&1 | grep -q "Corrupted Brotli"; then
         ((total++))
         filename=$(basename "$file")
         echo "📦 $filename"
@@ -54,7 +54,7 @@ find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -
             [[ "$btime" != "0" ]] && SetFile -d "$(date -r "$btime" +%m/%d/%Y\ %H:%M:%S)" "$file" 2>/dev/null || true
             
             # Verify
-            if exiftool -validate "$file" 2>&1 | grep -q "Corrupted Brotli"; then
+            if exiftool -validate -warning "$file" 2>&1 | grep -q "Corrupted Brotli"; then
                 echo "   ❌ Failed, restored backup"
                 cp -p "$backup" "$file"
                 ((failed++))
