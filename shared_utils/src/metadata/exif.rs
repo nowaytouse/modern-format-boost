@@ -181,50 +181,112 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
-    // 🔥 v8.2: 结构性强制修复 (Structural Repair)
-    // 对于 JPEG，如果开启了苹果兼容模式，先尝试用 magick 重建结构
-    if apple_compat && (ext == "jpg" || ext == "jpeg") {
-        let _ = Command::new("magick")
-            .arg(dst)
-            .arg(dst) // 原地重写结构
-            .output();
-    }
+    // 🔥 v8.2.2: 按需结构修复 (On-Demand Structural Repair)
+    // 只在 exiftool 检测到元数据损坏/不兼容时才执行 magick 修复
+    // 不对每个文件都执行，避免不必要的重编码和质量损失
+    // 
+    // 流程：
+    // 1. 先尝试正常 exiftool 元数据复制
+    // 2. 如果 exiftool 失败（检测到损坏/不兼容）
+    // 3. 才执行 magick 结构修复
+    // 4. 修复后重试 exiftool
+    //
+    // 注意：smart_file_copier 已经修正了扩展名，所以这里 ext 应该匹配内容
 
-    let mut output = Command::new("exiftool");
-    if is_nuclear_format && apple_compat {
-        output
-            .arg("-all=") // Nuclear clear (Standardizes format)
-            .arg("-tagsfromfile")
-            .arg("@") // Restore from self first
-            .arg("-all:all")
-            .arg("-unsafe")
-            .arg("-icc_profile")
-            .arg("-tagsfromfile")
-            .arg(src) // Then copy from source
-            .arg("-all:all")
-            .arg("-unsafe")
-            .arg("-icc_profile");
-    } else {
-        output
-            .arg("-tagsfromfile")
-            .arg(src) // Then copy from source
-            .arg("-all:all")
-            .arg("-ICC_Profile<ICC_Profile"); // Keep ICC explicit for safety
-    }
-
-    let output = output
+    // 第一步：先尝试正常 exiftool 元数据复制（不执行核弹级重构）
+    let mut output = Command::new("exiftool")
+        .arg("-tagsfromfile")
+        .arg(src)
+        .arg("-all:all")
+        .arg("-ICC_Profile<ICC_Profile")
         .arg("-use")
-        .arg("MWG") // Metadata Working Group standard
+        .arg("MWG")
         .arg("-api")
         .arg("LargeFileSupport=1")
-        // 🔥 Remove -overwrite_original to ensure atomic safety during nuclear rebuild.
-        // If the process is killed during writing, the original data won't be lost.
-        // We will manually delete the _original backup if the command succeeds.
-        .arg("-q") // Quiet mode
-        .arg("-m") // Ignore minor errors (faster)
+        .arg("-q")
+        .arg("-m")
         .arg(dst)
         .output()?;
 
+    // 检查是否成功
+    let needs_repair = apple_compat && is_nuclear_format && {
+        if output.status.success() {
+            false // 成功，不需要修复
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // 检测常见的损坏/不兼容错误
+            let is_corrupt = stderr.contains("Error") || 
+                            stderr.contains("corrupt") || 
+                            stderr.contains("invalid") ||
+                            stderr.contains("truncated") ||
+                            stderr.contains("Not a valid");
+            
+            if is_corrupt {
+                eprintln!("⚠️  [结构修复] {} 检测到元数据损坏：{}", dst.display(), 
+                         stderr.lines().next().unwrap_or("unknown error"));
+            }
+            
+            is_corrupt
+        }
+    };
+
+    if needs_repair {
+        // 第二步：执行 magick 结构修复
+        eprintln!("🔧  [结构修复] 执行 ImageMagick 重建...");
+        
+        let magick_result = Command::new("magick")
+            .arg(dst)
+            .arg(dst) // 原地重写结构
+            .output();
+        
+        match magick_result {
+            Ok(out) => {
+                if out.status.success() {
+                    eprintln!("✅  [结构修复] 完成：{}", dst.display());
+                    
+                    // 第三步：修复后重试 exiftool（使用核弹级重构确保兼容性）
+                    output = Command::new("exiftool")
+                        .arg("-all=") // Nuclear clear
+                        .arg("-tagsfromfile")
+                        .arg("@")
+                        .arg("-all:all")
+                        .arg("-unsafe")
+                        .arg("-icc_profile")
+                        .arg("-tagsfromfile")
+                        .arg(src)
+                        .arg("-all:all")
+                        .arg("-unsafe")
+                        .arg("-icc_profile")
+                        .arg("-use")
+                        .arg("MWG")
+                        .arg("-api")
+                        .arg("LargeFileSupport=1")
+                        .arg("-q")
+                        .arg("-m")
+                        .arg(dst)
+                        .output()?;
+                } else {
+                    eprintln!("⚠️  [结构修复] magick 失败：{}", 
+                             String::from_utf8_lossy(&out.stderr));
+                    // magick 失败，返回原始 exiftool 错误
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.contains("Warning") {
+                        return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("⚠️  [结构修复] magick 不可用：{}", e);
+                // magick 不可用，返回原始 exiftool 错误
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.contains("Warning") {
+                    return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
+                }
+            }
+        }
+    }
+
+    // 检查最终结果
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Don't fail on minor warnings
