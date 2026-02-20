@@ -24,8 +24,9 @@ failed=0
 echo "🔍 Scanning for corrupted files..."
 echo ""
 
-# Use a more reliable file iteration method
-find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" 2>/dev/null | while IFS= read -r file; do
+# Use a more reliable file iteration method with process substitution
+# to ensure the variables total, fixed, failed are updated in the current shell
+while IFS= read -r file; do
     if exiftool -validate -warning "$file" 2>&1 | grep -q "Corrupted Brotli"; then
         ((total++))
         filename=$(basename "$file")
@@ -38,9 +39,11 @@ find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -
         mtime=$(stat -f%m "$file")
         btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
         
-        # Rebuild metadata with explicit DateCreated preservation
-        # Avoids -all:all to prevent Brotli re-compression, but preserves critical fields
-        if exiftool -all= -tagsfromfile @ -DateCreated -XMP:DateCreated -overwrite_original "$file" 2>/dev/null; then
+        # Rebuild metadata while preserving MAXIMUM original data (ExifTool FAQ #20)
+        # -all= clears everything, then we restore standard tags (-all:all),
+        # plus proprietary/unsafe tags (-unsafe) and color profiles (-icc_profile)
+        # This standardizes the metadata format and removes the Brotli corruption
+        if exiftool -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$file" 2>/dev/null; then
             backup="$BACKUP_DIR/$filename.backup"
             
             # Restore xattr
@@ -68,7 +71,7 @@ find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -
         fi
         echo ""
     fi
-done
+done < <(find "$TARGET_DIR" -type f -iname "*.jxl" ! -path "*/.brotli_exif_backups/*" ! -path "*/.jxl_container_backups/*" 2>/dev/null)
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📊 Summary"

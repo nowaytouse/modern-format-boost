@@ -176,16 +176,29 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
     // 🚀 Performance: Use minimal argument set
     // -all:all copies everything, individual date tags are redundant
+    // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20)
+    // This clears any existing corrupted/compressed block and rebuilds it cleanly.
+    // -all= clears everything, then we restore standard tags (-all:all),
+    // plus proprietary/unsafe tags (-unsafe) and color profiles (-icc_profile)
     let output = Command::new("exiftool")
+        .arg("-all=") // Nuclear clear (Standardizes format)
         .arg("-tagsfromfile")
-        .arg(src)
-        .arg("-all:all") // Copy all metadata
-        .arg("-ICC_Profile<ICC_Profile") // Ensure ICC is copied
+        .arg("@") // Restore from self first
+        .arg("-all:all")
+        .arg("-unsafe")
+        .arg("-icc_profile")
+        .arg("-tagsfromfile")
+        .arg(src) // Then copy from source
+        .arg("-all:all")
+        .arg("-unsafe")
+        .arg("-icc_profile")
         .arg("-use")
         .arg("MWG") // Metadata Working Group standard
         .arg("-api")
         .arg("LargeFileSupport=1")
-        .arg("-overwrite_original") // Don't create backup
+        // 🔥 Remove -overwrite_original to ensure atomic safety during nuclear rebuild.
+        // If the process is killed during writing, the original data won't be lost.
+        // We will manually delete the _original backup if the command succeeds.
         .arg("-q") // Quiet mode
         .arg("-m") // Ignore minor errors (faster)
         .arg(dst)
@@ -198,6 +211,12 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
             return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
         }
     }
+
+    // 🔥 Clean up the backup file created by ExifTool after successful operation
+    let mut backup_name = dst.file_name().unwrap_or_default().to_os_string();
+    backup_name.push("_original");
+    let backup_path = dst.with_file_name(backup_name);
+    let _ = std::fs::remove_file(&backup_path);
 
     // 🔥 视频文件特殊处理：修复 QuickTime 日期
     if is_video_file(dst) {
