@@ -83,11 +83,33 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
     // Check if HEIC - use libheif instead of image crate
     if is_heic_file(path) {
+        // 🔥 v8.1.5 [精致策略]: 智能诊断 HEIC 扩展名不匹配
+        if let Some(ext) = path.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            if !["heic", "heif", "hif"].contains(&ext_str.as_str()) {
+                eprintln!(
+                    "⚠️  [智能修正] 扩展名不匹配: '{}' (伪装为 .{}) -> 实际为 HEIC, 将按实际格式处理", 
+                    path.display(), 
+                    ext_str
+                );
+            }
+        }
         return analyze_heic_image(path, file_size);
     }
 
     // Check if JXL - image crate doesn't support JXL natively
     if is_jxl_file(path) {
+        // 🔥 v8.1.5 [精致策略]: 智能诊断 JXL 扩展名不匹配
+        if let Some(ext) = path.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            if ext_str != "jxl" {
+                eprintln!(
+                    "⚠️  [智能修正] 扩展名不匹配: '{}' (伪装为 .{}) -> 实际为 JXL, 将按实际格式处理", 
+                    path.display(), 
+                    ext_str
+                );
+            }
+        }
         return analyze_jxl_image(path, file_size);
     }
 
@@ -105,6 +127,62 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         ))
     })?;
     let format_str = format_to_string(&format);
+
+    // 🔥 v8.1 [精致策略]: 智能扩展名诊断与兼容性标记
+    // 不再粗暴报错，而是智能识别真实格式，并标记兼容性风险
+    let mut extension_mismatch = false;
+    let mut real_extension_suggestion = String::new();
+    let mut apple_warning = String::new();
+
+    if let Some(ext) = path.extension() {
+        let ext_str = ext.to_string_lossy().to_lowercase();
+        // 定义各格式的标准扩展名池
+        let (is_valid, suggested) = match format {
+            ImageFormat::Jpeg => (
+                ["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), 
+                "jpg"
+            ),
+            ImageFormat::Png => (
+                ext_str == "png", 
+                "png"
+            ),
+            ImageFormat::WebP => (
+                ext_str == "webp", 
+                "webp"
+            ),
+            ImageFormat::Gif => (
+                ext_str == "gif", 
+                "gif"
+            ),
+            ImageFormat::Tiff => (
+                ["tiff", "tif"].contains(&ext_str.as_str()), 
+                "tiff"
+            ),
+            ImageFormat::Avif => (
+                ext_str == "avif", 
+                "avif"
+            ),
+            _ => (true, ""), // 其他格式暂不做严格检查
+        };
+
+        if !is_valid && !suggested.is_empty() {
+             extension_mismatch = true;
+             real_extension_suggestion = suggested.to_string();
+             
+             // 仅在控制台输出友好的处理日志
+             eprintln!(
+                 "⚠️  [智能修正] 扩展名不匹配: '{}' (伪装为 .{}) -> 实际为 {}, 将按实际格式处理", 
+                 path.display(), 
+                 ext_str, 
+                 format_str
+             );
+             
+             apple_warning = format!(
+                 "⚠️ 扩展名与内容不符 (.{} vs {})。这会导致 Apple 相册无法导入。建议运行 repair_apple_photos.sh 修复。",
+                 ext_str, format_str
+             );
+        }
+    }
 
     let img = reader.decode()
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {}", e)))?;
@@ -145,7 +223,15 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     };
 
     // Extract metadata
-    let metadata = extract_metadata(path)?;
+    let mut metadata = extract_metadata(path)?;
+
+    // Add smart diagnostic metadata
+    if extension_mismatch {
+        metadata.insert("extension_mismatch".to_string(), "true".to_string());
+        metadata.insert("real_extension".to_string(), real_extension_suggestion.clone());
+        metadata.insert("apple_compatibility_warning".to_string(), apple_warning.clone());
+        metadata.insert("format_warning".to_string(), format!("Content is actually {}", format_str));
+    }
 
     // Get duration for animated images using ffprobe
     let duration_secs = if is_animated {

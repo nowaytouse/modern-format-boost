@@ -88,14 +88,36 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     Ok((img, analysis))
 }
 
-/// Check if file is HEIC/HEIF format
+/// Check if file is HEIC/HEIF format (Content-aware)
+/// 
+/// v8.1.1: Added magic byte detection to support files with incorrect extensions
 pub fn is_heic_file(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase());
+    // 1. Check extension (fast path)
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext = ext.to_lowercase();
+        if matches!(ext.as_str(), "heic" | "heif" | "hif") {
+            return true;
+        }
+    }
 
-    matches!(ext.as_deref(), Some("heic") | Some("heif") | Some("hif"))
+    // 2. Check magic bytes (content-aware fallback)
+    // HEIF files are ISO-BMFF containers starting with an 'ftyp' box.
+    if let Ok(mut file) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut buffer = [0u8; 12];
+        if file.read_exact(&mut buffer).is_ok() {
+            // Offset 4-7 is "ftyp"
+            if &buffer[4..8] == b"ftyp" {
+                let brand = &buffer[8..12];
+                // Common HEIC brands: heic, heix, heim, heis, mif1, msf1
+                if matches!(brand, b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1") {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
