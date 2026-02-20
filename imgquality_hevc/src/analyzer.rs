@@ -686,7 +686,8 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
 /// 🔥 v3.8: Enhanced with fallback mechanisms for better reliability
 /// - Primary: ffprobe with JSON format parsing
 /// - Fallback 1: ffprobe with default format
-/// - Fallback 2: Frame count analysis (for static GIFs)
+/// - Fallback 2: ImageMagick identify for WebP/GIF animation
+/// - Fallback 3: Frame count analysis (for static GIFs)
 fn get_animation_duration(path: &Path) -> Option<f32> {
     // Method 1: Try ffprobe with JSON format (most reliable)
     if let Some(duration) = try_ffprobe_json(path) {
@@ -698,7 +699,13 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         return Some(duration);
     }
 
-    // Method 3: For GIF files, check if it's actually animated
+    // Method 3: Try ImageMagick identify for WebP/GIF animation
+    // identify -format "%T" returns delay in centiseconds for each frame
+    if let Some(duration) = try_imagemagick_identify(path) {
+        return Some(duration);
+    }
+
+    // Method 4: For GIF files, check if it's actually animated
     // If it's a static GIF (1 frame), return a very small duration to indicate "static"
     if let Some(ext) = path.extension() {
         if ext.to_str().unwrap_or("").to_lowercase() == "gif" {
@@ -785,6 +792,49 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
 
     let duration_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
     duration_str.parse::<f32>().ok()
+}
+
+/// Try to get duration using ImageMagick identify command
+/// Works for WebP and GIF animations
+/// identify -format "%T" returns delay in centiseconds (1/100s) for each frame
+fn try_imagemagick_identify(path: &Path) -> Option<f32> {
+    use std::process::Command;
+
+    // Get all frame delays
+    let output = Command::new("identify")
+        .args(["-format", "%T\n"])
+        .arg(path.to_str().unwrap_or(""))
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut total_cs = 0u32; // Total centiseconds
+    let mut frame_count = 0u32;
+
+    for line in stdout.lines() {
+        if let Ok(delay_cs) = line.trim().parse::<u32>() {
+            total_cs += delay_cs;
+            frame_count += 1;
+        }
+    }
+
+    if frame_count == 0 {
+        return None;
+    }
+
+    // Convert centiseconds to seconds
+    let duration = total_cs as f32 / 100.0;
+    
+    eprintln!(
+        "📊 ImageMagick: WebP/GIF animation detected ({} frames, {} centiseconds = {:.2}s)",
+        frame_count, total_cs, duration
+    );
+    
+    Some(duration)
 }
 
 /// Try to get frame count using ffprobe (for static GIF detection)
