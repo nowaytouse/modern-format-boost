@@ -175,7 +175,7 @@ impl XmpMerger {
                 "-Source",
                 "-OriginalDocumentID",
             ])
-            .arg(xmp_path)
+            .arg(crate::safe_path_arg(xmp_path).as_ref())
             .output()
             .context("Failed to run exiftool")?;
 
@@ -366,7 +366,7 @@ impl XmpMerger {
             // Check if media file has SidecarForExtension or similar tag pointing to this XMP
             let output = Command::new("exiftool")
                 .args(["-s3", "-SidecarForExtension", "-XMPFileRef"])
-                .arg(&path)
+                .arg(crate::safe_path_arg(&path).as_ref())
                 .output()
                 .ok()?;
 
@@ -510,7 +510,7 @@ impl XmpMerger {
             // Get DocumentID from media file
             let output = Command::new("exiftool")
                 .args(["-s3", "-DocumentID"])
-                .arg(&path)
+                .arg(crate::safe_path_arg(&path).as_ref())
                 .output()
                 .ok()?;
 
@@ -671,12 +671,12 @@ impl XmpMerger {
         }
 
         args.push("-tagsfromfile".to_string());
-        args.push(xmp_path.to_string_lossy().to_string());
+        args.push(crate::safe_path_arg(xmp_path).as_ref().to_string());
         args.push("-all:all".to_string());
 
         // Don't overwrite certain critical tags
         args.push("-FileModifyDate<FileModifyDate".to_string());
-        args.push(media_path.to_string_lossy().to_string());
+        args.push(crate::safe_path_arg(media_path).as_ref().to_string());
 
         let output = Command::new("exiftool")
             .args(&args)

@@ -61,3 +61,7 @@ proptest = "1.7"
 lto = true
 opt-level = 3
 codegen-units = 1
+
+[profile.dev]
+opt-level = 0
+# 调试时如需更快编译可设为 1：incremental = true 已默认

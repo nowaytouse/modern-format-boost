@@ -696,7 +696,7 @@ impl ExploreContext {
             .arg("-threads")
             .arg(self.max_threads.to_string())
             .arg("-i")
-            .arg(&self.input_path)
+            .arg(crate::safe_path_arg(&self.input_path).as_ref())
             .arg("-c:v")
             .arg(self.encoder.ffmpeg_name())
             .arg("-crf")
@@ -714,7 +714,7 @@ impl ExploreContext {
             cmd.arg(arg);
         }
 
-        cmd.arg(&self.output_path);
+        cmd.arg(crate::safe_path_arg(&self.output_path).as_ref());
 
         let output = cmd.output().context("Failed to run ffmpeg")?;
 
@@ -781,9 +781,9 @@ impl ExploreContext {
 
         let output = Command::new("ffmpeg")
             .arg("-i")
-            .arg(&self.input_path)
+            .arg(crate::safe_path_arg(&self.input_path).as_ref())
             .arg("-i")
-            .arg(&self.output_path)
+            .arg(crate::safe_path_arg(&self.output_path).as_ref())
             .arg("-lavfi")
             .arg(filter)
             .arg("-f")
@@ -848,9 +848,9 @@ impl ExploreContext {
 
         let output = Command::new("ffmpeg")
             .arg("-i")
-            .arg(&self.input_path)
+            .arg(crate::safe_path_arg(&self.input_path).as_ref())
             .arg("-i")
-            .arg(&self.output_path)
+            .arg(crate::safe_path_arg(&self.output_path).as_ref())
             .arg("-lavfi")
             .arg(filter)
             .arg("-f")

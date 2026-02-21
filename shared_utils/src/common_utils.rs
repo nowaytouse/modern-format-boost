@@ -42,6 +42,7 @@ use tracing::{debug, error, info};
 /// assert_eq!(get_extension_lowercase(Path::new("test.mp4")), "mp4");
 /// assert_eq!(get_extension_lowercase(Path::new("noext")), "");
 /// ```
+#[inline]
 pub fn get_extension_lowercase(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
@@ -68,9 +69,12 @@ pub fn get_extension_lowercase(path: &Path) -> String {
 /// assert!(has_extension(Path::new("image.png"), extensions));
 /// assert!(!has_extension(Path::new("video.mp4"), extensions));
 /// ```
+#[inline]
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
-    let ext = get_extension_lowercase(path);
-    extensions.contains(&ext.as_str())
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| extensions.iter().any(|ext| ext.eq_ignore_ascii_case(e)))
+        .unwrap_or(false)
 }
 
 /// 检查文件是否为隐藏文件（以点号开头）
@@ -90,6 +94,7 @@ pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
 /// assert!(is_hidden_file(Path::new(".gitignore")));
 /// assert!(!is_hidden_file(Path::new("normal.txt")));
 /// ```
+#[inline]
 pub fn is_hidden_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())

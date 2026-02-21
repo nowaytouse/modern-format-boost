@@ -1,19 +1,20 @@
-
-use std::path::Path;
 use std::borrow::Cow;
+use std::path::Path;
 
 /// Sanitizes a file path for command-line usage, specifically for tools like FFmpeg
 /// that do not support '--' as a delimiter.
 ///
 /// Ensures the path starts with either '/' (absolute) or './' (relative),
 /// preventing it from being misinterpreted as a flag if it starts with '-'.
+#[inline]
 pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     let s = path.to_string_lossy();
     if s.starts_with('-') {
-        // Prepend ./ to relative paths starting with -
-        Cow::Owned(format!("./{}", s))
+        let mut out = String::with_capacity(2 + s.len());
+        out.push_str("./");
+        out.push_str(&s);
+        Cow::Owned(out)
     } else {
-        // Absolute paths (/) or safe relative paths (parent/, file.txt) are fine
         s
     }
 }

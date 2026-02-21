@@ -3063,7 +3063,7 @@ impl VideoExplorer {
         cmd.arg("-threads")
             .arg(self.max_threads.to_string())
             .arg("-i")
-            .arg(&self.input_path)
+            .arg(crate::safe_path_arg(&self.input_path).as_ref())
             .arg("-c:v")
             .arg(encoder_name);
 
@@ -3099,7 +3099,7 @@ impl VideoExplorer {
             cmd.arg(arg);
         }
 
-        cmd.arg(&self.output_path);
+        cmd.arg(crate::safe_path_arg(&self.output_path).as_ref());
 
         // 🔥 v4.12: 修复管道死锁 - stderr 必须被消耗
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -3234,7 +3234,7 @@ impl VideoExplorer {
             .arg("format=duration")
             .arg("-of")
             .arg("default=noprint_wrappers=1:nokey=1")
-            .arg(&self.input_path)
+            .arg(crate::safe_path_arg(&self.input_path).as_ref())
             .output()
             .ok()?;
 
@@ -4823,7 +4823,7 @@ pub mod precheck {
                 "default=noprint_wrappers=1:nokey=1",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output()
             .context("ffprobe执行失败 - 获取codec")?;
 
@@ -4856,7 +4856,7 @@ pub mod precheck {
                 "default=noprint_wrappers=1:nokey=1",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output()
             .context("ffprobe执行失败 - 获取bitrate")?;
 
@@ -4903,7 +4903,7 @@ pub mod precheck {
                 "json",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output()
             .context("ffprobe执行失败")?;
 
@@ -5002,7 +5002,7 @@ pub mod precheck {
                 "csv=p=0",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output();
 
         if let Ok(output) = output {
@@ -5062,7 +5062,7 @@ pub mod precheck {
                 "csv=p=0",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output()
             .context("ffprobe执行失败")?;
 
@@ -5917,18 +5917,22 @@ pub mod dynamic_mapping {
                     .tempfile()
                     .context("Failed to create temp file")?;
                 let temp_input = temp_input_file.path().to_path_buf();
+                // 🔥 强制偶数宽高，避免 pipe 输出时维度变化导致 x265 Broken pipe。
+                // -an 仅用于本段「校准用」临时 Y4M 抽取（Y4M 本身无音轨）；最终成片由后续 encode 生成，音轨由 -c:a 策略保留，不受此处影响。
                 let extract_result = Command::new("ffmpeg")
                     .arg("-y")
                     .arg("-t")
                     .arg(format!("{}", sample_duration.min(10.0)))
                     .arg("-i")
-                    // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
                     .arg(crate::safe_path_arg(input).as_ref())
+                    .arg("-an")
+                    .arg("-vf")
+                    .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos")
                     .arg("-f")
                     .arg("yuv4mpegpipe")
                     .arg("-pix_fmt")
                     .arg("yuv420p")
-                    .arg(&temp_input)
+                    .arg(crate::safe_path_arg(&temp_input).as_ref())
                     .output();
 
                 match extract_result {
@@ -5939,8 +5943,9 @@ pub mod dynamic_mapping {
                             "   ❌ Failed to extract input sample for CRF {:.1}",
                             anchor_crf
                         );
-                        if stderr.contains("Invalid") {
-                            eprintln!("      Cause: Invalid input file or parameters");
+                        eprintln!("   FFmpeg stderr (full):");
+                        for line in stderr.lines() {
+                            eprintln!("      {}", line);
                         }
                         let _ = fs::remove_file(&temp_gpu);
                         continue;
@@ -6195,7 +6200,7 @@ pub fn explore_with_gpu_coarse_search(
                     "default=noprint_wrappers=1:nokey=1",
                     "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
                 ])
-                .arg(input)
+                .arg(crate::safe_path_arg(input).as_ref())
                 .output();
             duration_output
                 .ok()
@@ -6520,36 +6525,20 @@ pub fn explore_with_gpu_coarse_search(
         let should_run_vmaf = !is_gif_format && (duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long);
 
         if is_gif_format {
-            // 🔥 v7.9.1: GIF 格式专用路径 - 只使用 SSIM All
-            eprintln!("   ⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
-            eprintln!("   🎯 Using SSIM-only verification (compatible with GIF)...");
-
-            let quality_target = result.actual_min_ssim.max(0.90);
-
-            if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
-                eprintln!("   📊 SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);
-
-                if all < quality_target {
-                    eprintln!("   ❌ SSIM ALL BELOW TARGET! {:.4} < {:.2}", all, quality_target);
-                    result.ms_ssim_passed = Some(false);
-                    result.ms_ssim_score = Some(all);
-                } else {
-                    eprintln!("   ✅ SSIM ALL TARGET MET: {:.4} ≥ {:.2}", all, quality_target);
-                    result.ms_ssim_passed = Some(true);
-                    result.ms_ssim_score = Some(all);
-                }
-            } else {
-                // GIF 的 SSIM All 也失败了
-                eprintln!("   ⚠️  SSIM calculation failed for GIF");
-                eprintln!("   📊 Using explore SSIM as fallback: {}", result.ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string()));
-                if let Some(ssim) = result.ssim {
-                    result.ms_ssim_passed = Some(ssim >= quality_target);
-                    result.ms_ssim_score = Some(ssim);
-                } else {
-                    result.ms_ssim_passed = None;
-                    result.ms_ssim_score = None;
-                }
+            // GIF 不支持 MS-SSIM；不静默降级，失败即响亮报错；无遗漏：同步写入 result.log 以便输出到相邻目录时日志完整
+            let gif_err_lines = [
+                "   ════════════════════════════════════════════════════",
+                "   ❌ ERROR: GIF format does not support MS-SSIM quality verification.",
+                "   ❌ Palette-based formats are not supported for this check.",
+                "   ❌ Refusing to use SSIM-only/explore-SSIM fallback (would be false success).",
+                "   ════════════════════════════════════════════════════",
+            ];
+            for line in &gif_err_lines {
+                eprintln!("{}", line);
+                result.log.push((*line).to_string());
             }
+            result.ms_ssim_passed = Some(false);
+            result.ms_ssim_score = None;
         } else if should_run_vmaf {
             // 短视频（≤5分钟）或强制启用，开启精确验证
             eprintln!("   ✅ Short video detected (≤5min)");
@@ -6890,7 +6879,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 "default=noprint_wrappers=1:nokey=1",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output();
         duration_output
             .ok()
@@ -7053,7 +7042,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 cmd.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
             }
         }
-        cmd.arg(output);
+        cmd.arg(crate::safe_path_arg(output).as_ref());
 
         cmd.stdout(Stdio::piped());
         // 🔥 v6.9: 改进错误处理 - 使用临时文件捕获stderr，避免死锁同时保留错误信息
@@ -7259,9 +7248,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         for filter in &filters {
             let ssim_output = std::process::Command::new("ffmpeg")
                 .arg("-i")
-                .arg(input)
+                .arg(crate::safe_path_arg(input).as_ref())
                 .arg("-i")
-                .arg(output)
+                .arg(crate::safe_path_arg(output).as_ref())
                 .arg("-lavfi")
                 .arg(filter)
                 .arg("-f")
@@ -7825,11 +7814,11 @@ fn cpu_fine_tune_from_gpu_boundary(
             eprintln!();
             eprintln!("📍 Phase 3: Search DOWNWARD with marginal benefit analysis");
 
-            let compress_point = best_crf.unwrap();
+            let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
             let mut test_crf = compress_point - step_size;
             let mut consecutive_failures = 0u32;
             let mut prev_ssim_opt = best_ssim_tracked; // 🔥 v5.70: 使用Option，不用默认值
-            let mut prev_size = best_size.unwrap();
+            let mut prev_size = best_size.unwrap_or(0);
 
             while test_crf >= min_crf && iterations < max_iterations_for_video {
                 // 🔥 v6.5: CrfCache 直接用 crf 作为 key
@@ -8110,9 +8099,9 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     for (name, filter) in filters {
         let result = Command::new("ffmpeg")
             .arg("-i")
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .arg("-i")
-            .arg(output)
+            .arg(crate::safe_path_arg(output).as_ref())
             .arg("-lavfi")
             .arg(*filter)
             .arg("-f")
@@ -8241,12 +8230,11 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
     use chrono::Local;
     use std::thread;
 
-    // 🔥 v7.8: 检查文件格式兼容性
+    // 🔥 v7.8: GIF 不支持 MS-SSIM，不提供静默降级
     if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
         let ext_lower = ext.to_lowercase();
         if matches!(ext_lower.as_str(), "gif") {
-            eprintln!("   ⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
-            eprintln!("   📊 Using SSIM-only verification (compatible with GIF)");
+            eprintln!("   ❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback.");
             return None;
         }
     }
@@ -8424,9 +8412,9 @@ fn calculate_ms_ssim_channel_sampled(
     let result = Command::new("ffmpeg")
         .arg("-i")
         // .arg("--") // 🔥 v7.9: ffmpeg does not support '--' as delimiter
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-i")
-        .arg(output)
+        .arg(crate::safe_path_arg(output).as_ref())
         .arg("-filter_complex")
         .arg(&filter)
         .arg("-f")

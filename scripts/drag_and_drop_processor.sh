@@ -247,7 +247,7 @@ create_directory_structure() {
 # 📊 Stats
 count_files() {
     draw_separator "Scanning Content"
-    printf "${DIM}   Analyzing directory structure...${RESET}\r"
+    printf "${DIM}   Analyzing directory structure...${RESET}\n"
     
     TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" | wc -l | tr -d ' ')
     IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" \) | wc -l | tr -d ' ')

@@ -225,7 +225,25 @@ where
         }
     }
 
-    let result = converter(input)?;
+    // 🔥 无遗漏设计：不论成功、跳过还是报错，有 output 时最终目录都要有对应文件；报错时先复制原文件再返回 Err
+    let result = match converter(input) {
+        Ok(r) => r,
+        Err(e) => {
+            if let Some(ref output_dir) = config.output {
+                if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                    input,
+                    Some(output_dir),
+                    config.base_dir.as_deref(),
+                    true,
+                ) {
+                    error!("❌ Failed to copy original to output dir: {}", copy_err);
+                } else {
+                    info!("📋 Copied original to output (conversion failed): {}", input.display());
+                }
+            }
+            return Err(e.into());
+        }
+    };
 
     info!("");
     info!("📊 Conversion Summary:");

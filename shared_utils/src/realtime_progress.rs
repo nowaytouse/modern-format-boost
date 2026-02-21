@@ -550,7 +550,7 @@ impl DetailedProgressState {
             .unwrap_or_else(|| "---".to_string());
 
         let trend_indicator = if self.ssim_trend.len() >= 2 {
-            let last = self.ssim_trend.last().unwrap();
+            let last = self.ssim_trend.last().expect("len >= 2");
             let prev = self.ssim_trend[self.ssim_trend.len() - 2];
             if *last > prev {
                 "↑"
