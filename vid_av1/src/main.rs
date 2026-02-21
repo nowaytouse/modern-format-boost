@@ -95,6 +95,10 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         allow_size_tolerance: bool,
 
+        /// Disable 1% size tolerance
+        #[arg(long)]
+        no_allow_size_tolerance: bool,
+
         /// Verbose output (show skipped files and success messages)
         #[arg(short, long)]
         verbose: bool,
@@ -175,6 +179,7 @@ fn main() -> anyhow::Result<()> {
             cpu,
             base_dir,
             allow_size_tolerance,
+            no_allow_size_tolerance,
             verbose,
         } => {
             // Determine base directory
@@ -221,7 +226,7 @@ fn main() -> anyhow::Result<()> {
                 ultimate_mode: false,
                 // 🔥 v7.9: Pass down thread limit
                 child_threads: thread_config.child_threads,
-                allow_size_tolerance,
+                allow_size_tolerance: allow_size_tolerance && !no_allow_size_tolerance,
                 verbose,
             };
 
