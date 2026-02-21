@@ -1,7 +1,7 @@
 //! FFprobe wrapper module
 //!
 //! Shared FFprobe functionality for video analysis.
-//! Used by vidquality and vidquality-hevc.
+//! Used by vidquality and vid-hevc.
 
 use serde::{Deserialize, Serialize};
 use std::io;

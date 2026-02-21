@@ -1,54 +1,23 @@
-//! Flag 组合验证器 - 统一的 flag 组合验证逻辑
+//! Flag 组合验证器 - 简化逻辑，仅支持推荐组合
 //!
-//! 🔥 v4.6: 模块化设计，避免四个工具重复代码
-//! 🔥 v6.2: 添加 --ultimate flag 验证
-//!
-//! ## 有效组合
-//! 1. `--compress` 单独：只要输出 < 输入（哪怕 1KB）
-//! 2. `--explore` 单独：寻找尽可能更小的输出
-//! 3. `--match-quality` 单独：粗略 SSIM 验证
-//! 4. `--compress --match-quality`：输出 < 输入 + 粗略 SSIM 验证
-//! 5. `--explore --match-quality`：精确质量匹配（最高 SSIM，不在乎大小）
-//! 6. `--explore --match-quality --compress`：精确质量匹配 + 必须压缩
-//! 7. `--explore --match-quality --compress --ultimate`：极限探索模式（SSIM 饱和）
-//!
-//! ## 无效组合（响亮报错）
-//! - `--explore --compress`（没有 `--match-quality`）
-//! - `--ultimate` 单独使用或与其他非完整组合
+//! 有效组合仅一种（均为默认开启）：
+//! - `explore + match_quality + compress`（可选 `--ultimate`）
+//! 其他组合一律 Invalid，不再兼容老旧单独/部分组合。
 
 use std::fmt;
 
-/// Flag 组合模式
+/// Flag 组合模式（简化后仅两种有效）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlagMode {
-    /// 默认模式：无特殊 flag
-    Default,
-    /// `--compress` 单独：只要输出 < 输入
-    CompressOnly,
-    /// `--explore` 单独：寻找尽可能更小的输出
-    ExploreOnly,
-    /// `--match-quality` 单独：粗略 SSIM 验证
-    QualityOnly,
-    /// `--compress --match-quality`：输出 < 输入 + 粗略 SSIM 验证
-    CompressWithQuality,
-    /// `--explore --match-quality`：精确质量匹配（最高 SSIM）
-    PreciseQuality,
-    /// `--explore --match-quality --compress`：精确质量匹配 + 必须压缩
+    /// 推荐模式：explore + match_quality + compress
     PreciseQualityWithCompress,
-    /// 🔥 v6.2: `--explore --match-quality --compress --ultimate`：极限探索模式
-    /// 持续搜索直到 SSIM 完全饱和（领域墙）
+    /// 极限探索：上述 + --ultimate（SSIM 饱和）
     UltimateExplore,
 }
 
 impl fmt::Display for FlagMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlagMode::Default => write!(f, "Default"),
-            FlagMode::CompressOnly => write!(f, "--compress"),
-            FlagMode::ExploreOnly => write!(f, "--explore"),
-            FlagMode::QualityOnly => write!(f, "--match-quality"),
-            FlagMode::CompressWithQuality => write!(f, "--compress --match-quality"),
-            FlagMode::PreciseQuality => write!(f, "--explore --match-quality"),
             FlagMode::PreciseQualityWithCompress => {
                 write!(f, "--explore --match-quality --compress")
             }
@@ -63,12 +32,6 @@ impl FlagMode {
     /// 获取模式的中文描述
     pub fn description_cn(&self) -> &'static str {
         match self {
-            FlagMode::Default => "默认模式",
-            FlagMode::CompressOnly => "仅压缩（输出小于输入）",
-            FlagMode::ExploreOnly => "探索最小输出",
-            FlagMode::QualityOnly => "粗略质量匹配",
-            FlagMode::CompressWithQuality => "压缩+粗略质量验证",
-            FlagMode::PreciseQuality => "精确质量匹配（最高SSIM）",
             FlagMode::PreciseQualityWithCompress => "精确质量匹配+必须压缩",
             FlagMode::UltimateExplore => "🔥 极限探索（SSIM饱和）",
         }
@@ -77,18 +40,12 @@ impl FlagMode {
     /// 获取模式的英文描述
     pub fn description_en(&self) -> &'static str {
         match self {
-            FlagMode::Default => "Default mode",
-            FlagMode::CompressOnly => "Compress only (output < input)",
-            FlagMode::ExploreOnly => "Find smallest output",
-            FlagMode::QualityOnly => "Basic quality match",
-            FlagMode::CompressWithQuality => "Compress + basic SSIM validation",
-            FlagMode::PreciseQuality => "Precise quality match (highest SSIM)",
             FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
             FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation)",
         }
     }
 
-    /// 🔥 v6.2: 是否为极限探索模式
+    /// 是否为极限探索模式
     pub fn is_ultimate(&self) -> bool {
         matches!(self, FlagMode::UltimateExplore)
     }
@@ -103,104 +60,32 @@ pub enum FlagValidation {
     Invalid(String),
 }
 
-/// 验证 flag 组合（不含 ultimate）
-///
-/// # Arguments
-/// * `explore` - `--explore` flag
-/// * `match_quality` - `--match-quality` flag
-/// * `compress` - `--compress` flag
-///
-/// # Returns
-/// * `FlagValidation::Valid(mode)` - 有效组合及其模式
-/// * `FlagValidation::Invalid(error)` - 无效组合及错误信息
-///
-/// # Example
-/// ```
-/// use shared_utils::flag_validator::{validate_flags, FlagValidation, FlagMode};
-///
-/// match validate_flags(true, true, false) {
-///     FlagValidation::Valid(mode) => println!("Mode: {}", mode),
-///     FlagValidation::Invalid(err) => eprintln!("Error: {}", err),
-/// }
-/// ```
+/// 验证 flag 组合（不含 ultimate）。仅接受 explore && match_quality && compress。
 pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
     validate_flags_with_ultimate(explore, match_quality, compress, false)
 }
 
-/// 🔥 v6.2: 验证 flag 组合（含 ultimate）
-///
-/// # Arguments
-/// * `explore` - `--explore` flag
-/// * `match_quality` - `--match-quality` flag
-/// * `compress` - `--compress` flag
-/// * `ultimate` - `--ultimate` flag
-///
-/// # Returns
-/// * `FlagValidation::Valid(mode)` - 有效组合及其模式
-/// * `FlagValidation::Invalid(error)` - 无效组合及错误信息
-///
-/// # 🔥 --ultimate 使用规则
-/// `--ultimate` 只能与 `--explore --match-quality --compress` 组合使用！
-/// 其他任何组合都会响亮报错。
+/// 验证 flag 组合（含 ultimate）。仅接受推荐组合：explore + match_quality + compress（可选 ultimate）。
+/// 其他组合一律 Invalid，不再兼容老旧单独/部分组合。
 pub fn validate_flags_with_ultimate(
     explore: bool,
     match_quality: bool,
     compress: bool,
     ultimate: bool,
 ) -> FlagValidation {
-    // 🔥 v6.2: --ultimate 只能与 --explore --match-quality --compress 组合
+    if !explore || !match_quality || !compress {
+        return FlagValidation::Invalid(
+            "❌ Only the recommended flag combination is supported: explore + match-quality + compress (all on by default).\n\
+             💡 Omit flags to use defaults, or do not turn off explore/match-quality/compress.".to_string(),
+        );
+    }
     if ultimate {
-        if explore && match_quality && compress {
-            return FlagValidation::Valid(FlagMode::UltimateExplore);
-        } else {
-            return FlagValidation::Invalid(
-                "❌ Invalid flag combination: --ultimate can only be used with --explore --match-quality --compress!\n\
-                 💡 --ultimate is the ultimate exploration mode, searching continuously until SSIM is fully saturated\n\
-                 💡 Correct usage:\n\
-                    • --explore --match-quality --compress --ultimate\n\
-                 💡 --ultimate cannot be used alone or with other incomplete combinations".to_string()
-            );
-        }
+        return FlagValidation::Valid(FlagMode::UltimateExplore);
     }
-
-    match (explore, match_quality, compress) {
-        // 无效组合：--explore --compress（没有 --match-quality）
-        (true, false, true) => FlagValidation::Invalid(
-            "❌ Invalid flag combination: --explore --compress\n\
-             💡 --explore seeks minimal output, --compress just needs smaller output; goals conflict\n\
-             💡 Valid combinations:\n\
-                • --compress alone: Just output < input\n\
-                • --explore alone: Find the smallest possible output\n\
-                • --explore --match-quality --compress: Precise quality match + must compress"
-                .to_string(),
-        ),
-
-        // 有效组合 6: --explore --match-quality --compress
-        (true, true, true) => FlagValidation::Valid(FlagMode::PreciseQualityWithCompress),
-
-        // 有效组合 5: --explore --match-quality
-        (true, true, false) => FlagValidation::Valid(FlagMode::PreciseQuality),
-
-        // 有效组合 4: --compress --match-quality
-        (false, true, true) => FlagValidation::Valid(FlagMode::CompressWithQuality),
-
-        // 有效组合 3: --match-quality 单独
-        (false, true, false) => FlagValidation::Valid(FlagMode::QualityOnly),
-
-        // 有效组合 2: --explore 单独
-        (true, false, false) => FlagValidation::Valid(FlagMode::ExploreOnly),
-
-        // 有效组合 1: --compress 单独
-        (false, false, true) => FlagValidation::Valid(FlagMode::CompressOnly),
-
-        // 默认模式：无特殊 flag
-        (false, false, false) => FlagValidation::Valid(FlagMode::Default),
-    }
+    FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
 }
 
-/// 验证 flag 组合并返回 Result（不含 ultimate）
-///
-/// 便捷函数，直接返回 Result 类型，方便在 ? 操作符中使用
+/// 验证并返回 Result（不含 ultimate）
 pub fn validate_flags_result(
     explore: bool,
     match_quality: bool,
@@ -212,9 +97,7 @@ pub fn validate_flags_result(
     }
 }
 
-/// 🔥 v6.2: 验证 flag 组合并返回 Result（含 ultimate）
-///
-/// 便捷函数，直接返回 Result 类型，方便在 ? 操作符中使用
+/// 验证并返回 Result（含 ultimate）
 pub fn validate_flags_result_with_ultimate(
     explore: bool,
     match_quality: bool,
@@ -227,24 +110,12 @@ pub fn validate_flags_result_with_ultimate(
     }
 }
 
-/// 打印 flag 组合帮助信息
+/// 打印 flag 组合帮助信息（简化：仅推荐组合有效）
 pub fn print_flag_help() {
-    eprintln!("📋 Flag Combination Guide:");
-    eprintln!("   --compress              Just need output < input (even 1KB)");
-    eprintln!("   --explore               Find smallest possible output");
-    eprintln!("   --match-quality         Rough SSIM validation");
-    eprintln!("   --compress --match-quality");
-    eprintln!("                           Output < input + rough SSIM validation");
-    eprintln!("   --explore --match-quality");
-    eprintln!("                           Precise quality match (highest SSIM, ignore size)");
-    eprintln!("   --explore --match-quality --compress");
-    eprintln!("                           Precise quality match + must compress");
-    eprintln!("   --explore --match-quality --compress --ultimate");
-    eprintln!("                           🔥 Ultimate explore (search until SSIM saturates)");
-    eprintln!();
-    eprintln!("❌ Invalid combinations:");
-    eprintln!("   --explore --compress    Conflicting goals, please add --match-quality");
-    eprintln!("   --ultimate alone        Must use with --explore --match-quality --compress");
+    eprintln!("📋 Flag (simplified): Only the recommended combination is supported.");
+    eprintln!("   Default: explore + match-quality + compress (all on).");
+    eprintln!("   Optional: --ultimate for SSIM saturation search.");
+    eprintln!("   To disable optional features only: --no-apple-compat, --no-recursive, --no-allow-size-tolerance");
 }
 
 #[cfg(test)]
@@ -256,393 +127,47 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn test_valid_combinations() {
-        // 默认模式
-        assert!(matches!(
-            validate_flags(false, false, false),
-            FlagValidation::Valid(FlagMode::Default)
-        ));
-
-        // --compress 单独
-        assert!(matches!(
-            validate_flags(false, false, true),
-            FlagValidation::Valid(FlagMode::CompressOnly)
-        ));
-
-        // --explore 单独
-        assert!(matches!(
-            validate_flags(true, false, false),
-            FlagValidation::Valid(FlagMode::ExploreOnly)
-        ));
-
-        // --match-quality 单独
-        assert!(matches!(
-            validate_flags(false, true, false),
-            FlagValidation::Valid(FlagMode::QualityOnly)
-        ));
-
-        // --compress --match-quality
-        assert!(matches!(
-            validate_flags(false, true, true),
-            FlagValidation::Valid(FlagMode::CompressWithQuality)
-        ));
-
-        // --explore --match-quality
-        assert!(matches!(
-            validate_flags(true, true, false),
-            FlagValidation::Valid(FlagMode::PreciseQuality)
-        ));
-
-        // --explore --match-quality --compress
+    fn test_only_recommended_combination_valid() {
         assert!(matches!(
             validate_flags(true, true, true),
             FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
         ));
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // 无效组合测试
-    // ═══════════════════════════════════════════════════════════════
-
     #[test]
-    fn test_invalid_combination() {
-        // --explore --compress（无效）
-        assert!(matches!(
-            validate_flags(true, false, true),
-            FlagValidation::Invalid(_)
-        ));
+    fn test_any_other_combination_invalid() {
+        assert!(matches!(validate_flags(false, false, false), FlagValidation::Invalid(_)));
+        assert!(matches!(validate_flags(false, false, true), FlagValidation::Invalid(_)));
+        assert!(matches!(validate_flags(false, true, false), FlagValidation::Invalid(_)));
+        assert!(matches!(validate_flags(false, true, true), FlagValidation::Invalid(_)));
+        assert!(matches!(validate_flags(true, false, false), FlagValidation::Invalid(_)));
+        assert!(matches!(validate_flags(true, false, true), FlagValidation::Invalid(_)));
+        assert!(matches!(validate_flags(true, true, false), FlagValidation::Invalid(_)));
     }
 
     #[test]
-    fn test_invalid_combination_error_message() {
-        // 验证错误信息包含关键内容
-        if let FlagValidation::Invalid(err) = validate_flags(true, false, true) {
-            assert!(
-                err.contains("--explore --compress"),
-                "错误信息应包含无效组合"
-            );
-            assert!(
-                err.contains("goals conflict") || err.contains("conflict"),
-                "错误信息应说明冲突原因"
-            );
-            assert!(
-                err.contains("--match-quality"),
-                "错误信息应建议添加 --match-quality"
-            );
-        } else {
-            panic!("应该返回 Invalid");
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // Result API 测试
-    // ═══════════════════════════════════════════════════════════════
-
-    #[test]
-    fn test_validate_flags_result() {
-        assert!(validate_flags_result(true, true, false).is_ok());
-        assert!(validate_flags_result(true, false, true).is_err());
+    fn test_ultimate_valid_only_with_full_combination() {
+        let r = validate_flags_result_with_ultimate(true, true, true, true);
+        assert!(r.is_ok());
+        assert_eq!(r.unwrap(), FlagMode::UltimateExplore);
     }
 
     #[test]
-    fn test_validate_flags_result_all_combinations() {
-        // 所有 8 种组合的完整测试
-        let test_cases = [
-            // (explore, match_quality, compress, expected_ok)
-            (false, false, false, true), // Default
-            (false, false, true, true),  // CompressOnly
-            (false, true, false, true),  // QualityOnly
-            (false, true, true, true),   // CompressWithQuality
-            (true, false, false, true),  // ExploreOnly
-            (true, false, true, false),  // ❌ Invalid: explore + compress
-            (true, true, false, true),   // PreciseQuality
-            (true, true, true, true),    // PreciseQualityWithCompress
-        ];
-
-        for (explore, match_quality, compress, expected_ok) in test_cases {
-            let result = validate_flags_result(explore, match_quality, compress);
-            assert_eq!(
-                result.is_ok(),
-                expected_ok,
-                "validate_flags_result({}, {}, {}) should be {}",
-                explore,
-                match_quality,
-                compress,
-                if expected_ok { "Ok" } else { "Err" }
-            );
-        }
+    fn test_ultimate_invalid_with_incomplete() {
+        assert!(validate_flags_result_with_ultimate(false, false, false, true).is_err());
+        assert!(validate_flags_result_with_ultimate(true, true, false, true).is_err());
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // FlagMode 方法测试
-    // ═══════════════════════════════════════════════════════════════
-
     #[test]
-    fn test_flag_mode_display() {
-        assert_eq!(format!("{}", FlagMode::Default), "Default");
-        assert_eq!(format!("{}", FlagMode::CompressOnly), "--compress");
-        assert_eq!(format!("{}", FlagMode::ExploreOnly), "--explore");
-        assert_eq!(format!("{}", FlagMode::QualityOnly), "--match-quality");
-        assert_eq!(
-            format!("{}", FlagMode::CompressWithQuality),
-            "--compress --match-quality"
-        );
-        assert_eq!(
-            format!("{}", FlagMode::PreciseQuality),
-            "--explore --match-quality"
-        );
+    fn test_flag_mode_display_and_descriptions() {
         assert_eq!(
             format!("{}", FlagMode::PreciseQualityWithCompress),
             "--explore --match-quality --compress"
         );
-    }
-
-    #[test]
-    fn test_flag_mode_description_cn() {
-        // 确保所有模式都有中文描述
-        assert!(!FlagMode::Default.description_cn().is_empty());
-        assert!(!FlagMode::CompressOnly.description_cn().is_empty());
-        assert!(!FlagMode::ExploreOnly.description_cn().is_empty());
-        assert!(!FlagMode::QualityOnly.description_cn().is_empty());
-        assert!(!FlagMode::CompressWithQuality.description_cn().is_empty());
-        assert!(!FlagMode::PreciseQuality.description_cn().is_empty());
-        assert!(!FlagMode::PreciseQualityWithCompress
-            .description_cn()
-            .is_empty());
-
-        // 验证描述内容合理
-        assert!(FlagMode::CompressOnly.description_cn().contains("仅压缩"));
-        assert!(
-            FlagMode::ExploreOnly.description_cn().contains("探索")
-                || FlagMode::ExploreOnly.description_cn().contains("最小")
-        );
-        assert!(
-            FlagMode::PreciseQuality.description_cn().contains("精确")
-                || FlagMode::PreciseQuality.description_cn().contains("SSIM")
-        );
-    }
-
-    #[test]
-    fn test_flag_mode_description_en() {
-        // 确保所有模式都有英文描述
-        assert!(!FlagMode::Default.description_en().is_empty());
-        assert!(!FlagMode::CompressOnly.description_en().is_empty());
-        assert!(!FlagMode::ExploreOnly.description_en().is_empty());
-        assert!(!FlagMode::QualityOnly.description_en().is_empty());
-        assert!(!FlagMode::CompressWithQuality.description_en().is_empty());
-        assert!(!FlagMode::PreciseQuality.description_en().is_empty());
-        assert!(!FlagMode::PreciseQualityWithCompress
-            .description_en()
-            .is_empty());
-
-        // 验证描述内容合理
-        assert!(FlagMode::CompressOnly
-            .description_en()
-            .to_lowercase()
-            .contains("compress"));
-        assert!(
-            FlagMode::PreciseQuality
-                .description_en()
-                .to_lowercase()
-                .contains("precise")
-                || FlagMode::PreciseQuality
-                    .description_en()
-                    .to_lowercase()
-                    .contains("ssim")
-        );
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // 边缘案例测试
-    // ═══════════════════════════════════════════════════════════════
-
-    #[test]
-    fn test_flag_mode_equality() {
-        // 测试 FlagMode 的 PartialEq 实现
-        assert_eq!(FlagMode::Default, FlagMode::Default);
-        assert_ne!(FlagMode::Default, FlagMode::CompressOnly);
-        assert_ne!(FlagMode::ExploreOnly, FlagMode::CompressOnly);
-        assert_eq!(
-            FlagMode::PreciseQualityWithCompress,
-            FlagMode::PreciseQualityWithCompress
-        );
-    }
-
-    #[test]
-    fn test_flag_mode_clone() {
-        // 测试 FlagMode 的 Clone 实现
-        let mode = FlagMode::PreciseQuality;
-        let cloned = mode;
-        assert_eq!(mode, cloned);
-    }
-
-    #[test]
-    fn test_flag_mode_copy() {
-        // 测试 FlagMode 的 Copy 实现
-        let mode = FlagMode::CompressWithQuality;
-        let copied = mode; // Copy, not move
-        assert_eq!(mode, copied);
-    }
-
-    #[test]
-    fn test_flag_mode_debug() {
-        // 测试 FlagMode 的 Debug 实现
-        let debug_str = format!("{:?}", FlagMode::PreciseQualityWithCompress);
-        assert!(debug_str.contains("PreciseQualityWithCompress"));
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // 语义正确性测试
-    // ═══════════════════════════════════════════════════════════════
-
-    #[test]
-    fn test_semantic_compress_only_vs_explore_only() {
-        // --compress: 只要更小即可
-        // --explore: 寻找最小输出
-        // 两者语义不同，不应混淆
-        let compress = validate_flags_result(false, false, true).unwrap();
-        let explore = validate_flags_result(true, false, false).unwrap();
-
-        assert_ne!(
-            compress, explore,
-            "CompressOnly 和 ExploreOnly 应该是不同的模式"
-        );
-        assert_eq!(compress, FlagMode::CompressOnly);
-        assert_eq!(explore, FlagMode::ExploreOnly);
-    }
-
-    #[test]
-    fn test_semantic_quality_modes() {
-        // --match-quality: 粗略验证
-        // --explore --match-quality: 精确匹配
-        let basic = validate_flags_result(false, true, false).unwrap();
-        let precise = validate_flags_result(true, true, false).unwrap();
-
-        assert_ne!(
-            basic, precise,
-            "QualityOnly 和 PreciseQuality 应该是不同的模式"
-        );
-        assert_eq!(basic, FlagMode::QualityOnly);
-        assert_eq!(precise, FlagMode::PreciseQuality);
-    }
-
-    #[test]
-    fn test_semantic_compress_with_quality_vs_precise_with_compress() {
-        // --compress --match-quality: 压缩 + 粗略验证
-        // --explore --match-quality --compress: 精确匹配 + 必须压缩
-        let basic_compress = validate_flags_result(false, true, true).unwrap();
-        let precise_compress = validate_flags_result(true, true, true).unwrap();
-
-        assert_ne!(
-            basic_compress, precise_compress,
-            "CompressWithQuality 和 PreciseQualityWithCompress 应该是不同的模式"
-        );
-        assert_eq!(basic_compress, FlagMode::CompressWithQuality);
-        assert_eq!(precise_compress, FlagMode::PreciseQualityWithCompress);
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // 完整性测试 - 确保所有 8 种布尔组合都有处理
-    // ═══════════════════════════════════════════════════════════════
-
-    #[test]
-    fn test_all_boolean_combinations_handled() {
-        // 穷举所有 2^3 = 8 种组合，确保都有处理（不会 panic）
-        for explore in [false, true] {
-            for match_quality in [false, true] {
-                for compress in [false, true] {
-                    let result = validate_flags(explore, match_quality, compress);
-                    // 确保返回的是 Valid 或 Invalid，不会 panic
-                    match result {
-                        FlagValidation::Valid(_) => {}
-                        FlagValidation::Invalid(_) => {}
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_exactly_one_invalid_combination() {
-        // 确保只有一种无效组合：--explore --compress
-        let mut invalid_count = 0;
-        for explore in [false, true] {
-            for match_quality in [false, true] {
-                for compress in [false, true] {
-                    if let FlagValidation::Invalid(_) =
-                        validate_flags(explore, match_quality, compress)
-                    {
-                        invalid_count += 1;
-                        // 验证是正确的无效组合
-                        assert!(
-                            explore && !match_quality && compress,
-                            "唯一的无效组合应该是 explore=true, match_quality=false, compress=true"
-                        );
-                    }
-                }
-            }
-        }
-        assert_eq!(invalid_count, 1, "应该只有一种无效组合");
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // 🔥 v6.2: Ultimate 模式测试
-    // ═══════════════════════════════════════════════════════════════
-
-    #[test]
-    fn test_ultimate_valid_combination() {
-        // --ultimate 只能与 --explore --match-quality --compress 组合
-        let result = validate_flags_result_with_ultimate(true, true, true, true);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), FlagMode::UltimateExplore);
-    }
-
-    #[test]
-    fn test_ultimate_invalid_alone() {
-        // --ultimate 单独使用无效
-        let result = validate_flags_result_with_ultimate(false, false, false, true);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("--ultimate"));
-    }
-
-    #[test]
-    fn test_ultimate_invalid_partial_combination() {
-        // --ultimate 与不完整组合无效
-        // --explore --ultimate (缺少 --match-quality --compress)
-        assert!(validate_flags_result_with_ultimate(true, false, false, true).is_err());
-        // --match-quality --ultimate (缺少 --explore --compress)
-        assert!(validate_flags_result_with_ultimate(false, true, false, true).is_err());
-        // --compress --ultimate (缺少 --explore --match-quality)
-        assert!(validate_flags_result_with_ultimate(false, false, true, true).is_err());
-        // --explore --match-quality --ultimate (缺少 --compress)
-        assert!(validate_flags_result_with_ultimate(true, true, false, true).is_err());
-        // --explore --compress --ultimate (缺少 --match-quality)
-        assert!(validate_flags_result_with_ultimate(true, false, true, true).is_err());
-        // --match-quality --compress --ultimate (缺少 --explore)
-        assert!(validate_flags_result_with_ultimate(false, true, true, true).is_err());
-    }
-
-    #[test]
-    fn test_ultimate_mode_display() {
-        assert_eq!(
-            format!("{}", FlagMode::UltimateExplore),
-            "--explore --match-quality --compress --ultimate"
-        );
-    }
-
-    #[test]
-    fn test_ultimate_mode_description() {
+        assert!(FlagMode::PreciseQualityWithCompress.description_cn().contains("精确"));
         assert!(FlagMode::UltimateExplore.description_cn().contains("极限"));
-        assert!(FlagMode::UltimateExplore
-            .description_en()
-            .to_lowercase()
-            .contains("ultimate"));
-    }
-
-    #[test]
-    fn test_ultimate_is_ultimate() {
         assert!(FlagMode::UltimateExplore.is_ultimate());
         assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
-        assert!(!FlagMode::Default.is_ultimate());
     }
+
 }

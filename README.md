@@ -77,10 +77,10 @@ For advanced users:
 
 ```bash
 # Convert a folder to JXL (Images)
-./target/release/imgquality_av1 --input "/path/to/photos" --quality 100 --effort 7
+./target/release/img_av1 --input "/path/to/photos" --quality 100 --effort 7
 
 # Convert a folder to HEVC (Videos)
-./target/release/vidquality_hevc --input "/path/to/videos" --crf 18
+./target/release/vid_hevc --input "/path/to/videos" --crf 18
 ```
 
 ---
