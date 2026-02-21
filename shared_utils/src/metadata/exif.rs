@@ -86,10 +86,10 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
             if err_str.contains("Not a valid") || err_str.contains("looks more like") {
                 eprintln!("⚠️ Metadata preservation failed: {}", err_str);
                 eprintln!("⚠️ Attempting content-aware fallback...");
-                
+
                 let hint = crate::extract_suggested_extension(&err_str);
                 if let Some(ref h) = hint {
-                     eprintln!("💡 ExifTool suggests content is: {}", h);
+                    eprintln!("💡 ExifTool suggests content is: {}", h);
                 }
 
                 match preserve_internal_metadata_fallback(src, dst, hint.as_deref()) {
@@ -110,30 +110,45 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 /// Fallback strategy: Rename file to match its content and retry
-fn preserve_internal_metadata_fallback(src: &Path, dst: &Path, hint_ext: Option<&str>) -> io::Result<()> {
+fn preserve_internal_metadata_fallback(
+    src: &Path,
+    dst: &Path,
+    hint_ext: Option<&str>,
+) -> io::Result<()> {
     // 1. Detect real extension
     // Priority: Hint > Detection
     let detected_ext = if let Some(hint) = hint_ext {
         hint.to_string()
     } else {
         crate::common_utils::detect_real_extension(dst)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Cannot detect file content"))?
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "Cannot detect file content")
+            })?
             .to_string()
     };
-    
+
     let current_ext = crate::common_utils::get_extension_lowercase(dst);
-    
+
     // If extensions match, fallback is useless
     if detected_ext.eq_ignore_ascii_case(&current_ext) {
-        return Err(io::Error::other(format!("Extension matches content ({}), fallback skipped", detected_ext)));
+        return Err(io::Error::other(format!(
+            "Extension matches content ({}), fallback skipped",
+            detected_ext
+        )));
     }
 
-    eprintln!("⚠️ Temporary rename to .{} for metadata preservation...", detected_ext);
+    eprintln!(
+        "⚠️ Temporary rename to .{} for metadata preservation...",
+        detected_ext
+    );
 
     // 2. Temporary rename
     let temp_path = dst.with_extension(&detected_ext);
     if temp_path.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("Temporary fallback path exists: {}", temp_path.display())));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("Temporary fallback path exists: {}", temp_path.display()),
+        ));
     }
 
     std::fs::rename(dst, &temp_path)?;
@@ -143,7 +158,12 @@ fn preserve_internal_metadata_fallback(src: &Path, dst: &Path, hint_ext: Option<
 
     // 4. Restore filename (Critical! Must succeed regardless of metadata result)
     if let Err(e) = std::fs::rename(&temp_path, dst) {
-        eprintln!("❌ CRITICAL: Failed to restore filename from {} to {}: {}", temp_path.display(), dst.display(), e);
+        eprintln!(
+            "❌ CRITICAL: Failed to restore filename from {} to {}: {}",
+            temp_path.display(),
+            dst.display(),
+            e
+        );
         // 🔥 v8.2.4: Emergency recovery — try harder
         // If temp_path still exists but dst doesn't, the file is stranded
         if temp_path.exists() && !dst.exists() {
@@ -152,7 +172,10 @@ fn preserve_internal_metadata_fallback(src: &Path, dst: &Path, hint_ext: Option<
                 let _ = std::fs::remove_file(&temp_path);
                 eprintln!("   ✅ Emergency recovery succeeded");
             } else {
-                eprintln!("   ❌ Emergency recovery FAILED. File stranded at: {}", temp_path.display());
+                eprintln!(
+                    "   ❌ Emergency recovery FAILED. File stranded at: {}",
+                    temp_path.display()
+                );
             }
         }
         return Err(e);
@@ -175,14 +198,16 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20) ONLY when Apple Compatibility mode is active.
     // This clears any existing corrupted/compressed/incompatible blocks and rebuilds them cleanly.
     // 针对 JXL, JPEG, WEBP 开启核弹级重构以确保苹果设备兼容性。
-    let ext = dst.extension().map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
+    let ext = dst
+        .extension()
+        .map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
     let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
     // 🔥 v8.2.2: 按需Structural Repair (On-Demand Structural Repair)
     // 只在 exiftool detected metadata corruption/不兼容时才执行 magick 修复
     // 不对每个文件都执行，避免不必要的重编码和质量损失
-    // 
+    //
     // 流程：
     // 1. 先尝试正常 exiftool 元数据复制
     // 2. 如果 exiftool 失败（检测到损坏/不兼容）
@@ -215,17 +240,20 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             // 检测常见的损坏/不兼容错误
-            let is_corrupt = stderr.contains("Error") || 
-                            stderr.contains("corrupt") || 
-                            stderr.contains("invalid") ||
-                            stderr.contains("truncated") ||
-                            stderr.contains("Not a valid");
-            
+            let is_corrupt = stderr.contains("Error")
+                || stderr.contains("corrupt")
+                || stderr.contains("invalid")
+                || stderr.contains("truncated")
+                || stderr.contains("Not a valid");
+
             if is_corrupt {
-                eprintln!("⚠️  [Structural Repair] {} detected metadata corruption：{}", dst.display(), 
-                         stderr.lines().next().unwrap_or("unknown error"));
+                eprintln!(
+                    "⚠️  [Structural Repair] {} detected metadata corruption：{}",
+                    dst.display(),
+                    stderr.lines().next().unwrap_or("unknown error")
+                );
             }
-            
+
             is_corrupt
         }
     };
@@ -233,18 +261,18 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if needs_repair {
         // 第二步：执行 magick Structural Repair
         eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
-        
+
         let magick_result = Command::new("magick")
             .arg("--") // 防止 dash-prefix 文件名被解析为参数
             .arg(crate::safe_path_arg(dst).as_ref())
             .arg(crate::safe_path_arg(dst).as_ref()) // 原地重写结构
             .output();
-        
+
         match magick_result {
             Ok(out) => {
                 if out.status.success() {
                     eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
-                    
+
                     // 第三步：修复后重试 exiftool（使用核弹级重构确保兼容性）
                     output = Command::new("exiftool")
                         .arg("-all=") // Nuclear clear
@@ -267,8 +295,10 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg(crate::safe_path_arg(dst).as_ref())
                         .output()?;
                 } else {
-                    eprintln!("⚠️  [Structural Repair] magick failed：{}", 
-                             String::from_utf8_lossy(&out.stderr));
+                    eprintln!(
+                        "⚠️  [Structural Repair] magick failed：{}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
                     // magick failed，返回原始 exiftool 错误
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     if !stderr.contains("Warning") {
@@ -384,28 +414,27 @@ mod tests {
         let src_path = complex_dir.join("src_image.png");
         // 1x1 PNG data
         let png_data = [
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
-            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
-            0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
-            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-            0x44, 0xAE, 0x42, 0x60, 0x82
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
         fs::write(&src_path, png_data).unwrap();
-        
+
         // Create dst as PNG but named .jpeg
         let dst_path = complex_dir.join("dst_image.jpeg");
         fs::write(&dst_path, png_data).unwrap();
-        
+
         // Run preserve
         let result = preserve_internal_metadata(&src_path, &dst_path);
-        
+
         if let Err(e) = &result {
             println!("Test failed with error: {}", e);
         }
-        assert!(result.is_ok(), "Metadata preservation failed for mismatched extension with complex path");
+        assert!(
+            result.is_ok(),
+            "Metadata preservation failed for mismatched extension with complex path"
+        );
     }
 }

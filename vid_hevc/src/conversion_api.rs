@@ -141,8 +141,9 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     // 🔥 v7.9: Auto-calculate threads for simple mode (Video workload)
     let max_threads = shared_utils::thread_manager::get_balanced_thread_config(
-        shared_utils::thread_manager::WorkloadType::Video
-    ).child_threads;
+        shared_utils::thread_manager::WorkloadType::Video,
+    )
+    .child_threads;
 
     let output_size = execute_hevc_conversion(&detection, &output_path, 18, max_threads)?;
 
@@ -801,7 +802,11 @@ fn execute_hevc_conversion(
 }
 
 /// Execute HEVC lossless conversion (x265 lossless mode)
-fn execute_hevc_lossless(detection: &VideoDetectionResult, output: &Path, max_threads: usize) -> Result<u64> {
+fn execute_hevc_lossless(
+    detection: &VideoDetectionResult,
+    output: &Path,
+    max_threads: usize,
+) -> Result<u64> {
     warn!("⚠️  HEVC Lossless encoding - this will be slow and produce large files!");
 
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿

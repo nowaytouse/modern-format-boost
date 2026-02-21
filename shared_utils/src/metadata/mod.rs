@@ -22,7 +22,9 @@ pub use exif::preserve_internal_metadata;
 /// 唯一入口：将源文件的时间戳（atime/mtime，macOS 下含创建时间与 Date Added）应用到目标文件。
 /// 所有“按源文件恢复目标时间戳”的逻辑均经此函数，避免重复实现。
 fn apply_file_timestamps(src: &Path, dst: &Path) {
-    let Ok(m) = std::fs::metadata(src) else { return };
+    let Ok(m) = std::fs::metadata(src) else {
+        return;
+    };
     let atime = filetime::FileTime::from_last_access_time(&m);
     let mtime = filetime::FileTime::from_last_modification_time(&m);
     if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
@@ -62,7 +64,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
         }
         let _ = network::verify_network_metadata(src, dst);
         apply_file_timestamps(src, dst);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -208,7 +210,11 @@ pub fn preserve_directory_metadata_with_log(base_dir: &Path, output_dir: &Path) 
 
 /// 🔥 v8.2.5: 原地模式保存目录时间戳（用于处理结束后恢复）
 /// 处理会修改目录 mtime，需在结束后恢复以保留文件夹元数据
-pub fn save_directory_timestamps(dir: &Path) -> io::Result<std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>> {
+pub fn save_directory_timestamps(
+    dir: &Path,
+) -> io::Result<
+    std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+> {
     use std::collections::HashMap;
     let mut saved = HashMap::new();
     if dir.is_dir() {
@@ -223,11 +229,17 @@ pub fn save_directory_timestamps(dir: &Path) -> io::Result<std::collections::Has
 }
 
 /// 恢复已保存的目录时间戳
-pub fn restore_directory_timestamps(saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>) {
+pub fn restore_directory_timestamps(
+    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+) {
     for (path, (atime, mtime)) in saved {
         if path.exists() && path.is_dir() {
             if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
-                eprintln!("⚠️ Failed to restore directory timestamps for {}: {}", path.display(), e);
+                eprintln!(
+                    "⚠️ Failed to restore directory timestamps for {}: {}",
+                    path.display(),
+                    e
+                );
             }
         }
     }
@@ -245,7 +257,11 @@ pub fn apply_saved_timestamps_to_dst(
             let dst_path = dst_root.join(rel_path);
             if dst_path.exists() && dst_path.is_dir() {
                 if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
-                    eprintln!("⚠️ Failed to apply directory timestamps to {}: {}", dst_path.display(), e);
+                    eprintln!(
+                        "⚠️ Failed to apply directory timestamps to {}: {}",
+                        dst_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -259,7 +275,9 @@ fn copy_file_timestamps_only(src: &Path, dst: &Path) {
 
 /// 输出树中每个文件按相对路径在源树中找同名 stem 的源文件（尝试常见扩展名），并复制时间戳
 fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
-    const SOURCE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl"];
+    const SOURCE_EXTENSIONS: &[&str] = &[
+        "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl",
+    ];
     for entry in walkdir::WalkDir::new(dst_root)
         .follow_links(false)
         .into_iter()
@@ -302,7 +320,10 @@ pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) 
 
 fn collect_dir_timestamps(
     dir: &Path,
-    map: &mut std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+    map: &mut std::collections::HashMap<
+        std::path::PathBuf,
+        (filetime::FileTime, filetime::FileTime),
+    >,
 ) -> io::Result<()> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
@@ -413,9 +434,12 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
             if let Ok(entries) = std::fs::read_dir(parent) {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
-                    
+
                     // 必须是以 .xmp 结尾的文件
-                    if !path.extension().is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp")) {
+                    if !path
+                        .extension()
+                        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("xmp"))
+                    {
                         continue;
                     }
 
@@ -428,9 +452,14 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
                         // 1. 完全匹配 stem (忽略大小写): photo.xmp vs photo.jpg
                         // 2. 匹配双重扩展名 stem: photo.jpg.xmp vs photo.jpg
                         // 3. 匹配 Root Stem (终极回退): photo.jpg.xmp vs photo.png
-                        if xmp_stem == src_stem 
-                            || xmp_stem == format!("{}.{}", src_stem, src.extension().and_then(|e| e.to_str()).unwrap_or(""))
-                            || xmp_root_stem == src_root_stem 
+                        if xmp_stem == src_stem
+                            || xmp_stem
+                                == format!(
+                                    "{}.{}",
+                                    src_stem,
+                                    src.extension().and_then(|e| e.to_str()).unwrap_or("")
+                                )
+                            || xmp_root_stem == src_root_stem
                         {
                             return Some(path);
                         }

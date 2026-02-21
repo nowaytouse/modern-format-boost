@@ -88,8 +88,8 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if !["heic", "heif", "hif"].contains(&ext_str.as_str()) {
                 eprintln!(
-                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually HEIC, will process as actual format", 
-                    path.display(), 
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually HEIC, will process as actual format",
+                    path.display(),
                     ext_str
                 );
             }
@@ -104,8 +104,8 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str != "jxl" {
                 eprintln!(
-                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually JXL, will process as actual format", 
-                    path.display(), 
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually JXL, will process as actual format",
+                    path.display(),
                     ext_str
                 );
             }
@@ -138,53 +138,36 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         let ext_str = ext.to_string_lossy().to_lowercase();
         // Define standard extension pools for each format
         let (is_valid, suggested) = match format {
-            ImageFormat::Jpeg => (
-                ["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), 
-                "jpg"
-            ),
-            ImageFormat::Png => (
-                ext_str == "png", 
-                "png"
-            ),
-            ImageFormat::WebP => (
-                ext_str == "webp", 
-                "webp"
-            ),
-            ImageFormat::Gif => (
-                ext_str == "gif", 
-                "gif"
-            ),
-            ImageFormat::Tiff => (
-                ["tiff", "tif"].contains(&ext_str.as_str()), 
-                "tiff"
-            ),
-            ImageFormat::Avif => (
-                ext_str == "avif", 
-                "avif"
-            ),
+            ImageFormat::Jpeg => (["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), "jpg"),
+            ImageFormat::Png => (ext_str == "png", "png"),
+            ImageFormat::WebP => (ext_str == "webp", "webp"),
+            ImageFormat::Gif => (ext_str == "gif", "gif"),
+            ImageFormat::Tiff => (["tiff", "tif"].contains(&ext_str.as_str()), "tiff"),
+            ImageFormat::Avif => (ext_str == "avif", "avif"),
             _ => (true, ""), // Other formats: skip strict check for now
         };
 
         if !is_valid && !suggested.is_empty() {
-             extension_mismatch = true;
-             real_extension_suggestion = suggested.to_string();
-             
-             // Output friendly processing log to console only
-             eprintln!(
-                 "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format", 
-                 path.display(), 
-                 ext_str, 
+            extension_mismatch = true;
+            real_extension_suggestion = suggested.to_string();
+
+            // Output friendly processing log to console only
+            eprintln!(
+                 "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format",
+                 path.display(),
+                 ext_str,
                  format_str
              );
-             
-             apple_warning = format!(
+
+            apple_warning = format!(
                  "⚠️ Extension mismatch (.{} vs {})。This will prevent Apple Photos import. Run repair_apple_photos.sh to fix.",
                  ext_str, format_str
              );
         }
     }
 
-    let img = reader.decode()
+    let img = reader
+        .decode()
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {}", e)))?;
 
     // Get basic image properties
@@ -228,9 +211,18 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     // Add smart diagnostic metadata
     if extension_mismatch {
         metadata.insert("extension_mismatch".to_string(), "true".to_string());
-        metadata.insert("real_extension".to_string(), real_extension_suggestion.clone());
-        metadata.insert("apple_compatibility_warning".to_string(), apple_warning.clone());
-        metadata.insert("format_warning".to_string(), format!("Content is actually {}", format_str));
+        metadata.insert(
+            "real_extension".to_string(),
+            real_extension_suggestion.clone(),
+        );
+        metadata.insert(
+            "apple_compatibility_warning".to_string(),
+            apple_warning.clone(),
+        );
+        metadata.insert(
+            "format_warning".to_string(),
+            format!("Content is actually {}", format_str),
+        );
     }
 
     // Get duration for animated images using ffprobe
@@ -569,7 +561,7 @@ fn is_animated_format(path: &Path, format: &ImageFormat) -> Result<bool> {
 }
 
 /// Check if GIF is animated by properly parsing the GIF structure
-/// 
+///
 /// GIF structure:
 /// - Header (6 bytes): "GIF87a" or "GIF89a"
 /// - Logical Screen Descriptor (7 bytes)
@@ -584,32 +576,36 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let bytes = std::fs::read(path)?;
-    
+
     // Minimum valid GIF size: header(6) + LSD(7) + image descriptor(10) + trailer(1) = 24 bytes
     if bytes.len() < 24 {
         return Ok(false); // Too small to be valid GIF
     }
-    
+
     // Verify GIF header
     if &bytes[0..3] != b"GIF" {
         return Ok(false);
     }
-    
+
     // Parse GIF structure properly
     let mut pos = 6; // Skip header
-    
+
     // Skip Logical Screen Descriptor (7 bytes)
     if pos + 7 > bytes.len() {
         return Ok(false);
     }
     let packed = bytes[pos + 4];
     let has_gct = (packed & 0x80) != 0;
-    let gct_size = if has_gct { 3 * (1 << ((packed & 0x07) + 1)) } else { 0 };
+    let gct_size = if has_gct {
+        3 * (1 << ((packed & 0x07) + 1))
+    } else {
+        0
+    };
     pos += 7 + gct_size;
-    
+
     // Count actual image frames
     let mut frame_count = 0;
-    
+
     while pos < bytes.len() {
         match bytes[pos] {
             0x2C => {
@@ -618,22 +614,26 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
                 if frame_count > 1 {
                     return Ok(true); // Found multiple frames = animated
                 }
-                
+
                 // Skip Image Descriptor (10 bytes minimum)
                 if pos + 10 > bytes.len() {
                     break;
                 }
                 let img_packed = bytes[pos + 9];
                 let has_lct = (img_packed & 0x80) != 0;
-                let lct_size = if has_lct { 3 * (1 << ((img_packed & 0x07) + 1)) } else { 0 };
+                let lct_size = if has_lct {
+                    3 * (1 << ((img_packed & 0x07) + 1))
+                } else {
+                    0
+                };
                 pos += 10 + lct_size;
-                
+
                 // Skip LZW data
                 if pos >= bytes.len() {
                     break;
                 }
                 pos += 1; // LZW minimum code size
-                
+
                 // Skip sub-blocks
                 while pos < bytes.len() {
                     let block_size = bytes[pos] as usize;
@@ -650,7 +650,7 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
                     break;
                 }
                 pos += 2; // Skip extension introducer and label
-                
+
                 // Skip sub-blocks
                 while pos < bytes.len() {
                     let block_size = bytes[pos] as usize;
@@ -671,7 +671,7 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
             }
         }
     }
-    
+
     Ok(frame_count > 1)
 }
 
@@ -686,13 +686,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     use std::process::Command;
 
     let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-        ])
+        .args(["-v", "quiet", "-print_format", "json", "-show_format"])
         .arg(shared_utils::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
@@ -831,7 +825,9 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     // 🔥 使用 jxlinfo 获取 JXL 文件信息（比 djxl 更可靠）
     let (width, height, has_alpha, color_depth) = if which::which("jxlinfo").is_ok() {
-        let output = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
+        let output = Command::new("jxlinfo")
+            .arg(shared_utils::safe_path_arg(path).as_ref())
+            .output();
 
         if let Ok(out) = output {
             if out.status.success() {

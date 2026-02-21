@@ -80,7 +80,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
 }
 
 /// Check if file is HEIC/HEIF format (Content-aware)
-/// 
+///
 /// v8.1.1: Added magic byte detection to support files with incorrect extensions
 pub fn is_heic_file(path: &Path) -> bool {
     // 1. Check extension (fast path)
@@ -101,7 +101,10 @@ pub fn is_heic_file(path: &Path) -> bool {
             if &buffer[4..8] == b"ftyp" {
                 let brand = &buffer[8..12];
                 // Common HEIC brands: heic, heix, heim, heis, mif1, msf1
-                if matches!(brand, b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1") {
+                if matches!(
+                    brand,
+                    b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1"
+                ) {
                     return true;
                 }
             }

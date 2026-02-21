@@ -406,7 +406,11 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
 /// explore_smaller_size → 使用 shared_utils::explore_size_only
 ///
 /// Execute FFV1 conversion
-fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path, max_threads: usize) -> Result<u64> {
+fn execute_ffv1_conversion(
+    detection: &VideoDetectionResult,
+    output: &Path,
+    max_threads: usize,
+) -> Result<u64> {
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
     // let max_threads = shared_utils::thread_manager::get_ffmpeg_threads(); // Deprecated
     // max_threads passed in arguments
@@ -462,7 +466,12 @@ fn execute_ffv1_conversion(detection: &VideoDetectionResult, output: &Path, max_
 
 /// Execute AV1 conversion with specified CRF (using SVT-AV1 for better performance)
 #[allow(dead_code)]
-fn execute_av1_conversion(detection: &VideoDetectionResult, output: &Path, crf: u8, max_threads: usize) -> Result<u64> {
+fn execute_av1_conversion(
+    detection: &VideoDetectionResult,
+    output: &Path,
+    crf: u8,
+    max_threads: usize,
+) -> Result<u64> {
     // 使用 SVT-AV1 编码器 (libsvtav1) - 比 libaom-av1 快 10-20 倍
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
     // max_threads passed in arguments
@@ -517,7 +526,11 @@ fn execute_av1_conversion(detection: &VideoDetectionResult, output: &Path, crf: 
 }
 
 /// Execute mathematical lossless AV1 conversion using SVT-AV1 (⚠️ SLOW, huge files)
-fn execute_av1_lossless(detection: &VideoDetectionResult, output: &Path, max_threads: usize) -> Result<u64> {
+fn execute_av1_lossless(
+    detection: &VideoDetectionResult,
+    output: &Path,
+    max_threads: usize,
+) -> Result<u64> {
     warn!("⚠️  Mathematical lossless AV1 encoding (SVT-AV1) - this will be SLOW!");
 
     // SVT-AV1 无损模式: crf=0 + lossless=1

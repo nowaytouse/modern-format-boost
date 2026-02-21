@@ -20,7 +20,7 @@ pub struct JpegQualityAnalysis {
     pub is_standard_table: bool,
     /// Sum of squared errors for luminance table
     pub luminance_sse: f64,
-    /// Sum of squared errors for chrominance table  
+    /// Sum of squared errors for chrominance table
     pub chrominance_sse: Option<f64>,
     /// Luminance quality estimate
     pub luminance_quality: u8,

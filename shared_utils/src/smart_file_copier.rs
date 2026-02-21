@@ -14,36 +14,36 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// 🔥 v8.2.2: 检测文件的实际格式（通过魔法字节）
-/// 
+///
 /// 返回格式名称（小写），如 "jpeg", "png", "webp", "heic", "tiff" 等
 fn detect_content_format(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let mut buffer = [0u8; 24];
-    
+
     if file.read_exact(&mut buffer).is_err() {
         return None;
     }
-    
+
     // JPEG: FF D8 FF
     if buffer.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some("jpeg".to_string());
     }
-    
+
     // PNG: 89 50 4E 47 0D 0A 1A 0A
     if buffer.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return Some("png".to_string());
     }
-    
+
     // GIF: 47 49 46 38 39 61 (GIF89a) or 47 49 46 38 37 61 (GIF87a)
     if buffer.starts_with(&[0x47, 0x49, 0x46, 0x38]) {
         return Some("gif".to_string());
     }
-    
+
     // WebP: RIFF....WEBP
     if buffer.starts_with(&[0x52, 0x49, 0x46, 0x46]) && buffer[8..12] == [0x57, 0x45, 0x42, 0x50] {
         return Some("webp".to_string());
     }
-    
+
     // HEIC/HEIF: 00 00 00 18 66 74 79 70 (ftyp box)
     // Brands: heic, heix, heim, heis, mif1, msf1
     if buffer.len() >= 12 && buffer[4..8] == [0x66, 0x74, 0x79, 0x70] {
@@ -56,9 +56,11 @@ fn detect_content_format(path: &Path) -> Option<String> {
             return Some("avif".to_string());
         }
     }
-    
+
     // TIFF: II* (little-endian) or MM* (big-endian)
-    if buffer.starts_with(&[0x49, 0x49, 0x2A, 0x00]) || buffer.starts_with(&[0x4D, 0x4D, 0x00, 0x2A]) {
+    if buffer.starts_with(&[0x49, 0x49, 0x2A, 0x00])
+        || buffer.starts_with(&[0x4D, 0x4D, 0x00, 0x2A])
+    {
         return Some("tiff".to_string());
     }
 
@@ -68,25 +70,28 @@ fn detect_content_format(path: &Path) -> Option<String> {
     }
 
     // JXL container: 00 00 00 0C 4A 58 4C 20 0D 0A 87 0A
-    if buffer.starts_with(&[0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A]) {
+    if buffer.starts_with(&[
+        0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A,
+    ]) {
         return Some("jxl".to_string());
     }
-    
+
     None
 }
 
 /// 🔥 v8.2.2: 检查并修正文件扩展名以匹配实际内容
-/// 
+///
 /// 如果文件扩展名与实际内容格式不匹配，重命名文件为正确的扩展名
 /// 这对于处理"伪装"文件（如 HEIC 内容但 .jpeg 扩展名）很重要
-/// 
+///
 /// 返回：如果扩展名被修正，返回新路径；否则返回原路径
 pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
-    let current_ext = path.extension()
+    let current_ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    
+
     if let Some(content_format) = detect_content_format(path) {
         // 检查扩展名是否与内容匹配
         let is_mismatch = match content_format.as_str() {
@@ -100,7 +105,7 @@ pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
             "tiff" => !matches!(current_ext.as_str(), "tiff" | "tif"),
             _ => false,
         };
-        
+
         if is_mismatch {
             // Create new path
             let new_path = path.with_extension(&content_format);
@@ -119,25 +124,37 @@ pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
                     _ => false,
                 };
                 if !same_file {
-                    eprintln!("⚠️  [Extension Fix] SKIPPED: {} -> .{} (target {} already exists)",
-                        path.display(), content_format, new_path.display());
+                    eprintln!(
+                        "⚠️  [Extension Fix] SKIPPED: {} -> .{} (target {} already exists)",
+                        path.display(),
+                        content_format,
+                        new_path.display()
+                    );
                     return Ok(path.to_path_buf());
                 }
             }
 
-            eprintln!("⚠️  [Extension Fix] {} -> .{} (content does not match extension)",
-                     path.display(), content_format);
+            eprintln!(
+                "⚠️  [Extension Fix] {} -> .{} (content does not match extension)",
+                path.display(),
+                content_format
+            );
 
             // Rename file
-            fs::rename(path, &new_path)
-                .with_context(|| format!("Failed to rename {} to {}", path.display(), new_path.display()))?;
+            fs::rename(path, &new_path).with_context(|| {
+                format!(
+                    "Failed to rename {} to {}",
+                    path.display(),
+                    new_path.display()
+                )
+            })?;
 
             eprintln!("✅  [Extension Fix] Complete: {}", new_path.display());
 
             return Ok(new_path);
         }
     }
-    
+
     Ok(path.to_path_buf())
 }
 

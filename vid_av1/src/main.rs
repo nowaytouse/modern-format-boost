@@ -127,10 +127,8 @@ enum OutputFormat {
 
 fn main() -> anyhow::Result<()> {
     // 🔥 v7.8: 使用统一的日志系统
-    let _ = shared_utils::logging::init_logging(
-        "vid_av1",
-        shared_utils::logging::LogConfig::default(),
-    );
+    let _ =
+        shared_utils::logging::init_logging("vid_av1", shared_utils::logging::LogConfig::default());
 
     let cli = Cli::parse();
 

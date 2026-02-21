@@ -71,25 +71,25 @@ impl ThreadConfig {
 }
 
 /// Calculate optimal thread count based on system capabilities
-/// 
+///
 /// # Arguments
 /// * `config` - Thread configuration settings
-/// 
+///
 /// # Returns
 /// Optimal number of threads to use
 pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
     let cpu_count = num_cpus::get();
-    
+
     // Check for multi-instance mode
     let effective_percentage = if config.multi_instance_aware && is_multi_instance() {
         config.core_percentage / 2 // Halve resources in multi-instance mode
     } else {
         config.core_percentage
     };
-    
+
     // Calculate based on percentage
     let calculated = (cpu_count * effective_percentage / 100).max(1);
-    
+
     // Apply min/max bounds
     calculated.clamp(config.min_threads, config.max_threads)
 }
@@ -123,30 +123,30 @@ pub enum WorkloadType {
 /// Formula: parallel_tasks * child_threads <= total_available_cores
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
     let total_cores = num_cpus::get();
-    
+
     // Always leave some breathing room for the OS and UI
     // Reserve 20% of cores, minimum 1, maximum 2
     let reserved = (total_cores as f64 * 0.2).ceil() as usize;
     let reserved = reserved.clamp(1, 2);
-    
+
     let available_cores = total_cores.saturating_sub(reserved).max(1);
-    
+
     match workload {
         WorkloadType::Image => {
             // Image Mode: Favor parallelism (Width)
             // Goal: Run multiple cjxl instances, each using few threads.
             // This is usually faster for batch image processing.
-            
+
             // Allocate 2 threads per child process (sufficient for cjxl/image encoders)
             let child_threads = 2;
-            
+
             // Calculate how many parallel tasks fit
             let parallel_tasks = (available_cores / child_threads).max(1);
-            
+
             // Cap parallel tasks to avoid excessive IO/Context switching
             // On a 10-core machine: 8 available / 2 = 4 tasks.
             let parallel_tasks = parallel_tasks.clamp(1, 8);
-            
+
             ThreadAllocation {
                 parallel_tasks,
                 child_threads,
@@ -156,16 +156,16 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
             // Video Mode: Favor intensity (Depth)
             // Goal: Run few ffmpeg instances, each using many threads.
             // Video encoding scales well with threads.
-            
+
             // Limit parallel tasks to 1 or 2 to prevent thrashing
             let parallel_tasks = if available_cores >= 8 {
                 2 // enough room for 2 heavy tasks
             } else {
                 1 // focus on one task
             };
-            
+
             let child_threads = (available_cores / parallel_tasks).max(1);
-            
+
             ThreadAllocation {
                 parallel_tasks,
                 child_threads,
@@ -177,9 +177,9 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
 /// Get optimal threads for general processing (cached)
 pub fn get_optimal_threads() -> usize {
     *OPTIMAL_THREADS.get_or_init(|| {
-         // Default to conservative general usage if specific strategy isn't requested
-         // Use Image strategy as a balanced default
-         get_balanced_thread_config(WorkloadType::Image).parallel_tasks
+        // Default to conservative general usage if specific strategy isn't requested
+        // Use Image strategy as a balanced default
+        get_balanced_thread_config(WorkloadType::Image).parallel_tasks
     })
 }
 
@@ -194,7 +194,7 @@ pub fn is_multi_instance() -> bool {
     if std::env::var("MFB_MULTI_INSTANCE").is_ok() {
         return true;
     }
-    
+
     // Check atomic flag
     MULTI_INSTANCE_MODE.load(Ordering::Relaxed)
 }
@@ -210,25 +210,25 @@ pub fn disable_multi_instance_mode() {
 }
 
 /// Get the path to brew rsync if available
-/// 
+///
 /// Returns the path to the Homebrew-installed rsync (v3.4+) if available,
 /// otherwise returns the system rsync path
 pub fn get_rsync_path() -> &'static str {
     static RSYNC_PATH: OnceLock<String> = OnceLock::new();
-    
+
     RSYNC_PATH.get_or_init(|| {
         // Check for Homebrew rsync on Apple Silicon
         let brew_rsync = "/opt/homebrew/opt/rsync/bin/rsync";
         if std::path::Path::new(brew_rsync).exists() {
             return brew_rsync.to_string();
         }
-        
+
         // Check for Homebrew rsync on Intel Mac
         let intel_brew_rsync = "/usr/local/opt/rsync/bin/rsync";
         if std::path::Path::new(intel_brew_rsync).exists() {
             return intel_brew_rsync.to_string();
         }
-        
+
         // Fall back to system rsync
         "rsync".to_string()
     })
@@ -237,12 +237,12 @@ pub fn get_rsync_path() -> &'static str {
 /// Get rsync version info
 pub fn get_rsync_version() -> Option<String> {
     use std::process::Command;
-    
+
     let output = Command::new(get_rsync_path())
         .arg("--version")
         .output()
         .ok()?;
-    
+
     if output.status.success() {
         let version_line = String::from_utf8_lossy(&output.stdout)
             .lines()

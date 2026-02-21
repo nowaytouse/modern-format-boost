@@ -274,27 +274,21 @@ pub fn execute_conversion(
 
 /// Convert to JXL
 fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_str = input.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input)))?;
-    let output_str = output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?;
+    let input_str = input.to_str().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input))
+    })?;
+    let output_str = output.to_str().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
+    })?;
 
     let args = if *format == DetectedFormat::JPEG {
         // JPEG lossless transcode
-        vec![
-            "--lossless_jpeg=1",
-            "--",
-            input_str,
-            output_str,
-        ]
+        vec!["--lossless_jpeg=1", "--", input_str, output_str]
     } else {
         // Lossless modular encoding
         vec![
-            "-d",
-            "0.0",
-            "-e",
-            "7", // cjxl v0.11+ 范围是 1-10，默认 7
-            "--",
-            input_str,
-            output_str,
+            "-d", "0.0", "-e", "7", // cjxl v0.11+ 范围是 1-10，默认 7
+            "--", input_str, output_str,
         ]
     };
 
@@ -312,8 +306,12 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
 /// Convert to AVIF
 fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
     let q = quality.unwrap_or(85).to_string();
-    let input_str = input.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input)))?;
-    let output_str = output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?;
+    let input_str = input.to_str().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input))
+    })?;
+    let output_str = output.to_str().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
+    })?;
 
     let status = Command::new("avifenc")
         .args([input_str, output_str, "-q", &q])
@@ -356,7 +354,9 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
             &fps_str,
             "-pix_fmt",
             "yuv420p",
-            output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?,
+            output.to_str().ok_or_else(|| {
+                ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
+            })?,
         ])
         .output()?;
 
@@ -460,17 +460,16 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
 
 /// JXL lossless conversion (always mathematical lossless)
 fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_str = input.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input)))?;
-    let output_str = output.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output)))?;
+    let input_str = input.to_str().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input))
+    })?;
+    let output_str = output.to_str().ok_or_else(|| {
+        ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
+    })?;
 
     let args = if *format == DetectedFormat::JPEG {
         // JPEG: use lossless_jpeg transcode
-        vec![
-            "--lossless_jpeg=1",
-            "--",
-            input_str,
-            output_str,
-        ]
+        vec!["--lossless_jpeg=1", "--", input_str, output_str]
     } else {
         // Non-JPEG: use -d 0.0 for mathematical lossless
         // cjxl v0.11+: --modular=1 强制使用 modular 模式，-e 范围 1-10
