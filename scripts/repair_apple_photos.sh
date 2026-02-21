@@ -9,8 +9,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=common_zsh.sh
-source "$SCRIPT_DIR/common_zsh.sh"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
 TARGET_DIR="${1:-.}"
 BACKUP_DIR="$TARGET_DIR/.apple_photos_repair_backups"

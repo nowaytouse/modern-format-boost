@@ -17,8 +17,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 # Tool Paths (🔥 v6.9.15: 修正为正确的 target/release 路径)
-IMGQUALITY_HEVC="$PROJECT_ROOT/target/release/imgquality-hevc"
-VIDQUALITY_HEVC="$PROJECT_ROOT/target/release/vidquality-hevc"
+IMGQUALITY_HEVC="$PROJECT_ROOT/target/release/img-hevc"
+VIDQUALITY_HEVC="$PROJECT_ROOT/target/release/vid-hevc"
 
 # Configuration
 OUTPUT_MODE="inplace"
@@ -273,9 +273,8 @@ process_images() {
 
     draw_separator "Processing Images ($IMG_COUNT)"
 
-    # 🔥 v6.9.16: 修复参数顺序，确保 --recursive 正确传递以保留目录结构
-    # 🔥 v7.8.3: 默认启用 --allow-size-tolerance（提高转换率）
-    local args=(auto --explore --match-quality --compress --apple-compat --recursive --allow-size-tolerance)
+    # 默认即推荐组合；仅传 run 与路径，与视频处理一致
+    local args=(run)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
 
@@ -299,8 +298,11 @@ process_videos() {
     
     draw_separator "Processing Videos ($VID_COUNT)"
     
-    # 🔥 v6.9.16: 修复参数顺序，确保 --recursive 正确传递以保留目录结构
-    local args=(auto --explore --match-quality --compress --apple-compat --recursive)
+    # 默认即推荐参数组合（explore + match-quality + compress + apple-compat + recursive + allow-size-tolerance）
+    # 仅需传 run 与路径；递归强制开启。关闭项可组合：环境变量或在此追加 --no-apple-compat、--no-allow-size-tolerance
+    local args=(run)
+    [[ -n "${NO_APPLE_COMPAT:-}" ]] && args+=(--no-apple-compat)
+    [[ -n "${NO_ALLOW_SIZE_TOLERANCE:-}" ]] && args+=(--no-allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
     
@@ -347,7 +349,7 @@ parse_tool_stats() {
     fi
 }
 
-# 🔥 v7.10: Fix JXL Containers for iCloud Photos（脚本只负责调用，时间戳恢复由 imgquality-hevc restore-timestamps 统一处理）
+# 🔥 v7.10: Fix JXL Containers for iCloud Photos（脚本只负责调用，时间戳恢复由 img-hevc restore-timestamps 统一处理）
 fix_jxl_containers() {
     local target_path="$TARGET_DIR"
     [[ "$OUTPUT_MODE" == "adjacent" ]] && target_path="$OUTPUT_DIR"
@@ -486,7 +488,7 @@ _main() {
     # Wait, the tool handles image formats. 
     # v6.9.13 says "Process all files". 
     # Does the tool copy non-media files? 
-    # imgquality-hevc/vidquality-hevc usually only touch their extensions.
+    # img-hevc/vid-hevc usually only touch their extensions.
     # We should perform a manual copy pass for non-media files if in adjacent mode.
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then

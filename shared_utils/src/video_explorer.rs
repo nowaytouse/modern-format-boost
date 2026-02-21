@@ -1,16 +1,11 @@
 //! Video CRF Explorer Module - 统一的视频质量探索器
 //!
-//! 🔥 三种探索模式：
-//! 1. `--explore` 单独使用：寻找更小的文件大小（不验证质量，仅保证 size < input）
-//! 2. `--match-quality` 单独使用：使用算法预测的 CRF，单次编码 + SSIM 验证
-//! 3. `--explore --match-quality` 组合：二分搜索 + SSIM 裁判验证，找到最精确的质量匹配
-//!
-//! ⚠️ 仅支持动态图片→视频和视频→视频转换！
-//! ⚠️ 静态图片使用无损转换，不支持探索模式！
+//! 推荐模式：explore + match-quality + compress（默认开启，见 flag_validator）。
+//! 仅支持动态图片→视频和视频→视频转换；静态图片使用无损转换，不支持探索模式。
 //!
 //! ## 模块化设计
 //!
-//! 所有探索逻辑集中在此模块，其他模块（imgquality_hevc, vidquality_hevc）
+//! 所有探索逻辑集中在此模块，其他模块（img_hevc, vid_hevc）
 //! 只需调用此模块的便捷函数，避免重复实现。
 
 use anyhow::{bail, Context, Result};
@@ -6718,59 +6713,20 @@ pub fn explore_with_gpu_coarse_search(
                     result.ms_ssim_score = Some(score);
                 }
             } else {
-                // 🔥 v7.9.1: 修复错误消息 - 区分 MS-SSIM 失败和全部失败
-                eprintln!("   ════════════════════════════════════════════════════");
-                eprintln!("   ⚠️  MS-SSIM + SSIM All calculation failed");
-                eprintln!("   ════════════════════════════════════════════════════");
-                eprintln!("      Possible causes:");
-                eprintln!("         - libvmaf not available in ffmpeg");
-                eprintln!("         - Incompatible pixel format");
-                eprintln!("         - Resolution mismatch between channels");
-                eprintln!("      🔄 FALLBACK: Using single-channel MS-SSIM (Y only)");
-                eprintln!("      ⚠️  WARNING: Single-channel ignores chroma loss!");
-                eprintln!("   ════════════════════════════════════════════════════");
-
-                if let Some(ms_ssim) = calculate_ms_ssim(input, output) {
-                    eprintln!("      MS-SSIM (Y only): {:.4}", ms_ssim);
-                    eprintln!("      ⚠️  This value may be HIGHER than actual quality!");
-                    if ms_ssim < quality_target {
-                        eprintln!(
-                            "   ❌ MS-SSIM BELOW TARGET! {:.4} < {:.2}",
-                            ms_ssim, quality_target
-                        );
-                        result.ms_ssim_passed = Some(false);
-                        result.ms_ssim_score = Some(ms_ssim);
-                    } else {
-                        eprintln!(
-                            "   ✅ MS-SSIM TARGET MET: {:.4} ≥ {:.2}",
-                            ms_ssim, quality_target
-                        );
-                        eprintln!("      ⚠️  (Fallback mode - chroma quality not verified)");
-                        result.ms_ssim_passed = Some(true);
-                        result.ms_ssim_score = Some(ms_ssim);
-                    }
-                } else {
-                    eprintln!("   ════════════════════════════════════════════════════");
-                    eprintln!("   ⚠️  All MS-SSIM calculations failed");
-                    eprintln!("   ════════════════════════════════════════════════════");
-                    eprintln!("      Using explore SSIM as final fallback...");
-                    let ssim_str = result.ssim.map(|s| format!("{:.4}", s)).unwrap_or_else(|| "N/A".to_string());
-                    eprintln!("      SSIM (explore): {}", ssim_str);
-                    if let Some(ssim) = result.ssim {
-                        if ssim < quality_target {
-                            eprintln!("   ❌ SSIM BELOW TARGET! {:.4} < {:.2}", ssim, quality_target);
-                            result.ms_ssim_passed = Some(false);
-                        } else {
-                            eprintln!("   ✅ SSIM TARGET MET: {:.4} ≥ {:.2}", ssim, quality_target);
-                            result.ms_ssim_passed = Some(true);
-                        }
-                        result.ms_ssim_score = Some(ssim);
-                    } else {
-                        eprintln!("      ⚠️  No quality metric available!");
-                        result.ms_ssim_passed = None;
-                        result.ms_ssim_score = None;
-                    }
+                // 🔥 根除伪造成功：MS-SSIM + SSIM All 均失败时不使用单通道/explore 兜底当通过，响亮报错并拒绝通过
+                let err_lines = [
+                    "   ════════════════════════════════════════════════════",
+                    "   ❌ ERROR: Fusion verification incomplete (MS-SSIM + SSIM All failed).",
+                    "   ❌ Refusing to mark as passed — no fallback to single-channel or explore SSIM.",
+                    "   ❌ Possible causes: libvmaf unavailable, pixel format, or resolution mismatch.",
+                    "   ════════════════════════════════════════════════════",
+                ];
+                for line in &err_lines {
+                    eprintln!("{}", line);
+                    result.log.push((*line).to_string());
                 }
+                result.ms_ssim_passed = Some(false);
+                result.ms_ssim_score = None;
             }
         } else {
             // 🔥 v6.9.9: 长视频使用 SSIM All 验证（包含色度）
@@ -6803,12 +6759,15 @@ pub fn explore_with_gpu_coarse_search(
                 }
                 result.ms_ssim_score = Some(all);
             } else {
-                eprintln!("   ⚠️  SSIM All calculation failed, using Y channel only");
-                let ssim_str = result
-                    .ssim
-                    .map(|s| format!("{:.6}", s))
-                    .unwrap_or_else(|| "N/A".to_string());
-                eprintln!("   ℹ️  SSIM (Y only): {}", ssim_str);
+                let err_lines = [
+                    "   ❌ ERROR: SSIM All calculation failed (long-video path). Refusing to mark as passed.",
+                ];
+                for line in &err_lines {
+                    eprintln!("{}", line);
+                    result.log.push((*line).to_string());
+                }
+                result.ms_ssim_passed = Some(false);
+                result.ms_ssim_score = None;
             }
         }
     } else {
@@ -6838,14 +6797,57 @@ pub fn explore_with_gpu_coarse_search(
             }
             result.ms_ssim_score = Some(all);
         } else {
-            let ssim_str = result
-                .ssim
-                .map(|s| format!("{:.6}", s))
-                .unwrap_or_else(|| "N/A".to_string());
-            eprintln!("   ⚠️  SSIM All calculation failed");
-            eprintln!("   ℹ️  SSIM (Y only): {}", ssim_str);
+            let err_lines = [
+                "   ❌ ERROR: SSIM All calculation failed (no duration path). Refusing to mark as passed.",
+            ];
+            for line in &err_lines {
+                eprintln!("{}", line);
+                result.log.push((*line).to_string());
+            }
+            result.ms_ssim_passed = Some(false);
+            result.ms_ssim_score = None;
         }
     }
+
+    // 🔥 体积变化与质量指标：每个文件最完整透明度，同时写入 stderr 与 result.log
+    let input_size = fs::metadata(input).ok().map(|m| m.len());
+    let output_size_actual = fs::metadata(output).ok().map(|m| m.len()).unwrap_or(result.output_size);
+    let size_change_line = if let (Some(in_sz), Some(out_sz)) = (input_size, Some(output_size_actual)) {
+        if in_sz == 0 {
+            "   SizeChange: N/A (zero input size)".to_string()
+        } else {
+            let ratio = out_sz as f64 / in_sz as f64;
+            let pct = (ratio - 1.0) * 100.0;
+            format!("   SizeChange: {:.2}x ({:+.1}%) vs original", ratio, pct)
+        }
+    } else {
+        "   SizeChange: N/A (missing original or output size)".to_string()
+    };
+    eprintln!("{}", size_change_line);
+    result.log.push(size_change_line);
+
+    let quality_line = if result.ms_ssim_passed == Some(false) && result.ms_ssim_score.is_none() {
+        "   Quality: N/A (quality check failed)".to_string()
+    } else if let Some(score) = result.ms_ssim_score {
+        let pct = (score * 100.0 * 10.0).round() / 10.0;
+        format!("   Quality: {:.1}% (MS-SSIM={:.4})", pct, score)
+    } else if let Some(s) = result.ssim {
+        let pct = (s * 100.0 * 10.0).round() / 10.0;
+        format!("   Quality: {:.1}% (SSIM={:.4}, approx.)", pct, s)
+    } else {
+        "   Quality: N/A (quality check failed)".to_string()
+    };
+    eprintln!("{}", quality_line);
+    result.log.push(quality_line);
+
+    let quality_check_line = match (result.ms_ssim_passed, result.quality_passed) {
+        (Some(true), _) => "   QualityCheck: PASSED (MS-SSIM/SSIM target met)",
+        (Some(false), _) => "   QualityCheck: FAILED (below target or verification failed)",
+        (None, true) => "   QualityCheck: WAIVED (explore/size-only path)",
+        (None, false) => "   QualityCheck: FAILED (quality not verified)",
+    };
+    eprintln!("{}", quality_check_line);
+    result.log.push(quality_check_line.to_string());
 
     eprintln!();
 
