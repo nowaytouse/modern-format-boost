@@ -21,12 +21,12 @@ use walkdir::WalkDir;
 /// 支持的图像格式（会被转换，不需要复制）
 pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    "bmp", "jxl",
+    "bmp",
 ];
 
 /// 分析阶段使用的图像扩展名子集（不含 heic/heif/avif，供 analyze 命令使用）
 pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "jxl",
+    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
 ];
 
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[

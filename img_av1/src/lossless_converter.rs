@@ -256,7 +256,8 @@ pub fn convert_to_jxl(
 
             // 🔥 智能回退：如果转换后文件变大，删除输出并跳过
             // 这对于小型PNG或已高度优化的图片很常见
-            if output_size > input_size {
+            let tolerance_ratio = if options.allow_size_tolerance { 1.01 } else { 1.0 };
+            if output_size as f64 > input_size as f64 * tolerance_ratio {
                 if let Err(e) = fs::remove_file(&output) {
                     eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
                 }
@@ -1093,7 +1094,8 @@ pub fn convert_to_jxl_matched(
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             // 🔥 智能回退：如果转换后文件变大，删除输出并跳过
-            if output_size > input_size {
+            let tolerance_ratio = if options.allow_size_tolerance { 1.01 } else { 1.0 };
+            if output_size as f64 > input_size as f64 * tolerance_ratio {
                 if let Err(e) = fs::remove_file(&output) {
                     eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
                 }
