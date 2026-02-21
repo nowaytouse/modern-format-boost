@@ -102,6 +102,19 @@ If you have files that refuse to import, use the dedicated repair tool:
 
 ---
 
+## 🔧 Development / 开发
+
+```bash
+cargo build          # Debug 构建
+cargo build --release
+cargo test           # 运行测试
+cargo clippy         # 代码质量与潜在问题检查
+```
+
+Release 构建已启用 LTO 与单 codegen-unit，以最大化运行效率。
+
+---
+
 ## 📜 License
 
 MIT License. See `LICENSE` for details.

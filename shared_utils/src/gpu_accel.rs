@@ -1909,7 +1909,7 @@ pub fn gpu_coarse_search_with_log(
                 "default=noprint_wrappers=1:nokey=1",
                 "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
             ])
-            .arg(input)
+            .arg(crate::safe_path_arg(input).as_ref())
             .output();
 
         duration_output
@@ -2045,7 +2045,7 @@ pub fn gpu_coarse_search_with_log(
             cmd.arg(*arg);
         }
 
-        cmd.arg("-an").arg(&warmup_output);
+        cmd.arg("-an").arg(crate::safe_path_arg(&warmup_output).as_ref());
 
         let result = cmd.output().context("Failed to run warmup encode")?;
         let size = if result.status.success() {
@@ -2169,7 +2169,7 @@ pub fn gpu_coarse_search_with_log(
         cmd.arg("-an")
             .arg("-progress")
             .arg("pipe:1")
-            .arg(output)
+            .arg(crate::safe_path_arg(output).as_ref())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -2355,7 +2355,7 @@ pub fn gpu_coarse_search_with_log(
                         .arg("-t")
                         .arg(format!("{}", sample_dur))
                         .arg("-i")
-                        .arg(&input_path)
+                        .arg(crate::safe_path_arg(&input_path).as_ref())
                         .arg("-c:v")
                         .arg(&encoder_name);
 
@@ -2366,7 +2366,7 @@ pub fn gpu_coarse_search_with_log(
                         cmd.arg(arg);
                     }
 
-                    cmd.arg("-an").arg(&output_path);
+                    cmd.arg("-an").arg(crate::safe_path_arg(&output_path).as_ref());
 
                     let result = cmd.output();
 
@@ -2645,15 +2645,15 @@ pub fn gpu_coarse_search_with_log(
 
             while test_crf <= config.max_crf && iterations < max_iterations_limit {
                 // 🔥 v6.5: CrfCache 直接用 crf 作为 key
-                let size_result = if size_cache.contains_key(test_crf) {
-                    Ok(*size_cache.get(test_crf).unwrap())
-                } else {
-                    encode_cached(test_crf, &mut size_cache)
+                let cached = size_cache.get(test_crf).copied();
+                let size_result = match cached {
+                    Some(s) => Ok(s),
+                    None => encode_cached(test_crf, &mut size_cache),
                 };
 
                 match size_result {
                     Ok(size) => {
-                        if !size_cache.contains_key(test_crf) {
+                        if cached.is_none() {
                             iterations += 1;
                             if let Some(cb) = progress_cb {
                                 cb(test_crf, size);
@@ -2747,15 +2747,15 @@ pub fn gpu_coarse_search_with_log(
 
             while test_crf >= config.min_crf && iterations < max_iterations_limit {
                 // 🔥 v6.5: CrfCache 直接用 crf 作为 key
-                let size_result = if size_cache.contains_key(test_crf) {
-                    Ok(*size_cache.get(test_crf).unwrap())
-                } else {
-                    encode_cached(test_crf, &mut size_cache)
+                let cached = size_cache.get(test_crf).copied();
+                let size_result = match cached {
+                    Some(s) => Ok(s),
+                    None => encode_cached(test_crf, &mut size_cache),
                 };
 
                 match size_result {
                     Ok(size) => {
-                        if !size_cache.contains_key(test_crf) {
+                        if cached.is_none() {
                             iterations += 1;
                             if let Some(cb) = progress_cb {
                                 cb(test_crf, size);
@@ -2846,8 +2846,7 @@ pub fn gpu_coarse_search_with_log(
             let test_crf = mid as f32;
 
             // 🔥 v6.5: CrfCache 直接用 crf 作为 key
-            if size_cache.contains_key(test_crf) {
-                let cached_size = *size_cache.get(test_crf).unwrap();
+            if let Some(&cached_size) = size_cache.get(test_crf) {
                 if cached_size < sample_input_size {
                     hi = mid;
                     best_crf = Some(test_crf);
@@ -2931,8 +2930,7 @@ pub fn gpu_coarse_search_with_log(
                 }
 
                 // 🔥 v6.5: CrfCache 直接用 crf 作为 key
-                let result = if size_cache.contains_key(test_crf) {
-                    let cached_size = *size_cache.get(test_crf).unwrap();
+                let result = if let Some(&cached_size) = size_cache.get(test_crf) {
                     log_msg!("   📦 Cache hit: CRF {:.1}", test_crf);
                     Ok(cached_size)
                 } else {

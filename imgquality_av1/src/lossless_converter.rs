@@ -80,8 +80,8 @@ pub fn convert_to_jxl(
     }
 
     cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
-        .arg(&actual_input)
-        .arg(&output);
+        .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
 
@@ -111,7 +111,7 @@ pub fn convert_to_jxl(
                 // Step 1: 启动 ImageMagick 进程
                 let magick_result = Command::new("magick")
                     .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-                    .arg(input)
+                    .arg(shared_utils::safe_path_arg(input).as_ref())
                     .arg("-depth")
                     .arg("16") // 保留位深
                     .arg("png:-") // 输出到 stdout
@@ -125,7 +125,7 @@ pub fn convert_to_jxl(
                         if let Some(magick_stdout) = magick_proc.stdout.take() {
                             let mut cmd = Command::new("cjxl");
                             cmd.arg("-") // 从 stdin 读取
-                                .arg(&output)
+                                .arg(shared_utils::safe_path_arg(&output).as_ref())
                                 .arg("-d")
                                 .arg(format!("{:.1}", distance))
                                 .arg("-e")
@@ -390,8 +390,8 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 
     cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
-        .arg(input)
-        .arg(&output);
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
 
@@ -508,8 +508,8 @@ pub fn convert_to_avif(
         .arg("-q")
         .arg(q.to_string())
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
-        .arg(&output)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
     match result {
@@ -632,7 +632,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         cmd.arg(arg);
     }
 
-    cmd.arg(&output);
+    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
     let result = cmd.output();
 
     match result {
@@ -737,8 +737,8 @@ pub fn convert_to_avif_lossless(
         .arg("-j")
         .arg("all")
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
-        .arg(&output)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
     match result {
@@ -1112,8 +1112,8 @@ pub fn convert_to_jxl_matched(
     }
 
     cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
-        .arg(input)
-        .arg(&output);
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
 
@@ -1277,7 +1277,7 @@ pub fn convert_to_av1_mp4_lossless(
         cmd.arg(arg);
     }
 
-    cmd.arg(&output);
+    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
     let result = cmd.output();
 
     match result {
@@ -1403,8 +1403,9 @@ fn prepare_input_for_cjxl(
                 let temp_png = temp_png_file.path().to_path_buf();
 
                 let result = Command::new("magick")
-                    .arg(input)
-                    .arg(&temp_png)
+                    .arg("--") // 防止 dash-prefix 文件名被解析为参数
+                    .arg(shared_utils::safe_path_arg(input).as_ref())
+                    .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                     .output();
 
                 match result {
@@ -1443,9 +1444,9 @@ fn prepare_input_for_cjxl(
 
             let result = Command::new("dwebp")
                 // .arg("--") // 🔥 v7.9: dwebp does not support '--' as delimiter
-                .arg(input)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("-o")
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -1480,10 +1481,10 @@ fn prepare_input_for_cjxl(
 
             let result = Command::new("magick")
                 .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-                .arg(input)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("-depth")
                 .arg("16") // 保留位深
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -1510,7 +1511,11 @@ fn prepare_input_for_cjxl(
                 .tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
-            let result = Command::new("magick").arg(input).arg(&temp_png).output();
+            let result = Command::new("magick")
+                .arg("--") // 防止 dash-prefix 文件名被解析为参数
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
+                .output();
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
@@ -1541,9 +1546,9 @@ fn prepare_input_for_cjxl(
                 .arg("format")
                 .arg("png")
                 // .arg("--") // 🔥 v7.9: sips does not support '--' as delimiter
-                .arg(input)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("--out")
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -1556,8 +1561,8 @@ fn prepare_input_for_cjxl(
                     // 尝试 ImageMagick
                     let result = Command::new("magick")
                         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-                        .arg(input)
-                        .arg(&temp_png)
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                         .output();
 
                     match result {
