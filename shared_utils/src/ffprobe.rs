@@ -307,19 +307,37 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     }
 }
 
+/// Standard fallback frame rate (24 fps) when parsing fails.
+/// Prevents downstream divide-by-zero when frame_rate is used as a divisor.
+const FALLBACK_FRAME_RATE: f64 = 24.0;
+
 /// Parse frame rate string (e.g., "30/1" or "29.97")
+///
+/// Returns `FALLBACK_FRAME_RATE` (24.0) instead of 0.0 when parsing fails,
+/// preventing divide-by-zero in downstream calculations.
 pub fn parse_frame_rate(s: &str) -> f64 {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
             let num = parts[0].parse::<f64>().unwrap_or(0.0);
-            let den = parts[1].parse::<f64>().unwrap_or(1.0);
+            let den = parts[1].parse::<f64>().unwrap_or(0.0);
             if den > 0.0 {
-                return num / den;
+                let rate = num / den;
+                if rate > 0.0 {
+                    return rate;
+                }
             }
         }
     }
-    s.parse::<f64>().unwrap_or(0.0)
+    match s.parse::<f64>() {
+        Ok(v) if v > 0.0 => v,
+        _ => {
+            if !s.is_empty() && s != "0" && s != "0/1" {
+                eprintln!("⚠️ [ffprobe] Failed to parse frame rate '{}', using fallback {}fps", s, FALLBACK_FRAME_RATE);
+            }
+            FALLBACK_FRAME_RATE
+        }
+    }
 }
 
 /// Detect bit depth from pixel format
@@ -370,203 +388,77 @@ mod tests {
     use super::*;
 
     // ============================================================
-    // Frame Rate Parsing Tests (裁判机制)
+    // Frame Rate Parsing Tests — Table-driven
     // ============================================================
 
     #[test]
-    fn test_parse_frame_rate_fraction() {
-        // Standard frame rates as fractions
-        assert!((parse_frame_rate("30/1") - 30.0).abs() < 0.001);
-        assert!((parse_frame_rate("24/1") - 24.0).abs() < 0.001);
-        assert!((parse_frame_rate("60/1") - 60.0).abs() < 0.001);
-        assert!((parse_frame_rate("25/1") - 25.0).abs() < 0.001);
-    }
+    fn test_parse_frame_rate() {
+        let cases: &[(&str, f64, f64)] = &[
+            // Standard fractions
+            ("30/1", 30.0, 0.001),
+            ("24/1", 24.0, 0.001),
+            ("60/1", 60.0, 0.001),
+            ("25/1", 25.0, 0.001),
+            // NTSC (strict precision)
+            ("30000/1001", 30000.0 / 1001.0, 0.0001),
+            ("24000/1001", 24000.0 / 1001.0, 0.0001),
+            ("60000/1001", 60000.0 / 1001.0, 0.0001),
+            // Decimal values
+            ("24", 24.0, 0.001),
+            ("29.97", 29.97, 0.01),
+            ("59.94", 59.94, 0.01),
+            // High frame rates
+            ("120/1", 120.0, 0.001),
+            ("240/1", 240.0, 0.001),
+            ("144/1", 144.0, 0.001),
+        ];
 
-    #[test]
-    fn test_parse_frame_rate_ntsc() {
-        // NTSC frame rates (drop frame)
-        // 29.97 fps = 30000/1001
-        let fps_2997 = parse_frame_rate("30000/1001");
-        assert!(
-            (fps_2997 - 29.97).abs() < 0.01,
-            "30000/1001 should be ~29.97, got {}",
-            fps_2997
-        );
-
-        // 23.976 fps = 24000/1001
-        let fps_23976 = parse_frame_rate("24000/1001");
-        assert!(
-            (fps_23976 - 23.976).abs() < 0.01,
-            "24000/1001 should be ~23.976, got {}",
-            fps_23976
-        );
-
-        // 59.94 fps = 60000/1001
-        let fps_5994 = parse_frame_rate("60000/1001");
-        assert!(
-            (fps_5994 - 59.94).abs() < 0.01,
-            "60000/1001 should be ~59.94, got {}",
-            fps_5994
-        );
-    }
-
-    #[test]
-    fn test_parse_frame_rate_decimal() {
-        // Direct decimal values
-        assert!((parse_frame_rate("24") - 24.0).abs() < 0.001);
-        assert!((parse_frame_rate("29.97") - 29.97).abs() < 0.01);
-        assert!((parse_frame_rate("59.94") - 59.94).abs() < 0.01);
+        for (input, expected, tolerance) in cases {
+            let result = parse_frame_rate(input);
+            assert!(
+                (result - expected).abs() < *tolerance,
+                "parse_frame_rate({:?}): expected {}, got {}",
+                input, expected, result
+            );
+        }
     }
 
     #[test]
     fn test_parse_frame_rate_edge_cases() {
-        // Zero denominator should not crash, returns 0
-        assert_eq!(parse_frame_rate("30/0"), 0.0);
-
-        // Invalid format returns 0
-        assert_eq!(parse_frame_rate("invalid"), 0.0);
-        assert_eq!(parse_frame_rate(""), 0.0);
-
-        // Multiple slashes - only first two parts used, but split gives 3 parts
-        // so parts.len() == 2 check fails, falls through to parse as decimal
-        // "30/1/extra" parsed as decimal = 0.0 (invalid)
-        let result = parse_frame_rate("30/1/extra");
-        // This is expected behavior - malformed input returns 0
-        assert_eq!(result, 0.0, "Malformed frame rate should return 0");
-    }
-
-    #[test]
-    fn test_parse_frame_rate_high_fps() {
-        // High frame rates (gaming, slow-mo)
-        assert!((parse_frame_rate("120/1") - 120.0).abs() < 0.001);
-        assert!((parse_frame_rate("240/1") - 240.0).abs() < 0.001);
-        assert!((parse_frame_rate("144/1") - 144.0).abs() < 0.001);
+        // Zero denominator, invalid, empty → fallback
+        assert_eq!(parse_frame_rate("30/0"), FALLBACK_FRAME_RATE);
+        assert_eq!(parse_frame_rate("invalid"), FALLBACK_FRAME_RATE);
+        assert_eq!(parse_frame_rate(""), FALLBACK_FRAME_RATE);
+        assert_eq!(parse_frame_rate("30/1/extra"), FALLBACK_FRAME_RATE);
     }
 
     // ============================================================
-    // Bit Depth Detection Tests (裁判机制)
+    // Bit Depth Detection Tests — Table-driven
     // ============================================================
 
     #[test]
-    fn test_detect_bit_depth_8bit() {
-        // Standard 8-bit formats
-        assert_eq!(detect_bit_depth("yuv420p"), 8);
-        assert_eq!(detect_bit_depth("yuv422p"), 8);
-        assert_eq!(detect_bit_depth("yuv444p"), 8);
-        assert_eq!(detect_bit_depth("rgb24"), 8);
-        assert_eq!(detect_bit_depth("bgr24"), 8);
-        assert_eq!(detect_bit_depth("nv12"), 8);
-        assert_eq!(detect_bit_depth("yuvj420p"), 8);
-    }
-
-    #[test]
-    fn test_detect_bit_depth_10bit() {
-        // 10-bit formats (HDR common)
-        assert_eq!(detect_bit_depth("yuv420p10le"), 10);
-        assert_eq!(detect_bit_depth("yuv420p10be"), 10);
-        assert_eq!(detect_bit_depth("yuv422p10le"), 10);
-        assert_eq!(detect_bit_depth("yuv444p10le"), 10);
-        assert_eq!(detect_bit_depth("p010le"), 10);
-        assert_eq!(detect_bit_depth("p010"), 10);
-    }
-
-    #[test]
-    fn test_detect_bit_depth_12bit() {
-        // 12-bit formats (professional)
-        assert_eq!(detect_bit_depth("yuv420p12le"), 12);
-        assert_eq!(detect_bit_depth("yuv420p12be"), 12);
-        assert_eq!(detect_bit_depth("yuv422p12le"), 12);
-        assert_eq!(detect_bit_depth("yuv444p12le"), 12);
-    }
-
-    #[test]
-    fn test_detect_bit_depth_16bit() {
-        // 16-bit formats (rare, scientific)
-        assert_eq!(detect_bit_depth("yuv420p16le"), 16);
-        assert_eq!(detect_bit_depth("yuv420p16be"), 16);
-        assert_eq!(detect_bit_depth("rgb48le"), 16);
-    }
-
-    #[test]
-    fn test_detect_bit_depth_unknown() {
-        // Unknown formats default to 8-bit
-        assert_eq!(detect_bit_depth("unknown"), 8);
-        assert_eq!(detect_bit_depth(""), 8);
-        assert_eq!(detect_bit_depth("custom_format"), 8);
-    }
-
-    // ============================================================
-    // 🔬 Strict Precision Tests (裁判机制)
-    // ============================================================
-
-    /// Strict test: NTSC frame rate precision
-    #[test]
-    fn test_strict_ntsc_precision() {
-        // 29.97 fps must be within 0.001 of actual value
-        let actual_2997 = 30000.0 / 1001.0;
-        let parsed = parse_frame_rate("30000/1001");
-        assert!(
-            (parsed - actual_2997).abs() < 0.0001,
-            "STRICT: 30000/1001 precision error: expected {}, got {}",
-            actual_2997,
-            parsed
-        );
-
-        // 23.976 fps must be within 0.001 of actual value
-        let actual_23976 = 24000.0 / 1001.0;
-        let parsed = parse_frame_rate("24000/1001");
-        assert!(
-            (parsed - actual_23976).abs() < 0.0001,
-            "STRICT: 24000/1001 precision error: expected {}, got {}",
-            actual_23976,
-            parsed
-        );
-    }
-
-    /// Strict test: Bit depth must be exact
-    #[test]
-    fn test_strict_bit_depth_exact() {
-        // These must be EXACTLY correct, no approximation
-        let test_cases = [
-            ("yuv420p", 8),
-            ("yuv420p10le", 10),
-            ("yuv420p12le", 12),
-            ("yuv420p16le", 16),
+    fn test_detect_bit_depth() {
+        let cases: &[(&str, u8)] = &[
+            // 8-bit
+            ("yuv420p", 8), ("yuv422p", 8), ("yuv444p", 8),
+            ("rgb24", 8), ("bgr24", 8), ("nv12", 8), ("yuvj420p", 8),
+            // 10-bit
+            ("yuv420p10le", 10), ("yuv420p10be", 10), ("yuv422p10le", 10),
+            ("yuv444p10le", 10), ("p010le", 10), ("p010", 10),
+            // 12-bit
+            ("yuv420p12le", 12), ("yuv420p12be", 12),
+            ("yuv422p12le", 12), ("yuv444p12le", 12),
+            // 16-bit
+            ("yuv420p16le", 16), ("yuv420p16be", 16), ("rgb48le", 16),
+            // Unknown → 8
+            ("unknown", 8), ("", 8), ("custom_format", 8),
         ];
 
-        for (fmt, expected) in test_cases {
-            let detected = detect_bit_depth(fmt);
+        for (fmt, expected) in cases {
             assert_eq!(
-                detected, expected,
-                "STRICT: Bit depth for {} must be exactly {}, got {}",
-                fmt, expected, detected
+                detect_bit_depth(fmt), *expected,
+                "detect_bit_depth({:?}) mismatch", fmt
             );
-        }
-    }
-
-    // ============================================================
-    // Consistency Tests (裁判机制)
-    // ============================================================
-
-    #[test]
-    fn test_consistency_frame_rate() {
-        // Same input should always produce same output
-        for _ in 0..10 {
-            let result1 = parse_frame_rate("30000/1001");
-            let result2 = parse_frame_rate("30000/1001");
-            assert!(
-                (result1 - result2).abs() < 0.0000001,
-                "Frame rate parsing must be deterministic"
-            );
-        }
-    }
-
-    #[test]
-    fn test_consistency_bit_depth() {
-        // Same input should always produce same output
-        for _ in 0..10 {
-            assert_eq!(detect_bit_depth("yuv420p10le"), 10);
-            assert_eq!(detect_bit_depth("yuv420p"), 8);
         }
     }
 }

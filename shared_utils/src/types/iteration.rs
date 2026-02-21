@@ -4,11 +4,8 @@
 
 use std::fmt;
 
-/// 紧急保底迭代限制（绝对上限）
-pub const EMERGENCY_MAX_ITERATIONS: u32 = 500;
-
-/// 普通模式最大迭代次数
-pub const NORMAL_MAX_ITERATIONS: u32 = 60;
+// 从 crf_constants 导入统一的迭代限制常量（单一来源）
+pub use crate::crf_constants::{EMERGENCY_MAX_ITERATIONS, NORMAL_MAX_ITERATIONS};
 
 /// 长视频阈值（秒）
 pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
