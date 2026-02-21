@@ -200,12 +200,9 @@ get_binary_path() {
     local project_dir="$1"
     local binary_name="$2"
     
-    # 🔥 v7.5: Cargo workspace 的二进制文件在根目录的 target/release
-    # 优先检查根目录，然后检查项目目录
+    # 🔥 v8.3: Unified workspace target directory
     if [[ -f "target/release/$binary_name" ]]; then
         echo "target/release/$binary_name"
-    elif [[ -f "$project_dir/target/release/$binary_name" ]]; then
-        echo "$project_dir/target/release/$binary_name"
     else
         echo ""
     fi
@@ -273,8 +270,7 @@ build_project() {
             if [[ $retry_count -lt $MAX_STALE_RETRIES ]]; then
                 echo -e "${YELLOW}🔄 Retry $((retry_count + 1))/$MAX_STALE_RETRIES: Rebuilding with clean...${NC}"
                 # 清理并重试
-                rm -rf "$project_dir/target/release/deps" 2>/dev/null || true
-                rm -rf "$project_dir/target/release/.fingerprint" 2>/dev/null || true
+                # 🔥 v8.3: Only clean root target
                 rm -rf "target/release/deps" 2>/dev/null || true
                 rm -rf "target/release/.fingerprint" 2>/dev/null || true
                 build_project "$project_dir" "$binary_name" $((retry_count + 1))
