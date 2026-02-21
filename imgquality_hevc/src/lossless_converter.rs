@@ -174,8 +174,8 @@ pub fn convert_to_jxl(
     }
 
     cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
-        .arg(&actual_input)
-        .arg(&output);
+        .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
 
@@ -231,7 +231,7 @@ pub fn convert_to_jxl(
                         if let Some(ffmpeg_stdout) = ffmpeg_proc.stdout.take() {
                             let mut cmd = Command::new("cjxl");
                             cmd.arg("-") // 从 stdin 读取
-                                .arg(&output)
+                                .arg(shared_utils::safe_path_arg(&output).as_ref())
                                 .arg("-d")
                                 .arg(format!("{:.1}", distance))
                                 .arg("-e")
@@ -536,8 +536,8 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 
     cmd.arg("--") // 🔥 v7.9: Prevent dash-prefix filenames from being parsed as args
-        .arg(input)
-        .arg(&output);
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
 
@@ -707,8 +707,8 @@ pub fn convert_to_avif(
         .arg("-q")
         .arg(q.to_string())
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
-        .arg(&output)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
     match result {
@@ -839,7 +839,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         cmd.arg(arg);
     }
 
-    cmd.arg(&output);
+    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
     let result = cmd.output();
 
     match result {
@@ -946,8 +946,8 @@ pub fn convert_to_avif_lossless(
         .arg("-j")
         .arg("all")
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
-        .arg(&output)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
     match result {
@@ -1683,7 +1683,7 @@ pub fn convert_to_hevc_mkv_lossless(
         cmd.arg(arg);
     }
 
-    cmd.arg(&output);
+    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
     let result = cmd.output();
 
     match result {
@@ -1760,7 +1760,7 @@ fn try_imagemagick_fallback(
     // Step 1: 启动 ImageMagick 进程
     let magick_result = Command::new("magick")
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
-        .arg(input)
+        .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-depth")
         .arg("16") // 保留位深
         .arg("png:-") // 输出到 stdout
@@ -1926,8 +1926,9 @@ fn prepare_input_for_cjxl(
                 let temp_png = temp_png_file.path().to_path_buf();
 
                 let result = Command::new("magick")
-                    .arg(input)
-                    .arg(&temp_png)
+                    .arg("--") // 防止 dash-prefix 文件名被解析为参数
+                    .arg(shared_utils::safe_path_arg(input).as_ref())
+                    .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                     .output();
 
                 match result {
@@ -1966,9 +1967,9 @@ fn prepare_input_for_cjxl(
 
             let result = Command::new("dwebp")
                 // .arg("--") // 🔥 v7.9: dwebp does not support '--' as delimiter
-                .arg(input)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("-o")
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -2005,10 +2006,10 @@ fn prepare_input_for_cjxl(
 
             let result = Command::new("magick")
                 .arg("--")
-                .arg(input)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("-depth")
                 .arg("16")
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -2038,8 +2039,8 @@ fn prepare_input_for_cjxl(
 
             let result = Command::new("magick")
                 .arg("--")
-                .arg(input)
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -2072,9 +2073,9 @@ fn prepare_input_for_cjxl(
                 .arg("-s")
                 .arg("format")
                 .arg("png")
-                .arg(input)
+                .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("--out")
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -2086,8 +2087,8 @@ fn prepare_input_for_cjxl(
                     eprintln!("   ⚠️  sips failed, trying ImageMagick...");
                     let result = Command::new("magick")
                         .arg("--")
-                        .arg(input)
-                        .arg(&temp_png)
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                         .output();
 
                     match result {
@@ -2123,7 +2124,7 @@ fn prepare_input_for_cjxl(
                 .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg("-frames:v")
                 .arg("1")
-                .arg(&temp_png)
+                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
                 .output();
 
             match result {
@@ -2293,7 +2294,7 @@ pub fn convert_to_gif_apple_compat(
             "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
             fps_val, width, height
         ))
-        .arg(&palette_path)
+        .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
         .output();
 
     if let Err(e) = palette_result {
@@ -2310,13 +2311,13 @@ pub fn convert_to_gif_apple_compat(
         .arg("-i")
         .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-i")
-        .arg(&palette_path)
+        .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
         .arg("-lavfi")
         .arg(format!(
             "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
             fps_val, width, height
         ))
-        .arg(&output)
+        .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
     // 清理调色板文件

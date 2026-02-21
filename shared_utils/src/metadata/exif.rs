@@ -42,7 +42,7 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         .arg("-XMP-xmp:CreateDate")
         .arg("-EXIF:DateTimeOriginal")
         .arg("-EXIF:CreateDate")
-        .arg(src)
+        .arg(crate::safe_path_arg(src).as_ref())
         .output()
         .ok()?;
 
@@ -195,7 +195,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     // 🔥 v8.2.5: 添加 -unsafe 以保留 MakerNotes 等完整元数据（重构后的 JXL 易丢失）
     let mut output = Command::new("exiftool")
         .arg("-tagsfromfile")
-        .arg(src)
+        .arg(crate::safe_path_arg(src).as_ref())
         .arg("-all:all")
         .arg("-unsafe")
         .arg("-ICC_Profile<ICC_Profile")
@@ -205,7 +205,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("LargeFileSupport=1")
         .arg("-q")
         .arg("-m")
-        .arg(dst)
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
 
     // 检查是否成功
@@ -235,8 +235,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
         
         let magick_result = Command::new("magick")
-            .arg(dst)
-            .arg(dst) // 原地重写结构
+            .arg("--") // 防止 dash-prefix 文件名被解析为参数
+            .arg(crate::safe_path_arg(dst).as_ref())
+            .arg(crate::safe_path_arg(dst).as_ref()) // 原地重写结构
             .output();
         
         match magick_result {
@@ -253,7 +254,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg("-unsafe")
                         .arg("-icc_profile")
                         .arg("-tagsfromfile")
-                        .arg(src)
+                        .arg(crate::safe_path_arg(src).as_ref())
                         .arg("-all:all")
                         .arg("-unsafe")
                         .arg("-icc_profile")
@@ -263,7 +264,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         .arg("LargeFileSupport=1")
                         .arg("-q")
                         .arg("-m")
-                        .arg(dst)
+                        .arg(crate::safe_path_arg(dst).as_ref())
                         .output()?;
                 } else {
                     eprintln!("⚠️  [Structural Repair] magick failed：{}", 
@@ -318,7 +319,7 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     let check_output = Command::new("exiftool")
         .arg("-s3")
         .arg("-QuickTime:CreateDate")
-        .arg(dst)
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
 
     let current_date = String::from_utf8_lossy(&check_output.stdout);
@@ -349,7 +350,7 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("-overwrite_original")
         .arg("-q")
         .arg("-m")
-        .arg(dst)
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
 
     if !output.status.success() {
