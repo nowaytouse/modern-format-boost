@@ -12,9 +12,9 @@
 # 
 # Usage: Drag folder onto this script or double-click to select
 
-# Script Location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
 # Tool Paths (🔥 v6.9.15: 修正为正确的 target/release 路径)
 IMGQUALITY_HEVC="$PROJECT_ROOT/target/release/imgquality-hevc"
@@ -26,20 +26,6 @@ OUTPUT_DIR=""
 SELECTED=0
 ULTIMATE_MODE=true
 VERBOSE_MODE=false  # 🔥 默认静默模式
-
-# 🎨 Color Schemes (Premium Dark Mode)
-RESET='\033[0m'
-BOLD='\033[1m'
-DIM='\033[2m'
-RED='\033[38;5;196m'
-GREEN='\033[38;5;46m'
-YELLOW='\033[38;5;226m'
-BLUE='\033[38;5;39m'
-MAGENTA='\033[38;5;213m'
-CYAN='\033[38;5;51m'
-WHITE='\033[38;5;255m'
-GRAY='\033[38;5;240m'
-BG_HEADER='\033[48;5;236m'
 
 # 🛠️  Helper Functions
 
@@ -361,12 +347,11 @@ parse_tool_stats() {
     fi
 }
 
-# 🔥 v7.10: Fix JXL Containers for iCloud Photos
+# 🔥 v7.10: Fix JXL Containers for iCloud Photos（脚本只负责调用，时间戳恢复由 imgquality-hevc restore-timestamps 统一处理）
 fix_jxl_containers() {
     local target_path="$TARGET_DIR"
     [[ "$OUTPUT_MODE" == "adjacent" ]] && target_path="$OUTPUT_DIR"
 
-    # Check if there are any JXL files
     local jxl_count=$(find "$target_path" -type f -iname "*.jxl" 2>/dev/null | wc -l | tr -d ' ')
     [[ $jxl_count -eq 0 ]] && return 0
 
@@ -531,35 +516,47 @@ _main() {
 
         "$RSYNC_CMD" -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
         echo -e "\r   ${GREEN}✅ Non-media files synced.${RESET}         "
-        
-        # 🔥 v7.4.9: rsync 会修改目录时间戳，需要在最后再次修复
-        echo -ne "   ${DIM}Restoring directory timestamps...${RESET}"
-        # 内联恢复目录时间戳，不依赖外部脚本
-        find "$TARGET_DIR" -type d -print0 | while IFS= read -r -d '' src_dir; do
-            local rel="${src_dir#$TARGET_DIR}"
-            rel="${rel#/}"
-            local dst_dir="$OUTPUT_DIR${rel:+/$rel}"
-            [[ -d "$dst_dir" ]] && touch -r "$src_dir" "$dst_dir" 2>/dev/null
-        done
-        echo -e "\r   ${GREEN}✅ Directory timestamps restored.${RESET}  "
         echo ""
     fi
     
     # 🔥 v7.10: Auto-fix JXL containers for iCloud Photos compatibility
     fix_jxl_containers
-    
+
+    # 🔥 v8.2.5: 后处理（JXL fix / rsync）会更新时间戳，统一用 shared_utils 逻辑恢复（脚本只调用）
+    if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
+        "$IMGQUALITY_HEVC" restore-timestamps "$TARGET_DIR" "$OUTPUT_DIR" 2>/dev/null && echo -e "   ${GREEN}✅ Timestamps restored.${RESET}" || true
+    fi
+
     show_summary
 }
+
+# 🔥 v7.0.1: Internal worker for script logging compatibility
+if [[ "$1" == "--internal-worker" ]]; then
+    shift
+    # 💡 Variables are already initialized globally in the script
+    _main "$@"
+    exit $?
+fi
 
 # Wrapper function with full session logging
 main() {
     init_log
+    export LOG_FILE  # 🔥 Make it available to the worker process
     
-    # Use script command to capture full terminal session (including ANSI colors)
-    script -q -f "$LOG_FILE" -c '_main "$@"' -- "$@"
-    
-    # Show log location after script exits
-    save_log
+    # 🔥 v7.0.1: Support both macOS and Linux script syntax
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS: Use -F for flush. Command and args follow the log file positional argument.
+        # No -c option on macOS native script. Adding -e for child exit code.
+        script -q -e -F "$LOG_FILE" "$BASH" "$0" --internal-worker "$@"
+    else
+        # Linux / Others: Use -f for flush, and -c for command string
+        # Fallback to direct execution if script is not util-linux
+        if script --version 2>/dev/null | grep -q "util-linux"; then
+             script -q -f "$LOG_FILE" -c "$BASH \"$0\" --internal-worker \"$*\""
+        else
+             _main "$@"
+        fi
+    fi
 }
 
 main "$@"
