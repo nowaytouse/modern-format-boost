@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use walkdir::WalkDir;
+use serde_json;
 use tracing::info;
 
 use vid_av1::{auto_convert, detect_video, determine_strategy, ConversionConfig};
@@ -18,9 +20,13 @@ struct Cli {
 enum Commands {
     /// Analyze video properties
     Analyze {
-        /// Input video file
+        /// Input file or directory
         #[arg(value_name = "INPUT")]
         input: PathBuf,
+
+        /// Recursive directory scan
+        #[arg(short, long, default_value_t = true)]
+        recursive: bool,
 
         /// Output format
         #[arg(short, long, default_value = "human")]
@@ -43,7 +49,7 @@ enum Commands {
         force: bool,
 
         /// Recursive directory scan
-        #[arg(short, long)]
+        #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
         /// Delete original after conversion
@@ -133,14 +139,24 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Analyze { input, output } => {
-            let result = detect_video(&input)?;
-
-            match output {
-                OutputFormat::Human => print_analysis_human(&result),
-                OutputFormat::Json => {
-                    println!("{}", serde_json::to_string_pretty(&result)?);
+        Commands::Analyze {
+            input,
+            recursive,
+            output,
+        } => {
+            if input.is_file() {
+                let result = detect_video(&input)?;
+                match output {
+                    OutputFormat::Human => print_analysis_human(&result),
+                    OutputFormat::Json => {
+                        println!("{}", serde_json::to_string_pretty(&result)?);
+                    }
                 }
+            } else if input.is_dir() {
+                analyze_directory(&input, recursive, output)?;
+            } else {
+                eprintln!("❌ Error: Input path does not exist: {}", input.display());
+                std::process::exit(1);
             }
         }
 
@@ -330,4 +346,64 @@ fn print_analysis_human(result: &vid_av1::VideoDetectionResult) {
         }
     );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+}
+
+fn analyze_directory(
+    path: &PathBuf,
+    recursive: bool,
+    output_format: OutputFormat,
+) -> anyhow::Result<()> {
+    let walker = if recursive {
+        WalkDir::new(path).follow_links(true)
+    } else {
+        WalkDir::new(path).max_depth(1)
+    };
+
+    let mut results = Vec::new();
+    let mut count = 0;
+
+    for entry in walker {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        if let Some(ext) = path.extension() {
+            if shared_utils::file_copier::SUPPORTED_VIDEO_EXTENSIONS
+                .contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
+            {
+                match detect_video(path) {
+                    Ok(analysis) => {
+                        count += 1;
+                        if output_format == OutputFormat::Json {
+                            let result = serde_json::to_value(&analysis)?;
+                            results.push(result);
+                        } else {
+                            println!("\n{}", "=".repeat(80));
+                            print_analysis_human(&analysis);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  Failed to analyze {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+    }
+
+    if output_format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "total": count,
+                "results": results
+            })
+        );
+    } else {
+        println!("\n{}", "=".repeat(80));
+        println!("✅ Analysis complete: {} files processed", count);
+    }
+
+    Ok(())
 }

@@ -274,7 +274,7 @@ process_images() {
     draw_separator "Processing Images ($IMG_COUNT)"
 
     # 默认即推荐组合；仅传 run 与路径，与视频处理一致
-    local args=(run)
+    local args=(run --recursive)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
 
@@ -300,7 +300,7 @@ process_videos() {
     
     # 默认即推荐参数组合（explore + match-quality + compress + apple-compat + recursive + allow-size-tolerance）
     # 仅需传 run 与路径；递归强制开启。关闭项可组合：环境变量或在此追加 --no-apple-compat、--no-allow-size-tolerance
-    local args=(run)
+    local args=(run --recursive)
     [[ -n "${NO_APPLE_COMPAT:-}" ]] && args+=(--no-apple-compat)
     [[ -n "${NO_ALLOW_SIZE_TOLERANCE:-}" ]] && args+=(--no-allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
