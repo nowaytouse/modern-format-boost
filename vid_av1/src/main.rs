@@ -9,8 +9,8 @@ use vid_av1::{auto_convert, detect_video, determine_strategy, ConversionConfig};
 // 🔥 使用 shared_utils 的统计报告功能（模块化）
 
 #[derive(Parser)]
-#[command(name = "vidquality")]
-#[command(version, about = "Video quality analyzer and format converter - FFV1 archival and AV1 compression", long_about = None)]
+#[command(name = "vid-av1")]
+#[command(version, about = "Video quality analyzer and format converter - AV1 compression", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -77,10 +77,44 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         compress: bool,
 
-        /// 🍎 Apple compatibility mode: Skip AV1 conversion (AV1 not natively supported on Apple devices)
-        /// When enabled, shows a warning that AV1 files may not play on Apple devices
-        #[arg(long, default_value_t = false)]
+        /// 🍎 Apple compatibility mode: AV1 not natively supported on older Apple devices
+        /// When enabled, shows a warning that AV1 files may not play on older Apple devices
+        #[arg(long, default_value_t = true)]
         apple_compat: bool,
+
+        /// Disable Apple compatibility mode
+        #[arg(long)]
+        no_apple_compat: bool,
+
+        /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
+        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
+        /// ⚠️ MUST be used with --explore --match-quality --compress
+        #[arg(long, default_value_t = false)]
+        ultimate: bool,
+
+        /// 🔥 Enable MS-SSIM verification (Multi-Scale SSIM, more accurate but slower)
+        #[arg(long, default_value_t = false)]
+        ms_ssim: bool,
+
+        /// 🔥 Minimum MS-SSIM score threshold (default: 0.90, range: 0-1)
+        #[arg(long, default_value_t = 0.90)]
+        ms_ssim_threshold: f64,
+
+        /// 🔥 Force MS-SSIM verification even for long videos (>5min)
+        #[arg(long, default_value_t = false)]
+        force_ms_ssim_long: bool,
+
+        /// 🔥 v7.6: MS-SSIM sampling rate (1/N, e.g., 3 for 1/3 sampling)
+        #[arg(long)]
+        ms_ssim_sampling: Option<u32>,
+
+        /// 🔥 v7.6: Force full MS-SSIM calculation (disable sampling)
+        #[arg(long, default_value_t = false)]
+        full_ms_ssim: bool,
+
+        /// 🔥 v7.6: Skip MS-SSIM calculation entirely
+        #[arg(long, default_value_t = false)]
+        skip_ms_ssim: bool,
 
         /// 🔥 v4.15: Force CPU encoding (libaom) instead of hardware acceleration
         /// Use --cpu for maximum quality (higher SSIM)
@@ -176,12 +210,35 @@ fn main() -> anyhow::Result<()> {
             match_quality,
             compress,
             apple_compat,
+            no_apple_compat,
+            ultimate,
+            ms_ssim,
+            ms_ssim_threshold,
+            force_ms_ssim_long,
+            ms_ssim_sampling,
+            full_ms_ssim,
+            skip_ms_ssim,
             cpu,
             base_dir,
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
         } => {
+            // Apply --no-* overrides
+            let apple_compat = apple_compat && !no_apple_compat;
+            let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
+
+            // 🔥 v6.2: Validate flag combinations with ultimate support
+            if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
+                explore,
+                match_quality,
+                compress,
+                ultimate,
+            ) {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            }
+
             // Determine base directory
             let base_dir = if let Some(explicit_base) = base_dir {
                 Some(explicit_base)
@@ -211,22 +268,19 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 in_place,
                 // 🔥 v3.5: 裁判机制增强参数
-                min_ssim: 0.95,          // 默认 SSIM 阈值
-                validate_ms_ssim: false, // 默认不启用 VMAF（较慢）
-                // 🔥 v7.6: MS-SSIM优化配置
-                ms_ssim_sampling: None, // 自动选择
-                full_ms_ssim: false,
-                skip_ms_ssim: false,
-                min_ms_ssim: 85.0,             // 默认 VMAF 阈值
-                require_compression: compress, // 🔥 v4.6
-                apple_compat,                  // 🍎 v4.15
-                use_gpu: !cpu,                 // 🔥 v4.15: CPU mode = no GPU
-                // HEVC flags (unused in AV1)
-                force_ms_ssim_long: false,
-                ultimate_mode: false,
-                // 🔥 v7.9: Pass down thread limit
+                min_ssim: 0.95,
+                validate_ms_ssim: ms_ssim,
+                ms_ssim_sampling,
+                full_ms_ssim,
+                skip_ms_ssim,
+                min_ms_ssim: ms_ssim_threshold,
+                require_compression: compress,
+                apple_compat,
+                use_gpu: !cpu,
+                force_ms_ssim_long,
+                ultimate_mode: ultimate,
                 child_threads: thread_config.child_threads,
-                allow_size_tolerance: allow_size_tolerance && !no_allow_size_tolerance,
+                allow_size_tolerance,
                 verbose,
             };
 
@@ -249,10 +303,34 @@ fn main() -> anyhow::Result<()> {
                 info!("   📂 Recursive: ENABLED");
             }
             if apple_compat {
-                info!("   🍎 Apple Compatibility: ENABLED (⚠️ Note: AV1 not natively supported on Apple devices)");
+                info!("   🍎 Apple Compatibility: ENABLED (⚠️ Note: AV1 not natively supported on older Apple devices)");
+                std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
+            }
+            if ultimate {
+                info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if cpu {
                 info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
+            }
+            if ms_ssim {
+                info!(
+                    "   📊 MS-SSIM Verification: ENABLED (threshold: {:.2})",
+                    ms_ssim_threshold
+                );
+                if force_ms_ssim_long {
+                    info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
+                }
+                if skip_ms_ssim {
+                    eprintln!("⚠️  Warning: --skip-ms-ssim conflicts with --ms-ssim, MS-SSIM will be skipped");
+                } else if full_ms_ssim {
+                    info!("   🔥 Full MS-SSIM: ENABLED (no sampling)");
+                } else if let Some(rate) = ms_ssim_sampling {
+                    info!("   📊 MS-SSIM Sampling: 1/{} frames", rate);
+                } else {
+                    info!("   📊 MS-SSIM Sampling: AUTO (based on video duration)");
+                }
+            } else if skip_ms_ssim {
+                info!("   ⏭️  MS-SSIM: SKIPPED");
             }
             info!("");
 
@@ -277,7 +355,7 @@ fn main() -> anyhow::Result<()> {
             output,
             lossless: _,
         } => {
-            info!("🎬 Simple Mode Conversion");
+            info!("🎬 Simple Mode Conversion (AV1)");
             info!("   ⚠️  ALL videos → AV1 MP4 (MATHEMATICAL LOSSLESS - VERY SLOW!)");
             info!("   (Note: Simple mode now enforces lossless conversion by default)");
             info!("");
@@ -294,7 +372,7 @@ fn main() -> anyhow::Result<()> {
             let detection = detect_video(&input)?;
             let strategy = determine_strategy(&detection);
 
-            println!("\n🎯 Recommended Strategy (Auto Mode)");
+            println!("\n🎯 Recommended Strategy (AV1 Auto Mode)");
             println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
             println!("📁 File: {}", input.display());
             println!(
@@ -313,7 +391,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn print_analysis_human(result: &vid_av1::VideoDetectionResult) {
-    println!("\n📊 Video Analysis Report");
+    println!("\n📊 Video Analysis Report (AV1)");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("📁 File: {}", result.file_path);
     println!("📦 Format: {}", result.format);

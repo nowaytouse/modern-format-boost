@@ -9,9 +9,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use walkdir::WalkDir;
 
+use img_av1::conversion_api::ConversionOutput;
+
 /// Configuration for auto-convert operations
-struct AutoConvertConfig<'a> {
-    output_dir: Option<&'a Path>,
+#[derive(Clone)]
+struct AutoConvertConfig {
+    output_dir: Option<PathBuf>,
     force: bool,
     recursive: bool,
     delete_original: bool,
@@ -20,12 +23,15 @@ struct AutoConvertConfig<'a> {
     explore: bool,
     match_quality: bool,
     compress: bool,
+    apple_compat: bool,
     /// 🔥 v4.15: Use GPU acceleration (default: true)
     use_gpu: bool,
+    /// 🔥 v6.2: 极限探索模式（AV1 暂不支持 Domain Wall，但保留 flag 以对齐接口）
+    ultimate: bool,
     /// Verbose output
     verbose: bool,
     /// Base directory for relative path preservation
-    base_dir: Option<&'a Path>,
+    base_dir: Option<PathBuf>,
     /// 🔥 v7.9: Balanced thread config
     child_threads: usize,
     /// 🔥 v8.3: Allow 1% size tolerance
@@ -33,8 +39,8 @@ struct AutoConvertConfig<'a> {
 }
 
 #[derive(Parser)]
-#[command(name = "imgquality")]
-#[command(version, about = "Image quality analyzer and format upgrade tool", long_about = None)]
+#[command(name = "img-av1")]
+#[command(version, about = "Image quality analyzer and format upgrade tool - AV1/AVIF", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -80,7 +86,7 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
 
-        /// Recursive directory scan
+        /// Recursive directory scan (always on; 强制递归)
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
@@ -94,7 +100,7 @@ enum Commands {
         #[arg(long)]
         in_place: bool,
 
-        /// Use mathematical lossless AVIF/AV1 (⚠️ VERY SLOW, huge files)
+        /// Use mathematical lossless AV1 (⚠️ VERY SLOW, huge files)
         #[arg(long)]
         lossless: bool,
 
@@ -110,13 +116,28 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         compress: bool,
 
+        /// 🍎 Apple compatibility mode: Convert non-Apple-compatible animated formats to AV1
+        /// When enabled, animated WebP (VP8/VP9) will be converted to AV1 MP4
+        /// instead of being skipped as "modern format"
+        #[arg(long, default_value_t = true)]
+        apple_compat: bool,
+
+        /// Disable Apple compatibility mode
+        #[arg(long)]
+        no_apple_compat: bool,
+
+        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
+        /// ⚠️ MUST be used with --explore --match-quality --compress
+        #[arg(long, default_value_t = false)]
+        ultimate: bool,
+
         /// 🔥 v4.15: Force CPU encoding (libaom) instead of GPU
         /// Hardware encoding may have lower quality ceiling. Use --cpu for maximum SSIM
         #[arg(long, default_value_t = false)]
         cpu: bool,
 
-        /// Verbose output
-        #[arg(long)]
+        /// Verbose output (show skipped files and success messages)
+        #[arg(short, long)]
         verbose: bool,
 
         /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
@@ -139,6 +160,18 @@ enum Commands {
 
         /// Converted file
         converted: PathBuf,
+    },
+
+    /// 从源目录恢复输出目录的时间戳（目录+文件）
+    /// 供脚本在后处理（如 JXL Container Fix）后调用，逻辑在 shared_utils，此处仅转发
+    RestoreTimestamps {
+        /// 源目录（如 test）
+        #[arg(value_name = "SOURCE_DIR")]
+        source: PathBuf,
+
+        /// 输出目录（如 test_optimized）
+        #[arg(value_name = "OUTPUT_DIR")]
+        output: PathBuf,
     },
 }
 
@@ -185,6 +218,9 @@ fn main() -> anyhow::Result<()> {
             explore,
             match_quality,
             compress,
+            apple_compat,
+            no_apple_compat,
+            ultimate,
             cpu,
             base_dir,
             verbose,
@@ -192,48 +228,53 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
         } => {
+            // Apply --no-apple-compat override
+            let apple_compat = apple_compat && !no_apple_compat;
+            let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
 
-            // 🔥 v4.6: 使用模块化的 flag 验证器
-            let flag_mode =
-                match shared_utils::validate_flags_result(explore, match_quality, compress) {
-                    Ok(mode) => mode,
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        std::process::exit(1);
-                    }
-                };
+            // 🔥 v6.2: 使用模块化的 flag 验证器（含 ultimate 支持）
+            let flag_mode = match shared_utils::validate_flags_result_with_ultimate(
+                explore,
+                match_quality,
+                compress,
+                ultimate,
+            ) {
+                Ok(mode) => mode,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            };
 
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-            } else {
+                eprintln!("   Smart quality matching: DISABLED");
+            } else if verbose {
                 eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
+                eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
+            }
+            if apple_compat {
+                eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
+                std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if in_place {
                 eprintln!(
                     "🔄 In-place mode: ENABLED (original files will be deleted after conversion)"
                 );
             }
+            if ultimate {
+                eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+            }
+            if !allow_size_tolerance {
+                eprintln!(
+                    "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)"
+                );
+            }
             if cpu {
                 eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
-
-            // Determine base directory
-            // 🔥 v7.9.6: If explicitly provided via CLI, use it. Otherwise calculate based on input.
-            let base_dir = if let Some(explicit_base) = base_dir {
-                Some(explicit_base)
-            } else if recursive {
-                // Recursive: base is the input directory (or parent if input is file)
-                if input.is_dir() {
-                    Some(input.clone())
-                } else {
-                    input.parent().map(|p| p.to_path_buf())
-                }
-            } else {
-                // Non-recursive: base is parent of input
-                input.parent().map(|p| p.to_path_buf())
-            };
 
             // 🔥 v7.9: Calculate balanced thread configuration
             let workload = if input.is_dir() {
@@ -244,7 +285,7 @@ fn main() -> anyhow::Result<()> {
             let thread_config = shared_utils::thread_manager::get_balanced_thread_config(workload);
 
             let config = AutoConvertConfig {
-                output_dir: output.as_deref(),
+                output_dir: output.clone(),
                 force,
                 recursive,
                 delete_original: should_delete,
@@ -253,16 +294,19 @@ fn main() -> anyhow::Result<()> {
                 explore,
                 match_quality,
                 compress,
-                use_gpu: !cpu, // 🔥 v4.15: CPU mode = no GPU
+                apple_compat,
+                use_gpu: !cpu,
+                ultimate,
                 verbose,
-                base_dir: base_dir.as_deref(),
+                base_dir: base_dir.clone(),
                 child_threads: if child_threads > 0 {
                     child_threads
                 } else {
                     thread_config.child_threads
                 },
-                allow_size_tolerance: allow_size_tolerance && !no_allow_size_tolerance,
+                allow_size_tolerance,
             };
+
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
@@ -278,6 +322,14 @@ fn main() -> anyhow::Result<()> {
             converted,
         } => {
             verify_conversion(&original, &converted)?;
+        }
+
+        Commands::RestoreTimestamps { source, output } => {
+            if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
+            {
+                eprintln!("⚠️ restore-timestamps failed: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 
@@ -386,6 +438,7 @@ fn analyze_directory(
 
     Ok(())
 }
+
 fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
@@ -438,7 +491,6 @@ fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<
 
 /// Load image safely, handling JXL via external decoder if needed
 fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
-    // Check extension
     let is_jxl = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase() == "jxl")
@@ -447,7 +499,6 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
     if is_jxl {
         use std::process::Command;
 
-        // 🔥 Secure temp file creation
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
             .tempfile()
@@ -455,7 +506,6 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
 
         let temp_path = temp_png_file.path();
 
-        // Decode JXL to PNG using djxl
         let status = Command::new("djxl")
             .arg(shared_utils::safe_path_arg(path).as_ref())
             .arg(temp_path)
@@ -466,11 +516,9 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
             return Err(anyhow::anyhow!("djxl failed to decode JXL file"));
         }
 
-        // Load the temp PNG
         let img = image::open(temp_path)
             .map_err(|e| anyhow::anyhow!("Failed to open decoded PNG: {}", e))?;
 
-        // Cleanup is automatic via NamedTempFile guard drop
         Ok(img)
     } else {
         Ok(image::open(path)?)
@@ -507,7 +555,6 @@ fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
         println!("🎬 Animated: Yes");
     }
 
-    // Quality analysis section
     println!("\n📈 Quality Analysis");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!(
@@ -534,7 +581,6 @@ fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
         analysis.features.compression_ratio * 100.0
     );
 
-    // JPEG specific analysis with enhanced details
     if let Some(ref jpeg) = analysis.jpeg_analysis {
         println!("\n🎯 JPEGQuality Analysis (accuracy: ±1)");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -552,7 +598,6 @@ fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
             }
         );
 
-        // Show both luma and chroma quality if available
         if let Some(chroma_q) = jpeg.chrominance_quality {
             println!(
                 "🔬 Luma quality: Q={} (SSE: {:.1})",
@@ -565,7 +610,6 @@ fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
             println!("🔬 Luma SSE:  {:.1}", jpeg.luminance_sse);
         }
 
-        // Show encoder hint if detected
         if let Some(ref encoder) = jpeg.encoder_hint {
             println!("🏭 Encoder:   {}", encoder);
         }
@@ -575,7 +619,6 @@ fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
         }
     }
 
-    // Legacy PSNR/SSIM
     if let Some(psnr) = analysis.psnr {
         println!("\n📐 Estimated metrics");
         println!("   PSNR: {:.2} dB", psnr);
@@ -604,15 +647,29 @@ fn print_recommendation_human(rec: &img_av1::UpgradeRecommendation) {
     }
 }
 
+/// 🔥 在"输出到相邻目录"模式下复制原始文件
+/// 当文件被跳过时（短动画、无法压缩等），需要将原始文件复制到输出目录
+fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
+    shared_utils::copy_on_skip_or_fail(
+        input,
+        config.output_dir.as_deref(),
+        config.base_dir.as_deref(),
+        config.verbose,
+    )?;
+    Ok(())
+}
+
 /// Smart auto-convert a single file based on format detection
-fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
+fn auto_convert_single_file(
+    input: &Path,
+    config: &AutoConvertConfig,
+) -> anyhow::Result<ConversionOutput> {
     use img_av1::lossless_converter::{
         convert_jpeg_to_jxl, convert_to_av1_mp4, convert_to_av1_mp4_lossless,
         convert_to_av1_mp4_matched, convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
 
-    // 🔥 v8.2.3: Fix extension BEFORE analysis/conversion so get_input_dimensions
-    // can correctly read files with mismatched extensions (e.g. WebP disguised as .jpeg)
+    // 🔥 v8.2.3: Fix extension BEFORE analysis/conversion
     let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
     let input = fixed_input.as_path();
 
@@ -620,21 +677,40 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
 
     let options = ConvertOptions {
         force: config.force,
-        output_dir: config.output_dir.map(|p| p.to_path_buf()),
-        base_dir: config.base_dir.map(|p| p.to_path_buf()),
+        output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),
         delete_original: config.delete_original,
         in_place: config.in_place,
         explore: config.explore,
         match_quality: config.match_quality,
         compress: config.compress,
-        apple_compat: false,        // img_av1 不需要 Apple 兼容模式
-        use_gpu: config.use_gpu,    // 🔥 v4.15: Pass GPU control
-        ultimate: false,            // 🔥 v6.2: AV1 暂不支持极限模式
-        allow_size_tolerance: config.allow_size_tolerance, // 🔥 v7.8.3: Use config value
+        apple_compat: config.apple_compat,
+        use_gpu: config.use_gpu,
+        ultimate: config.ultimate,
+        allow_size_tolerance: config.allow_size_tolerance,
         verbose: config.verbose,
         child_threads: config.child_threads,
-        // 🔥 v7.9.8: Inject detected format to handle misleading extensions
         input_format: Some(analysis.format.clone()),
+    };
+
+    macro_rules! verbose_log {
+        ($($arg:tt)*) => {
+            if config.verbose {
+                println!($($arg)*);
+            }
+        };
+    }
+
+    let make_skipped = |msg: &str| -> ConversionOutput {
+        ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            message: msg.to_string(),
+            original_size: analysis.file_size,
+            output_size: None,
+            size_reduction: None,
+        }
     };
 
     // Smart conversion based on format and lossless status
@@ -651,39 +727,38 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         | ("AVIF", true, false)
         | ("HEIC", true, false)
         | ("HEIF", true, false) => {
-            println!("🔄 Modern Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0)? // Mathematical lossless
+            verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
+            convert_to_jxl(input, &options, 0.0)?
         }
-        ("WebP", false, _) | ("AVIF", false, _) | ("HEIC", false, _) | ("HEIF", false, _) => {
-            println!(
+        ("WebP", false, false)
+        | ("AVIF", false, false)
+        | ("HEIC", false, false)
+        | ("HEIF", false, false) => {
+            verbose_log!(
                 "⏭️ Skipping modern lossy format (avoid generation loss): {}",
                 input.display()
             );
-            return Ok(());
+            copy_original_if_adjacent_mode(input, config)?;
+            return Ok(make_skipped("Skipping modern lossy format"));
         }
 
         // JPEG → JXL
         ("JPEG", _, false) => {
             if config.match_quality {
-                // Match quality mode: use lossy JXL with matched distance for better compression
-                println!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
+                verbose_log!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
                 convert_to_jxl_matched(input, &options, &analysis)?
             } else {
-                // Default: lossless transcode (preserves DCT coefficients, no quality loss)
-                println!("🔄 JPEG→JXL lossless transcode: {}", input.display());
+                verbose_log!("🔄 JPEG→JXL lossless transcode: {}", input.display());
                 convert_jpeg_to_jxl(input, &options)?
             }
         }
         // Legacy Static lossless (PNG, TIFF, BMP etc) → JXL
         (_, true, false) => {
-            println!("🔄 Legacy Lossless→JXL: {}", input.display());
+            verbose_log!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
         // Animated lossless → AV1 MP4 CRF 0 (visually lossless, only if >=3 seconds)
-        // 🔥 无损源保持高质量：默认 CRF 0，用户可选 --lossless 数学无损
         (_, true, true) => {
-            // Check duration - only convert animations >=3 seconds
-            // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
@@ -692,30 +767,30 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
                         input.display()
                     );
                     eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                    return Ok(());
+                    eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
+                    copy_original_if_adjacent_mode(input, config)?;
+                    return Ok(make_skipped("Cannot get animation duration"));
                 }
             };
             if duration < 3.0 {
-                println!(
+                verbose_log!(
                     "⏭️ Skipping short animation ({:.1}s < 3s): {}",
                     duration,
                     input.display()
                 );
-                return Ok(());
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(make_skipped("Skipping short animation"));
             }
 
             if config.lossless {
-                // 用户显式要求数学无损
-                println!(
+                verbose_log!(
                     "🔄 Animated lossless→AV1 MP4 (LOSSLESS, {:.1}s): {}",
                     duration,
                     input.display()
                 );
                 convert_to_av1_mp4_lossless(input, &options)?
             } else {
-                // 🔥 无损源默认使用 CRF 0（视觉无损），不使用 match_quality
-                // match_quality 仅用于有损源
-                println!(
+                verbose_log!(
                     "🔄 Animated lossless→AV1 MP4 (CRF 0, {:.1}s): {}",
                     duration,
                     input.display()
@@ -724,9 +799,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
             }
         }
         // Animated lossy → AV1 MP4 with match_quality (only if >=3 seconds)
-        // 🔥 有损源使用 match_quality 以获得更好的空间效率
         (_, false, true) => {
-            // 🔥 质量宣言：时长未知时使用保守策略（跳过），并响亮警告
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
@@ -735,29 +808,29 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
                         input.display()
                     );
                     eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                    return Ok(());
+                    copy_original_if_adjacent_mode(input, config)?;
+                    return Ok(make_skipped("Cannot get animation duration"));
                 }
             };
             if duration < 3.0 {
-                println!(
+                verbose_log!(
                     "⏭️ Skipping short animation ({:.1}s < 3s): {}",
                     duration,
                     input.display()
                 );
-                return Ok(());
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(make_skipped("Skipping short animation"));
             }
 
             if config.lossless {
-                // 用户显式要求数学无损
-                println!(
+                verbose_log!(
                     "🔄 Animated lossy→AV1 MP4 (LOSSLESS, {:.1}s): {}",
                     duration,
                     input.display()
                 );
                 convert_to_av1_mp4_lossless(input, &options)?
             } else {
-                // 🔥 有损源默认使用 match_quality
-                println!(
+                verbose_log!(
                     "🔄 Animated lossy→AV1 MP4 (MATCH QUALITY, {:.1}s): {}",
                     duration,
                     input.display()
@@ -766,32 +839,41 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
             }
         }
         // Legacy Static lossy (non-JPEG, non-Modern) → JXL
-        // This handles cases like BMP (if not detected as lossless somehow) or other obscure formats
         (format, false, false) => {
-            // Redundant safecheck for WebP/AVIF/HEIC just in case pattern matching missed
             if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
-                println!("⏭️ Skipping modern lossy format: {}", input.display());
-                return Ok(());
+                verbose_log!("⏭️ Skipping modern lossy format: {}", input.display());
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(make_skipped("Skipping modern lossy format"));
             }
 
             if config.match_quality {
-                println!("🔄 Legacy Lossy→JXL (MATCH QUALITY): {}", input.display());
+                verbose_log!("🔄 Legacy Lossy→JXL (MATCH QUALITY): {}", input.display());
                 convert_to_jxl_matched(input, &options, &analysis)?
             } else {
-                println!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
+                verbose_log!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
                 convert_to_jxl(input, &options, 0.1)?
             }
         }
     };
 
-    if result.skipped {
-        println!("⏭️ {}", result.message);
+    // 🔥 将 ConversionResult 转换为 ConversionOutput
+    let output = ConversionOutput {
+        original_path: result.input_path.clone(),
+        output_path: result.output_path.clone().unwrap_or(result.input_path),
+        skipped: result.skipped,
+        message: result.message.clone(),
+        original_size: result.input_size,
+        output_size: result.output_size,
+        size_reduction: result.size_reduction.map(|r| r as f32),
+    };
+
+    if output.skipped {
+        verbose_log!("⏭️ {}", output.message);
     } else {
-        // 🔥 修复：message 已经包含了正确的 size reduction/increase 信息
-        println!("✅ {}", result.message);
+        verbose_log!("✅ {}", output.message);
     }
 
-    Ok(())
+    Ok(output)
 }
 
 /// Smart auto-convert a directory with parallel processing and progress bar
@@ -804,12 +886,26 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         }
     }
 
+    // 🔥 v6.9.15: 克隆 config 并设置 base_dir 以保留目录结构
+    let mut config_with_base = config.clone();
+    if config_with_base.output_dir.is_some() && config_with_base.base_dir.is_none() {
+        config_with_base.base_dir = Some(input.to_path_buf());
+    }
+
+    let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Image,
+    );
+    let pool_size = thread_config.parallel_tasks;
+    config_with_base.child_threads = thread_config.child_threads;
+
+    let config = &config_with_base;
+
     let start_time = Instant::now();
 
+    // 🔥 v8.2.5: 必须在 collect_files 之前保存！collect_files 遍历目录会更新 atime
+    let saved_dir_timestamps = shared_utils::save_directory_timestamps(input).ok();
+
     // 🔥 v7.5: 使用文件排序功能，优先处理小文件
-    // - 快速看到进度反馈
-    // - 小文件处理快，可以更早发现问题
-    // - 大文件留到后面，避免长时间卡住
     let files = shared_utils::collect_files_small_first(
         input,
         shared_utils::SUPPORTED_IMAGE_EXTENSIONS,
@@ -822,7 +918,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
         // 🔥 v7.4.9: 即使没有文件，也要保留目录元数据
         if let Some(output_dir) = config.output_dir.as_ref() {
-            if let Some(base_dir) = config.base_dir {
+            if let Some(ref base_dir) = config.base_dir {
                 shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
             }
         }
@@ -830,8 +926,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         return Ok(());
     }
 
-    println!("📂 Found {} files to process", total);
-    if config.lossless {
+    if config.verbose {
+        println!("📂 Found {} files to process", total);
+    }
+    if config.lossless && config.verbose {
         println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
     }
 
@@ -840,22 +938,15 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     let skipped = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
     let processed = AtomicUsize::new(0);
-    // 🔥 修复：追踪实际转换的输入/输出大小
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
 
     // 🔥 Progress bar with ETA
-    let pb = shared_utils::create_progress_bar(total as u64, "Converting");
+    let pb = shared_utils::UnifiedProgressBar::new(total as u64, "Converting");
 
-    // 🔥 性能优化：限制并发数，避免系统卡顿
-    // - 使用智能线程管理器计算最优并发数
-    // - 针对 Apple Silicon 优化，防止过载
-    let balanced_config = shared_utils::thread_manager::get_balanced_thread_config(
-        shared_utils::thread_manager::WorkloadType::Image,
-    );
-    let pool_size = balanced_config.parallel_tasks;
+    // 🔥 v7.3.2: 启用安静模式，避免并行线程的进度条互相干扰
+    shared_utils::progress_mode::enable_quiet_mode();
 
-    // 创建自定义线程池
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(pool_size)
         .build()
@@ -866,47 +957,28 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
                 .expect("Failed to create fallback thread pool")
         });
 
-    println!(
-        "🔧 Using {} parallel threads (CPU cores: {}) with {} threads per task",
-        pool_size,
-        num_cpus::get(),
-        balanced_config.child_threads
-    );
+    if config.verbose {
+        println!(
+            "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
+            pool_size,
+            thread_config.child_threads,
+            num_cpus::get()
+        );
+    }
 
     // Process files in parallel using custom thread pool
     pool.install(|| {
         files.par_iter().for_each(|path| {
-            // 获取输入文件大小
-            let input_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-
             match auto_convert_single_file(path, config) {
-                Ok(_) => {
-                    // 🔥 修复：检查是否真的生成了输出文件
-                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    let parent_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-                    let out_dir = config.output_dir.unwrap_or(&parent_dir);
-
-                    // 检查可能的输出文件
-                    let possible_outputs = [
-                        out_dir.join(format!("{}.jxl", stem)),
-                        out_dir.join(format!("{}.mp4", stem)),
-                    ];
-
-                    let output_size: u64 = possible_outputs
-                        .iter()
-                        .filter_map(|p| std::fs::metadata(p).ok())
-                        .map(|m| m.len())
-                        .next()
-                        .unwrap_or(0);
-
-                    if output_size > 0 {
-                        // 真正成功的转换
-                        success.fetch_add(1, Ordering::Relaxed);
-                        actual_input_bytes.fetch_add(input_size, Ordering::Relaxed);
-                        actual_output_bytes.fetch_add(output_size, Ordering::Relaxed);
-                    } else {
-                        // 跳过的文件（没有生成输出）
+                Ok(result) => {
+                    if result.skipped {
                         skipped.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        success.fetch_add(1, Ordering::Relaxed);
+                        actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
+                        if let Some(out_size) = result.output_size {
+                            actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
+                        }
                     }
                 }
                 Err(e) => {
@@ -916,6 +988,15 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
                     } else {
                         eprintln!("❌ Conversion failed {}: {}", path.display(), e);
                         failed.fetch_add(1, Ordering::Relaxed);
+
+                        if let Some(ref output_dir) = config.output_dir {
+                            let _ = shared_utils::copy_on_skip_or_fail(
+                                path,
+                                Some(output_dir),
+                                config.base_dir.as_deref(),
+                                config.verbose,
+                            );
+                        }
                     }
                 }
             }
@@ -932,22 +1013,22 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     pb.finish_with_message("Complete!");
 
+    // 🔥 v7.3.2: 恢复正常模式
+    shared_utils::progress_mode::disable_quiet_mode();
+
     let success_count = success.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);
     let failed_count = failed.load(Ordering::Relaxed);
 
-    // Build result for summary report
     let mut result = BatchResult::new();
     result.succeeded = success_count;
     result.failed = failed_count;
     result.skipped = skipped_count;
     result.total = total;
 
-    // 🔥 修复：使用实际追踪的输入/输出大小
     let final_input_bytes = actual_input_bytes.load(Ordering::Relaxed);
     let final_output_bytes = actual_output_bytes.load(Ordering::Relaxed);
 
-    // 🔥 Print detailed summary report
     print_summary_report(
         &result,
         start_time.elapsed(),
@@ -956,11 +1037,22 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         "Image Conversion",
     );
 
-    // 🔥 v7.4.5: 保留目录元数据（时间戳、权限、xattr）
-    if let Some(output_dir) = config.output_dir {
-        if let Some(base_dir) = config.base_dir {
+    // 🔥 v7.4.9: 保留目录元数据（权限、xattr）
+    if let Some(ref output_dir) = config.output_dir {
+        if let Some(ref base_dir) = config.base_dir {
             shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
         }
+    }
+
+    // 🔥 v8.2.5: 用处理前保存的时间戳恢复
+    if let Some(ref saved) = saved_dir_timestamps {
+        if let Some(ref output_dir) = config.output_dir {
+            if let Some(ref base_dir) = config.base_dir {
+                shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
+            }
+        }
+        shared_utils::restore_directory_timestamps(saved);
+        println!("✅ Directory timestamps restored");
     }
 
     Ok(())
