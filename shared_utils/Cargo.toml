@@ -41,6 +41,11 @@ lazy_static = { workspace = true }
 
 tempfile = { workspace = true }
 
+# Image analysis dependencies (migrated from img_hevc/img_av1)
+image = { workspace = true }
+rayon = { workspace = true }
+libheif-rs = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 

@@ -114,6 +114,20 @@ pub mod errors;
 // 🔥 Refactor: Shared Conversion Types
 pub mod conversion_types;
 
+// 🔥 Refactor: Video detection (migrated from vid_hevc/vid_av1)
+pub mod video_detection;
+
+// 🔥 Refactor: Image analysis modules (migrated from img_hevc/img_av1)
+pub mod img_errors;
+pub mod image_analyzer;
+pub mod image_detection;
+pub mod image_formats;
+pub mod image_heic_analysis;
+pub mod image_jpeg_analysis;
+pub mod image_metrics;
+pub mod image_quality_core;
+pub mod image_recommender;
+
 pub use batch::*;
 pub use codecs::*;
 pub use conversion::*;

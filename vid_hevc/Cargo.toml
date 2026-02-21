@@ -42,3 +42,6 @@ shared_utils = { workspace = true }
 
 # CPU detection for performance optimization
 num_cpus = { workspace = true }
+
+# Image dimension detection (for animated image → video conversion)
+image = { workspace = true }

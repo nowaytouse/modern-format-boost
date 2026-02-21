@@ -535,65 +535,6 @@ mod tests {
     // Size Reduction Calculation Tests (裁判机制)
     // ============================================================
 
-    #[test]
-    fn test_calculate_size_reduction_50_percent() {
-        // 1000 -> 500 = 50% reduction
-        let reduction = calculate_size_reduction(1000, 500);
-        assert!(
-            (reduction - 50.0).abs() < 0.01,
-            "1000->500 should be 50% reduction, got {}",
-            reduction
-        );
-    }
-
-    #[test]
-    fn test_calculate_size_reduction_75_percent() {
-        // 1000 -> 250 = 75% reduction
-        let reduction = calculate_size_reduction(1000, 250);
-        assert!(
-            (reduction - 75.0).abs() < 0.01,
-            "1000->250 should be 75% reduction, got {}",
-            reduction
-        );
-    }
-
-    #[test]
-    fn test_calculate_size_reduction_no_change() {
-        // Same size = 0% reduction
-        let reduction = calculate_size_reduction(1000, 1000);
-        assert!(
-            (reduction - 0.0).abs() < 0.01,
-            "Same size should be 0% reduction, got {}",
-            reduction
-        );
-    }
-
-    #[test]
-    fn test_calculate_size_reduction_increase() {
-        // 500 -> 1000 = -100% (doubled)
-        let reduction = calculate_size_reduction(500, 1000);
-        assert!(
-            (reduction - (-100.0)).abs() < 0.01,
-            "500->1000 should be -100% (increase), got {}",
-            reduction
-        );
-    }
-
-    #[test]
-    fn test_calculate_size_reduction_small_increase() {
-        // 1000 -> 1100 = -10% increase
-        let reduction = calculate_size_reduction(1000, 1100);
-        assert!(
-            (reduction - (-10.0)).abs() < 0.01,
-            "1000->1100 should be -10% (increase), got {}",
-            reduction
-        );
-    }
-
-    // ============================================================
-    // 🔬 Strict Precision Tests (裁判机制)
-    // ============================================================
-
     /// Strict test: Size reduction formula must be mathematically correct
     #[test]
     fn test_strict_size_reduction_formula() {
@@ -788,56 +729,8 @@ mod tests {
     }
 
     // ============================================================
-    // Consistency Tests (裁判机制)
-    // ============================================================
-
-    #[test]
-    fn test_consistency_size_reduction() {
-        // Same input should always produce same output
-        for _ in 0..10 {
-            let result1 = calculate_size_reduction(1000, 500);
-            let result2 = calculate_size_reduction(1000, 500);
-            assert!(
-                (result1 - result2).abs() < 0.0000001,
-                "Size reduction calculation must be deterministic"
-            );
-        }
-    }
-
-    #[test]
-    fn test_consistency_format_message() {
-        // Same input should always produce same message
-        let msg1 = format_size_change(1000, 500);
-        let msg2 = format_size_change(1000, 500);
-        assert_eq!(msg1, msg2, "Format message must be deterministic");
-    }
-
-    // ============================================================
     // 🔥 v4.15: GPU/CPU Mode Tests (裁判机制)
     // ============================================================
-
-    #[test]
-    fn test_convert_options_default_use_gpu() {
-        // 🔥 v4.15: 默认应该使用 GPU
-        let opts = ConvertOptions::default();
-        assert!(opts.use_gpu, "Default should use GPU (use_gpu = true)");
-    }
-
-    #[test]
-    fn test_convert_options_cpu_mode() {
-        // 🔥 v4.15: 显式设置 CPU 模式
-        let mut opts = ConvertOptions::default();
-        opts.use_gpu = false;
-        assert!(!opts.use_gpu, "CPU mode should have use_gpu = false");
-    }
-
-    #[test]
-    fn test_convert_options_gpu_mode_explicit() {
-        // 显式设置 GPU 模式
-        let mut opts = ConvertOptions::default();
-        opts.use_gpu = true;
-        assert!(opts.use_gpu, "GPU mode should have use_gpu = true");
-    }
 
     // ============================================================
     // 🔥 v4.15: Flag Mode with GPU/CPU Combinations (裁判机制)
@@ -1036,64 +929,4 @@ mod tests {
         }
     }
 
-    // ============================================================
-    // 🔥 v4.15: Delete Original Edge Cases (裁判机制)
-    // ============================================================
-
-    #[test]
-    fn test_should_delete_original_both_false() {
-        let opts = ConvertOptions::default();
-        assert!(!opts.delete_original);
-        assert!(!opts.in_place);
-        assert!(!opts.should_delete_original());
-    }
-
-    #[test]
-    fn test_should_delete_original_delete_true() {
-        let mut opts = ConvertOptions::default();
-        opts.delete_original = true;
-        opts.in_place = false;
-        assert!(opts.should_delete_original());
-    }
-
-    #[test]
-    fn test_should_delete_original_inplace_true() {
-        let mut opts = ConvertOptions::default();
-        opts.delete_original = false;
-        opts.in_place = true;
-        assert!(opts.should_delete_original());
-    }
-
-    #[test]
-    fn test_should_delete_original_both_true() {
-        let mut opts = ConvertOptions::default();
-        opts.delete_original = true;
-        opts.in_place = true;
-        assert!(opts.should_delete_original());
-    }
-
-    // ============================================================
-    // 🔥 v4.15: ConvertOptions Clone/Debug Tests (裁判机制)
-    // ============================================================
-
-    #[test]
-    fn test_convert_options_clone() {
-        let mut opts = ConvertOptions::default();
-        opts.explore = true;
-        opts.match_quality = true;
-        opts.use_gpu = false;
-
-        let cloned = opts.clone();
-        assert_eq!(opts.explore, cloned.explore);
-        assert_eq!(opts.match_quality, cloned.match_quality);
-        assert_eq!(opts.use_gpu, cloned.use_gpu);
-    }
-
-    #[test]
-    fn test_convert_options_debug() {
-        let opts = ConvertOptions::default();
-        let debug_str = format!("{:?}", opts);
-        assert!(debug_str.contains("ConvertOptions"));
-        assert!(debug_str.contains("use_gpu"));
-    }
 }

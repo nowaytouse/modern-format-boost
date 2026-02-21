@@ -28,4 +28,15 @@ pub enum VidQualityError {
     GeneralError(String),
 }
 
+/// Convert FFprobeError to VidQualityError for seamless error propagation
+impl From<crate::ffprobe::FFprobeError> for VidQualityError {
+    fn from(e: crate::ffprobe::FFprobeError) -> Self {
+        match e {
+            crate::ffprobe::FFprobeError::ToolNotFound(s) => VidQualityError::ToolNotFound(s),
+            crate::ffprobe::FFprobeError::IoError(e) => VidQualityError::IoError(e),
+            other => VidQualityError::FFprobeError(other.to_string()),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, VidQualityError>;

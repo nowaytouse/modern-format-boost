@@ -18,6 +18,8 @@ use crate::explore_strategy::CrfCache;
 
 // 🔥 v7.1: 类型安全包装器
 use crate::types::{FileSize, Ssim};
+use crate::float_compare::SSIM_EPSILON;
+use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
 // 🔥 v7.1: 领域特定浮点比较（不导入 ssim_meets_threshold，避免与 precision 模块冲突）
 // 使用 crate::float_compare::ssim_meets_threshold 完整路径调用
 
@@ -83,11 +85,6 @@ pub const BINARY_SEARCH_MAX_ITERATIONS: u32 = 12;
 
 /// 🔥 v5.25: 全局迭代底线（防止无限循环）
 pub const GLOBAL_MAX_ITERATIONS: u32 = 60;
-
-/// 🔥 v6.4.9: 紧急保底迭代限制（绝对上限）
-/// 即使动态计算的迭代次数更高，也不会超过此值
-/// 防止极端情况下的无限循环
-pub const EMERGENCY_MAX_ITERATIONS: u32 = 500;
 
 /// 🔥 v6.4.2: 小文件阈值（字节）
 /// 🔥 v6.4.3: 小文件阈值（字节）
@@ -2115,7 +2112,7 @@ impl VideoExplorer {
             let mut high = self.config.max_crf;
             let mut prev_ssim = min_ssim;
 
-            while high - low > 1.0 && iterations < max_iterations {
+            while high - low > 0.5 && iterations < max_iterations {
                 // 🔥 v6.4.9: 紧急保底检查
                 if iterations >= EMERGENCY_MAX_ITERATIONS {
                     eprintln!(
@@ -2142,8 +2139,8 @@ impl VideoExplorer {
                 );
 
                 // 更新最佳（优先高 SSIM，相同时选高 CRF = 更小文件）
-                if ssim > best_ssim + 0.00001
-                    || (ssim >= best_ssim - 0.00001 && mid_rounded > best_crf)
+                if ssim > best_ssim + SSIM_EPSILON
+                    || (ssim >= best_ssim - SSIM_EPSILON && mid_rounded > best_crf)
                 {
                     best_crf = mid_rounded;
                     best_size = size;
@@ -2179,7 +2176,7 @@ impl VideoExplorer {
                     let ssim = quality.0.unwrap_or(0.0);
                     log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
-                    if ssim > best_ssim + 0.00001 || (ssim >= best_ssim - 0.00001 && crf > best_crf)
+                    if ssim > best_ssim + SSIM_EPSILON || (ssim >= best_ssim - SSIM_EPSILON && crf > best_crf)
                     {
                         best_crf = crf;
                         best_size = size;
@@ -7831,7 +7828,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         if domain_wall_hit {
             // 🏛️ DOMAIN WALL (极限模式) - 已在循环内报告
             // 确保使用最后一个好的 CRF
-            if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
+            if best_crf.is_none_or(|c| c > last_good_crf) {
                 best_crf = Some(last_good_crf);
                 best_size = Some(last_good_size);
                 best_ssim_tracked = last_good_ssim;
@@ -7839,7 +7836,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         } else if quality_wall_hit {
             // 🎯 QUALITY WALL (普通模式) - 已在循环内报告
             // 确保使用最后一个好的 CRF
-            if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
+            if best_crf.is_none_or(|c| c > last_good_crf) {
                 best_crf = Some(last_good_crf);
                 best_size = Some(last_good_size);
                 best_ssim_tracked = last_good_ssim;
@@ -7886,7 +7883,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             );
 
             // 确保使用最后一个好的 CRF
-            if best_crf.is_none() || best_crf.unwrap() > last_good_crf {
+            if best_crf.is_none_or(|c| c > last_good_crf) {
                 best_crf = Some(last_good_crf);
                 best_size = Some(last_good_size);
                 best_ssim_tracked = last_good_ssim;

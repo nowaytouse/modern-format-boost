@@ -4,9 +4,8 @@
 
 use std::fmt;
 
-/// SSIM 专用 epsilon（比通用 F64_EPSILON 更宽松）
-/// 用于 SSIM 值的近似相等比较
-pub const SSIM_EPSILON: f64 = 1e-4;
+// 从 float_compare 导入统一的 SSIM epsilon（单一来源）
+pub use crate::float_compare::SSIM_EPSILON;
 
 /// SSIM 最小值
 pub const SSIM_MIN: f64 = 0.0;
