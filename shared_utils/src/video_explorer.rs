@@ -5826,6 +5826,14 @@ pub mod dynamic_mapping {
 
         let mut mapper = DynamicCrfMapper::new(input_size);
 
+        // 🔥 GIF 检测：GIF 走 FFmpeg 单步 libx265 校准，避免 Y4M→x265 管道解码失败
+        let is_gif_input = crate::ffprobe::probe_video(input)
+            .map(|p| p.format_name.eq_ignore_ascii_case("gif"))
+            .unwrap_or(false);
+        if is_gif_input {
+            eprintln!("   📌 GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)");
+        }
+
         // 🔥 v7.4: 尝试多个校准CRF值，提高成功率
         let calibration_crfs = vec![20.0_f32, 18.0, 22.0];
         let mut calibration_success = false;
@@ -5898,8 +5906,49 @@ pub mod dynamic_mapping {
             // 🔥 v6.9.17: CPU 采样编码 - 使用 x265 CLI 工具
             let max_threads = crate::thread_manager::get_ffmpeg_threads();
 
-            let cpu_size = if encoder == super::VideoEncoder::Hevc {
-                // 使用 x265 CLI 工具进行 CPU 校准
+            let cpu_size = if encoder == super::VideoEncoder::Hevc && is_gif_input {
+                // 🔥 GIF 专用：单步 FFmpeg libx265，避免 Y4M 抽取 + x265 管道导致的 decode failed
+                let mut cpu_cmd = Command::new("ffmpeg");
+                cpu_cmd
+                    .arg("-y")
+                    .arg("-t")
+                    .arg(format!("{}", sample_duration.min(10.0)))
+                    .arg("-i")
+                    .arg(crate::safe_path_arg(input).as_ref())
+                    .arg("-an")
+                    .arg("-vf")
+                    .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos")
+                    .arg("-c:v")
+                    .arg("libx265")
+                    .arg("-crf")
+                    .arg(format!("{:.0}", anchor_crf));
+                for arg in encoder.extra_args(max_threads) {
+                    cpu_cmd.arg(arg);
+                }
+                cpu_cmd.arg(&temp_cpu);
+                match cpu_cmd.output() {
+                    Ok(out) if out.status.success() => {
+                        fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        eprintln!("   ❌ CPU calibration (GIF/libx265) failed for CRF {:.1}", anchor_crf);
+                        if !stderr.is_empty() {
+                            for line in stderr.lines().take(5) {
+                                eprintln!("      {}", line);
+                            }
+                        }
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                    Err(e) => {
+                        eprintln!("   ❌ CPU calibration (GIF) command failed: {}", e);
+                        let _ = fs::remove_file(&temp_gpu);
+                        continue;
+                    }
+                }
+            } else if encoder == super::VideoEncoder::Hevc {
+                // 使用 x265 CLI 工具进行 CPU 校准（非 GIF：Y4M + x265）
                 use crate::x265_encoder::{encode_with_x265, X265Config};
 
                 let config = X265Config {

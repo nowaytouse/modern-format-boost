@@ -6,7 +6,7 @@
 
 | 文件 | 改动前 | 改动后 | 影响 |
 |------|--------|--------|------|
-| **shared_utils/src/video_explorer.rs** | GIF 时静默用 SSIM-only / explore SSIM 兜底，视为“通过” | GIF 时响亮报错，不兜底；报错内容同步写入 `result.log`；校准用 Y4M 抽取加 `-an`，失败时打印完整 FFmpeg stderr | GIF 不再虚假成功；相邻目录下日志/结果里能看到完整错误；校准失败可据 stderr 排查 |
+| **shared_utils/src/video_explorer.rs** | GIF 时静默用 SSIM-only / explore SSIM 兜底，视为“通过”；GIF 校准时走 Y4M→x265 管道易 FFmpeg decode failed | GIF 时响亮报错，不兜底；报错内容同步写入 `result.log`；校准用 Y4M 抽取加 `-an`，失败时打印完整 FFmpeg stderr；**GIF 专用**：动态校准时用 FFmpeg 单步 libx265（不走 Y4M 管道），减少校准失败 | GIF 不再虚假成功；相邻目录下日志/结果里能看到完整错误；校准失败可据 stderr 排查；GIF 校准更稳、更少 fallback 到 static offset |
 | **shared_utils/src/cli_runner.rs** | 单文件转换返回 `Err` 时直接向上抛错，不写输出目录 | 单文件转换失败时，若有 `output`（相邻目录），先 `copy_on_skip_or_fail` 把原文件复制到输出目录，再返回 `Err` | 单文件报错时相邻目录仍有一份原文件，实现「跳过/报错都无遗漏」 |
 | **shared_utils/src/msssim_parallel.rs** | GIF 时返回 `Ok(MsssimResult::skipped())`，日志提示用 SSIM-only | GIF 时返回 `Err(AppError::Other(...))`，明确报错不降级 | 与 video_explorer 一致，GIF 不静默跳过 MS-SSIM |
 
