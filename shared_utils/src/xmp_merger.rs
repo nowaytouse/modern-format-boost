@@ -120,16 +120,6 @@ impl Default for XmpMergerConfig {
 
 /// Extract suggested extension from ExifTool error message
 /// Example: "Error: Not a valid JPEG (looks more like a PNG)" -> Some("png")
-fn extract_suggested_extension(error_msg: &str) -> Option<String> {
-    if let Some(start) = error_msg.find("looks more like a ") {
-        let rest = &error_msg[start + "looks more like a ".len()..];
-        if let Some(end) = rest.find(')') {
-             return Some(rest[..end].trim().to_lowercase());
-        }
-    }
-    None
-}
-
 /// XMP Metadata Merger
 pub struct XmpMerger {
     config: XmpMergerConfig,
@@ -636,7 +626,7 @@ impl XmpMerger {
             Ok(()) => Ok(()),
             Err(e) => {
                 let err_str = e.to_string();
-                let hint = extract_suggested_extension(&err_str);
+                let hint = crate::extract_suggested_extension(&err_str);
                 
                 if let Some(ref h) = hint {
                     eprintln!("💡 ExifTool suggests content is: {}", h);

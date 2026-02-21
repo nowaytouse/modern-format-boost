@@ -97,6 +97,19 @@ pub fn is_hidden_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 从 ExifTool 错误信息中解析建议的扩展名（如 "looks more like a xxx)"）
+///
+/// 用于 content-aware fallback 时提示用户或选择处理策略。
+pub fn extract_suggested_extension(error_msg: &str) -> Option<String> {
+    if let Some(start) = error_msg.find("looks more like a ") {
+        let rest = &error_msg[start + "looks more like a ".len()..];
+        if let Some(end) = rest.find(')') {
+            return Some(rest[..end].trim().to_lowercase());
+        }
+    }
+    None
+}
+
 /// 安全地创建目录（包括父目录）
 ///
 /// 如果目录已存在则不报错，自动创建所有必需的父目录。
