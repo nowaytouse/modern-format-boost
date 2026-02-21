@@ -19,10 +19,10 @@ echo "🗑️  Removing old binary files..."
 # 删除旧的测试二进制
 find . -type f -name "imgquality" -not -path "*/target/release/*" -delete 2>/dev/null || true
 find . -type f -name "vidquality" -not -path "*/target/release/*" -delete 2>/dev/null || true
-find . -type f -name "imgquality-hevc" -not -path "*/target/release/*" -delete 2>/dev/null || true
-find . -type f -name "imgquality-av1" -not -path "*/target/release/*" -delete 2>/dev/null || true
-find . -type f -name "vidquality-hevc" -not -path "*/target/release/*" -delete 2>/dev/null || true
-find . -type f -name "vidquality-av1" -not -path "*/target/release/*" -delete 2>/dev/null || true
+find . -type f -name "img-hevc" -not -path "*/target/release/*" -delete 2>/dev/null || true
+find . -type f -name "img-av1" -not -path "*/target/release/*" -delete 2>/dev/null || true
+find . -type f -name "vid-hevc" -not -path "*/target/release/*" -delete 2>/dev/null || true
+find . -type f -name "vid-av1" -not -path "*/target/release/*" -delete 2>/dev/null || true
 
 echo "✅ Old binaries removed"
 
