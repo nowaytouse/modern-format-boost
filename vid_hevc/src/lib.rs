@@ -14,6 +14,7 @@
 //! simple_convert(input, output_dir)?;
 //! ```
 
+pub mod animated_image;
 pub mod codecs;
 pub mod conversion_api;
 pub mod detection_api;

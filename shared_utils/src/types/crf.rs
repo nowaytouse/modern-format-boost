@@ -11,11 +11,9 @@ use crate::float_compare::approx_eq_f32;
 use std::fmt;
 use std::marker::PhantomData;
 
-/// CRF 缓存键乘数（用于整数键生成）
-pub const CRF_CACHE_KEY_MULTIPLIER: f32 = 100.0;
-
-/// CRF 专用 epsilon（用于近似相等比较）
-pub const CRF_EPSILON: f32 = 0.01;
+// 从统一来源导入常量（避免重复定义）
+pub use crate::crf_constants::CRF_CACHE_KEY_MULTIPLIER;
+pub use crate::float_compare::CRF_EPSILON;
 
 // ============================================================================
 // Encoder Marker Types

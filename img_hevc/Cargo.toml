@@ -45,6 +45,9 @@ lazy_static = { workspace = true }
 # Shared utilities (progress bar, safety checks, batch processing)
 shared_utils = { workspace = true }
 
+# Video conversion for animated images (delegated to vid_hevc)
+vid-hevc = { path = "../vid_hevc" }
+
 # CPU detection for performance optimization
 num_cpus = { workspace = true }
 
