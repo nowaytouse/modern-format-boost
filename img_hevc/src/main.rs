@@ -34,7 +34,7 @@ enum Commands {
         input: PathBuf,
 
         /// Recursive directory scan
-        #[arg(short, long)]
+        #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
         /// Output format
@@ -67,8 +67,8 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
 
-        /// Recursive directory scan
-        #[arg(short, long)]
+        /// Recursive directory scan (always on; 强制递归)
+        #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
         /// Delete original after successful conversion
@@ -101,8 +101,12 @@ enum Commands {
         /// 🍎 Apple compatibility mode: Convert non-Apple-compatible animated formats to HEVC
         /// When enabled, animated WebP (VP8/VP9) will be converted to HEVC MP4
         /// instead of being skipped as "modern format"
-        #[arg(long, default_value_t = false)]
+        #[arg(long, default_value_t = true)]
         apple_compat: bool,
+
+        /// Disable Apple compatibility mode
+        #[arg(long)]
+        no_apple_compat: bool,
 
         /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
         /// ⚠️ MUST be used with --explore --match-quality --compress
@@ -115,6 +119,10 @@ enum Commands {
         /// Use --no-allow-size-tolerance to disable.
         #[arg(long, default_value_t = true)]
         allow_size_tolerance: bool,
+
+        /// Disable 1% size tolerance
+        #[arg(long)]
+        no_allow_size_tolerance: bool,
 
         /// Verbose output (show skipped files and success messages)
         #[arg(short, long)]
@@ -189,11 +197,16 @@ fn main() -> anyhow::Result<()> {
             match_quality,
             compress,
             apple_compat,
+            no_apple_compat,
             ultimate,
             allow_size_tolerance,
+            no_allow_size_tolerance,
             verbose,
             base_dir,
         } => {
+            // Apply --no-apple-compat override
+            let apple_compat = apple_compat && !no_apple_compat;
+            let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
 
