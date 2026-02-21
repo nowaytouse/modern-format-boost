@@ -337,13 +337,15 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
 /// Convert to AVIF
 fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
     let q = quality.unwrap_or(85).to_string();
-    
+
     // 🔥 Fix filename trap: Ensure paths are safe (absolute)
     let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
     let output_abs = if output.is_absolute() {
         output.to_path_buf()
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(output)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(output)
     };
 
     let input_str = path_to_str(&input_abs)?;
@@ -371,7 +373,7 @@ fn convert_to_hevc_mp4(
     height: u32,
 ) -> Result<()> {
     use shared_utils::ffmpeg_process::FfmpegProcess;
-    
+
     let fps_str = fps.unwrap_or(10.0).to_string();
 
     // Even dimension padding: HEVC encoder requires even width/height
@@ -408,12 +410,14 @@ fn convert_to_hevc_mp4(
         cmd.arg("-vf").arg(&vf_args);
     }
     cmd.arg("-pix_fmt").arg("yuv420p");
-    
+
     // Fix filename trap: Ensure output is absolute
     let output_abs = if output.is_absolute() {
         output.to_path_buf()
     } else {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(output)
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(output)
     };
     cmd.arg(&output_abs);
 
@@ -423,7 +427,8 @@ fn convert_to_hevc_mp4(
     // Solution: FfmpegProcess uses a separate thread to consume stderr continuously
     let process = FfmpegProcess::spawn(&mut cmd)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
-    let (status, stderr) = process.wait_with_output()
+    let (status, stderr) = process
+        .wait_with_output()
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     if !status.success() {
@@ -475,7 +480,7 @@ fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
 /// Preserve metadata using unified shared_utils (with content-aware fallback)
 fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
     // 🔥 v7.9.8: Use shared_utils which has robust content-aware fallback
-    // If exiftool fails due to extension mismatch, it will temporarily rename 
+    // If exiftool fails due to extension mismatch, it will temporarily rename
     // the file to its real content type and retry.
     shared_utils::metadata::copy_metadata(source, dest);
     Ok(())
@@ -587,7 +592,16 @@ fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat)
     } else {
         // Non-JPEG: use -d 0.0 for mathematical lossless
         // cjxl v0.11+: --modular=1 强制使用 modular 模式，-e 范围 1-10
-        vec!["-d", "0.0", "--modular=1", "-e", "9", "--", input_str, output_str]
+        vec![
+            "-d",
+            "0.0",
+            "--modular=1",
+            "-e",
+            "9",
+            "--",
+            input_str,
+            output_str,
+        ]
     };
 
     let status = Command::new("cjxl").args(&args).output()?;

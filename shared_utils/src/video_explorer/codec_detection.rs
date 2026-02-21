@@ -43,8 +43,7 @@ pub enum VideoEncoder {
 ///
 /// 🔥 重要：探索模式必须使用与最终压制相同的 preset！
 /// 否则探索出的 CRF 在最终压制时会产生不同的文件大小。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncoderPreset {
     /// 最快（质量最低，仅用于测试）
     Ultrafast,

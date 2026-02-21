@@ -19,7 +19,7 @@
 //! fn long_running_operation() {
 //!     // 创建心跳守卫，自动在作用域结束时清理
 //!     let _guard = HeartbeatGuard::new(HeartbeatConfig::fast("SSIM计算"));
-//!     
+//!
 //!     // 执行耗时操作...
 //!     // 心跳会每10秒自动输出一次
 //! } // 守卫在此处自动停止心跳
@@ -34,7 +34,7 @@
 //!     let config = HeartbeatConfig::medium("视频编码")
 //!         .with_info(format!("文件: {}", filename));
 //!     let _guard = HeartbeatGuard::new(config);
-//!     
+//!
 //!     // 执行编码...
 //! }
 //! ```
@@ -47,7 +47,7 @@
 //! fn critical_operation() {
 //!     let config = HeartbeatConfig::slow("极限探索").force();
 //!     let _guard = HeartbeatGuard::new(config);
-//!     
+//!
 //!     // 即使有进度条，也会显示心跳
 //! }
 //! ```
@@ -61,7 +61,7 @@
 //!     // 每45秒输出一次心跳
 //!     let config = HeartbeatConfig::custom("自定义操作", 45);
 //!     let _guard = HeartbeatGuard::new(config);
-//!     
+//!
 //!     // 执行操作...
 //! }
 //! ```
@@ -502,10 +502,10 @@ impl Drop for UniversalHeartbeat {
 /// fn process_video() {
 ///     // 创建守卫，自动开始心跳
 ///     let _guard = HeartbeatGuard::new(HeartbeatConfig::medium("视频处理"));
-///     
+///
 ///     // 执行耗时操作...
 ///     // 心跳会自动每30秒输出一次
-///     
+///
 /// } // 守卫在此处自动停止心跳，无需手动清理
 /// ```
 ///

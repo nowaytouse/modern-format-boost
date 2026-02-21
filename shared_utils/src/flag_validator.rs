@@ -2,7 +2,7 @@
 //!
 //! 有效组合仅一种（均为默认开启）：
 //! - `explore + match_quality + compress`（可选 `--ultimate`）
-//! 其他组合一律 Invalid，不再兼容老旧单独/部分组合。
+//!   其他组合一律 Invalid，不再兼容老旧单独/部分组合。
 
 use std::fmt;
 
@@ -136,13 +136,34 @@ mod tests {
 
     #[test]
     fn test_any_other_combination_invalid() {
-        assert!(matches!(validate_flags(false, false, false), FlagValidation::Invalid(_)));
-        assert!(matches!(validate_flags(false, false, true), FlagValidation::Invalid(_)));
-        assert!(matches!(validate_flags(false, true, false), FlagValidation::Invalid(_)));
-        assert!(matches!(validate_flags(false, true, true), FlagValidation::Invalid(_)));
-        assert!(matches!(validate_flags(true, false, false), FlagValidation::Invalid(_)));
-        assert!(matches!(validate_flags(true, false, true), FlagValidation::Invalid(_)));
-        assert!(matches!(validate_flags(true, true, false), FlagValidation::Invalid(_)));
+        assert!(matches!(
+            validate_flags(false, false, false),
+            FlagValidation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_flags(false, false, true),
+            FlagValidation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_flags(false, true, false),
+            FlagValidation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_flags(false, true, true),
+            FlagValidation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_flags(true, false, false),
+            FlagValidation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_flags(true, false, true),
+            FlagValidation::Invalid(_)
+        ));
+        assert!(matches!(
+            validate_flags(true, true, false),
+            FlagValidation::Invalid(_)
+        ));
     }
 
     #[test]
@@ -164,10 +185,11 @@ mod tests {
             format!("{}", FlagMode::PreciseQualityWithCompress),
             "--explore --match-quality --compress"
         );
-        assert!(FlagMode::PreciseQualityWithCompress.description_cn().contains("精确"));
+        assert!(FlagMode::PreciseQualityWithCompress
+            .description_cn()
+            .contains("精确"));
         assert!(FlagMode::UltimateExplore.description_cn().contains("极限"));
         assert!(FlagMode::UltimateExplore.is_ultimate());
         assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
     }
-
 }

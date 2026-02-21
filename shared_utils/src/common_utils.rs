@@ -230,7 +230,7 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut buffer = [0u8; 12];
     let bytes_read = file.read(&mut buffer).ok()?;
-    
+
     if bytes_read < 4 {
         return None;
     }
@@ -251,14 +251,23 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     }
 
     // TIFF: 49 49 2A 00 or 4D 4D 00 2A
-    if (buffer[0] == 0x49 && buffer[1] == 0x49 && buffer[2] == 0x2A && buffer[3] == 0x00) ||
-       (buffer[0] == 0x4D && buffer[1] == 0x4D && buffer[2] == 0x00 && buffer[3] == 0x2A) {
+    if (buffer[0] == 0x49 && buffer[1] == 0x49 && buffer[2] == 0x2A && buffer[3] == 0x00)
+        || (buffer[0] == 0x4D && buffer[1] == 0x4D && buffer[2] == 0x00 && buffer[3] == 0x2A)
+    {
         return Some("tif");
     }
 
     // WEBP: RIFF....WEBP (RIFF at 0, WEBP at 8)
-    if buffer[0] == 0x52 && buffer[1] == 0x49 && buffer[2] == 0x46 && buffer[3] == 0x46
-        && bytes_read >= 12 && buffer[8] == 0x57 && buffer[9] == 0x45 && buffer[10] == 0x42 && buffer[11] == 0x50 {
+    if buffer[0] == 0x52
+        && buffer[1] == 0x49
+        && buffer[2] == 0x46
+        && buffer[3] == 0x46
+        && bytes_read >= 12
+        && buffer[8] == 0x57
+        && buffer[9] == 0x45
+        && buffer[10] == 0x42
+        && buffer[11] == 0x50
+    {
         return Some("webp");
     }
 
@@ -269,18 +278,35 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
 
     // JXL container: 00 00 00 0C 4A 58 4C 20 0D 0A 87 0A
     if bytes_read >= 12
-        && buffer[0] == 0x00 && buffer[1] == 0x00 && buffer[2] == 0x00 && buffer[3] == 0x0C
-        && buffer[4] == 0x4A && buffer[5] == 0x58 && buffer[6] == 0x4C && buffer[7] == 0x20
-        && buffer[8] == 0x0D && buffer[9] == 0x0A && buffer[10] == 0x87 && buffer[11] == 0x0A
+        && buffer[0] == 0x00
+        && buffer[1] == 0x00
+        && buffer[2] == 0x00
+        && buffer[3] == 0x0C
+        && buffer[4] == 0x4A
+        && buffer[5] == 0x58
+        && buffer[6] == 0x4C
+        && buffer[7] == 0x20
+        && buffer[8] == 0x0D
+        && buffer[9] == 0x0A
+        && buffer[10] == 0x87
+        && buffer[11] == 0x0A
     {
         return Some("jxl");
     }
 
     // QuickTime/ISO Base Media File Format: ftyp box at offset 4
     // Brand at bytes 8-11 distinguishes HEIC from MOV/MP4
-    if bytes_read >= 12 && buffer[4] == 0x66 && buffer[5] == 0x74 && buffer[6] == 0x79 && buffer[7] == 0x70 {
+    if bytes_read >= 12
+        && buffer[4] == 0x66
+        && buffer[5] == 0x74
+        && buffer[6] == 0x79
+        && buffer[7] == 0x70
+    {
         let brand = &buffer[8..12];
-        if matches!(brand, b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1") {
+        if matches!(
+            brand,
+            b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1"
+        ) {
             return Some("heic");
         }
         if matches!(brand, b"avif" | b"avis") {
@@ -420,19 +446,19 @@ pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
 /// ```
 pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     let command_str = format!("{:?}", cmd);
-    
+
     info!(
         command = %command_str,
         "Executing external command"
     );
-    
+
     let output = cmd
         .output()
         .with_context(|| format!("Failed to execute command: {}", command_str))?;
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    
+
     if output.status.success() {
         info!(
             command = %command_str,
@@ -453,7 +479,7 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
             "Command failed"
         );
     }
-    
+
     Ok(output)
 }
 
@@ -618,11 +644,11 @@ mod tests {
     fn test_ensure_dir_exists() {
         let temp = TempDir::new().unwrap();
         let nested = temp.path().join("a/b/c");
-        
+
         ensure_dir_exists(&nested).unwrap();
         assert!(nested.exists());
         assert!(nested.is_dir());
-        
+
         // 再次调用应该成功（幂等性）
         ensure_dir_exists(&nested).unwrap();
     }
@@ -631,7 +657,7 @@ mod tests {
     fn test_ensure_parent_dir_exists() {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("a/b/c/file.txt");
-        
+
         ensure_parent_dir_exists(&file_path).unwrap();
         assert!(file_path.parent().unwrap().exists());
     }
@@ -642,7 +668,7 @@ mod tests {
         let path = Path::new("/home/user/project/src/main.rs");
         let rel = compute_relative_path(path, base);
         assert_eq!(rel, PathBuf::from("src/main.rs"));
-        
+
         // 无法计算相对路径时返回原路径
         let unrelated = Path::new("/tmp/file.txt");
         let rel2 = compute_relative_path(unrelated, base);
@@ -654,9 +680,9 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source.txt");
         let dest = temp.path().join("dest.txt");
-        
+
         fs::write(&source, "test content").unwrap();
-        
+
         let bytes = copy_file_with_context(&source, &dest).unwrap();
         assert_eq!(bytes, 12); // "test content" 的长度
         assert_eq!(fs::read_to_string(&dest).unwrap(), "test content");
@@ -701,13 +727,13 @@ mod tests {
             // Unix系统上测试sh（更可靠）
             assert!(is_command_available("sh"));
         }
-        
+
         #[cfg(windows)]
         {
             // Windows系统上测试cmd
             assert!(is_command_available("cmd"));
         }
-        
+
         // 测试一个不存在的命令
         assert!(!is_command_available("nonexistent_command_xyz_123"));
     }
@@ -725,10 +751,10 @@ mod tests {
     fn test_execute_command_with_logging() {
         let mut cmd = Command::new("echo");
         cmd.arg("test");
-        
+
         let output = execute_command_with_logging(&mut cmd).unwrap();
         assert!(output.status.success());
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("test"));
     }

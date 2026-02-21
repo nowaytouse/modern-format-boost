@@ -128,7 +128,8 @@ pub use ffprobe::{
 pub use metadata::{
     apply_saved_timestamps_to_dst, copy_metadata, preserve_directory_metadata,
     preserve_directory_metadata_with_log, preserve_metadata, preserve_pro,
-    restore_directory_timestamps, restore_timestamps_from_source_to_output, save_directory_timestamps,
+    restore_directory_timestamps, restore_timestamps_from_source_to_output,
+    save_directory_timestamps,
 };
 pub use progress::{
     create_compact_progress_bar,
@@ -454,10 +455,12 @@ pub use app_error::AppError;
 // 🔥 v6.9.13: 文件复制模块（无遗漏设计）
 pub use file_copier::{
     copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
-    FileStats, VerifyResult, SIDECAR_EXTENSIONS, IMAGE_EXTENSIONS_ANALYZE, SUPPORTED_IMAGE_EXTENSIONS,
-    SUPPORTED_VIDEO_EXTENSIONS,
+    FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, SIDECAR_EXTENSIONS,
+    SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
 };
-pub use smart_file_copier::{copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure};
+pub use smart_file_copier::{
+    copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure,
+};
 
 // 🔥 v7.5: 文件排序
 pub use file_sorter::{
@@ -493,33 +496,26 @@ pub use common_utils::{
     copy_file_with_context,
     ensure_dir_exists,
     ensure_parent_dir_exists,
-    get_extension_lowercase,
-    has_extension,
-    is_hidden_file,
-    // 错误信息解析（ExifTool 建议扩展名）
-    extract_suggested_extension,
+    // 命令执行
+    execute_command_with_logging,
     // 字符串处理
     extract_digits,
+    // 错误信息解析（ExifTool 建议扩展名）
+    extract_suggested_extension,
+    format_command_string,
+    get_command_version,
+    get_extension_lowercase,
+    has_extension,
+    is_command_available,
+    is_hidden_file,
     normalize_path_string,
     parse_float_or_default,
     truncate_string,
-    // 命令执行
-    execute_command_with_logging,
-    format_command_string,
-    get_command_version,
-    is_command_available,
 };
 
 // 🔥 v7.9: Smart thread management for Apple Silicon
 pub use thread_manager::{
-    calculate_optimal_threads,
-    disable_multi_instance_mode,
-    enable_multi_instance_mode,
-    get_ffmpeg_threads,
-    get_optimal_threads,
-    get_rsync_path,
-    get_rsync_version,
-    is_multi_instance,
+    calculate_optimal_threads, disable_multi_instance_mode, enable_multi_instance_mode,
+    get_ffmpeg_threads, get_optimal_threads, get_rsync_path, get_rsync_version, is_multi_instance,
     ThreadConfig,
 };
-

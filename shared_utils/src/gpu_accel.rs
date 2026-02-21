@@ -2045,7 +2045,8 @@ pub fn gpu_coarse_search_with_log(
             cmd.arg(*arg);
         }
 
-        cmd.arg("-an").arg(crate::safe_path_arg(&warmup_output).as_ref());
+        cmd.arg("-an")
+            .arg(crate::safe_path_arg(&warmup_output).as_ref());
 
         let result = cmd.output().context("Failed to run warmup encode")?;
         let size = if result.status.success() {
@@ -2180,7 +2181,10 @@ pub fn gpu_coarse_search_with_log(
 
         // 🔥 v7.5.3: 启动stderr捕获
         let stderr_capture = StderrCapture::new(100);
-        let stderr_handle = child.stderr.take().map(|stderr| stderr_capture.spawn_capture_thread(stderr));
+        let stderr_handle = child
+            .stderr
+            .take()
+            .map(|stderr| stderr_capture.spawn_capture_thread(stderr));
 
         // 🔥 v7.5.3: 启动心跳监控
         let last_activity = Arc::new(Mutex::new(Instant::now()));
@@ -2274,7 +2278,7 @@ pub fn gpu_coarse_search_with_log(
                                     }
                                 };
 
-                                eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x", 
+                                eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
                                     pct, current_secs, actual_sample_duration, eta, speed);
 
                                 if let Some(cb) = progress_cb {
@@ -2366,7 +2370,8 @@ pub fn gpu_coarse_search_with_log(
                         cmd.arg(arg);
                     }
 
-                    cmd.arg("-an").arg(crate::safe_path_arg(&output_path).as_ref());
+                    cmd.arg("-an")
+                        .arg(crate::safe_path_arg(&output_path).as_ref());
 
                     let result = cmd.output();
 

@@ -125,7 +125,7 @@ impl DetectedFormat {
     }
 
     /// 🔥 v7.9.9: Check if format is already a modern, optimized format
-    /// 
+    ///
     /// Modern formats (HEIC, HEIF, AVIF, JXL) are already highly compressed
     /// and shouldn't be re-processed - just copy them to output unchanged.
     /// This prevents SecurityLimitExceeded errors from HEIC processing.

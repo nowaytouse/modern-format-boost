@@ -108,12 +108,16 @@ pub mod webp {
 
     /// Check if WebP is lossless
     pub fn is_lossless(path: &Path) -> bool {
-        fs::read(path).map(|b| is_lossless_from_bytes(&b)).unwrap_or(false)
+        fs::read(path)
+            .map(|b| is_lossless_from_bytes(&b))
+            .unwrap_or(false)
     }
 
     /// Check if WebP is animated
     pub fn is_animated(path: &Path) -> bool {
-        fs::read(path).map(|b| is_animated_from_bytes(&b)).unwrap_or(false)
+        fs::read(path)
+            .map(|b| is_animated_from_bytes(&b))
+            .unwrap_or(false)
     }
 }
 
@@ -137,7 +141,11 @@ pub mod gif {
         }
         let packed = data[pos + 4];
         let has_gct = (packed & 0x80) != 0;
-        let gct_size = if has_gct { 3 * (1 << ((packed & 0x07) + 1)) } else { 0 };
+        let gct_size = if has_gct {
+            3 * (1 << ((packed & 0x07) + 1))
+        } else {
+            0
+        };
         pos += 7 + gct_size;
 
         let mut frame_count = 0u32;
@@ -151,13 +159,17 @@ pub mod gif {
                     }
                     let img_packed = data[pos + 9];
                     let has_lct = (img_packed & 0x80) != 0;
-                    let lct_size = if has_lct { 3 * (1 << ((img_packed & 0x07) + 1)) } else { 0 };
+                    let lct_size = if has_lct {
+                        3 * (1 << ((img_packed & 0x07) + 1))
+                    } else {
+                        0
+                    };
                     pos += 10 + lct_size;
                     if pos >= data.len() {
                         break;
                     }
                     pos += 1; // LZW minimum code size
-                    // skip sub-blocks
+                              // skip sub-blocks
                     while pos < data.len() {
                         let block_size = data[pos] as usize;
                         pos += 1;
@@ -199,7 +211,9 @@ pub mod gif {
 
     /// Check if GIF is animated
     pub fn is_animated(path: &Path) -> bool {
-        fs::read(path).map(|b| is_animated_from_bytes(&b)).unwrap_or(false)
+        fs::read(path)
+            .map(|b| is_animated_from_bytes(&b))
+            .unwrap_or(false)
     }
 
     /// Get number of frames in GIF

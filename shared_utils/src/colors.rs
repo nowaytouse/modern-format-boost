@@ -164,14 +164,14 @@ pub fn print_info(msg: &str) {
 pub fn fmt_search_result(crf: f32, size_pct: f64, ssim: Option<f64>, compressed: bool) -> String {
     let status = fmt_compress_status(compressed);
     let size_str = fmt_size_pct(size_pct);
-    
+
     if let Some(s) = ssim {
         let ssim_str = fmt_ssim(s);
-        format!("   {} {} | {} | {}", 
+        format!("   {} {} | {} | {}",
             if compressed { style("✓").green() } else { style("✗").red() },
             fmt_crf(crf), size_str, ssim_str)
     } else {
-        format!("   {} {} | {} {}", 
+        format!("   {} {} | {} {}",
             if compressed { style("✓").green() } else { style("✗").red() },
             fmt_crf(crf), size_str, status)
     }

@@ -114,7 +114,9 @@ impl ParallelMsssimCalculator {
         // 🔥 v7.9.2: GIF 不支持 MS-SSIM，响亮报错，不静默跳过
         if let Ok(probe) = crate::ffprobe::probe_video(&self.original_path) {
             if probe.format_name.eq_ignore_ascii_case("gif") {
-                eprintln!("❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback.");
+                eprintln!(
+                    "❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback."
+                );
                 return Err(AppError::Other(anyhow::anyhow!(
                     "GIF does not support MS-SSIM quality verification."
                 )));
@@ -261,8 +263,11 @@ impl ParallelMsssimCalculator {
             }
             Err(_) => {
                 // 🔥 v7.8.1: MS-SSIM失败时fallback到SSIM
-                eprintln!("⚠️  MS-SSIM failed for channel {}, falling back to SSIM", channel);
-                
+                eprintln!(
+                    "⚠️  MS-SSIM failed for channel {}, falling back to SSIM",
+                    channel
+                );
+
                 // 构建SSIM fallback命令
                 let mut ssim_args = vec![
                     "-i",
@@ -298,7 +303,10 @@ impl ParallelMsssimCalculator {
                 // 获取SSIM分数
                 progress_monitor.get_channel_score(channel).ok_or_else(|| {
                     eprintln!("❌ Failed to get {} channel SSIM score", channel);
-                    AppError::Other(anyhow::anyhow!("Failed to get {} channel SSIM score", channel))
+                    AppError::Other(anyhow::anyhow!(
+                        "Failed to get {} channel SSIM score",
+                        channel
+                    ))
                 })
             }
         }

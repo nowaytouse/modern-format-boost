@@ -66,7 +66,11 @@ pub fn convert_to_jxl(
     // Note: cjxl 默认保留 ICC 颜色配置文件，无需额外参数
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = if options.child_threads > 0 { options.child_threads } else { shared_utils::thread_manager::get_optimal_threads() };
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        shared_utils::thread_manager::get_optimal_threads()
+    };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
         .arg(format!("{:.1}", distance)) // Distance parameter
@@ -137,9 +141,8 @@ pub fn convert_to_jxl(
                                 cmd.arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression
                             }
 
-                            let cjxl_result = cmd.stdin(magick_stdout)
-                                .stderr(Stdio::piped())
-                                .spawn();
+                            let cjxl_result =
+                                cmd.stdin(magick_stdout).stderr(Stdio::piped()).spawn();
 
                             match cjxl_result {
                                 Ok(mut cjxl_proc) => {
@@ -215,7 +218,7 @@ pub fn convert_to_jxl(
                                             stderr: Vec::new(),
                                         })
                                     } else {
-                                        eprintln!("   ❌ FALLBACK FAILED: Pipeline error (magick: {}, cjxl: {})", 
+                                        eprintln!("   ❌ FALLBACK FAILED: Pipeline error (magick: {}, cjxl: {})",
                                             if magick_ok { "✓" } else { "✗" },
                                             if cjxl_ok { "✓" } else { "✗" });
                                         result
@@ -610,7 +613,11 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     // AV1 with CRF 0 for visually lossless (使用 SVT-AV1 编码器)
     // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
     // 🔥 性能优化：限制 cjxl 线程数，避免系统卡顿
-    let max_threads = if options.child_threads > 0 { options.child_threads } else { shared_utils::thread_manager::get_optimal_threads() };
+    let max_threads = if options.child_threads > 0 {
+        options.child_threads
+    } else {
+        shared_utils::thread_manager::get_optimal_threads()
+    };
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y") // Overwrite
@@ -1325,7 +1332,9 @@ fn prepare_input_for_cjxl(
     let ext = if let Some(real) = detected_ext {
         if !literal_ext.is_empty() && real != literal_ext {
             // 允许 jpg/jpeg 互换
-            if !((real == "jpg" && literal_ext == "jpeg") || (real == "jpeg" && literal_ext == "jpg")) {
+            if !((real == "jpg" && literal_ext == "jpeg")
+                || (real == "jpeg" && literal_ext == "jpg"))
+            {
                 eprintln!(
                     "   ⚠️  EXTENSION MISMATCH: {} is actually {}, adjusting pre-processing...",
                     input.display(),
@@ -1355,14 +1364,13 @@ fn prepare_input_for_cjxl(
 
             if !is_header_valid {
                 use console::style;
-                eprintln!("   {} {}", 
-                    style("🔧 PRE-PROCESSING:").yellow().bold(), 
+                eprintln!(
+                    "   {} {}",
+                    style("🔧 PRE-PROCESSING:").yellow().bold(),
                     style("Corrupted JPEG header detected, using ImageMagick to sanitize").yellow()
                 );
-                
-                let temp_png_file = tempfile::Builder::new()
-                    .suffix(".png")
-                    .tempfile()?;
+
+                let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
                 let temp_png = temp_png_file.path().to_path_buf();
 
                 let result = Command::new("magick")
@@ -1373,14 +1381,18 @@ fn prepare_input_for_cjxl(
 
                 match result {
                     Ok(output) if output.status.success() && temp_png.exists() => {
-                        eprintln!("   {} {}", 
+                        eprintln!(
+                            "   {} {}",
                             style("✅").green(),
-                            style("ImageMagick JPEG sanitization successful").green().bold()
+                            style("ImageMagick JPEG sanitization successful")
+                                .green()
+                                .bold()
                         );
                         Ok((temp_png, Some(temp_png_file)))
                     }
                     _ => {
-                        eprintln!("   {} {}", 
+                        eprintln!(
+                            "   {} {}",
                             style("⚠️").red(),
                             style("ImageMagick sanitization failed, trying direct input").dim()
                         );
@@ -1395,14 +1407,13 @@ fn prepare_input_for_cjxl(
         // WebP: 使用 dwebp 解码（处理 ICC profile 问题）
         "webp" => {
             use console::style;
-            eprintln!("   {} {}", 
+            eprintln!(
+                "   {} {}",
                 style("🔧 PRE-PROCESSING:").cyan().bold(),
                 style("WebP detected, using dwebp for ICC profile compatibility").dim()
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("dwebp")
@@ -1414,14 +1425,16 @@ fn prepare_input_for_cjxl(
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!("   {} {}", 
+                    eprintln!(
+                        "   {} {}",
                         style("✅").green(),
                         style("dwebp pre-processing successful").green()
                     );
                     Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
-                    eprintln!("   {} {}", 
+                    eprintln!(
+                        "   {} {}",
                         style("⚠️").yellow(),
                         style("dwebp pre-processing failed, trying direct cjxl").dim()
                     );
@@ -1437,9 +1450,7 @@ fn prepare_input_for_cjxl(
                 "   🔧 PRE-PROCESSING: TIFF detected, using ImageMagick for cjxl compatibility"
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
@@ -1469,9 +1480,7 @@ fn prepare_input_for_cjxl(
                 "   🔧 PRE-PROCESSING: BMP detected, using ImageMagick for cjxl compatibility"
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
@@ -1497,9 +1506,7 @@ fn prepare_input_for_cjxl(
         "heic" | "heif" => {
             eprintln!("   🔧 PRE-PROCESSING: HEIC/HEIF detected, using sips/ImageMagick for cjxl compatibility");
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             // 优先使用 sips (macOS 原生)
@@ -1645,7 +1652,9 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
     // 🔥 使用 jxlinfo 进行更可靠的验证（如果可用）
     // jxlinfo 比 djxl 更适合验证，因为它只读取元数据，不需要完整解码
     if which::which("jxlinfo").is_ok() {
-        let result = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
+        let result = Command::new("jxlinfo")
+            .arg(shared_utils::safe_path_arg(path).as_ref())
+            .output();
 
         if let Ok(output) = result {
             if !output.status.success() {
