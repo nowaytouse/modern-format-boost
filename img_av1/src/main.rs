@@ -47,7 +47,7 @@ enum Commands {
         input: PathBuf,
 
         /// Recursive directory scan
-        #[arg(short, long)]
+        #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
         /// Output format
@@ -79,7 +79,7 @@ enum Commands {
         force: bool,
 
         /// Recursive directory scan
-        #[arg(short, long)]
+        #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
         /// Delete original after successful conversion
