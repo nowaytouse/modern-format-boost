@@ -1,18 +1,9 @@
 //! Metadata Preservation Module
 //!
-//! Complete metadata preservation across all layers:
-//! - Internal: EXIF/IPTC/XMP via ExifTool
-//! - Network: WhereFroms, User Tags
-//! - System: ACL, Flags, Xattr, Timestamps
-//!
-//! Performance optimizations:
-//! - macOS: copyfile() first (fast), then exiftool for internal metadata
-//! - Cached tool availability checks
-//! - Parallel-safe with OnceLock
-//!
-//! 🔥 关键：时间戳必须在最后设置！
-//! exiftool 的 -overwrite_original 会修改文件，从而更新时间戳。
-//! 因此 filetime::set_file_times() 必须在所有操作完成后执行。
+//! 分层保留：Internal (ExifTool) / Network / System (ACL, xattr, timestamps)。
+//! 时间戳统一入口：单文件经 `apply_file_timestamps(src, dst)`，目录树经
+//! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`，
+//! 避免多处重复实现。exiftool 会改写文件，故时间戳一律在写操作之后设置。
 
 use std::io;
 use std::path::Path;
@@ -28,6 +19,26 @@ mod windows;
 
 pub use exif::preserve_internal_metadata;
 
+/// 唯一入口：将源文件的时间戳（atime/mtime，macOS 下含创建时间与 Date Added）应用到目标文件。
+/// 所有“按源文件恢复目标时间戳”的逻辑均经此函数，避免重复实现。
+fn apply_file_timestamps(src: &Path, dst: &Path) {
+    let Ok(m) = std::fs::metadata(src) else { return };
+    let atime = filetime::FileTime::from_last_access_time(&m);
+    let mtime = filetime::FileTime::from_last_modification_time(&m);
+    if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
+        eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(created) = m.created() {
+            let _ = macos::set_creation_time(dst, created);
+        }
+        if let Ok(added) = macos::get_added_time(src) {
+            let _ = macos::set_added_time(dst, added);
+        }
+    }
+}
+
 /// Nuclear Preservation: The Ultimate Metadata Strategy
 ///
 /// Performance: ~100-300ms per file on macOS (copyfile + exiftool)
@@ -41,97 +52,30 @@ pub use exif::preserve_internal_metadata;
 /// 🔥 重要：不复制 COPYFILE_DATA (1<<3)！那会复制文件内容，导致转换无效！
 /// 🔥 关键：时间戳在最后设置，因为 exiftool 会修改文件时间戳！
 pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
-    // 🚀 Performance: macOS fast path - copyfile first (handles ACL, xattr, timestamps)
     #[cfg(target_os = "macos")]
     {
-        // 🔥 先读取源文件时间戳，保存起来，最后再设置
-        let src_times = std::fs::metadata(src).ok().map(|m| {
-            (
-                filetime::FileTime::from_last_access_time(&m),
-                filetime::FileTime::from_last_modification_time(&m),
-            )
-        });
-
-        // Step 1: System Layer (fast, ~5ms)
-        // copyfile handles: ACL, XATTR (不依赖它的时间戳复制，因为不可靠)
         if let Err(e) = macos::copy_native_metadata(src, dst) {
             eprintln!("⚠️ [metadata] macOS native copy failed: {}", e);
         }
-
-        // Step 2: 保存创建时间和Date Added，稍后设置
-        // ⚠️ 不在这里设置！因为 exiftool 会覆盖文件，重置创建时间
-        let src_created = std::fs::metadata(src).ok().and_then(|m| m.created().ok());
-        let src_added = macos::get_added_time(src).ok();
-
-        // Step 3: Internal Metadata via ExifTool (~100-200ms)
-        // This handles EXIF, IPTC, XMP, ICC that copyfile doesn't touch
-        // ⚠️ 注意：exiftool -overwrite_original 会修改文件，更新时间戳！
         if let Err(e) = exif::preserve_internal_metadata(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
         }
-
-        // Step 4: Network metadata verification (fast, ~1ms)
         let _ = network::verify_network_metadata(src, dst);
-
-        // Step 5: 🔥 最后设置时间戳！这是关键！
-        // 必须在 exiftool 之后执行，否则时间戳会被覆盖
-        if let Some((atime, mtime)) = src_times {
-            if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
-                eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
-            }
-        }
-
-        // Step 6: 🔥 macOS创建时间和Date Added（必须在最后！）
-        // filetime::set_file_times 只设置 atime/mtime，不设置创建时间
-        // 必须使用 setattrlist 单独设置创建时间
-        if let Some(created) = src_created {
-            if let Err(e) = macos::set_creation_time(dst, created) {
-                eprintln!("⚠️ [metadata] Failed to set creation time: {}", e);
-            }
-        }
-        if let Some(added) = src_added {
-            if let Err(e) = macos::set_added_time(dst, added) {
-                eprintln!("⚠️ [metadata] Failed to set added time: {}", e);
-            }
-        }
-
-        Ok(())
+        apply_file_timestamps(src, dst);
+        return Ok(());
     }
 
-    // Non-macOS path (Linux/Windows)
     #[cfg(not(target_os = "macos"))]
     {
-        // 🔥 先读取源文件时间戳，保存起来，最后再设置
-        let src_times = std::fs::metadata(src).ok().map(|m| {
-            (
-                filetime::FileTime::from_last_access_time(&m),
-                filetime::FileTime::from_last_modification_time(&m),
-            )
-        });
-
-        // Step 1: Internal Metadata (Exif, MakerNotes, ICC)
-        // ⚠️ 注意：exiftool -overwrite_original 会修改文件，更新时间戳！
         if let Err(e) = exif::preserve_internal_metadata(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
         }
-
-        // Step 2: Network & User Context (Verification)
         let _ = network::verify_network_metadata(src, dst);
-
-        // Step 3: Platform-specific
         #[cfg(target_os = "linux")]
-        {
-            let _ = linux::preserve_linux_attributes(src, dst);
-        }
-
+        let _ = linux::preserve_linux_attributes(src, dst);
         #[cfg(target_os = "windows")]
-        {
-            let _ = windows::preserve_windows_attributes(src, dst);
-        }
-
-        // Step 4: xattrs + permissions
+        let _ = windows::preserve_windows_attributes(src, dst);
         copy_xattrs_manual(src, dst);
-
         if let Ok(metadata) = std::fs::metadata(src) {
             #[cfg(unix)]
             {
@@ -140,13 +84,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
                 let _ = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode));
             }
         }
-
-        // Step 5: 🔥 最后设置时间戳！这是关键！
-        // 必须在 exiftool 之后执行，否则时间戳会被覆盖
-        if let Some((atime, mtime)) = src_times {
-            let _ = filetime::set_file_times(dst, atime, mtime);
-        }
-
+        apply_file_timestamps(src, dst);
         Ok(())
     }
 }
@@ -157,22 +95,15 @@ pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 /// 🔥 v4.8: 便捷函数 - 复制元数据（静默错误）
-/// 🔥 v5.76: 自动合并XMP边车文件
+/// 🔥 v5.76: 自动合并XMP边车文件；时间戳统一经 apply_file_timestamps 在最后应用。
 ///
-/// 与 preserve_metadata 相同，但错误时只打印警告而不返回 Result。
-/// 这是各个工具中 copy_metadata 函数的统一实现。
-///
-/// 自动检测并合并XMP边车文件：
-/// - photo.jpg.xmp → 合并到输出文件
-/// - photo.xmp → 合并到输出文件
+/// 流程：preserve_metadata → merge_xmp_sidecar → apply_file_timestamps（merge 会改文件，故时间戳最后再设）
 pub fn copy_metadata(src: &Path, dst: &Path) {
-    // Step 1: 复制源文件的内部元数据
     if let Err(e) = preserve_metadata(src, dst) {
         eprintln!("⚠️ Failed to preserve metadata: {}", e);
     }
-
-    // Step 2: 🔥 自动合并XMP边车文件
     merge_xmp_sidecar(src, dst);
+    apply_file_timestamps(src, dst);
 }
 
 /// 🔥 v7.4: 保留文件夹元数据（时间戳、权限）
@@ -262,6 +193,130 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
         copy_dir_xattrs(src_path, &dst_path);
     }
 
+    Ok(())
+}
+
+/// 薄封装：调用 preserve_directory_metadata 并统一打印与错误信息，供 hevc/av1 main 复用。
+pub fn preserve_directory_metadata_with_log(base_dir: &Path, output_dir: &Path) {
+    println!("\n📁 Preserving directory metadata...");
+    if let Err(e) = preserve_directory_metadata(base_dir, output_dir) {
+        eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
+    } else {
+        println!("✅ Directory metadata preserved");
+    }
+}
+
+/// 🔥 v8.2.5: 原地模式保存目录时间戳（用于处理结束后恢复）
+/// 处理会修改目录 mtime，需在结束后恢复以保留文件夹元数据
+pub fn save_directory_timestamps(dir: &Path) -> io::Result<std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>> {
+    use std::collections::HashMap;
+    let mut saved = HashMap::new();
+    if dir.is_dir() {
+        if let Ok(meta) = std::fs::metadata(dir) {
+            let atime = filetime::FileTime::from_last_access_time(&meta);
+            let mtime = filetime::FileTime::from_last_modification_time(&meta);
+            saved.insert(dir.to_path_buf(), (atime, mtime));
+        }
+        collect_dir_timestamps(dir, &mut saved)?;
+    }
+    Ok(saved)
+}
+
+/// 恢复已保存的目录时间戳
+pub fn restore_directory_timestamps(saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>) {
+    for (path, (atime, mtime)) in saved {
+        if path.exists() && path.is_dir() {
+            if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
+                eprintln!("⚠️ Failed to restore directory timestamps for {}: {}", path.display(), e);
+            }
+        }
+    }
+}
+
+/// 🔥 v8.2.5: 将保存的源目录时间戳应用到输出目录（相邻模式）
+/// 处理过程中源目录被读取( atime 更新)、输出目录被写入( mtime 更新)，需用处理前保存的元数据恢复
+pub fn apply_saved_timestamps_to_dst(
+    saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+    src_root: &Path,
+    dst_root: &Path,
+) {
+    for (src_path, (atime, mtime)) in saved {
+        if let Ok(rel_path) = src_path.strip_prefix(src_root) {
+            let dst_path = dst_root.join(rel_path);
+            if dst_path.exists() && dst_path.is_dir() {
+                if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
+                    eprintln!("⚠️ Failed to apply directory timestamps to {}: {}", dst_path.display(), e);
+                }
+            }
+        }
+    }
+}
+
+/// 按源文件对目标应用时间戳（复用唯一实现，避免重复）
+fn copy_file_timestamps_only(src: &Path, dst: &Path) {
+    apply_file_timestamps(src, dst);
+}
+
+/// 输出树中每个文件按相对路径在源树中找同名 stem 的源文件（尝试常见扩展名），并复制时间戳
+fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
+    const SOURCE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl"];
+    for entry in walkdir::WalkDir::new(dst_root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let dst_path = entry.path();
+        if !dst_path.is_file() {
+            continue;
+        }
+        let rel = match dst_path.strip_prefix(dst_root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let parent = rel.parent().unwrap_or(rel);
+        let stem = dst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.is_empty() {
+            continue;
+        }
+        let src_parent = src_root.join(parent);
+        for ext in SOURCE_EXTENSIONS {
+            let src_file = src_parent.join(format!("{}.{}", stem, ext));
+            if src_file.exists() && src_file.is_file() {
+                copy_file_timestamps_only(&src_file, dst_path);
+                break;
+            }
+        }
+    }
+}
+
+/// 🔥 v8.2.5: 从源目录树恢复输出目录树的时间戳（目录 + 文件）
+/// 用于后处理（如 JXL Container Fix）修改了输出文件/目录后，用源侧时间戳统一恢复。
+/// 脚本仅需调用 imgquality-hevc restore-timestamps <src> <dst>，不重复实现逻辑。
+pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
+    let saved = save_directory_timestamps(src_dir)?;
+    apply_saved_timestamps_to_dst(&saved, src_dir, dst_dir);
+    copy_file_timestamps_from_source_tree(src_dir, dst_dir);
+    restore_directory_timestamps(&saved);
+    Ok(())
+}
+
+fn collect_dir_timestamps(
+    dir: &Path,
+    map: &mut std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
+) -> io::Result<()> {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    let atime = filetime::FileTime::from_last_access_time(&meta);
+                    let mtime = filetime::FileTime::from_last_modification_time(&meta);
+                    map.insert(path.clone(), (atime, mtime));
+                }
+                collect_dir_timestamps(&path, map)?;
+            }
+        }
+    }
     Ok(())
 }
 

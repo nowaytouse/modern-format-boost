@@ -78,15 +78,40 @@ pub fn collect_files_small_first(dir: &Path, extensions: &[&str], recursive: boo
     collect_files_sorted(dir, extensions, recursive, SortStrategy::SizeAscending)
 }
 
+/// 按扩展名过滤并计算目录下匹配文件的总字节数
+pub fn calculate_directory_size_by_extensions(
+    dir: &Path,
+    extensions: &[&str],
+    recursive: bool,
+) -> u64 {
+    let walker = if recursive {
+        WalkDir::new(dir).follow_links(true)
+    } else {
+        WalkDir::new(dir).max_depth(1)
+    };
+
+    walker
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|e_str| extensions.contains(&e_str.to_lowercase().as_str()))
+                .unwrap_or(false)
+        })
+        .filter_map(|e| std::fs::metadata(e.path()).ok())
+        .map(|m| m.len())
+        .sum()
+}
+
 /// Image file extensions commonly supported
 /// 🔥 v6.9.12: 添加 jpe, jfif 格式支持
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
     "jxl", "bmp",
 ];
-
-/// Video file extensions commonly supported
-pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv"];
 
 /// Animated image extensions
 pub const ANIMATED_EXTENSIONS: &[&str] = &[

@@ -141,6 +141,18 @@ enum Commands {
         /// Converted file
         converted: PathBuf,
     },
+
+    /// 🔥 v8.2.5: 从源目录恢复输出目录的时间戳（目录+文件）
+    /// 供脚本在后处理（如 JXL Container Fix）后调用，逻辑在 shared_utils，此处仅转发
+    RestoreTimestamps {
+        /// 源目录（如 test）
+        #[arg(value_name = "SOURCE_DIR")]
+        source: PathBuf,
+
+        /// 输出目录（如 test_optimized）
+        #[arg(value_name = "OUTPUT_DIR")]
+        output: PathBuf,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -149,35 +161,6 @@ enum OutputFormat {
     Human,
     /// JSON output (for API use)
     Json,
-}
-
-/// 计算目录中指定扩展名文件的总大小
-#[allow(dead_code)]
-fn calculate_directory_size_by_extensions(
-    dir: &PathBuf,
-    extensions: &[&str],
-    recursive: bool,
-) -> u64 {
-    let walker = if recursive {
-        WalkDir::new(dir).follow_links(true)
-    } else {
-        WalkDir::new(dir).max_depth(1)
-    };
-
-    walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            if let Some(ext) = e.path().extension() {
-                extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
-            } else {
-                false
-            }
-        })
-        .filter_map(|e| std::fs::metadata(e.path()).ok())
-        .map(|m| m.len())
-        .sum()
 }
 
 fn main() -> anyhow::Result<()> {
@@ -311,6 +294,13 @@ fn main() -> anyhow::Result<()> {
         } => {
             verify_conversion(&original, &converted)?;
         }
+
+        Commands::RestoreTimestamps { source, output } => {
+            if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output) {
+                eprintln!("⚠️ restore-timestamps failed: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())
@@ -350,10 +340,6 @@ fn analyze_directory(
     output_format: OutputFormat,
     recommend: bool,
 ) -> anyhow::Result<()> {
-    let image_extensions = [
-        "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
-    ];
-
     let walker = if recursive {
         WalkDir::new(path).follow_links(true)
     } else {
@@ -371,7 +357,7 @@ fn analyze_directory(
 
         let path = entry.path();
         if let Some(ext) = path.extension() {
-            if image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
+            if shared_utils::IMAGE_EXTENSIONS_ANALYZE.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
                 // 🔥 v7.9: Validate file integrity first
                 if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
                     eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
@@ -1018,15 +1004,12 @@ fn auto_convert_directory(
     let config = &config_with_base;
 
     let start_time = Instant::now();
-    let image_extensions = [
-        "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    ];
+
+    // 🔥 v8.2.5: 必须在 collect_files 之前保存！collect_files 遍历目录会更新 atime
+    let saved_dir_timestamps = shared_utils::save_directory_timestamps(input).ok();
 
     // 🔥 v7.5: 使用文件排序功能，优先处理小文件
-    // - 快速看到进度反馈
-    // - 小文件处理快，可以更早发现问题
-    // - 大文件留到后面，避免长时间卡住
-    let files = shared_utils::collect_files_small_first(input, &image_extensions, recursive);
+    let files = shared_utils::collect_files_small_first(input, shared_utils::SUPPORTED_IMAGE_EXTENSIONS, recursive);
 
     let total = files.len();
     if total == 0 {
@@ -1035,12 +1018,7 @@ fn auto_convert_directory(
         // 🔥 v7.4.9: 即使没有文件，也要保留目录元数据
         if let Some(output_dir) = config.output_dir.as_ref() {
             if let Some(ref base_dir) = config.base_dir {
-                println!("\n📁 Preserving directory metadata...");
-                if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
-                    eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
-                } else {
-                    println!("✅ Directory metadata preserved");
-                }
+                shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
             }
         }
 
@@ -1180,16 +1158,22 @@ fn auto_convert_directory(
     // imgquality_hevc 只负责处理图片。视频文件的处理、未支持文件的复制以及最终完整性校验
     // 将由后续的 vidquality 工具或主控脚本负责。避免在此阶段误报"文件缺失"。
 
-    // 🔥 v7.4.9: 保留目录元数据（时间戳、权限、xattr）
+    // 🔥 v7.4.9: 保留目录元数据（权限、xattr）
     if let Some(ref output_dir) = config.output_dir {
         if let Some(ref base_dir) = config.base_dir {
-            println!("\n📁 Preserving directory metadata...");
-            if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
-                eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
-            } else {
-                println!("✅ Directory metadata preserved");
+            shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
+        }
+    }
+
+    // 🔥 v8.2.5: 用处理前保存的时间戳恢复（解决处理过程中 atime/mtime 被更新）
+    if let Some(ref saved) = saved_dir_timestamps {
+        if let Some(ref output_dir) = config.output_dir {
+            if let Some(ref base_dir) = config.base_dir {
+                shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
             }
         }
+        shared_utils::restore_directory_timestamps(saved);
+        println!("✅ Directory timestamps restored");
     }
 
     Ok(())
