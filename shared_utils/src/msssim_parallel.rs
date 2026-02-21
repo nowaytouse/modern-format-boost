@@ -111,12 +111,13 @@ impl ParallelMsssimCalculator {
             return Ok(MsssimResult::skipped());
         }
 
-        // 🔥 v7.9.2: Check file format compatibility (Robust GIF detection)
+        // 🔥 v7.9.2: GIF 不支持 MS-SSIM，响亮报错，不静默跳过
         if let Ok(probe) = crate::ffprobe::probe_video(&self.original_path) {
             if probe.format_name.eq_ignore_ascii_case("gif") {
-                eprintln!("⚠️  GIF format detected - MS-SSIM not supported for palette-based formats");
-                eprintln!("📊 Using alternative quality metrics");
-                return Ok(MsssimResult::skipped());
+                eprintln!("❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback.");
+                return Err(AppError::Other(anyhow::anyhow!(
+                    "GIF does not support MS-SSIM quality verification."
+                )));
             }
         } else {
             // If probe fails (e.g. file missing?), we might fail later or just proceed.

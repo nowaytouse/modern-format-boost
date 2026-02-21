@@ -167,7 +167,7 @@ fn encode_to_hevc(
         .arg("--input")
         .arg("-") // 从stdin读取
         .arg("--output")
-        .arg(hevc_output)
+        .arg(crate::safe_path_arg(hevc_output).as_ref())
         .arg("--crf")
         .arg(format!("{:.1}", config.crf))
         .arg("--preset")
@@ -310,11 +310,11 @@ fn mux_hevc_to_container(
     let start_time = std::time::Instant::now();
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y").arg("-i").arg(hevc_file); // HEVC视频流
+    cmd.arg("-y").arg("-i").arg(crate::safe_path_arg(hevc_file).as_ref()); // HEVC视频流
 
     // 如果需要保留音频，添加原始输入作为音频源
     if config.preserve_audio {
-        cmd.arg("-i").arg(original_input); // 原始文件（音频源）
+        cmd.arg("-i").arg(crate::safe_path_arg(original_input).as_ref()); // 原始文件（音频源）
         cmd.arg("-map")
             .arg("0:v:0") // 使用第一个输入的视频流（HEVC）
             .arg("-map")
@@ -337,7 +337,7 @@ fn mux_hevc_to_container(
         cmd.arg("-movflags").arg("+faststart"); // 快速启动
     }
 
-    cmd.arg(output).stdout(Stdio::null()).stderr(Stdio::piped());
+    cmd.arg(crate::safe_path_arg(output).as_ref()).stdout(Stdio::null()).stderr(Stdio::piped());
 
     // 记录FFmpeg mux命令
     let cmd_str = format!(

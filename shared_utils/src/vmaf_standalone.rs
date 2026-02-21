@@ -90,13 +90,13 @@ fn convert_to_y4m(input: &Path, output_path: &Path) -> Result<()> {
     // ⚠️ Important: We must overwrite the empty temp file created by Builder
     let status = Command::new("ffmpeg")
         .arg("-i")
-        .arg(input)
+        .arg(crate::safe_path_arg(input).as_ref())
         .arg("-pix_fmt")
         .arg("yuv420p")
         .arg("-f")
         .arg("yuv4mpegpipe")
         .arg("-y") // Overwrite existing file
-        .arg(output_path)
+        .arg(crate::safe_path_arg(output_path).as_ref())
         .stderr(std::process::Stdio::null())
         .status()
         .context("Failed to convert to Y4M")?;
