@@ -88,8 +88,8 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if !["heic", "heif", "hif"].contains(&ext_str.as_str()) {
                 eprintln!(
-                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually HEIC, will process as actual format", 
-                    path.display(), 
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually HEIC, will process as actual format",
+                    path.display(),
                     ext_str
                 );
             }
@@ -104,8 +104,8 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str != "jxl" {
                 eprintln!(
-                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually JXL, will process as actual format", 
-                    path.display(), 
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually JXL, will process as actual format",
+                    path.display(),
                     ext_str
                 );
             }
@@ -138,53 +138,36 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         let ext_str = ext.to_string_lossy().to_lowercase();
         // Define standard extension pools for each format
         let (is_valid, suggested) = match format {
-            ImageFormat::Jpeg => (
-                ["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), 
-                "jpg"
-            ),
-            ImageFormat::Png => (
-                ext_str == "png", 
-                "png"
-            ),
-            ImageFormat::WebP => (
-                ext_str == "webp", 
-                "webp"
-            ),
-            ImageFormat::Gif => (
-                ext_str == "gif", 
-                "gif"
-            ),
-            ImageFormat::Tiff => (
-                ["tiff", "tif"].contains(&ext_str.as_str()), 
-                "tiff"
-            ),
-            ImageFormat::Avif => (
-                ext_str == "avif", 
-                "avif"
-            ),
+            ImageFormat::Jpeg => (["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), "jpg"),
+            ImageFormat::Png => (ext_str == "png", "png"),
+            ImageFormat::WebP => (ext_str == "webp", "webp"),
+            ImageFormat::Gif => (ext_str == "gif", "gif"),
+            ImageFormat::Tiff => (["tiff", "tif"].contains(&ext_str.as_str()), "tiff"),
+            ImageFormat::Avif => (ext_str == "avif", "avif"),
             _ => (true, ""), // Other formats: skip strict check for now
         };
 
         if !is_valid && !suggested.is_empty() {
-             extension_mismatch = true;
-             real_extension_suggestion = suggested.to_string();
-             
-             // Output friendly processing log to console only
-             eprintln!(
-                 "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format", 
-                 path.display(), 
-                 ext_str, 
+            extension_mismatch = true;
+            real_extension_suggestion = suggested.to_string();
+
+            // Output friendly processing log to console only
+            eprintln!(
+                 "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format",
+                 path.display(),
+                 ext_str,
                  format_str
              );
-             
-             apple_warning = format!(
+
+            apple_warning = format!(
                  "⚠️ Extension mismatch (.{} vs {})。This will prevent Apple Photos import. Run repair_apple_photos.sh to fix.",
                  ext_str, format_str
              );
         }
     }
 
-    let img = reader.decode()
+    let img = reader
+        .decode()
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {}", e)))?;
 
     // Get basic image properties
@@ -228,9 +211,18 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     // Add smart diagnostic metadata
     if extension_mismatch {
         metadata.insert("extension_mismatch".to_string(), "true".to_string());
-        metadata.insert("real_extension".to_string(), real_extension_suggestion.clone());
-        metadata.insert("apple_compatibility_warning".to_string(), apple_warning.clone());
-        metadata.insert("format_warning".to_string(), format!("Content is actually {}", format_str));
+        metadata.insert(
+            "real_extension".to_string(),
+            real_extension_suggestion.clone(),
+        );
+        metadata.insert(
+            "apple_compatibility_warning".to_string(),
+            apple_warning.clone(),
+        );
+        metadata.insert(
+            "format_warning".to_string(),
+            format!("Content is actually {}", format_str),
+        );
     }
 
     // Get duration for animated images using ffprobe
@@ -638,13 +630,7 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
     use std::process::Command;
 
     let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-        ])
+        .args(["-v", "quiet", "-print_format", "json", "-show_format"])
         .arg(shared_utils::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
@@ -738,12 +724,12 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
 
     // Convert centiseconds to seconds
     let duration = total_cs as f32 / 100.0;
-    
+
     eprintln!(
         "📊 ImageMagick: WebP/GIF animation detected ({} frames, {} centiseconds = {:.2}s)",
         frame_count, total_cs, duration
     );
-    
+
     Some(duration)
 }
 
@@ -853,7 +839,9 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     // 🔥 使用 jxlinfo 获取 JXL 文件信息（比 djxl 更可靠）
     let (width, height, has_alpha, color_depth) = if which::which("jxlinfo").is_ok() {
-        let output = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
+        let output = Command::new("jxlinfo")
+            .arg(shared_utils::safe_path_arg(path).as_ref())
+            .output();
 
         if let Ok(out) = output {
             if out.status.success() {

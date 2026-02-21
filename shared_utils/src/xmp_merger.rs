@@ -231,7 +231,7 @@ impl XmpMerger {
     fn find_same_name_different_ext(&self, xmp_path: &Path) -> Option<PathBuf> {
         let parent = xmp_path.parent()?;
         let xmp_stem_raw = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
-        
+
         // Root stem: "image.jpg" -> "image"
         let xmp_root_stem = xmp_stem_raw.split('.').next().unwrap_or(&xmp_stem_raw);
 
@@ -248,7 +248,7 @@ impl XmpMerger {
                 Some(s) => s.to_string_lossy().to_lowercase(),
                 None => continue,
             };
-            
+
             // Media root stem: "image.png" -> "image"
             let file_root_stem = file_stem_raw.split('.').next().unwrap_or(&file_stem_raw);
 
@@ -258,7 +258,9 @@ impl XmpMerger {
             };
 
             // Match logic: root stem match or exact stem match
-            if (file_stem_raw == xmp_stem_raw || file_root_stem == xmp_root_stem) && is_potential_media(&ext) {
+            if (file_stem_raw == xmp_stem_raw || file_root_stem == xmp_root_stem)
+                && is_potential_media(&ext)
+            {
                 return Some(path);
             }
         }
@@ -298,7 +300,8 @@ impl XmpMerger {
 
         // Normalize: remove special chars, lowercase
         let normalized_stem = Self::normalize_filename(&stem);
-        let root_normalized_stem = Self::normalize_filename(stem.split('.').next().unwrap_or(&stem));
+        let root_normalized_stem =
+            Self::normalize_filename(stem.split('.').next().unwrap_or(&stem));
 
         if normalized_stem.is_empty() {
             return None;
@@ -323,7 +326,8 @@ impl XmpMerger {
 
             let file_stem = path.file_stem()?.to_string_lossy();
             let normalized_file = Self::normalize_filename(&file_stem);
-            let root_normalized_file = Self::normalize_filename(file_stem.split('.').next().unwrap_or(&file_stem));
+            let root_normalized_file =
+                Self::normalize_filename(file_stem.split('.').next().unwrap_or(&file_stem));
 
             if normalized_file == normalized_stem || root_normalized_file == root_normalized_stem {
                 return Some(path);
@@ -627,7 +631,7 @@ impl XmpMerger {
             Err(e) => {
                 let err_str = e.to_string();
                 let hint = crate::extract_suggested_extension(&err_str);
-                
+
                 if let Some(ref h) = hint {
                     eprintln!("💡 ExifTool suggests content is: {}", h);
                 }
@@ -651,18 +655,20 @@ impl XmpMerger {
             args.push("-overwrite_original".to_string());
         }
 
-        let is_jxl = media_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"));
+        let is_jxl = media_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("jxl"));
         let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
         // 🔥 Nuclear Rebuild Strategy (Standardize Metadata & Prevent Brotli Corruption)
         // Only run for JXL files when apple compatibility is actively requested.
         // Otherwise, defer to 100% data preservation and avoid stripping un-recognized metadata.
         if is_jxl && apple_compat {
-            // -all= clears everything, then we restore from the file itself (@) 
-            // and finally merge the XMP sidecar. This ensures the metadata block 
+            // -all= clears everything, then we restore from the file itself (@)
+            // and finally merge the XMP sidecar. This ensures the metadata block
             // is rewritten cleanly without compression anomalies.
             args.push("-all=".to_string());
-            
+
             args.push("-tagsfromfile".to_string());
             args.push("@".to_string());
             args.push("-all:all".to_string());
@@ -706,23 +712,28 @@ impl XmpMerger {
     }
 
     /// Fallback strategy: Temporary extension correction
-    fn merge_xmp_fallback(&self, xmp_path: &Path, media_path: &Path, hint_ext: Option<&str>) -> Result<()> {
+    fn merge_xmp_fallback(
+        &self,
+        xmp_path: &Path,
+        media_path: &Path,
+        hint_ext: Option<&str>,
+    ) -> Result<()> {
         let xmp_filename = xmp_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        
+
         // Strategy 1: Smart Content Detection (Magic Bytes)
         // Check if the file content matches a specific format explicitly
         let detected_ext = if let Some(hint) = hint_ext {
             Some(hint.to_string())
         } else {
-             crate::common_utils::detect_real_extension(media_path).map(|s| s.to_string())
+            crate::common_utils::detect_real_extension(media_path).map(|s| s.to_string())
         };
 
         // Strategy 2: Implied extension from XMP filename (Legacy fallback)
         let implied_ext = if xmp_filename.to_lowercase().ends_with(".xmp") {
-             let stem = &xmp_filename[..xmp_filename.len() - 4];
-             Path::new(stem).extension().and_then(|e| e.to_str())
+            let stem = &xmp_filename[..xmp_filename.len() - 4];
+            Path::new(stem).extension().and_then(|e| e.to_str())
         } else {
-             None
+            None
         };
 
         // Decide which extension to force
@@ -730,21 +741,24 @@ impl XmpMerger {
         let target_ext = detected_ext.or(implied_ext.map(|s| s.to_string()));
 
         let Some(original_ext) = target_ext else {
-             // No extension determined, cannot use fallback
-             // Retry core to return the original error if we can't find a fallback
-             return self.merge_xmp_core(xmp_path, media_path); 
+            // No extension determined, cannot use fallback
+            // Retry core to return the original error if we can't find a fallback
+            return self.merge_xmp_core(xmp_path, media_path);
         };
 
-        let current_ext = media_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let current_ext = media_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
 
         // If extensions match (ignoring case), fallback won't help
         if original_ext.eq_ignore_ascii_case(current_ext) {
-             return self.merge_xmp_core(xmp_path, media_path);
+            return self.merge_xmp_core(xmp_path, media_path);
         }
 
         eprintln!(
-             "⚠️ Merge failed, attempting fallback: Temporary rename to .{} for merge...",
-             original_ext
+            "⚠️ Merge failed, attempting fallback: Temporary rename to .{} for merge...",
+            original_ext
         );
 
         // Construct temporary path
@@ -752,13 +766,16 @@ impl XmpMerger {
 
         // Safety check: Don't overwrite existing files
         if temp_path.exists() {
-             eprintln!("⚠️ Fallback aborted: Temporary target {} already exists", temp_path.display());
-             return self.merge_xmp_core(xmp_path, media_path);
+            eprintln!(
+                "⚠️ Fallback aborted: Temporary target {} already exists",
+                temp_path.display()
+            );
+            return self.merge_xmp_core(xmp_path, media_path);
         }
 
         // 1. Rename to original extension
         std::fs::rename(media_path, &temp_path)
-             .context("Fallback: Failed to rename for temporary merge")?;
+            .context("Fallback: Failed to rename for temporary merge")?;
 
         // 2. Perform merge on temporary file
         // We use a scope guard-like pattern ensures we rename back even if merge fails
@@ -766,22 +783,26 @@ impl XmpMerger {
 
         // 3. Rename back to current extension (Critical!)
         if let Err(e) = std::fs::rename(&temp_path, media_path) {
-             // This is bad - we're left with the temp filename
-             eprintln!("❌ CRITICAL: Failed to restore filename from {} to {}", temp_path.display(), media_path.display());
-             eprintln!("❌ Error: {}", e);
-             // If merge succeeded but rename back failed, we still report error because system state is potentially inconsistent
-             bail!("Critical: Failed to restore filename after fallback merge");
+            // This is bad - we're left with the temp filename
+            eprintln!(
+                "❌ CRITICAL: Failed to restore filename from {} to {}",
+                temp_path.display(),
+                media_path.display()
+            );
+            eprintln!("❌ Error: {}", e);
+            // If merge succeeded but rename back failed, we still report error because system state is potentially inconsistent
+            bail!("Critical: Failed to restore filename after fallback merge");
         }
 
         match merge_result {
-             Ok(()) => {
-                 eprintln!("✅ Fallback merge successful");
-                 Ok(())
-             }
-             Err(e) => {
-                 eprintln!("❌ Fallback merge failed: {}", e);
-                 Err(e)
-             }
+            Ok(()) => {
+                eprintln!("✅ Fallback merge successful");
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("❌ Fallback merge failed: {}", e);
+                Err(e)
+            }
         }
     }
 
@@ -964,10 +985,10 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     // 尝试多种XMP命名方式
     let ext_lower = ext.to_lowercase();
     let xmp_candidates = [
-        parent.join(format!("{}.xmp", stem)),                // photo.xmp
-        parent.join(format!("{}.{}.xmp", stem, ext)),        // photo.jpg.xmp (match original)
-        parent.join(format!("{}.{}.xmp", stem, ext_lower)),  // photo.jpg.xmp (normalized)
-        parent.join(format!("{}.XMP", stem)),                // photo.XMP (uppercase)
+        parent.join(format!("{}.xmp", stem)),               // photo.xmp
+        parent.join(format!("{}.{}.xmp", stem, ext)),       // photo.jpg.xmp (match original)
+        parent.join(format!("{}.{}.xmp", stem, ext_lower)), // photo.jpg.xmp (normalized)
+        parent.join(format!("{}.XMP", stem)),               // photo.XMP (uppercase)
     ];
 
     for xmp_path in &xmp_candidates {
@@ -981,14 +1002,14 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
                 preserve_timestamps: true, // Preserve destination timestamps if needed (usually dest is new)
                 verbose: false,
             };
-            
+
             let merger = XmpMerger::new(config);
-            
+
             // Call merge_xmp which includes the fallback logic
             if let Err(e) = merger.merge_xmp(xmp_path, dest) {
                 // If merge fails, we log it but don't fail the whole process
                 // unless it's critical, but here we return Err to let caller decide
-                 bail!("Failed to merge XMP: {}", e);
+                bail!("Failed to merge XMP: {}", e);
             }
 
             eprintln!("✅ XMP sidecar merged successfully");
@@ -1173,15 +1194,11 @@ mod tests {
 
         // 1x1 PNG data
         let png_data = [
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-            0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41,
-            0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
-            0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
-            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
-            0x44, 0xAE, 0x42, 0x60, 0x82
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
         fs::write(&jpg_path, png_data).unwrap();
 
@@ -1210,7 +1227,7 @@ mod tests {
 
         // This should trigger the fallback because ExifTool will complain about PNG vs JPG
         let result = merger.merge_xmp(&xmp_path, &jpg_path);
-        
+
         if let Err(e) = &result {
             println!("Merge failed with error: {}", e);
         }

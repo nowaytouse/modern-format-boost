@@ -334,7 +334,7 @@ pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
     // Order matters: check higher bit depths first to avoid false matches
 
     // 16-bit formats
-    if pix_fmt.contains("16le") || pix_fmt.contains("16be") || 
+    if pix_fmt.contains("16le") || pix_fmt.contains("16be") ||
        pix_fmt.contains("48le") || pix_fmt.contains("48be") ||  // rgb48, bgr48
        pix_fmt.contains("64le") || pix_fmt.contains("64be")
     {

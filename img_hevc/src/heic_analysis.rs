@@ -31,16 +31,21 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();
 
     // 🔥 v7.8.1: 增强HEIC错误处理，特别是SecurityLimitExceeded错误
-    let ctx = HeifContext::read_from_file(path.to_string_lossy().as_ref())
-        .map_err(|e| {
-            let error_msg = format!("{}", e);
-            if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
-                eprintln!("⚠️  HEIC SecurityLimitExceeded: {} - using fallback analysis", path.display());
-                ImgQualityError::ImageReadError(format!("HEIC security limit exceeded (ipco box limit): {}", e))
-            } else {
-                ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
-            }
-        })?;
+    let ctx = HeifContext::read_from_file(path.to_string_lossy().as_ref()).map_err(|e| {
+        let error_msg = format!("{}", e);
+        if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
+            eprintln!(
+                "⚠️  HEIC SecurityLimitExceeded: {} - using fallback analysis",
+                path.display()
+            );
+            ImgQualityError::ImageReadError(format!(
+                "HEIC security limit exceeded (ipco box limit): {}",
+                e
+            ))
+        } else {
+            ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
+        }
+    })?;
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgQualityError::ImageReadError(format!("Failed to get primary image: {}", e))
@@ -89,7 +94,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
 }
 
 /// Check if file is HEIC/HEIF format (Content-aware)
-/// 
+///
 /// v8.1.1: Added magic byte detection to support files with incorrect extensions
 pub fn is_heic_file(path: &Path) -> bool {
     // 1. Check extension (fast path)
@@ -110,7 +115,10 @@ pub fn is_heic_file(path: &Path) -> bool {
             if &buffer[4..8] == b"ftyp" {
                 let brand = &buffer[8..12];
                 // Common HEIC brands: heic, heix, heim, heis, mif1, msf1
-                if matches!(brand, b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1") {
+                if matches!(
+                    brand,
+                    b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1"
+                ) {
                     return true;
                 }
             }

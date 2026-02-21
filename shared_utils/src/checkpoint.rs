@@ -293,7 +293,10 @@ impl CheckpointManager {
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS {
                             if let Err(e) = fs::remove_file(&self.lock_file) {
-                                eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                                eprintln!(
+                                    "⚠️ [checkpoint] Failed to remove stale lock file: {}",
+                                    e
+                                );
                             }
                             return Ok(None);
                         }

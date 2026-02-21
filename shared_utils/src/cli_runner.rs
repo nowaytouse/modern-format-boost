@@ -238,10 +238,13 @@ where
                 ) {
                     error!("❌ Failed to copy original to output dir: {}", copy_err);
                 } else {
-                    info!("📋 Copied original to output (conversion failed): {}", input.display());
+                    info!(
+                        "📋 Copied original to output (conversion failed): {}",
+                        input.display()
+                    );
                 }
             }
-            return Err(e.into());
+            return Err(e);
         }
     };
 

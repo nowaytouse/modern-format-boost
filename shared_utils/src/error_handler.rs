@@ -401,9 +401,8 @@ mod tests {
     #[test]
     fn test_error_chain_reporting() {
         // 创建一个带有错误链的错误
-        let outer_error: Box<dyn std::error::Error> = Box::new(io::Error::other(
-            "outer error with inner cause",
-        ));
+        let outer_error: Box<dyn std::error::Error> =
+            Box::new(io::Error::other("outer error with inner cause"));
 
         // 测试 report_error 能处理错误链
         report_error(outer_error.as_ref());

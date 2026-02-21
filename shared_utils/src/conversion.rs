@@ -285,8 +285,8 @@ impl Default for ConvertOptions {
             match_quality: false,
             apple_compat: false,
             compress: false,
-            use_gpu: true,   // 🔥 v4.15: GPU by default
-            ultimate: false, // 🔥 v6.2: 默认关闭极限模式
+            use_gpu: true,              // 🔥 v4.15: GPU by default
+            ultimate: false,            // 🔥 v6.2: 默认关闭极限模式
             allow_size_tolerance: true, // 🔥 v7.8.3: 默认允许1%容差（提高转换率）
             verbose: false,
             child_threads: 0,
