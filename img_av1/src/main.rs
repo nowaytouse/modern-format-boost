@@ -28,6 +28,8 @@ struct AutoConvertConfig<'a> {
     base_dir: Option<&'a Path>,
     /// 🔥 v7.9: Balanced thread config
     child_threads: usize,
+    /// 🔥 v8.3: Allow 1% size tolerance
+    allow_size_tolerance: bool,
 }
 
 #[derive(Parser)]
@@ -120,6 +122,14 @@ enum Commands {
         /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
         #[arg(long, default_value_t = 0)]
         child_threads: usize,
+
+        /// 🔥 v8.3: Allow 1% size tolerance (default: enabled)
+        #[arg(long, default_value_t = true)]
+        allow_size_tolerance: bool,
+
+        /// Disable 1% size tolerance
+        #[arg(long)]
+        no_allow_size_tolerance: bool,
     },
 
     /// Verify conversion quality
@@ -179,6 +189,8 @@ fn main() -> anyhow::Result<()> {
             base_dir,
             verbose,
             child_threads,
+            allow_size_tolerance,
+            no_allow_size_tolerance,
         } => {
             // in_place implies delete_original
             let should_delete = delete_original || in_place;
@@ -249,6 +261,7 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     thread_config.child_threads
                 },
+                allow_size_tolerance: allow_size_tolerance && !no_allow_size_tolerance,
             };
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
@@ -617,7 +630,7 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         apple_compat: false,        // img_av1 不需要 Apple 兼容模式
         use_gpu: config.use_gpu,    // 🔥 v4.15: Pass GPU control
         ultimate: false,            // 🔥 v6.2: AV1 暂不支持极限模式
-        allow_size_tolerance: true, // 🔥 v7.8.3: AV1 默认启用容差
+        allow_size_tolerance: config.allow_size_tolerance, // 🔥 v7.8.3: Use config value
         verbose: config.verbose,
         child_threads: config.child_threads,
         // 🔥 v7.9.8: Inject detected format to handle misleading extensions
