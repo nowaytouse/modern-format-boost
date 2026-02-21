@@ -25,18 +25,18 @@ use crate::types::{FileSize, Ssim};
 // 🔥 v7.7: 子模块声明（任务 6.1-6.2）
 // ═══════════════════════════════════════════════════════════════
 
+pub mod codec_detection;
 pub mod metadata;
 pub mod stream_analysis;
-pub mod codec_detection;
 
 // 重新导出公共 API（保持向后兼容）
 // Note: These wildcard re-exports are used by external modules
 #[allow(unused_imports)]
+pub use codec_detection::*;
+#[allow(unused_imports)]
 pub use metadata::*;
 #[allow(unused_imports)]
 pub use stream_analysis::*;
-#[allow(unused_imports)]
-pub use codec_detection::*;
 
 // ═══════════════════════════════════════════════════════════════
 // 🔥 v5.5: 进度条辅助宏 - 固定底部显示
@@ -736,9 +736,8 @@ impl ExploreResult {
     /// 🔥 v7.1: 使用 float_compare::ssim_meets_threshold 进行精确比较
     #[inline]
     pub fn ssim_meets(&self, threshold: f64) -> bool {
-        self.ssim.is_some_and(|s| {
-            crate::float_compare::ssim_meets_threshold(s, threshold)
-        })
+        self.ssim
+            .is_some_and(|s| crate::float_compare::ssim_meets_threshold(s, threshold))
     }
 }
 
@@ -964,8 +963,7 @@ pub enum VideoEncoder {
 ///
 /// 🔥 重要：探索模式必须使用与最终压制相同的 preset！
 /// 否则探索出的 CRF 在最终压制时会产生不同的文件大小。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncoderPreset {
     /// 最快（质量最低，仅用于测试）
     Ultrafast,
@@ -981,7 +979,6 @@ pub enum EncoderPreset {
     /// 极慢（极致压缩，耗时很长）
     Veryslow,
 }
-
 
 impl EncoderPreset {
     /// 获取 x265/x264 preset 字符串
@@ -2897,7 +2894,6 @@ impl VideoExplorer {
         let ms_ssim_norm = ms_ssim.clamp(0.0, 1.0); // MS-SSIM 已经是 0-1 范围
 
         // 加权计算
-        
 
         if self.config.quality_thresholds.validate_ms_ssim
             && self.config.quality_thresholds.validate_psnr
@@ -3892,7 +3888,16 @@ pub fn explore_precise_quality_match_with_compression_gpu(
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
+    VideoExplorer::new_with_gpu(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        use_gpu,
+        max_threads,
+    )?
+    .explore()
 }
 
 /// 🔥 v4.15: 精确质量匹配（带 GPU 控制）
@@ -3908,7 +3913,16 @@ pub fn explore_precise_quality_match_gpu(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
+    VideoExplorer::new_with_gpu(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        use_gpu,
+        max_threads,
+    )?
+    .explore()
 }
 
 /// 🔥 v4.15: 仅压缩（带 GPU 控制）
@@ -3923,7 +3937,16 @@ pub fn explore_compress_only_gpu(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
+    VideoExplorer::new_with_gpu(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        use_gpu,
+        max_threads,
+    )?
+    .explore()
 }
 
 /// 🔥 v4.15: 压缩 + 质量验证（带 GPU 控制）
@@ -3938,7 +3961,16 @@ pub fn explore_compress_with_quality_gpu(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
+    VideoExplorer::new_with_gpu(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        use_gpu,
+        max_threads,
+    )?
+    .explore()
 }
 
 /// 🔥 v4.15: 仅探索大小（带 GPU 控制）
@@ -3953,7 +3985,16 @@ pub fn explore_size_only_gpu(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
+    VideoExplorer::new_with_gpu(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        use_gpu,
+        max_threads,
+    )?
+    .explore()
 }
 
 /// 🔥 v4.15: 仅匹配质量（带 GPU 控制）
@@ -3967,7 +4008,16 @@ pub fn explore_quality_match_gpu(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
-    VideoExplorer::new_with_gpu(input, output, encoder, vf_args, config, use_gpu, max_threads)?.explore()
+    VideoExplorer::new_with_gpu(
+        input,
+        output,
+        encoder,
+        vf_args,
+        config,
+        use_gpu,
+        max_threads,
+    )?
+    .explore()
 }
 
 /// 快速探索（仅基于大小，不验证质量）- 兼容旧 API
@@ -3982,7 +4032,15 @@ pub fn quick_explore(
 ) -> Result<ExploreResult> {
     // 🔥 v7.9: Backward compatibility shim - calculate optimal threads
     let max_threads = crate::thread_manager::get_optimal_threads();
-    explore_size_only(input, output, encoder, vf_args, initial_crf, max_crf, max_threads)
+    explore_size_only(
+        input,
+        output,
+        encoder,
+        vf_args,
+        initial_crf,
+        max_crf,
+        max_threads,
+    )
 }
 
 /// 完整探索（包含 SSIM 质量验证）- 兼容旧 API
@@ -4129,7 +4187,14 @@ pub fn explore_hevc_quality_match(
     predicted_crf: f32,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_quality_match(input, output, VideoEncoder::Hevc, vf_args, predicted_crf, max_threads)
+    explore_quality_match(
+        input,
+        output,
+        VideoEncoder::Hevc,
+        vf_args,
+        predicted_crf,
+        max_threads,
+    )
 }
 
 /// 🔥 v4.6: HEVC 仅压缩（--compress 单独使用）
@@ -4229,7 +4294,14 @@ pub fn explore_av1_quality_match(
     predicted_crf: f32,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_quality_match(input, output, VideoEncoder::Av1, vf_args, predicted_crf, max_threads)
+    explore_quality_match(
+        input,
+        output,
+        VideoEncoder::Av1,
+        vf_args,
+        predicted_crf,
+        max_threads,
+    )
 }
 
 /// 🔥 v4.6: AV1 仅压缩（--compress 单独使用）
@@ -5073,7 +5145,8 @@ pub mod precheck {
         }
 
         // 解析宽高
-        let width: u32 = parts.first()
+        let width: u32 = parts
+            .first()
             .and_then(|s| s.parse().ok())
             .context("Failed to parse video width")?;
         let height: u32 = parts
@@ -5349,7 +5422,7 @@ pub mod precheck {
             && bitrate_kbps < expected_min_bitrate * 0.5
             && bpp < bpp_threshold_very_low
         {
-                        return ProcessingRecommendation::Optional {
+            return ProcessingRecommendation::Optional {
                             reason: format!(
                                 "File already highly compressed (bitrate: {:.0} kbps < {:.0} kbps, BPP: {:.4} < {:.4}), \
                                 limited gain expected",
@@ -5358,7 +5431,8 @@ pub mod precheck {
                                 bpp,
                                 bpp_threshold_very_low
                             ),
-                        };        }
+                        };
+        }
 
         // 4.2 低bitrate + 低BPP → Recommended（中等压缩，有一定提升空间）
         if bitrate_kbps > 0.0 && bitrate_kbps < expected_min_bitrate && bpp < bpp_threshold_low {
@@ -5614,7 +5688,11 @@ pub mod calibration {
             // 根据压缩比例调整 CPU 起点
             let (adjustment, confidence, reason) = if size_ratio < 0.95 {
                 // GPU 压缩余量大，CPU 可以更激进
-                (1.0, 0.85, "GPU compression margin large, CPU can be more aggressive")
+                (
+                    1.0,
+                    0.85,
+                    "GPU compression margin large, CPU can be more aggressive",
+                )
             } else if size_ratio < 1.0 {
                 // GPU 刚好压缩，CPU 小幅调整
                 (0.5, 0.90, "GPU barely compressed, CPU slight adjustment")
@@ -5826,7 +5904,9 @@ pub mod dynamic_mapping {
             .map(|p| p.format_name.eq_ignore_ascii_case("gif"))
             .unwrap_or(false);
         if is_gif_input {
-            eprintln!("   📌 GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)");
+            eprintln!(
+                "   📌 GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
+            );
         }
 
         // 🔥 v7.4: 尝试多个校准CRF值，提高成功率
@@ -5927,7 +6007,10 @@ pub mod dynamic_mapping {
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
-                        eprintln!("   ❌ CPU calibration (GIF/libx265) failed for CRF {:.1}", anchor_crf);
+                        eprintln!(
+                            "   ❌ CPU calibration (GIF/libx265) failed for CRF {:.1}",
+                            anchor_crf
+                        );
                         if !stderr.is_empty() {
                             for line in stderr.lines().take(5) {
                                 eprintln!("      {}", line);
@@ -6566,7 +6649,8 @@ pub fn explore_with_gpu_coarse_search(
         // 🔥 v6.9: 检查是否应该运行 MS-SSIM
         // 短视频（≤5分钟）自动启用，长视频需要 force_ms_ssim_long 参数
         // 🔥 v7.9.1: GIF 格式跳过 MS-SSIM（不支持调色板格式）
-        let should_run_vmaf = !is_gif_format && (duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long);
+        let should_run_vmaf =
+            !is_gif_format && (duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long);
 
         if is_gif_format {
             // GIF 不支持 MS-SSIM；不静默降级，失败即响亮报错；无遗漏：同步写入 result.log 以便输出到相邻目录时日志完整
@@ -6811,18 +6895,22 @@ pub fn explore_with_gpu_coarse_search(
 
     // 🔥 体积变化与质量指标：每个文件最完整透明度，同时写入 stderr 与 result.log
     let input_size = fs::metadata(input).ok().map(|m| m.len());
-    let output_size_actual = fs::metadata(output).ok().map(|m| m.len()).unwrap_or(result.output_size);
-    let size_change_line = if let (Some(in_sz), Some(out_sz)) = (input_size, Some(output_size_actual)) {
-        if in_sz == 0 {
-            "   SizeChange: N/A (zero input size)".to_string()
+    let output_size_actual = fs::metadata(output)
+        .ok()
+        .map(|m| m.len())
+        .unwrap_or(result.output_size);
+    let size_change_line =
+        if let (Some(in_sz), Some(out_sz)) = (input_size, Some(output_size_actual)) {
+            if in_sz == 0 {
+                "   SizeChange: N/A (zero input size)".to_string()
+            } else {
+                let ratio = out_sz as f64 / in_sz as f64;
+                let pct = (ratio - 1.0) * 100.0;
+                format!("   SizeChange: {:.2}x ({:+.1}%) vs original", ratio, pct)
+            }
         } else {
-            let ratio = out_sz as f64 / in_sz as f64;
-            let pct = (ratio - 1.0) * 100.0;
-            format!("   SizeChange: {:.2}x ({:+.1}%) vs original", ratio, pct)
-        }
-    } else {
-        "   SizeChange: N/A (missing original or output size)".to_string()
-    };
+            "   SizeChange: N/A (missing original or output size)".to_string()
+        };
     eprintln!("{}", size_change_line);
     result.log.push(size_change_line);
 
@@ -7104,25 +7192,25 @@ fn cpu_fine_tune_from_gpu_boundary(
             .suffix(".log")
             .tempfile()
             .context("Failed to create stderr temp file")?;
-        
+
         let stderr_file = stderr_temp_val.path().to_path_buf();
         // Wrap in Option to maintain compatibility with existing reading logic downstream
         let stderr_temp = Some(stderr_temp_val);
 
         if let Some(ref temp) = stderr_temp {
             // Reopen the file to get a handle for Command
-             if let Ok(file) = temp.reopen() {
+            if let Ok(file) = temp.reopen() {
                 cmd.stderr(file);
             } else {
                 cmd.stderr(Stdio::null());
             }
         } else {
-             // Fallback to manual file creation if tempfile failed (though unlikely)
-             if let Ok(file) = std::fs::File::create(&stderr_file) {
-                 cmd.stderr(file);
-             } else {
-                 cmd.stderr(Stdio::null());
-             }
+            // Fallback to manual file creation if tempfile failed (though unlikely)
+            if let Ok(file) = std::fs::File::create(&stderr_file) {
+                cmd.stderr(file);
+            } else {
+                cmd.stderr(Stdio::null());
+            }
         }
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
@@ -8285,7 +8373,9 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
     if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
         let ext_lower = ext.to_lowercase();
         if matches!(ext_lower.as_str(), "gif") {
-            eprintln!("   ❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback.");
+            eprintln!(
+                "   ❌ ERROR: GIF format - MS-SSIM not supported (palette-based). No fallback."
+            );
             return None;
         }
     }
@@ -8728,7 +8818,15 @@ pub fn explore_hevc_with_gpu_coarse(
     initial_crf: f32,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, false, false, max_threads)
+    explore_hevc_with_gpu_coarse_full(
+        input,
+        output,
+        vf_args,
+        initial_crf,
+        false,
+        false,
+        max_threads,
+    )
 }
 
 /// 🔥 v6.2: HEVC GPU+CPU 智能探索（极限模式）
@@ -8743,7 +8841,15 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     ultimate_mode: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    explore_hevc_with_gpu_coarse_full(input, output, vf_args, initial_crf, ultimate_mode, false, max_threads)
+    explore_hevc_with_gpu_coarse_full(
+        input,
+        output,
+        vf_args,
+        initial_crf,
+        ultimate_mode,
+        false,
+        max_threads,
+    )
 }
 
 /// 🔥 v6.9: HEVC GPU+CPU 智能探索（完整参数版本）
@@ -10469,4 +10575,3 @@ mod prop_tests_v69 {
         }
     }
 }
- 

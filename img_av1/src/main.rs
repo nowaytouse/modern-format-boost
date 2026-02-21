@@ -1,8 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use img_av1::{analyze_image, get_recommendation};
-use img_av1::{
-    calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
-};
+use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use rayon::prelude::*;
 use serde_json::json;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
@@ -144,10 +142,8 @@ enum OutputFormat {
 
 fn main() -> anyhow::Result<()> {
     // 🔥 v7.8: 初始化日志系统
-    let _ = shared_utils::logging::init_logging(
-        "img_av1",
-        shared_utils::logging::LogConfig::default(),
-    );
+    let _ =
+        shared_utils::logging::init_logging("img_av1", shared_utils::logging::LogConfig::default());
 
     let cli = Cli::parse();
 
@@ -188,13 +184,14 @@ fn main() -> anyhow::Result<()> {
             let should_delete = delete_original || in_place;
 
             // 🔥 v4.6: 使用模块化的 flag 验证器
-            let flag_mode = match shared_utils::validate_flags_result(explore, match_quality, compress) {
-                Ok(mode) => mode,
-                Err(e) => {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }
-            };
+            let flag_mode =
+                match shared_utils::validate_flags_result(explore, match_quality, compress) {
+                    Ok(mode) => mode,
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        std::process::exit(1);
+                    }
+                };
 
             if lossless {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
@@ -325,7 +322,9 @@ fn analyze_directory(
 
         let path = entry.path();
         if let Some(ext) = path.extension() {
-            if shared_utils::IMAGE_EXTENSIONS_ANALYZE.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
+            if shared_utils::IMAGE_EXTENSIONS_ANALYZE
+                .contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
+            {
                 // 🔥 v7.9: Validate file integrity first
                 if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
                     eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
@@ -434,13 +433,13 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
 
     if is_jxl {
         use std::process::Command;
-        
+
         // 🔥 Secure temp file creation
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
             .tempfile()
             .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
-            
+
         let temp_path = temp_png_file.path();
 
         // Decode JXL to PNG using djxl
@@ -455,9 +454,8 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
         }
 
         // Load the temp PNG
-        let img = image::open(temp_path).map_err(|e| {
-            anyhow::anyhow!("Failed to open decoded PNG: {}", e)
-        })?;
+        let img = image::open(temp_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open decoded PNG: {}", e))?;
 
         // Cleanup is automatic via NamedTempFile guard drop
         Ok(img)
@@ -616,9 +614,9 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         explore: config.explore,
         match_quality: config.match_quality,
         compress: config.compress,
-        apple_compat: false,     // img_av1 不需要 Apple 兼容模式
-        use_gpu: config.use_gpu, // 🔥 v4.15: Pass GPU control
-        ultimate: false,         // 🔥 v6.2: AV1 暂不支持极限模式
+        apple_compat: false,        // img_av1 不需要 Apple 兼容模式
+        use_gpu: config.use_gpu,    // 🔥 v4.15: Pass GPU control
+        ultimate: false,            // 🔥 v6.2: AV1 暂不支持极限模式
         allow_size_tolerance: true, // 🔥 v7.8.3: AV1 默认启用容差
         verbose: config.verbose,
         child_threads: config.child_threads,
@@ -799,8 +797,11 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     // - 快速看到进度反馈
     // - 小文件处理快，可以更早发现问题
     // - 大文件留到后面，避免长时间卡住
-    let files =
-        shared_utils::collect_files_small_first(input, shared_utils::SUPPORTED_IMAGE_EXTENSIONS, config.recursive);
+    let files = shared_utils::collect_files_small_first(
+        input,
+        shared_utils::SUPPORTED_IMAGE_EXTENSIONS,
+        config.recursive,
+    );
 
     let total = files.len();
     if total == 0 {
@@ -837,7 +838,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     // - 使用智能线程管理器计算最优并发数
     // - 针对 Apple Silicon 优化，防止过载
     let balanced_config = shared_utils::thread_manager::get_balanced_thread_config(
-        shared_utils::thread_manager::WorkloadType::Image
+        shared_utils::thread_manager::WorkloadType::Image,
     );
     let pool_size = balanced_config.parallel_tasks;
 

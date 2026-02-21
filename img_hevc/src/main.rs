@@ -232,7 +232,9 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if !allow_size_tolerance {
-                eprintln!("📏 Size Tolerance: DISABLED (output must be strictly smaller than input)");
+                eprintln!(
+                    "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)"
+                );
             }
             let config = AutoConvertConfig {
                 output_dir: output.clone(),
@@ -245,8 +247,8 @@ fn main() -> anyhow::Result<()> {
                 match_quality,
                 compress,
                 apple_compat,
-                use_gpu: true, // 🔥 v6.2: Always use GPU for coarse search
-                ultimate,      // 🔥 v6.2: 极限探索模式
+                use_gpu: true,        // 🔥 v6.2: Always use GPU for coarse search
+                ultimate,             // 🔥 v6.2: 极限探索模式
                 allow_size_tolerance, // 🔥 v7.8.3: 容差开关
                 verbose,
                 // 🔥 v7.9: Pass down thread limit
@@ -284,7 +286,8 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::RestoreTimestamps { source, output } => {
-            if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output) {
+            if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
+            {
                 eprintln!("⚠️ restore-timestamps failed: {}", e);
                 std::process::exit(1);
             }
@@ -345,7 +348,9 @@ fn analyze_directory(
 
         let path = entry.path();
         if let Some(ext) = path.extension() {
-            if shared_utils::IMAGE_EXTENSIONS_ANALYZE.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
+            if shared_utils::IMAGE_EXTENSIONS_ANALYZE
+                .contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
+            {
                 // 🔥 v7.9: Validate file integrity first
                 if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
                     eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
@@ -454,13 +459,13 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
 
     if is_jxl {
         use std::process::Command;
-        
+
         // 🔥 Secure temp file creation
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
             .tempfile()
             .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
-            
+
         let temp_path = temp_png_file.path();
 
         // Decode JXL to PNG using djxl
@@ -475,9 +480,8 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
         }
 
         // Load the temp PNG
-        let img = image::open(temp_path).map_err(|e| {
-            anyhow::anyhow!("Failed to open decoded PNG: {}", e)
-        })?;
+        let img = image::open(temp_path)
+            .map_err(|e| anyhow::anyhow!("Failed to open decoded PNG: {}", e))?;
 
         // Cleanup is automatic via NamedTempFile guard drop
         Ok(img)
@@ -677,7 +681,10 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
 /// - 二分搜索找到最优 CRF
 /// - SSIM 裁判验证确保质量 (≥0.95)
 /// - 输出大于输入时自动跳过
-fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<ConversionOutput> {
+fn auto_convert_single_file(
+    input: &Path,
+    config: &AutoConvertConfig,
+) -> anyhow::Result<ConversionOutput> {
     use img_hevc::lossless_converter::{
         convert_jpeg_to_jxl, convert_to_hevc_mkv_lossless, convert_to_hevc_mp4_matched,
         convert_to_jxl, ConvertOptions,
@@ -706,10 +713,10 @@ fn auto_convert_single_file(input: &Path, config: &AutoConvertConfig) -> anyhow:
         verbose: config.verbose,
         // 🔥 v7.9: Pass down thread limit
         child_threads: if config.child_threads > 0 {
-             config.child_threads
+            config.child_threads
         } else {
-             // Fallback for single file mode (conservative default)
-             2 
+            // Fallback for single file mode (conservative default)
+            2
         },
         // 🔥 v7.9.8: Inject detected format to handle misleading extensions
         input_format: Some(analysis.format.clone()),
@@ -977,7 +984,7 @@ fn auto_convert_directory(
     }
     // config.child_threads is already set by caller (Commands::Auto)
     // But for directory processing, we want to ensure we use Image workload pool size
-    
+
     // 🔥 性能优化：使用新的平衡线程策略
     // - 避免系统卡死 (防止 N 个任务 * M 个线程的 CPU 过载)
     // - Image Mode: 多任务并发 (宽)，每任务少线程 (浅)
@@ -985,10 +992,10 @@ fn auto_convert_directory(
         shared_utils::thread_manager::WorkloadType::Image,
     );
     let pool_size = thread_config.parallel_tasks; // Use calculated pool size
-    
+
     // Override child_threads in config if needed (should match Image workload)
     config_with_base.child_threads = thread_config.child_threads;
-    
+
     let config = &config_with_base;
 
     let start_time = Instant::now();
@@ -997,7 +1004,11 @@ fn auto_convert_directory(
     let saved_dir_timestamps = shared_utils::save_directory_timestamps(input).ok();
 
     // 🔥 v7.5: 使用文件排序功能，优先处理小文件
-    let files = shared_utils::collect_files_small_first(input, shared_utils::SUPPORTED_IMAGE_EXTENSIONS, recursive);
+    let files = shared_utils::collect_files_small_first(
+        input,
+        shared_utils::SUPPORTED_IMAGE_EXTENSIONS,
+        recursive,
+    );
 
     let total = files.len();
     if total == 0 {
@@ -1058,8 +1069,8 @@ fn auto_convert_directory(
             num_cpus::get()
         );
     }
-    
-    // 🔥 Store child_threads in config or a thread-local static? 
+
+    // 🔥 Store child_threads in config or a thread-local static?
     // Ideally pass it down. But config struct is fixed.
     // For now we'll update the config struct or use a global setting.
     // Let's check AutoConvertConfig structure again.

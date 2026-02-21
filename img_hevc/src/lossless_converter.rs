@@ -186,18 +186,23 @@ pub fn convert_to_jxl(
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if stderr.contains("Getting pixel data failed") 
-                || stderr.contains("Failed to decode") 
+            if stderr.contains("Getting pixel data failed")
+                || stderr.contains("Failed to decode")
                 || stderr.contains("Decoding failed")
                 || stderr.contains("pixel data")
-                || stderr.contains("Error while decoding") {
+                || stderr.contains("Error while decoding")
+            {
                 use console::style;
                 eprintln!(
                     "   {} {}",
                     style("⚠️  CJXL ENCODING FAILED:").yellow().bold(),
                     stderr.lines().next().unwrap_or("Unknown error")
                 );
-                eprintln!("   {} {}", style("🔄 FALLBACK:").cyan(), style("Using FFmpeg → CJXL pipeline (more reliable for large images)").dim());
+                eprintln!(
+                    "   {} {}",
+                    style("🔄 FALLBACK:").cyan(),
+                    style("Using FFmpeg → CJXL pipeline (more reliable for large images)").dim()
+                );
                 eprintln!(
                     "   📋 Reason: Image format/size incompatible with installed CJXL version (metadata will be preserved)"
                 );
@@ -243,23 +248,23 @@ pub fn convert_to_jxl(
                                 cmd.arg("--compress_boxes=0"); // 🔥 v7.11: Disable metadata compression
                             }
 
-                            let cjxl_result = cmd.stdin(ffmpeg_stdout)
-                                .stderr(Stdio::piped())
-                                .spawn();
+                            let cjxl_result =
+                                cmd.stdin(ffmpeg_stdout).stderr(Stdio::piped()).spawn();
 
                             match cjxl_result {
                                 Ok(mut cjxl_proc) => {
                                     // 🔥 v8.2.4: Drain ffmpeg stderr in background thread
                                     // to prevent deadlock when pipe buffer fills
-                                    let ffmpeg_stderr_thread = ffmpeg_proc.stderr.take().map(|stderr| {
-                                        std::thread::spawn(move || {
-                                            use std::io::Read;
-                                            let mut buf = String::new();
-                                            let mut reader = stderr;
-                                            let _ = reader.read_to_string(&mut buf);
-                                            buf
-                                        })
-                                    });
+                                    let ffmpeg_stderr_thread =
+                                        ffmpeg_proc.stderr.take().map(|stderr| {
+                                            std::thread::spawn(move || {
+                                                use std::io::Read;
+                                                let mut buf = String::new();
+                                                let mut reader = stderr;
+                                                let _ = reader.read_to_string(&mut buf);
+                                                buf
+                                            })
+                                        });
 
                                     // 等待两个进程完成
                                     let ffmpeg_status = ffmpeg_proc.wait();
@@ -280,16 +285,16 @@ pub fn convert_to_jxl(
                                             if !ffmpeg_stderr_str.is_empty() {
                                                 eprintln!(
                                                     "      Error: {}",
-                                                    ffmpeg_stderr_str.lines().next().unwrap_or("Unknown")
+                                                    ffmpeg_stderr_str
+                                                        .lines()
+                                                        .next()
+                                                        .unwrap_or("Unknown")
                                                 );
                                             }
                                             false
                                         }
                                         Err(e) => {
-                                            eprintln!(
-                                                "   ❌ Failed to wait for FFmpeg: {}",
-                                                e
-                                            );
+                                            eprintln!("   ❌ Failed to wait for FFmpeg: {}", e);
                                             false
                                         }
                                     };
@@ -331,20 +336,29 @@ pub fn convert_to_jxl(
                                             stderr: Vec::new(),
                                         })
                                     } else {
-                                        eprintln!("   ❌ FFmpeg pipeline failed (ffmpeg: {}, cjxl: {})", 
+                                        eprintln!(
+                                            "   ❌ FFmpeg pipeline failed (ffmpeg: {}, cjxl: {})",
                                             if ffmpeg_ok { "✓" } else { "✗" },
-                                            if cjxl_ok { "✓" } else { "✗" });
-                                        
+                                            if cjxl_ok { "✓" } else { "✗" }
+                                        );
+
                                         // 🔥 v7.8.2: Secondary Fallback - ImageMagick pipeline
                                         eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                        try_imagemagick_fallback(input, &output, distance, max_threads)
+                                        try_imagemagick_fallback(
+                                            input,
+                                            &output,
+                                            distance,
+                                            max_threads,
+                                        )
                                     }
                                 }
                                 Err(e) => {
                                     eprintln!("   ❌ Failed to start cjxl process: {}", e);
                                     let _ = ffmpeg_proc.kill();
                                     // 尝试 ImageMagick fallback
-                                    eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                                    eprintln!(
+                                        "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline..."
+                                    );
                                     try_imagemagick_fallback(input, &output, distance, max_threads)
                                 }
                             }
@@ -594,17 +608,19 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             // 🔥 v8.2: Handle truncated/corrupted JPEGs by falling back to ImageMagick sanitization
-            if stderr.contains("Error while decoding") 
+            if stderr.contains("Error while decoding")
                 || stderr.contains("Corrupt JPEG")
-                || stderr.contains("Premature end") {
-                
+                || stderr.contains("Premature end")
+            {
                 use console::style;
-                eprintln!("   {} {}", 
+                eprintln!(
+                    "   {} {}",
                     style("⚠️  JPEG TRANSCODE FAILED:").yellow().bold(),
                     style("Detected corrupted/truncated JPEG structure").yellow()
                 );
-                eprintln!("   {} {}", 
-                    style("🔄 FALLBACK:").cyan(), 
+                eprintln!(
+                    "   {} {}",
+                    style("🔄 FALLBACK:").cyan(),
                     style("Using ImageMagick → cjxl pipeline to sanitize and re-encode").dim()
                 );
 
@@ -613,18 +629,23 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                     Ok(_) => {
                         let output_size = fs::metadata(&output)?.len();
                         let reduction = 1.0 - (output_size as f64 / input_size as f64);
-                        
+
                         // Copy metadata and timestamps
                         shared_utils::copy_metadata(input, &output);
                         mark_as_processed(input);
-                        
+
                         if options.should_delete_original()
-                            && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok() {
+                            && shared_utils::conversion::safe_delete_original(input, &output, 100)
+                                .is_ok()
+                        {
                             // Handled
                         }
 
                         let reduction_pct = reduction * 100.0;
-                        let message = format!("JPEG (Sanitized) -> JXL: size reduced {:.1}%", reduction_pct);
+                        let message = format!(
+                            "JPEG (Sanitized) -> JXL: size reduced {:.1}%",
+                            reduction_pct
+                        );
 
                         Ok(ConversionResult {
                             success: true,
@@ -638,11 +659,10 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                             skip_reason: None,
                         })
                     }
-                    Err(e) => {
-                        Err(ImgQualityError::ConversionError(format!(
-                            "Fallback failed after JPEG corruption: {}", e
-                        )))
-                    }
+                    Err(e) => Err(ImgQualityError::ConversionError(format!(
+                        "Fallback failed after JPEG corruption: {}",
+                        e
+                    ))),
                 }
             } else {
                 Err(ImgQualityError::ConversionError(format!(
@@ -1118,7 +1138,8 @@ pub fn convert_to_hevc_mp4_matched(
     let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
     if explore_result.output_size > max_allowed_size {
-        let size_increase_pct = ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
+        let size_increase_pct =
+            ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         if let Err(e) = fs::remove_file(&output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized HEVC output: {}", e);
         }
@@ -1453,7 +1474,7 @@ pub fn convert_to_jxl_matched(
             // 🔥 v7.8: 添加容差避免高概率跳过 - 允许最多1%的大小增加
             let tolerance_ratio = 1.01; // 1%容差 (精确控制)
             let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
-            
+
             if output_size > max_allowed_size {
                 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
                 if let Err(e) = fs::remove_file(&output) {
@@ -1689,9 +1710,9 @@ fn try_imagemagick_fallback(
     max_threads: usize,
 ) -> std::result::Result<std::process::Output, std::io::Error> {
     use std::process::Stdio;
-    
+
     eprintln!("   🔧 ImageMagick → cjxl pipeline");
-    
+
     // Step 1: 启动 ImageMagick 进程
     let magick_result = Command::new("magick")
         .arg("--") // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
@@ -1746,10 +1767,7 @@ fn try_imagemagick_fallback(
                         let cjxl_ok = match cjxl_status {
                             Ok(status) if status.success() => true,
                             Ok(status) => {
-                                eprintln!(
-                                    "   ❌ cjxl failed with exit code: {:?}",
-                                    status.code()
-                                );
+                                eprintln!("   ❌ cjxl failed with exit code: {:?}", status.code());
                                 false
                             }
                             Err(e) => {
@@ -1760,20 +1778,20 @@ fn try_imagemagick_fallback(
 
                         // 构造结果
                         if magick_ok && cjxl_ok {
-                            eprintln!("   🎉 SECONDARY FALLBACK SUCCESS: ImageMagick pipeline completed");
+                            eprintln!(
+                                "   🎉 SECONDARY FALLBACK SUCCESS: ImageMagick pipeline completed"
+                            );
                             Ok(std::process::Output {
                                 status: std::process::ExitStatus::default(),
                                 stdout: Vec::new(),
                                 stderr: Vec::new(),
                             })
                         } else {
-                            eprintln!("   ❌ SECONDARY FALLBACK FAILED: ImageMagick pipeline error (magick: {}, cjxl: {})", 
+                            eprintln!("   ❌ SECONDARY FALLBACK FAILED: ImageMagick pipeline error (magick: {}, cjxl: {})",
                                 if magick_ok { "✓" } else { "✗" },
                                 if cjxl_ok { "✓" } else { "✗" });
                             // 返回原始Error
-                            Err(std::io::Error::other(
-                                "All fallback methods failed"
-                            ))
+                            Err(std::io::Error::other("All fallback methods failed"))
                         }
                     }
                     Err(e) => {
@@ -1786,7 +1804,7 @@ fn try_imagemagick_fallback(
                 eprintln!("   ❌ Failed to capture ImageMagick stdout");
                 let _ = magick_proc.kill();
                 Err(std::io::Error::other(
-                    "Failed to capture ImageMagick stdout"
+                    "Failed to capture ImageMagick stdout",
                 ))
             }
         }
@@ -1820,11 +1838,16 @@ fn prepare_input_for_cjxl(
     let ext = if let Some(real) = detected_ext {
         if !literal_ext.is_empty() && real != literal_ext {
             // 允许 jpg/jpeg 互换
-            if !((real == "jpg" && literal_ext == "jpeg") || (real == "jpeg" && literal_ext == "jpg")) {
+            if !((real == "jpg" && literal_ext == "jpeg")
+                || (real == "jpeg" && literal_ext == "jpg"))
+            {
                 use console::style;
-                eprintln!("   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
+                eprintln!(
+                    "   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
                     style("⚠️  [智能修正] 扩展名不匹配:").yellow().bold(),
-                    input.display(), literal_ext, real.to_uppercase()
+                    input.display(),
+                    literal_ext,
+                    real.to_uppercase()
                 );
             }
         }
@@ -1850,14 +1873,13 @@ fn prepare_input_for_cjxl(
 
             if !is_header_valid {
                 use console::style;
-                eprintln!("   {} {}", 
-                    style("🔧 PRE-PROCESSING:").yellow().bold(), 
+                eprintln!(
+                    "   {} {}",
+                    style("🔧 PRE-PROCESSING:").yellow().bold(),
                     style("Corrupted JPEG header detected, using ImageMagick to sanitize").yellow()
                 );
-                
-                let temp_png_file = tempfile::Builder::new()
-                    .suffix(".png")
-                    .tempfile()?;
+
+                let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
                 let temp_png = temp_png_file.path().to_path_buf();
 
                 let result = Command::new("magick")
@@ -1868,14 +1890,18 @@ fn prepare_input_for_cjxl(
 
                 match result {
                     Ok(output) if output.status.success() && temp_png.exists() => {
-                        eprintln!("   {} {}", 
+                        eprintln!(
+                            "   {} {}",
                             style("✅").green(),
-                            style("ImageMagick JPEG sanitization successful").green().bold()
+                            style("ImageMagick JPEG sanitization successful")
+                                .green()
+                                .bold()
                         );
                         Ok((temp_png, Some(temp_png_file)))
                     }
                     _ => {
-                        eprintln!("   {} {}", 
+                        eprintln!(
+                            "   {} {}",
                             style("⚠️").red(),
                             style("ImageMagick sanitization failed, trying direct input").dim()
                         );
@@ -1890,14 +1916,13 @@ fn prepare_input_for_cjxl(
         // WebP: 使用 dwebp 解码（处理 ICC profile 问题）
         "webp" => {
             use console::style;
-            eprintln!("   {} {}", 
+            eprintln!(
+                "   {} {}",
                 style("🔧 PRE-PROCESSING:").cyan().bold(),
                 style("WebP detected, using dwebp for ICC profile compatibility").dim()
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("dwebp")
@@ -1909,14 +1934,16 @@ fn prepare_input_for_cjxl(
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!("   {} {}", 
+                    eprintln!(
+                        "   {} {}",
                         style("✅").green(),
                         style("dwebp pre-processing successful").green()
                     );
                     Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
-                    eprintln!("   {} {}", 
+                    eprintln!(
+                        "   {} {}",
                         style("⚠️").yellow(),
                         style("dwebp pre-processing failed, trying direct cjxl").dim()
                     );
@@ -1929,14 +1956,13 @@ fn prepare_input_for_cjxl(
         // TIFF: 使用 ImageMagick 转换
         "tiff" | "tif" => {
             use console::style;
-            eprintln!("   {} {}", 
+            eprintln!(
+                "   {} {}",
                 style("🔧 PRE-PROCESSING:").cyan().bold(),
                 style("TIFF detected, using ImageMagick for cjxl compatibility").dim()
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
@@ -1949,11 +1975,19 @@ fn prepare_input_for_cjxl(
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!("   {} {}", style("✅").green(), style("ImageMagick TIFF pre-processing successful").green());
+                    eprintln!(
+                        "   {} {}",
+                        style("✅").green(),
+                        style("ImageMagick TIFF pre-processing successful").green()
+                    );
                     Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
-                    eprintln!("   {} {}", style("⚠️").yellow(), style("ImageMagick TIFF pre-processing failed, trying direct cjxl").dim());
+                    eprintln!(
+                        "   {} {}",
+                        style("⚠️").yellow(),
+                        style("ImageMagick TIFF pre-processing failed, trying direct cjxl").dim()
+                    );
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1962,14 +1996,13 @@ fn prepare_input_for_cjxl(
         // BMP: 使用 ImageMagick 转换
         "bmp" => {
             use console::style;
-            eprintln!("   {} {}", 
+            eprintln!(
+                "   {} {}",
                 style("🔧 PRE-PROCESSING:").cyan().bold(),
                 style("BMP detected, using ImageMagick for cjxl compatibility").dim()
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("magick")
@@ -1980,11 +2013,19 @@ fn prepare_input_for_cjxl(
 
             match result {
                 Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!("   {} {}", style("✅").green(), style("ImageMagick BMP pre-processing successful").green());
+                    eprintln!(
+                        "   {} {}",
+                        style("✅").green(),
+                        style("ImageMagick BMP pre-processing successful").green()
+                    );
                     Ok((temp_png, Some(temp_png_file)))
                 }
                 _ => {
-                    eprintln!("   {} {}", style("⚠️").yellow(), style("ImageMagick BMP pre-processing failed, trying direct cjxl").dim());
+                    eprintln!(
+                        "   {} {}",
+                        style("⚠️").yellow(),
+                        style("ImageMagick BMP pre-processing failed, trying direct cjxl").dim()
+                    );
                     Ok((input.to_path_buf(), None))
                 }
             }
@@ -1993,14 +2034,13 @@ fn prepare_input_for_cjxl(
         // HEIC/HEIF: 使用 ImageMagick 或 sips 转换
         "heic" | "heif" => {
             use console::style;
-            eprintln!("   {} {}", 
+            eprintln!(
+                "   {} {}",
                 style("🔧 PRE-PROCESSING:").cyan().bold(),
                 style("HEIC/HEIF detected, using sips/ImageMagick for cjxl compatibility").dim()
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             eprintln!("   🍎 Trying macOS sips first...");
@@ -2048,9 +2088,7 @@ fn prepare_input_for_cjxl(
                 "   🔧 PRE-PROCESSING: GIF detected, using FFmpeg for static frame extraction"
             );
 
-            let temp_png_file = tempfile::Builder::new()
-                .suffix(".png")
-                .tempfile()?;
+            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
             let temp_png = temp_png_file.path().to_path_buf();
 
             let result = Command::new("ffmpeg")
@@ -2082,12 +2120,12 @@ fn prepare_input_for_cjxl(
                         "   🔧 PRE-PROCESSING: Extension mismatch detected (.{} vs {}), creating aligned temp file",
                         actual_ext, ext
                     );
-                    
+
                     let temp_aligned_file = tempfile::Builder::new()
                         .suffix(&format!(".{}", ext))
                         .tempfile()?;
                     let temp_path = temp_aligned_file.path().to_path_buf();
-                    
+
                     if std::fs::copy(input, &temp_path).is_ok() {
                         Ok((temp_path, Some(temp_aligned_file)))
                     } else {
@@ -2102,8 +2140,6 @@ fn prepare_input_for_cjxl(
         }
     }
 }
-
-
 
 /// Wrapper for shared_utils::determine_output_path with imgquality error type
 fn get_output_path(
@@ -2443,7 +2479,9 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
     // 🔥 使用 jxlinfo 进行更可靠的验证（如果可用）
     // jxlinfo 比 djxl 更适合验证，因为它只读取元数据，不需要完整解码
     if which::which("jxlinfo").is_ok() {
-        let result = Command::new("jxlinfo").arg(shared_utils::safe_path_arg(path).as_ref()).output();
+        let result = Command::new("jxlinfo")
+            .arg(shared_utils::safe_path_arg(path).as_ref())
+            .output();
 
         if let Ok(output) = result {
             if !output.status.success() {
