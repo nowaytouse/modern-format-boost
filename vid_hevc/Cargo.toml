@@ -1,0 +1,44 @@
+[package]
+name = "vid-hevc"
+version = "0.1.0"
+edition = "2021"
+authors = ["Modern Format Boost Contributors"]
+description = "Video quality analyzer and format converter API - FFV1 archival and AV1 compression"
+license = "MIT"
+keywords = ["video", "ffv1", "av1", "quality", "archival"]
+
+[dependencies]
+# CLI framework
+clap = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Parallel processing
+rayon = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Directory traversal
+walkdir = { workspace = true }
+
+# File modification time
+filetime = { workspace = true }
+libc = { workspace = true }
+xattr = { workspace = true }
+
+# Command execution check
+which = { workspace = true }
+
+# Shared utilities (progress bar, safety checks, batch processing)
+shared_utils = { workspace = true }
+
+# CPU detection for performance optimization
+num_cpus = { workspace = true }

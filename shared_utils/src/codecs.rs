@@ -1,7 +1,7 @@
 //! Codec Information Module
 //!
 //! Contains codec-specific information and characteristics.
-//! Shared between vidquality and vidquality-hevc.
+//! Shared between vidquality and vid-hevc.
 
 use serde::{Deserialize, Serialize};
 

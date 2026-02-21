@@ -291,7 +291,7 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
 
 /// 🔥 v8.2.5: 从源目录树恢复输出目录树的时间戳（目录 + 文件）
 /// 用于后处理（如 JXL Container Fix）修改了输出文件/目录后，用源侧时间戳统一恢复。
-/// 脚本仅需调用 imgquality-hevc restore-timestamps <src> <dst>，不重复实现逻辑。
+/// 脚本仅需调用 img-hevc restore-timestamps <src> <dst>，不重复实现逻辑。
 pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
     let saved = save_directory_timestamps(src_dir)?;
     apply_saved_timestamps_to_dst(&saved, src_dir, dst_dir);

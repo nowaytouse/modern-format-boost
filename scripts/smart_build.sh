@@ -26,15 +26,14 @@ cd "$PROJECT_ROOT"
 # ═══════════════════════════════════════════════════════════════
 # 格式: "项目目录:二进制名称"
 ALL_PROJECTS=(
-    "imgquality_hevc:imgquality-hevc"
-    "vidquality_hevc:vidquality-hevc"
-    "imgquality_av1:imgquality-av1"
-    "vidquality_av1:vidquality-av1"
-    "xmp_merger:xmp-merge"
+    "img_hevc:img-hevc"
+    "vid_hevc:vid-hevc"
+    "img_av1:img-av1"
+    "vid_av1:vid-av1"
 )
 
 # 默认构建项目（HEVC工具）
-DEFAULT_PROJECTS=("imgquality_hevc" "vidquality_hevc")
+DEFAULT_PROJECTS=("img_hevc" "vid_hevc")
 
 # 辅助函数：根据项目目录获取二进制名称
 get_binary_name() {
@@ -318,23 +317,19 @@ parse_args() {
                 shift
                 ;;
             --hevc)
-                SELECTED_PROJECTS+=("imgquality_hevc" "vidquality_hevc")
+                SELECTED_PROJECTS+=("img_hevc" "vid_hevc")
                 shift
                 ;;
             --av1)
-                SELECTED_PROJECTS+=("imgquality_av1" "vidquality_av1")
+                SELECTED_PROJECTS+=("img_av1" "vid_av1")
                 shift
                 ;;
             --img)
-                SELECTED_PROJECTS+=("imgquality_hevc" "imgquality_av1")
+                SELECTED_PROJECTS+=("img_hevc" "img_av1")
                 shift
                 ;;
             --vid)
-                SELECTED_PROJECTS+=("vidquality_hevc" "vidquality_av1")
-                shift
-                ;;
-            --xmp)
-                SELECTED_PROJECTS+=("xmp_merger")
+                SELECTED_PROJECTS+=("vid_hevc" "vid_av1")
                 shift
                 ;;
             --no-verify-timestamps)
@@ -354,7 +349,6 @@ parse_args() {
                 echo "  --av1             Build AV1 tools"
                 echo "  --img             Build image tools"
                 echo "  --vid             Build video tools"
-                echo "  --xmp             Build XMP merger"
                 echo "  --no-verify-timestamps  Disable timestamp verification after build"
                 echo "  --help, -h        Show this help"
                 echo ""

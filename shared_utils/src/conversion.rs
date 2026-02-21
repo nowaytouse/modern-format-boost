@@ -315,41 +315,11 @@ impl ConvertOptions {
 
     /// 获取探索模式（兼容旧 API）
     ///
-    /// 🔥 v4.6: 内部使用 flag_mode()，但忽略 compress flag 以保持兼容性
-    /// 新代码应使用 flag_mode() 获取完整的 flag 组合信息
+    /// 简化：仅推荐组合有效，统一映射为 PreciseQualityMatchWithCompression
     pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
-        // 使用 flag_mode 但映射到旧的 ExploreMode
         match self.flag_mode() {
-            Ok(mode) => match mode {
-                crate::flag_validator::FlagMode::UltimateExplore => {
-                    crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
-                }
-                crate::flag_validator::FlagMode::PreciseQualityWithCompress => {
-                    crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
-                }
-                crate::flag_validator::FlagMode::PreciseQuality => {
-                    crate::video_explorer::ExploreMode::PreciseQualityMatch
-                }
-                crate::flag_validator::FlagMode::CompressWithQuality => {
-                    crate::video_explorer::ExploreMode::CompressWithQuality
-                }
-                crate::flag_validator::FlagMode::QualityOnly => {
-                    crate::video_explorer::ExploreMode::QualityMatch
-                }
-                crate::flag_validator::FlagMode::ExploreOnly => {
-                    crate::video_explorer::ExploreMode::SizeOnly
-                }
-                crate::flag_validator::FlagMode::CompressOnly => {
-                    crate::video_explorer::ExploreMode::CompressOnly
-                }
-                crate::flag_validator::FlagMode::Default => {
-                    crate::video_explorer::ExploreMode::QualityMatch
-                }
-            },
-            Err(_) => {
-                // 无效组合时返回默认模式（调用者应该先用 flag_mode() 检查）
-                crate::video_explorer::ExploreMode::QualityMatch
-            }
+            Ok(_) => crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
+            Err(_) => crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
         }
     }
 }

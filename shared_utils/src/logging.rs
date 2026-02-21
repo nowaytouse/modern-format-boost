@@ -102,7 +102,7 @@ impl LogConfig {
 /// use shared_utils::logging::{LogConfig, init_logging};
 ///
 /// let config = LogConfig::default();
-/// init_logging("imgquality_hevc", config).expect("Failed to init logging");
+/// init_logging("img_hevc", config).expect("Failed to init logging");
 /// ```
 pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     // 确保日志目录存在

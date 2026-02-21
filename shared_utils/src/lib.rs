@@ -1,6 +1,6 @@
 //! Shared Utilities for modern_format_boost tools
 //!
-//! This crate provides common functionality shared across imgquality, vidquality, and vidquality-hevc:
+//! This crate provides common functionality shared across imgquality, vidquality, and vid-hevc:
 //! - Progress bar with ETA
 //! - Safety checks (dangerous directory detection)
 //! - Batch processing utilities
