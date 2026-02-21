@@ -349,34 +349,25 @@ parse_tool_stats() {
     fi
 }
 
-# 🔥 v7.10: Fix JXL Containers for iCloud Photos（脚本只负责调用，时间戳恢复由 img-hevc restore-timestamps 统一处理）
-fix_jxl_containers() {
+# 🔥 v8.2: Unified Repair for Apple Photos (replaces standalone JXL fixer)
+repair_apple_photos_compat() {
     local target_path="$TARGET_DIR"
     [[ "$OUTPUT_MODE" == "adjacent" ]] && target_path="$OUTPUT_DIR"
 
-    local jxl_count=$(find "$target_path" -type f -iname "*.jxl" 2>/dev/null | wc -l | tr -d ' ')
-    [[ $jxl_count -eq 0 ]] && return 0
+    # Only run if there are potential files to repair (JXL, WebP, JPEG)
+    local repair_candidate_count=$(find "$target_path" -type f \( -iname "*.jxl" -o -iname "*.webp" -o -iname "*.jpg" -o -iname "*.jpeg" \) 2>/dev/null | wc -l | tr -d ' ')
+    [[ $repair_candidate_count -eq 0 ]] && return 0
 
-    draw_separator "JXL Container Fix"
-    echo -e "   ${CYAN}🔍 Checking $jxl_count JXL files for iCloud compatibility...${RESET}"
+    draw_separator "Apple Photos Compatibility Repair"
+    echo -e "   ${CYAN}🔍 Repairing $repair_candidate_count files for Apple Photos compatibility...${RESET}"
     echo ""
 
-    local fixed=0
-    local failed=0
-    while IFS= read -r -d '' jxl_file; do
-        local tmp_out="${jxl_file}.tmp.jxl"
-        if python3 "$SCRIPT_DIR/jxl_container_fixer.py" "$jxl_file" "$tmp_out" 2>/dev/null; then
-            if [[ -f "$tmp_out" ]]; then
-                mv "$tmp_out" "$jxl_file"
-                ((fixed++))
-            fi
-        else
-            rm -f "$tmp_out"
-            ((failed++))
-        fi
-    done < <(find "$target_path" -type f -iname "*.jxl" -print0)
-
-    echo -e "   ${GREEN}✅ JXL Container Fix: $fixed fixed, $failed skipped/already-codestream${RESET}"
+    # Call the unified repair script
+    if [[ -f "$SCRIPT_DIR/repair_apple_photos.sh" ]]; then
+        zsh "$SCRIPT_DIR/repair_apple_photos.sh" "$target_path"
+    else
+        echo -e "   ${RED}⚠️ Repair script not found: repair_apple_photos.sh${RESET}"
+    fi
     echo ""
 }
 
@@ -521,8 +512,8 @@ _main() {
         echo ""
     fi
     
-    # 🔥 v7.10: Auto-fix JXL containers for iCloud Photos compatibility
-    fix_jxl_containers
+    # 🔥 v8.2: Unified Apple Photos compatibility repair
+    repair_apple_photos_compat
 
     # 🔥 v8.2.5: 后处理（JXL fix / rsync）会更新时间戳，统一用 shared_utils 逻辑恢复（脚本只调用）
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
