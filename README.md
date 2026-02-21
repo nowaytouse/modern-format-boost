@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-8.2.0-blue.svg)
+![Version](https://img.shields.io/badge/version-8.3.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
 
@@ -18,6 +18,21 @@
 Unlike simple converters, it features a robust **"Self-Healing" engine** specifically engineered to fix files that Apple Photos refuses to import ("Unknown Error"). It handles corrupted headers, mismatched extensions, and toxic metadata automatically.
 
 与简单的转换器不同，它内置了强大的**“自愈”引擎**，专门用于修复 Apple 照片无法导入（报“未知错误”）的文件。它能自动处理损坏的文件头、扩展名不匹配以及有毒的元数据。
+
+---
+
+## 🏗️ 智能处理策略 / Smart Processing Strategy
+
+程序基于 **“信息无损优先”** 和 **“避免二代损耗”** 原则，根据文件状态自动选择最优路径：
+
+| 原始状态 / Original State | 质量类型 / Type | 目标格式 / Target | 核心逻辑 / Core Logic |
+| :--- | :--- | :--- | :--- |
+| **PNG / TIFF / BMP** | 无损 / Lossless | **JXL** | 100% 数学无损压缩 (Saving 20-40%) |
+| **JPEG** | 有损 / Lossy | **JXL** | **DCT 系数保留转码** (Zero quality loss!) |
+| **WebP / AVIF** | 无损 / Lossless | **JXL** | 跨格式无损迁移，更佳的归档效率 |
+| **WebP / AVIF / HEIC** | 有损 / Lossy | **跳过 / SKIP** | **防止二代损耗** (Avoid generation loss) |
+| **GIF / 动态图片** | 任意 (时长>=3s) | **MP4** | **智能 SSIM 裁判** 寻找视觉无损平衡点 |
+| **损坏/有毒元数据** | 任意状态 | **Repair** | **元数据全量重构** + 结构修复 (Fix for Apple) |
 
 ---
 
