@@ -145,35 +145,6 @@ enum OutputFormat {
     Json,
 }
 
-/// 计算目录中指定扩展名文件的总大小
-#[allow(dead_code)]
-fn calculate_directory_size_by_extensions(
-    dir: &PathBuf,
-    extensions: &[&str],
-    recursive: bool,
-) -> u64 {
-    let walker = if recursive {
-        WalkDir::new(dir).follow_links(true)
-    } else {
-        WalkDir::new(dir).max_depth(1)
-    };
-
-    walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            if let Some(ext) = e.path().extension() {
-                extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
-            } else {
-                false
-            }
-        })
-        .filter_map(|e| std::fs::metadata(e.path()).ok())
-        .map(|m| m.len())
-        .sum()
-}
-
 fn main() -> anyhow::Result<()> {
     // 🔥 v7.8: 初始化日志系统
     let _ = shared_utils::logging::init_logging(
@@ -340,10 +311,6 @@ fn analyze_directory(
     output_format: OutputFormat,
     recommend: bool,
 ) -> anyhow::Result<()> {
-    let image_extensions = [
-        "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
-    ];
-
     let walker = if recursive {
         WalkDir::new(path).follow_links(true)
     } else {
@@ -361,7 +328,7 @@ fn analyze_directory(
 
         let path = entry.path();
         if let Some(ext) = path.extension() {
-            if image_extensions.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
+            if shared_utils::IMAGE_EXTENSIONS_ANALYZE.contains(&ext.to_str().unwrap_or("").to_lowercase().as_str()) {
                 // 🔥 v7.9: Validate file integrity first
                 if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
                     eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
@@ -830,16 +797,13 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     }
 
     let start_time = Instant::now();
-    let image_extensions = [
-        "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    ];
 
     // 🔥 v7.5: 使用文件排序功能，优先处理小文件
     // - 快速看到进度反馈
     // - 小文件处理快，可以更早发现问题
     // - 大文件留到后面，避免长时间卡住
     let files =
-        shared_utils::collect_files_small_first(input, &image_extensions, config.recursive);
+        shared_utils::collect_files_small_first(input, shared_utils::SUPPORTED_IMAGE_EXTENSIONS, config.recursive);
 
     let total = files.len();
     if total == 0 {
@@ -848,12 +812,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         // 🔥 v7.4.9: 即使没有文件，也要保留目录元数据
         if let Some(output_dir) = config.output_dir.as_ref() {
             if let Some(base_dir) = config.base_dir {
-                println!("\n📁 Preserving directory metadata...");
-                if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
-                    eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
-                } else {
-                    println!("✅ Directory metadata preserved");
-                }
+                shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
             }
         }
 
@@ -989,12 +948,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     // 🔥 v7.4.5: 保留目录元数据（时间戳、权限、xattr）
     if let Some(output_dir) = config.output_dir {
         if let Some(base_dir) = config.base_dir {
-            println!("\n📁 Preserving directory metadata...");
-            if let Err(e) = shared_utils::preserve_directory_metadata(base_dir, output_dir) {
-                eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
-            } else {
-                println!("✅ Directory metadata preserved");
-            }
+            shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
         }
     }
 

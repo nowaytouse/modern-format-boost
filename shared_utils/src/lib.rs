@@ -125,7 +125,11 @@ pub use ffprobe::{
     detect_bit_depth, get_duration, get_frame_count, is_ffprobe_available, parse_frame_rate,
     probe_video, FFprobeError, FFprobeResult,
 };
-pub use metadata::{copy_metadata, preserve_directory_metadata, preserve_metadata, preserve_pro};
+pub use metadata::{
+    apply_saved_timestamps_to_dst, copy_metadata, preserve_directory_metadata,
+    preserve_directory_metadata_with_log, preserve_metadata, preserve_pro,
+    restore_directory_timestamps, restore_timestamps_from_source_to_output, save_directory_timestamps,
+};
 pub use progress::{
     create_compact_progress_bar,
     create_detailed_progress_bar,
@@ -450,7 +454,7 @@ pub use app_error::AppError;
 // 🔥 v6.9.13: 文件复制模块（无遗漏设计）
 pub use file_copier::{
     copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
-    FileStats, VerifyResult, SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS,
+    FileStats, VerifyResult, SIDECAR_EXTENSIONS, IMAGE_EXTENSIONS_ANALYZE, SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
 };
 pub use smart_file_copier::{copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure};
@@ -492,6 +496,8 @@ pub use common_utils::{
     get_extension_lowercase,
     has_extension,
     is_hidden_file,
+    // 错误信息解析（ExifTool 建议扩展名）
+    extract_suggested_extension,
     // 字符串处理
     extract_digits,
     normalize_path_string,

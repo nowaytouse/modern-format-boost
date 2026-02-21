@@ -244,18 +244,9 @@ pub fn execute_conversion(
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
     let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
 
-    // 🔥 顺序很重要！先 metadata，后 timestamps
-    // exiftool -overwrite_original 会修改文件，从而更新时间戳
-    // 因此必须在 metadata 之后设置 timestamps
-
-    // Preserve metadata if requested (exiftool will modify file timestamps!)
-    if config.preserve_metadata {
-        preserve_metadata(input_path, &output_path)?;
-    }
-
-    // Preserve timestamps if requested (must be AFTER metadata!)
-    if config.preserve_timestamps {
-        preserve_timestamps(input_path, &output_path)?;
+    // 统一走 shared_utils::copy_metadata（含 EXIF/XMP 边车、时间戳、content-aware fallback）
+    if config.preserve_metadata || config.preserve_timestamps {
+        shared_utils::copy_metadata(input_path, &output_path);
     }
 
     // 🔥 Safe delete with integrity check (断电保护)
@@ -373,51 +364,6 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
         return Err(ImgQualityError::ConversionError(
             String::from_utf8_lossy(&status.stderr).to_string(),
         ));
-    }
-
-    Ok(())
-}
-
-/// Preserve file timestamps (modification time, access time)
-fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
-    let source_str = source.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid source path: {:?}", source)))?;
-    let dest_str = dest.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid dest path: {:?}", dest)))?;
-
-    let status = Command::new("touch")
-        .args(["-r", source_str, dest_str])
-        .output()?;
-
-    if !status.status.success() {
-        // Non-fatal, just log
-        eprintln!("⚠️ Warning: Failed to preserve timestamps");
-    }
-
-    Ok(())
-}
-
-/// Preserve metadata using exiftool
-fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
-    // Check if exiftool is available
-    if which::which("exiftool").is_err() {
-        return Ok(()); // Skip if not available
-    }
-
-    let source_str = source.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid source path: {:?}", source)))?;
-    let dest_str = dest.to_str().ok_or_else(|| ImgQualityError::ConversionError(format!("Invalid dest path: {:?}", dest)))?;
-
-    let status = Command::new("exiftool")
-        .args([
-            "-overwrite_original",
-            "-TagsFromFile",
-            source_str,
-            "-All:All",
-            dest_str,
-        ])
-        .output()?;
-
-    if !status.status.success() {
-        // Non-fatal, just log
-        eprintln!("⚠️ Warning: Failed to preserve metadata");
     }
 
     Ok(())

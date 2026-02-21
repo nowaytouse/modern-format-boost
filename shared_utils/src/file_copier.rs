@@ -24,6 +24,11 @@ pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "bmp",
 ];
 
+/// 分析阶段使用的图像扩展名子集（不含 heic/heif/avif，供 analyze 命令使用）
+pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
+    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
+];
+
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
 ];

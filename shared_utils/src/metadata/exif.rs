@@ -23,14 +23,11 @@ fn is_exiftool_available() -> bool {
     *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
 }
 
-/// 视频文件扩展名
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mkv", "webm", "avi"];
-
-/// 检查是否是视频文件
+/// 检查是否是视频文件（使用 file_copier 统一扩展名列表）
 fn is_video_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        .map(|e| crate::SUPPORTED_VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
 }
 
@@ -72,16 +69,6 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
 
 /// Extract suggested extension from ExifTool error message
 /// Example: "Error: Not a valid JPEG (looks more like a PNG)" -> Some("png")
-fn extract_suggested_extension(error_msg: &str) -> Option<String> {
-    if let Some(start) = error_msg.find("looks more like a ") {
-        let rest = &error_msg[start + "looks more like a ".len()..];
-        if let Some(end) = rest.find(')') {
-             return Some(rest[..end].trim().to_lowercase());
-        }
-    }
-    None
-}
-
 /// Preserve internal metadata via ExifTool
 ///
 /// Performance: ~50-200ms per file depending on metadata complexity
@@ -100,7 +87,7 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
                 eprintln!("⚠️ Metadata preservation failed: {}", err_str);
                 eprintln!("⚠️ Attempting content-aware fallback...");
                 
-                let hint = extract_suggested_extension(&err_str);
+                let hint = crate::extract_suggested_extension(&err_str);
                 if let Some(ref h) = hint {
                      eprintln!("💡 ExifTool suggests content is: {}", h);
                 }
@@ -205,10 +192,12 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     // 注意：smart_file_copier 已经修正了扩展名，所以这里 ext 应该匹配内容
 
     // 第一步：先尝试正常 exiftool 元数据复制（不执行核弹级重构）
+    // 🔥 v8.2.5: 添加 -unsafe 以保留 MakerNotes 等完整元数据（重构后的 JXL 易丢失）
     let mut output = Command::new("exiftool")
         .arg("-tagsfromfile")
         .arg(src)
         .arg("-all:all")
+        .arg("-unsafe")
         .arg("-ICC_Profile<ICC_Profile")
         .arg("-use")
         .arg("MWG")
