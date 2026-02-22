@@ -75,17 +75,23 @@ impl StderrCapture {
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
-                let mut buf = lines.lock().unwrap();
-                if buf.len() >= max {
-                    buf.pop_front();
+                if let Ok(mut buf) = lines.lock() {
+                    if buf.len() >= max {
+                        buf.pop_front();
+                    }
+                    buf.push_back(line);
                 }
-                buf.push_back(line);
             }
         })
     }
 
     fn get_lines(&self) -> Vec<String> {
-        self.lines.lock().unwrap().iter().cloned().collect()
+        self.lines
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect()
     }
 }
 
@@ -123,7 +129,10 @@ impl HeartbeatMonitor {
                     break;
                 }
 
-                let elapsed = self.last_activity.lock().unwrap().elapsed();
+                let elapsed = self.last_activity
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .elapsed();
                 let elapsed_secs = elapsed.as_secs();
 
                 eprintln!(
@@ -851,7 +860,11 @@ pub fn calculate_quality_score(
     input_size: u64,
     phase: SearchPhase,
 ) -> QualityScore {
-    let compression_ratio = output_size as f64 / input_size as f64;
+    let compression_ratio = if input_size == 0 {
+        1.0
+    } else {
+        output_size as f64 / input_size as f64
+    };
 
     let (ssim_weight, size_weight) = match phase {
         SearchPhase::Gpu => (0.4, 0.6),
@@ -1218,7 +1231,11 @@ impl PsnrSsimMapper {
             let (psnr2, ssim2) = points[i + 1];
 
             if psnr >= psnr1 && psnr <= psnr2 {
-                let ratio = (psnr - psnr1) / (psnr2 - psnr1);
+                let denom = psnr2 - psnr1;
+                if denom.abs() < f64::EPSILON {
+                    return Some((ssim1 + ssim2) / 2.0);
+                }
+                let ratio = (psnr - psnr1) / denom;
                 let predicted_ssim = ssim1 + ratio * (ssim2 - ssim1);
                 return Some(predicted_ssim);
             }
@@ -1227,13 +1244,21 @@ impl PsnrSsimMapper {
         if psnr < points[0].0 {
             let (psnr1, ssim1) = points[0];
             let (psnr2, ssim2) = points[1];
-            let slope = (ssim2 - ssim1) / (psnr2 - psnr1);
+            let denom = psnr2 - psnr1;
+            if denom.abs() < f64::EPSILON {
+                return Some(ssim1);
+            }
+            let slope = (ssim2 - ssim1) / denom;
             Some(ssim1 + slope * (psnr - psnr1))
         } else {
             let n = points.len();
             let (psnr1, ssim1) = points[n - 2];
             let (psnr2, ssim2) = points[n - 1];
-            let slope = (ssim2 - ssim1) / (psnr2 - psnr1);
+            let denom = psnr2 - psnr1;
+            if denom.abs() < f64::EPSILON {
+                return Some(ssim2);
+            }
+            let slope = (ssim2 - ssim1) / denom;
             Some(ssim2 + slope * (psnr - psnr2))
         }
     }
@@ -1529,7 +1554,7 @@ pub fn gpu_coarse_search_with_log(
         Ok(size)
     };
 
-    let warmup_input_size = if duration <= WARMUP_DURATION {
+    let warmup_input_size = if duration <= WARMUP_DURATION || duration == 0.0 {
         input_size
     } else {
         (input_size as f64 * warmup_duration as f64 / duration as f64) as u64
@@ -1682,7 +1707,9 @@ pub fn gpu_coarse_search_with_log(
                     first_output.store(true, Ordering::Relaxed);
                 }
 
-                *last_activity.lock().unwrap() = Instant::now();
+                if let Ok(mut guard) = last_activity.lock() {
+                    *guard = Instant::now();
+                }
 
                 if let Ok(line) = line {
                     if let Some(val) = line.strip_prefix("out_time_us=") {
@@ -1691,10 +1718,15 @@ pub fn gpu_coarse_search_with_log(
                                 let current_secs = time_us as f64 / 1_000_000.0;
                                 let pct = (current_secs / actual_sample_duration as f64 * 100.0)
                                     .min(100.0);
-                                let eta = if pct > 0.1 {
-                                    ((actual_sample_duration as f64 - current_secs)
-                                        / (current_secs / start_time.elapsed().as_secs_f64()))
-                                    .max(0.0) as u64
+                                let elapsed_secs = start_time.elapsed().as_secs_f64();
+                                let eta = if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
+                                    let speed = current_secs / elapsed_secs;
+                                    if speed > 0.0 {
+                                        ((actual_sample_duration as f64 - current_secs) / speed)
+                                            .max(0.0) as u64
+                                    } else {
+                                        0
+                                    }
                                 } else {
                                     0
                                 };

@@ -301,19 +301,32 @@ mod tests {
             let mut data = b"GIF89a".to_vec();
             data.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]);
             data.extend_from_slice(&[0x00, 0x00, 0x00]);
+
             data.push(0x2C);
-            data.extend_from_slice(&[0u8; 10]);
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+            data.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]);
+            data.push(0x00);
+            data.push(0x02);
+            data.extend_from_slice(&[0x02, 0x4C, 0x01]);
+            data.push(0x00);
+
             data.push(0x2C);
-            data.extend_from_slice(&[0u8; 10]);
+            data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+            data.extend_from_slice(&[0x01, 0x00, 0x01, 0x00]);
+            data.push(0x00);
+            data.push(0x02);
+            data.extend_from_slice(&[0x02, 0x4C, 0x01]);
+            data.push(0x00);
+
             data.push(0x3B);
             data
         };
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(&gif_data).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temp file");
+        file.write_all(&gif_data).expect("Failed to write");
 
         let count = gif::get_frame_count(file.path());
-        assert_eq!(count, 2, "应检测到 2 帧，实际: {}", count);
-        assert!(gif::is_animated(file.path()), "2 帧 GIF 应被检测为动画");
+        assert_eq!(count, 2, "Expected 2 frames, got: {}", count);
+        assert!(gif::is_animated(file.path()), "2-frame GIF should be detected as animated");
     }
 
     #[test]
