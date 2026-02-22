@@ -8,10 +8,9 @@ use log::{error, info, warn};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Trait to unify result reporting from different tools
 pub trait CliProcessingResult {
     fn is_skipped(&self) -> bool;
-    fn is_success(&self) -> bool; // 🔥 v7.9: 新增成功判断方法
+    fn is_success(&self) -> bool;
     fn skip_reason(&self) -> Option<&str>;
     fn input_path(&self) -> &str;
     fn output_path(&self) -> Option<&str>;
@@ -20,7 +19,6 @@ pub trait CliProcessingResult {
     fn message(&self) -> &str;
 }
 
-// Default impl for shared_utils::conversion::ConversionResult
 impl CliProcessingResult for crate::conversion::ConversionResult {
     fn is_skipped(&self) -> bool {
         self.skipped
@@ -48,16 +46,14 @@ impl CliProcessingResult for crate::conversion::ConversionResult {
     }
 }
 
-/// Configuration for the CLI runner
 pub struct CliRunnerConfig {
     pub input: PathBuf,
     pub output: Option<PathBuf>,
     pub recursive: bool,
-    pub label: String,             // e.g. "AV1 Video" or "HEVC Video"
-    pub base_dir: Option<PathBuf>, // 🔥 v7.4.5: For directory metadata preservation
+    pub label: String,
+    pub base_dir: Option<PathBuf>,
 }
 
-/// Run the "Auto" command logic for batch processing
 pub fn run_auto_command<F, R>(config: CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R>,
@@ -78,10 +74,6 @@ where
     let input = &config.input;
     let recursive = config.recursive;
 
-    // 🔥 v7.5: 使用文件排序功能，优先处理小文件
-    // - 快速看到进度反馈
-    // - 小文件处理快，可以更早发现问题
-    // - 大文件留到后面，避免长时间卡住
     let files = crate::collect_files_small_first(input, SUPPORTED_VIDEO_EXTENSIONS, recursive);
 
     if files.is_empty() {
@@ -96,7 +88,6 @@ where
 
     info!("📂 Found {} video files to process", files.len());
 
-    // 2. Process Batch
     let start_time = Instant::now();
     let mut batch_result = BatchResult::new();
     let mut total_input_bytes: u64 = 0;
@@ -113,18 +104,16 @@ where
                     );
                     batch_result.skip();
                 } else if result.is_success() {
-                    // 🔥 v7.9: 使用 is_success() 判断真正的成功转换
                     info!(
                         "✅ {} → {} ({})",
                         file.file_name().unwrap_or_default().to_string_lossy(),
                         result.output_path().unwrap_or("?"),
-                        result.message() // Message already contains size reduction info if formatted correctly
+                        result.message()
                     );
                     batch_result.success();
                     total_input_bytes += result.input_size();
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
                 } else {
-                    // 🔥 v7.9: 转换失败（success=false）
                     info!(
                         "❌ {} → FAILED ({})",
                         file.file_name().unwrap_or_default().to_string_lossy(),
@@ -145,12 +134,11 @@ where
                     info!("❌ {} failed: {}", file.display(), e);
                     batch_result.fail(file.clone(), e.to_string());
 
-                    // 🔥 v7.4.8: Fallback - 使用 smart_file_copier 保留目录结构和元数据
                     if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
                         file,
                         config.output.as_deref(),
                         config.base_dir.as_deref(),
-                        true, // 🔥 v7.9: Always show fallback copy message (it's important)
+                        true,
                     ) {
                         error!("❌ Failed to copy original: {}", copy_err);
                     } else {
@@ -161,7 +149,6 @@ where
         }
     }
 
-    // 3. Summary Report
     print_summary_report(
         &batch_result,
         start_time.elapsed(),
@@ -170,7 +157,6 @@ where
         &config.label,
     );
 
-    // 4. Post-processing (Copy unsupported, verify)
     if let Some(ref output_dir) = config.output {
         info!("\n📦 Copying unsupported files...");
         let copy_result = copy_unsupported_files(input, output_dir, recursive);
@@ -188,7 +174,6 @@ where
             warn!("⚠️  Some files may be missing from output!");
         }
 
-        // 🔥 v7.4.5: 保留目录元数据（时间戳、权限、xattr）
         if let Some(ref base_dir) = config.base_dir {
             info!("\n📁 Preserving directory metadata...");
             if let Err(e) = crate::metadata::preserve_directory_metadata(base_dir, output_dir) {
@@ -209,7 +194,6 @@ where
 {
     let input = &config.input;
 
-    // Check extension
     if let Some(ext) = input.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
         if !SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_str.as_str()) {
@@ -225,7 +209,6 @@ where
         }
     }
 
-    // 🔥 无遗漏设计：不论成功、跳过还是报错，有 output 时最终目录都要有对应文件；报错时先复制原文件再返回 Err
     let result = match converter(input) {
         Ok(r) => r,
         Err(e) => {

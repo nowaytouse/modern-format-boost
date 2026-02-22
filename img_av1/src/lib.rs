@@ -1,4 +1,3 @@
-// Core modules
 pub mod analyzer;
 pub mod formats;
 pub mod heic_analysis;
@@ -8,11 +7,9 @@ pub mod metrics;
 pub mod quality_core;
 pub mod recommender;
 
-// Separated API layers
 pub mod conversion_api;
 pub mod detection_api;
 
-// Core exports
 pub use analyzer::{analyze_image, ImageAnalysis};
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
@@ -24,7 +21,6 @@ pub use metrics::{
 pub use quality_core::{ConversionRecommendation, QualityAnalysis, QualityParams};
 pub use recommender::{get_recommendation, UpgradeRecommendation};
 
-// New API exports
 pub use conversion_api::{
     determine_strategy, simple_convert, smart_convert, ConversionConfig, ConversionOutput,
     TargetFormat,
@@ -33,5 +29,4 @@ pub use detection_api::{
     detect_image, CompressionType, DetectedFormat, DetectionResult, ImageType,
 };
 
-// 🔥 Refactor: Use shared error types (migrated to shared_utils)
 pub use shared_utils::img_errors::{ImgQualityError, Result};

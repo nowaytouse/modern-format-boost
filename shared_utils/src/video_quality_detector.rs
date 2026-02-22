@@ -20,14 +20,9 @@ use crate::quality_matcher::{
 };
 use serde::{Deserialize, Serialize};
 
-// ============================================================
-// Core Types
-// ============================================================
 
-/// Video quality analysis result for auto routing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoQualityAnalysis {
-    // === Basic Properties ===
     pub width: u32,
     pub height: u32,
     pub file_size: u64,
@@ -35,70 +30,44 @@ pub struct VideoQualityAnalysis {
     pub fps: f64,
     pub frame_count: u64,
 
-    // === Codec Detection ===
     pub codec: String,
     pub codec_type: VideoCodecType,
     pub is_modern_codec: bool,
     pub should_skip: bool,
     pub skip_reason: Option<String>,
 
-    // === Quality Metrics ===
-    /// Total bitrate (includes audio)
     pub total_bitrate: u64,
-    /// Video-only bitrate (excludes audio) - more accurate for BPP
     pub video_bitrate: Option<u64>,
-    /// Bits per pixel per frame
     pub bpp: f64,
-    /// Bit depth (8, 10, 12)
     pub bit_depth: u8,
 
-    // === Encoding Structure ===
-    /// Pixel format (yuv420p, yuv444p, etc.)
     pub pix_fmt: String,
-    /// Chroma subsampling type
     pub chroma: ChromaSubsampling,
-    /// GOP size (keyframe interval)
     pub gop_size: Option<u32>,
-    /// Number of B-frames
     pub b_frame_count: u8,
-    /// Has B-frames
     pub has_b_frames: bool,
 
-    // === Color Information ===
     pub color_space: Option<String>,
     pub is_hdr: bool,
 
-    // === Content Classification ===
     pub content_type: VideoContentType,
     pub compression_type: CompressionLevel,
 
-    // === Quality Estimation ===
-    /// Estimated quality score (0-100)
     pub quality_score: u8,
-    /// Estimated CRF equivalent
     pub estimated_crf: u8,
 
-    // === Routing Decision ===
     pub routing_decision: VideoRoutingDecision,
 
-    /// Analysis confidence (0.0-1.0)
     pub confidence: f64,
 }
 
-/// Video codec type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoCodecType {
-    /// Lossless codecs (FFV1, HuffYUV, UTVideo)
     Lossless,
-    /// Modern efficient codecs (AV1, HEVC, VP9, VVC)
     ModernEfficient,
-    /// Legacy codecs (H.264, MPEG-4)
     Legacy,
-    /// Intermediate/Professional (ProRes, DNxHD)
     Intermediate,
-    /// Very inefficient (MJPEG, GIF)
     Inefficient,
-    /// Unknown
     Unknown,
 }
 
@@ -121,18 +90,12 @@ impl VideoCodecType {
     }
 }
 
-/// Chroma subsampling type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChromaSubsampling {
-    /// 4:2:0 - Most common, baseline
     Yuv420,
-    /// 4:2:2 - Professional
     Yuv422,
-    /// 4:4:4 - Full chroma
     Yuv444,
-    /// RGB
     Rgb,
-    /// Unknown
     Unknown,
 }
 
@@ -152,7 +115,6 @@ impl ChromaSubsampling {
         }
     }
 
-    /// Factor for quality calculation (higher = needs more bits)
     pub fn quality_factor(&self) -> f64 {
         match self {
             ChromaSubsampling::Yuv420 => 1.0,
@@ -164,25 +126,17 @@ impl ChromaSubsampling {
     }
 }
 
-/// Video content type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VideoContentType {
-    /// Live action film/video
     LiveAction,
-    /// Animation/anime
     Animation,
-    /// Screen recording
     ScreenRecording,
-    /// Gaming content
     Gaming,
-    /// Film with grain
     FilmGrain,
-    /// Unknown/mixed
     Unknown,
 }
 
 impl VideoContentType {
-    /// Convert to quality_matcher ContentType
     pub fn to_content_type(&self) -> ContentType {
         match self {
             VideoContentType::LiveAction => ContentType::LiveAction,
@@ -195,23 +149,16 @@ impl VideoContentType {
     }
 }
 
-/// Compression level classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompressionLevel {
-    /// Mathematically lossless
     Lossless,
-    /// Visually lossless (CRF 0-4)
     VisuallyLossless,
-    /// High quality (CRF 5-18)
     HighQuality,
-    /// Standard quality (CRF 19-28)
     Standard,
-    /// Low quality (CRF 29+)
     LowQuality,
 }
 
 impl CompressionLevel {
-    /// Estimate from BPP and codec
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
         if codec_type == VideoCodecType::Lossless {
             return CompressionLevel::Lossless;
@@ -220,7 +167,6 @@ impl CompressionLevel {
             return CompressionLevel::VisuallyLossless;
         }
 
-        // BPP thresholds (adjusted for codec efficiency)
         let efficiency = match codec_type {
             VideoCodecType::ModernEfficient => 0.6,
             VideoCodecType::Legacy => 1.0,
@@ -242,54 +188,19 @@ impl CompressionLevel {
     }
 }
 
-/// Routing decision for video format selection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoRoutingDecision {
-    /// Primary recommended format
     pub primary_format: String,
-    /// Alternative formats
     pub alternatives: Vec<String>,
-    /// Recommended encoder
     pub encoder: String,
-    /// Estimated CRF for quality matching
     pub recommended_crf: u8,
-    /// Use lossless encoding
     pub use_lossless: bool,
-    /// Reason for decision
     pub reason: String,
-    /// Should skip conversion
     pub should_skip: bool,
-    /// Skip reason
     pub skip_reason: Option<String>,
 }
 
-// ============================================================
-// Analysis Functions
-// ============================================================
 
-/// Analyze video quality from ffprobe data
-///
-/// # Arguments
-/// * `codec` - Video codec name from ffprobe
-/// * `width` - Video width
-/// * `height` - Video height
-/// * `fps` - Frame rate
-/// * `duration_secs` - Duration in seconds
-/// * `total_bitrate` - Total bitrate (video + audio)
-/// * `video_bitrate` - Video-only bitrate (optional, more accurate)
-/// * `pix_fmt` - Pixel format string
-/// * `bit_depth` - Bit depth (8, 10, 12)
-/// * `has_b_frames` - Whether B-frames are used
-/// * `gop_size` - GOP size (optional)
-/// * `color_space` - Color space (optional)
-/// * `file_size` - File size in bytes
-///
-/// # Returns
-/// * `Result<VideoQualityAnalysis, String>` - Analysis or error
-///
-/// # 🔥 Quality Manifesto
-/// - All metrics from actual ffprobe data
-/// - Fails loudly on invalid input
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
     codec: &str,
@@ -306,7 +217,6 @@ pub fn analyze_video_quality(
     color_space: Option<&str>,
     file_size: u64,
 ) -> Result<VideoQualityAnalysis, String> {
-    // 🔥 Validate input - fail loudly
     if width == 0 || height == 0 {
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
@@ -320,15 +230,12 @@ pub fn analyze_video_quality(
     let _pixels = (width as u64) * (height as u64);
     let frame_count = (duration_secs * fps) as u64;
 
-    // === Codec analysis ===
     let source_codec = parse_source_codec(codec);
     let codec_type = VideoCodecType::from_source_codec(source_codec);
     let is_modern = source_codec.is_modern();
 
-    // === Skip decision ===
     let skip_decision = should_skip_video_codec(codec);
 
-    // === Calculate BPP ===
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
     let pixels_per_second = (width as f64) * (height as f64) * fps;
     let bpp = if pixels_per_second > 0.0 {
@@ -337,7 +244,6 @@ pub fn analyze_video_quality(
         0.0
     };
 
-    // === Chroma and color ===
     let chroma = ChromaSubsampling::from_pix_fmt(pix_fmt);
     let is_hdr = color_space
         .map(|cs| {
@@ -346,22 +252,16 @@ pub fn analyze_video_quality(
         })
         .unwrap_or(false);
 
-    // === B-frame count estimation ===
     let b_frame_count = if has_b_frames { 2 } else { 0 };
 
-    // === Content type estimation (basic) ===
     let content_type = estimate_content_type(bpp, codec_type, width, height);
 
-    // === Compression level ===
     let compression_type = CompressionLevel::from_bpp(bpp, codec_type);
 
-    // === Quality score ===
     let quality_score = calculate_quality_score(bpp, codec_type, bit_depth, compression_type);
 
-    // === Estimated CRF ===
     let estimated_crf = estimate_crf_from_bpp(bpp, codec_type);
 
-    // === Routing decision ===
     let routing_decision = make_video_routing_decision(
         codec_type,
         compression_type,
@@ -371,7 +271,6 @@ pub fn analyze_video_quality(
         estimated_crf,
     );
 
-    // === Confidence ===
     let confidence = calculate_video_confidence(
         video_bitrate.is_some(),
         gop_size.is_some(),
@@ -415,7 +314,6 @@ pub fn analyze_video_quality(
     })
 }
 
-/// Convert to QualityAnalysis for use with quality_matcher
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
     VideoAnalysisBuilder::new()
         .basic(
@@ -438,9 +336,6 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         .build()
 }
 
-// ============================================================
-// Helper Functions
-// ============================================================
 
 fn estimate_content_type(
     bpp: f64,
@@ -448,7 +343,6 @@ fn estimate_content_type(
     width: u32,
     height: u32,
 ) -> VideoContentType {
-    // Screen recording: typically low BPP, specific resolutions
     let is_screen_res = (width == 1920 && height == 1080)
         || (width == 2560 && height == 1440)
         || (width == 3840 && height == 2160);
@@ -456,12 +350,10 @@ fn estimate_content_type(
         return VideoContentType::ScreenRecording;
     }
 
-    // Animation: often uses specific codecs or has very low BPP
     if bpp < 0.05 {
         return VideoContentType::Animation;
     }
 
-    // High BPP with intermediate codec = likely film
     if codec_type == VideoCodecType::Intermediate && bpp > 0.5 {
         return VideoContentType::FilmGrain;
     }
@@ -483,10 +375,8 @@ fn calculate_quality_score(
         CompressionLevel::LowQuality => 40,
     };
 
-    // Bit depth bonus
     let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
 
-    // Modern codec bonus
     let codec_bonus = if codec_type == VideoCodecType::ModernEfficient {
         3
     } else {
@@ -501,7 +391,6 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         return 0;
     }
 
-    // Efficiency factor
     let efficiency = match codec_type {
         VideoCodecType::ModernEfficient => 0.5,
         VideoCodecType::Legacy => 1.0,
@@ -512,8 +401,6 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
 
     let adjusted_bpp = bpp / efficiency;
 
-    // CRF estimation based on adjusted BPP
-    // Higher BPP = lower CRF (better quality)
 
     if adjusted_bpp > 1.0 {
         18
@@ -551,7 +438,6 @@ fn make_video_routing_decision(
         };
     }
 
-    // Lossless source -> FFV1 for archival
     if codec_type == VideoCodecType::Lossless || compression == CompressionLevel::Lossless {
         return VideoRoutingDecision {
             primary_format: "ffv1".to_string(),
@@ -565,13 +451,12 @@ fn make_video_routing_decision(
         };
     }
 
-    // High quality intermediate -> AV1 or HEVC
     if codec_type == VideoCodecType::Intermediate {
         return VideoRoutingDecision {
             primary_format: "av1".to_string(),
             alternatives: vec!["hevc".to_string()],
             encoder: "svt-av1".to_string(),
-            recommended_crf: estimated_crf.saturating_sub(2), // Slightly lower CRF for quality
+            recommended_crf: estimated_crf.saturating_sub(2),
             use_lossless: false,
             reason: "Intermediate codec - convert to AV1 for efficiency".to_string(),
             should_skip: false,
@@ -579,7 +464,6 @@ fn make_video_routing_decision(
         };
     }
 
-    // Legacy or inefficient -> AV1
     VideoRoutingDecision {
         primary_format: "av1".to_string(),
         alternatives: vec!["hevc".to_string()],
@@ -603,22 +487,18 @@ fn calculate_video_confidence(
 ) -> f64 {
     let mut confidence: f64 = 0.7;
 
-    // Video-only bitrate is more accurate
     if has_video_bitrate {
         confidence += 0.1;
     }
 
-    // GOP size helps with quality estimation
     if has_gop_size {
         confidence += 0.05;
     }
 
-    // Longer videos = more reliable analysis
     if duration > 10.0 {
         confidence += 0.05;
     }
 
-    // More frames = more reliable
     if frame_count > 100 {
         confidence += 0.05;
     }
@@ -626,17 +506,11 @@ fn calculate_video_confidence(
     confidence.clamp(0.0, 1.0)
 }
 
-// ============================================================
-// 🔬 PRECISION VALIDATION TESTS ("裁判" Tests)
-// ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ============================================================
-    // Basic Functionality Tests
-    // ============================================================
 
     #[test]
     fn test_analyze_h264_1080p() {
@@ -764,13 +638,9 @@ mod tests {
         assert_eq!(result.chroma, ChromaSubsampling::Yuv444);
     }
 
-    // ============================================================
-    // 🔬 Skip Decision Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_skip_modern_codecs() {
-        // HEVC should skip
         let hevc = analyze_video_quality(
             "hevc", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
@@ -778,7 +648,6 @@ mod tests {
         .unwrap();
         assert!(hevc.should_skip, "HEVC should be skipped");
 
-        // AV1 should skip
         let av1 = analyze_video_quality(
             "av1", 1920, 1080, 30.0, 60.0, 5_000_000, None, "yuv420p", 8, true, None, None,
             37_500_000,
@@ -786,7 +655,6 @@ mod tests {
         .unwrap();
         assert!(av1.should_skip, "AV1 should be skipped");
 
-        // VP9 should skip
         let vp9 = analyze_video_quality(
             "vp9", 1920, 1080, 30.0, 60.0, 6_000_000, None, "yuv420p", 8, true, None, None,
             45_000_000,
@@ -794,7 +662,6 @@ mod tests {
         .unwrap();
         assert!(vp9.should_skip, "VP9 should be skipped");
 
-        // VVC should skip
         let vvc = analyze_video_quality(
             "vvc", 1920, 1080, 30.0, 60.0, 4_000_000, None, "yuv420p", 8, true, None, None,
             30_000_000,
@@ -805,7 +672,6 @@ mod tests {
 
     #[test]
     fn test_not_skip_legacy_codecs() {
-        // H.264 should NOT skip
         let h264 = analyze_video_quality(
             "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
@@ -813,7 +679,6 @@ mod tests {
         .unwrap();
         assert!(!h264.should_skip, "H.264 should NOT be skipped");
 
-        // MJPEG should NOT skip
         let mjpeg = analyze_video_quality(
             "mjpeg",
             1920,
@@ -832,7 +697,6 @@ mod tests {
         .unwrap();
         assert!(!mjpeg.should_skip, "MJPEG should NOT be skipped");
 
-        // ProRes should NOT skip
         let prores = analyze_video_quality(
             "prores",
             1920,
@@ -852,9 +716,6 @@ mod tests {
         assert!(!prores.should_skip, "ProRes should NOT be skipped");
     }
 
-    // ============================================================
-    // 🔬 Chroma Subsampling Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_chroma_detection() {
@@ -900,14 +761,9 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 BPP Calculation Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_bpp_calculation_accuracy() {
-        // 1080p @ 8Mbps @ 30fps
-        // BPP = 8_000_000 / (1920 * 1080 * 30) = 0.128
         let result = analyze_video_quality(
             "h264",
             1920,
@@ -936,15 +792,14 @@ mod tests {
 
     #[test]
     fn test_bpp_uses_video_bitrate_when_available() {
-        // Total bitrate includes audio, video bitrate is more accurate
         let result = analyze_video_quality(
             "h264",
             1920,
             1080,
             30.0,
             60.0,
-            10_000_000,      // Total (includes audio)
-            Some(8_000_000), // Video only
+            10_000_000,
+            Some(8_000_000),
             "yuv420p",
             8,
             true,
@@ -954,7 +809,6 @@ mod tests {
         )
         .unwrap();
 
-        // Should use video bitrate, not total
         let expected_bpp = 8_000_000.0 / (1920.0 * 1080.0 * 30.0);
         assert!(
             (result.bpp - expected_bpp).abs() < 0.001,
@@ -964,9 +818,6 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 Compression Level Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_compression_level_lossless() {
@@ -992,7 +843,6 @@ mod tests {
 
     #[test]
     fn test_compression_level_high_bpp() {
-        // ProRes with very high BPP
         let result = analyze_video_quality(
             "prores",
             1920,
@@ -1015,10 +865,6 @@ mod tests {
 
     #[test]
     fn test_compression_level_standard() {
-        // H.264 with typical streaming bitrate
-        // 8Mbps @ 1080p30 = 8_000_000 / (1920 * 1080 * 30) = 0.128 BPP
-        // For Legacy codec (efficiency=1.0), adjusted_bpp = 0.128
-        // 0.1 < 0.128 < 0.3 → Standard
         let result = analyze_video_quality(
             "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
@@ -1035,9 +881,6 @@ mod tests {
 
     #[test]
     fn test_compression_level_low_quality() {
-        // H.264 with low streaming bitrate
-        // 3Mbps @ 1080p30 = 3_000_000 / (1920 * 1080 * 30) = 0.048 BPP
-        // For Legacy codec (efficiency=1.0), adjusted_bpp = 0.048 < 0.1 → LowQuality
         let result = analyze_video_quality(
             "h264", 1920, 1080, 30.0, 60.0, 3_000_000, None, "yuv420p", 8, true, None, None,
             22_500_000,
@@ -1052,13 +895,9 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 CRF Estimation Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_crf_estimation_high_quality() {
-        // High bitrate = low CRF
         let result = analyze_video_quality(
             "h264",
             1920,
@@ -1085,7 +924,6 @@ mod tests {
 
     #[test]
     fn test_crf_estimation_low_quality() {
-        // Low bitrate = high CRF
         let result = analyze_video_quality(
             "h264",
             1920,
@@ -1132,9 +970,6 @@ mod tests {
         assert_eq!(result.estimated_crf, 0, "Lossless should have CRF 0");
     }
 
-    // ============================================================
-    // 🔬 HDR Detection Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_hdr_detection_bt2020() {
@@ -1194,9 +1029,6 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 Routing Decision Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_routing_skip_modern() {
@@ -1273,9 +1105,6 @@ mod tests {
         assert_eq!(result.routing_decision.primary_format, "av1");
     }
 
-    // ============================================================
-    // 🔬 Edge Case Tests - Invalid Input (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_invalid_zero_width() {
@@ -1341,13 +1170,9 @@ mod tests {
         assert!(result.is_err(), "Should fail on negative duration");
     }
 
-    // ============================================================
-    // 🔬 Edge Case Tests - Extreme Bitrates (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_extreme_low_bitrate() {
-        // 100kbps - very low quality streaming
         let result = analyze_video_quality(
             "h264",
             1920,
@@ -1378,7 +1203,6 @@ mod tests {
 
     #[test]
     fn test_extreme_high_bitrate() {
-        // 500Mbps - near lossless
         let result = analyze_video_quality(
             "h264",
             1920,
@@ -1404,9 +1228,6 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 Edge Case Tests - Various Resolutions (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_resolution_sd_480p() {
@@ -1418,7 +1239,6 @@ mod tests {
 
         assert_eq!(result.width, 854);
         assert_eq!(result.height, 480);
-        // SD at 2Mbps should have decent BPP
         let expected_bpp = 2_000_000.0 / (854.0 * 480.0 * 30.0);
         assert!((result.bpp - expected_bpp).abs() < 0.001);
     }
@@ -1485,7 +1305,6 @@ mod tests {
 
     #[test]
     fn test_resolution_vertical_video() {
-        // 9:16 vertical video (mobile)
         let result = analyze_video_quality(
             "h264", 1080, 1920, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
@@ -1499,7 +1318,6 @@ mod tests {
 
     #[test]
     fn test_resolution_square() {
-        // 1:1 square video (Instagram)
         let result = analyze_video_quality(
             "h264", 1080, 1080, 30.0, 60.0, 6_000_000, None, "yuv420p", 8, true, None, None,
             45_000_000,
@@ -1510,9 +1328,6 @@ mod tests {
         assert_eq!(result.height, 1080);
     }
 
-    // ============================================================
-    // 🔬 Edge Case Tests - Frame Rates (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_fps_24_film() {
@@ -1523,7 +1338,7 @@ mod tests {
         .unwrap();
 
         assert!((result.fps - 24.0).abs() < 0.01);
-        assert_eq!(result.frame_count, 1440); // 24 * 60
+        assert_eq!(result.frame_count, 1440);
     }
 
     #[test]
@@ -1546,7 +1361,7 @@ mod tests {
         .unwrap();
 
         assert!((result.fps - 60.0).abs() < 0.01);
-        assert_eq!(result.frame_count, 3600); // 60 * 60
+        assert_eq!(result.frame_count, 3600);
     }
 
     #[test]
@@ -1558,12 +1373,11 @@ mod tests {
         .unwrap();
 
         assert!((result.fps - 120.0).abs() < 0.01);
-        assert_eq!(result.frame_count, 3600); // 120 * 30
+        assert_eq!(result.frame_count, 3600);
     }
 
     #[test]
     fn test_fps_fractional_ntsc() {
-        // 29.97 fps (NTSC)
         let result = analyze_video_quality(
             "h264", 1920, 1080, 29.97, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
@@ -1573,13 +1387,9 @@ mod tests {
         assert!((result.fps - 29.97).abs() < 0.01);
     }
 
-    // ============================================================
-    // 🔬 Codec Type Classification Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_codec_type_lossless() {
-        // FFV1
         let ffv1 = analyze_video_quality(
             "ffv1",
             1920,
@@ -1598,7 +1408,6 @@ mod tests {
         .unwrap();
         assert_eq!(ffv1.codec_type, VideoCodecType::Lossless);
 
-        // HuffYUV
         let huffyuv = analyze_video_quality(
             "huffyuv",
             1920,
@@ -1617,7 +1426,6 @@ mod tests {
         .unwrap();
         assert_eq!(huffyuv.codec_type, VideoCodecType::Lossless);
 
-        // UTVideo
         let utvideo = analyze_video_quality(
             "utvideo",
             1920,
@@ -1657,7 +1465,6 @@ mod tests {
 
     #[test]
     fn test_codec_type_intermediate() {
-        // ProRes
         let prores = analyze_video_quality(
             "prores",
             1920,
@@ -1676,7 +1483,6 @@ mod tests {
         .unwrap();
         assert_eq!(prores.codec_type, VideoCodecType::Intermediate);
 
-        // DNxHD
         let dnxhd = analyze_video_quality(
             "dnxhd",
             1920,
@@ -1698,7 +1504,6 @@ mod tests {
 
     #[test]
     fn test_codec_type_inefficient() {
-        // MJPEG
         let mjpeg = analyze_video_quality(
             "mjpeg",
             1920,
@@ -1717,7 +1522,6 @@ mod tests {
         .unwrap();
         assert_eq!(mjpeg.codec_type, VideoCodecType::Inefficient);
 
-        // GIF
         let gif = analyze_video_quality(
             "gif", 640, 480, 15.0, 10.0, 5_000_000, None, "rgb8", 8, false, None, None, 6_250_000,
         )
@@ -1725,9 +1529,6 @@ mod tests {
         assert_eq!(gif.codec_type, VideoCodecType::Inefficient);
     }
 
-    // ============================================================
-    // 🔬 Confidence Calculation Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_confidence_with_video_bitrate() {
@@ -1824,9 +1625,6 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 to_quality_analysis Integration Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_to_quality_analysis_conversion() {
@@ -1856,9 +1654,6 @@ mod tests {
         assert_eq!(qa.video_bitrate, Some(7_500_000));
     }
 
-    // ============================================================
-    // 🔬 Consistency Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_consistency_same_input() {
@@ -1905,14 +1700,9 @@ mod tests {
         assert_eq!(result1.estimated_crf, result2.estimated_crf);
     }
 
-    // ============================================================
-    // 🔬 Strict Precision Tests (裁判机制)
-    // ============================================================
 
-    /// Strict test: BPP calculation must be mathematically correct
     #[test]
     fn test_strict_bpp_formula() {
-        // Test multiple resolutions and bitrates
         let test_cases = [
             (1920, 1080, 30.0, 8_000_000u64),
             (3840, 2160, 30.0, 25_000_000u64),
@@ -1952,13 +1742,12 @@ mod tests {
         }
     }
 
-    /// Strict test: Frame count must be mathematically correct
     #[test]
     fn test_strict_frame_count() {
         let test_cases = [
-            (30.0, 60.0, 1800u64),  // 30fps * 60s = 1800
-            (24.0, 120.0, 2880u64), // 24fps * 120s = 2880
-            (60.0, 30.0, 1800u64),  // 60fps * 30s = 1800
+            (30.0, 60.0, 1800u64),
+            (24.0, 120.0, 2880u64),
+            (60.0, 30.0, 1800u64),
         ];
 
         for (fps, duration, expected_frames) in test_cases {
@@ -1976,7 +1765,6 @@ mod tests {
         }
     }
 
-    /// Strict test: Modern codecs must always skip
     #[test]
     fn test_strict_modern_always_skip() {
         let modern_codecs = ["hevc", "h265", "av1", "vp9", "vvc", "av2"];
@@ -2001,7 +1789,6 @@ mod tests {
         }
     }
 
-    /// Strict test: Legacy codecs must never skip
     #[test]
     fn test_strict_legacy_never_skip() {
         let legacy_codecs = ["h264", "mpeg4", "mpeg2video", "mjpeg"];

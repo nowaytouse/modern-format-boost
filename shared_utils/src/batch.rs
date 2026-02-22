@@ -9,15 +9,6 @@ use crate::file_sorter::{sort_by_size_ascending, SortStrategy};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// Collect files from a directory with extension filtering
-///
-/// # Arguments
-/// * `dir` - Directory to scan
-/// * `extensions` - List of allowed extensions (lowercase, without dot)
-/// * `recursive` - Whether to scan subdirectories
-///
-/// # Returns
-/// Vector of file paths matching the criteria (unsorted)
 pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
     let walker = if recursive {
         WalkDir::new(dir).follow_links(true)
@@ -34,16 +25,6 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
         .collect()
 }
 
-/// 🔥 v7.5: Collect and sort files from a directory
-///
-/// # Arguments
-/// * `dir` - Directory to scan
-/// * `extensions` - List of allowed extensions (lowercase, without dot)
-/// * `recursive` - Whether to scan subdirectories
-/// * `sort_strategy` - How to sort the files (default: SizeAscending for small files first)
-///
-/// # Returns
-/// Vector of file paths matching the criteria, sorted according to strategy
 pub fn collect_files_sorted(
     dir: &Path,
     extensions: &[&str],
@@ -56,23 +37,15 @@ pub fn collect_files_sorted(
         SortStrategy::None => files,
         SortStrategy::SizeAscending => sort_by_size_ascending(files),
         _ => {
-            // 使用 FileSorter 处理其他策略
             crate::file_sorter::FileSorter::new(sort_strategy).sort(files)
         }
     }
 }
 
-/// 🔥 v7.5: Convenience function - collect files sorted by size (small first)
-///
-/// 这是推荐的默认方式，优先处理小文件：
-/// - 快速看到进度反馈
-/// - 小文件处理快，可以更早发现问题
-/// - 大文件留到后面，避免长时间卡住
 pub fn collect_files_small_first(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
     collect_files_sorted(dir, extensions, recursive, SortStrategy::SizeAscending)
 }
 
-/// 按扩展名过滤并计算目录下匹配文件的总字节数
 pub fn calculate_directory_size_by_extensions(
     dir: &Path,
     extensions: &[&str],
@@ -94,19 +67,15 @@ pub fn calculate_directory_size_by_extensions(
         .sum()
 }
 
-/// Image file extensions commonly supported
-/// 🔥 v6.9.12: 添加 jpe, jfif 格式支持
 pub const IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
     "jxl", "bmp",
 ];
 
-/// Animated image extensions
 pub const ANIMATED_EXTENSIONS: &[&str] = &[
-    "gif", "webp", "png", // PNG can be APNG
+    "gif", "webp", "png",
 ];
 
-/// Batch processing result
 #[derive(Debug, Clone)]
 pub struct BatchResult {
     pub total: usize,
@@ -143,7 +112,6 @@ impl BatchResult {
         self.skipped += 1;
     }
 
-    /// Calculate success rate as percentage
     pub fn success_rate(&self) -> f64 {
         if self.total == 0 {
             100.0
@@ -159,17 +127,11 @@ impl Default for BatchResult {
     }
 }
 
-// ============================================================
-// 🔬 PRECISION VALIDATION TESTS ("裁判" Tests)
-// ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ============================================================
-    // BatchResult Basic Tests
-    // ============================================================
 
     #[test]
     fn test_batch_result_new() {
@@ -228,14 +190,10 @@ mod tests {
         assert_eq!(result.skipped, 1);
     }
 
-    // ============================================================
-    // 🔬 Success Rate Calculation Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_success_rate_empty() {
         let result = BatchResult::new();
-        // Empty batch should return 100% (no failures)
         assert!(
             (result.success_rate() - 100.0).abs() < 0.01,
             "Empty batch should have 100% success rate"
@@ -287,8 +245,6 @@ mod tests {
         result.skip();
         result.skip();
 
-        // 2 success out of 4 total = 50%
-        // Note: skipped counts in total but not in succeeded
         assert!(
             (result.success_rate() - 50.0).abs() < 0.01,
             "2 success, 2 skipped should be 50%, got {}",
@@ -296,21 +252,16 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // 🔬 Strict Mathematical Precision Tests (裁判机制)
-    // ============================================================
 
-    /// Strict test: Success rate formula must be mathematically correct
     #[test]
     fn test_strict_success_rate_formula() {
-        // Formula: (succeeded / total) * 100
         let test_cases = [
-            (10, 0, 0, 100.0), // 10 success, 0 fail, 0 skip = 100%
-            (5, 5, 0, 50.0),   // 5 success, 5 fail = 50%
-            (3, 1, 0, 75.0),   // 3 success, 1 fail = 75%
-            (1, 3, 0, 25.0),   // 1 success, 3 fail = 25%
-            (0, 10, 0, 0.0),   // 0 success, 10 fail = 0%
-            (7, 2, 1, 70.0),   // 7 success, 2 fail, 1 skip = 70%
+            (10, 0, 0, 100.0),
+            (5, 5, 0, 50.0),
+            (3, 1, 0, 75.0),
+            (1, 3, 0, 25.0),
+            (0, 10, 0, 0.0),
+            (7, 2, 1, 70.0),
         ];
 
         for (success, fail, skip, expected) in test_cases {
@@ -348,12 +299,10 @@ mod tests {
         }
     }
 
-    /// Strict test: Large numbers should not overflow
     #[test]
     fn test_strict_large_numbers() {
         let mut result = BatchResult::new();
 
-        // Simulate 1 million files
         for _ in 0..500_000 {
             result.success();
         }
@@ -368,9 +317,6 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // Consistency Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_consistency_success_rate() {
@@ -379,7 +325,6 @@ mod tests {
         result.success();
         result.fail(PathBuf::from("test.png"), "Error".to_string());
 
-        // Same calculation should always produce same result
         let rate1 = result.success_rate();
         let rate2 = result.success_rate();
         let rate3 = result.success_rate();
@@ -398,7 +343,6 @@ mod tests {
         result.fail(PathBuf::from("f2.png"), "E".to_string());
         result.skip();
 
-        // Total should always equal succeeded + failed + skipped
         assert_eq!(
             result.total,
             result.succeeded + result.failed + result.skipped,

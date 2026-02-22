@@ -8,7 +8,6 @@
 use crate::detection_api::{detect_video, CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
-// 🔥 v9.2: Use shared types
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
@@ -16,10 +15,7 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
-/// Determine conversion strategy based on detection result (for auto mode)
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
-    // 🔥 使用统一的跳过检测逻辑 (shared_utils::should_skip_video_codec)
-    // 支持: H.265/HEVC, AV1, VP9, VVC/H.266, AV2
     let skip_decision = shared_utils::should_skip_video_codec(result.codec.as_str());
 
     if skip_decision.should_skip {
@@ -33,7 +29,6 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
         };
     }
 
-    // 🔥 Also check Unknown codec string for modern formats
     if let crate::detection_api::DetectedCodec::Unknown(ref s) = result.codec {
         let unknown_skip = shared_utils::should_skip_video_codec(s);
         if unknown_skip.should_skip {
@@ -57,20 +52,10 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
                     result.codec.as_str()
                 ),
                 0.0,
-                true, // Enable mathematical lossless
+                true,
             )
         }
         CompressionType::VisuallyLossless => {
-            // Treat visually lossless source as high quality source -> AV1 CRF 0 (Lossy/High Quality)
-            // User said: "Input ffv1 etc more lossless coding -> convert to av1 lossless"
-            // But "Visually Lossless" (e.g. ProRes) is technically lossy.
-            // However, usually ProRes/DNxHD are intermediates.
-            // Let's stick to: If strictly Lossless -> AV1 Lossless. If "Visually Lossless" -> AV1 CRF 0.
-            // Wait, user instruction: "Input ffv1 etc more lossless coding -> convert to av1 lossless"
-            // "Input h264 lossy etc more coding -> convert to av1 crf 0"
-            // ProRes is "more lossless" than H264. Let's treat it as High Quality Source -> CRF 0?
-            // "Visually Lossless" in detection_api includes ProRes.
-            // Ideally ProRes -> AV1 CRF 0 is better than ProRes -> AV1 Lossless (huge).
             (
                 TargetVideoFormat::Av1Mp4,
                 format!(
@@ -103,7 +88,6 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     }
 }
 
-/// Simple mode conversion - ALWAYS use AV1 MP4 (LOSSLESS)
 pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     let detection = detect_video(input)?;
 
@@ -119,7 +103,6 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         .unwrap_or("output");
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    // 🔥 当输入是 mp4 时，添加 _av1 后缀避免冲突
     let output_path = if input_ext.eq_ignore_ascii_case("mp4") {
         output_dir.join(format!("{}_av1.mp4", stem))
     } else {
@@ -128,15 +111,11 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     info!("🎬 Simple Mode: {} → AV1 MP4 (LOSSLESS)", input.display());
 
-    // Always AV1 MP4 with LOSSLESS mode (as requested: corresponding to image JXL lossless)
-    // Note: This produces large files but is mathematically lossless.
-    // 🔥 Calculate balanced threads for simple mode (single file = Video workload)
     let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
         shared_utils::thread_manager::WorkloadType::Video,
     );
     let output_size = execute_av1_lossless(&detection, &output_path, thread_config.child_threads)?;
 
-    // Preserve metadata (complete copy)
     shared_utils::copy_metadata(input, &output_path);
 
     let size_ratio = output_size as f64 / detection.file_size as f64;
@@ -164,20 +143,15 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     })
 }
 
-// remove simple_convert_with_lossless as it's no longer needed/used with the new policy
 
-/// Auto mode conversion with intelligent strategy selection
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     let detection = detect_video(input)?;
     let strategy = determine_strategy(&detection);
 
-    // Handle Skip Strategy
     if strategy.target == TargetVideoFormat::Skip {
         info!("🎬 Auto Mode: {} → SKIP", input.display());
         info!("   Reason: {}", strategy.reason);
 
-        // 🔥 v6.9.14: 相邻目录模式下，复制原始文件到输出目录
-        // 🔥 v7.4.4: 使用 smart_file_copier 保留目录结构
         if let Some(ref out_dir) = config.output_dir {
             let _ = shared_utils::copy_on_skip_or_fail(
                 input,
@@ -215,26 +189,23 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let target_ext = strategy.target.extension();
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    // 🔥 当输入输出扩展名相同时，添加 _av1 后缀避免冲突
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext) {
         output_dir.join(format!("{}_av1.{}", stem, target_ext))
     } else {
         output_dir.join(format!("{}.{}", stem, target_ext))
     };
 
-    // 🔥 检测输入输出路径冲突（作为安全检查）
     shared_utils::path_validator::check_input_output_conflict(input, &output_path)
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
-    // 🔥 修复：输出文件已存在时返回跳过状态而非错误
     if output_path.exists() && !config.force {
         info!("⏭️ Output exists, skipping: {}", output_path.display());
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: String::new(), // 空路径表示跳过
+            output_path: String::new(),
             strategy: strategy.clone(),
             input_size: detection.file_size,
-            output_size: 0, // 0 表示跳过
+            output_size: 0,
             size_ratio: 1.0,
             success: true,
             message: format!("Skipped: output exists ({})", output_path.display()),
@@ -252,7 +223,6 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
     let (output_size, final_crf, attempts) = match strategy.target {
         TargetVideoFormat::Ffv1Mkv => {
-            // Legacy/Fallback catch-all
             let size = execute_ffv1_conversion(&detection, &output_path, config.child_threads)?;
             (size, 0.0, 0)
         }
@@ -262,7 +232,6 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let size = execute_av1_lossless(&detection, &output_path, config.child_threads)?;
                 (size, 0.0, 0)
             } else {
-                // 🔥 v4.6: 使用模块化的 flag 验证器
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(
                     detection.width,
                     detection.height,
@@ -277,7 +246,6 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 )
                 .map_err(VidQualityError::ConversionError)?;
 
-                // 简化：仅推荐组合有效，统一走 PreciseQualityWithCompress
                 let initial_crf = calculate_matched_crf(&detection);
                 info!(
                     "   🔬 {}: CRF {}",
@@ -296,7 +264,6 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 )
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
-                // 打印探索日志
                 for log_line in &explore_result.log {
                     info!("{}", log_line);
                 }
@@ -308,16 +275,14 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 )
             }
         }
-        TargetVideoFormat::Skip => unreachable!(), // Handled above
+        TargetVideoFormat::Skip => unreachable!(),
         _ => unreachable!("AV1 tool should not return HEVC target"),
     };
 
-    // Preserve metadata (complete copy)
     shared_utils::copy_metadata(input, &output_path);
 
     let size_ratio = output_size as f64 / detection.file_size as f64;
 
-    // 🔥 Safe delete with integrity check (断电保护)
     if config.should_delete_original() {
         if let Err(e) = shared_utils::conversion::safe_delete_original(input, &output_path, 1000) {
             warn!("   ⚠️  Safe delete failed: {}", e);
@@ -353,15 +318,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     })
 }
 
-/// Calculate CRF to match input video quality level (Enhanced Algorithm for AV1)
-///
-/// Uses the unified quality_matcher module from shared_utils for consistent
-/// quality matching across all tools.
-///
-/// AV1 CRF range is 0-63, with 23 being default "good quality"
-/// Clamped to range [18, 35] for practical use
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
-    // 🔥 使用统一的 quality_matcher 模块
     let analysis = shared_utils::from_video_detection(
         &detection.file_path,
         detection.codec.as_str(),
@@ -381,7 +338,6 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
             result.crf.round() as u8
         }
         Err(e) => {
-            // 🔥 Quality Manifesto: 失败时响亮报错，使用保守值
             warn!("   ⚠️  Quality analysis failed: {}", e);
             warn!("   ⚠️  Using conservative CRF 28");
             28
@@ -389,39 +345,18 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
     }
 }
 
-/// 🔥 v3.5: 精确质量匹配探索 (--explore + --match-quality 组合)
-///
-/// 策略：二分搜索 + SSIM/VMAF 裁判验证
-/// 找到满足质量阈值的最高 CRF（最小文件）
-///
-/// ## 裁判机制 (Referee Mechanism)
-/// 1. 使用算法预测的 CRF 作为起点
-/// 2. 二分搜索找到满足 SSIM >= min_ssim 的最高 CRF
-/// 3. 可选 VMAF 验证（更准确但更慢）
-/// 4. 自校准：如果初始 CRF 不满足质量，向下搜索
-///
-/// ## 评价标准 (Evaluation Criteria)
-/// 🔥 v4.8: 已删除重复实现
-/// explore_precise_quality_match_av1 → 使用 shared_utils::explore_precise_quality_match
-/// explore_smaller_size → 使用 shared_utils::explore_size_only
-///
-/// Execute FFV1 conversion
 fn execute_ffv1_conversion(
     detection: &VideoDetectionResult,
     output: &Path,
     max_threads: usize,
 ) -> Result<u64> {
-    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    // let max_threads = shared_utils::thread_manager::get_ffmpeg_threads(); // Deprecated
-    // max_threads passed in arguments
 
-    // 🔥 偶数分辨率处理：确保宽高为偶数
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
-        max_threads.to_string(), // 限制 ffmpeg 线程数
+        max_threads.to_string(),
         "-i".to_string(),
         detection.file_path.clone(),
         "-c:v".to_string(),
@@ -435,12 +370,11 @@ fn execute_ffv1_conversion(
         "-g".to_string(),
         "1".to_string(),
         "-slices".to_string(),
-        max_threads.to_string(), // 使用与线程数相同的 slices
+        max_threads.to_string(),
         "-slicecrc".to_string(),
         "1".to_string(),
     ];
 
-    // 添加视频滤镜（偶数分辨率）
     for arg in &vf_args {
         args.push(arg.clone());
     }
@@ -464,7 +398,6 @@ fn execute_ffv1_conversion(
     Ok(std::fs::metadata(output)?.len())
 }
 
-/// Execute AV1 conversion with specified CRF (using SVT-AV1 for better performance)
 #[allow(dead_code)]
 fn execute_av1_conversion(
     detection: &VideoDetectionResult,
@@ -472,18 +405,14 @@ fn execute_av1_conversion(
     crf: u8,
     max_threads: usize,
 ) -> Result<u64> {
-    // 使用 SVT-AV1 编码器 (libsvtav1) - 比 libaom-av1 快 10-20 倍
-    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    // max_threads passed in arguments
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
 
-    // 🔥 偶数分辨率处理：AV1 编码器要求宽高为偶数
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
-        max_threads.to_string(), // 限制 ffmpeg 线程数
+        max_threads.to_string(),
         "-i".to_string(),
         detection.file_path.clone(),
         "-c:v".to_string(),
@@ -491,12 +420,11 @@ fn execute_av1_conversion(
         "-crf".to_string(),
         crf.to_string(),
         "-preset".to_string(),
-        "6".to_string(), // 0-13, 6 是平衡点
+        "6".to_string(),
         "-svtav1-params".to_string(),
-        svt_params, // 限制 SVT-AV1 线程数
+        svt_params,
     ];
 
-    // 添加视频滤镜（偶数分辨率）
     for arg in &vf_args {
         args.push(arg.clone());
     }
@@ -525,7 +453,6 @@ fn execute_av1_conversion(
     Ok(std::fs::metadata(output)?.len())
 }
 
-/// Execute mathematical lossless AV1 conversion using SVT-AV1 (⚠️ SLOW, huge files)
 fn execute_av1_lossless(
     detection: &VideoDetectionResult,
     output: &Path,
@@ -533,18 +460,14 @@ fn execute_av1_lossless(
 ) -> Result<u64> {
     warn!("⚠️  Mathematical lossless AV1 encoding (SVT-AV1) - this will be SLOW!");
 
-    // SVT-AV1 无损模式: crf=0 + lossless=1
-    // 🔥 性能优化：限制 ffmpeg 线程数，避免系统卡顿
-    // max_threads passed in arguments
     let svt_params = format!("lossless=1:lp={}", max_threads);
 
-    // 🔥 偶数分辨率处理：AV1 编码器要求宽高为偶数
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
-        max_threads.to_string(), // 限制 ffmpeg 线程数
+        max_threads.to_string(),
         "-i".to_string(),
         detection.file_path.clone(),
         "-c:v".to_string(),
@@ -552,18 +475,17 @@ fn execute_av1_lossless(
         "-crf".to_string(),
         "0".to_string(),
         "-preset".to_string(),
-        "4".to_string(), // 无损模式用更慢的 preset 保证质量
+        "4".to_string(),
         "-svtav1-params".to_string(),
-        svt_params, // 数学无损 + 限制线程数
+        svt_params,
     ];
 
-    // 添加视频滤镜（偶数分辨率）
     for arg in &vf_args {
         args.push(arg.clone());
     }
 
     if detection.has_audio {
-        args.extend(vec!["-c:a".to_string(), "flac".to_string()]); // 无损音频
+        args.extend(vec!["-c:a".to_string(), "flac".to_string()]);
     } else {
         args.push("-an".to_string());
     }
@@ -581,12 +503,7 @@ fn execute_av1_lossless(
     Ok(std::fs::metadata(output)?.len())
 }
 
-// MacOS specialized timestamp setter (creation time + date added)
 
-// 🔥 v4.8: 使用 shared_utils::copy_metadata 替代本地实现
-// pub use shared_utils::copy_metadata;
-
-// Legacy alias for backward compatibility
 pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     auto_convert(input, config)
 }

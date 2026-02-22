@@ -10,7 +10,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// 文件信息结构体
 #[derive(Debug, Clone)]
 pub struct FileInfo {
     pub path: PathBuf,
@@ -18,7 +17,6 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    /// 创建文件信息
     pub fn new(path: PathBuf) -> Option<Self> {
         fs::metadata(&path).ok().map(|meta| FileInfo {
             path,
@@ -27,37 +25,23 @@ impl FileInfo {
     }
 }
 
-/// 排序策略枚举
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortStrategy {
-    /// 按文件大小升序（小文件优先）
     SizeAscending,
-    /// 按文件大小降序（大文件优先）
     SizeDescending,
-    /// 按文件名字母顺序
     NameAscending,
-    /// 不排序（保持原始顺序）
     None,
 }
 
-/// 文件排序器
 pub struct FileSorter {
     strategy: SortStrategy,
 }
 
 impl FileSorter {
-    /// 创建新的文件排序器
     pub fn new(strategy: SortStrategy) -> Self {
         Self { strategy }
     }
 
-    /// 对文件路径列表进行排序
-    ///
-    /// # Arguments
-    /// * `files` - 文件路径列表
-    ///
-    /// # Returns
-    /// 排序后的文件路径列表
     pub fn sort(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         match self.strategy {
             SortStrategy::None => files,
@@ -67,7 +51,6 @@ impl FileSorter {
         }
     }
 
-    /// 按文件大小升序排序（小文件优先）
     fn sort_by_size_ascending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
@@ -75,7 +58,6 @@ impl FileSorter {
         file_infos.into_iter().map(|f| f.path).collect()
     }
 
-    /// 按文件大小降序排序（大文件优先）
     fn sort_by_size_descending(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         let mut file_infos: Vec<FileInfo> = files.into_iter().filter_map(FileInfo::new).collect();
 
@@ -83,31 +65,24 @@ impl FileSorter {
         file_infos.into_iter().map(|f| f.path).collect()
     }
 
-    /// 按文件名字母顺序排序
     fn sort_by_name(&self, mut files: Vec<PathBuf>) -> Vec<PathBuf> {
         files.sort();
         files
     }
 }
 
-/// 便捷函数：按大小升序排序（小文件优先）
 pub fn sort_by_size_ascending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeAscending).sort(files)
 }
 
-/// 便捷函数：按大小降序排序（大文件优先）
 pub fn sort_by_size_descending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeDescending).sort(files)
 }
 
-/// 便捷函数：按文件名排序
 pub fn sort_by_name(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::NameAscending).sort(files)
 }
 
-// ============================================================
-// 🔬 TESTS (裁判机制)
-// ============================================================
 
 #[cfg(test)]
 mod tests {
@@ -116,7 +91,6 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    /// 创建测试文件
     fn create_test_file(dir: &Path, name: &str, size: usize) -> PathBuf {
         let path = dir.join(name);
         let mut file = fs::File::create(&path).unwrap();
@@ -146,7 +120,6 @@ mod tests {
     fn test_sort_by_size_ascending() {
         let temp_dir = TempDir::new().unwrap();
 
-        // 创建不同大小的文件
         let large = create_test_file(temp_dir.path(), "large.txt", 1000);
         let small = create_test_file(temp_dir.path(), "small.txt", 100);
         let medium = create_test_file(temp_dir.path(), "medium.txt", 500);
@@ -154,7 +127,6 @@ mod tests {
         let files = vec![large.clone(), small.clone(), medium.clone()];
         let sorted = sort_by_size_ascending(files);
 
-        // 验证顺序：小 -> 中 -> 大
         assert_eq!(sorted.len(), 3);
         assert_eq!(sorted[0], small);
         assert_eq!(sorted[1], medium);
@@ -172,7 +144,6 @@ mod tests {
         let files = vec![small.clone(), medium.clone(), large.clone()];
         let sorted = sort_by_size_descending(files);
 
-        // 验证顺序：大 -> 中 -> 小
         assert_eq!(sorted.len(), 3);
         assert_eq!(sorted[0], large);
         assert_eq!(sorted[1], medium);
@@ -190,7 +161,6 @@ mod tests {
         let files = vec![c.clone(), a.clone(), b.clone()];
         let sorted = sort_by_name(files);
 
-        // 验证字母顺序
         assert_eq!(sorted.len(), 3);
         assert_eq!(sorted[0], a);
         assert_eq!(sorted[1], b);
@@ -209,7 +179,6 @@ mod tests {
         let sorter = FileSorter::new(SortStrategy::None);
         let sorted = sorter.sort(files.clone());
 
-        // 验证顺序不变
         assert_eq!(sorted, files);
     }
 
@@ -236,7 +205,6 @@ mod tests {
     fn test_same_size_files() {
         let temp_dir = TempDir::new().unwrap();
 
-        // 创建相同大小的文件
         let f1 = create_test_file(temp_dir.path(), "file1.txt", 100);
         let f2 = create_test_file(temp_dir.path(), "file2.txt", 100);
         let f3 = create_test_file(temp_dir.path(), "file3.txt", 100);
@@ -244,16 +212,13 @@ mod tests {
         let files = vec![f1.clone(), f2.clone(), f3.clone()];
         let sorted = sort_by_size_ascending(files);
 
-        // 相同大小的文件，顺序应该稳定
         assert_eq!(sorted.len(), 3);
     }
 
-    /// 🔬 严格测试：验证排序的正确性
     #[test]
     fn test_strict_sorting_correctness() {
         let temp_dir = TempDir::new().unwrap();
 
-        // 创建多个不同大小的文件
         let sizes = [5000, 100, 3000, 200, 4000, 50, 1000];
         let mut files = Vec::new();
 
@@ -264,7 +229,6 @@ mod tests {
 
         let sorted = sort_by_size_ascending(files);
 
-        // 验证排序后的顺序是严格递增的
         for i in 0..sorted.len() - 1 {
             let size1 = fs::metadata(&sorted[i]).unwrap().len();
             let size2 = fs::metadata(&sorted[i + 1]).unwrap().len();

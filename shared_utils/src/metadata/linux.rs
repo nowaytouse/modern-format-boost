@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
-    // ACLs via getfacl/setfacl
     if which::which("getfacl").is_ok() && which::which("setfacl").is_ok() {
         let output = Command::new("getfacl")
             .arg("--absolute-names")
@@ -24,6 +23,6 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             }
         }
     }
-    let _ = dst; // suppress warning
+    let _ = dst;
     Ok(())
 }

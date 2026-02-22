@@ -6,12 +6,9 @@
 
 use std::fmt;
 
-/// Flag 组合模式（简化后仅两种有效）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlagMode {
-    /// 推荐模式：explore + match_quality + compress
     PreciseQualityWithCompress,
-    /// 极限探索：上述 + --ultimate（SSIM 饱和）
     UltimateExplore,
 }
 
@@ -29,7 +26,6 @@ impl fmt::Display for FlagMode {
 }
 
 impl FlagMode {
-    /// 获取模式的中文描述
     pub fn description_cn(&self) -> &'static str {
         match self {
             FlagMode::PreciseQualityWithCompress => "精确质量匹配+必须压缩",
@@ -37,7 +33,6 @@ impl FlagMode {
         }
     }
 
-    /// 获取模式的英文描述
     pub fn description_en(&self) -> &'static str {
         match self {
             FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
@@ -45,28 +40,21 @@ impl FlagMode {
         }
     }
 
-    /// 是否为极限探索模式
     pub fn is_ultimate(&self) -> bool {
         matches!(self, FlagMode::UltimateExplore)
     }
 }
 
-/// Flag 组合验证结果
 #[derive(Debug)]
 pub enum FlagValidation {
-    /// 有效组合
     Valid(FlagMode),
-    /// 无效组合（包含错误信息）
     Invalid(String),
 }
 
-/// 验证 flag 组合（不含 ultimate）。仅接受 explore && match_quality && compress。
 pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
     validate_flags_with_ultimate(explore, match_quality, compress, false)
 }
 
-/// 验证 flag 组合（含 ultimate）。仅接受推荐组合：explore + match_quality + compress（可选 ultimate）。
-/// 其他组合一律 Invalid，不再兼容老旧单独/部分组合。
 pub fn validate_flags_with_ultimate(
     explore: bool,
     match_quality: bool,
@@ -85,7 +73,6 @@ pub fn validate_flags_with_ultimate(
     FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
 }
 
-/// 验证并返回 Result（不含 ultimate）
 pub fn validate_flags_result(
     explore: bool,
     match_quality: bool,
@@ -97,7 +84,6 @@ pub fn validate_flags_result(
     }
 }
 
-/// 验证并返回 Result（含 ultimate）
 pub fn validate_flags_result_with_ultimate(
     explore: bool,
     match_quality: bool,
@@ -110,7 +96,6 @@ pub fn validate_flags_result_with_ultimate(
     }
 }
 
-/// 打印 flag 组合帮助信息（简化：仅推荐组合有效）
 pub fn print_flag_help() {
     eprintln!("📋 Flag (simplified): Only the recommended combination is supported.");
     eprintln!("   Default: explore + match-quality + compress (all on).");
@@ -122,9 +107,6 @@ pub fn print_flag_help() {
 mod tests {
     use super::*;
 
-    // ═══════════════════════════════════════════════════════════════
-    // 基础有效组合测试
-    // ═══════════════════════════════════════════════════════════════
 
     #[test]
     fn test_only_recommended_combination_valid() {

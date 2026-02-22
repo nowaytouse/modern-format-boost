@@ -7,7 +7,6 @@
 //! - Result builders: Reduce boilerplate code
 //! - Size formatting: Unified message formatting
 
-// 测试代码中的字段赋值是合理的测试模式
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
 use serde::{Deserialize, Serialize};
@@ -17,15 +16,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-// ============================================================================
-// Global processed files tracker (anti-duplicate)
-// ============================================================================
 
 lazy_static::lazy_static! {
     static ref PROCESSED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
 }
 
-/// Check if file has already been processed (anti-duplicate)
 pub fn is_already_processed(path: &Path) -> bool {
     let canonical = path
         .canonicalize()
@@ -37,7 +32,6 @@ pub fn is_already_processed(path: &Path) -> bool {
     processed.contains(&canonical)
 }
 
-/// Mark file as processed
 pub fn mark_as_processed(path: &Path) {
     let canonical = path
         .canonicalize()
@@ -49,20 +43,14 @@ pub fn mark_as_processed(path: &Path) {
     processed.insert(canonical);
 }
 
-/// Clear processed files list
 pub fn clear_processed_list() {
     let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
     processed.clear();
 }
 
-// ============================================================================
-// 🔥 Atomic Operation Protection (断电保护)
-// Re-exported from checkpoint module for backward compatibility
-// ============================================================================
 
 pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
 
-/// Load processed files list from disk
 pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if !list_path.exists() {
         return Ok(());
@@ -79,7 +67,6 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-/// Save processed files list to disk
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
     let mut file = fs::File::create(list_path)?;
@@ -91,11 +78,7 @@ pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-// ============================================================================
-// Conversion Result
-// ============================================================================
 
-/// Unified conversion result structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionResult {
     pub success: bool,
@@ -110,12 +93,6 @@ pub struct ConversionResult {
 }
 
 impl ConversionResult {
-    /// Create a skipped result (already processed)
-    ///
-    /// 注意：这里使用 unwrap_or(0) 是合理的，因为：
-    /// 1. 这是跳过场景，文件大小仅用于显示目的
-    /// 2. 如果文件不存在（极端情况），返回0不会影响功能
-    /// 3. 跳过的文件不会被转换，所以大小信息不影响质量
     pub fn skipped_duplicate(input: &Path) -> Self {
         Self {
             success: true,
@@ -130,9 +107,6 @@ impl ConversionResult {
         }
     }
 
-    /// Create a skipped result (output exists)
-    ///
-    /// 注意：这里使用 unwrap_or(0) 是合理的（同上）
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         Self {
@@ -148,7 +122,6 @@ impl ConversionResult {
         }
     }
 
-    /// Create a skipped result (size increase - rollback)
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
         let increase_pct = (output_size as f64 / input_size as f64 - 1.0) * 100.0;
         Self {
@@ -164,7 +137,6 @@ impl ConversionResult {
         }
     }
 
-    /// Create a successful conversion result
     pub fn success(
         input: &Path,
         output: &Path,
@@ -214,62 +186,23 @@ impl ConversionResult {
     }
 }
 
-// ============================================================================
-// Conversion Options
-// ============================================================================
 
-/// Common conversion options
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
-    /// Force conversion even if already processed
     pub force: bool,
-    /// Output directory (None = same as input)
     pub output_dir: Option<PathBuf>,
-    /// Base directory for preserving directory structure
     pub base_dir: Option<PathBuf>,
-    /// Delete original after successful conversion
     pub delete_original: bool,
-    /// In-place conversion: convert and delete original (effectively "replace")
-    /// When true, the original file is deleted after successful conversion
-    /// This is equivalent to delete_original but with clearer semantics
     pub in_place: bool,
-    /// 探索模式：寻找更小的文件大小
-    /// - 单独使用：仅探索更小大小，提示裁判验证准确度
-    /// - 与 match_quality 组合：精确质量匹配（二分搜索 + SSIM 验证）
     pub explore: bool,
-    /// 质量匹配模式：匹配输入质量
-    /// - 单独使用：使用算法预测的 CRF + SSIM 验证
-    /// - 与 explore 组合：精确质量匹配（二分搜索 + SSIM 验证）
     pub match_quality: bool,
-    /// 🍎 Apple compatibility mode: Convert non-Apple-compatible formats to HEVC
-    /// When enabled, AV1/VP9 animated images will be converted to HEVC MP4
-    /// instead of being skipped as "modern format"
     pub apple_compat: bool,
-    /// 🔥 v4.6: 压缩模式：确保输出 < 输入
-    /// - 单独使用：只要输出 < 输入（哪怕 1KB）
-    /// - 与 match_quality 组合：输出 < 输入 + 粗略 SSIM 验证
-    /// - 与 explore + match_quality 组合：精确质量匹配 + 必须压缩
     pub compress: bool,
-    /// 🔥 v4.15: Use GPU acceleration (default: true)
-    /// Set to false to force CPU encoding (libx265) for higher SSIM (0.98+)
-    /// VideoToolbox hardware encoding caps at ~0.95 SSIM
     pub use_gpu: bool,
-    /// 🔥 v6.2: 极限探索模式
-    /// 持续搜索直到 SSIM 完全饱和（领域墙）
-    /// 只能与 --explore --match-quality --compress 组合使用
     pub ultimate: bool,
-    /// 🔥 v7.8.3: 允许大小容差（1%）
-    /// - true: 允许输出比输入大最多1%（提高转换率，避免高跳过率）
-    /// - false: 严格要求输出必须小于输入（哪怕只有1KB）
-    ///   默认: true（保持高转换率）
     pub allow_size_tolerance: bool,
-    /// Verbose output (informational messages)
     pub verbose: bool,
-    /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
-    /// 0 means use default (or calculated optimal)
     pub child_threads: usize,
-    /// 🔥 v7.9.8: Explicitly injected input format (e.g. "JPEG", "PNG")
-    /// Useful when file content does not match its extension
     pub input_format: Option<String>,
 }
 
@@ -278,16 +211,16 @@ impl Default for ConvertOptions {
         Self {
             force: false,
             output_dir: None,
-            base_dir: None, // 🔥 v6.9.15
+            base_dir: None,
             delete_original: false,
             in_place: false,
             explore: false,
             match_quality: false,
             apple_compat: false,
             compress: false,
-            use_gpu: true,              // 🔥 v4.15: GPU by default
-            ultimate: false,            // 🔥 v6.2: 默认关闭极限模式
-            allow_size_tolerance: true, // 🔥 v7.8.3: 默认允许1%容差（提高转换率）
+            use_gpu: true,
+            ultimate: false,
+            allow_size_tolerance: true,
             verbose: false,
             child_threads: 0,
             input_format: None,
@@ -296,14 +229,10 @@ impl Default for ConvertOptions {
 }
 
 impl ConvertOptions {
-    /// Check if original should be deleted (either via delete_original or in_place)
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
 
-    /// 🔥 v6.2: 获取 flag 模式（使用模块化验证器，含 ultimate 支持）
-    ///
-    /// 返回 Result，无效组合会返回错误信息
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
         crate::flag_validator::validate_flags_result_with_ultimate(
             self.explore,
@@ -313,9 +242,6 @@ impl ConvertOptions {
         )
     }
 
-    /// 获取探索模式（兼容旧 API）
-    ///
-    /// 简化：仅推荐组合有效，统一映射为 PreciseQualityMatchWithCompression
     pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
         match self.flag_mode() {
             Ok(_) => crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
@@ -324,16 +250,7 @@ impl ConvertOptions {
     }
 }
 
-// ============================================================================
-// Output Path Utilities
-// ============================================================================
 
-/// Determine output path and ensure directory exists
-/// Returns Err if input and output would be the same file
-///
-/// 🔥 v6.9.15: 保留目录结构
-/// - 如果指定 output_dir，保留输入文件相对于基准目录的路径结构
-/// - 需要配合 determine_output_path_with_base 使用
 pub fn determine_output_path(
     input: &Path,
     extension: &str,
@@ -346,14 +263,12 @@ pub fn determine_output_path(
 
     let output = match output_dir {
         Some(dir) => {
-            // Ensure output directory exists
             let _ = fs::create_dir_all(dir);
             dir.join(format!("{}.{}", stem, extension))
         }
         None => input.with_extension(extension),
     };
 
-    // 🔥 检测输入输出路径冲突
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
     let output_canonical = if output.exists() {
         output.canonicalize().unwrap_or_else(|_| output.clone())
@@ -371,7 +286,6 @@ pub fn determine_output_path(
         ));
     }
 
-    // Ensure output directory exists
     if let Some(parent) = output.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -379,24 +293,6 @@ pub fn determine_output_path(
     Ok(output)
 }
 
-/// 🔥 v6.9.15: 保留目录结构的输出路径计算
-///
-/// # Arguments
-/// * `input` - 输入文件路径
-/// * `base_dir` - 基准目录（通常是用户指定的输入目录）
-/// * `extension` - 输出文件扩展名
-/// * `output_dir` - 输出目录
-///
-/// # Returns
-/// 保留相对路径结构的输出路径
-///
-/// # Example
-/// ```
-/// // 输入: /data/photos/2024/img.jpg
-/// // 基准: /data/photos
-/// // 输出: /output
-/// // 结果: /output/2024/img.jxl
-/// ```
 pub fn determine_output_path_with_base(
     input: &Path,
     base_dir: &Path,
@@ -410,7 +306,6 @@ pub fn determine_output_path_with_base(
 
     let output = match output_dir {
         Some(dir) => {
-            // 🔥 计算相对路径，保留目录结构
             let rel_path = input
                 .strip_prefix(base_dir)
                 .unwrap_or(input)
@@ -425,7 +320,6 @@ pub fn determine_output_path_with_base(
         None => input.with_extension(extension),
     };
 
-    // 🔥 检测输入输出路径冲突
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
     let output_canonical = if output.exists() {
         output.canonicalize().unwrap_or_else(|_| output.clone())
@@ -443,7 +337,6 @@ pub fn determine_output_path_with_base(
         ));
     }
 
-    // Ensure output directory exists
     if let Some(parent) = output.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -451,11 +344,7 @@ pub fn determine_output_path_with_base(
     Ok(output)
 }
 
-// ============================================================================
-// Size Formatting
-// ============================================================================
 
-/// Format size reduction/increase message
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = 1.0 - (output_size as f64 / input_size as f64);
     let reduction_pct = reduction * 100.0;
@@ -467,28 +356,20 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     }
 }
 
-/// Calculate size reduction percentage (positive = smaller, negative = larger)
 pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     (1.0 - (output_size as f64 / input_size as f64)) * 100.0
 }
 
-// ============================================================================
-// Pre-conversion Checks
-// ============================================================================
 
-/// Perform standard pre-conversion checks
-/// Returns Some(ConversionResult) if should skip, None if should proceed
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
     options: &ConvertOptions,
 ) -> Option<ConversionResult> {
-    // Anti-duplicate check
     if !options.force && is_already_processed(input) {
         return Some(ConversionResult::skipped_duplicate(input));
     }
 
-    // Output exists check
     if output.exists() && !options.force {
         return Some(ConversionResult::skipped_exists(input, output));
     }
@@ -496,49 +377,33 @@ pub fn pre_conversion_check(
     None
 }
 
-// ============================================================================
-// Post-conversion Actions
-// ============================================================================
 
-/// Perform standard post-conversion actions
 pub fn post_conversion_actions(
     input: &Path,
     output: &Path,
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
-    // Copy metadata
     if let Err(e) = crate::preserve_metadata(input, output) {
         eprintln!("⚠️ Failed to preserve metadata: {}", e);
     }
 
-    // Mark as processed
     mark_as_processed(input);
 
-    // 🔥 Safe delete with integrity check (断电保护)
     if options.should_delete_original() {
-        // Minimum output size: at least 100 bytes for any valid media file
         safe_delete_original(input, output, 100)?;
     }
 
     Ok(())
 }
 
-// ============================================================
-// 🔬 PRECISION VALIDATION TESTS ("裁判" Tests)
-// ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ============================================================
-    // Size Reduction Calculation Tests (裁判机制)
-    // ============================================================
 
-    /// Strict test: Size reduction formula must be mathematically correct
     #[test]
     fn test_strict_size_reduction_formula() {
-        // Formula: (1 - output/input) * 100
         let test_cases = [
             (1000u64, 500u64, 50.0f64),
             (1000, 250, 75.0),
@@ -570,10 +435,8 @@ mod tests {
         }
     }
 
-    /// Strict test: Large file sizes (GB range)
     #[test]
     fn test_strict_large_file_sizes() {
-        // 10GB -> 5GB = 50% reduction
         let reduction = calculate_size_reduction(10_000_000_000, 5_000_000_000);
         assert!(
             (reduction - 50.0).abs() < 0.001,
@@ -581,7 +444,6 @@ mod tests {
             reduction
         );
 
-        // 100GB -> 25GB = 75% reduction
         let reduction = calculate_size_reduction(100_000_000_000, 25_000_000_000);
         assert!(
             (reduction - 75.0).abs() < 0.001,
@@ -590,10 +452,8 @@ mod tests {
         );
     }
 
-    /// Strict test: Small file sizes (bytes range)
     #[test]
     fn test_strict_small_file_sizes() {
-        // 100 bytes -> 50 bytes = 50% reduction
         let reduction = calculate_size_reduction(100, 50);
         assert!(
             (reduction - 50.0).abs() < 0.001,
@@ -602,9 +462,6 @@ mod tests {
         );
     }
 
-    // ============================================================
-    // Format Size Change Message Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_format_size_change_reduction() {
@@ -636,9 +493,6 @@ mod tests {
         assert!(msg.contains("0.0%"), "Should show 0.0% for same size");
     }
 
-    // ============================================================
-    // Output Path Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_determine_output_path() {
@@ -666,9 +520,6 @@ mod tests {
         assert_eq!(mkv, Path::new("/path/to/video.mkv"));
     }
 
-    // ============================================================
-    // ConversionResult Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_conversion_result_success() {
@@ -697,9 +548,6 @@ mod tests {
         assert!(result.message.contains("larger"));
     }
 
-    // ============================================================
-    // ConvertOptions Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_convert_options_default() {
@@ -728,13 +576,6 @@ mod tests {
         assert!(opts.should_delete_original());
     }
 
-    // ============================================================
-    // 🔥 v4.15: GPU/CPU Mode Tests (裁判机制)
-    // ============================================================
-
-    // ============================================================
-    // 🔥 v4.15: Flag Mode with GPU/CPU Combinations (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_flag_mode_with_gpu() {
@@ -742,7 +583,7 @@ mod tests {
         opts.explore = true;
         opts.match_quality = true;
         opts.compress = true;
-        opts.use_gpu = true; // GPU mode
+        opts.use_gpu = true;
 
         let mode = opts.flag_mode().unwrap();
         assert_eq!(
@@ -758,7 +599,7 @@ mod tests {
         opts.explore = true;
         opts.match_quality = true;
         opts.compress = true;
-        opts.use_gpu = false; // CPU mode
+        opts.use_gpu = false;
 
         let mode = opts.flag_mode().unwrap();
         assert_eq!(
@@ -770,19 +611,17 @@ mod tests {
 
     #[test]
     fn test_all_flag_combinations_with_gpu_cpu() {
-        // 测试所有有效 flag 组合与 GPU/CPU 模式的独立性
         let valid_flag_combinations = [
-            (false, false, false), // Default
-            (false, false, true),  // CompressOnly
-            (false, true, false),  // QualityOnly
-            (false, true, true),   // CompressWithQuality
-            (true, false, false),  // ExploreOnly
-            (true, true, false),   // PreciseQuality
-            (true, true, true),    // PreciseQualityWithCompress
+            (false, false, false),
+            (false, false, true),
+            (false, true, false),
+            (false, true, true),
+            (true, false, false),
+            (true, true, false),
+            (true, true, true),
         ];
 
         for (explore, match_quality, compress) in valid_flag_combinations {
-            // 测试 GPU 模式
             let mut opts_gpu = ConvertOptions::default();
             opts_gpu.explore = explore;
             opts_gpu.match_quality = match_quality;
@@ -798,7 +637,6 @@ mod tests {
                 compress
             );
 
-            // 测试 CPU 模式
             let mut opts_cpu = ConvertOptions::default();
             opts_cpu.explore = explore;
             opts_cpu.match_quality = match_quality;
@@ -814,7 +652,6 @@ mod tests {
                 compress
             );
 
-            // Flag mode 应该与 GPU/CPU 选择无关
             assert_eq!(
                 mode_gpu.unwrap(),
                 mode_cpu.unwrap(),
@@ -823,9 +660,6 @@ mod tests {
         }
     }
 
-    // ============================================================
-    // 🔥 v4.15: Edge Cases for ConvertOptions (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_convert_options_all_flags_enabled() {
@@ -837,7 +671,7 @@ mod tests {
         opts.match_quality = true;
         opts.compress = true;
         opts.apple_compat = true;
-        opts.use_gpu = false; // CPU mode
+        opts.use_gpu = false;
 
         assert!(opts.force);
         assert!(opts.should_delete_original());
@@ -858,7 +692,6 @@ mod tests {
         opts.match_quality = false;
         opts.compress = true;
 
-        // This is the invalid combination: --explore --compress without --match-quality
         let result = opts.flag_mode();
         assert!(
             result.is_err(),
@@ -868,14 +701,13 @@ mod tests {
 
     #[test]
     fn test_convert_options_explore_mode_mapping() {
-        // 测试 explore_mode() 方法正确映射到 ExploreMode
         let test_cases = [
             (
                 false,
                 false,
                 false,
                 crate::video_explorer::ExploreMode::QualityMatch,
-            ), // Default
+            ),
             (
                 false,
                 false,

@@ -38,50 +38,24 @@ use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, error, info};
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.4.7: FfmpegProcess - 防死锁的 FFmpeg 进程包装器
-// ═══════════════════════════════════════════════════════════════
 
-/// FFmpeg 进程包装器 - 自动处理 stderr 消耗，防止管道死锁
-///
-/// # 设计原理
-///
-/// 操作系统管道缓冲区通常只有 64KB。如果 FFmpeg 输出大量 stderr
-/// 而程序只读取 stdout，stderr 缓冲区会满，导致 FFmpeg 阻塞，
-/// 进而导致 stdout 也停止输出，形成死锁。
-///
-/// 本结构体通过独立线程持续消耗 stderr 来解决这个问题。
 pub struct FfmpegProcess {
     child: Child,
     stderr_thread: Option<JoinHandle<String>>,
 }
 
 impl FfmpegProcess {
-    /// 启动 FFmpeg 进程（自动处理 stderr 消耗）
-    ///
-    /// # Arguments
-    /// * `cmd` - 已配置好参数的 Command（会自动设置 stdout/stderr 为 piped）
-    ///
-    /// # Returns
-    /// 包装后的 FfmpegProcess，可安全读取 stdout 而不会死锁
-    ///
-    /// # Errors
-    /// - 进程启动失败
-    /// - 无法捕获 stderr
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
-        // 记录即将执行的FFmpeg命令
         let command_str = format!("{:?}", cmd);
         info!(
             command = %command_str,
             "Executing FFmpeg command"
         );
 
-        // 设置管道
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = cmd.spawn().context("Failed to spawn FFmpeg process")?;
 
-        // 🔥 关键：独立线程消耗 stderr，防止缓冲区满死锁
         let stderr = child
             .stderr
             .take()
@@ -103,29 +77,14 @@ impl FfmpegProcess {
         })
     }
 
-    /// 获取 stdout 用于读取进度
-    ///
-    /// # Returns
-    /// stdout 的可变引用，如果已被 take 则返回 None
     pub fn stdout(&mut self) -> Option<&mut ChildStdout> {
         self.child.stdout.as_mut()
     }
 
-    /// Take stdout（转移所有权）
-    ///
-    /// # Returns
-    /// stdout，如果已被 take 则返回 None
     pub fn take_stdout(&mut self) -> Option<ChildStdout> {
         self.child.stdout.take()
     }
 
-    /// 等待进程完成并获取输出
-    ///
-    /// # Returns
-    /// (ExitStatus, stderr_content) - 退出状态和 stderr 内容
-    ///
-    /// # Errors
-    /// - 等待进程失败
     pub fn wait_with_output(mut self) -> Result<(ExitStatus, String)> {
         let status = self.child.wait().context("Failed to wait for FFmpeg")?;
         let stderr = self
@@ -134,7 +93,6 @@ impl FfmpegProcess {
             .map(|t| t.join().unwrap_or_default())
             .unwrap_or_default();
 
-        // 记录FFmpeg执行结果
         if status.success() {
             info!(
                 exit_code = status.code(),
@@ -155,64 +113,29 @@ impl FfmpegProcess {
         Ok((status, stderr))
     }
 
-    /// 检查进程是否仍在运行
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         self.child
             .try_wait()
             .context("Failed to check FFmpeg status")
     }
 
-    /// 强制终止进程
     pub fn kill(&mut self) -> Result<()> {
         self.child.kill().context("Failed to kill FFmpeg process")
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.4.7: FfmpegProgressParser - 统一的进度解析器
-// ═══════════════════════════════════════════════════════════════
 
-/// FFmpeg 进度解析器 - 统一解析 FFmpeg 输出的进度信息
-///
-/// # 支持的格式
-///
-/// - `frame=  123` - 当前帧数
-/// - `fps=24.5` - 当前帧率
-/// - `time=00:01:23.45` - 当前时间
-/// - `speed=1.5x` - 编码速度
-///
-/// # 使用示例
-///
-/// ```ignore
-/// let mut parser = FfmpegProgressParser::new(Some(1000)); // 总帧数
-///
-/// for line in stdout.lines() {
-///     if let Some(progress) = parser.parse_line(&line?) {
-///         println!("Progress: {:.1}%", progress * 100.0);
-///     }
-/// }
-/// ```
 #[derive(Debug, Clone)]
 pub struct FfmpegProgressParser {
-    /// 总帧数（如果已知）
     total_frames: Option<u64>,
-    /// 总时长（秒，如果已知）
     total_duration: Option<f64>,
-    /// 当前帧数
     current_frame: u64,
-    /// 当前时间（秒）
     current_time: f64,
-    /// 当前帧率
     current_fps: f64,
-    /// 编码速度
     current_speed: f64,
 }
 
 impl FfmpegProgressParser {
-    /// 创建新的进度解析器
-    ///
-    /// # Arguments
-    /// * `total_frames` - 总帧数（如果已知）
     pub fn new(total_frames: Option<u64>) -> Self {
         Self {
             total_frames,
@@ -224,10 +147,6 @@ impl FfmpegProgressParser {
         }
     }
 
-    /// 创建带时长的进度解析器
-    ///
-    /// # Arguments
-    /// * `total_duration` - 总时长（秒）
     pub fn with_duration(total_duration: f64) -> Self {
         Self {
             total_frames: None,
@@ -239,36 +158,25 @@ impl FfmpegProgressParser {
         }
     }
 
-    /// 解析 FFmpeg 进度行
-    ///
-    /// # Arguments
-    /// * `line` - FFmpeg 输出的一行
-    ///
-    /// # Returns
-    /// 进度百分比 (0.0 - 1.0)，如果无法计算则返回 None
     pub fn parse_line(&mut self, line: &str) -> Option<f64> {
-        // 解析 frame=
         if let Some(frame_str) = line.strip_prefix("frame=") {
             if let Ok(frame) = frame_str.split_whitespace().next()?.parse::<u64>() {
                 self.current_frame = frame;
             }
         }
 
-        // 解析 fps=
         if let Some(fps_str) = line.strip_prefix("fps=") {
             if let Ok(fps) = fps_str.split_whitespace().next()?.parse::<f64>() {
                 self.current_fps = fps;
             }
         }
 
-        // 解析 time=
         if let Some(time_str) = line.strip_prefix("time=") {
             if let Some(time) = Self::parse_time(time_str.split_whitespace().next()?) {
                 self.current_time = time;
             }
         }
 
-        // 解析 speed=
         if let Some(speed_str) = line.strip_prefix("speed=") {
             let speed_str = speed_str.trim().trim_end_matches('x');
             if let Ok(speed) = speed_str.parse::<f64>() {
@@ -276,11 +184,9 @@ impl FfmpegProgressParser {
             }
         }
 
-        // 计算进度
         self.calculate_progress()
     }
 
-    /// 解析时间字符串 (HH:MM:SS.ms)
     fn parse_time(time_str: &str) -> Option<f64> {
         let parts: Vec<&str> = time_str.split(':').collect();
         if parts.len() != 3 {
@@ -294,16 +200,13 @@ impl FfmpegProgressParser {
         Some(hours * 3600.0 + minutes * 60.0 + seconds)
     }
 
-    /// 计算当前进度
     fn calculate_progress(&self) -> Option<f64> {
-        // 优先使用帧数计算
         if let Some(total) = self.total_frames {
             if total > 0 && self.current_frame > 0 {
                 return Some((self.current_frame as f64 / total as f64).min(1.0));
             }
         }
 
-        // 其次使用时长计算
         if let Some(total) = self.total_duration {
             if total > 0.0 && self.current_time > 0.0 {
                 return Some((self.current_time / total).min(1.0));
@@ -313,49 +216,25 @@ impl FfmpegProgressParser {
         None
     }
 
-    /// 获取当前帧数
     pub fn current_frame(&self) -> u64 {
         self.current_frame
     }
 
-    /// 获取当前时间（秒）
     pub fn current_time(&self) -> f64 {
         self.current_time
     }
 
-    /// 获取当前帧率
     pub fn current_fps(&self) -> f64 {
         self.current_fps
     }
 
-    /// 获取编码速度
     pub fn current_speed(&self) -> f64 {
         self.current_speed
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.4.7: FFmpeg 错误格式化
-// ═══════════════════════════════════════════════════════════════
 
-/// 统一的 FFmpeg 错误格式化
-///
-/// 从 stderr 输出中提取最有意义的错误信息。
-///
-/// # Arguments
-/// * `stderr` - FFmpeg 的 stderr 输出
-///
-/// # Returns
-/// 格式化后的错误消息
-///
-/// # 提取逻辑
-///
-/// 1. 跳过空行和进度行（frame=...）
-/// 2. 优先查找包含 "Error" 或 "error" 的行
-/// 3. 如果没有，返回最后一行非空内容
-/// 4. 如果全空，返回 "Unknown FFmpeg error"
 pub fn format_ffmpeg_error(stderr: &str) -> String {
-    // 优先查找包含 Error 的行
     if let Some(error_line) = stderr
         .lines()
         .rev()
@@ -364,7 +243,6 @@ pub fn format_ffmpeg_error(stderr: &str) -> String {
         return error_line.trim().to_string();
     }
 
-    // 其次返回最后一行有意义的内容
     stderr
         .lines()
         .rev()
@@ -379,7 +257,6 @@ pub fn format_ffmpeg_error(stderr: &str) -> String {
         .unwrap_or_else(|| "Unknown FFmpeg error".to_string())
 }
 
-/// 检查 FFmpeg 错误是否为可恢复的临时错误
 pub fn is_recoverable_error(stderr: &str) -> bool {
     let recoverable_patterns = [
         "Resource temporarily unavailable",
@@ -393,22 +270,13 @@ pub fn is_recoverable_error(stderr: &str) -> bool {
         .any(|pattern| stderr.contains(pattern))
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.5: 详细的 FFmpeg 错误报告
-// ═══════════════════════════════════════════════════════════════
 
-/// FFmpeg 错误详情
 #[derive(Debug, Clone)]
 pub struct FfmpegError {
-    /// 完整命令行
     pub command: String,
-    /// stdout 输出
     pub stdout: String,
-    /// stderr 输出
     pub stderr: String,
-    /// 退出码
     pub exit_code: Option<i32>,
-    /// 可操作的建议
     pub suggestion: Option<String>,
 }
 
@@ -429,7 +297,6 @@ impl std::fmt::Display for FfmpegError {
 
 impl std::error::Error for FfmpegError {}
 
-/// 🔥 v6.5: 解析常见错误模式并提供建议
 pub fn get_error_suggestion(stderr: &str) -> Option<String> {
     let patterns = [
         ("No such file or directory", "检查输入文件路径是否正确"),
@@ -462,14 +329,12 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
     None
 }
 
-/// 🔥 v6.5: 运行 FFmpeg 并返回详细错误报告
 pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(args);
 
     let command_str = format!("ffmpeg {}", args.join(" "));
 
-    // 记录即将执行的命令
     info!(
         command = %command_str,
         "Executing FFmpeg command"
@@ -489,7 +354,6 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
             suggestion: get_error_suggestion(&stderr),
         };
 
-        // 🔥 响亮报错 - 使用tracing记录详细错误信息
         error!(
             command = %error.command,
             exit_code = ?error.exit_code,
@@ -499,13 +363,11 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
             "FFmpeg command failed"
         );
 
-        // 同时输出到stderr供用户查看
         eprintln!("{}", error);
 
         return Err(anyhow::anyhow!(error));
     }
 
-    // 记录成功执行
     info!(
         exit_code = output.status.code(),
         "FFmpeg command completed successfully"
@@ -519,9 +381,6 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
     Ok(output)
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.4.7: 单元测试
-// ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod tests {
@@ -585,9 +444,6 @@ Conversion failed!
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.4.7: 属性测试
-// ═══════════════════════════════════════════════════════════════
 
 #[cfg(test)]
 mod prop_tests {
@@ -595,9 +451,6 @@ mod prop_tests {
     use proptest::prelude::*;
 
     proptest! {
-        /// **Feature: code-quality-v6.4.7, Property 4: FFmpeg 进度解析正确性**
-        /// *对于任意*有效的帧数，进度解析应返回正确的百分比
-        /// **验证: Requirements 3.1, 3.2, 3.3**
         #[test]
         fn prop_progress_parser_frame_accuracy(
             current in 0u64..10000,
@@ -616,8 +469,6 @@ mod prop_tests {
             }
         }
 
-        /// **Feature: code-quality-v6.4.7, Property 4b: 时间解析正确性**
-        /// *对于任意*有效的时间，进度解析应返回正确的百分比
         #[test]
         fn prop_progress_parser_time_accuracy(
             hours in 0u32..24,
@@ -639,8 +490,6 @@ mod prop_tests {
             }
         }
 
-        /// **Feature: code-quality-v6.4.7, Property 4c: 错误格式化非空**
-        /// *对于任意*非空 stderr，format_ffmpeg_error 应返回非空字符串
         #[test]
         fn prop_format_error_non_empty(
             content in "[a-zA-Z0-9 ]{1,100}"
@@ -649,8 +498,6 @@ mod prop_tests {
             prop_assert!(!error.is_empty(), "Error message should not be empty");
         }
 
-        /// **Feature: code-quality-v6.4.7, Property 4d: 错误格式化优先 Error 行**
-        /// 如果 stderr 包含 "Error"，应优先返回该行
         #[test]
         fn prop_format_error_prefers_error_line(
             prefix in "[a-zA-Z ]{0,50}",

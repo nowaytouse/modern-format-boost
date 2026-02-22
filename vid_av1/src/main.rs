@@ -6,7 +6,6 @@ use tracing::info;
 
 use vid_av1::{auto_convert, detect_video, determine_strategy, ConversionConfig};
 
-// 🔥 使用 shared_utils 的统计报告功能（模块化）
 
 #[derive(Parser)]
 #[command(name = "vid-av1")]
@@ -18,144 +17,104 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Analyze video properties
     Analyze {
-        /// Input file or directory
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Recursive directory scan
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
-        /// Output format
         #[arg(short, long, default_value = "human")]
         output: OutputFormat,
     },
 
-    /// Run conversion: FFV1 for lossless, AV1 for lossy (intelligent selection); default explore+match_quality+compress
     #[command(name = "run")]
     Run {
-        /// Input video file
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Output directory
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Force overwrite existing files
         #[arg(short, long)]
         force: bool,
 
-        /// Recursive directory scan
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
-        /// Delete original after conversion
         #[arg(long)]
         delete_original: bool,
 
-        /// In-place conversion: convert and delete original file
-        /// Effectively "replaces" the original with the new format
         #[arg(long)]
         in_place: bool,
 
-        /// Explore + match-quality + compress (default: on; required).
         #[arg(long, default_value_t = true)]
         explore: bool,
 
-        /// Use mathematical lossless AV1 (⚠️ VERY SLOW, huge files)
         #[arg(long)]
         lossless: bool,
 
-        /// Match input quality (default: on; required).
         #[arg(long, default_value_t = true)]
         match_quality: bool,
 
-        /// Require compression (default: on; required).
         #[arg(long, default_value_t = true)]
         compress: bool,
 
-        /// 🍎 Apple compatibility mode: AV1 not natively supported on older Apple devices
-        /// When enabled, shows a warning that AV1 files may not play on older Apple devices
         #[arg(long, default_value_t = true)]
         apple_compat: bool,
 
-        /// Disable Apple compatibility mode
         #[arg(long)]
         no_apple_compat: bool,
 
-        /// 🔥 v6.2: Ultimate explore mode - search until SSIM fully saturates (Domain Wall)
-        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
-        /// ⚠️ MUST be used with --explore --match-quality --compress
         #[arg(long, default_value_t = false)]
         ultimate: bool,
 
-        /// 🔥 Enable MS-SSIM verification (Multi-Scale SSIM, more accurate but slower)
         #[arg(long, default_value_t = false)]
         ms_ssim: bool,
 
-        /// 🔥 Minimum MS-SSIM score threshold (default: 0.90, range: 0-1)
         #[arg(long, default_value_t = 0.90)]
         ms_ssim_threshold: f64,
 
-        /// 🔥 Force MS-SSIM verification even for long videos (>5min)
         #[arg(long, default_value_t = false)]
         force_ms_ssim_long: bool,
 
-        /// 🔥 v7.6: MS-SSIM sampling rate (1/N, e.g., 3 for 1/3 sampling)
         #[arg(long)]
         ms_ssim_sampling: Option<u32>,
 
-        /// 🔥 v7.6: Force full MS-SSIM calculation (disable sampling)
         #[arg(long, default_value_t = false)]
         full_ms_ssim: bool,
 
-        /// 🔥 v7.6: Skip MS-SSIM calculation entirely
         #[arg(long, default_value_t = false)]
         skip_ms_ssim: bool,
 
-        /// 🔥 v4.15: Force CPU encoding (libaom) instead of hardware acceleration
-        /// Use --cpu for maximum quality (higher SSIM)
         #[arg(long, default_value_t = false)]
         cpu: bool,
 
-        /// 🔥 v8.0: Base directory for output path generation (preserves directory structure)
         #[arg(long)]
         base_dir: Option<PathBuf>,
 
-        /// 🔥 v8.0: Allow 1% size tolerance (default: enabled)
         #[arg(long, default_value_t = true)]
         allow_size_tolerance: bool,
 
-        /// Disable 1% size tolerance
         #[arg(long)]
         no_allow_size_tolerance: bool,
 
-        /// Verbose output (show skipped files and success messages)
         #[arg(short, long)]
         verbose: bool,
     },
 
-    /// Simple mode: ALL videos → AV1 MP4
     Simple {
-        /// Input video file
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Output directory
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Use mathematical lossless AV1 (⚠️ VERY SLOW, huge files)
         #[arg(long)]
         lossless: bool,
     },
 
-    /// Show recommended strategy without converting
     Strategy {
-        /// Input video file
         #[arg(value_name = "INPUT")]
         input: PathBuf,
     },
@@ -163,14 +122,11 @@ enum Commands {
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
-    /// Human-readable output
     Human,
-    /// JSON output
     Json,
 }
 
 fn main() -> anyhow::Result<()> {
-    // 🔥 v7.8: 使用统一的日志系统
     let _ =
         shared_utils::logging::init_logging("vid_av1", shared_utils::logging::LogConfig::default());
 
@@ -224,11 +180,9 @@ fn main() -> anyhow::Result<()> {
             no_allow_size_tolerance,
             verbose,
         } => {
-            // Apply --no-* overrides
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
 
-            // 🔥 v6.2: Validate flag combinations with ultimate support
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
                 explore,
                 match_quality,
@@ -239,7 +193,6 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
-            // Determine base directory
             let base_dir = if let Some(explicit_base) = base_dir {
                 Some(explicit_base)
             } else if recursive {
@@ -252,7 +205,6 @@ fn main() -> anyhow::Result<()> {
                 input.parent().map(|p| p.to_path_buf())
             };
 
-            // 🔥 v7.9: Balanced thread config (AV1 always uses Video workload)
             let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
                 shared_utils::thread_manager::WorkloadType::Video,
             );
@@ -267,7 +219,6 @@ fn main() -> anyhow::Result<()> {
                 use_lossless: lossless,
                 match_quality,
                 in_place,
-                // 🔥 v3.5: 裁判机制增强参数
                 min_ssim: 0.95,
                 validate_ms_ssim: ms_ssim,
                 ms_ssim_sampling,
@@ -344,7 +295,7 @@ fn main() -> anyhow::Result<()> {
                         Some(input.clone())
                     } else {
                         None
-                    }, // 🔥 v7.4.5
+                    },
                 },
                 |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
