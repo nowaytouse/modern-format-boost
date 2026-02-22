@@ -29,10 +29,8 @@ pub mod metadata;
 pub mod modern_ui;
 pub mod progress;
 pub mod quality_matcher;
-pub mod realtime_progress;
 pub mod report;
 pub mod safety;
-pub mod simple_progress;
 pub mod ssim_mapping;
 pub mod tools;
 pub mod video;
@@ -349,18 +347,6 @@ pub use modern_ui::{
     print_result_box, print_stage, print_substage, print_success, print_warning, progress_style,
     render_colored_progress, render_progress_bar, spinner_dots, spinner_frame, symbols,
     ExploreProgressState, ProgressStyle,
-};
-
-// 🔥 v5.20: 真正的实时进度条
-#[allow(deprecated)]
-pub use realtime_progress::{
-    // 🔥 v5.72: 详细进度状态
-    DetailedProgressState,
-    // v5.31: 旧的基于CRF范围的进度条（已弃用但保留兼容）
-    RealtimeExploreProgress,
-    RealtimeSpinner,
-    // 🔥 v5.34: 新的基于迭代计数的进度条（推荐）
-    SimpleIterationProgress,
 };
 
 // 🔥 v5.72: LRU缓存模块
