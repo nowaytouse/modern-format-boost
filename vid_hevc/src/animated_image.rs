@@ -357,20 +357,24 @@ pub fn convert_to_hevc_mp4_matched(
             } else {
                 0.0
             };
+            tracing::warn!(input = %input.display(), "Video stream compression failed: {:.1}KB → {:.1}KB", input_stream_kb, output_stream_kb);
             eprintln!(
                 "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
                 input_stream_kb, output_stream_kb, stream_change_pct
             );
             eprintln!("   ⚠️  File may already be highly optimized");
         } else if explore_result.ssim.is_none() {
+            tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
             eprintln!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
             eprintln!("   ⚠️  This may indicate codec compatibility issues");
         } else if actual_ssim < threshold {
+            tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, "Quality validation failed");
             eprintln!(
                 "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
                 actual_ssim, threshold
             );
         } else {
+            tracing::warn!(input = %input.display(), "Quality validation failed: unknown reason");
             eprintln!("   ⚠️  Quality validation FAILED: unknown reason");
         }
         eprintln!("   🛡️  Original file PROTECTED (quality too low to replace)");

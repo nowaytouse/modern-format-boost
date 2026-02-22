@@ -34,7 +34,8 @@ use crate::explore_strategy::CrfCache;
 
 
 fn beijing_time_now() -> String {
-    let beijing = FixedOffset::east_opt(8 * 3600).unwrap();
+    // UTC+8 (28800 seconds) is always a valid offset
+    let beijing = FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid fixed offset");
     let now: DateTime<Utc> = Utc::now();
     now.with_timezone(&beijing)
         .format("%Y-%m-%d %H:%M:%S")

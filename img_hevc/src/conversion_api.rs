@@ -396,7 +396,7 @@ fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     let dest_str = path_to_str(dest)?;
 
     let status = Command::new("touch")
-        .args(["-r", source_str, dest_str])
+        .args(["-r", "--", source_str, dest_str])
         .output()?;
 
     if !status.status.success() {

@@ -49,18 +49,21 @@ pub fn handle_error<E: std::error::Error + Send + Sync + 'static>(
 
     match category {
         ErrorCategory::Recoverable => {
+            tracing::warn!("[{}] {}: {}", category, context, error);
             eprintln!("⚠️ [{}] {}: {}", category, context, error);
             eprintln!("   → Suggested action: {}", suggestion_str);
             eprintln!("   → Continuing with fallback behavior...");
             ErrorAction::Continue
         }
         ErrorCategory::Fatal => {
+            tracing::error!("[{}] {}: {}", category, context, error);
             eprintln!("❌ [{}] {}: {}", category, context, error);
             eprintln!("   → Suggested action: {}", suggestion_str);
             eprintln!("   → Operation aborted.");
             ErrorAction::Abort(anyhow::anyhow!("{}: {}", context, error))
         }
         ErrorCategory::Optional => {
+            tracing::info!("[{}] {}: {}", category, context, error);
             eprintln!("ℹ️ [{}] {}: {}", category, context, error);
             eprintln!("   → This is non-critical, continuing...");
             ErrorAction::Continue

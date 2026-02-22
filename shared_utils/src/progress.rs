@@ -1088,6 +1088,7 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(100));
         }
         self.main_bar = Some(bar);
+        // SAFETY: set to Some on the line above
         self.main_bar.as_ref().unwrap()
     }
 
@@ -1107,6 +1108,7 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(80));
         }
         self.sub_bar = Some(bar);
+        // SAFETY: set to Some on the line above
         self.sub_bar.as_ref().unwrap()
     }
 
