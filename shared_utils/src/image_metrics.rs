@@ -112,6 +112,9 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
         .map(|&(x, y)| calculate_window_ssim(&orig_gray, &conv_gray, x, y, &window))
         .sum();
 
+    if positions.is_empty() {
+        return None;
+    }
     let count = positions.len() as f64;
     Some(ssim_sum / count)
 }

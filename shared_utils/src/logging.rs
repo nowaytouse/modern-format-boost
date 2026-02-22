@@ -94,7 +94,9 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(true)
         .with_target(false)
-        .with_line_number(false);
+        .with_level(false)
+        .with_line_number(false)
+        .without_time();
 
     tracing_subscriber::registry()
         .with(env_filter)

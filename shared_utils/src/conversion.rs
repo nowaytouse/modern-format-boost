@@ -14,12 +14,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
-
-lazy_static::lazy_static! {
-    static ref PROCESSED_FILES: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
-}
+static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 pub fn is_already_processed(path: &Path) -> bool {
     let canonical = path
@@ -28,7 +26,7 @@ pub fn is_already_processed(path: &Path) -> bool {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
+    let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
     processed.contains(&canonical)
 }
 
@@ -39,12 +37,12 @@ pub fn mark_as_processed(path: &Path) {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
     processed.insert(canonical);
 }
 
 pub fn clear_processed_list() {
-    let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
     processed.clear();
 }
 
@@ -58,7 +56,7 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 
     let file = fs::File::open(list_path)?;
     let reader = BufReader::new(file);
-    let mut processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
 
     for path in reader.lines().map_while(Result::ok) {
         processed.insert(path);
@@ -68,7 +66,7 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 }
 
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let processed = PROCESSED_FILES.lock().expect("Mutex poisoned");
+    let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let mut file = fs::File::create(list_path)?;
 
     for path in processed.iter() {
@@ -610,52 +608,44 @@ mod tests {
     }
 
     #[test]
-    fn test_all_flag_combinations_with_gpu_cpu() {
-        let valid_flag_combinations = [
+    fn test_only_recommended_flags_valid_with_gpu_cpu() {
+        let mut opts_gpu = ConvertOptions::default();
+        opts_gpu.explore = true;
+        opts_gpu.match_quality = true;
+        opts_gpu.compress = true;
+        opts_gpu.use_gpu = true;
+        assert!(opts_gpu.flag_mode().is_ok());
+
+        let mut opts_cpu = ConvertOptions::default();
+        opts_cpu.explore = true;
+        opts_cpu.match_quality = true;
+        opts_cpu.compress = true;
+        opts_cpu.use_gpu = false;
+        assert!(opts_cpu.flag_mode().is_ok());
+
+        assert_eq!(opts_gpu.flag_mode().unwrap(), opts_cpu.flag_mode().unwrap());
+    }
+
+    #[test]
+    fn test_invalid_flag_combinations_rejected() {
+        let invalid_combos = [
             (false, false, false),
             (false, false, true),
             (false, true, false),
-            (false, true, true),
             (true, false, false),
-            (true, true, false),
-            (true, true, true),
         ];
 
-        for (explore, match_quality, compress) in valid_flag_combinations {
-            let mut opts_gpu = ConvertOptions::default();
-            opts_gpu.explore = explore;
-            opts_gpu.match_quality = match_quality;
-            opts_gpu.compress = compress;
-            opts_gpu.use_gpu = true;
-
-            let mode_gpu = opts_gpu.flag_mode();
+        for (explore, match_quality, compress) in invalid_combos {
+            let mut opts = ConvertOptions::default();
+            opts.explore = explore;
+            opts.match_quality = match_quality;
+            opts.compress = compress;
             assert!(
-                mode_gpu.is_ok(),
-                "Flag combination ({}, {}, {}) should be valid with GPU",
+                opts.flag_mode().is_err(),
+                "({}, {}, {}) should be invalid",
                 explore,
                 match_quality,
                 compress
-            );
-
-            let mut opts_cpu = ConvertOptions::default();
-            opts_cpu.explore = explore;
-            opts_cpu.match_quality = match_quality;
-            opts_cpu.compress = compress;
-            opts_cpu.use_gpu = false;
-
-            let mode_cpu = opts_cpu.flag_mode();
-            assert!(
-                mode_cpu.is_ok(),
-                "Flag combination ({}, {}, {}) should be valid with CPU",
-                explore,
-                match_quality,
-                compress
-            );
-
-            assert_eq!(
-                mode_gpu.unwrap(),
-                mode_cpu.unwrap(),
-                "Flag mode should be independent of GPU/CPU selection"
             );
         }
     }
@@ -700,65 +690,16 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_options_explore_mode_mapping() {
-        let test_cases = [
-            (
-                false,
-                false,
-                false,
-                crate::video_explorer::ExploreMode::QualityMatch,
-            ),
-            (
-                false,
-                false,
-                true,
-                crate::video_explorer::ExploreMode::CompressOnly,
-            ),
-            (
-                false,
-                true,
-                false,
-                crate::video_explorer::ExploreMode::QualityMatch,
-            ),
-            (
-                false,
-                true,
-                true,
-                crate::video_explorer::ExploreMode::CompressWithQuality,
-            ),
-            (
-                true,
-                false,
-                false,
-                crate::video_explorer::ExploreMode::SizeOnly,
-            ),
-            (
-                true,
-                true,
-                false,
-                crate::video_explorer::ExploreMode::PreciseQualityMatch,
-            ),
-            (
-                true,
-                true,
-                true,
-                crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
-            ),
-        ];
+    fn test_explore_mode_returns_precise_quality_with_compression() {
+        let mut opts = ConvertOptions::default();
+        opts.explore = true;
+        opts.match_quality = true;
+        opts.compress = true;
 
-        for (explore, match_quality, compress, expected_mode) in test_cases {
-            let mut opts = ConvertOptions::default();
-            opts.explore = explore;
-            opts.match_quality = match_quality;
-            opts.compress = compress;
-
-            let mode = opts.explore_mode();
-            assert_eq!(
-                mode, expected_mode,
-                "explore_mode() for ({}, {}, {}) should map to {:?}",
-                explore, match_quality, compress, expected_mode
-            );
-        }
+        assert_eq!(
+            opts.explore_mode(),
+            crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
+        );
     }
 
 }

@@ -6,42 +6,23 @@ description = "Shared utilities for modern_format_boost tools"
 authors = ["Pixly Team"]
 
 [dependencies]
-# Error handling
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-
-# Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
-# Progress bar
 indicatif = { workspace = true }
-# CPU detection
-num_cpus = { workspace = true }
-# Terminal colors
 console = { workspace = true }
-# Time formatting
 chrono = { workspace = true }
-# Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-# Directory walking
 walkdir = { workspace = true }
-# Metadata preservation (from metadata_keeper)
 libc = { workspace = true }
 xattr = { workspace = true }
 filetime = { workspace = true }
-# log crate is often used by other crates, keep it as defined in workspace if available
-# but let's check if 'log' is in workspace.dependencies. It's not. 
-# Wait, I'll add 'log' to workspace.dependencies in root.
 log = { workspace = true }
 which = { workspace = true }
-# Thread-safe global state
-lazy_static = { workspace = true }
-
 tempfile = { workspace = true }
-
-# Image analysis dependencies (migrated from img_hevc/img_av1)
 image = { workspace = true }
 rayon = { workspace = true }
 libheif-rs = { workspace = true }

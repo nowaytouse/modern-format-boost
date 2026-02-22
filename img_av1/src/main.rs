@@ -871,19 +871,19 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(pool_size)
         .build()
-        .unwrap_or_else(|_| {
+        .or_else(|_| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(2)
                 .build()
-                .expect("Failed to create fallback thread pool")
-        });
+        })
+        .map_err(|e| anyhow::anyhow!("Failed to create thread pool: {}", e))?;
 
     if config.verbose {
         println!(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             pool_size,
             thread_config.child_threads,
-            num_cpus::get()
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
         );
     }
 

@@ -61,7 +61,7 @@ impl ThreadConfig {
 }
 
 pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
-    let cpu_count = num_cpus::get();
+    let cpu_count = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
 
     let effective_percentage = if config.multi_instance_aware && is_multi_instance() {
         config.core_percentage / 2
@@ -87,7 +87,7 @@ pub enum WorkloadType {
 }
 
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
-    let total_cores = num_cpus::get();
+    let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
 
     let reserved = (total_cores as f64 * 0.2).ceil() as usize;
     let reserved = reserved.clamp(1, 2);
