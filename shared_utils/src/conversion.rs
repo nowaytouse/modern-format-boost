@@ -120,6 +120,20 @@ impl ConversionResult {
         }
     }
 
+    pub fn skipped_custom(input: &Path, input_size: u64, reason: &str, skip_reason: &str) -> Self {
+        Self {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: reason.to_string(),
+            skipped: true,
+            skip_reason: Some(skip_reason.to_string()),
+        }
+    }
+
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
         let increase_pct = (output_size as f64 / input_size as f64 - 1.0) * 100.0;
         Self {
@@ -375,6 +389,36 @@ pub fn pre_conversion_check(
     None
 }
 
+
+pub fn finalize_conversion(
+    input: &Path,
+    output: &Path,
+    input_size: u64,
+    format_name: &str,
+    extra_info: Option<&str>,
+    options: &ConvertOptions,
+) -> std::io::Result<ConversionResult> {
+    let output_size = std::fs::metadata(output)?.len();
+
+    if let Err(e) = crate::preserve_metadata(input, output) {
+        eprintln!("\u{26a0}\u{fe0f} Failed to preserve metadata: {}", e);
+    }
+
+    mark_as_processed(input);
+
+    if options.should_delete_original() {
+        let _ = safe_delete_original(input, output, 100);
+    }
+
+    Ok(ConversionResult::success(
+        input,
+        output,
+        input_size,
+        output_size,
+        format_name,
+        extra_info,
+    ))
+}
 
 pub fn post_conversion_actions(
     input: &Path,
