@@ -9,8 +9,8 @@ use std::path::Path;
 use std::process::Command;
 
 pub use shared_utils::conversion::{
-    clear_processed_list, format_size_change, is_already_processed, load_processed_list,
-    mark_as_processed, save_processed_list, ConversionResult, ConvertOptions,
+    clear_processed_list, finalize_conversion, format_size_change, is_already_processed,
+    load_processed_list, mark_as_processed, save_processed_list, ConversionResult, ConvertOptions,
 };
 
 pub fn convert_to_jxl(
@@ -19,17 +19,7 @@ pub fn convert_to_jxl(
     distance: f32,
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -40,17 +30,7 @@ pub fn convert_to_jxl(
     }
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
@@ -230,7 +210,6 @@ pub fn convert_to_jxl(
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             let tolerance_ratio = if options.allow_size_tolerance { 1.01 } else { 1.0 };
             if output_size as f64 > input_size as f64 * tolerance_ratio {
@@ -244,20 +223,7 @@ pub fn convert_to_jxl(
                     (output_size as f64 / input_size as f64 - 1.0) * 100.0
                 );
                 mark_as_processed(input);
-                return Ok(ConversionResult {
-                    success: true,
-                    input_path: input.display().to_string(),
-                    output_path: None,
-                    input_size,
-                    output_size: None,
-                    size_reduction: None,
-                    message: format!(
-                        "Skipped: JXL would be larger (+{:.1}%)",
-                        (output_size as f64 / input_size as f64 - 1.0) * 100.0
-                    ),
-                    skipped: true,
-                    skip_reason: Some("size_increase".to_string()),
-                });
+                return Ok(ConversionResult::skipped_size_increase(input, input_size, output_size));
             }
 
             if let Err(e) = verify_jxl_health(&output) {
@@ -267,39 +233,8 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!(
-                    "JXL conversion successful: size reduced {:.1}%",
-                    reduction_pct
-                )
-            } else {
-                format!(
-                    "JXL conversion successful: size increased {:.1}%",
-                    -reduction_pct
-                )
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            finalize_conversion(input, &output, input_size, "JXL", None, options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -317,34 +252,14 @@ pub fn convert_to_jxl(
 
 pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
@@ -365,9 +280,6 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
             if let Err(e) = verify_jxl_health(&output) {
                 if let Err(re) = fs::remove_file(&output) {
                     eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
@@ -375,39 +287,8 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 return Err(e);
             }
 
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!(
-                    "JPEG lossless transcode successful: size reduced {:.1}%",
-                    reduction_pct
-                )
-            } else {
-                format!(
-                    "JPEG lossless transcode successful: size increased {:.1}%",
-                    -reduction_pct
-                )
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            finalize_conversion(input, &output, input_size, "JPEG lossless transcode", None, options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -429,34 +310,14 @@ pub fn convert_to_avif(
     options: &ConvertOptions,
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let q = quality.unwrap_or(85);
@@ -475,42 +336,8 @@ pub fn convert_to_avif(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!(
-                    "AVIF conversion successful: size reduced {:.1}%",
-                    reduction_pct
-                )
-            } else {
-                format!(
-                    "AVIF conversion successful: size increased {:.1}%",
-                    -reduction_pct
-                )
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            finalize_conversion(input, &output, input_size, "AVIF", None, options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -528,34 +355,14 @@ pub fn convert_to_avif(
 
 pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mp4", options)?;
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let (width, height) = get_input_dimensions(input)?;
@@ -591,42 +398,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!(
-                    "AV1 conversion successful: size reduced {:.1}%",
-                    reduction_pct
-                )
-            } else {
-                format!(
-                    "AV1 conversion successful: size increased {:.1}%",
-                    -reduction_pct
-                )
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            finalize_conversion(input, &output, input_size, "AV1", None, options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -649,34 +422,14 @@ pub fn convert_to_avif_lossless(
     eprintln!("⚠️  Mathematical lossless AVIF encoding - this will be SLOW!");
 
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let result = Command::new("avifenc")
@@ -692,36 +445,8 @@ pub fn convert_to_avif_lossless(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!("Lossless AVIF: size reduced {:.1}%", reduction_pct)
-            } else {
-                format!("Lossless AVIF: size increased {:.1}%", -reduction_pct)
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -743,34 +468,14 @@ pub fn convert_to_av1_mp4_matched(
     analysis: &crate::ImageAnalysis,
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mp4", options)?;
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let initial_crf = calculate_matched_crf_for_animation(analysis, input_size) as f32;
@@ -804,42 +509,9 @@ pub fn convert_to_av1_mp4_matched(
         eprintln!("{}", log);
     }
 
-    let output_size = explore_result.output_size;
-    let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
-    shared_utils::copy_metadata(input, &output);
-
-    mark_as_processed(input);
-
-    if options.should_delete_original()
-        && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-    {
-    }
-
-    let reduction_pct = reduction * 100.0;
-    let message = if reduction >= 0.0 {
-        format!(
-            "Quality-matched AV1 (CRF {:.1}): size reduced {:.1}%",
-            explore_result.optimal_crf, reduction_pct
-        )
-    } else {
-        format!(
-            "Quality-matched AV1 (CRF {:.1}): size increased {:.1}%",
-            explore_result.optimal_crf, -reduction_pct
-        )
-    };
-
-    Ok(ConversionResult {
-        success: true,
-        input_path: input.display().to_string(),
-        output_path: Some(output.display().to_string()),
-        input_size,
-        output_size: Some(output_size),
-        size_reduction: Some(reduction_pct),
-        message,
-        skipped: false,
-        skip_reason: None,
-    })
+    let extra = format!("CRF {:.1}", explore_result.optimal_crf);
+    finalize_conversion(input, &output, input_size, "Quality-matched AV1", Some(&extra), options)
+        .map_err(ImgQualityError::IoError)
 }
 
 fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
@@ -913,17 +585,7 @@ pub fn convert_to_jxl_matched(
     analysis: &crate::ImageAnalysis,
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -934,17 +596,7 @@ pub fn convert_to_jxl_matched(
     }
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let distance = calculate_matched_distance_for_static(analysis, input_size);
@@ -976,7 +628,6 @@ pub fn convert_to_jxl_matched(
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             let tolerance_ratio = if options.allow_size_tolerance { 1.01 } else { 1.0 };
             if output_size as f64 > input_size as f64 * tolerance_ratio {
@@ -990,20 +641,7 @@ pub fn convert_to_jxl_matched(
                     (output_size as f64 / input_size as f64 - 1.0) * 100.0
                 );
                 mark_as_processed(input);
-                return Ok(ConversionResult {
-                    success: true,
-                    input_path: input.display().to_string(),
-                    output_path: None,
-                    input_size,
-                    output_size: None,
-                    size_reduction: None,
-                    message: format!(
-                        "Skipped: JXL would be larger (+{:.1}%)",
-                        (output_size as f64 / input_size as f64 - 1.0) * 100.0
-                    ),
-                    skipped: true,
-                    skip_reason: Some("size_increase".to_string()),
-                });
+                return Ok(ConversionResult::skipped_size_increase(input, input_size, output_size));
             }
 
             if let Err(e) = verify_jxl_health(&output) {
@@ -1013,39 +651,9 @@ pub fn convert_to_jxl_matched(
                 return Err(e);
             }
 
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!(
-                    "Quality-matched JXL (d={:.2}): size reduced {:.1}%",
-                    distance, reduction_pct
-                )
-            } else {
-                format!(
-                    "Quality-matched JXL (d={:.2}): size increased {:.1}%",
-                    distance, -reduction_pct
-                )
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            let extra = format!("d={:.2}", distance);
+            finalize_conversion(input, &output, input_size, "Quality-matched JXL", Some(&extra), options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -1068,34 +676,14 @@ pub fn convert_to_av1_mp4_lossless(
     eprintln!("⚠️  Mathematical lossless AV1 encoding - this will be VERY SLOW!");
 
     if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: None,
-            input_size: fs::metadata(input).map(|m| m.len()).unwrap_or(0),
-            output_size: None,
-            size_reduction: None,
-            message: "Skipped: Already processed".to_string(),
-            skipped: true,
-            skip_reason: Some("duplicate".to_string()),
-        });
+        return Ok(ConversionResult::skipped_duplicate(input));
     }
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mp4", options)?;
 
     if output.exists() && !options.force {
-        return Ok(ConversionResult {
-            success: true,
-            input_path: input.display().to_string(),
-            output_path: Some(output.display().to_string()),
-            input_size,
-            output_size: fs::metadata(&output).map(|m| m.len()).ok(),
-            size_reduction: None,
-            message: "Skipped: Output file exists".to_string(),
-            skipped: true,
-            skip_reason: Some("exists".to_string()),
-        });
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
     let (width, height) = get_input_dimensions(input)?;
@@ -1127,36 +715,8 @@ pub fn convert_to_av1_mp4_lossless(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
-            shared_utils::copy_metadata(input, &output);
-
-            mark_as_processed(input);
-
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-            {
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!("Lossless AV1: size reduced {:.1}%", reduction_pct)
-            } else {
-                format!("Lossless AV1: size increased {:.1}%", -reduction_pct)
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+            finalize_conversion(input, &output, input_size, "Lossless AV1", None, options)
+                .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);

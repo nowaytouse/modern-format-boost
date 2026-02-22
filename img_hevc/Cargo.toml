@@ -1,10 +1,10 @@
 [package]
 name = "img-hevc"
-version = "0.1.0"
-edition = "2021"
-authors = ["Modern Format Boost Contributors"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "High-performance image quality analyzer - HEVC version for animated images"
-license = "MIT"
 
 [dependencies]
 clap = { workspace = true }

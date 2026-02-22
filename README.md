@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-8.3.0-blue.svg)
+![Version](https://img.shields.io/badge/version-8.4.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
 
@@ -127,6 +127,18 @@ cargo clippy         # 代码质量与潜在问题检查
 ```
 
 Release 构建已启用 LTO 与单 codegen-unit，以最大化运行效率。
+
+---
+
+## 📋 更新日志 / Changelog
+
+### v8.4.0
+- **代码现代化**: 移除 `lazy_static` 和 `num_cpus` 外部依赖，改用标准库 `LazyLock` 和 `available_parallelism()`
+- **安全性修复**: 修复 5 处除零漏洞（PSNR 插值、质量评分、ETA 计算等）
+- **健壮性提升**: 所有 Mutex 操作改用 poison-recovery 模式，防止线程 panic 导致死锁
+- **代码去重**: 提取 `finalize_conversion()` 等共享辅助函数，消除两个图像转换器中 ~760 行重复代码
+- **版本统一**: 全部 crate 统一使用 workspace 版本继承 (`version.workspace = true`)
+- **日志优化**: stderr 输出层移除冗余时间戳和级别前缀，更简洁
 
 ---
 
