@@ -9,36 +9,21 @@ use crate::ffprobe::{probe_video, FFprobeError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Detected video codec
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectedCodec {
-    /// FFV1 - Lossless archival codec
     FFV1,
-    /// H.264/AVC
     H264,
-    /// H.265/HEVC
     H265,
-    /// VP9
     VP9,
-    /// AV1
     AV1,
-    /// AV2 (Experimental)
     AV2,
-    /// H.266/VVC
     VVC,
-    /// Apple ProRes
     ProRes,
-    /// Avid DNxHD/DNxHR
     DNxHD,
-    /// Motion JPEG
     MJPEG,
-    /// Uncompressed (rawvideo)
     Uncompressed,
-    /// HuffYUV - Lossless
     HuffYUV,
-    /// UT Video - Lossless
     UTVideo,
-    /// Unknown codec
     Unknown(String),
 }
 
@@ -62,7 +47,6 @@ impl DetectedCodec {
         }
     }
 
-    /// Check if codec is natively lossless
     pub fn is_lossless(&self) -> bool {
         matches!(
             self,
@@ -73,7 +57,6 @@ impl DetectedCodec {
         )
     }
 
-    /// Check if codec can be lossless (like ProRes 4444 XQ)
     pub fn can_be_lossless(&self) -> bool {
         matches!(
             self,
@@ -106,18 +89,12 @@ impl DetectedCodec {
     }
 }
 
-/// Compression type classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CompressionType {
-    /// Mathematically lossless (FFV1, Uncompressed, etc.)
     Lossless,
-    /// Visually lossless (CRF 0-4, high-quality ProRes)
     VisuallyLossless,
-    /// High quality lossy (CRF 5-18)
     HighQuality,
-    /// Standard quality (CRF 19-28)
     Standard,
-    /// Low quality (CRF 29+)
     LowQuality,
 }
 
@@ -133,7 +110,6 @@ impl CompressionType {
     }
 }
 
-/// Color space information
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorSpace {
     BT709,
@@ -155,7 +131,6 @@ impl ColorSpace {
     }
 }
 
-/// Complete video detection result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoDetectionResult {
     pub file_path: String,
@@ -175,19 +150,14 @@ pub struct VideoDetectionResult {
     pub has_audio: bool,
     pub audio_codec: Option<String>,
     pub file_size: u64,
-    /// Estimated quality score (0-100)
     pub quality_score: u8,
-    /// Recommendation for archival
     pub archival_candidate: bool,
-    // Enhanced fields for precise CRF matching
     pub profile: Option<String>,
     pub has_b_frames: bool,
     pub video_bitrate: Option<u64>,
-    /// Bits per pixel (for quality estimation)
     pub bits_per_pixel: f64,
 }
 
-/// Determine compression type based on codec and bitrate
 pub fn determine_compression_type(
     codec: &DetectedCodec,
     bitrate: u64,
@@ -215,7 +185,6 @@ pub fn determine_compression_type(
     CompressionType::LowQuality
 }
 
-/// Calculate quality score (0-100)
 pub fn calculate_quality_score(
     compression: &CompressionType,
     bit_depth: u8,
@@ -235,7 +204,6 @@ pub fn calculate_quality_score(
     (base_score + depth_bonus + res_bonus).min(100)
 }
 
-/// Detect video properties - main entry point
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let probe = probe_video(path)?;
 

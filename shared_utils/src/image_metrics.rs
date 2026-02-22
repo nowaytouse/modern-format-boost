@@ -10,17 +10,14 @@
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
-/// SSIM constants for 8-bit images (from Wang et al. 2004)
 const K1: f64 = 0.01;
 const K2: f64 = 0.03;
-const L: f64 = 255.0; // Dynamic range for 8-bit images
-const C1: f64 = (K1 * L) * (K1 * L); // 6.5025
-const C2: f64 = (K2 * L) * (K2 * L); // 58.5225
+const L: f64 = 255.0;
+const C1: f64 = (K1 * L) * (K1 * L);
+const C2: f64 = (K2 * L) * (K2 * L);
 
-/// Window size for SSIM calculation (standard is 11x11)
 const WINDOW_SIZE: usize = 11;
 
-/// Gaussian weights for 11x11 window (sigma = 1.5)
 fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
     let sigma = 1.5;
     let mut window = [[0.0f64; WINDOW_SIZE]; WINDOW_SIZE];
@@ -37,7 +34,6 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
         }
     }
 
-    // Normalize
     for i in 0..WINDOW_SIZE {
         for j in 0..WINDOW_SIZE {
             window[i][j] /= sum;
@@ -47,10 +43,6 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
     window
 }
 
-/// Calculate PSNR (Peak Signal-to-Noise Ratio) between two images
-/// Uses parallel processing for large images.
-/// Returns PSNR in dB. Higher values indicate better quality.
-/// PSNR > 40dB: Excellent, PSNR 30-40dB: Good, PSNR < 30dB: Poor
 pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -65,7 +57,6 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let orig_pixels: Vec<_> = orig_rgb.pixels().collect();
     let conv_pixels: Vec<_> = conv_rgb.pixels().collect();
 
-    // Parallel MSE calculation using rayon
     let mse_sum: f64 = orig_pixels
         .par_iter()
         .zip(conv_pixels.par_iter())
@@ -81,7 +72,6 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let mse = mse_sum / (3.0 * pixel_count);
 
     if mse < 1e-10 {
-        // Identical images
         return Some(f64::INFINITY);
     }
 
@@ -89,9 +79,6 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
     Some(psnr)
 }
 
-/// Calculate SSIM (Structural Similarity Index) between two images
-/// Uses 11x11 Gaussian window (standard algorithm from Wang et al. 2004)
-/// Returns SSIM between 0.0 and 1.0. 1.0 means identical images.
 pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -106,14 +93,12 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     let width = w1 as usize;
     let height = h1 as usize;
 
-    // For very small images, fall back to simple calculation
     if width < WINDOW_SIZE || height < WINDOW_SIZE {
         return calculate_ssim_simple(original, converted);
     }
 
     let window = get_gaussian_window();
 
-    // Calculate SSIM for each window position in parallel
     let _half_win = WINDOW_SIZE / 2;
     let valid_width = width - WINDOW_SIZE + 1;
     let valid_height = height - WINDOW_SIZE + 1;
@@ -131,7 +116,6 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
     Some(ssim_sum / count)
 }
 
-/// Calculate SSIM for a single window position
 fn calculate_window_ssim(
     orig: &GrayImage,
     conv: &GrayImage,
@@ -145,7 +129,6 @@ fn calculate_window_ssim(
     let mut var_y = 0.0;
     let mut cov_xy = 0.0;
 
-    // Calculate weighted means
     for i in 0..WINDOW_SIZE {
         for j in 0..WINDOW_SIZE {
             let px = x + j;
@@ -158,7 +141,6 @@ fn calculate_window_ssim(
         }
     }
 
-    // Calculate weighted variances and covariance
     for i in 0..WINDOW_SIZE {
         for j in 0..WINDOW_SIZE {
             let px = x + j;
@@ -174,14 +156,12 @@ fn calculate_window_ssim(
         }
     }
 
-    // SSIM formula
     let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
     let denominator = (mean_x * mean_x + mean_y * mean_y + C1) * (var_x + var_y + C2);
 
     numerator / denominator
 }
 
-/// Simple SSIM for small images (fallback)
 fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
@@ -217,8 +197,6 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     Some(numerator / denominator)
 }
 
-/// Calculate MS-SSIM (Multi-Scale SSIM) - more accurate for varying viewing distances
-/// Returns MS-SSIM between 0.0 and 1.0
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
     let weights = [0.0448, 0.2856, 0.3001, 0.2363, 0.1333];
@@ -237,7 +215,6 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
             ms_ssim *= ssim.powf(weights[i]);
         }
 
-        // Downsample for next scale
         if i < scales - 1 {
             orig = orig.resize_exact(w / 2, h / 2, image::imageops::FilterType::Lanczos3);
             conv = conv.resize_exact(w / 2, h / 2, image::imageops::FilterType::Lanczos3);
@@ -247,7 +224,6 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     Some(ms_ssim)
 }
 
-/// Quality assessment description based on PSNR
 pub fn psnr_quality_description(psnr: f64) -> &'static str {
     if psnr.is_infinite() {
         "Identical (lossless)"
@@ -264,7 +240,6 @@ pub fn psnr_quality_description(psnr: f64) -> &'static str {
     }
 }
 
-/// Quality assessment description based on SSIM
 pub fn ssim_quality_description(ssim: f64) -> &'static str {
     if ssim >= 0.999 {
         "Identical"
@@ -317,10 +292,10 @@ mod tests {
 
         let psnr = calculate_psnr(&img1, &img2);
         assert!(psnr.is_some());
-        assert!(psnr.unwrap() < 10.0); // Very different images
+        assert!(psnr.unwrap() < 10.0);
 
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
-        assert!(ssim.unwrap() < 0.1); // Very different images
+        assert!(ssim.unwrap() < 0.1);
     }
 }

@@ -5,17 +5,6 @@
 //! - FFmpeg filter generation
 //! - Video format detection
 
-/// YUV420 色度子采样要求宽度和高度都是偶数
-/// 如果尺寸是奇数，需要裁剪或填充到偶数
-///
-/// 常见错误: "Picture height must be an integer multiple of the specified chroma subsampling"
-///
-/// # Arguments
-/// * `width` - 原始宽度
-/// * `height` - 原始高度
-///
-/// # Returns
-/// * `(corrected_width, corrected_height, needs_correction)` - 修正后的尺寸和是否需要修正
 pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
     let corrected_width = if !width.is_multiple_of(2) {
         width - 1
@@ -32,56 +21,28 @@ pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
     (corrected_width, corrected_height, needs_correction)
 }
 
-/// 生成 FFmpeg 视频滤镜字符串，用于修正奇数尺寸
-///
-/// 使用 crop 滤镜裁剪到偶数尺寸（比 pad 更好，避免添加黑边）
-///
-/// # Arguments
-/// * `width` - 原始宽度
-/// * `height` - 原始高度
-///
-/// # Returns
-/// * `Option<String>` - 如果需要修正，返回滤镜字符串；否则返回 None
 pub fn get_dimension_correction_filter(width: u32, height: u32) -> Option<String> {
     let (corrected_width, corrected_height, needs_correction) =
         ensure_even_dimensions(width, height);
 
     if needs_correction {
-        // 使用 crop 滤镜裁剪到偶数尺寸
-        // crop=w:h:x:y - 从中心裁剪
         Some(format!("crop={}:{}:0:0", corrected_width, corrected_height))
     } else {
         None
     }
 }
 
-/// 生成完整的 FFmpeg 视频滤镜链
-///
-/// 包含:
-/// 1. 尺寸修正（如果需要）
-/// 2. 像素格式转换（yuv420p）
-///
-/// # Arguments
-/// * `width` - 原始宽度
-/// * `height` - 原始高度
-/// * `has_alpha` - 是否有 alpha 通道（如果有，需要先移除）
-///
-/// # Returns
-/// * `String` - 完整的滤镜链
 pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> String {
     let mut filters = Vec::new();
 
-    // 1. 如果有 alpha 通道，先移除（用黑色背景）
     if has_alpha {
         filters.push("format=rgba,colorchannelmixer=aa=1.0,format=rgb24".to_string());
     }
 
-    // 2. 尺寸修正
     if let Some(crop_filter) = get_dimension_correction_filter(width, height) {
         filters.push(crop_filter);
     }
 
-    // 3. 像素格式转换（确保 yuv420p）
     filters.push("format=yuv420p".to_string());
 
     if filters.is_empty() {
@@ -91,22 +52,10 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
     }
 }
 
-/// 检查视频尺寸是否兼容 YUV420 色度子采样
 pub fn is_yuv420_compatible(width: u32, height: u32) -> bool {
     width.is_multiple_of(2) && height.is_multiple_of(2)
 }
 
-/// 获取 FFmpeg 尺寸修正参数
-///
-/// 返回用于 FFmpeg 命令的参数列表
-///
-/// # Arguments
-/// * `width` - 原始宽度
-/// * `height` - 原始高度
-/// * `has_alpha` - 是否有 alpha 通道
-///
-/// # Returns
-/// * `Vec<String>` - FFmpeg 参数列表（如 ["-vf", "crop=..."]）
 pub fn get_ffmpeg_dimension_args(width: u32, height: u32, has_alpha: bool) -> Vec<String> {
     let filter_chain = build_video_filter_chain(width, height, has_alpha);
     vec!["-vf".to_string(), filter_chain]

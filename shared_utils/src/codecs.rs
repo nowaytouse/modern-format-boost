@@ -5,22 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Codec category
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodecCategory {
-    /// Designed for lossless archival
     Archival,
-    /// Production intermediate codec
     Production,
-    /// Delivery/streaming codec
     Delivery,
-    /// Screen recording codec
     ScreenCapture,
-    /// Unknown category
     Unknown,
 }
 
-/// Codec information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodecInfo {
     pub name: String,
@@ -30,10 +23,8 @@ pub struct CodecInfo {
     pub typical_extension: String,
 }
 
-/// Detected video codec enum
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectedCodec {
-    // Lossless/Archival
     FFV1,
     ProRes,
     DNxHD,
@@ -41,14 +32,12 @@ pub enum DetectedCodec {
     UTVideo,
     RawVideo,
 
-    // Modern Delivery (skip conversion)
     H265,
     AV1,
     AV2,
     VP9,
     VVC,
 
-    // Legacy Delivery (convert)
     H264,
     VP8,
     MPEG4,
@@ -56,17 +45,14 @@ pub enum DetectedCodec {
     MPEG1,
     WMV,
 
-    // Animation
     GIF,
     APNG,
     WebPAnim,
 
-    // Unknown
     Unknown(String),
 }
 
 impl DetectedCodec {
-    /// Create from ffprobe codec name
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
             "ffv1" => DetectedCodec::FFV1,
@@ -92,7 +78,6 @@ impl DetectedCodec {
         }
     }
 
-    /// Get human-readable codec name
     pub fn as_str(&self) -> &str {
         match self {
             DetectedCodec::FFV1 => "FFV1",
@@ -119,7 +104,6 @@ impl DetectedCodec {
         }
     }
 
-    /// Check if this is a modern codec (should skip conversion)
     pub fn is_modern(&self) -> bool {
         matches!(
             self,
@@ -131,7 +115,6 @@ impl DetectedCodec {
         )
     }
 
-    /// Check if this is a lossless codec
     pub fn is_lossless(&self) -> bool {
         matches!(
             self,
@@ -142,13 +125,11 @@ impl DetectedCodec {
         )
     }
 
-    /// Check if this is a production codec
     pub fn is_production(&self) -> bool {
         matches!(self, DetectedCodec::ProRes | DetectedCodec::DNxHD)
     }
 }
 
-/// Get codec info by name
 pub fn get_codec_info(codec_name: &str) -> CodecInfo {
     match codec_name.to_lowercase().as_str() {
         "ffv1" => CodecInfo {
@@ -238,54 +219,40 @@ pub fn get_codec_info(codec_name: &str) -> CodecInfo {
     }
 }
 
-// ============================================================
-// 🔬 PRECISION VALIDATION TESTS ("裁判" Tests)
-// ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ============================================================
-    // Codec Detection Tests (裁判机制) — Table-driven
-    // ============================================================
 
     #[test]
     fn test_detected_codec_from_ffprobe() {
         let cases: &[(&str, DetectedCodec)] = &[
-            // H.264 variants
             ("h264", DetectedCodec::H264),
             ("avc", DetectedCodec::H264),
             ("libx264", DetectedCodec::H264),
-            ("H264", DetectedCodec::H264), // case insensitive
-            // HEVC variants
+            ("H264", DetectedCodec::H264),
             ("hevc", DetectedCodec::H265),
             ("h265", DetectedCodec::H265),
             ("libx265", DetectedCodec::H265),
             ("HEVC", DetectedCodec::H265),
-            // AV1 variants
             ("av1", DetectedCodec::AV1),
             ("libaom-av1", DetectedCodec::AV1),
             ("libsvtav1", DetectedCodec::AV1),
-            // VP9 variants
             ("vp9", DetectedCodec::VP9),
             ("libvpx-vp9", DetectedCodec::VP9),
-            // VVC variants
             ("vvc", DetectedCodec::VVC),
             ("h266", DetectedCodec::VVC),
             ("libvvenc", DetectedCodec::VVC),
-            // Lossless codecs
             ("ffv1", DetectedCodec::FFV1),
             ("huffyuv", DetectedCodec::HuffYUV),
             ("ffvhuff", DetectedCodec::HuffYUV),
             ("utvideo", DetectedCodec::UTVideo),
             ("rawvideo", DetectedCodec::RawVideo),
-            // Production codecs
             ("prores", DetectedCodec::ProRes),
             ("prores_ks", DetectedCodec::ProRes),
             ("dnxhd", DetectedCodec::DNxHD),
             ("dnxhr", DetectedCodec::DNxHD),
-            // Legacy codecs
             ("vp8", DetectedCodec::VP8),
             ("libvpx", DetectedCodec::VP8),
             ("mpeg4", DetectedCodec::MPEG4),
@@ -293,12 +260,10 @@ mod tests {
             ("divx", DetectedCodec::MPEG4),
             ("mpeg2video", DetectedCodec::MPEG2),
             ("mpeg1video", DetectedCodec::MPEG1),
-            // WMV variants
             ("wmv1", DetectedCodec::WMV),
             ("wmv2", DetectedCodec::WMV),
             ("wmv3", DetectedCodec::WMV),
             ("vc1", DetectedCodec::WMV),
-            // Animation
             ("gif", DetectedCodec::GIF),
             ("apng", DetectedCodec::APNG),
             ("webp", DetectedCodec::WebPAnim),
@@ -323,13 +288,9 @@ mod tests {
         }
     }
 
-    // ============================================================
-    // Codec Properties Tests (裁判机制) — Table-driven
-    // ============================================================
 
     #[test]
     fn test_codec_properties() {
-        // (codec, is_modern, is_lossless, is_production)
         let cases: &[(DetectedCodec, bool, bool, bool)] = &[
             (DetectedCodec::H265, true, false, false),
             (DetectedCodec::AV1, true, false, false),
@@ -354,9 +315,6 @@ mod tests {
         }
     }
 
-    // ============================================================
-    // Codec Info Tests (裁判机制)
-    // ============================================================
 
     #[test]
     fn test_codec_info_h264() {
@@ -407,14 +365,9 @@ mod tests {
         assert_eq!(info.category, CodecCategory::Unknown);
     }
 
-    // ============================================================
-    // 🔬 Strict Consistency Tests (裁判机制)
-    // ============================================================
 
-    /// Strict test: Codec name display must be human-readable
     #[test]
     fn test_strict_codec_names() {
-        // Names should be human-readable, not internal codec names
         assert_eq!(DetectedCodec::H264.as_str(), "H.264/AVC");
         assert_eq!(DetectedCodec::H265.as_str(), "H.265/HEVC");
         assert_eq!(DetectedCodec::AV1.as_str(), "AV1");

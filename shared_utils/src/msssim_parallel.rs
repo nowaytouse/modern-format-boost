@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
-/// MS-SSIM计算结果
 #[derive(Debug, Clone)]
 pub struct MsssimResult {
     pub y_score: f64,
@@ -29,7 +28,6 @@ pub struct MsssimResult {
 }
 
 impl MsssimResult {
-    /// 创建跳过的结果
     pub fn skipped() -> Self {
         Self {
             y_score: 0.0,
@@ -42,12 +40,10 @@ impl MsssimResult {
         }
     }
 
-    /// 是否跳过了计算
     pub fn is_skipped(&self) -> bool {
         self.sampling_strategy == SamplingStrategy::Skip
     }
 
-    /// 打印性能统计
     pub fn print_stats(&self, elapsed_secs: f64) {
         if self.is_skipped() {
             return;
@@ -62,28 +58,14 @@ impl MsssimResult {
     }
 }
 
-/// 并行MS-SSIM计算器
 pub struct ParallelMsssimCalculator {
-    /// 原始视频路径
     original_path: PathBuf,
-    /// 转换后视频路径
     converted_path: PathBuf,
-    /// 采样配置
     sampling_config: SamplingConfig,
-    /// 进度监控器
     progress_monitor: Arc<MsssimProgressMonitor>,
 }
 
 impl ParallelMsssimCalculator {
-    /// 创建新的并行计算器
-    ///
-    /// # Arguments
-    /// * `original_path` - 原始视频路径
-    /// * `converted_path` - 转换后视频路径
-    /// * `sampling_config` - 采样配置
-    ///
-    /// # Returns
-    /// 并行计算器实例
     pub fn new(
         original_path: PathBuf,
         converted_path: PathBuf,
@@ -102,16 +84,11 @@ impl ParallelMsssimCalculator {
         }
     }
 
-    /// 并行计算MS-SSIM
-    ///
-    /// # Returns
-    /// 成功返回MsssimResult，失败返回AppError
     pub fn calculate(&self) -> Result<MsssimResult, AppError> {
         if self.sampling_config.strategy == SamplingStrategy::Skip {
             return Ok(MsssimResult::skipped());
         }
 
-        // 🔥 v7.9.2: GIF 不支持 MS-SSIM，响亮报错，不静默跳过
         if let Ok(probe) = crate::ffprobe::probe_video(&self.original_path) {
             if probe.format_name.eq_ignore_ascii_case("gif") {
                 eprintln!(
@@ -122,17 +99,12 @@ impl ParallelMsssimCalculator {
                 )));
             }
         } else {
-            // If probe fails (e.g. file missing?), we might fail later or just proceed.
-            // Original logic implicitly proceeded if extension checks failed/absent.
-            // We'll proceed and let ffmpeg handle/fail.
         }
 
         eprintln!("🔄 Calculating MS-SSIM (heartbeat active)");
 
-        // 启动心跳检测
         let heartbeat = Heartbeat::start(30);
 
-        // 创建三个通道的计算任务
         let y_monitor = Arc::clone(&self.progress_monitor);
         let u_monitor = Arc::clone(&self.progress_monitor);
         let v_monitor = Arc::clone(&self.progress_monitor);
@@ -141,7 +113,6 @@ impl ParallelMsssimCalculator {
         let conv_path = self.converted_path.clone();
         let config = self.sampling_config.clone();
 
-        // Y通道线程
         let y_handle = thread::spawn(move || {
             Self::calculate_channel(&orig_path, &conv_path, &config, "Y", y_monitor)
         });
@@ -150,7 +121,6 @@ impl ParallelMsssimCalculator {
         let conv_path = self.converted_path.clone();
         let config = self.sampling_config.clone();
 
-        // U通道线程
         let u_handle = thread::spawn(move || {
             Self::calculate_channel(&orig_path, &conv_path, &config, "U", u_monitor)
         });
@@ -159,12 +129,10 @@ impl ParallelMsssimCalculator {
         let conv_path = self.converted_path.clone();
         let config = self.sampling_config.clone();
 
-        // V通道线程
         let v_handle = thread::spawn(move || {
             Self::calculate_channel(&orig_path, &conv_path, &config, "V", v_monitor)
         });
 
-        // 等待所有线程完成
         let y_result = y_handle.join().map_err(|_| {
             eprintln!("❌ Y channel thread panicked");
             AppError::Other(anyhow::anyhow!("Y channel thread panicked"))
@@ -178,10 +146,8 @@ impl ParallelMsssimCalculator {
             AppError::Other(anyhow::anyhow!("V channel thread panicked"))
         })?;
 
-        // 停止心跳
         heartbeat.stop();
 
-        // 检查错误
         let y_score = y_result?;
         let u_score = u_result?;
         let v_score = v_result?;
@@ -203,17 +169,6 @@ impl ParallelMsssimCalculator {
         })
     }
 
-    /// 计算单个通道的MS-SSIM
-    ///
-    /// # Arguments
-    /// * `original_path` - 原始视频路径
-    /// * `converted_path` - 转换后视频路径
-    /// * `config` - 采样配置
-    /// * `channel` - 通道名称（Y/U/V）
-    /// * `progress_monitor` - 进度监控器
-    ///
-    /// # Returns
-    /// 成功返回通道分数，失败返回AppError
     fn calculate_channel(
         original_path: &Path,
         converted_path: &Path,
@@ -221,7 +176,6 @@ impl ParallelMsssimCalculator {
         channel: &str,
         progress_monitor: Arc<MsssimProgressMonitor>,
     ) -> Result<f64, AppError> {
-        // 构建ffmpeg命令参数
         let original_path_str = original_path.to_string_lossy();
         let converted_path_str = converted_path.to_string_lossy();
         let mut args = vec![
@@ -231,7 +185,6 @@ impl ParallelMsssimCalculator {
             converted_path_str.as_ref(),
         ];
 
-        // 添加select filter（如果需要）
         let filter_str;
         if let Some(filter) = config.strategy.ffmpeg_filter() {
             filter_str = format!("[0:v]{}[v0];[1:v]{}[v1]", filter, filter);
@@ -239,8 +192,6 @@ impl ParallelMsssimCalculator {
             args.push(&filter_str);
         }
 
-        // 🔥 v7.8.1: 改进MS-SSIM fallback机制 - 先尝试MS-SSIM，失败时fallback到SSIM
-        // 添加libvmaf filter计算MS-SSIM
         let lavfi_str = format!("libvmaf=feature=name=ms_ssim:channel={}", channel);
         args.push("-lavfi");
         args.push(&lavfi_str);
@@ -248,27 +199,23 @@ impl ParallelMsssimCalculator {
         args.push("null");
         args.push("-");
 
-        // 执行命令并监控进度
         let ms_ssim_result = progress_monitor
             .monitor_ffmpeg_process(&args, channel)
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
 
         match ms_ssim_result {
             Ok(_) => {
-                // MS-SSIM成功，获取通道分数
                 progress_monitor.get_channel_score(channel).ok_or_else(|| {
                     eprintln!("❌ Failed to get {} channel score", channel);
                     AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
                 })
             }
             Err(_) => {
-                // 🔥 v7.8.1: MS-SSIM失败时fallback到SSIM
                 eprintln!(
                     "⚠️  MS-SSIM failed for channel {}, falling back to SSIM",
                     channel
                 );
 
-                // 构建SSIM fallback命令
                 let mut ssim_args = vec![
                     "-i",
                     original_path_str.as_ref(),
@@ -276,7 +223,6 @@ impl ParallelMsssimCalculator {
                     converted_path_str.as_ref(),
                 ];
 
-                // 添加select filter（如果需要）
                 let ssim_filter_str;
                 if let Some(filter) = config.strategy.ffmpeg_filter() {
                     ssim_filter_str = format!("[0:v]{}[v0];[1:v]{}[v1]", filter, filter);
@@ -284,7 +230,6 @@ impl ParallelMsssimCalculator {
                     ssim_args.push(&ssim_filter_str);
                 }
 
-                // 使用SSIM作为fallback
                 let ssim_lavfi_str = format!("libvmaf=feature=name=ssim:channel={}", channel);
                 ssim_args.push("-lavfi");
                 ssim_args.push(&ssim_lavfi_str);
@@ -292,7 +237,6 @@ impl ParallelMsssimCalculator {
                 ssim_args.push("null");
                 ssim_args.push("-");
 
-                // 执行SSIM fallback
                 progress_monitor
                     .monitor_ffmpeg_process(&ssim_args, channel)
                     .map_err(|e| {
@@ -300,7 +244,6 @@ impl ParallelMsssimCalculator {
                         AppError::Other(anyhow::anyhow!("Both MS-SSIM and SSIM failed: {}", e))
                     })?;
 
-                // 获取SSIM分数
                 progress_monitor.get_channel_score(channel).ok_or_else(|| {
                     eprintln!("❌ Failed to get {} channel SSIM score", channel);
                     AppError::Other(anyhow::anyhow!(
@@ -339,7 +282,6 @@ mod tests {
             total_frames: 3000,
         };
 
-        // 测试打印不会panic
         result.print_stats(30.5);
     }
 
@@ -359,14 +301,11 @@ mod tests {
         );
     }
 
-    // 🔥 属性测试：验证并行计算结果
     #[cfg(test)]
     mod property_tests {
         use super::*;
         use proptest::prelude::*;
 
-        // Property 4: 并行结果输出格式
-        // Validates: Requirements 3.5
         proptest! {
             #[test]
             fn prop_result_combined_score(
@@ -384,13 +323,10 @@ mod tests {
                     total_frames: 1000,
                 };
 
-                // 验证组合分数计算正确
                 let expected = (y + u + v) / 3.0;
                 prop_assert!((result.combined_score - expected).abs() < 1e-10);
             }
 
-            // Property 11: 耗时计算
-            // Validates: Requirements 6.2
             #[test]
             fn prop_elapsed_time_calculation(elapsed in 0.1f64..10000.0f64) {
                 let result = MsssimResult {
@@ -403,12 +339,9 @@ mod tests {
                     total_frames: 1000,
                 };
 
-                // 测试打印不会panic
                 result.print_stats(elapsed);
             }
 
-            // Property 12: 性能统计输出格式
-            // Validates: Requirements 6.3
             #[test]
             fn prop_performance_stats_format(
                 sampled in 1u64..10000u64,
@@ -427,12 +360,9 @@ mod tests {
                     total_frames,
                 };
 
-                // 测试打印不会panic
                 result.print_stats(30.0);
             }
 
-            // Property 13: 加速比计算
-            // Validates: Requirements 6.4, 6.5
             #[test]
             fn prop_speedup_calculation(
                 sampled in 1u64..10000u64,
@@ -443,10 +373,8 @@ mod tests {
 
                 let speedup = total_frames as f64 / sampled_frames.max(1) as f64;
 
-                // 验证加速比 >= 1.0
                 prop_assert!(speedup >= 1.0);
 
-                // 验证加速比 = total / sampled
                 let expected = total_frames as f64 / sampled_frames as f64;
                 prop_assert!((speedup - expected).abs() < 1e-10);
             }

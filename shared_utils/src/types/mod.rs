@@ -13,27 +13,17 @@ pub mod file_size;
 pub mod iteration;
 pub mod ssim;
 
-// Re-exports for convenience
 pub use crf::{Av1Encoder, Crf, CrfError, EncoderBounds, HevcEncoder, Vp9Encoder, X264Encoder};
 pub use file_size::FileSize;
 pub use iteration::{IterationError, IterationGuard};
 pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 
-// ============================================================================
-// Property-Based Tests
-// ============================================================================
 
 #[cfg(test)]
 mod property_tests {
     use super::*;
     use proptest::prelude::*;
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 1: CRF Validation Correctness**
-    // *For any* f32 value, Crf::new should succeed if and only if the value
-    // is within encoder-specific bounds [MIN, MAX].
-    // **Validates: Requirements 1.1, 1.2**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -62,12 +52,6 @@ mod property_tests {
         }
     }
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 2: CRF Cache Key Round-Trip**
-    // *For any* valid Crf value, converting to cache key and back should
-    // produce an approximately equal value (within cache precision).
-    // **Validates: Requirements 1.4**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -77,7 +61,6 @@ mod property_tests {
             let key = original.to_cache_key();
             let recovered = Crf::<HevcEncoder>::from_cache_key(key).unwrap();
 
-            // 缓存键精度为 0.01，所以差异应该 < 0.01
             let diff = (original.value() - recovered.value()).abs();
             prop_assert!(diff < 0.01,
                 "Round-trip failed: {} -> {} -> {}, diff = {}",
@@ -99,12 +82,6 @@ mod property_tests {
         }
     }
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 3: SSIM Validation Correctness**
-    // *For any* f64 value, Ssim::new should succeed if and only if the value
-    // is within [0.0, 1.0].
-    // **Validates: Requirements 2.1, 2.2**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -121,12 +98,6 @@ mod property_tests {
         }
     }
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 4: SSIM Display Precision**
-    // *For any* valid Ssim value, the display string should contain exactly
-    // 6 decimal places.
-    // **Validates: Requirements 2.4**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -135,7 +106,6 @@ mod property_tests {
             let ssim = Ssim::new(value).unwrap();
             let display = ssim.display();
 
-            // 格式应该是 "X.XXXXXX"，小数点后 6 位
             let parts: Vec<&str> = display.split('.').collect();
             prop_assert_eq!(parts.len(), 2, "Display should have decimal point");
             prop_assert_eq!(parts[1].len(), 6,
@@ -145,12 +115,6 @@ mod property_tests {
         }
     }
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 5: FileSize Saturating Arithmetic**
-    // *For any* two FileSize values a and b, a.saturating_sub(b) should return
-    // FileSize(0) when b > a, and a - b otherwise.
-    // **Validates: Requirements 3.1**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -174,12 +138,6 @@ mod property_tests {
         }
     }
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 6: FileSize Compression Ratio Safety**
-    // *For any* FileSize values, compression_ratio should return None for zero
-    // original, and Some(ratio) otherwise where 0.0 <= ratio.
-    // **Validates: Requirements 3.2**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -205,12 +163,6 @@ mod property_tests {
         }
     }
 
-    // ========================================================================
-    // **Feature: rust-type-safety-v7.1, Property 7: IterationGuard Termination**
-    // *For any* IterationGuard, calling increment() more than max times should
-    // return Err(IterationLimitExceeded).
-    // **Validates: Requirements 6.1**
-    // ========================================================================
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -218,7 +170,6 @@ mod property_tests {
         fn iteration_guard_termination_property(max in 1u32..100) {
             let mut guard = IterationGuard::new(max, "test");
 
-            // 前 max 次应该成功
             for i in 1..=max {
                 let result = guard.increment();
                 prop_assert!(result.is_ok(),
@@ -226,7 +177,6 @@ mod property_tests {
                 );
             }
 
-            // 第 max+1 次应该失败
             let result = guard.increment();
             prop_assert!(result.is_err(),
                 "Iteration {} of {} should fail", max + 1, max

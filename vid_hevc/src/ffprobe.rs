@@ -11,7 +11,6 @@ pub use shared_utils::ffprobe::{
 use crate::{Result, VidQualityError};
 use std::path::Path;
 
-/// Probe video file using ffprobe (wrapper with VidQualityError conversion)
 pub fn probe_video(path: &Path) -> Result<FFprobeResult> {
     shared_utils::ffprobe::probe_video(path).map_err(VidQualityError::from)
 }

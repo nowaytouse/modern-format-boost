@@ -8,7 +8,6 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 
-/// FFprobe error types
 #[derive(Debug)]
 pub enum FFprobeError {
     ToolNotFound(String),
@@ -36,7 +35,6 @@ impl From<io::Error> for FFprobeError {
     }
 }
 
-/// FFprobe analysis result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FFprobeResult {
     pub format_name: String,
@@ -55,33 +53,27 @@ pub struct FFprobeResult {
     pub bit_depth: u8,
     pub has_audio: bool,
     pub audio_codec: Option<String>,
-    // 🔥 v6.9.1: 音频质量信息（用于智能转码决策）
-    pub audio_bit_rate: Option<u64>,    // 音频比特率 (bps)
-    pub audio_sample_rate: Option<u32>, // 采样率 (Hz)
-    pub audio_channels: Option<u32>,    // 声道数
-    // Enhanced fields for precise CRF matching
-    pub profile: Option<String>,     // H.264 profile (Baseline/Main/High)
-    pub level: Option<String>,       // H.264 level (3.1, 4.0, etc.)
-    pub has_b_frames: bool,          // Whether B-frames are used
-    pub video_bit_rate: Option<u64>, // Video stream specific bitrate
-    pub refs: Option<u32>,           // Reference frames
+    pub audio_bit_rate: Option<u64>,
+    pub audio_sample_rate: Option<u32>,
+    pub audio_channels: Option<u32>,
+    pub profile: Option<String>,
+    pub level: Option<String>,
+    pub has_b_frames: bool,
+    pub video_bit_rate: Option<u64>,
+    pub refs: Option<u32>,
 }
 
-/// Check if ffprobe is available
 pub fn is_ffprobe_available() -> bool {
     Command::new("ffprobe").arg("-version").output().is_ok()
 }
 
-/// Probe video file using ffprobe
 pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
-    // Check if ffprobe exists
     if !is_ffprobe_available() {
         return Err(FFprobeError::ToolNotFound(
             "ffprobe not found. Install with: brew install ffmpeg".to_string(),
         ));
     }
 
-    // 🔥 检查文件是否存在
     if !path.exists() {
         return Err(FFprobeError::ExecutionFailed(format!(
             "File not found: {}",
@@ -89,7 +81,6 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         )));
     }
 
-    // 🔥 检查是否是文件（不是目录）
     if !path.is_file() {
         return Err(FFprobeError::ExecutionFailed(format!(
             "Not a file (is it a directory?): {}",
@@ -104,12 +95,12 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let output = Command::new("ffprobe")
         .args([
             "-v",
-            "error", // 🔥 改为 error 级别以获取错误信息
+            "error",
             "-print_format",
             "json",
             "-show_format",
             "-show_streams",
-            "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            "--",
             path_str,
         ])
         .output()?;
@@ -132,7 +123,6 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let json: serde_json::Value =
         serde_json::from_str(&json_str).map_err(|e| FFprobeError::ParseError(e.to_string()))?;
 
-    // Extract format info
     let format = &json["format"];
     let format_name = format["format_name"]
         .as_str()
@@ -151,7 +141,6 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
 
-    // Find video stream
     let streams = json["streams"]
         .as_array()
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
@@ -172,10 +161,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let width = video_stream["width"].as_u64().unwrap_or(0) as u32;
     let height = video_stream["height"].as_u64().unwrap_or(0) as u32;
 
-    // Parse frame rate (e.g., "30/1" or "29.97")
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"));
 
-    // Get frame count
     let frame_count = video_stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
@@ -190,10 +177,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .map(|s| s.to_string());
 
-    // Determine bit depth from pixel format
     let bit_depth = detect_bit_depth(&pix_fmt);
 
-    // Enhanced fields for precise CRF matching
     let profile = video_stream["profile"].as_str().map(|s| s.to_string());
     let level = video_stream["level"]
         .as_u64()
@@ -204,7 +189,6 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .and_then(|s| s.parse::<u64>().ok());
     let refs = video_stream["refs"].as_u64().map(|r| r as u32);
 
-    // Check for audio and extract audio quality info
     let audio_stream = streams
         .iter()
         .find(|s| s["codec_type"].as_str() == Some("audio"));
@@ -212,7 +196,6 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let audio_codec = audio_stream
         .and_then(|s| s["codec_name"].as_str())
         .map(|s| s.to_string());
-    // 🔥 v6.9.1: 提取音频质量信息
     let audio_bit_rate = audio_stream
         .and_then(|s| s["bit_rate"].as_str())
         .and_then(|s| s.parse::<u64>().ok());
@@ -251,8 +234,6 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     })
 }
 
-/// Get animation/video duration in seconds
-/// Works for both video files and animated images (GIF, WebP, APNG)
 pub fn get_duration(path: &Path) -> Option<f64> {
     let output = Command::new("ffprobe")
         .args([
@@ -262,7 +243,7 @@ pub fn get_duration(path: &Path) -> Option<f64> {
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            "--",
             path.to_str()?,
         ])
         .output()
@@ -278,7 +259,6 @@ pub fn get_duration(path: &Path) -> Option<f64> {
     }
 }
 
-/// Get frame count for video/animation
 pub fn get_frame_count(path: &Path) -> Option<u64> {
     let output = Command::new("ffprobe")
         .args([
@@ -291,7 +271,7 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
             "stream=nb_read_frames",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            "--", // 🔥 v7.9: 防止 dash-prefix 文件名被解析为参数
+            "--",
             path.to_str()?,
         ])
         .output()
@@ -307,14 +287,8 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     }
 }
 
-/// Standard fallback frame rate (24 fps) when parsing fails.
-/// Prevents downstream divide-by-zero when frame_rate is used as a divisor.
 const FALLBACK_FRAME_RATE: f64 = 24.0;
 
-/// Parse frame rate string (e.g., "30/1" or "29.97")
-///
-/// Returns `FALLBACK_FRAME_RATE` (24.0) instead of 0.0 when parsing fails,
-/// preventing divide-by-zero in downstream calculations.
 pub fn parse_frame_rate(s: &str) -> f64 {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
@@ -340,32 +314,19 @@ pub fn parse_frame_rate(s: &str) -> f64 {
     }
 }
 
-/// Detect bit depth from pixel format
-///
-/// Supports common pixel formats:
-/// - 8-bit: yuv420p, yuv422p, yuv444p, rgb24, nv12, etc.
-/// - 10-bit: yuv420p10le, p010, etc.
-/// - 12-bit: yuv420p12le, etc.
-/// - 16-bit: yuv420p16le, rgb48le, etc.
 pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
-    // Check for explicit bit depth markers
-    // Order matters: check higher bit depths first to avoid false matches
 
-    // 16-bit formats
     if pix_fmt.contains("16le") || pix_fmt.contains("16be") ||
-       pix_fmt.contains("48le") || pix_fmt.contains("48be") ||  // rgb48, bgr48
+       pix_fmt.contains("48le") || pix_fmt.contains("48be") ||
        pix_fmt.contains("64le") || pix_fmt.contains("64be")
     {
-        // rgba64
         return 16;
     }
 
-    // 12-bit formats
     if pix_fmt.contains("12le") || pix_fmt.contains("12be") {
         return 12;
     }
 
-    // 10-bit formats
     if pix_fmt.contains("10le")
         || pix_fmt.contains("10be")
         || pix_fmt.contains("p010")
@@ -375,39 +336,28 @@ pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
         return 10;
     }
 
-    // Default to 8-bit
     8
 }
 
-// ============================================================
-// 🔬 PRECISION VALIDATION TESTS ("裁判" Tests)
-// ============================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // ============================================================
-    // Frame Rate Parsing Tests — Table-driven
-    // ============================================================
 
     #[test]
     fn test_parse_frame_rate() {
         let cases: &[(&str, f64, f64)] = &[
-            // Standard fractions
             ("30/1", 30.0, 0.001),
             ("24/1", 24.0, 0.001),
             ("60/1", 60.0, 0.001),
             ("25/1", 25.0, 0.001),
-            // NTSC (strict precision)
             ("30000/1001", 30000.0 / 1001.0, 0.0001),
             ("24000/1001", 24000.0 / 1001.0, 0.0001),
             ("60000/1001", 60000.0 / 1001.0, 0.0001),
-            // Decimal values
             ("24", 24.0, 0.001),
             ("29.97", 29.97, 0.01),
             ("59.94", 59.94, 0.01),
-            // High frame rates
             ("120/1", 120.0, 0.001),
             ("240/1", 240.0, 0.001),
             ("144/1", 144.0, 0.001),
@@ -425,32 +375,23 @@ mod tests {
 
     #[test]
     fn test_parse_frame_rate_edge_cases() {
-        // Zero denominator, invalid, empty → fallback
         assert_eq!(parse_frame_rate("30/0"), FALLBACK_FRAME_RATE);
         assert_eq!(parse_frame_rate("invalid"), FALLBACK_FRAME_RATE);
         assert_eq!(parse_frame_rate(""), FALLBACK_FRAME_RATE);
         assert_eq!(parse_frame_rate("30/1/extra"), FALLBACK_FRAME_RATE);
     }
 
-    // ============================================================
-    // Bit Depth Detection Tests — Table-driven
-    // ============================================================
 
     #[test]
     fn test_detect_bit_depth() {
         let cases: &[(&str, u8)] = &[
-            // 8-bit
             ("yuv420p", 8), ("yuv422p", 8), ("yuv444p", 8),
             ("rgb24", 8), ("bgr24", 8), ("nv12", 8), ("yuvj420p", 8),
-            // 10-bit
             ("yuv420p10le", 10), ("yuv420p10be", 10), ("yuv422p10le", 10),
             ("yuv444p10le", 10), ("p010le", 10), ("p010", 10),
-            // 12-bit
             ("yuv420p12le", 12), ("yuv420p12be", 12),
             ("yuv422p12le", 12), ("yuv444p12le", 12),
-            // 16-bit
             ("yuv420p16le", 16), ("yuv420p16be", 16), ("rgb48le", 16),
-            // Unknown → 8
             ("unknown", 8), ("", 8), ("custom_format", 8),
         ];
 

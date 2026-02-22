@@ -4,7 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// PSNR→SSIM 映射数据点
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappingPoint {
     pub psnr: f64,
@@ -12,18 +11,13 @@ pub struct MappingPoint {
 }
 
 impl MappingPoint {
-    // ═══════════════════════════════════════════════════════════════
-    // 🔥 v7.1: 类型安全辅助方法
-    // ═══════════════════════════════════════════════════════════════
 
-    /// 获取类型安全的 SSIM 值
     #[inline]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
     }
 }
 
-/// PSNR→SSIM 动态映射表
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PsnrSsimMapping {
     points: Vec<MappingPoint>,
@@ -34,9 +28,7 @@ impl PsnrSsimMapping {
         Self { points: Vec::new() }
     }
 
-    /// 插入新的映射点
     pub fn insert(&mut self, psnr: f64, ssim: f64) {
-        // 按 PSNR 排序插入
         let point = MappingPoint { psnr, ssim };
         let pos = self
             .points
@@ -46,36 +38,28 @@ impl PsnrSsimMapping {
         self.points.insert(pos, point);
     }
 
-    /// 是否有足够的数据点进行预测 (>=3)
     pub fn has_enough_points(&self) -> bool {
         self.points.len() >= 3
     }
 
-    /// 获取数据点数量
     pub fn len(&self) -> usize {
         self.points.len()
     }
 
-    /// 是否为空
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 
-    /// 使用线性插值预测 SSIM（类型安全版本）
-    ///
-    /// 🔥 v7.1: 返回 Option<Ssim> 确保值在有效范围内
     pub fn predict_ssim_typed(&self, psnr: f64) -> Option<crate::types::Ssim> {
         self.predict_ssim(psnr)
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
-    /// 使用线性插值预测 SSIM
     pub fn predict_ssim(&self, psnr: f64) -> Option<f64> {
         if self.points.len() < 2 {
             return None;
         }
 
-        // 找到 psnr 所在的区间
         let mut lower = None;
         let mut upper = None;
 
@@ -89,16 +73,13 @@ impl PsnrSsimMapping {
         }
 
         match (lower, upper) {
-            // 精确匹配
             (Some(l), Some(u)) if l == u => Some(self.points[l].ssim),
-            // 在两点之间，线性插值
             (Some(l), Some(u)) => {
                 let p1 = &self.points[l];
                 let p2 = &self.points[u];
                 let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
                 Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
             }
-            // 外推（使用最近的两点）
             (Some(_), None) => {
                 let n = self.points.len();
                 if n >= 2 {
@@ -124,9 +105,7 @@ impl PsnrSsimMapping {
         }
     }
 
-    /// 更新映射点（校正预测误差）
     pub fn update(&mut self, psnr: f64, actual_ssim: f64) {
-        // 查找是否已存在相近的点
         const PSNR_TOLERANCE: f64 = 0.5;
         if let Some(point) = self
             .points
@@ -139,7 +118,6 @@ impl PsnrSsimMapping {
         }
     }
 
-    /// 获取所有数据点（用于调试）
     pub fn get_points(&self) -> &[MappingPoint] {
         &self.points
     }
@@ -158,10 +136,8 @@ mod tests {
 
         assert!(mapping.has_enough_points());
 
-        // 精确匹配
         assert!((mapping.predict_ssim(40.0).unwrap() - 0.95).abs() < 0.001);
 
-        // 线性插值
         let predicted = mapping.predict_ssim(35.0).unwrap();
         assert!((predicted - 0.925).abs() < 0.001);
     }
@@ -173,7 +149,6 @@ mod tests {
         mapping.insert(40.0, 0.95);
 
         assert!(!mapping.has_enough_points());
-        // 仍然可以预测（2点）
         assert!(mapping.predict_ssim(35.0).is_some());
     }
 
@@ -181,7 +156,7 @@ mod tests {
     fn test_update() {
         let mut mapping = PsnrSsimMapping::new();
         mapping.insert(30.0, 0.90);
-        mapping.update(30.2, 0.91); // 应该更新现有点
+        mapping.update(30.2, 0.91);
 
         assert_eq!(mapping.len(), 1);
         assert!((mapping.get_points()[0].ssim - 0.91).abs() < 0.001);
@@ -193,8 +168,6 @@ mod prop_tests {
     use super::*;
     use proptest::prelude::*;
 
-    // **Feature: video-explorer-transparency-v5.74, Property 3: 线性插值正确性**
-    // **Validates: Requirements 1.3**
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -213,19 +186,15 @@ mod prop_tests {
             mapping.insert(p2_psnr, p2_ssim);
             mapping.insert(p3_psnr, p3_ssim);
 
-            // 在 p1 和 p2 之间查询
             let query_psnr = p1_psnr + query_ratio * (p2_psnr - p1_psnr);
             let predicted = mapping.predict_ssim(query_psnr).unwrap();
 
-            // 验证线性插值：predicted = p1_ssim + ratio * (p2_ssim - p1_ssim)
             let expected = p1_ssim + query_ratio * (p2_ssim - p1_ssim);
             prop_assert!((predicted - expected).abs() < 0.0001,
                 "Interpolation error: predicted={}, expected={}", predicted, expected);
         }
     }
 
-    // **Feature: video-explorer-transparency-v5.74, Property 4: 映射表校正**
-    // **Validates: Requirements 1.5**
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
 
@@ -238,10 +207,8 @@ mod prop_tests {
             let mut mapping = PsnrSsimMapping::new();
             mapping.insert(psnr, initial_ssim);
 
-            // 校正映射
             mapping.update(psnr + 0.1, actual_ssim);
 
-            // 验证映射被更新
             let points = mapping.get_points();
             prop_assert_eq!(points.len(), 1, "Should update existing point");
             prop_assert!((points[0].ssim - actual_ssim).abs() < 0.001,
