@@ -451,7 +451,7 @@ _main() {
 
     # 🩹 Brotli EXIF Fix Only Mode - Skip normal processing
     if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
-        "$SCRIPT_DIR/fix_brotli_exif.sh" "$TARGET_DIR"
+        "$SCRIPT_DIR/repair_apple_photos.sh" "$TARGET_DIR"
 
         echo ""
         echo -e "${GREEN}✅ Brotli EXIF Fix Completed${RESET}"
