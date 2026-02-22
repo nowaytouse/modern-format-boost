@@ -6,40 +6,28 @@
 use std::fmt;
 use std::path::Path;
 
-/// Dangerous shell metacharacters that could enable command injection
-/// 危险的 shell 元字符，可能导致命令注入
 const DANGEROUS_CHARS: &[char] = &[
-    ';',  // Command separator
-    '|',  // Pipe
-    '&',  // Background/AND
-    '$',  // Variable expansion
-    '`',  // Command substitution
-    '(',  // Subshell
-    ')',  // Subshell
-    '{',  // Brace expansion
-    '}',  // Brace expansion
-    '<',  // Input redirection
-    '>',  // Output redirection
-    '\n', // Newline (command separator)
-    '\r', // Carriage return
-    '\0', // Null byte
+    ';',
+    '|',
+    '&',
+    '$',
+    '`',
+    '(',
+    ')',
+    '{',
+    '}',
+    '<',
+    '>',
+    '\n',
+    '\r',
+    '\0',
 ];
 
-/// Path validation error
-/// 路径验证错误
 #[derive(Debug, Clone)]
 pub enum PathValidationError {
-    /// Path contains a dangerous character
-    /// 路径包含危险字符
     DangerousCharacter { character: char, path: String },
-    /// Path is empty
-    /// 路径为空
     EmptyPath,
-    /// Path contains null byte
-    /// 路径包含空字节
     NullByte(String),
-    /// Input and output paths are the same
-    /// 输入和输出路径相同
     InputOutputConflict { path: String },
 }
 
@@ -76,11 +64,7 @@ impl fmt::Display for PathValidationError {
 
 impl std::error::Error for PathValidationError {}
 
-// ═══════════════════════════════════════════════════════════════
-// 🔥 v6.5: 安全路径转换 (避免 unwrap panic)
-// ═══════════════════════════════════════════════════════════════
 
-/// 路径转换错误
 #[derive(Debug, Clone)]
 pub struct PathConversionError {
     pub path_display: String,
@@ -99,8 +83,6 @@ impl fmt::Display for PathConversionError {
 
 impl std::error::Error for PathConversionError {}
 
-/// 安全地将 Path 转换为 &str，失败时返回 Result
-/// 🔥 v6.5: 替代 path.to_str().unwrap() 避免 panic
 pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
     path.to_str().ok_or_else(|| {
         let err = PathConversionError {
@@ -112,48 +94,22 @@ pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
     })
 }
 
-/// 安全地将 Path 转换为 String，使用 lossy 转换
-/// 🔥 v6.5: 非 UTF-8 字符会被替换为 U+FFFD
 pub fn path_to_string_lossy(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-/// 安全地将 Path 转换为 String，失败时返回 Result
 pub fn path_to_string_safe(path: &Path) -> Result<String, PathConversionError> {
     path_to_str_safe(path).map(|s| s.to_string())
 }
 
-/// Validate a path for safety before using in shell commands
-/// 在 shell 命令中使用前验证路径安全性
-///
-/// # Arguments
-/// * `path` - The path to validate
-///
-/// # Returns
-/// * `Ok(())` if the path is safe
-/// * `Err(PathValidationError)` if the path contains dangerous characters
-///
-/// # Example
-/// ```
-/// use shared_utils::path_validator::validate_path;
-/// use std::path::Path;
-///
-/// let safe_path = Path::new("/home/user/video.mp4");
-/// assert!(validate_path(safe_path).is_ok());
-///
-/// let dangerous_path = Path::new("/home/user/; rm -rf /");
-/// assert!(validate_path(dangerous_path).is_err());
-/// ```
 pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     let path_str = path.to_string_lossy();
 
-    // Check for empty path
     if path_str.is_empty() {
         eprintln!("⚠️ PATH VALIDATION FAILED: Empty path");
         return Err(PathValidationError::EmptyPath);
     }
 
-    // Check for dangerous characters
     for &c in DANGEROUS_CHARS {
         if path_str.contains(c) {
             eprintln!(
@@ -170,8 +126,6 @@ pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     Ok(())
 }
 
-/// Validate multiple paths at once
-/// 一次验证多个路径
 pub fn validate_paths(paths: &[&Path]) -> Result<(), PathValidationError> {
     for path in paths {
         validate_path(path)?;
@@ -179,18 +133,14 @@ pub fn validate_paths(paths: &[&Path]) -> Result<(), PathValidationError> {
     Ok(())
 }
 
-/// Check if input and output paths conflict (are the same file)
-/// 检查输入和输出路径是否冲突（是否为同一文件）
 pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), PathValidationError> {
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
 
-    // 如果输出路径存在，获取规范路径；否则使用原始路径（尽力而为）
     let output_canonical = if output.exists() {
         output
             .canonicalize()
             .unwrap_or_else(|_| output.to_path_buf())
     } else {
-        // 尝试解析绝对路径即使文件不存在
         if output.is_relative() {
             std::env::current_dir().unwrap_or_default().join(output)
         } else {
@@ -207,9 +157,6 @@ pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), Pa
     Ok(())
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -335,7 +282,6 @@ mod tests {
         assert!(msg.contains(";"));
     }
 
-    // Property test: all dangerous chars are detected
     #[test]
     fn test_all_dangerous_chars_detected() {
         for &c in DANGEROUS_CHARS {

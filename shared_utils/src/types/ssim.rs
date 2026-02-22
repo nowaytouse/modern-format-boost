@@ -4,28 +4,18 @@
 
 use std::fmt;
 
-// 从 float_compare 导入统一的 SSIM epsilon（单一来源）
 pub use crate::float_compare::SSIM_EPSILON;
 
-/// SSIM 最小值
 pub const SSIM_MIN: f64 = 0.0;
 
-/// SSIM 最大值
 pub const SSIM_MAX: f64 = 1.0;
 
-/// SSIM 显示精度（小数位数）
 pub const SSIM_DISPLAY_PRECISION: usize = 6;
 
-// ============================================================================
-// SsimError
-// ============================================================================
 
-/// SSIM 错误类型
 #[derive(Debug, Clone, PartialEq)]
 pub enum SsimError {
-    /// SSIM 值超出有效范围 [0.0, 1.0]
     OutOfRange { value: f64 },
-    /// NaN 或 Inf 值
     InvalidFloat,
 }
 
@@ -44,52 +34,20 @@ impl fmt::Display for SsimError {
 
 impl std::error::Error for SsimError {}
 
-// ============================================================================
-// Ssim Newtype
-// ============================================================================
 
-/// 类型安全的 SSIM 值
-///
-/// SSIM (Structural Similarity Index) 范围为 [0.0, 1.0]，
-/// 其中 1.0 表示完全相同，0.0 表示完全不同。
-///
-/// # Examples
-/// ```
-/// use shared_utils::types::ssim::Ssim;
-///
-/// let ssim = Ssim::new(0.95).unwrap();
-/// assert_eq!(ssim.value(), 0.95);
-/// assert_eq!(ssim.display(), "0.950000");
-///
-/// // 超出范围会返回错误
-/// assert!(Ssim::new(1.5).is_err());
-/// assert!(Ssim::new(-0.1).is_err());
-/// ```
 #[derive(Clone, Copy)]
 pub struct Ssim(f64);
 
 impl Ssim {
-    /// 完美 SSIM（完全相同）
     pub const PERFECT: Ssim = Ssim(1.0);
 
-    /// 零 SSIM（完全不同）
     pub const ZERO: Ssim = Ssim(0.0);
 
-    /// 创建 SSIM 值，验证范围
-    ///
-    /// # Arguments
-    /// * `value` - SSIM 值
-    ///
-    /// # Returns
-    /// * `Ok(Ssim)` - 如果值在 [0.0, 1.0] 范围内
-    /// * `Err(SsimError)` - 如果值超出范围或为 NaN/Inf
     pub fn new(value: f64) -> Result<Self, SsimError> {
-        // 检查 NaN 和 Inf
         if value.is_nan() || value.is_infinite() {
             return Err(SsimError::InvalidFloat);
         }
 
-        // 检查范围
         if !(SSIM_MIN..=SSIM_MAX).contains(&value) {
             return Err(SsimError::OutOfRange { value });
         }
@@ -97,34 +55,25 @@ impl Ssim {
         Ok(Self(value))
     }
 
-    /// 获取原始 SSIM 值
     #[inline]
     pub fn value(&self) -> f64 {
         self.0
     }
 
-    /// 近似相等比较
-    ///
-    /// 使用 SSIM_EPSILON 进行比较，处理浮点精度问题。
     #[inline]
     pub fn approx_eq(&self, other: &Self) -> bool {
         (self.0 - other.0).abs() < SSIM_EPSILON
     }
 
-    /// 格式化显示（6 位小数）
     pub fn display(&self) -> String {
         format!("{:.6}", self.0)
     }
 
-    /// 检查是否达到阈值
-    ///
-    /// 使用 SSIM_EPSILON 进行容差比较。
     #[inline]
     pub fn meets_threshold(&self, threshold: f64) -> bool {
         self.0 >= threshold - SSIM_EPSILON
     }
 
-    /// 钳制到有效范围（不返回错误）
     pub fn clamped(value: f64) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
             0.0
@@ -134,12 +83,10 @@ impl Ssim {
         Self(clamped)
     }
 
-    /// 转换为百分比字符串
     pub fn as_percent(&self) -> String {
         format!("{:.2}%", self.0 * 100.0)
     }
 
-    /// 获取质量描述
     pub fn quality_description(&self) -> &'static str {
         if self.0 >= 0.99 {
             "Excellent (visually lossless)"
@@ -155,9 +102,6 @@ impl Ssim {
     }
 }
 
-// ============================================================================
-// Trait Implementations
-// ============================================================================
 
 impl fmt::Debug for Ssim {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -183,9 +127,6 @@ impl PartialOrd for Ssim {
     }
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -218,9 +159,8 @@ mod tests {
     fn test_ssim_display_precision() {
         let ssim = Ssim::new(0.123456789).unwrap();
         let display = ssim.display();
-        // 应该有 6 位小数
-        assert_eq!(display, "0.123457"); // 四舍五入
-        assert_eq!(display.len(), 8); // "0." + 6 digits
+        assert_eq!(display, "0.123457");
+        assert_eq!(display.len(), 8);
     }
 
     #[test]

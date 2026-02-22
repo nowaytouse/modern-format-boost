@@ -11,16 +11,11 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-// Re-export shared_utils helpers used by this module
 use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
 
-// ═══════════════════════════════════════════════════════════════
-// Helper functions
-// ═══════════════════════════════════════════════════════════════
 
-/// Wrapper for shared_utils::determine_output_path with vid_hevc error type
 fn get_output_path(
     input: &Path,
     extension: &str,
@@ -35,7 +30,6 @@ fn get_output_path(
     }
 }
 
-/// Copy original file to output directory when conversion is skipped
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
     shared_utils::copy_on_skip_or_fail(
         input,
@@ -46,21 +40,17 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
     .unwrap_or_default()
 }
 
-/// Get input file dimensions (width, height) using ffprobe → image crate → ImageMagick fallback
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    // Primary: ffprobe (for videos and animations)
     if let Ok(probe) = shared_utils::probe_video(input) {
         if probe.width > 0 && probe.height > 0 {
             return Ok((probe.width, probe.height));
         }
     }
 
-    // Fallback: image crate (for static images)
     if let Ok((w, h)) = image::image_dimensions(input) {
         return Ok((w, h));
     }
 
-    // Last resort: ImageMagick identify
     {
         let safe_path = shared_utils::safe_path_arg(input);
         let output = Command::new("magick")
@@ -99,7 +89,6 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
     )))
 }
 
-/// Calculate max threads for encoding
 fn get_max_threads(options: &ConvertOptions) -> usize {
     if options.child_threads > 0 {
         options.child_threads
@@ -108,21 +97,12 @@ fn get_max_threads(options: &ConvertOptions) -> usize {
     }
 }
 
-/// Check if animated image is "high quality" (should convert to video rather than GIF)
-///
-/// High quality criteria (any one):
-/// - Width >= 1280 or Height >= 720
-/// - Total pixels >= 921600 (1280*720)
 pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
     let total_pixels = width as u64 * height as u64;
     width >= 1280 || height >= 720 || total_pixels >= 921600
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Conversion functions
-// ═══════════════════════════════════════════════════════════════
 
-/// Helper: build a "skipped: already processed" result
 fn skipped_already_processed(input: &Path) -> ConversionResult {
     ConversionResult {
         success: true,
@@ -137,7 +117,6 @@ fn skipped_already_processed(input: &Path) -> ConversionResult {
     }
 }
 
-/// Helper: build a "skipped: output exists" result
 fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> ConversionResult {
     ConversionResult {
         success: true,
@@ -152,9 +131,6 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
     }
 }
 
-/// Convert animated lossless to HEVC MP4/MOV (CRF 0 visually lossless)
-///
-/// Apple compat mode uses MOV container format.
 pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
@@ -208,7 +184,6 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             if options.should_delete_original()
                 && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
             {
-                // Already handled
             }
 
             let reduction_pct = reduction * 100.0;
@@ -235,7 +210,6 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            // Clean up partial output file on FFmpeg failure
             if output.exists() {
                 let _ = fs::remove_file(&output);
             }
@@ -245,7 +219,6 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             )))
         }
         Err(e) => {
-            // Clean up partial output file on FFmpeg failure
             if output.exists() {
                 let _ = fs::remove_file(&output);
             }
@@ -257,12 +230,6 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 }
 
-/// Convert animated to HEVC MP4/MOV with quality-matched CRF (binary search + SSIM validation)
-///
-/// Unlike `convert_to_hevc_mp4`, this takes a pre-calculated `initial_crf` and `has_alpha`
-/// so that the caller (img_hevc) handles image analysis while vid_hevc handles encoding.
-///
-/// Exploration mode is determined by `options.explore` and `options.match_quality`.
 pub fn convert_to_hevc_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -330,7 +297,6 @@ pub fn convert_to_hevc_mp4_matched(
         eprintln!("{}", log);
     }
 
-    // Size tolerance check
     let tolerance_ratio = if options.allow_size_tolerance {
         1.01
     } else {
@@ -376,7 +342,6 @@ pub fn convert_to_hevc_mp4_matched(
         });
     }
 
-    // Quality validation
     if !explore_result.quality_passed {
         let actual_ssim = explore_result.ssim.unwrap_or(0.0);
         let threshold = explore_result.actual_min_ssim;
@@ -447,7 +412,6 @@ pub fn convert_to_hevc_mp4_matched(
     if options.should_delete_original()
         && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
     {
-        // Already handled
     }
 
     let reduction_pct = -explore_result.size_change_pct;
@@ -480,7 +444,6 @@ pub fn convert_to_hevc_mp4_matched(
     })
 }
 
-/// Convert animated to HEVC MKV using mathematical lossless (slow, large files)
 pub fn convert_to_hevc_mkv_lossless(
     input: &Path,
     options: &ConvertOptions,
@@ -538,7 +501,6 @@ pub fn convert_to_hevc_mkv_lossless(
             if options.should_delete_original()
                 && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
             {
-                // Already handled
             }
 
             let reduction_pct = reduction * 100.0;
@@ -582,10 +544,6 @@ pub fn convert_to_hevc_mkv_lossless(
     }
 }
 
-/// Convert modern animated images to GIF for Apple compatibility
-///
-/// Uses two-step palette generation (256 colors, Bayer dithering).
-/// Skips if input is already GIF. Rolls back if output is larger.
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,
@@ -642,10 +600,8 @@ pub fn convert_to_gif_apple_compat(
     let (width, height) = get_input_dimensions(input)?;
     let fps_val = fps.unwrap_or(10.0);
 
-    // Step 1: Generate palette
     let palette_path = output.with_extension("palette.png");
 
-    // RAII guard: ensure palette temp file is cleaned up on any exit path
     struct PaletteGuard<'a> {
         path: &'a Path,
     }
@@ -679,7 +635,6 @@ pub fn convert_to_gif_apple_compat(
         )));
     }
 
-    // Step 2: Apply palette with Bayer dithering
     let result = Command::new("ffmpeg")
         .arg("-y")
         .arg("-i")
@@ -694,7 +649,6 @@ pub fn convert_to_gif_apple_compat(
         .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
-    // Palette cleanup is handled by _palette_guard (RAII)
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {

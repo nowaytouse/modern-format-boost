@@ -5,7 +5,6 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 
-/// FFprobe 视频流信息
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct FfprobeStream {
     #[serde(default)]
@@ -16,14 +15,12 @@ pub struct FfprobeStream {
     pub bits_per_raw_sample: Option<String>,
 }
 
-/// FFprobe 输出结构
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct FfprobeOutput {
     #[serde(default)]
     pub streams: Vec<FfprobeStream>,
 }
 
-/// 色彩信息结果
 #[derive(Debug, Clone, Default)]
 pub struct ColorInfo {
     pub color_space: Option<String>,
@@ -31,7 +28,6 @@ pub struct ColorInfo {
     pub bit_depth: Option<u8>,
 }
 
-/// 🔥 v6.5: 使用 serde_json 解析 ffprobe 输出
 pub fn extract_color_info(input: &Path) -> ColorInfo {
     let input_str = input.to_string_lossy();
 
@@ -67,7 +63,6 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         }
     };
 
-    // 🔥 使用 serde_json 解析
     let parsed: FfprobeOutput = match serde_json::from_str(&json_str) {
         Ok(p) => p,
         Err(e) => {
@@ -133,9 +128,6 @@ mod prop_tests {
     use proptest::prelude::*;
 
     proptest! {
-        /// **Property 5: JSON 解析健壮性**
-        /// *对于任意*有效的 color_space/pix_fmt，解析应正确提取
-        /// **Validates: Requirements 4.2, 4.3**
         #[test]
         fn prop_json_parse_roundtrip(
             cs in "[a-z0-9]{1,10}",
@@ -153,11 +145,9 @@ mod prop_tests {
             prop_assert_eq!(p.streams[0].pix_fmt.clone(), Some(pf));
         }
 
-        /// **Property 5b: 空/无效 JSON 不崩溃**
         #[test]
         fn prop_invalid_json_no_panic(s in ".*") {
             let _ = serde_json::from_str::<FfprobeOutput>(&s);
-            // 只要不 panic 就通过
         }
     }
 }

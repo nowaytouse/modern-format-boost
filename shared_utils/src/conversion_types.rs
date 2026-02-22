@@ -1,18 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Target video format
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetVideoFormat {
-    /// FFV1 in MKV container - for archival
     Ffv1Mkv,
-    /// AV1 in MP4 container - for compression
     Av1Mp4,
-    /// HEVC Lossless in MKV container - for archival
     HevcLosslessMkv,
-    /// HEVC in MP4 container - for compression
     HevcMp4,
-    /// Skip conversion (already modern/efficient)
     Skip,
 }
 
@@ -36,65 +30,43 @@ impl TargetVideoFormat {
     }
 }
 
-/// Conversion strategy result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionStrategy {
     pub target: TargetVideoFormat,
     pub reason: String,
     pub command: String,
     pub preserve_audio: bool,
-    /// CRF value (unified to f32 to support both u8 and f32 use cases)
     pub crf: f32,
     pub lossless: bool,
 }
 
-/// Unified Conversion Configuration
 #[derive(Debug, Clone)]
 pub struct ConversionConfig {
     pub output_dir: Option<PathBuf>,
-    /// Base directory for preserving directory structure
     pub base_dir: Option<PathBuf>,
     pub force: bool,
     pub delete_original: bool,
     pub preserve_metadata: bool,
-    /// Enable size exploration (try higher CRF if output > input)
     pub explore_smaller: bool,
-    /// Use mathematical lossless mode
     pub use_lossless: bool,
-    /// Match input video quality level
     pub match_quality: bool,
-    /// In-place conversion: convert and delete original file
     pub in_place: bool,
-    /// Minimum SSIM threshold for quality validation
     pub min_ssim: f64,
-    /// Enable VMAF validation (slower but more accurate)
     pub validate_ms_ssim: bool,
-    /// Minimum VMAF/MS-SSIM threshold
     pub min_ms_ssim: f64,
-    /// Require compression - output must be smaller than input
     pub require_compression: bool,
-    /// Apple compatibility mode
     pub apple_compat: bool,
-    /// Use GPU acceleration
     pub use_gpu: bool,
 
-    // HEVC specific flags (optional or defaulted for others)
     pub force_ms_ssim_long: bool,
     pub ultimate_mode: bool,
 
-    // 🔥 v7.6: MS-SSIM优化配置
-    /// MS-SSIM采样率（1/N，例如3表示1/3采样）
     pub ms_ssim_sampling: Option<u32>,
-    /// 强制全量MS-SSIM计算（禁用采样）
     pub full_ms_ssim: bool,
-    /// 跳过MS-SSIM计算
     pub skip_ms_ssim: bool,
 
-    /// 🔥 v7.9: Max threads for child processes
     pub child_threads: usize,
-    /// 🔥 v8.0: Allow 1% size tolerance (output can be up to 1.01x input)
     pub allow_size_tolerance: bool,
-    /// Verbose output
     pub verbose: bool,
 }
 
@@ -118,8 +90,7 @@ impl Default for ConversionConfig {
             use_gpu: true,
             force_ms_ssim_long: false,
             ultimate_mode: false,
-            // 🔥 v7.6: MS-SSIM优化默认值
-            ms_ssim_sampling: None, // 自动选择
+            ms_ssim_sampling: None,
             full_ms_ssim: false,
             skip_ms_ssim: false,
             child_threads: 0,
@@ -130,13 +101,11 @@ impl Default for ConversionConfig {
 }
 
 impl ConversionConfig {
-    /// Check if original should be deleted (either via delete_original or in_place)
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
 }
 
-/// Conversion output
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionOutput {
     pub input_path: String,
@@ -147,21 +116,16 @@ pub struct ConversionOutput {
     pub size_ratio: f64,
     pub success: bool,
     pub message: String,
-    /// CRF used for final output
     pub final_crf: f32,
-    /// Number of exploration attempts
     pub exploration_attempts: u8,
 }
 
-// Implement CliProcessingResult for ConversionOutput
 impl crate::cli_runner::CliProcessingResult for ConversionOutput {
     fn is_skipped(&self) -> bool {
-        // 🔥 v7.9: 修复统计逻辑 - 只有成功且输出为空时才算跳过
         self.success && (self.output_size == 0 && self.output_path.is_empty())
     }
 
     fn is_success(&self) -> bool {
-        // 🔥 v7.9: 成功且未跳过才算真正的成功转换
         self.success && !(self.output_size == 0 && self.output_path.is_empty())
     }
 

@@ -11,7 +11,6 @@ use walkdir::WalkDir;
 
 use img_av1::conversion_api::ConversionOutput;
 
-/// Configuration for auto-convert operations
 #[derive(Clone)]
 struct AutoConvertConfig {
     output_dir: Option<PathBuf>,
@@ -24,17 +23,11 @@ struct AutoConvertConfig {
     match_quality: bool,
     compress: bool,
     apple_compat: bool,
-    /// 🔥 v4.15: Use GPU acceleration (default: true)
     use_gpu: bool,
-    /// 🔥 v6.2: 极限探索模式（AV1 暂不支持 Domain Wall，但保留 flag 以对齐接口）
     ultimate: bool,
-    /// Verbose output
     verbose: bool,
-    /// Base directory for relative path preservation
     base_dir: Option<PathBuf>,
-    /// 🔥 v7.9: Balanced thread config
     child_threads: usize,
-    /// 🔥 v8.3: Allow 1% size tolerance
     allow_size_tolerance: bool,
 }
 
@@ -48,128 +41,90 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Analyze image quality parameters
     Analyze {
-        /// Input file or directory
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Recursive directory scan
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
-        /// Output format
         #[arg(short, long, value_enum, default_value = "human")]
         output: OutputFormat,
 
-        /// Include upgrade recommendation
         #[arg(short = 'R', long)]
         recommend: bool,
     },
 
-    /// Run conversion: format-based (JPEG→JXL, PNG→JXL, Animated→AV1 MP4); default explore+match_quality+compress
     #[command(name = "run")]
     Run {
-        /// Output directory (default: same as input)
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Base directory for preserving directory structure (optional)
         #[arg(long)]
         base_dir: Option<PathBuf>,
 
-        /// Input file or directory
         #[arg(value_name = "INPUT")]
         input: PathBuf,
 
-        /// Force conversion even if already processed
         #[arg(short, long)]
         force: bool,
 
-        /// Recursive directory scan (always on; 强制递归)
         #[arg(short, long, default_value_t = true)]
         recursive: bool,
 
-        /// Delete original after successful conversion
         #[arg(long)]
         delete_original: bool,
 
-        /// In-place conversion: convert and delete original file
-        /// Effectively "replaces" the original with the new format
-        /// Example: image.png → image.jxl (original .png deleted)
         #[arg(long)]
         in_place: bool,
 
-        /// Use mathematical lossless AV1 (⚠️ VERY SLOW, huge files)
         #[arg(long)]
         lossless: bool,
 
-        /// Explore + match-quality + compress (default: on; required for animated→video).
         #[arg(long, default_value_t = true)]
         explore: bool,
 
-        /// Match input quality (default: on; required).
         #[arg(long, default_value_t = true)]
         match_quality: bool,
 
-        /// Require compression for animated→video (default: on; required).
         #[arg(long, default_value_t = true)]
         compress: bool,
 
-        /// 🍎 Apple compatibility mode: Convert non-Apple-compatible animated formats to AV1
-        /// When enabled, animated WebP (VP8/VP9) will be converted to AV1 MP4
-        /// instead of being skipped as "modern format"
         #[arg(long, default_value_t = true)]
         apple_compat: bool,
 
-        /// Disable Apple compatibility mode
         #[arg(long)]
         no_apple_compat: bool,
 
-        /// Uses adaptive wall limit based on CRF range, continues until no more quality gains
-        /// ⚠️ MUST be used with --explore --match-quality --compress
         #[arg(long, default_value_t = false)]
         ultimate: bool,
 
-        /// 🔥 v4.15: Force CPU encoding (libaom) instead of GPU
-        /// Hardware encoding may have lower quality ceiling. Use --cpu for maximum SSIM
         #[arg(long, default_value_t = false)]
         cpu: bool,
 
-        /// Verbose output (show skipped files and success messages)
         #[arg(short, long)]
         verbose: bool,
 
-        /// 🔥 v7.9: Max threads for child processes (ffmpeg/cjxl/x265)
         #[arg(long, default_value_t = 0)]
         child_threads: usize,
 
-        /// 🔥 v8.3: Allow 1% size tolerance (default: enabled)
         #[arg(long, default_value_t = true)]
         allow_size_tolerance: bool,
 
-        /// Disable 1% size tolerance
         #[arg(long)]
         no_allow_size_tolerance: bool,
     },
 
-    /// Verify conversion quality
     Verify {
-        /// Original file
         original: PathBuf,
 
-        /// Converted file
         converted: PathBuf,
     },
 
-    /// 从源目录恢复输出目录的时间戳（目录+文件）
-    /// 供脚本在后处理（如 JXL Container Fix）后调用，逻辑在 shared_utils，此处仅转发
     RestoreTimestamps {
-        /// 源目录（如 test）
         #[arg(value_name = "SOURCE_DIR")]
         source: PathBuf,
 
-        /// 输出目录（如 test_optimized）
         #[arg(value_name = "OUTPUT_DIR")]
         output: PathBuf,
     },
@@ -177,14 +132,11 @@ enum Commands {
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
-    /// Human-readable output
     Human,
-    /// JSON output (for API use)
     Json,
 }
 
 fn main() -> anyhow::Result<()> {
-    // 🔥 v7.8: 初始化日志系统
     let _ =
         shared_utils::logging::init_logging("img_av1", shared_utils::logging::LogConfig::default());
 
@@ -228,13 +180,10 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
         } => {
-            // Apply --no-apple-compat override
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
-            // in_place implies delete_original
             let should_delete = delete_original || in_place;
 
-            // 🔥 v6.2: 使用模块化的 flag 验证器（含 ultimate 支持）
             let flag_mode = match shared_utils::validate_flags_result_with_ultimate(
                 explore,
                 match_quality,
@@ -276,7 +225,6 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
 
-            // 🔥 v7.9: Calculate balanced thread configuration
             let workload = if input.is_dir() {
                 shared_utils::thread_manager::WorkloadType::Image
             } else {
@@ -390,7 +338,6 @@ fn analyze_directory(
             if shared_utils::IMAGE_EXTENSIONS_ANALYZE
                 .contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
             {
-                // 🔥 v7.9: Validate file integrity first
                 if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
                     eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
                     continue;
@@ -463,7 +410,6 @@ fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<
         100.0 * (1.0 - converted_analysis.file_size as f64 / original_analysis.file_size as f64);
     println!("   Size reduction: {:.2}%", reduction);
 
-    // Load images for quality comparison
     let orig_img = load_image_safe(original)?;
     let conv_img = load_image_safe(converted)?;
 
@@ -489,7 +435,6 @@ fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<
     Ok(())
 }
 
-/// Load image safely, handling JXL via external decoder if needed
 fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
     let is_jxl = path
         .extension()
@@ -647,8 +592,6 @@ fn print_recommendation_human(rec: &img_av1::UpgradeRecommendation) {
     }
 }
 
-/// 🔥 在"输出到相邻目录"模式下复制原始文件
-/// 当文件被跳过时（短动画、无法压缩等），需要将原始文件复制到输出目录
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
     shared_utils::copy_on_skip_or_fail(
         input,
@@ -659,7 +602,6 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
     Ok(())
 }
 
-/// Smart auto-convert a single file based on format detection
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -669,7 +611,6 @@ fn auto_convert_single_file(
         convert_to_av1_mp4_matched, convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
 
-    // 🔥 v8.2.3: Fix extension BEFORE analysis/conversion
     let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
     let input = fixed_input.as_path();
 
@@ -713,16 +654,11 @@ fn auto_convert_single_file(
         }
     };
 
-    // Smart conversion based on format and lossless status
     let result = match (
         analysis.format.as_str(),
         analysis.is_lossless,
         analysis.is_animated,
     ) {
-        // Modern Formats Logic (WebP, AVIF, HEIC)
-        // Rule: Avoid generational loss.
-        // - If Lossy: SKIP (don't recompress lossy to lossy/jxl)
-        // - If Lossless: CONVERT to JXL (better compression)
         ("WebP", true, false)
         | ("AVIF", true, false)
         | ("HEIC", true, false)
@@ -742,7 +678,6 @@ fn auto_convert_single_file(
             return Ok(make_skipped("Skipping modern lossy format"));
         }
 
-        // JPEG → JXL
         ("JPEG", _, false) => {
             if config.match_quality {
                 verbose_log!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
@@ -752,12 +687,10 @@ fn auto_convert_single_file(
                 convert_jpeg_to_jxl(input, &options)?
             }
         }
-        // Legacy Static lossless (PNG, TIFF, BMP etc) → JXL
         (_, true, false) => {
             verbose_log!("🔄 Legacy Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
-        // Animated lossless → AV1 MP4 CRF 0 (visually lossless, only if >=3 seconds)
         (_, true, true) => {
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
@@ -798,7 +731,6 @@ fn auto_convert_single_file(
                 convert_to_av1_mp4(input, &options)?
             }
         }
-        // Animated lossy → AV1 MP4 with match_quality (only if >=3 seconds)
         (_, false, true) => {
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
@@ -838,7 +770,6 @@ fn auto_convert_single_file(
                 convert_to_av1_mp4_matched(input, &options, &analysis)?
             }
         }
-        // Legacy Static lossy (non-JPEG, non-Modern) → JXL
         (format, false, false) => {
             if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
                 verbose_log!("⏭️ Skipping modern lossy format: {}", input.display());
@@ -856,7 +787,6 @@ fn auto_convert_single_file(
         }
     };
 
-    // 🔥 将 ConversionResult 转换为 ConversionOutput
     let output = ConversionOutput {
         original_path: result.input_path.clone(),
         output_path: result.output_path.clone().unwrap_or(result.input_path),
@@ -876,9 +806,7 @@ fn auto_convert_single_file(
     Ok(output)
 }
 
-/// Smart auto-convert a directory with parallel processing and progress bar
 fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
-    // 🔥 Safety check: prevent accidental damage to system directories
     if config.delete_original || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{}", e);
@@ -886,7 +814,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         }
     }
 
-    // 🔥 v6.9.15: 克隆 config 并设置 base_dir 以保留目录结构
     let mut config_with_base = config.clone();
     if config_with_base.output_dir.is_some() && config_with_base.base_dir.is_none() {
         config_with_base.base_dir = Some(input.to_path_buf());
@@ -902,10 +829,8 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     let start_time = Instant::now();
 
-    // 🔥 v8.2.5: 必须在 collect_files 之前保存！collect_files 遍历目录会更新 atime
     let saved_dir_timestamps = shared_utils::save_directory_timestamps(input).ok();
 
-    // 🔥 v7.5: 使用文件排序功能，优先处理小文件
     let files = shared_utils::collect_files_small_first(
         input,
         shared_utils::SUPPORTED_IMAGE_EXTENSIONS,
@@ -916,7 +841,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     if total == 0 {
         println!("📂 No image files found in {}", input.display());
 
-        // 🔥 v7.4.9: 即使没有文件，也要保留目录元数据
         if let Some(output_dir) = config.output_dir.as_ref() {
             if let Some(ref base_dir) = config.base_dir {
                 shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
@@ -933,7 +857,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
     }
 
-    // Atomic counters for thread-safe counting
     let success = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
@@ -941,10 +864,8 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
 
-    // 🔥 Progress bar with ETA
     let pb = shared_utils::UnifiedProgressBar::new(total as u64, "Converting");
 
-    // 🔥 v7.3.2: 启用安静模式，避免并行线程的进度条互相干扰
     shared_utils::progress_mode::enable_quiet_mode();
 
     let pool = rayon::ThreadPoolBuilder::new()
@@ -966,7 +887,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         );
     }
 
-    // Process files in parallel using custom thread pool
     pool.install(|| {
         files.par_iter().for_each(|path| {
             match auto_convert_single_file(path, config) {
@@ -1013,7 +933,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     pb.finish_with_message("Complete!");
 
-    // 🔥 v7.3.2: 恢复正常模式
     shared_utils::progress_mode::disable_quiet_mode();
 
     let success_count = success.load(Ordering::Relaxed);
@@ -1037,14 +956,12 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         "Image Conversion",
     );
 
-    // 🔥 v7.4.9: 保留目录元数据（权限、xattr）
     if let Some(ref output_dir) = config.output_dir {
         if let Some(ref base_dir) = config.base_dir {
             shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
         }
     }
 
-    // 🔥 v8.2.5: 用处理前保存的时间戳恢复
     if let Some(ref saved) = saved_dir_timestamps {
         if let Some(ref output_dir) = config.output_dir {
             if let Some(ref base_dir) = config.base_dir {

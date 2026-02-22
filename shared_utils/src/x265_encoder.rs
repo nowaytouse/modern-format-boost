@@ -20,18 +20,12 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use tracing::{debug, error, info, warn};
 
-/// x265编码器配置
 #[derive(Debug, Clone)]
 pub struct X265Config {
-    /// CRF值（0-51，越小质量越高）
     pub crf: f32,
-    /// 编码preset（ultrafast, fast, medium, slow, slower, veryslow）
     pub preset: String,
-    /// 最大线程数
     pub threads: usize,
-    /// 输出容器格式（mp4, mov, mkv）
     pub container: String,
-    /// 是否保留音频
     pub preserve_audio: bool,
 }
 
@@ -47,18 +41,6 @@ impl Default for X265Config {
     }
 }
 
-/// 使用x265 CLI工具进行CPU编码
-///
-/// # 流程
-/// 1. FFmpeg解码输入 → Y4M管道
-/// 2. x265从管道读取Y4M → 编码为HEVC
-/// 3. FFmpeg封装HEVC + 音频 → 最终容器
-///
-/// # Arguments
-/// * `input` - 输入视频文件
-/// * `output` - 输出文件路径
-/// * `config` - x265编码配置
-/// * `vf_args` - 视频滤镜参数（用于分辨率调整）
 pub fn encode_with_x265(
     input: &Path,
     output: &Path,
@@ -73,14 +55,11 @@ pub fn encode_with_x265(
         "🖥️  Starting CPU encoding with x265 CLI"
     );
 
-    // 🔥 v7.7: 启动心跳检测(30秒间隔)
     use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
     let _heartbeat = HeartbeatGuard::new(
         HeartbeatConfig::medium("x265 CLI Encoding").with_info(format!("CRF {:.1}", config.crf)),
     );
 
-    // 临时文件路径
-    // 🔥 Fix: Use tempfile for secure temporary file creation
     let hevc_temp = tempfile::Builder::new()
         .suffix(".hevc")
         .tempfile()
@@ -89,10 +68,7 @@ pub fn encode_with_x265(
 
     debug!(hevc_temp_file = ?hevc_file, "Using temporary HEVC file");
 
-    // hevc_temp (NamedTempFile) handles cleanup automatically when dropped
-    // so we don't need manual remove_file calls
 
-    // Step 1: FFmpeg解码 → Y4M → x265编码 → HEVC
     info!("Step 1/2: Decode + x265 encode...");
     let encode_result = encode_to_hevc(input, &hevc_file, config, vf_args)?;
 
@@ -101,14 +77,11 @@ pub fn encode_with_x265(
         bail!("x265 encoding failed");
     }
 
-    // Step 2: FFmpeg封装HEVC + 音频 → MP4
     info!("Step 2/2: Mux HEVC + audio...");
     mux_hevc_to_container(input, &hevc_file, output, config)?;
 
-    // 清理临时文件 (handled by hevc_temp drop, but we can drop explicitly if we want)
     drop(hevc_temp);
 
-    // 返回输出文件大小
     let output_size = std::fs::metadata(output)
         .context("Failed to get output file size")?
         .len();
@@ -122,7 +95,6 @@ pub fn encode_with_x265(
     Ok(output_size)
 }
 
-/// Step 1: FFmpeg解码 + x265编码
 fn encode_to_hevc(
     input: &Path,
     hevc_output: &Path,
@@ -131,7 +103,6 @@ fn encode_to_hevc(
 ) -> Result<bool> {
     let start_time = std::time::Instant::now();
 
-    // 构建FFmpeg解码命令（输出Y4M到stdout）
     let mut ffmpeg_cmd = Command::new("ffmpeg");
     ffmpeg_cmd
         .arg("-y")
@@ -140,7 +111,6 @@ fn encode_to_hevc(
         .arg("-f")
         .arg("yuv4mpegpipe");
 
-    // 添加视频滤镜
     for arg in vf_args {
         ffmpeg_cmd.arg(arg);
     }
@@ -150,9 +120,8 @@ fn encode_to_hevc(
         .arg("yuv420p")
         .arg("-")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped()); // 🔥 v7.9.9: Capture stderr for better error reporting
+        .stderr(Stdio::piped());
 
-    // 记录FFmpeg命令
     let ffmpeg_cmd_str = format!(
         "ffmpeg -y -i {} -f yuv4mpegpipe {} -pix_fmt yuv420p -",
         crate::safe_path_arg(input),
@@ -160,12 +129,11 @@ fn encode_to_hevc(
     );
     info!(command = %ffmpeg_cmd_str, "Executing FFmpeg decode command");
 
-    // 构建x265编码命令（从stdin读取Y4M）
     let mut x265_cmd = Command::new("x265");
     x265_cmd
-        .arg("--y4m") // 输入格式为Y4M
+        .arg("--y4m")
         .arg("--input")
-        .arg("-") // 从stdin读取
+        .arg("-")
         .arg("--output")
         .arg(crate::safe_path_arg(hevc_output).as_ref())
         .arg("--crf")
@@ -180,31 +148,20 @@ fn encode_to_hevc(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    // 记录x265命令
     let x265_cmd_str = format!(
         "x265 --y4m --input - --output {:?} --crf {:.1} --preset {} --pools {} --log-level error",
         hevc_output, config.crf, config.preset, config.threads
     );
     info!(command = %x265_cmd_str, "Executing x265 encode command");
 
-    // 启动FFmpeg解码进程
     let mut ffmpeg_child = ffmpeg_cmd
         .spawn()
         .context("Failed to spawn ffmpeg decode process")?;
 
-    // 启动x265编码进程
     let mut x265_child = x265_cmd
         .spawn()
         .context("Failed to spawn x265 encode process")?;
 
-    // 🔥 CRITICAL FIX: Drain stderr in background threads to prevent pipe deadlock.
-    //
-    // OS pipe buffers are ~64KB. If ffmpeg/x265 write enough stderr to fill the buffer,
-    // they block on the write, which stops stdout/stdin data flow, causing the entire
-    // ffmpeg→x265 pipeline to deadlock forever. This is the same fix applied in
-    // FfmpegProcess::spawn() and encode_with_ffmpeg().
-    //
-    // The stderr must be drained BEFORE calling .wait(), not after.
     let ffmpeg_stderr_thread = ffmpeg_child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
@@ -231,25 +188,19 @@ fn encode_to_hevc(
         })
     });
 
-    // 连接FFmpeg stdout → x265 stdin
     if let (Some(mut ffmpeg_out), Some(mut x265_in)) =
         (ffmpeg_child.stdout.take(), x265_child.stdin.take())
     {
-        // 在后台线程中传输数据
         let transfer_thread =
             std::thread::spawn(move || std::io::copy(&mut ffmpeg_out, &mut x265_in));
 
-        // 等待两个进程完成
-        // Wait for x265 (consumer) first, then ffmpeg (producer)
         let x265_status = x265_child.wait().context("Failed to wait for x265")?;
         let ffmpeg_status = ffmpeg_child.wait().context("Failed to wait for ffmpeg")?;
 
-        // 等待数据传输完成
         let _ = transfer_thread.join();
 
         let duration = start_time.elapsed();
 
-        // Collect stderr from background threads (safe now, processes are done)
         let ffmpeg_stderr = ffmpeg_stderr_thread
             .and_then(|h| h.join().ok())
             .unwrap_or_default();
@@ -300,7 +251,6 @@ fn encode_to_hevc(
     }
 }
 
-/// Step 2: FFmpeg封装HEVC + 音频到容器
 fn mux_hevc_to_container(
     original_input: &Path,
     hevc_file: &Path,
@@ -312,39 +262,36 @@ fn mux_hevc_to_container(
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-i")
-        .arg(crate::safe_path_arg(hevc_file).as_ref()); // HEVC视频流
+        .arg(crate::safe_path_arg(hevc_file).as_ref());
 
-    // 如果需要保留音频，添加原始输入作为音频源
     if config.preserve_audio {
         cmd.arg("-i")
-            .arg(crate::safe_path_arg(original_input).as_ref()); // 原始文件（音频源）
+            .arg(crate::safe_path_arg(original_input).as_ref());
         cmd.arg("-map")
-            .arg("0:v:0") // 使用第一个输入的视频流（HEVC）
+            .arg("0:v:0")
             .arg("-map")
-            .arg("1:a:0?") // 使用第二个输入的音频流（如果存在）
+            .arg("1:a:0?")
             .arg("-c:v")
-            .arg("copy") // 视频流直接复制
+            .arg("copy")
             .arg("-c:a")
-            .arg("aac") // 音频转码为AAC
+            .arg("aac")
             .arg("-b:a")
-            .arg("256k"); // 音频比特率
+            .arg("256k");
     } else {
         cmd.arg("-c:v")
-            .arg("copy") // 视频流直接复制
-            .arg("-an"); // 无音频
+            .arg("copy")
+            .arg("-an");
     }
 
-    // 添加容器特定参数
     if config.container == "mp4" || config.container == "mov" {
-        cmd.arg("-tag:v").arg("hvc1"); // Apple兼容性
-        cmd.arg("-movflags").arg("+faststart"); // 快速启动
+        cmd.arg("-tag:v").arg("hvc1");
+        cmd.arg("-movflags").arg("+faststart");
     }
 
     cmd.arg(crate::safe_path_arg(output).as_ref())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    // 记录FFmpeg mux命令
     let cmd_str = format!(
         "ffmpeg -y -i {:?} {} -c:v copy {} {:?}",
         hevc_file,
@@ -390,7 +337,6 @@ fn mux_hevc_to_container(
     Ok(())
 }
 
-/// 检查x265工具是否可用
 pub fn is_x265_available() -> bool {
     let result = Command::new("x265")
         .arg("--version")
@@ -415,7 +361,6 @@ mod tests {
 
     #[test]
     fn test_x265_available() {
-        // 这个测试在CI环境可能失败，仅用于本地验证
         if is_x265_available() {
             println!("✅ x265 is available");
         } else {

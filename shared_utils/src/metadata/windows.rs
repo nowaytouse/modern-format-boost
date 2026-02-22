@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
-    // ACLs via PowerShell
     if which::which("powershell").is_ok() {
         let ps_script = format!(
             "Get-Acl -Path '{}' | Set-Acl -Path '{}'",
@@ -18,7 +17,6 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             .output();
     }
 
-    // File attributes
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
