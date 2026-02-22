@@ -6625,28 +6625,39 @@ fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
     use std::process::Command;
 
-    let result = Command::new("ffmpeg")
-        .arg("-i")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-i")
-        .arg(crate::safe_path_arg(output).as_ref())
-        .arg("-lavfi")
-        .arg("[0:v][1:v]ssim")
-        .arg("-f")
-        .arg("null")
-        .arg("-")
-        .output();
+    // Use multiple filter strategies with fallback, matching calculate_ssim() approach.
+    // GIF inputs use pal8 pixel format which is incompatible with ssim filter directly —
+    // format=yuv420p conversion is required for cross-format comparison.
+    let filters = [
+        "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim",
+        "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim",
+        "[0:v][1:v]ssim",
+    ];
 
-    if let Ok(out) = result {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        for line in stderr.lines() {
-            if line.contains("SSIM Y:") && line.contains("All:") {
-                let y = extract_ssim_value(line, "Y:");
-                let u = extract_ssim_value(line, "U:");
-                let v = extract_ssim_value(line, "V:");
-                let all = extract_ssim_value(line, "All:");
-                if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all) {
-                    return Some((y, u, v, all));
+    for filter in &filters {
+        let result = Command::new("ffmpeg")
+            .arg("-i")
+            .arg(crate::safe_path_arg(input).as_ref())
+            .arg("-i")
+            .arg(crate::safe_path_arg(output).as_ref())
+            .arg("-lavfi")
+            .arg(filter)
+            .arg("-f")
+            .arg("null")
+            .arg("-")
+            .output();
+
+        if let Ok(out) = result {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            for line in stderr.lines() {
+                if line.contains("SSIM Y:") && line.contains("All:") {
+                    let y = extract_ssim_value(line, "Y:");
+                    let u = extract_ssim_value(line, "U:");
+                    let v = extract_ssim_value(line, "V:");
+                    let all = extract_ssim_value(line, "All:");
+                    if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all) {
+                        return Some((y, u, v, all));
+                    }
                 }
             }
         }
