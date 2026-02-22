@@ -1,10 +1,10 @@
 [package]
 name = "img-av1"
-version = "0.1.0"
-edition = "2021"
-authors = ["Modern Format Boost Contributors"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "High-performance image quality analyzer - AV1/AVIF format converter"
-license = "MIT"
 
 [dependencies]
 clap = { workspace = true }
