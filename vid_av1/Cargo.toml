@@ -1,10 +1,10 @@
 [package]
 name = "vid-av1"
-version = "0.1.0"
-edition = "2021"
-authors = ["Modern Format Boost Contributors"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "Video quality analyzer and AV1 converter"
-license = "MIT"
 keywords = ["video", "av1", "quality", "compression"]
 
 [dependencies]
