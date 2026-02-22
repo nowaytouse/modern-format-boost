@@ -7,51 +7,22 @@ description = "High-performance image quality analyzer - AV1/AVIF format convert
 license = "MIT"
 
 [dependencies]
-# CLI framework
 clap = { workspace = true }
-
-# Image processing - added avif-native for AVIF support via system dav1d
 image = { workspace = true }
-
-# JSON serialization for API mode
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# Parallel processing
 rayon = { workspace = true }
-
-# Progress bars
 indicatif = { workspace = true }
-
-# Error handling
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-
-# Command execution
 which = { workspace = true }
-
-# File system utilities
 walkdir = { workspace = true }
 filetime = { workspace = true }
 libc = { workspace = true }
 xattr = { workspace = true }
-
-# HEIC/HEIF support via system libheif
 libheif-rs = { workspace = true }
-
-# Lazy static for anti-duplicate mechanism
-lazy_static = { workspace = true }
-
-# Shared utilities (progress bar, safety checks, batch processing)
 shared_utils = { workspace = true }
-
-# CPU detection for performance optimization
-num_cpus = { workspace = true }
-
-# Temporary file management
 tempfile = { workspace = true }
-
-# Terminal colors
 console = { workspace = true }
 
 [dev-dependencies]

@@ -8,56 +8,40 @@ members = [
 ]
 resolver = "2"
 
-# 🔥 v7.8: 工作空间级别的共享依赖
-# Workspace-level shared dependencies
 [workspace.dependencies]
-# Error handling
 anyhow = "1.0"
 thiserror = "2.0"
 
-# Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
 tracing-appender = "0.2"
 
-# CLI
 clap = { version = "4.5", features = ["derive", "cargo"] }
 
-# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Parallel processing
 rayon = "1.11"
 
-# Progress bars
 indicatif = { version = "0.18", features = ["rayon"] }
 
-# File system
 walkdir = "2.5"
 filetime = "0.2"
 libc = "0.2"
 xattr = "1.6"
 
-# Command execution
 which = "8.0"
 log = "0.4"
 
-# Utilities
-num_cpus = "1.17"
-lazy_static = "1.5"
 console = "0.16"
 chrono = { version = "0.4", features = ["serde"] }
 
-# Image processing
 image = { version = "0.25", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
 libheif-rs = "2.6"
 
-# Testing
 tempfile = "3.25"
 proptest = "1.10"
 
-# Internal Workspace
 shared_utils = { path = "shared_utils" }
 
 [profile.release]
@@ -67,4 +51,3 @@ codegen-units = 1
 
 [profile.dev]
 opt-level = 0
-# 调试时如需更快编译可设为 1：incremental = true 已默认

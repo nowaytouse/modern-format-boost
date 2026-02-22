@@ -113,7 +113,7 @@ pub fn convert_to_jxl(
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
-        (num_cpus::get() / 2).clamp(1, 4)
+        (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4)
     };
 
     let mut cmd = Command::new("cjxl");
@@ -462,7 +462,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         });
     }
 
-    let max_threads = (num_cpus::get() / 2).clamp(1, 4);
+    let max_threads = (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4);
     let mut cmd = Command::new("cjxl");
     cmd.arg("--lossless_jpeg=1")
         .arg("-j")
@@ -928,7 +928,7 @@ pub fn convert_to_jxl_matched(
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
-        (num_cpus::get() / 2).clamp(1, 4)
+        (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4)
     };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")

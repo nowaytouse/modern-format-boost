@@ -93,7 +93,7 @@ fn get_max_threads(options: &ConvertOptions) -> usize {
     if options.child_threads > 0 {
         options.child_threads
     } else {
-        (num_cpus::get() / 2).clamp(1, 4)
+        (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4)
     }
 }
 
