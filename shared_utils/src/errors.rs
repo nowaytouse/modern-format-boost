@@ -23,12 +23,10 @@ pub enum VidQualityError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 
-    // Allow converting other errors to string for general failures
     #[error("General error: {0}")]
     GeneralError(String),
 }
 
-/// Convert FFprobeError to VidQualityError for seamless error propagation
 impl From<crate::ffprobe::FFprobeError> for VidQualityError {
     fn from(e: crate::ffprobe::FFprobeError) -> Self {
         match e {

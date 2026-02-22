@@ -1,8 +1,6 @@
 use crate::image_analyzer::ImageAnalysis;
 use serde::{Deserialize, Serialize};
 
-/// Simple upgrade recommendation
-/// Note: Most of the intelligence is now in the JxlIndicator from analyzer
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpgradeRecommendation {
     pub current_format: String,
@@ -13,8 +11,6 @@ pub struct UpgradeRecommendation {
     pub command: String,
 }
 
-/// Get simple upgrade recommendation based on analysis
-/// The real logic is now in analyzer.rs via JxlIndicator
 pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
     let indicator = &analysis.jxl_indicator;
 
@@ -61,7 +57,7 @@ mod tests {
             color_space: "sRGB".to_string(),
             has_alpha: false,
             is_animated: false,
-            duration_secs: None, // 静态图像无时长
+            duration_secs: None,
             is_lossless: true,
             jpeg_analysis: None,
             heic_analysis: None,

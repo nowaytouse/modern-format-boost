@@ -15,15 +15,12 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
 
-/// Cached exiftool availability (checked once per process)
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
-/// Check if exiftool is available (cached)
 fn is_exiftool_available() -> bool {
     *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
 }
 
-/// 检查是否是视频文件（使用 file_copier 统一扩展名列表）
 fn is_video_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -31,13 +28,11 @@ fn is_video_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// 从源文件获取最佳日期（用于设置 QuickTime 日期）
-/// 优先级：XMP:DateCreated > EXIF:DateTimeOriginal > File Modification Date
 fn get_best_date_from_source(src: &Path) -> Option<String> {
     let output = Command::new("exiftool")
-        .arg("-s3") // 只输出值
+        .arg("-s3")
         .arg("-d")
-        .arg("%Y:%m:%d %H:%M:%S") // 日期格式
+        .arg("%Y:%m:%d %H:%M:%S")
         .arg("-XMP-photoshop:DateCreated")
         .arg("-XMP-xmp:CreateDate")
         .arg("-EXIF:DateTimeOriginal")
@@ -48,7 +43,6 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // 返回第一个非空日期
     for line in stdout.lines() {
         let trimmed = line.trim();
         if !trimmed.is_empty() && !trimmed.contains("0000:00:00") {
@@ -56,7 +50,6 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
         }
     }
 
-    // 如果没有内部日期，使用文件修改时间
     if let Ok(metadata) = std::fs::metadata(src) {
         if let Ok(mtime) = metadata.modified() {
             let datetime: chrono::DateTime<chrono::Local> = mtime.into();
@@ -67,21 +60,10 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
     None
 }
 
-/// Extract suggested extension from ExifTool error message
-/// Example: "Error: Not a valid JPEG (looks more like a PNG)" -> Some("png")
-/// Preserve internal metadata via ExifTool
-///
-/// Performance: ~50-200ms per file depending on metadata complexity
-///
-/// 🔥 视频文件特殊处理：
-/// - 复制所有元数据后，检查 QuickTime 日期是否为空
-/// - 如果为空，从源文件的 XMP/EXIF 日期或文件修改时间设置
 pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     match preserve_internal_metadata_core(src, dst) {
         Ok(_) => Ok(()),
         Err(e) => {
-            // Check for content/extension mismatch
-            // Error typically looks like "Error: Not a valid JPEG (looks more like a MOV)"
             let err_str = e.to_string();
             if err_str.contains("Not a valid") || err_str.contains("looks more like") {
                 eprintln!("⚠️ Metadata preservation failed: {}", err_str);
@@ -99,24 +81,19 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
                     }
                     Err(fallback_err) => {
                         eprintln!("❌ Metadata fallback failed: {}", fallback_err);
-                        // Return original error as it is likely more descriptive for the user
                     }
                 }
             }
-            // Return original error if fallback fails or isn't applicable
             Err(e)
         }
     }
 }
 
-/// Fallback strategy: Rename file to match its content and retry
 fn preserve_internal_metadata_fallback(
     src: &Path,
     dst: &Path,
     hint_ext: Option<&str>,
 ) -> io::Result<()> {
-    // 1. Detect real extension
-    // Priority: Hint > Detection
     let detected_ext = if let Some(hint) = hint_ext {
         hint.to_string()
     } else {
@@ -129,7 +106,6 @@ fn preserve_internal_metadata_fallback(
 
     let current_ext = crate::common_utils::get_extension_lowercase(dst);
 
-    // If extensions match, fallback is useless
     if detected_ext.eq_ignore_ascii_case(&current_ext) {
         return Err(io::Error::other(format!(
             "Extension matches content ({}), fallback skipped",
@@ -142,7 +118,6 @@ fn preserve_internal_metadata_fallback(
         detected_ext
     );
 
-    // 2. Temporary rename
     let temp_path = dst.with_extension(&detected_ext);
     if temp_path.exists() {
         return Err(io::Error::new(
@@ -153,10 +128,8 @@ fn preserve_internal_metadata_fallback(
 
     std::fs::rename(dst, &temp_path)?;
 
-    // 3. Retry operation — ALWAYS restore filename even on panic/error
     let result = preserve_internal_metadata_core(src, &temp_path);
 
-    // 4. Restore filename (Critical! Must succeed regardless of metadata result)
     if let Err(e) = std::fs::rename(&temp_path, dst) {
         eprintln!(
             "❌ CRITICAL: Failed to restore filename from {} to {}: {}",
@@ -164,8 +137,6 @@ fn preserve_internal_metadata_fallback(
             dst.display(),
             e
         );
-        // 🔥 v8.2.4: Emergency recovery — try harder
-        // If temp_path still exists but dst doesn't, the file is stranded
         if temp_path.exists() && !dst.exists() {
             eprintln!("   🔧 Attempting emergency recovery via copy...");
             if let Ok(()) = std::fs::copy(&temp_path, dst).map(|_| ()) {
@@ -184,10 +155,8 @@ fn preserve_internal_metadata_fallback(
     result
 }
 
-/// Core implementation of metadata preservation
 fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
-        // Only warn once per process
         static WARNED: OnceLock<()> = OnceLock::new();
         WARNED.get_or_init(|| {
             eprintln!("⚠️ [metadata] ExifTool not found. EXIF/IPTC will NOT be preserved.");
@@ -195,29 +164,13 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    // 🚀 Performance: Use "Gold Standard" Rebuild (FAQ #20) ONLY when Apple Compatibility mode is active.
-    // This clears any existing corrupted/compressed/incompatible blocks and rebuilds them cleanly.
-    // 针对 JXL, JPEG, WEBP 开启核弹级重构以确保苹果设备兼容性。
     let ext = dst
         .extension()
         .map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
     let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
-    // 🔥 v8.2.2: 按需Structural Repair (On-Demand Structural Repair)
-    // 只在 exiftool detected metadata corruption/不兼容时才执行 magick 修复
-    // 不对每个文件都执行，避免不必要的重编码和质量损失
-    //
-    // 流程：
-    // 1. 先尝试正常 exiftool 元数据复制
-    // 2. 如果 exiftool 失败（检测到损坏/不兼容）
-    // 3. 才执行 magick Structural Repair
-    // 4. 修复后重试 exiftool
-    //
-    // 注意：smart_file_copier 已经修正了扩展名，所以这里 ext 应该匹配内容
 
-    // 第一步：先尝试正常 exiftool 元数据复制（不执行核弹级重构）
-    // 🔥 v8.2.5: 添加 -unsafe 以保留 MakerNotes 等完整元数据（重构后的 JXL 易丢失）
     let mut output = Command::new("exiftool")
         .arg("-tagsfromfile")
         .arg(crate::safe_path_arg(src).as_ref())
@@ -233,13 +186,11 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
 
-    // 检查是否成功
     let needs_repair = apple_compat && is_nuclear_format && {
         if output.status.success() {
-            false // 成功，不需要修复
+            false
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // 检测常见的损坏/不兼容错误
             let is_corrupt = stderr.contains("Error")
                 || stderr.contains("corrupt")
                 || stderr.contains("invalid")
@@ -259,13 +210,12 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     };
 
     if needs_repair {
-        // 第二步：执行 magick Structural Repair
         eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
 
         let magick_result = Command::new("magick")
-            .arg("--") // 防止 dash-prefix 文件名被解析为参数
+            .arg("--")
             .arg(crate::safe_path_arg(dst).as_ref())
-            .arg(crate::safe_path_arg(dst).as_ref()) // 原地重写结构
+            .arg(crate::safe_path_arg(dst).as_ref())
             .output();
 
         match magick_result {
@@ -273,9 +223,8 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                 if out.status.success() {
                     eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
 
-                    // 第三步：修复后重试 exiftool（使用核弹级重构确保兼容性）
                     output = Command::new("exiftool")
-                        .arg("-all=") // Nuclear clear
+                        .arg("-all=")
                         .arg("-tagsfromfile")
                         .arg("@")
                         .arg("-all:all")
@@ -299,7 +248,6 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         "⚠️  [Structural Repair] magick failed：{}",
                         String::from_utf8_lossy(&out.stderr)
                     );
-                    // magick failed，返回原始 exiftool 错误
                     let stderr = String::from_utf8_lossy(&output.stderr);
                     if !stderr.contains("Warning") {
                         return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
@@ -308,7 +256,6 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
             }
             Err(e) => {
                 eprintln!("⚠️  [Structural Repair] magick unavailable：{}", e);
-                // magick unavailable，返回原始 exiftool 错误
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 if !stderr.contains("Warning") {
                     return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
@@ -317,22 +264,18 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         }
     }
 
-    // 检查最终结果
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // Don't fail on minor warnings
         if !stderr.contains("Warning") {
             return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
         }
     }
 
-    // 🔥 Clean up the backup file created by ExifTool after successful operation
     let mut backup_name = dst.file_name().unwrap_or_default().to_os_string();
     backup_name.push("_original");
     let backup_path = dst.with_file_name(backup_name);
     let _ = std::fs::remove_file(&backup_path);
 
-    // 🔥 视频文件特殊处理：修复 QuickTime 日期
     if is_video_file(dst) {
         fix_quicktime_dates(src, dst)?;
     }
@@ -340,12 +283,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// 修复视频文件的 QuickTime 日期
-///
-/// 问题：FFmpeg 转换时会将 QuickTime Create Date 设置为 0000:00:00 00:00:00
-/// 解决：从源文件的 XMP/EXIF 日期或文件修改时间设置
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
-    // 检查 QuickTime 日期是否为空
     let check_output = Command::new("exiftool")
         .arg("-s3")
         .arg("-QuickTime:CreateDate")
@@ -355,12 +293,10 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     let current_date = String::from_utf8_lossy(&check_output.stdout);
     let current_date = current_date.trim();
 
-    // 如果日期已经有效，不需要修复
     if !current_date.is_empty() && !current_date.contains("0000:00:00") {
         return Ok(());
     }
 
-    // 获取源文件的最佳日期
     let best_date = match get_best_date_from_source(src) {
         Some(date) => date,
         None => {
@@ -369,7 +305,6 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         }
     };
 
-    // 设置 QuickTime 日期
     let output = Command::new("exiftool")
         .arg(format!("-QuickTime:CreateDate={}", best_date))
         .arg(format!("-QuickTime:ModifyDate={}", best_date))
@@ -406,13 +341,10 @@ mod tests {
             return;
         }
         let temp = TempDir::new().unwrap();
-        // Create a complex directory structure
         let complex_dir = temp.path().join("测试 dir/来源/小红书");
         fs::create_dir_all(&complex_dir).unwrap();
 
-        // Create a real PNG
         let src_path = complex_dir.join("src_image.png");
-        // 1x1 PNG data
         let png_data = [
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
@@ -422,11 +354,9 @@ mod tests {
         ];
         fs::write(&src_path, png_data).unwrap();
 
-        // Create dst as PNG but named .jpeg
         let dst_path = complex_dir.join("dst_image.jpeg");
         fs::write(&dst_path, png_data).unwrap();
 
-        // Run preserve
         let result = preserve_internal_metadata(&src_path, &dst_path);
 
         if let Err(e) = &result {
