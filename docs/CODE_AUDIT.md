@@ -459,3 +459,16 @@
 - **实际使用**：在 `video_explorer/gpu_coarse_search.rs` 中，在最终编码完成后（输出 stream 信息打印之后）调用 `quality_verifier_enhanced::verify_after_encode(input, output, &VerifyOptions::strict_video())`，并以 `verbose_eprintln` 输出 `summary()` 与 `details`，实现编码后增强校验（文件完整性 + 时长匹配 + 视频流存在性）。
 - **API 暴露**：`lib.rs` 中通过 `pub use quality_verifier_enhanced::{ verify_after_encode, verify_output_file, EnhancedVerifyResult, VerifyOptions, DEFAULT_MIN_FILE_SIZE }` 对外提供，便于 vid_hevc、img_av1 等 crate 复用。
 - **代码质量**：`quality_verifier_enhanced.rs` 已加 `#[must_use]` 于 `VerifyOptions`、`EnhancedVerifyResult`；`verify_output_file` 直接返回 `verify_output_integrity` 的 `Result<(), String>`，无多余转换；语法与风格与仓库一致，clippy 对该文件无额外告警。
+
+---
+
+## 24. metadata/network.rs 说明
+
+- **用途**：网络/云相关元数据**校验**（不负责拷贝）。在 `preserve_pro` / `preserve_metadata` 中，拷贝完成后调用 `verify_network_metadata(src, dst)`，检查源文件上存在的关键 xattr 在目标上是否也存在；若缺失则打印警告。
+- **检查的 xattr（macOS）**：`com.apple.metadata:kMDItemWhereFroms`（下载来源）、`com.apple.metadata:kMDItemUserTags`（用户标签）、`com.apple.quarantine`（ quarantine 不参与“缺失”警告，因通常故意不拷贝）。
+- **跨平台**：xattr 键为 macOS 专用，在非 macOS 上 `xattr::get` 对未知键会返回无数据，逻辑等效于不检查，不会报错。
+
+### 24.1 依赖更新（本次）
+
+- 已执行 `cargo update`，Cargo.lock 更新至当前 workspace 版本约束内最新（如 chrono 0.4.43 → 0.4.44）。
+- workspace 中声明的版本（anyhow 1.0、thiserror 2.0、clap 4.5、indicatif 0.18、tempfile 3.25、proptest 1.10 等）保持不变，与现有测试兼容。
