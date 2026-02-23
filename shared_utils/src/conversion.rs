@@ -439,7 +439,118 @@ pub fn post_conversion_actions(
 }
 
 
-#[cfg(test)]
+/// Get image/video dimensions using ffprobe → image crate → ImageMagick fallback chain.
+///
+/// Returns (width, height) or an error if all methods fail.
+pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
+    // Method 1: ffprobe
+    if let Ok(probe) = crate::probe_video(input) {
+        if probe.width > 0 && probe.height > 0 {
+            return Ok((probe.width, probe.height));
+        }
+    }
+
+    // Method 2: image crate
+    if let Ok((w, h)) = image::image_dimensions(input) {
+        return Ok((w, h));
+    }
+
+    // Method 3: ImageMagick identify
+    {
+        use std::process::Command;
+        let safe_path = crate::safe_path_arg(input);
+        let output = Command::new("magick")
+            .args(["identify", "-format", "%w %h\n"])
+            .arg(safe_path.as_ref())
+            .output()
+            .or_else(|_| {
+                Command::new("identify")
+                    .args(["-format", "%w %h\n"])
+                    .arg(safe_path.as_ref())
+                    .output()
+            });
+        if let Ok(out) = output {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = s.lines().next() {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+                        {
+                            if w > 0 && h > 0 {
+                                return Ok((w, h));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "❌ 无法获取文件尺寸: {}\n\
+         💡 ffprobe, image crate, ImageMagick identify 均失败\n\
+         请检查文件是否完整，或安装 ffmpeg/ImageMagick",
+        input.display(),
+    ))
+}
+
+
+/// Check if output exceeds size tolerance and clean up if so.
+///
+/// Returns `Some(ConversionResult)` if the output is too large (caller should return it),
+/// or `None` if the output passes the size check.
+pub fn check_size_tolerance(
+    input: &Path,
+    output: &Path,
+    input_size: u64,
+    output_size: u64,
+    options: &ConvertOptions,
+    format_label: &str,
+) -> Option<ConversionResult> {
+    let tolerance_ratio = if options.allow_size_tolerance {
+        1.01
+    } else {
+        1.0
+    };
+    let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+
+    if output_size <= max_allowed_size {
+        return None;
+    }
+
+    let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
+    if let Err(e) = fs::remove_file(output) {
+        eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
+    }
+    if options.verbose {
+        let mode = if options.allow_size_tolerance {
+            "tolerance: 1.0%"
+        } else {
+            "strict mode: no tolerance"
+        };
+        eprintln!(
+            "   ⏭️  Skipping: {} output larger than input by {:.1}% ({})",
+            format_label, size_increase_pct, mode
+        );
+        eprintln!(
+            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+            input_size, output_size, size_increase_pct
+        );
+    }
+
+    let _ = crate::copy_on_skip_or_fail(
+        input,
+        options.output_dir.as_deref(),
+        options.base_dir.as_deref(),
+        false,
+    );
+    mark_as_processed(input);
+
+    Some(ConversionResult::skipped_size_increase(
+        input, input_size, output_size,
+    ))
+}
 mod tests {
     use super::*;
 

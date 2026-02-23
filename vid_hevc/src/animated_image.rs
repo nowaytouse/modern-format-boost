@@ -41,52 +41,8 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
 }
 
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    if let Ok(probe) = shared_utils::probe_video(input) {
-        if probe.width > 0 && probe.height > 0 {
-            return Ok((probe.width, probe.height));
-        }
-    }
-
-    if let Ok((w, h)) = image::image_dimensions(input) {
-        return Ok((w, h));
-    }
-
-    {
-        let safe_path = shared_utils::safe_path_arg(input);
-        let output = Command::new("magick")
-            .args(["identify", "-format", "%w %h\n"])
-            .arg(safe_path.as_ref())
-            .output()
-            .or_else(|_| {
-                Command::new("identify")
-                    .args(["-format", "%w %h\n"])
-                    .arg(safe_path.as_ref())
-                    .output()
-            });
-        if let Ok(out) = output {
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout);
-                if let Some(line) = s.lines().next() {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 2 {
-                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-                        {
-                            if w > 0 && h > 0 {
-                                return Ok((w, h));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Err(VidQualityError::ConversionError(format!(
-        "❌ 无法获取文件尺寸: {}\n\
-         💡 ffprobe, image crate, ImageMagick identify 均失败\n\
-         请检查文件是否完整，或安装 ffmpeg/ImageMagick",
-        input.display(),
-    )))
+    shared_utils::conversion::get_input_dimensions(input)
+        .map_err(VidQualityError::ConversionError)
 }
 
 fn get_max_threads(options: &ConvertOptions) -> usize {

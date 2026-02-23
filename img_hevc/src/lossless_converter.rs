@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub use shared_utils::conversion::{
+    check_size_tolerance,
     clear_processed_list,
     determine_output_path_with_base,
     finalize_conversion,
@@ -300,38 +301,8 @@ pub fn convert_to_jxl(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
 
-            let tolerance_ratio = if options.allow_size_tolerance {
-                1.01
-            } else {
-                1.0
-            };
-            let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
-
-            if output_size > max_allowed_size {
-                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
-                if let Err(e) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
-                }
-                if options.verbose {
-                    if options.allow_size_tolerance {
-                        eprintln!(
-                            "   ⏭️  Skipping: JXL output larger than input by {:.1}% (tolerance: 1.0%)",
-                            size_increase_pct
-                        );
-                    } else {
-                        eprintln!(
-                            "   ⏭️  Skipping: JXL output larger than input by {:.1}% (strict mode: no tolerance)",
-                            size_increase_pct
-                        );
-                    }
-                    eprintln!(
-                        "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-                        input_size, output_size, size_increase_pct
-                    );
-                }
-                copy_original_on_skip(input, options);
-                mark_as_processed(input);
-                return Ok(ConversionResult::skipped_size_increase(input, input_size, output_size));
+            if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
+                return Ok(skipped);
             }
 
             if let Err(e) = verify_jxl_health(&output) {
@@ -841,6 +812,58 @@ fn try_imagemagick_fallback(
         }
     }
 }
+/// Run an external tool to convert input to a temp PNG. Returns (temp_path, temp_handle) on
+/// success, or (original_input, None) if the tool fails (graceful fallback).
+fn convert_to_temp_png(
+    input: &Path,
+    tool: &str,
+    args_before_input: &[&str],
+    args_after_input: &[&str],
+    label: &str,
+) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
+    use console::style;
+    eprintln!(
+        "   {} {}",
+        style("🔧 PRE-PROCESSING:").cyan().bold(),
+        style(label).dim()
+    );
+
+    let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
+    let temp_png = temp_png_file.path().to_path_buf();
+
+    let mut cmd = Command::new(tool);
+    for arg in args_before_input {
+        cmd.arg(arg);
+    }
+    cmd.arg(shared_utils::safe_path_arg(input).as_ref());
+    for arg in args_after_input {
+        if *arg == "__OUTPUT__" {
+            cmd.arg(shared_utils::safe_path_arg(&temp_png).as_ref());
+        } else {
+            cmd.arg(arg);
+        }
+    }
+
+    match cmd.output() {
+        Ok(output) if output.status.success() && temp_png.exists() => {
+            eprintln!(
+                "   {} {}",
+                style("✅").green(),
+                style(format!("{} pre-processing successful", tool)).green()
+            );
+            Ok((temp_png, Some(temp_png_file)))
+        }
+        _ => {
+            eprintln!(
+                "   {} {}",
+                style("⚠️").yellow(),
+                style(format!("{} pre-processing failed, trying direct cjxl", tool)).dim()
+            );
+            Ok((input.to_path_buf(), None))
+        }
+    }
+}
+
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
@@ -928,116 +951,27 @@ fn prepare_input_for_cjxl(
         }
 
         "webp" => {
-            use console::style;
-            eprintln!(
-                "   {} {}",
-                style("🔧 PRE-PROCESSING:").cyan().bold(),
-                style("WebP detected, using dwebp for ICC profile compatibility").dim()
-            );
-
-            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
-            let temp_png = temp_png_file.path().to_path_buf();
-
-            let result = Command::new("dwebp")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-o")
-                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                .output();
-
-            match result {
-                Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!(
-                        "   {} {}",
-                        style("✅").green(),
-                        style("dwebp pre-processing successful").green()
-                    );
-                    Ok((temp_png, Some(temp_png_file)))
-                }
-                _ => {
-                    eprintln!(
-                        "   {} {}",
-                        style("⚠️").yellow(),
-                        style("dwebp pre-processing failed, trying direct cjxl").dim()
-                    );
-                    Ok((input.to_path_buf(), None))
-                }
-            }
+            convert_to_temp_png(
+                input, "dwebp", &[],
+                &["-o", "__OUTPUT__"],
+                "WebP detected, using dwebp for ICC profile compatibility",
+            )
         }
 
         "tiff" | "tif" => {
-            use console::style;
-            eprintln!(
-                "   {} {}",
-                style("🔧 PRE-PROCESSING:").cyan().bold(),
-                style("TIFF detected, using ImageMagick for cjxl compatibility").dim()
-            );
-
-            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
-            let temp_png = temp_png_file.path().to_path_buf();
-
-            let result = Command::new("magick")
-                .arg("--")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-depth")
-                .arg("16")
-                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                .output();
-
-            match result {
-                Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!(
-                        "   {} {}",
-                        style("✅").green(),
-                        style("ImageMagick TIFF pre-processing successful").green()
-                    );
-                    Ok((temp_png, Some(temp_png_file)))
-                }
-                _ => {
-                    eprintln!(
-                        "   {} {}",
-                        style("⚠️").yellow(),
-                        style("ImageMagick TIFF pre-processing failed, trying direct cjxl").dim()
-                    );
-                    Ok((input.to_path_buf(), None))
-                }
-            }
+            convert_to_temp_png(
+                input, "magick", &["--"],
+                &["-depth", "16", "__OUTPUT__"],
+                "TIFF detected, using ImageMagick for cjxl compatibility",
+            )
         }
 
         "bmp" => {
-            use console::style;
-            eprintln!(
-                "   {} {}",
-                style("🔧 PRE-PROCESSING:").cyan().bold(),
-                style("BMP detected, using ImageMagick for cjxl compatibility").dim()
-            );
-
-            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
-            let temp_png = temp_png_file.path().to_path_buf();
-
-            let result = Command::new("magick")
-                .arg("--")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                .output();
-
-            match result {
-                Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!(
-                        "   {} {}",
-                        style("✅").green(),
-                        style("ImageMagick BMP pre-processing successful").green()
-                    );
-                    Ok((temp_png, Some(temp_png_file)))
-                }
-                _ => {
-                    eprintln!(
-                        "   {} {}",
-                        style("⚠️").yellow(),
-                        style("ImageMagick BMP pre-processing failed, trying direct cjxl").dim()
-                    );
-                    Ok((input.to_path_buf(), None))
-                }
-            }
+            convert_to_temp_png(
+                input, "magick", &["--"],
+                &["__OUTPUT__"],
+                "BMP detected, using ImageMagick for cjxl compatibility",
+            )
         }
 
         "heic" | "heif" => {
@@ -1091,32 +1025,11 @@ fn prepare_input_for_cjxl(
         }
 
         "gif" => {
-            eprintln!(
-                "   🔧 PRE-PROCESSING: GIF detected, using FFmpeg for static frame extraction"
-            );
-
-            let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
-            let temp_png = temp_png_file.path().to_path_buf();
-
-            let result = Command::new("ffmpeg")
-                .arg("-y")
-                .arg("-i")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-frames:v")
-                .arg("1")
-                .arg(shared_utils::safe_path_arg(&temp_png).as_ref())
-                .output();
-
-            match result {
-                Ok(output) if output.status.success() && temp_png.exists() => {
-                    eprintln!("   ✅ FFmpeg GIF pre-processing successful");
-                    Ok((temp_png, Some(temp_png_file)))
-                }
-                _ => {
-                    eprintln!("   ⚠️  FFmpeg GIF pre-processing failed, trying direct cjxl");
-                    Ok((input.to_path_buf(), None))
-                }
-            }
+            convert_to_temp_png(
+                input, "ffmpeg", &["-y", "-i"],
+                &["-frames:v", "1", "__OUTPUT__"],
+                "GIF detected, using FFmpeg for static frame extraction",
+            )
         }
 
         _ => {
