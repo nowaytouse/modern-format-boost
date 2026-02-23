@@ -289,3 +289,26 @@
 - **_VARIANCE_THRESHOLD / _calc_window_variance**: 删除未使用的 `_VARIANCE_THRESHOLD`；保留 `_calc_window_variance` 并加注释“Reserved for future variance-based early exit”，参数 `input_size` 改为 `_input_size` 避免未使用警告。
 - **beijing_time_now**: 格式化输出增加 “ (UTC+8)” 后缀，避免国际用户误解为本地时间。
 - **get_extra_args**: 改为 `extra_args(&self) -> &[&'static str]`，避免每次分配 `Vec`；video_explorer 等处调用改为 `extra_args()`，CPU 分支使用 `&[] as &[&str]` 保持类型一致。
+
+---
+
+## 19. explore_strategy.rs 审计修复
+
+### 19.1 P1 — 正确性
+
+- **binary_search_quality**: 阈值由硬编码 0.99 改为 `ctx.config.quality_thresholds.min_ssim`；搜索目标统一为「满足 min_ssim 的最大 CRF」（最佳压缩）。当 `result.value >= min_ssim` 时 `low = mid` 并仅在 `mid > best_crf` 时更新 best；否则 `high = mid`。返回的 best 为满足阈值下 CRF 最大的点。
+- **binary_search_compress**: 返回类型改为 `Result<Option<(f32, u64, u32)>>`，当整个范围内无压缩点时返回 `None`。CompressOnlyStrategy、PreciseQualityMatchWithCompressionStrategy、CompressWithQualityStrategy 在 `None` 时用 max_crf 编码并返回 `quality_passed: false`（或等效），避免 `best_size == u64::MAX` 进入 `size_change_pct` / `output_size`。
+- **PSNR→SSIM**: 在 `ssim_mapping.rs` 中新增 `psnr_to_ssim_estimate(psnr_db)` 统一公式，`explore_strategy::do_calculate_ssim` 与相关 prop test 改为调用该函数，与 gpu_accel 等 fallback 路径可共用同一估算逻辑。
+
+### 19.2 P2 — 设计
+
+- **prop_crf_cache_key_uniqueness**: 唯一性断言使用 `CACHE_CRF_RESOLUTION = 1.0 / CRF_CACHE_MULTIPLIER`，与缓存分辨率一致，避免误报。`prop_crf_cache_equivalence` 中 HashMap key 由 `crf * 40.0` 改为 `crf * CRF_CACHE_MULTIPLIER` 与实现一致。
+- **SSIM 缓存**: 在 `do_calculate_ssim` 上增加注释：SSIM 依赖当前磁盘上的 output_path，缓存 key 为 CRF，仅在 encode(crf) 后立即调用且未覆盖 output 时有效。
+- **SsimCalculationResult / SsimDataSource**: 增加 `#[deprecated]`，建议直接使用 `SsimResult` / `SsimSource`。
+- **ExploreContext::new**: 增加文档注释，说明 9 参数构造，建议后续可考虑 builder。
+
+### 19.3 P3 — 代码质量
+
+- **confidence_detail**: `build_result` 中 `ConfidenceBreakdown::default()` 旁加注释「not filled; confidence is the fixed value above」。
+- **strategy_name**: 删除自由函数 `strategy_name(mode)`，从 lib 导出中移除；测试改为仅断言 `strategy.name().is_empty() == false`。
+- **description()**: 六种 Strategy 的 `description()` 返回值由中文改为英文，与代码风格一致。
