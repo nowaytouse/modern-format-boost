@@ -197,3 +197,24 @@
 - **output_base**: 不再使用 `unwrap_or("output")`，改为 `ok_or_else(|| ImgQualityError::AnalysisError(...))?`，调用方需处理 `Result`。
 - **calculate_entropy**: 当宽或高 > 256 时先 `thumbnail(256, 256)` 再转 luma 计算熵，减少大图全量转换；并防护 `total < 1.0` 时除零。当前仅被删除的 GIF 启发式使用，保留函数并加 `#[allow(dead_code)]` 以备复用。
 - **测试**: 新增/调整：路径含单引号时 command 正确转义、HEIC 有损跳过、无法解析路径时返回 Err、GIF 质量返回 `estimated_quality: None` 与 `confidence: 0.0`；`test_format_lossless` 不再断言 GIF 为无损。
+
+---
+
+## 14. img_av1 conversion_api.rs 审计修复
+
+### 14.1 P1 — 正确性
+
+- **determine_strategy 展示命令与实际执行一致**: 展示用 `command` 与 `convert_to_jxl`/`convert_to_av1_mp4` 实际参数对齐（JPEG: `--lossless_jpeg=1 --`；静态无损: `-d 0.0 -e 7 --`；动图: 含 `-y -pix_fmt yuv420p`）；并注明为 illustrative，NoConversion 时改为 `command: Option<String>` 的 `None`。
+- **simple_convert 策略与 smart_convert 一致**: 按 `(image_type, compression)` 分支：Static+Lossy / Animated+Lossy 均跳过并返回 skipped，避免有损图被当作无损压成 JXL 造成二代损耗与体积膨胀；仅 Static+Lossless → JXL、Animated+Lossless → MP4 执行转换。
+- **转换失败后清理残留**: `execute_conversion` 与 `simple_convert` 在 `result.is_err()` 时调用 `std::fs::remove_file(&output_path)`，避免不完整输出导致后续“已存在”跳过。
+
+### 14.2 P2 — 设计
+
+- **ConversionStrategy::command**: 类型改为 `Option<String>`，NoConversion 为 `None`，调用方用 `command.as_deref().unwrap_or("")` 或 `command.as_ref().map(|s| s.as_str())` 展示。
+- **负数 size_reduction 消息**: 成功时根据 `size_reduction >= 0` 显示 “size reduced X%” 或 “size increased X%”，避免 “size reduced -12%” 的语义错误。
+- **convert_to_jxl vs convert_to_jxl_lossless**: 增加注释说明前者供 execute_conversion（effort 7），后者供 simple_convert（effort 9、--modular），避免误用。
+
+### 14.3 P3 — 逻辑与测试
+
+- **NoConversion 只在一处处理**: 扩展名 match 中 NoConversion 改为 `unreachable!("handled above")`，避免重复分支。
+- **测试**: 新增 NoConversion 时 `command.is_none()`、execute_conversion 在输出已存在时返回 skipped、simple_convert 对 Static+Lossy 跳过行为与消息的断言。
