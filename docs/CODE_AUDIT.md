@@ -110,3 +110,29 @@
 ### 9.4 Mutex 与锁
 
 - 未使用 `.lock().unwrap()`；Mutex 使用方式为 poison-safe（`lock().unwrap_or_else(|e| e.into_inner())` 或 `if let Ok(...) = ...lock()`），见 §2。
+
+---
+
+## 10. img_av1 / img_hevc 审计与修复
+
+### 10.1 路径安全
+
+- **img_hevc lossless_converter.rs**: 一处 `cjxl` 调用（约 629 行）原先 `.arg(input).arg(&output)`，已改为 `shared_utils::safe_path_arg(input).as_ref()` 与 `shared_utils::safe_path_arg(&output).as_ref()`。
+- **img_hevc conversion_api.rs**:  
+  - `convert_to_jxl` / `convert_to_avif` 改为通过 `safe_path_arg` 传路径给 cjxl/avifenc，不再使用 `path_to_str` 直接入参。  
+  - `convert_to_hevc_mp4` 输出路径 `cmd.arg(&output_abs)` 改为 `cmd.arg(shared_utils::safe_path_arg(&output_abs).as_ref())`。  
+  - `preserve_timestamps`（touch）：源/目标路径改为 `safe_path_arg(source).as_ref()` 与 `safe_path_arg(dest).as_ref()`。
+- **img_av1 conversion_api.rs**:  
+  - `convert_to_jxl`、`convert_to_jxl_lossless`、`convert_to_avif` 均改为用 `shared_utils::safe_path_arg` 传路径给 cjxl/avifenc。  
+  - `convert_to_av1_mp4` 输出路径改为 `safe_path_arg(output).as_ref()`。
+- **img_av1 main.rs**: djxl 解码时临时文件路径改为 `safe_path_arg(temp_path).as_ref()`，与仓库其余 Command 一致。
+
+### 10.2 除零
+
+- **img_av1 conversion_api.rs**: `size_reduction` 计算两处（execute_conversion 与 execute_animated_conversion）在 `detection.file_size == 0` 时返回 0.0，避免除零。
+- **img_hevc conversion_api.rs**: 同上，两处 `size_reduction` 在 `detection.file_size == 0` 时返回 0.0。
+- **img_hevc lossless_converter.rs**: JXL 输出大于输入时的 `size_increase_pct` 在 `input_size == 0` 时使用 0.0，避免除零。
+
+### 10.3 unwrap / 测试
+
+- **img_av1 / img_hevc lossless_converter.rs**: `get_output_path(...).unwrap()` 仅出现在 `#[test]` 中，生产路径使用 `Result` + `?`，已接受。
