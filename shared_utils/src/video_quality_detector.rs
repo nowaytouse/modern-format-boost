@@ -44,6 +44,7 @@ pub struct VideoQualityAnalysis {
     pub pix_fmt: String,
     pub chroma: ChromaSubsampling,
     pub gop_size: Option<u32>,
+    /// Estimated from has_b_frames only (0 or 2); not from actual ffprobe B-frame count.
     pub b_frame_count: u8,
     pub has_b_frames: bool,
 
@@ -106,7 +107,13 @@ impl ChromaSubsampling {
             ChromaSubsampling::Yuv444
         } else if fmt.contains("422") {
             ChromaSubsampling::Yuv422
-        } else if fmt.contains("420") || fmt.contains("yuv") || fmt.contains("nv12") {
+        } else if fmt.contains("411") {
+            ChromaSubsampling::Yuv422
+        } else if fmt.contains("410") {
+            ChromaSubsampling::Yuv420
+        } else if fmt.contains("420") || fmt.contains("nv12") {
+            ChromaSubsampling::Yuv420
+        } else if fmt.starts_with("yuv") {
             ChromaSubsampling::Yuv420
         } else if fmt.contains("rgb") || fmt.contains("gbr") || fmt.contains("bgr") {
             ChromaSubsampling::Rgb
@@ -196,11 +203,10 @@ pub struct VideoRoutingDecision {
     pub recommended_crf: u8,
     pub use_lossless: bool,
     pub reason: String,
-    pub should_skip: bool,
-    pub skip_reason: Option<String>,
 }
 
 
+/// Analyze video quality and routing. Consider using a struct (e.g. VideoQualityInput) when passing many arguments to avoid parameter order bugs.
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
     codec: &str,
@@ -227,7 +233,6 @@ pub fn analyze_video_quality(
         return Err("❌ Invalid duration: must be > 0".to_string());
     }
 
-    let _pixels = (width as u64) * (height as u64);
     let frame_count = (duration_secs * fps) as u64;
 
     let source_codec = parse_source_codec(codec);
@@ -254,7 +259,7 @@ pub fn analyze_video_quality(
 
     let b_frame_count = if has_b_frames { 2 } else { 0 };
 
-    let content_type = estimate_content_type(bpp, codec_type, width, height);
+    let content_type = estimate_content_type(bpp, codec_type, width, height, fps);
 
     let compression_type = CompressionLevel::from_bpp(bpp, codec_type);
 
@@ -265,7 +270,6 @@ pub fn analyze_video_quality(
     let routing_decision = make_video_routing_decision(
         codec_type,
         compression_type,
-        is_modern,
         skip_decision.should_skip,
         &skip_decision.reason,
         estimated_crf,
@@ -315,6 +319,8 @@ pub fn analyze_video_quality(
 }
 
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
+    let gop_fallback = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
+    let color_fallback = if analysis.height <= 576 { "bt601" } else { "bt709" };
     VideoAnalysisBuilder::new()
         .basic(
             &analysis.codec,
@@ -325,10 +331,10 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         )
         .file_size(analysis.file_size)
         .video_bitrate(analysis.video_bitrate.unwrap_or(analysis.total_bitrate))
-        .gop(analysis.gop_size.unwrap_or(60), analysis.b_frame_count)
+        .gop(analysis.gop_size.unwrap_or(gop_fallback), analysis.b_frame_count)
         .pix_fmt(&analysis.pix_fmt)
         .color(
-            analysis.color_space.as_deref().unwrap_or("bt709"),
+            analysis.color_space.as_deref().unwrap_or(color_fallback),
             analysis.is_hdr,
         )
         .content_type(analysis.content_type.to_content_type())
@@ -342,6 +348,7 @@ fn estimate_content_type(
     codec_type: VideoCodecType,
     width: u32,
     height: u32,
+    fps: f64,
 ) -> VideoContentType {
     let is_screen_res = (width == 1920 && height == 1080)
         || (width == 2560 && height == 1440)
@@ -358,11 +365,20 @@ fn estimate_content_type(
         return VideoContentType::FilmGrain;
     }
 
+    let is_1080_or_720 = (width == 1920 && height == 1080) || (width == 1280 && height == 720);
+    if fps >= 50.0 && is_1080_or_720 && bpp >= 0.08 && bpp <= 0.5 {
+        return VideoContentType::Gaming;
+    }
+
+    if bpp >= 0.05 && bpp <= 0.6 && codec_type != VideoCodecType::Intermediate {
+        return VideoContentType::LiveAction;
+    }
+
     VideoContentType::Unknown
 }
 
 fn calculate_quality_score(
-    _bpp: f64,
+    bpp: f64,
     codec_type: VideoCodecType,
     bit_depth: u8,
     compression: CompressionLevel,
@@ -383,7 +399,19 @@ fn calculate_quality_score(
         0
     };
 
-    (base + depth_bonus + codec_bonus).min(100)
+    let bpp_tweak = match compression {
+        CompressionLevel::Standard => {
+            let t = ((bpp - 0.1).clamp(0.0, 0.2) / 0.2 * 5.0).round() as i32;
+            t.clamp(0, 5) as u8
+        }
+        CompressionLevel::HighQuality => {
+            let t = ((bpp - 0.3).clamp(0.0, 0.2) / 0.2 * 3.0).round() as i32;
+            t.clamp(0, 3) as u8
+        }
+        _ => 0,
+    };
+
+    (base + depth_bonus + codec_bonus + bpp_tweak).min(100)
 }
 
 fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
@@ -401,8 +429,9 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
 
     let adjusted_bpp = bpp / efficiency;
 
-
-    if adjusted_bpp > 1.0 {
+    if adjusted_bpp > 5.0 {
+        14
+    } else if adjusted_bpp > 1.0 {
         18
     } else if adjusted_bpp > 0.5 {
         22
@@ -420,7 +449,6 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
 fn make_video_routing_decision(
     codec_type: VideoCodecType,
     compression: CompressionLevel,
-    _is_modern: bool,
     should_skip: bool,
     skip_reason: &str,
     estimated_crf: u8,
@@ -433,8 +461,6 @@ fn make_video_routing_decision(
             recommended_crf: 0,
             use_lossless: false,
             reason: skip_reason.to_string(),
-            should_skip: true,
-            skip_reason: Some(skip_reason.to_string()),
         };
     }
 
@@ -446,8 +472,6 @@ fn make_video_routing_decision(
             recommended_crf: 0,
             use_lossless: true,
             reason: "Lossless source - preserve with FFV1".to_string(),
-            should_skip: false,
-            skip_reason: None,
         };
     }
 
@@ -459,8 +483,6 @@ fn make_video_routing_decision(
             recommended_crf: estimated_crf.saturating_sub(2),
             use_lossless: false,
             reason: "Intermediate codec - convert to AV1 for efficiency".to_string(),
-            should_skip: false,
-            skip_reason: None,
         };
     }
 
@@ -474,8 +496,6 @@ fn make_video_routing_decision(
             "Convert to AV1 for better compression (estimated CRF {})",
             estimated_crf
         ),
-        should_skip: false,
-        skip_reason: None,
     }
 }
 
@@ -730,6 +750,14 @@ mod tests {
         assert_eq!(
             ChromaSubsampling::from_pix_fmt("yuv422p"),
             ChromaSubsampling::Yuv422
+        );
+        assert_eq!(
+            ChromaSubsampling::from_pix_fmt("yuv411p"),
+            ChromaSubsampling::Yuv422
+        );
+        assert_eq!(
+            ChromaSubsampling::from_pix_fmt("yuv410p"),
+            ChromaSubsampling::Yuv420
         );
         assert_eq!(
             ChromaSubsampling::from_pix_fmt("yuv444p"),
@@ -1039,7 +1067,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            result.routing_decision.should_skip,
+            result.should_skip,
             "HEVC routing should skip"
         );
         assert_eq!(result.routing_decision.primary_format, "skip");
@@ -1064,7 +1092,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!result.routing_decision.should_skip);
+        assert!(!result.should_skip);
         assert_eq!(result.routing_decision.primary_format, "ffv1");
         assert!(result.routing_decision.use_lossless);
     }
@@ -1088,7 +1116,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!result.routing_decision.should_skip);
+        assert!(!result.should_skip);
         assert_eq!(result.routing_decision.primary_format, "av1");
         assert!(!result.routing_decision.use_lossless);
     }
@@ -1101,7 +1129,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!result.routing_decision.should_skip);
+        assert!(!result.should_skip);
         assert_eq!(result.routing_decision.primary_format, "av1");
     }
 
@@ -1790,10 +1818,11 @@ mod tests {
     }
 
     #[test]
+    /// Codecs that are Legacy (h264, mpeg4, mpeg2video) or Inefficient (mjpeg) must not be skipped.
     fn test_strict_legacy_never_skip() {
-        let legacy_codecs = ["h264", "mpeg4", "mpeg2video", "mjpeg"];
+        let non_modern_codecs = ["h264", "mpeg4", "mpeg2video", "mjpeg"];
 
-        for codec in legacy_codecs {
+        for codec in non_modern_codecs {
             let result = analyze_video_quality(
                 codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
                 60_000_000,
@@ -1802,7 +1831,7 @@ mod tests {
 
             assert!(
                 !result.should_skip,
-                "STRICT: Legacy codec {} must NEVER skip",
+                "Non-modern codec {} (Legacy or Inefficient) must NEVER skip",
                 codec
             );
         }
