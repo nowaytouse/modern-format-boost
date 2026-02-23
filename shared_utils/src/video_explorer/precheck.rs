@@ -67,10 +67,10 @@ impl FpsCategory {
 
     pub fn description(&self) -> &'static str {
         match self {
-            FpsCategory::Normal => "主流范围 (1-240 fps)",
-            FpsCategory::Extended => "扩展范围 (240-2000 fps) - 高速摄影/特殊软件",
-            FpsCategory::Extreme => "极限范围 (2000-10000 fps) - Live2D/3D软件",
-            FpsCategory::Invalid => "异常 (>10000 fps) - 可能是元数据错误",
+            FpsCategory::Normal => "normal range (1-240 fps)",
+            FpsCategory::Extended => "extended range (240-2000 fps)",
+            FpsCategory::Extreme => "extreme range (2000-10000 fps)",
+            FpsCategory::Invalid => "invalid (>10000 fps, possible metadata error)",
         }
     }
 
@@ -141,10 +141,10 @@ fn get_codec_info(input: &Path) -> Result<String> {
         ])
         .arg(crate::safe_path_arg(input).as_ref())
         .output()
-        .context("ffprobe执行失败 - 获取codec")?;
+        .context("ffprobe failed to get codec")?;
 
     if !output.status.success() {
-        bail!("ffprobe获取codec失败");
+        bail!("ffprobe failed to get codec");
     }
 
     let codec = String::from_utf8_lossy(&output.stdout)
@@ -152,7 +152,7 @@ fn get_codec_info(input: &Path) -> Result<String> {
         .to_lowercase();
 
     if codec.is_empty() {
-        bail!("无法检测视频编解码器");
+        bail!("Could not detect video codec");
     }
 
     Ok(codec)
@@ -173,7 +173,7 @@ fn get_bitrate(input: &Path) -> Result<f64> {
         ])
         .arg(crate::safe_path_arg(input).as_ref())
         .output()
-        .context("ffprobe执行失败 - 获取bitrate")?;
+        .context("ffprobe failed to get bitrate")?;
 
     if output.status.success() {
         let bitrate_str = String::from_utf8_lossy(&output.stdout);
@@ -202,15 +202,15 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         ])
         .arg(crate::safe_path_arg(input).as_ref())
         .output()
-        .context("ffprobe执行失败")?;
+        .context("ffprobe failed")?;
 
     if !output.status.success() {
-        bail!("ffprobe获取时长信息失败");
+        bail!("ffprobe failed to get duration");
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
-        serde_json::from_str(&json_str).context("ffprobe JSON解析失败")?;
+        serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
     let fps: f64 = json["streams"]
         .get(0)
@@ -273,8 +273,20 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         }
     }
 
-    eprintln!("   🔴 DURATION DETECTION FAILED - Cannot determine video duration");
-    eprintln!("   🔴 File: {}", input.display());
+    eprintln!("   ⚠️ DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)...");
+    if let Some((duration_secs, frames)) = crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input) {
+        if duration_secs > 0.0 && frames > 0 {
+            let inferred_fps = frames as f64 / duration_secs;
+            eprintln!(
+                "   ✅ DURATION RECOVERED via ImageMagick: {:.2}s ({} frames, {:.2} fps)",
+                duration_secs, frames, inferred_fps
+            );
+            return Ok((duration_secs, inferred_fps, frames, "imagemagick"));
+        }
+    }
+
+    eprintln!("   ❌ DURATION DETECTION FAILED - Cannot determine video duration");
+    eprintln!("   File: {}", input.display());
     bail!("Failed to detect video duration - all methods failed")
 }
 
@@ -299,7 +311,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         ])
         .arg(crate::safe_path_arg(input).as_ref())
         .output()
-        .context("ffprobe执行失败")?;
+        .context("ffprobe failed")?;
 
     if !output.status.success() {
         bail!("ffprobe failed to get video info");
@@ -495,7 +507,7 @@ fn evaluate_processing_recommendation(
     if OPTIMAL_CODECS.iter().any(|&c| codec_lower.contains(c)) {
         return ProcessingRecommendation::NotRecommended {
             codec: codec.to_string(),
-            reason: "源文件已使用现代高效编解码器（HEVC或AV1），重新编码可能导致质量损失"
+            reason: "File already uses modern codec (HEVC/AV1), re-encoding may cause quality loss"
                 .to_string(),
         };
     }
@@ -559,47 +571,42 @@ pub fn calculate_bpp(input: &Path) -> Result<f64> {
 }
 
 pub fn print_precheck_report(info: &VideoInfo) {
+    if !crate::progress_mode::is_verbose_mode() {
+        return;
+    }
     eprintln!("┌─────────────────────────────────────────────────────");
-    eprintln!("│ 📊 Precheck Report v5.75");
+    eprintln!("│ Precheck Report v5.75");
     eprintln!("├─────────────────────────────────────────────────────");
-    eprintln!("│ 🎬 Codec: {}", info.codec);
-    eprintln!("│ 📐 Resolution: {}x{}", info.width, info.height);
+    eprintln!("│ Codec: {}", info.codec);
+    eprintln!("│ Resolution: {}x{}", info.width, info.height);
     eprintln!(
-        "│ 🎞️  Duration: {:.1}s ({} frames)",
+        "│ Duration: {:.1}s ({} frames)",
         info.duration, info.frame_count
     );
-
-    let fps_icon = match info.fps_category {
-        FpsCategory::Normal => "🟢",
-        FpsCategory::Extended => "🟡",
-        FpsCategory::Extreme => "🟠",
-        FpsCategory::Invalid => "🔴",
-    };
     eprintln!(
-        "│ 🎥 FPS: {:.2} {} {}",
+        "│ FPS: {:.2} {}",
         info.fps,
-        fps_icon,
         info.fps_category.description()
     );
 
     eprintln!(
-        "│ 📁 File Size: {:.2} MB",
+        "│ File Size: {:.2} MB",
         info.file_size as f64 / 1024.0 / 1024.0
     );
-    eprintln!("│ 📡 Bitrate: {:.0} kbps", info.bitrate_kbps);
-    eprintln!("│ 📈 BPP: {:.4} bits/pixel", info.bpp);
+    eprintln!("│ Bitrate: {:.0} kbps", info.bitrate_kbps);
+    eprintln!("│ BPP: {:.4} bits/pixel", info.bpp);
 
     if info.color_space.is_some() || info.pix_fmt.is_some() || info.bit_depth.is_some() {
         eprintln!("├─────────────────────────────────────────────────────");
         if let Some(ref cs) = info.color_space {
-            let hdr_indicator = if info.is_hdr { " 🌈 HDR" } else { "" };
-            eprintln!("│ 🎨 Color Space: {}{}", cs, hdr_indicator);
+            let hdr_indicator = if info.is_hdr { " HDR" } else { "" };
+            eprintln!("│ Color Space: {}{}", cs, hdr_indicator);
         }
         if let Some(ref pf) = info.pix_fmt {
-            eprintln!("│ 🖼️  Pixel Format: {}", pf);
+            eprintln!("│ Pixel Format: {}", pf);
         }
         if let Some(bd) = info.bit_depth {
-            eprintln!("│ 🔢 Bit Depth: {}-bit", bd);
+            eprintln!("│ Bit Depth: {}-bit", bd);
         }
     }
 
@@ -607,7 +614,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
 
     match info.compressibility {
         Compressibility::VeryHigh => {
-            eprintln!("│ 🔥 Compression Potential: VERY HIGH");
+            eprintln!("│ Compression Potential: VERY HIGH");
             eprintln!("│    → Ancient codec or extremely high BPP");
             eprintln!("│    → Expected 10-50x compression improvement!");
         }
@@ -616,7 +623,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
             eprintln!("│    → Large compression space expected");
         }
         Compressibility::Medium => {
-            eprintln!("│ 🔵 Compression Potential: Medium");
+            eprintln!("│ Compression Potential: Medium");
             eprintln!("│    → Moderate compression potential");
         }
         Compressibility::Low => {
@@ -624,7 +631,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
             eprintln!("│    → File already optimized");
         }
         Compressibility::VeryLow => {
-            eprintln!("│ ⛔ Compression Potential: VERY LOW");
+            eprintln!("│ Compression Potential: VERY LOW");
             eprintln!("│    → Already using modern codec (HEVC/AV1)");
             eprintln!("│    → Re-encoding may cause quality loss");
         }
@@ -633,7 +640,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
     eprintln!("├─────────────────────────────────────────────────────");
     match &info.recommendation {
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
-            eprintln!("│ 🔥 STRONGLY RECOMMENDED: Upgrade to modern codec!");
+            eprintln!("│ STRONGLY RECOMMENDED: Upgrade to modern codec!");
             eprintln!("│    → Source: {} (legacy/inefficient)", codec);
             eprintln!("│    → {}", reason);
         }
@@ -642,7 +649,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
             eprintln!("│    → {}", reason);
         }
         ProcessingRecommendation::Optional { reason } => {
-            eprintln!("│ 🔵 OPTIONAL: Marginal benefit expected");
+            eprintln!("│ OPTIONAL: Marginal benefit expected");
             eprintln!("│    → {}", reason);
         }
         ProcessingRecommendation::NotRecommended { codec, reason } => {
@@ -677,7 +684,7 @@ pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
         }
 
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
-            eprintln!("🔥 EXCELLENT TARGET: {} is a legacy codec!", codec);
+            eprintln!("EXCELLENT TARGET: {} is a legacy codec!", codec);
             eprintln!("    {}", reason);
             eprintln!("    (This file will benefit greatly from modern encoding!)");
         }
