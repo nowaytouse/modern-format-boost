@@ -312,3 +312,27 @@
 - **confidence_detail**: `build_result` 中 `ConfidenceBreakdown::default()` 旁加注释「not filled; confidence is the fixed value above」。
 - **strategy_name**: 删除自由函数 `strategy_name(mode)`，从 lib 导出中移除；测试改为仅断言 `strategy.name().is_empty() == false`。
 - **description()**: 六种 Strategy 的 `description()` 返回值由中文改为英文，与代码风格一致。
+
+---
+
+## 20. video_quality_detector.rs 审计修复
+
+### 20.1 P1 — 正确性
+
+- **estimate_content_type**: 增加 `fps` 参数；新增 Gaming（fps ≥ 50、1080p/720p、bpp 0.08–0.5）、LiveAction（bpp 0.05–0.6、非 Intermediate），典型电影/剧集不再全部落为 Unknown。
+- **to_quality_analysis**: GOP 无数据时用帧率相关默认值 `(fps * 2.5).clamp(12, 250)` 替代硬编码 60；色彩空间无数据时按分辨率区分：`height ≤ 576` 用 `bt601`，否则 `bt709`，符合 SD/HD 约定。
+- **ChromaSubsampling::from_pix_fmt**: 在宽泛的 `yuv` 兜底前显式处理 `411`（→ Yuv422）、`410`（→ Yuv420），避免 yuv411p/yuv410p 被误判为 Yuv420；并增加 yuv411p/yuv410p 的单元测试。
+
+### 20.2 P2 — 设计
+
+- **VideoRoutingDecision**: 删除与顶层重复的 `should_skip`、`skip_reason`，调用方统一从 `VideoQualityAnalysis.should_skip` / `skip_reason` 读取；本模块内测试改为使用 `result.should_skip`。
+- **calculate_quality_score**: 使用 `bpp` 在 Standard/HighQuality 档内做小幅调整（bpp_tweak），同档内不同 bpp 质量分数有区分。
+- **b_frame_count**: 在结构体字段上注明「Estimated from has_b_frames only (0 or 2); not from actual ffprobe B-frame count」。
+- **make_video_routing_decision**: 删除未使用的 `_is_modern` 参数。
+- **estimate_crf_from_bpp**: 对超高 BPP 增加下界：`adjusted_bpp > 5` 时返回 CRF 14，`> 1` 时 18，避免极高 bpp 与 1.x 混同。
+
+### 20.3 P3 — 代码质量
+
+- **_pixels**: 删除未使用的 `_pixels` 局部变量。
+- **test_strict_legacy_never_skip**: 注释与断言文案改为「Non-modern (Legacy or Inefficient) codec」，变量名改为 `non_modern_codecs`，避免 mjpeg（Inefficient）被误称为 Legacy。
+- **analyze_video_quality**: 增加文档注释，建议参数过多时考虑使用结构体（如 VideoQualityInput）以降低参数顺序错误风险。
