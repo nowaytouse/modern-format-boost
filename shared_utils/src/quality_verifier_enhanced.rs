@@ -15,6 +15,7 @@ pub const DEFAULT_MIN_FILE_SIZE: u64 = 32;
 
 /// Options for enhanced post-encode verification.
 #[derive(Clone, Debug, Default)]
+#[must_use]
 pub struct VerifyOptions {
     /// Minimum output file size in bytes. If 0, uses [DEFAULT_MIN_FILE_SIZE].
     pub min_file_size: u64,
@@ -56,6 +57,7 @@ impl VerifyOptions {
 
 /// Result of enhanced verification.
 #[derive(Clone, Debug)]
+#[must_use]
 pub struct EnhancedVerifyResult {
     pub file_ok: bool,
     pub duration_match: Option<bool>,
@@ -66,9 +68,7 @@ pub struct EnhancedVerifyResult {
 
 impl EnhancedVerifyResult {
     pub fn passed(&self) -> bool {
-        self.file_ok
-            && self.duration_match.unwrap_or(true)
-            && self.has_video_stream.unwrap_or(true)
+        self.file_ok && self.duration_match.unwrap_or(true) && self.has_video_stream.unwrap_or(true)
     }
 
     pub fn summary(&self) -> String {
@@ -83,8 +83,12 @@ impl EnhancedVerifyResult {
 /// Run basic output file health check (exists, size, readable).
 /// Does not require ffprobe.
 pub fn verify_output_file(output: &Path, min_size: u64) -> Result<(), String> {
-    let effective = if min_size > 0 { min_size } else { DEFAULT_MIN_FILE_SIZE };
-    verify_output_integrity(output, effective).map_err(|e| e.to_string())
+    let size = if min_size == 0 {
+        DEFAULT_MIN_FILE_SIZE
+    } else {
+        min_size
+    };
+    verify_output_integrity(output, size)
 }
 
 /// Run full enhanced verification: file health + optional duration/codec checks.
