@@ -2181,14 +2181,14 @@ impl VideoExplorer {
                         (
                             enc.name,
                             enc.get_crf_args(crf),
-                            enc.get_extra_args(),
+                            enc.extra_args(),
                             format!("🚀 GPU ({})", gpu.gpu_type),
                         )
                     } else {
                         (
                             self.encoder.ffmpeg_name(),
                             vec!["-crf".to_string(), format!("{:.1}", crf)],
-                            vec![],
+                            &[] as &[&str],
                             "CPU".to_string(),
                         )
                     }
@@ -2198,14 +2198,14 @@ impl VideoExplorer {
                         (
                             enc.name,
                             enc.get_crf_args(crf),
-                            enc.get_extra_args(),
+                            enc.extra_args(),
                             format!("🚀 GPU ({})", gpu.gpu_type),
                         )
                     } else {
                         (
                             self.encoder.ffmpeg_name(),
                             vec!["-crf".to_string(), format!("{:.1}", crf)],
-                            vec![],
+                            &[] as &[&str],
                             "CPU".to_string(),
                         )
                     }
@@ -2215,14 +2215,14 @@ impl VideoExplorer {
                         (
                             enc.name,
                             enc.get_crf_args(crf),
-                            enc.get_extra_args(),
+                            enc.extra_args(),
                             format!("🚀 GPU ({})", gpu.gpu_type),
                         )
                     } else {
                         (
                             self.encoder.ffmpeg_name(),
                             vec!["-crf".to_string(), format!("{:.1}", crf)],
-                            vec![],
+                            &[] as &[&str],
                             "CPU".to_string(),
                         )
                     }
@@ -2232,7 +2232,7 @@ impl VideoExplorer {
             (
                 self.encoder.ffmpeg_name(),
                 vec!["-crf".to_string(), format!("{:.1}", crf)],
-                vec![],
+                &[] as &[&str],
                 "CPU".to_string(),
             )
         };
@@ -2248,8 +2248,8 @@ impl VideoExplorer {
             cmd.arg(arg);
         }
 
-        for arg in &extra_args {
-            cmd.arg(*arg);
+        for arg in extra_args {
+            cmd.arg(arg);
         }
 
         cmd.arg("-progress")
