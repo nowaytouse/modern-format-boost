@@ -7,7 +7,7 @@
 //! - 美化的结果展示
 
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 
@@ -85,12 +85,8 @@ pub mod progress_style {
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_DOTS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
-#[allow(dead_code)]
-const SPINNER_BOUNCE: &[&str] = &["⠁", "⠂", "⠄", "⡀", "⢀", "⠠", "⠐", "⠈"];
 
 static SPINNER_FRAME: AtomicU64 = AtomicU64::new(0);
-#[allow(dead_code)]
-static SPINNER_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 pub fn spinner_frame() -> &'static str {
     let frame = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) as usize;

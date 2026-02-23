@@ -42,17 +42,6 @@ fn beijing_time_now() -> String {
         .to_string()
 }
 
-#[allow(dead_code)]
-fn format_log(level: &str, component: &str, msg: &str) -> String {
-    format!(
-        "[{}] [{}] [{}] {}",
-        beijing_time_now(),
-        level,
-        component,
-        msg
-    )
-}
-
 
 struct StderrCapture {
     lines: Arc<Mutex<VecDeque<String>>>,
@@ -1190,11 +1179,6 @@ impl QualityCeilingDetector {
             None
         }
     }
-
-    #[allow(dead_code)]
-    fn get_last_quality(&self) -> Option<f64> {
-        self.samples.last().map(|(_, q)| *q)
-    }
 }
 
 
@@ -1336,7 +1320,6 @@ pub fn gpu_coarse_search_with_log(
 
     let silent_mode = progress_cb.is_some();
 
-    #[allow(unused_macros)]
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
             let msg = format!($($arg)*);
