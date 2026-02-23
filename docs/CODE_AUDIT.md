@@ -87,3 +87,26 @@
 | unsafe         | ✅ 已注释   | gpu_accel、metadata/macos 已加 SAFETY 与模块头说明 |
 
 **本轮修复**: 路径安全（前轮 + vid_hevc/vid_av1 conversion_api）+ 除零保护（stream_size_change_pct、prev_size）+ progress expect + unsafe 注释 + 审计文档更新。
+
+---
+
+## 9. 系统审计 / Systematic Audit（后续轮次）
+
+### 9.1 路径安全 — 已补全
+
+- **video_explorer.rs**（SSIM/PSNR/MS-SSIM 等 ffmpeg 调用）: 四处 `Command::new("ffmpeg")` 原先直接 `.arg(&self.input_path)` / `.arg(&self.output_path)`，已全部改为 `crate::safe_path_arg(self.input_path.as_path()).as_ref()` 与 `crate::safe_path_arg(self.output_path.as_path()).as_ref()`（约 2505、2631、2674、2753 行附近）。
+- **video_explorer/dynamic_mapping.rs**: 校准阶段将 `temp_gpu` / `temp_cpu` 作为 ffmpeg 输出路径传入 Command 的三处（约 168、217、355 行），已改为 `crate::safe_path_arg(...).as_ref()`，与仓库内其余 Command 调用一致。
+
+### 9.2 unwrap / expect（生产代码）
+
+- **progress / unified_progress**: 模板字符串与进度条构建中仍有 `.expect(...)`，用于“未初始化即使用”的可追溯 panic，已接受。
+- **gpu_accel**: 固定偏移等处的 expect 已核查，属可控逻辑。
+- **测试与 IO**: 测试代码中的 `.unwrap()` 仅限测试；生产 IO 路径已优先使用 `Result` + `?`。
+
+### 9.3 除零与数值
+
+- 审计中列出的潜在除零点（precheck、report、conversion、video_explorer、dynamic_mapping、calibration、quality_matcher、msssim_progress 等）多数已有上下文保护或仅在有效数据下调用；高优先级处（如 gpu_coarse_search、stream_analysis）已在 §3 中修复。其余可按需在后续迭代中逐处加防护。
+
+### 9.4 Mutex 与锁
+
+- 未使用 `.lock().unwrap()`；Mutex 使用方式为 poison-safe（`lock().unwrap_or_else(|e| e.into_inner())` 或 `if let Ok(...) = ...lock()`），见 §2。
