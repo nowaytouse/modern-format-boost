@@ -263,6 +263,8 @@ pub enum ExploreMode {
 }
 
 
+/// Per-component confidence; overall() is computed from weights.
+/// Explore results currently use a fixed confidence value per mode; this breakdown is not yet filled.
 #[derive(Debug, Clone, Default)]
 pub struct ConfidenceBreakdown {
     pub sampling_coverage: f64,
@@ -400,8 +402,6 @@ pub struct QualityThresholds {
     pub validate_ms_ssim: bool,
     pub force_ms_ssim_long: bool,
 }
-
-pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
 impl Default for QualityThresholds {
     fn default() -> Self {
@@ -812,95 +812,13 @@ pub struct VideoExplorer {
 }
 
 impl VideoExplorer {
-    pub fn new(
+    fn build(
         input: &Path,
         output: &Path,
         encoder: VideoEncoder,
         vf_args: Vec<String>,
         config: ExploreConfig,
-        max_threads: usize,
-    ) -> Result<Self> {
-        crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{}", e))?;
-        crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        let input_size = fs::metadata(input)
-            .context("Failed to read input file metadata")?
-            .len();
-
-
-        let gpu = crate::gpu_accel::GpuAccel::detect();
-        let use_gpu = gpu.is_available()
-            && match encoder {
-                VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
-                VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
-                VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
-            };
-
-        let input_video_stream_size = if config.use_pure_media_comparison {
-            let stream_info = crate::stream_size::extract_stream_sizes(input);
-            stream_info.video_stream_size
-        } else {
-            input_size
-        };
-
-        Ok(Self {
-            config,
-            encoder,
-            input_path: input.to_path_buf(),
-            output_path: output.to_path_buf(),
-            input_size,
-            vf_args,
-            max_threads,
-            use_gpu,
-            preset: EncoderPreset::default(),
-            input_video_stream_size,
-        })
-    }
-
-    pub fn new_with_gpu(
-        input: &Path,
-        output: &Path,
-        encoder: VideoEncoder,
-        vf_args: Vec<String>,
-        config: ExploreConfig,
-        use_gpu: bool,
-        max_threads: usize,
-    ) -> Result<Self> {
-        crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{}", e))?;
-        crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-        let input_size = fs::metadata(input)
-            .context("Failed to read input file metadata")?
-            .len();
-
-
-        let input_video_stream_size = if config.use_pure_media_comparison {
-            let stream_info = crate::stream_size::extract_stream_sizes(input);
-            stream_info.video_stream_size
-        } else {
-            input_size
-        };
-
-        Ok(Self {
-            config,
-            encoder,
-            input_path: input.to_path_buf(),
-            output_path: output.to_path_buf(),
-            input_size,
-            vf_args,
-            max_threads,
-            use_gpu,
-            preset: EncoderPreset::default(),
-            input_video_stream_size,
-        })
-    }
-
-    pub fn new_with_preset(
-        input: &Path,
-        output: &Path,
-        encoder: VideoEncoder,
-        vf_args: Vec<String>,
-        config: ExploreConfig,
+        use_gpu: Option<bool>,
         preset: EncoderPreset,
         max_threads: usize,
     ) -> Result<Self> {
@@ -911,14 +829,18 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-
-        let gpu = crate::gpu_accel::GpuAccel::detect();
-        let use_gpu = gpu.is_available()
-            && match encoder {
-                VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
-                VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
-                VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
-            };
+        let use_gpu = match use_gpu {
+            Some(b) => b,
+            None => {
+                let gpu = crate::gpu_accel::GpuAccel::detect();
+                gpu.is_available()
+                    && match encoder {
+                        VideoEncoder::Hevc => gpu.get_hevc_encoder().is_some(),
+                        VideoEncoder::Av1 => gpu.get_av1_encoder().is_some(),
+                        VideoEncoder::H264 => gpu.get_h264_encoder().is_some(),
+                    }
+            }
+        };
 
         let input_video_stream_size = if config.use_pure_media_comparison {
             let stream_info = crate::stream_size::extract_stream_sizes(input);
@@ -939,6 +861,68 @@ impl VideoExplorer {
             preset,
             input_video_stream_size,
         })
+    }
+
+    pub fn new(
+        input: &Path,
+        output: &Path,
+        encoder: VideoEncoder,
+        vf_args: Vec<String>,
+        config: ExploreConfig,
+        max_threads: usize,
+    ) -> Result<Self> {
+        Self::build(
+            input,
+            output,
+            encoder,
+            vf_args,
+            config,
+            None,
+            EncoderPreset::default(),
+            max_threads,
+        )
+    }
+
+    pub fn new_with_gpu(
+        input: &Path,
+        output: &Path,
+        encoder: VideoEncoder,
+        vf_args: Vec<String>,
+        config: ExploreConfig,
+        use_gpu: bool,
+        max_threads: usize,
+    ) -> Result<Self> {
+        Self::build(
+            input,
+            output,
+            encoder,
+            vf_args,
+            config,
+            Some(use_gpu),
+            EncoderPreset::default(),
+            max_threads,
+        )
+    }
+
+    pub fn new_with_preset(
+        input: &Path,
+        output: &Path,
+        encoder: VideoEncoder,
+        vf_args: Vec<String>,
+        config: ExploreConfig,
+        preset: EncoderPreset,
+        max_threads: usize,
+    ) -> Result<Self> {
+        Self::build(
+            input,
+            output,
+            encoder,
+            vf_args,
+            config,
+            None,
+            preset,
+            max_threads,
+        )
     }
 
     pub fn explore(&self) -> Result<ExploreResult> {
@@ -1018,6 +1002,7 @@ impl VideoExplorer {
         progress_line!("Calculate SSIM...");
         let ssim = self.calculate_ssim().ok().flatten();
         progress_done!();
+        // SSIM is computed from self.output_path; must match the encode just above (max_crf).
 
         let size_change_pct = self.calc_change_pct(best_size);
         let elapsed = start_time.elapsed();
@@ -1113,7 +1098,7 @@ impl VideoExplorer {
         let mut cache: CrfCache<u64> = CrfCache::new();
 
         let start_time = std::time::Instant::now();
-        let mut _best_crf_so_far: f32 = 0.0;
+        let mut best_crf_so_far: f32 = 0.0;
 
         let encode_cached =
             |crf: f32, cache: &mut CrfCache<u64>, explorer: &VideoExplorer| -> Result<u64> {
@@ -1160,7 +1145,6 @@ impl VideoExplorer {
 
         if self.can_compress_with_margin(initial_size) {
             progress_done!();
-            _best_crf_so_far = self.config.initial_crf;
             let elapsed = start_time.elapsed();
 
             pb.finish_and_clear();
@@ -1210,13 +1194,13 @@ impl VideoExplorer {
                 mid,
                 size_pct,
                 compress_icon,
-                _best_crf_so_far
+                best_crf_so_far
             );
 
             if self.can_compress_with_margin(size) {
                 best_crf = Some(mid);
                 best_size = Some(size);
-                _best_crf_so_far = mid;
+                    best_crf_so_far = mid;
                 high = mid;
             } else {
                 low = mid;
@@ -1347,12 +1331,11 @@ impl VideoExplorer {
                 self.calc_change_pct(size)
             );
 
+            best_result = Some((boundary, size, ssim));
             if ssim >= min_ssim {
-                best_result = Some((boundary, size, ssim));
                 log_realtime!("      ✅ Valid: compresses + SSIM OK");
             } else {
-                best_result = Some((boundary, size, ssim));
-                log_realtime!("      ⚠️ SSIM below threshold, but best available");
+                log_realtime!("      ⚠️ SSIM below threshold, accepting best available (no lower-CRF retry)");
             }
         }
 
@@ -1503,7 +1486,7 @@ impl VideoExplorer {
             best_quality = max_quality;
             best_ssim = max_ssim;
         } else {
-            log_realtime!("   📍 Phase 2: Golden section search");
+            log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
             const PHI: f32 = 0.618;
 
             let mut low = self.config.min_crf;
@@ -2464,7 +2447,7 @@ impl VideoExplorer {
             let duration = get_video_duration(&self.input_path);
             let should_skip = match duration {
                 Some(d) => {
-                    d >= LONG_VIDEO_THRESHOLD as f64
+                    d >= LONG_VIDEO_THRESHOLD_SECS as f64
                         && !self.config.quality_thresholds.force_ms_ssim_long
                 }
                 None => {
@@ -4466,14 +4449,14 @@ mod prop_tests_v69 {
             frame_count in 1u64..1_000_000u64,
             fps in 1.0f64..240.0f64,
         ) {
-            let expected_duration = frame_count as f64 / fps;
-
-            prop_assert!((expected_duration - (frame_count as f64 / fps)).abs() < 0.0001,
-                "Duration计算应为 frame_count/fps: {} / {} = {}",
-                frame_count, fps, expected_duration);
-
-            prop_assert!(expected_duration > 0.0,
-                "Duration应为正数: {}", expected_duration);
+            let duration = frame_count as f64 / fps;
+            prop_assert!(duration > 0.0, "Duration should be positive: {}", duration);
+            let reconstructed_frames = (duration * fps).round();
+            prop_assert!(
+                (reconstructed_frames - frame_count as f64).abs() < 1.0,
+                "duration * fps should approximate frame_count: {} * {} ≈ {}",
+                duration, fps, frame_count
+            );
         }
     }
 }
