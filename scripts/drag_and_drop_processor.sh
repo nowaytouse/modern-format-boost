@@ -37,9 +37,11 @@ show_cursor() { printf '\033[?25h'; }
 # Clear screen
 clear_screen() { printf '\033[2J\033[H'; }
 
-# Spinner + elapsed time at bottom (shows program is running, not frozen)
+# Spinner + elapsed time at bottom (shows program is running, not frozen).
+# Writes to /dev/tty only so the session log file stays clean (no spinner lines).
 SPINNER_PID=""
 ELAPSED_START=0
+_tty() { [[ -c /dev/tty ]] && printf '\r   %s Running: %s   ' "$1" "$2" > /dev/tty 2>/dev/null; }
 start_elapsed_spinner() {
     ELAPSED_START=$(date +%s)
     (
@@ -53,7 +55,7 @@ start_elapsed_spinner() {
             s=$(( elapsed_sec % 60 ))
             elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
             case $(( idx % 4 )) in 0) sp='|';; 1) sp='/';; 2) sp='-';; *) sp='\';; esac
-            printf '\r   %s Running: %s   ' "$sp" "$elapsed_str"
+            _tty "$sp" "$elapsed_str"
             idx=$(( idx + 1 ))
             sleep 0.15
         done
@@ -71,7 +73,7 @@ stop_elapsed_spinner() {
     m=$(( (elapsed_sec % 3600) / 60 ))
     s=$(( elapsed_sec % 60 ))
     elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
-    printf '\r   %s Total time: %s    \n' "✅" "$elapsed_str"
+    [[ -c /dev/tty ]] && printf '\r   ✅ Total time: %s    \n' "$elapsed_str" > /dev/tty 2>/dev/null
 }
 
 # 📝 Log directory and file
@@ -581,25 +583,15 @@ if [[ "$1" == "--internal-worker" ]]; then
     exit $?
 fi
 
-# Wrapper function with full session logging
+# Wrapper function with full session logging.
+# Use tee (not script) so spinner output (written to /dev/tty) is not captured in the log file.
 main() {
     init_log
-    export LOG_FILE  # 🔥 Make it available to the worker process
-    
-    # 🔥 v7.0.1: Support both macOS and Linux script syntax
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS: Use -F for flush. Command and args follow the log file positional argument.
-        # No -c option on macOS native script. Adding -e for child exit code.
-        script -q -e -F "$LOG_FILE" "$BASH" "$0" --internal-worker "$@"
-    else
-        # Linux / Others: Use -f for flush, and -c for command string
-        # Fallback to direct execution if script is not util-linux
-        if script --version 2>/dev/null | grep -q "util-linux"; then
-             script -q -f "$LOG_FILE" -c "$BASH \"$0\" --internal-worker \"$*\""
-        else
-             _main "$@"
-        fi
-    fi
+    export LOG_FILE
+    export VERBOSE_LOG_FILE
+
+    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | tee "$LOG_FILE"
+    exit "${PIPESTATUS[0]:-$?}"
 }
 
 main "$@"
