@@ -655,12 +655,14 @@ mod tests {
     }
 
     fn create_gradient(width: u32, height: u32) -> Vec<u8> {
+        let w = width.max(1);
+        let h = height.max(1);
         let mut data = Vec::with_capacity((width as usize) * (height as usize) * 4);
         for y in 0..height {
             for x in 0..width {
-                let r = ((x * 255) / width) as u8;
-                let g = ((y * 255) / height) as u8;
-                let b = (((x + y) * 127) / (width + height)) as u8;
+                let r = ((x * 255) / w) as u8;
+                let g = ((y * 255) / h) as u8;
+                let b = (((x + y) * 127) / (w + h)) as u8;
                 data.extend_from_slice(&[r, g, b, 255]);
             }
         }
@@ -668,6 +670,7 @@ mod tests {
     }
 
     fn create_checkerboard(width: u32, height: u32, block_size: u32) -> Vec<u8> {
+        let block_size = block_size.max(1);
         let mut data = Vec::with_capacity((width as usize) * (height as usize) * 4);
         for y in 0..height {
             for x in 0..width {
