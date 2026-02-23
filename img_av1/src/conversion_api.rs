@@ -204,7 +204,13 @@ pub fn execute_conversion(
     }
 
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
+    let size_reduction = output_size.map(|s| {
+        if detection.file_size == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - s as f32 / detection.file_size as f32)
+        }
+    });
 
     if config.preserve_metadata || config.preserve_timestamps {
         shared_utils::copy_metadata(input_path, &output_path);
@@ -233,23 +239,16 @@ pub fn execute_conversion(
 }
 
 fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_str = input.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input))
-    })?;
-    let output_str = output.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
-    })?;
-
-    let args = if *format == DetectedFormat::JPEG {
-        vec!["--lossless_jpeg=1", "--", input_str, output_str]
+    let mut cmd = Command::new("cjxl");
+    if *format == DetectedFormat::JPEG {
+        cmd.args(["--lossless_jpeg=1", "--"]);
     } else {
-        vec![
-            "-d", "0.0", "-e", "7",
-            "--", input_str, output_str,
-        ]
-    };
-
-    let status = Command::new("cjxl").args(&args).output()?;
+        cmd.args(["-d", "0.0", "-e", "7", "--"]);
+    }
+    let status = cmd
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(output).as_ref())
+        .output()?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
@@ -262,15 +261,11 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
 
 fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
     let q = quality.unwrap_or(85).to_string();
-    let input_str = input.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input))
-    })?;
-    let output_str = output.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
-    })?;
 
     let status = Command::new("avifenc")
-        .args([input_str, output_str, "-q", &q])
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(output).as_ref())
+        .args(["-q", &q])
         .output()?;
 
     if !status.status.success() {
@@ -288,6 +283,7 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
 
     let safe_input = shared_utils::safe_path_arg(input);
+    let safe_output = shared_utils::safe_path_arg(output);
     let status = Command::new("ffmpeg")
         .arg("-y")
         .arg("-threads")
@@ -307,10 +303,8 @@ fn convert_to_av1_mp4(input: &Path, output: &Path, fps: Option<f32>) -> Result<(
             &fps_str,
             "-pix_fmt",
             "yuv420p",
-            output.to_str().ok_or_else(|| {
-                ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
-            })?,
         ])
+        .arg(safe_output.as_ref())
         .output()?;
 
     if !status.status.success() {
@@ -379,7 +373,13 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
     }
 
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
+    let size_reduction = output_size.map(|s| {
+        if detection.file_size == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - s as f32 / detection.file_size as f32)
+        }
+    });
 
     Ok(ConversionOutput {
         original_path: detection.file_path.clone(),
@@ -397,29 +397,16 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
 }
 
 fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_str = input.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid input path: {:?}", input))
-    })?;
-    let output_str = output.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid output path: {:?}", output))
-    })?;
-
-    let args = if *format == DetectedFormat::JPEG {
-        vec!["--lossless_jpeg=1", "--", input_str, output_str]
+    let mut cmd = Command::new("cjxl");
+    if *format == DetectedFormat::JPEG {
+        cmd.args(["--lossless_jpeg=1", "--"]);
     } else {
-        vec![
-            "-d",
-            "0.0",
-            "--modular=1",
-            "-e",
-            "9",
-            "--",
-            input_str,
-            output_str,
-        ]
-    };
-
-    let status = Command::new("cjxl").args(&args).output()?;
+        cmd.args(["-d", "0.0", "--modular=1", "-e", "9", "--"]);
+    }
+    let status = cmd
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(output).as_ref())
+        .output()?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(

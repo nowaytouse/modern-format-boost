@@ -627,8 +627,8 @@ pub fn convert_to_jxl_matched(
     }
 
     cmd.arg("--")
-        .arg(input)
-        .arg(&output);
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
 
@@ -640,7 +640,11 @@ pub fn convert_to_jxl_matched(
             let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
             if output_size > max_allowed_size {
-                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
+                let size_increase_pct = if input_size == 0 {
+                    0.0
+                } else {
+                    ((output_size as f64 / input_size as f64) - 1.0) * 100.0
+                };
                 if let Err(e) = fs::remove_file(&output) {
                     eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
                 }
