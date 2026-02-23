@@ -336,3 +336,120 @@
 - **_pixels**: 删除未使用的 `_pixels` 局部变量。
 - **test_strict_legacy_never_skip**: 注释与断言文案改为「Non-modern (Legacy or Inefficient) codec」，变量名改为 `non_modern_codecs`，避免 mjpeg（Inefficient）被误称为 Legacy。
 - **analyze_video_quality**: 增加文档注释，建议参数过多时考虑使用结构体（如 VideoQualityInput）以降低参数顺序错误风险。
+
+---
+
+## 21. 深挖审计：正确性与设计潜在问题
+
+以下为对 shared_utils 及关联路径的深挖结论：除已在前述章节修复的内容外，发现的潜在问题与已确认安全点如下。
+
+### 21.1 正确性 — 潜在问题
+
+- **image_quality_detector 测试辅助函数**  
+  - `create_checkerboard`：`block_size == 0` 会除零。已改为 `let block_size = block_size.max(1)`，避免误用导致 panic。  
+  - `create_gradient`：`width` 或 `height` 为 0 会除零。已改为使用 `w = width.max(1)`、`h = height.max(1)` 参与除法。
+
+- **dynamic_mapping 校准后使用 `anchors[0]`**  
+  仅在 `gpu_size > 0 && cpu_size > 0` 时 `add_anchor`，故 `calibration_success == true` 时 `anchors[0].gpu_size` 必为正，当前逻辑安全。若将来放宽 `add_anchor` 条件，需在 412–421 行使用 ratio 前再次保证 `gpu_size > 0`，避免除零。
+
+- **image_metrics / quality_matcher / precheck / ffprobe**  
+  - PSNR/MSE、SSIM 分母（pixel_count、n、denominator、used_weight_sum）均有零值检查或常数分母。  
+  - `parse_frame_rate`、precheck 中 fps/duration 解析均对 `den > 0` 或等效条件做了防护。  
+  - `video_bitrate()` 中 `pixels = w*h`、`fps > 0` 已校验。  
+  **结论**：当前实现下除零风险已覆盖。
+
+### 21.2 设计 — 观察与建议
+
+- **video_explorer / gpu_accel**  
+  - `probe_crfs` 固定为 3 元组，`probe_crfs[0/1/2]` 访问安全。  
+  - 失败路径上 vid_hevc/vid_av1 conversion_api 与 animated_image 均存在「删除输出 + copy_on_skip_or_fail」的清理逻辑，行为一致。
+
+- **conversion.rs `get_file_dimensions`**  
+  使用 `parts.len() >= 2` 后再访问 `parts[0]`、`parts[1]`，解析失败不 panic，设计合理。
+
+- **checkpoint**  
+  `normalize_path` 使用 `canonicalize().ok().and_then(...).unwrap_or_else(...)`，非 UTF-8 或不可 canonicalize 的路径会回退到 `path.display().to_string()`，不会因路径编码导致 panic。
+
+- **metadata/exif preserve_internal_metadata_fallback**  
+  失败时对 temp 文件有恢复或清理（rename 回退、emergency copy、remove_file），逻辑完整。
+
+### 21.3 代码质量 — 建议
+
+- **unwrap/expect 分布**  
+  video_quality_detector 中数量较多（多为测试或内部构造）；quality_matcher、xmp_merger、checkpoint 等也有使用。建议：对「用户可控输入或外部文件」路径继续优先使用 `Result` + `?`，并在错误中附带路径/上下文。
+
+- **类型转换**  
+  大量 `as usize`/`as u32`/`as f64` 用于索引或数值计算。当前未发现明显溢出或截断导致的逻辑错误；若后续引入极端分辨率或超大 duration，建议对「宽高/帧数/时长 → 整数」的转换做范围检查或 saturating 语义。
+
+- **浮点比较**  
+  已有不少 `> 0.0`、`< 1e-10` 等阈值判断，未发现直接用 `==` 比较未约束浮点数的关键逻辑；保持现状即可。
+
+### 21.4 优先级汇总（本节）
+
+| 优先级 | 项目 | 建议 |
+|--------|------|------|
+| 已修复 | create_checkerboard / create_gradient | 已用 max(1) 防护 block_size/width/height 为 0 的除零 |
+| 信息 | 其余除零/索引/清理路径 | 已核查，当前实现安全 |
+| 信息 | unwrap/expect、as 转换 | 新代码继续保守处理；极端输入时补充范围检查 |
+
+---
+
+## 22. progress.rs — 正确性与设计审计（非安全）
+
+**范围**: `shared_utils/src/progress.rs`，仅审查正确性、除零、API 一致性、设计重复与边界情况。
+
+### 22.1 已修复
+
+- **DetailedCoarseProgressBar SSIM 0.0 歧义**  
+  原先用 `current_ssim == 0` 表示“未设置”，但 `0.0f64.to_bits() == 0`，导致真实 SSIM 0.0 被当成 None。已改为增加 `has_ssim: AtomicBool`，仅在有 `Some(ssim)` 时置 true 并写入 `current_ssim`；读取时用 `has_ssim` 区分“未设置”与“0.0”。
+
+- **truncate_filename 边界**  
+  当 `max_len <= 3` 时，`(max_len - 3) / 2` 在 `max_len < 3` 时在 `usize` 下会下溢。已改为：`filename.len() <= max_len` 直接返回；`max_len <= 3` 时返回 `".".repeat(max_len)`；否则再按“前半...后半”截断。
+
+### 22.2 正确性 — 已核查
+
+- **除零**  
+  `CoarseProgressBar::render` 使用 `total.max(1)`；`DetailedCoarseProgressBar::render` 使用 `total_iterations.max(1)`；`ExploreLogger::calc_change` 与 `BatchProgress::stats` 对 `input_size`/`input_bytes` 为 0 有分支，无除零。
+
+- **ETA**  
+  `CoarseProgressBar` 在 `current > 0 && current < total` 时计算 ETA；`SmartProgressBar` 对 `recent_times` 仅在 `len() > 0` 时做平均，逻辑正确。
+
+- **finish 幂等**  
+  `CoarseProgressBar::finish`、`DetailedCoarseProgressBar::finish` 等通过 `is_finished.swap(true)` 实现“只执行一次”，行为正确。
+
+### 22.3 设计 / API 说明
+
+- **CoarseProgressBar::set_message(_msg)**  
+  仅调用 `self.render()`，未把 `_msg` 写入任何字段，因此“设置的消息”不会在进度条上显示。若需求是“显示自定义消息”，需在结构体增加 message 字段并在 render 中输出；当前为未完成 API。
+
+- **ExploreLogger::finish()**  
+  使用 `best_size` 计算 `size_change`；若从未调用 `new_best()`，`best_size` 为 0，会得到“-100%”等显示。建议：要么保证调用方至少调用一次 `new_best`，要么在 `finish` 中对“从未更新过 best”做单独提示。
+
+- **GlobalProgressManager**  
+  `create_main` / `create_sub` 用 `Option` 存 bar，返回 `as_ref().expect(...)`。下一次 `create_main` 会替换掉之前的 bar，之前返回的引用即失效。调用方需注意：不要持有旧引用在替换后继续使用。
+
+- **进度条类型较多**  
+  Coarse / DetailedCoarse / FixedBottom / Explore / ExploreLogger / Batch / SmartProgressBar / GlobalProgressManager 等职责有重叠，存在重复的“完成时恢复光标”等逻辑；长期可考虑收敛为 fewer 抽象，非必须。
+
+### 22.4 小结
+
+- 已修复：SSIM 0.0 与 None 的歧义（has_ssim）、truncate_filename 的 max_len 边界。
+- 正确性：除零与 finish 幂等已核查，无问题。
+- 设计：set_message 未真正展示消息、ExploreLogger 未更新 best 时的 finish 语义、GlobalProgressManager 引用生命周期，已在文档中说明，可按需后续改进。
+
+---
+
+## 23. quality_verifier_enhanced 实现与 heartbeat_manager 修复
+
+### 23.1 quality_verifier_enhanced
+
+- **已实现**：原 0 字节占位文件已完整实现为“编码后增强质量校验”模块。
+- **功能**：`verify_output_file(path, min_size)` 基础文件健康检查；`verify_after_encode(input, output, options)` 文件完整性 + 可选时长匹配、视频流存在性（ffprobe）；`VerifyOptions` / `EnhancedVerifyResult` 可配置与可扩展。
+- **依赖**：复用 [crate::checkpoint::verify_output_integrity]、[crate::ffprobe::probe_video]，无循环依赖。
+- **测试**：单元测试覆盖 options 默认值、不存在路径、空/小文件、result.passed() 逻辑。
+
+### 23.2 heartbeat_manager 原子下溢修复
+
+- **问题**：`unregister_progress_bar()` / `unregister_heartbeat()` 使用 `fetch_sub(1)`，在“注销次数多于注册次数”（如测试清理）时会发生原子下溢，`active_progress_count()` 返回 `usize::MAX`，导致 `test_progress_bar_guard` 失败。
+- **修复**：`unregister_progress_bar` 与 `unregister_heartbeat` 改为仅在 `count > 0` 时用 `compare_exchange` 递减，避免下溢。
+- **验证**：`cargo test -p shared_utils` 全部通过（含 heartbeat_manager 与 progress 相关测试）。

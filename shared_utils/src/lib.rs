@@ -50,6 +50,7 @@ pub use path_safety::safe_path_arg;
 pub mod ffprobe_json;
 pub mod stream_size;
 pub mod pure_media_verifier;
+pub mod quality_verifier_enhanced;
 pub mod types;
 pub mod app_error;
 pub mod file_copier;

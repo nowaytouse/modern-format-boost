@@ -173,7 +173,9 @@ pub struct DetailedCoarseProgressBar {
     input_size: u64,
     current_crf: AtomicU64,
     current_size: AtomicU64,
+    /// SSIM bits; meaning depends on has_ssim (0.0 is a valid value).
     current_ssim: AtomicU64,
+    has_ssim: AtomicBool,
     best_crf: AtomicU64,
     start_time: Instant,
     last_render: Arc<Mutex<Instant>>,
@@ -193,6 +195,7 @@ impl DetailedCoarseProgressBar {
             current_crf: AtomicU64::new(0),
             current_size: AtomicU64::new(0),
             current_ssim: AtomicU64::new(0),
+            has_ssim: AtomicBool::new(false),
             best_crf: AtomicU64::new(0),
             start_time: Instant::now(),
             last_render: Arc::new(Mutex::new(Instant::now())),
@@ -208,6 +211,7 @@ impl DetailedCoarseProgressBar {
         self.current_size.store(size, Ordering::Relaxed);
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
+            self.has_ssim.store(true, Ordering::Relaxed);
         }
 
         if size < self.input_size {
@@ -301,9 +305,8 @@ impl DetailedCoarseProgressBar {
         let iter = self.current_iteration.load(Ordering::Relaxed);
         let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
         let size = self.current_size.load(Ordering::Relaxed);
-        let ssim_bits = self.current_ssim.load(Ordering::Relaxed);
-        let ssim = if ssim_bits != 0 {
-            Some(f64::from_bits(ssim_bits))
+        let ssim = if self.has_ssim.load(Ordering::Relaxed) {
+            Some(f64::from_bits(self.current_ssim.load(Ordering::Relaxed)))
         } else {
             None
         };
@@ -1015,6 +1018,8 @@ impl BatchProgress {
 fn truncate_filename(filename: &str, max_len: usize) -> String {
     if filename.len() <= max_len {
         filename.to_string()
+    } else if max_len <= 3 {
+        ".".repeat(max_len)
     } else {
         let half = (max_len - 3) / 2;
         format!(
