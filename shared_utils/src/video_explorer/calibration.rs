@@ -47,25 +47,28 @@ impl CalibrationPoint {
     }
 
     pub fn print_report(&self, input_size: u64) {
+        if !crate::progress_mode::is_verbose_mode() {
+            return;
+        }
         let size_ratio = self.gpu_size as f64 / input_size as f64;
         let size_pct = (size_ratio - 1.0) * 100.0;
 
         eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 🎯 GPU→CPU Calibration Report");
+        eprintln!("│ GPU→CPU Calibration Report");
         eprintln!("├─────────────────────────────────────────────────────");
         eprintln!(
-            "│ 📍 GPU Boundary: CRF {:.1} → {:.1}% size",
+            "│ GPU Boundary: CRF {:.1} → {:.1}% size",
             self.gpu_crf, size_pct
         );
         if let Some(ssim) = self.gpu_ssim {
-            eprintln!("│ 📊 GPU SSIM: {:.4}", ssim);
+            eprintln!("│ GPU SSIM: {:.4}", ssim);
         }
         eprintln!(
-            "│ 🎯 Predicted CPU Start: CRF {:.1}",
+            "│ Predicted CPU Start: CRF {:.1}",
             self.predicted_cpu_crf
         );
-        eprintln!("│ 📈 Confidence: {:.0}%", self.confidence * 100.0);
-        eprintln!("│ 💡 Reason: {}", self.reason);
+        eprintln!("│ Confidence: {:.0}%", self.confidence * 100.0);
+        eprintln!("│ Reason: {}", self.reason);
         eprintln!("└─────────────────────────────────────────────────────");
     }
 }
