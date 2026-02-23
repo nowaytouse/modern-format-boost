@@ -10,9 +10,9 @@ pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
 
 pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
 
-pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 100;
+pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 
-pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 80;
+pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,7 +114,7 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
         LONG_VIDEO_FALLBACK_ITERATIONS
     } else if ultimate_mode {
-        200
+        crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS
     } else {
         NORMAL_MAX_ITERATIONS
     }
