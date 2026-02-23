@@ -88,10 +88,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         )));
     }
 
-    let path_str = path.to_str().ok_or_else(|| {
-        FFprobeError::ExecutionFailed(format!("Invalid path encoding: {}", path.display()))
-    })?;
-
+    let path_arg = crate::safe_path_arg(path);
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -101,8 +98,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
             "-show_format",
             "-show_streams",
             "--",
-            path_str,
         ])
+        .arg(path_arg.as_ref())
         .output()?;
 
     if !output.status.success() {
@@ -244,8 +241,8 @@ pub fn get_duration(path: &Path) -> Option<f64> {
             "-of",
             "default=noprint_wrappers=1:nokey=1",
             "--",
-            path.to_str()?,
         ])
+        .arg(crate::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 
@@ -272,8 +269,8 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
             "-of",
             "default=noprint_wrappers=1:nokey=1",
             "--",
-            path.to_str()?,
         ])
+        .arg(crate::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 

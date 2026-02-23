@@ -9,6 +9,13 @@ use super::calibration;
 use super::dynamic_mapping;
 use super::precheck;
 
+/// Percentage change from input stream size (avoids div-by-zero / inf when input is 0).
+#[inline]
+fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
+    let denom = input_size.max(1) as f64;
+    (output_size as f64 / denom - 1.0) * 100.0
+}
+
 pub fn explore_with_gpu_coarse_search(
     input: &Path,
     output: &Path,
@@ -1055,7 +1062,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
     iterations += 1;
     let gpu_output_video_size = crate::stream_size::get_output_video_stream_size(output);
-    let gpu_pct = (gpu_output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
+    let gpu_pct = stream_size_change_pct(gpu_output_video_size, input_video_stream_size);
     let gpu_ssim = calculate_ssim_quick();
 
     if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
@@ -1192,7 +1199,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             iterations += 1;
             let output_video_size = crate::stream_size::get_output_video_stream_size(output);
             let size_pct =
-                (output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
+                stream_size_change_pct(output_video_size, input_video_stream_size);
             let current_ssim_opt = calculate_ssim_quick();
 
             if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
@@ -1403,7 +1410,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             iterations += 1;
             let output_video_size = crate::stream_size::get_output_video_stream_size(output);
             let size_pct =
-                (output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
+                stream_size_change_pct(output_video_size, input_video_stream_size);
 
             if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
                 best_crf = Some(test_crf);
@@ -1426,7 +1433,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 "   Video stream: input {} vs output {} ({:+.1}%)",
                 crate::format_bytes(input_video_stream_size),
                 crate::format_bytes(last_output_video),
-                (last_output_video as f64 / input_video_stream_size as f64 - 1.0) * 100.0
+                stream_size_change_pct(last_output_video, input_video_stream_size)
             );
             let max_size = encode_cached(max_crf, &mut size_cache)?;
             iterations += 1;
@@ -1452,7 +1459,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 iterations += 1;
                 let output_video_size = crate::stream_size::get_output_video_stream_size(output);
                 let size_pct =
-                    (output_video_size as f64 / input_video_stream_size as f64 - 1.0) * 100.0;
+                    stream_size_change_pct(output_video_size, input_video_stream_size);
                 let current_ssim_opt = calculate_ssim_quick();
 
                 if crate::stream_size::can_compress_pure_video(output, input_video_stream_size) {
@@ -1463,7 +1470,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_ssim_tracked = current_ssim_opt;
 
                     let size_increase = size as f64 - prev_size as f64;
-                    let size_increase_pct = (size_increase / prev_size as f64) * 100.0;
+                    let size_increase_pct = if prev_size > 0 {
+                        (size_increase / prev_size as f64) * 100.0
+                    } else {
+                        0.0
+                    };
 
                     let should_stop = match (current_ssim_opt, prev_ssim_opt) {
                         (Some(current_ssim), Some(prev_ssim)) => {
@@ -1535,7 +1546,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 "   Video stream: input {} vs output {} ({:+.1}%)",
                 crate::format_bytes(input_video_stream_size),
                 crate::format_bytes(last_output_video),
-                (last_output_video as f64 / input_video_stream_size as f64 - 1.0) * 100.0
+                stream_size_change_pct(last_output_video, input_video_stream_size)
             );
             let size = encode_cached(max_crf, &mut size_cache)?;
             iterations += 1;

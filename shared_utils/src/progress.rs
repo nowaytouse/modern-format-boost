@@ -1088,8 +1088,7 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(100));
         }
         self.main_bar = Some(bar);
-        // SAFETY: set to Some on the line above
-        self.main_bar.as_ref().unwrap()
+        self.main_bar.as_ref().expect("main_bar set to Some immediately above")
     }
 
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
@@ -1108,8 +1107,7 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(80));
         }
         self.sub_bar = Some(bar);
-        // SAFETY: set to Some on the line above
-        self.sub_bar.as_ref().unwrap()
+        self.sub_bar.as_ref().expect("sub_bar set to Some immediately above")
     }
 
     pub fn inc_main(&self) {
