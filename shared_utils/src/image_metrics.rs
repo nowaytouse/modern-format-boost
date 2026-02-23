@@ -170,6 +170,9 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let conv_gray = converted.to_luma8();
 
     let pixel_count = (orig_gray.width() * orig_gray.height()) as f64;
+    if pixel_count < 1.0 {
+        return None;
+    }
 
     let orig_pixels: Vec<f64> = orig_gray.pixels().map(|p| p[0] as f64).collect();
     let conv_pixels: Vec<f64> = conv_gray.pixels().map(|p| p[0] as f64).collect();
@@ -196,7 +199,9 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
 
     let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
     let denominator = (mean_x.powi(2) + mean_y.powi(2) + C1) * (var_x + var_y + C2);
-
+    if denominator < 1e-10 {
+        return Some(1.0);
+    }
     Some(numerator / denominator)
 }
 

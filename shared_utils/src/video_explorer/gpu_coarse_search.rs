@@ -1578,7 +1578,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         crate::log_eprintln!("⚠️  SSIM calculation failed after trying all methods");
     }
 
-    let size_change_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
+    let size_change_pct = if input_size == 0 {
+        0.0
+    } else {
+        (final_full_size as f64 / input_size as f64 - 1.0) * 100.0
+    };
 
     // User-relevant success: total file smaller and quality met (not video-stream efficiency).
     let total_file_compressed = final_full_size < input_size;
@@ -1597,7 +1601,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let prediction_accuracy = 0.95;
 
     let target = compression_target_size(input_size);
-    let margin_safety = if final_full_size < target {
+    let margin_safety = if target > 0 && final_full_size < target {
         let margin = (target - final_full_size) as f64 / target as f64;
         (margin / 0.05).min(1.0)
     } else {
@@ -1649,7 +1653,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         video_stream_pct
     );
 
-    let total_file_pct = (final_full_size as f64 / input_size as f64 - 1.0) * 100.0;
+    let total_file_pct = if input_size == 0 {
+        0.0
+    } else {
+        (final_full_size as f64 / input_size as f64 - 1.0) * 100.0
+    };
     if output_stream_info.is_overhead_excessive() {
         crate::log_eprintln!(
             "   ⚠️  Container overhead: {:.1}% (> 10%)",
