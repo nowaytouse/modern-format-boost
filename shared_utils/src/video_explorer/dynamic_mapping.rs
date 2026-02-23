@@ -165,7 +165,7 @@ pub fn quick_calibrate(
             .arg(format!("{:.0}", anchor_crf))
             .arg("-c:a")
             .arg("copy")
-            .arg(&temp_gpu)
+            .arg(crate::safe_path_arg(temp_gpu.as_path()).as_ref())
             .output();
 
         let gpu_size = match gpu_result {
@@ -214,7 +214,7 @@ pub fn quick_calibrate(
             for arg in encoder.extra_args(max_threads) {
                 cpu_cmd.arg(arg);
             }
-            cpu_cmd.arg(&temp_cpu);
+            cpu_cmd.arg(crate::safe_path_arg(temp_cpu.as_path()).as_ref());
             match cpu_cmd.output() {
                 Ok(out) if out.status.success() => {
                     fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
@@ -352,7 +352,10 @@ pub fn quick_calibrate(
                 }
             }
 
-            cpu_cmd.arg("-c:a").arg("copy").arg(&temp_cpu);
+            cpu_cmd
+                .arg("-c:a")
+                .arg("copy")
+                .arg(crate::safe_path_arg(temp_cpu.as_path()).as_ref());
 
             let cpu_result = cpu_cmd.output();
 
