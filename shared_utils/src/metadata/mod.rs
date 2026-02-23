@@ -327,7 +327,9 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
     let xmp_path = find_xmp_sidecar(src);
 
     if let Some(xmp) = xmp_path {
-        eprintln!("📋 Found XMP sidecar: {}", xmp.display());
+        if crate::progress_mode::is_verbose_mode() {
+            eprintln!("📋 Found XMP sidecar: {}", xmp.display());
+        }
 
         let config = crate::xmp_merger::XmpMergerConfig {
             delete_xmp_after_merge: false,
@@ -338,12 +340,13 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
 
         let merger = crate::xmp_merger::XmpMerger::new(config);
 
+        crate::progress_mode::xmp_merge_attempt();
         match merger.merge_xmp(&xmp, dst) {
             Ok(()) => {
-                eprintln!("✅ XMP sidecar merged successfully");
+                crate::progress_mode::xmp_merge_success();
             }
             Err(e) => {
-                eprintln!("⚠️ Failed to merge XMP sidecar: {}", e);
+                crate::progress_mode::xmp_merge_failure(&e.to_string());
             }
         }
     }

@@ -82,13 +82,16 @@ impl DynamicCrfMapper {
     }
 
     pub fn print_calibration_report(&self) {
+        if !crate::progress_mode::is_verbose_mode() {
+            return;
+        }
         if self.anchors.is_empty() {
             eprintln!("⚠️ Dynamic mapping: No calibration data, using static offset");
             return;
         }
 
         eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 🔬 Dynamic GPU→CPU Mapping Calibration (v5.61)");
+        eprintln!("│ Dynamic GPU→CPU Mapping Calibration (v5.61)");
         eprintln!("├─────────────────────────────────────────────────────");
 
         for (i, anchor) in self.anchors.iter().enumerate() {
@@ -123,8 +126,8 @@ pub fn quick_calibrate(
         .map(|p| p.format_name.eq_ignore_ascii_case("gif"))
         .unwrap_or(false);
     if is_gif_input {
-        eprintln!(
-            "   📌 GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
+        crate::verbose_eprintln!(
+            "   GIF detected: using FFmpeg libx265 path for calibration (no Y4M pipeline)"
         );
     }
 
@@ -132,8 +135,8 @@ pub fn quick_calibrate(
     let mut calibration_success = false;
 
     for (attempt, anchor_crf) in calibration_crfs.iter().enumerate() {
-        eprintln!(
-            "🔬 Dynamic calibration attempt {}/{}: Testing CRF {:.1}...",
+        crate::verbose_eprintln!(
+            "Dynamic calibration attempt {}/{}: Testing CRF {:.1}...",
             attempt + 1,
             calibration_crfs.len(),
             anchor_crf
@@ -203,7 +206,7 @@ pub fn quick_calibrate(
                 .arg(crate::safe_path_arg(input).as_ref())
                 .arg("-an")
                 .arg("-vf")
-                .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos")
+                .arg("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos,format=yuv420p")
                 .arg("-c:v")
                 .arg("libx265")
                 .arg("-crf")
@@ -222,10 +225,20 @@ pub fn quick_calibrate(
                         "   ❌ CPU calibration (GIF/libx265) failed for CRF {:.1}",
                         anchor_crf
                     );
-                    if !stderr.is_empty() {
-                        for line in stderr.lines().take(5) {
-                            eprintln!("      {}", line);
-                        }
+                    let error_lines: Vec<&str> = stderr
+                        .lines()
+                        .filter(|l| {
+                            l.contains("Error")
+                                || l.contains("error")
+                                || l.contains("Invalid")
+                                || l.contains("failed")
+                                || l.contains("No such")
+                                || l.contains("cannot")
+                        })
+                        .take(2)
+                        .collect();
+                    if !error_lines.is_empty() {
+                        eprintln!("      Cause: {}", error_lines.join(" | "));
                     }
                     let _ = fs::remove_file(&temp_gpu);
                     continue;
@@ -276,9 +289,20 @@ pub fn quick_calibrate(
                         "   ❌ Failed to extract input sample for CRF {:.1}",
                         anchor_crf
                     );
-                    eprintln!("   FFmpeg stderr (full):");
-                    for line in stderr.lines() {
-                        eprintln!("      {}", line);
+                    let error_lines: Vec<&str> = stderr
+                        .lines()
+                        .filter(|l| {
+                            l.contains("Error")
+                                || l.contains("error")
+                                || l.contains("Invalid")
+                                || l.contains("failed")
+                                || l.contains("No such")
+                                || l.contains("cannot")
+                        })
+                        .take(2)
+                        .collect();
+                    if !error_lines.is_empty() {
+                        eprintln!("      Cause: {}", error_lines.join(" | "));
                     }
                     let _ = fs::remove_file(&temp_gpu);
                     continue;
@@ -362,8 +386,8 @@ pub fn quick_calibrate(
             let ratio = cpu_size as f64 / gpu_size as f64;
             let _offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
 
-            eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
-            eprintln!(
+            crate::verbose_eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
+            crate::verbose_eprintln!(
                 "      GPU: {} bytes, CPU: {} bytes (ratio: {:.2})",
                 gpu_size, cpu_size, ratio
             );
@@ -384,7 +408,7 @@ pub fn quick_calibrate(
         let offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
         let gpu_size = mapper.anchors[0].gpu_size;
         let cpu_size = mapper.anchors[0].cpu_size;
-        eprintln!(
+        crate::verbose_eprintln!(
             "✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
             gpu_size, cpu_size, ratio, offset
         );
