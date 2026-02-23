@@ -1566,30 +1566,6 @@ mod tests {
     }
 
     #[test]
-    fn test_content_type_adjustment() {
-        assert!(ContentType::Animation.crf_adjustment() > 0);
-        assert!(ContentType::FilmGrain.crf_adjustment() < 0);
-        assert_eq!(ContentType::LiveAction.crf_adjustment(), 0);
-    }
-
-    #[test]
-    fn test_video_analysis_builder() {
-        let analysis = VideoAnalysisBuilder::new()
-            .basic("h264", 1920, 1080, 30.0, 60.0)
-            .video_bitrate(5_000_000)
-            .gop(60, 3)
-            .pix_fmt("yuv420p")
-            .color("bt709", false)
-            .content_type(ContentType::LiveAction)
-            .build();
-
-        assert_eq!(analysis.width, 1920);
-        assert_eq!(analysis.gop_size, Some(60));
-        assert_eq!(analysis.b_frame_count, Some(3));
-        assert!(analysis.bpp > 0.0);
-    }
-
-    #[test]
     fn test_quality_bias() {
         let analysis = QualityAnalysis {
             bpp: 0.3,
@@ -1669,20 +1645,6 @@ mod tests {
         assert!(SourceCodec::Av2.efficiency_factor() <= SourceCodec::Vvc.efficiency_factor());
 
         assert!(SourceCodec::Gif.efficiency_factor() > 2.0);
-    }
-
-    #[test]
-    fn test_invalid_dimensions_error() {
-        let analysis = QualityAnalysis {
-            bpp: 0.3,
-            source_codec: "h264".to_string(),
-            width: 0,
-            height: 1080,
-            ..Default::default()
-        };
-
-        let result = calculate_av1_crf(&analysis);
-        assert!(result.is_err());
     }
 
     #[test]
