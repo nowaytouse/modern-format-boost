@@ -142,6 +142,7 @@ impl HeartbeatMonitor {
                     );
 
                     #[cfg(unix)]
+                    // SAFETY: child_pid is the PID of the child process we spawned; we own it and may signal it.
                     unsafe {
                         libc::kill(self.child_pid as i32, libc::SIGKILL);
                     }
@@ -1677,6 +1678,7 @@ pub fn gpu_coarse_search_with_log(
                     beijing_time_now()
                 );
                 #[cfg(unix)]
+                // SAFETY: child_pid is the PID of the child we spawned; we may signal it on timeout.
                 unsafe {
                     libc::kill(child_pid as i32, libc::SIGKILL);
                 }

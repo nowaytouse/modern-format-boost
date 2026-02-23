@@ -352,13 +352,17 @@ fn execute_ffv1_conversion(
 ) -> Result<u64> {
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+    let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
+        .as_ref()
+        .to_string();
+    let output_arg = shared_utils::safe_path_arg(output).as_ref().to_string();
 
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
         max_threads.to_string(),
         "-i".to_string(),
-        detection.file_path.clone(),
+        input_arg,
         "-c:v".to_string(),
         "ffv1".to_string(),
         "-level".to_string(),
@@ -385,7 +389,7 @@ fn execute_ffv1_conversion(
         args.push("-an".to_string());
     }
 
-    args.push(output.display().to_string());
+    args.push(output_arg);
 
     let result = Command::new("ffmpeg").args(&args).output()?;
 
@@ -408,13 +412,17 @@ fn execute_av1_lossless(
     let svt_params = format!("lossless=1:lp={}", max_threads);
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
+    let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
+        .as_ref()
+        .to_string();
+    let output_arg = shared_utils::safe_path_arg(output).as_ref().to_string();
 
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
         max_threads.to_string(),
         "-i".to_string(),
-        detection.file_path.clone(),
+        input_arg,
         "-c:v".to_string(),
         "libsvtav1".to_string(),
         "-crf".to_string(),
@@ -435,7 +443,7 @@ fn execute_av1_lossless(
         args.push("-an".to_string());
     }
 
-    args.push(output.display().to_string());
+    args.push(output_arg);
 
     let result = Command::new("ffmpeg").args(&args).output()?;
 

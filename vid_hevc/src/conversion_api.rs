@@ -790,12 +790,16 @@ fn execute_hevc_conversion(
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
+    let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
+        .as_ref()
+        .to_string();
+    let output_arg = shared_utils::safe_path_arg(output).as_ref().to_string();
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
         max_threads.to_string(),
         "-i".to_string(),
-        detection.file_path.clone(),
+        input_arg,
         "-c:v".to_string(),
         "libx265".to_string(),
         "-crf".to_string(),
@@ -823,7 +827,7 @@ fn execute_hevc_conversion(
         args.push("-an".to_string());
     }
 
-    args.push(output.display().to_string());
+    args.push(output_arg);
 
     let result = Command::new("ffmpeg").args(&args).output()?;
 
@@ -847,12 +851,16 @@ fn execute_hevc_lossless(
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
+    let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
+        .as_ref()
+        .to_string();
+    let output_arg = shared_utils::safe_path_arg(output).as_ref().to_string();
     let mut args = vec![
         "-y".to_string(),
         "-threads".to_string(),
         max_threads.to_string(),
         "-i".to_string(),
-        detection.file_path.clone(),
+        input_arg,
         "-c:v".to_string(),
         "libx265".to_string(),
         "-x265-params".to_string(),
@@ -873,7 +881,7 @@ fn execute_hevc_lossless(
         args.push("-an".to_string());
     }
 
-    args.push(output.display().to_string());
+    args.push(output_arg);
 
     let result = Command::new("ffmpeg").args(&args).output()?;
 
