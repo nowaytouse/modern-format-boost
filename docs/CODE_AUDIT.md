@@ -175,3 +175,25 @@
 
 - 删除未使用变量 `_half_win`；去掉 `#![allow(clippy::needless_range_loop)]`，高斯窗口用 `iter_mut().enumerate()` 写法；为 C1/C2 增加注释（Wang et al. 稳定常数）。
 - 新增测试：不同尺寸返回 `None`、小图走 simple 路径、常数图像 SSIM=1、MS-SSIM 同图、过小图 MS-SSIM 返回 `None`。
+
+---
+
+## 13. image_quality_core.rs 审计修复
+
+### 13.1 P1 — 正确性 / 安全性
+
+- **analyze_quality**: `todo!()` 改为返回 `Err(ImgQualityError::NotImplemented(...))`，不再在运行时 panic；`img_errors` 新增 `NotImplemented(String)` 变体。
+- **check_avif_lossless**: 保持返回 `false`，增加文档说明“未实现，调用方不得依赖此结果判断是否无损”；保留 TODO 提示后续解析 av1C/sequence_header_obu。
+- **generate_recommendation**: 所有拼接到 command 的路径均经 `shell_escape_single_quoted`（单引号内 `'` → `'\''`），避免路径含单引号时 shell 注入；并改为返回 `Result<ConversionRecommendation>`，当 `file_stem()` 无法得到有效 base 时返回 `Err`，避免静默使用 `"output"` 导致文件名冲突。
+
+### 13.2 P2 — 逻辑 / 设计
+
+- **is_format_lossless**: 从“无损”列表中移除 `ImageFormat::Gif`（GIF 为 256 色调色板，全彩转 GIF 为有损）；文档注明仅对真正无损格式返回 true。
+- **generate_recommendation**: 使用 `format` 参数：当 `format` 为 HEIC/HEIF 且 `is_lossless == false` 时，推荐 `should_convert: false`，理由为“避免二代有损”。
+- **analyze_gif_quality**: GIF 无质量参数概念，改为返回 `estimated_quality: None`、`confidence: 0.0`，仅保留 bit_depth/color_type/compression_method 等元数据；删除启发式质量分数与虚高置信度。
+
+### 13.3 P3 — 代码质量与测试
+
+- **output_base**: 不再使用 `unwrap_or("output")`，改为 `ok_or_else(|| ImgQualityError::AnalysisError(...))?`，调用方需处理 `Result`。
+- **calculate_entropy**: 当宽或高 > 256 时先 `thumbnail(256, 256)` 再转 luma 计算熵，减少大图全量转换；并防护 `total < 1.0` 时除零。当前仅被删除的 GIF 启发式使用，保留函数并加 `#[allow(dead_code)]` 以备复用。
+- **测试**: 新增/调整：路径含单引号时 command 正确转义、HEIC 有损跳过、无法解析路径时返回 Err、GIF 质量返回 `estimated_quality: None` 与 `confidence: 0.0`；`test_format_lossless` 不再断言 GIF 为无损。
