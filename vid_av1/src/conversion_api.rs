@@ -398,61 +398,6 @@ fn execute_ffv1_conversion(
     Ok(std::fs::metadata(output)?.len())
 }
 
-#[allow(dead_code)]
-fn execute_av1_conversion(
-    detection: &VideoDetectionResult,
-    output: &Path,
-    crf: u8,
-    max_threads: usize,
-) -> Result<u64> {
-    let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
-
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
-
-    let mut args = vec![
-        "-y".to_string(),
-        "-threads".to_string(),
-        max_threads.to_string(),
-        "-i".to_string(),
-        detection.file_path.clone(),
-        "-c:v".to_string(),
-        "libsvtav1".to_string(),
-        "-crf".to_string(),
-        crf.to_string(),
-        "-preset".to_string(),
-        "6".to_string(),
-        "-svtav1-params".to_string(),
-        svt_params,
-    ];
-
-    for arg in &vf_args {
-        args.push(arg.clone());
-    }
-
-    if detection.has_audio {
-        args.extend(vec![
-            "-c:a".to_string(),
-            "aac".to_string(),
-            "-b:a".to_string(),
-            "320k".to_string(),
-        ]);
-    } else {
-        args.push("-an".to_string());
-    }
-
-    args.push(output.display().to_string());
-
-    let result = Command::new("ffmpeg").args(&args).output()?;
-
-    if !result.status.success() {
-        return Err(VidQualityError::FFmpegError(
-            String::from_utf8_lossy(&result.stderr).to_string(),
-        ));
-    }
-
-    Ok(std::fs::metadata(output)?.len())
-}
-
 fn execute_av1_lossless(
     detection: &VideoDetectionResult,
     output: &Path,

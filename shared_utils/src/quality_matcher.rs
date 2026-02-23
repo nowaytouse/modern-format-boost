@@ -523,19 +523,6 @@ pub fn calculate_jxl_distance_with_options(
     })
 }
 
-#[allow(dead_code)]
-fn calculate_effective_bpp(
-    analysis: &QualityAnalysis,
-    target_encoder: EncoderType,
-) -> Result<(f64, AnalysisDetails), String> {
-    calculate_effective_bpp_with_options(
-        analysis,
-        target_encoder,
-        MatchMode::Quality,
-        QualityBias::Balanced,
-    )
-}
-
 fn calculate_effective_bpp_with_options(
     analysis: &QualityAnalysis,
     target_encoder: EncoderType,
@@ -958,11 +945,6 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     }
 
     (score / max_score).clamp(0.0, 1.0)
-}
-
-#[allow(dead_code)]
-fn calculate_confidence(analysis: &QualityAnalysis) -> f64 {
-    calculate_confidence_v3(analysis)
 }
 
 pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
