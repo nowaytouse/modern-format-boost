@@ -88,6 +88,15 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         return analyze_jxl_image(path, file_size);
     }
 
+    // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back to ffprobe
+    if path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase() == "avif")
+        .unwrap_or(false)
+    {
+        return analyze_avif_image(path, file_size);
+    }
+
     let reader = image::ImageReader::open(path)
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {}", e)))?
         .with_guessed_format()
@@ -247,7 +256,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     let jxl_indicator = JxlIndicator {
         should_convert: false,
-        reason: format!("HEIC已是现代高效格式 ({}编码)", codec),
+        reason: format!("HEIC is already a modern efficient format ({})", codec),
         command: String::new(),
         benefit: String::new(),
     };
@@ -289,29 +298,29 @@ fn generate_jxl_indicator(
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::Tiff => {
             JxlIndicator {
                 should_convert: true,
-                reason: "无损图像，强烈建议转换为JXL格式".to_string(),
+                reason: "Lossless image; strongly recommend converting to JXL".to_string(),
                 command: format!(
                     "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
                     file_path, output_path
                 ),
-                benefit: "可减少30-60%体积，完全保留原始质量".to_string(),
+                benefit: "30-60% size reduction while preserving full quality".to_string(),
             }
         }
         ImageFormat::Jpeg => {
             if let Some(ref jpeg) = jpeg_analysis {
-                let quality_info = format!("原始质量 Q={}", jpeg.estimated_quality);
+                let quality_info = format!("original quality Q={}", jpeg.estimated_quality);
                 JxlIndicator {
                     should_convert: true,
-                    reason: format!("JPEG图像 ({})，可无损转码至JXL", quality_info),
+                    reason: format!("JPEG ({}), lossless transcode to JXL", quality_info),
                     command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
-                    benefit: "保留原始JPEG DCT系数，可逆转换，减少约20%体积".to_string(),
+                    benefit: "Keeps original JPEG DCT coefficients, reversible, ~20% size reduction".to_string(),
                 }
             } else {
                 JxlIndicator {
                     should_convert: true,
-                    reason: "JPEG图像可无损转码至JXL".to_string(),
+                    reason: "JPEG can be losslessly transcoded to JXL".to_string(),
                     command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
-                    benefit: "保留原始JPEG DCT系数，可逆转换".to_string(),
+                    benefit: "Keeps original JPEG DCT coefficients, reversible".to_string(),
                 }
             }
         }
@@ -319,17 +328,17 @@ fn generate_jxl_indicator(
             if is_lossless {
                 JxlIndicator {
                     should_convert: true,
-                    reason: "无损WebP图像，建议转换为JXL".to_string(),
+                    reason: "Lossless WebP; recommend converting to JXL".to_string(),
                     command: format!(
                         "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
                         file_path, output_path
                     ),
-                    benefit: "JXL通常比WebP无损更高效".to_string(),
+                    benefit: "JXL is typically more efficient than lossless WebP".to_string(),
                 }
             } else {
                 JxlIndicator {
                     should_convert: false,
-                    reason: "有损WebP图像，转换可能导致额外质量损失".to_string(),
+                    reason: "Lossy WebP; conversion may cause additional quality loss".to_string(),
                     command: String::new(),
                     benefit: String::new(),
                 }
@@ -338,14 +347,14 @@ fn generate_jxl_indicator(
         ImageFormat::Avif => {
             JxlIndicator {
                 should_convert: false,
-                reason: "AVIF已是现代高效格式，无需转换".to_string(),
+                reason: "AVIF is already a modern efficient format; no conversion needed".to_string(),
                 command: String::new(),
                 benefit: String::new(),
             }
         }
         _ => JxlIndicator {
             should_convert: false,
-            reason: "不支持的格式或无需转换".to_string(),
+            reason: "Unsupported format or no conversion needed".to_string(),
             command: String::new(),
             benefit: String::new(),
         },
@@ -587,7 +596,9 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
     duration_str.parse::<f32>().ok()
 }
 
-fn try_imagemagick_identify(path: &Path) -> Option<f32> {
+/// Returns (duration_secs, frame_count) from ImageMagick identify (WebP/GIF animation).
+/// Use as fallback when ffprobe has no stream/format duration. Does not log.
+pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
     use std::process::Command;
 
     let safe_path = crate::safe_path_arg(path);
@@ -622,14 +633,19 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
         return None;
     }
 
-    let duration = total_cs as f32 / 100.0;
+    let duration_secs = total_cs as f64 / 100.0;
+    Some((duration_secs, frame_count as u64))
+}
 
-    eprintln!(
-        "📊 ImageMagick: WebP/GIF animation detected ({} frames, {} centiseconds = {:.2}s)",
-        frame_count, total_cs, duration
-    );
-
-    Some(duration)
+fn try_imagemagick_identify(path: &Path) -> Option<f32> {
+    if let Some((duration_secs, frame_count)) = get_animation_duration_and_frames_imagemagick(path) {
+        eprintln!(
+            "📊 ImageMagick: WebP/GIF animation detected ({} frames, {:.2}s)",
+            frame_count, duration_secs
+        );
+        return Some(duration_secs as f32);
+    }
+    None
 }
 
 fn try_get_frame_count(path: &Path) -> Option<u32> {
@@ -760,6 +776,55 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         jxl_indicator: JxlIndicator {
             should_convert: false,
             reason: "Already JXL format".to_string(),
+            command: String::new(),
+            benefit: String::new(),
+        },
+        psnr: None,
+        ssim: None,
+        metadata,
+    })
+}
+
+fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+    // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
+    // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
+    // correctly and also provides pix_fmt for accurate alpha and bit-depth detection.
+    let (width, height, has_alpha, color_depth) = if let Ok(probe) = crate::probe_video(path) {
+        let pix_fmt = probe.pix_fmt.to_lowercase();
+        let alpha = pix_fmt.contains("yuva")
+            || pix_fmt.contains("rgba")
+            || pix_fmt.contains("gbrap")
+            || pix_fmt.starts_with("p4");
+        let depth = if probe.bit_depth > 0 { probe.bit_depth } else { 8 };
+        (probe.width, probe.height, alpha, depth)
+    } else if let Ok(img) = image::open(path) {
+        let (w, h) = img.dimensions();
+        (w, h, has_alpha_channel(&img), detect_color_depth(&img))
+    } else {
+        (0u32, 0u32, false, 8u8)
+    };
+    let metadata = extract_metadata(path).unwrap_or_default();
+    Ok(ImageAnalysis {
+        file_path: path.display().to_string(),
+        format: "AVIF".to_string(),
+        width,
+        height,
+        file_size,
+        color_depth,
+        color_space: "sRGB".to_string(),
+        has_alpha,
+        is_animated: false,
+        duration_secs: None,
+        is_lossless: false,
+        jpeg_analysis: None,
+        heic_analysis: None,
+        features: ImageFeatures {
+            entropy: 0.0,
+            compression_ratio: 0.0,
+        },
+        jxl_indicator: JxlIndicator {
+            should_convert: false,
+            reason: "AVIF is already a modern efficient format; no conversion needed".to_string(),
             command: String::new(),
             benefit: String::new(),
         },
