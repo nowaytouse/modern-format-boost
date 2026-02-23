@@ -156,3 +156,22 @@
 ### 11.2 顺序与前置条件
 
 - 上述除零防护均保证“先判分母再除”的顺序；`dynamic_mapping` 的 `add_anchor` 在更新 `anchors` 前先校验 `gpu_size > 0`，与校准调用处的 `gpu_size > 0 && cpu_size > 0` 一致。
+
+---
+
+## 12. image_metrics.rs 审计修复 (SSIM / MS-SSIM)
+
+### 12.1 P1 — 正确性
+
+- **calculate_ssim_simple**: 方差/协方差改为无偏估计 `(n-1)` 分母，与 Wang et al. 及主路径 `calculate_window_ssim`（高斯加权）一致；小图（< 11×11）SSIM 不再系统性偏高。`n < 2` 时返回 `None`。
+- **calculate_ms_ssim**: 按实际参与 scale 的权重和 `used_weight_sum` 做归一化：`ms_ssim.powf(1.0 / used_weight_sum)`，提前 break 时结果仍落在 [0,1]；无任何有效 scale 时（`used_weight_sum < 1e-10`）返回 `None`。
+
+### 12.2 P2 — 性能
+
+- **calculate_window_ssim**: 先将 11×11 窗口一次性读入 `buf_x`/`buf_y`，再基于缓冲区计算均值与方差，将 get_pixel 从 242 次降为 121 次，更利于 cache。
+- **calculate_ssim_simple**: 单遍遍历，用 `sum_x, sum_y, sum_xx, sum_yy, sum_xy` 计算均值与无偏方差/协方差，不再分配 `Vec<f64>`，也无三次遍历。
+
+### 12.3 P3 — 代码质量与测试
+
+- 删除未使用变量 `_half_win`；去掉 `#![allow(clippy::needless_range_loop)]`，高斯窗口用 `iter_mut().enumerate()` 写法；为 C1/C2 增加注释（Wang et al. 稳定常数）。
+- 新增测试：不同尺寸返回 `None`、小图走 simple 路径、常数图像 SSIM=1、MS-SSIM 同图、过小图 MS-SSIM 返回 `None`。
