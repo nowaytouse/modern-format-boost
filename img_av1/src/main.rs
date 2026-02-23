@@ -204,6 +204,7 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
+            shared_utils::progress_mode::set_verbose_mode(verbose);
             if apple_compat {
                 eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
@@ -614,6 +615,21 @@ fn auto_convert_single_file(
     let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
     let input = fixed_input.as_path();
 
+    // Apple compat: HEIC/HEIF are already native — skip without running heavy analysis (avoids SecurityLimitExceeded etc.)
+    if config.apple_compat && shared_utils::image_heic_analysis::is_heic_file(input) {
+        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        copy_original_if_adjacent_mode(input, config)?;
+        return Ok(ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            message: "HEIC/HEIF is Apple native, skipping".to_string(),
+            original_size: file_size,
+            output_size: None,
+            size_reduction: None,
+        });
+    }
+
     let analysis = analyze_image(input)?;
 
     let options = ConvertOptions {
@@ -934,6 +950,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     pb.finish_with_message("Complete!");
 
     shared_utils::progress_mode::disable_quiet_mode();
+    shared_utils::progress_mode::xmp_merge_finalize();
 
     let success_count = success.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);

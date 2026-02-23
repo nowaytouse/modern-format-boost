@@ -290,10 +290,8 @@ pub fn determine_output_path(
 
     if input_canonical == output_canonical || input == output {
         return Err(format!(
-            "❌ 输入和输出路径相同: {}\n\
-             💡 建议:\n\
-             - 使用 --output/-o 指定不同的输出目录\n\
-             - 或使用 --in-place 参数进行原地替换（会删除原文件）",
+            "Input and output paths are identical: {}\n\
+             Tip: use --output/-o for a different output dir, or --in-place to replace in place (deletes original)",
             input.display()
         ));
     }
@@ -341,10 +339,8 @@ pub fn determine_output_path_with_base(
 
     if input_canonical == output_canonical || input == output {
         return Err(format!(
-            "❌ 输入和输出路径相同: {}\n\
-             💡 建议:\n\
-             - 使用 --output/-o 指定不同的输出目录\n\
-             - 或使用 --in-place 参数进行原地替换（会删除原文件）",
+            "Input and output paths are identical: {}\n\
+             Tip: use --output/-o for a different output dir, or --in-place to replace in place (deletes original)",
             input.display()
         ));
     }
@@ -488,9 +484,8 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
     }
 
     Err(format!(
-        "❌ 无法获取文件尺寸: {}\n\
-         💡 ffprobe, image crate, ImageMagick identify 均失败\n\
-         请检查文件是否完整，或安装 ffmpeg/ImageMagick",
+        "Could not get file dimensions: {}\n\
+         ffprobe, image crate, and ImageMagick identify all failed; check file integrity or install ffmpeg/ImageMagick",
         input.display(),
     ))
 }
@@ -551,6 +546,7 @@ pub fn check_size_tolerance(
         input, input_size, output_size,
     ))
 }
+#[cfg(test)]
 mod tests {
     use super::*;
 

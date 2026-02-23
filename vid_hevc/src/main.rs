@@ -79,6 +79,10 @@ enum Commands {
         no_allow_size_tolerance: bool,
         #[arg(short, long)]
         verbose: bool,
+
+        /// Write full verbose log to this file (regardless of --verbose flag).
+        #[arg(long, value_name = "PATH")]
+        log_file: Option<PathBuf>,
     },
 
     Simple {
@@ -156,6 +160,7 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
+            log_file,
         } => {
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
@@ -211,6 +216,12 @@ fn main() -> anyhow::Result<()> {
                 verbose,
             };
 
+            shared_utils::progress_mode::set_verbose_mode(verbose);
+            if let Some(ref lf) = log_file {
+                if let Err(e) = shared_utils::progress_mode::set_log_file(lf) {
+                    eprintln!("⚠️  Could not open log file {}: {}", lf.display(), e);
+                }
+            }
             info!("🎬 Run Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");
             if match_quality {
@@ -275,6 +286,8 @@ fn main() -> anyhow::Result<()> {
                 },
                 |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
+            shared_utils::progress_mode::xmp_merge_finalize();
+            shared_utils::progress_mode::flush_log_file();
         }
 
         Commands::Simple {

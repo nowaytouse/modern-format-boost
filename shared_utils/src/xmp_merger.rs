@@ -848,7 +848,9 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 
     for xmp_path in &xmp_candidates {
         if xmp_path.exists() {
-            eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
+            if crate::progress_mode::is_verbose_mode() {
+                eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
+            }
 
             let config = XmpMergerConfig {
                 delete_xmp_after_merge: false,
@@ -859,11 +861,16 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 
             let merger = XmpMerger::new(config);
 
-            if let Err(e) = merger.merge_xmp(xmp_path, dest) {
-                bail!("Failed to merge XMP: {}", e);
+            crate::progress_mode::xmp_merge_attempt();
+            match merger.merge_xmp(xmp_path, dest) {
+                Ok(()) => {
+                    crate::progress_mode::xmp_merge_success();
+                }
+                Err(e) => {
+                    crate::progress_mode::xmp_merge_failure(&e.to_string());
+                    bail!("Failed to merge XMP: {}", e);
+                }
             }
-
-            eprintln!("✅ XMP sidecar merged successfully");
             return Ok(true);
         }
     }

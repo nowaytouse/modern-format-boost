@@ -235,6 +235,7 @@ fn main() -> anyhow::Result<()> {
                 verbose,
             };
 
+            shared_utils::progress_mode::set_verbose_mode(verbose);
             info!("🎬 Run Mode Conversion (AV1)");
             info!("   Lossless sources → AV1 Lossless");
             info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
@@ -299,6 +300,7 @@ fn main() -> anyhow::Result<()> {
                 },
                 |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
+            shared_utils::progress_mode::xmp_merge_finalize();
         }
 
         Commands::Simple {
