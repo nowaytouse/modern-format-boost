@@ -416,6 +416,5 @@ mod tests {
             Some(0),
             std::time::Duration::from_secs(1),
         );
-
     }
 }

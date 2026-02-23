@@ -38,7 +38,6 @@ use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
 use tracing::{debug, error, info};
 
-
 pub struct FfmpegProcess {
     child: Child,
     stderr_thread: Option<JoinHandle<String>>,
@@ -123,7 +122,6 @@ impl FfmpegProcess {
         self.child.kill().context("Failed to kill FFmpeg process")
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct FfmpegProgressParser {
@@ -233,7 +231,6 @@ impl FfmpegProgressParser {
     }
 }
 
-
 pub fn format_ffmpeg_error(stderr: &str) -> String {
     if let Some(error_line) = stderr
         .lines()
@@ -269,7 +266,6 @@ pub fn is_recoverable_error(stderr: &str) -> bool {
         .iter()
         .any(|pattern| stderr.contains(pattern))
 }
-
 
 #[derive(Debug, Clone)]
 pub struct FfmpegError {
@@ -381,7 +377,6 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
     Ok(output)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,7 +438,6 @@ Conversion failed!
         assert!(!is_recoverable_error("Invalid input file"));
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

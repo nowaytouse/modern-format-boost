@@ -14,7 +14,6 @@
 //! 在探索模式中，我们需要精确计算纯视频数据的大小，
 //! 以便准确判断压缩效果。
 
-
 pub const SMALL_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
 pub const METADATA_MARGIN_MIN: u64 = 2048;
@@ -23,13 +22,11 @@ pub const METADATA_MARGIN_MAX: u64 = 102400;
 
 pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionVerifyStrategy {
     PureVideo,
     TotalSize,
 }
-
 
 #[inline]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {

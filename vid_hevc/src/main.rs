@@ -1,14 +1,13 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
-use walkdir::WalkDir;
 use serde_json;
+use std::path::PathBuf;
 use tracing::info;
+use walkdir::WalkDir;
 
 use vid_hevc::{
     auto_convert, detect_video, determine_strategy, simple_convert, ConversionConfig,
     VideoDetectionResult,
 };
-
 
 #[derive(Parser)]
 #[command(name = "vid-hevc")]

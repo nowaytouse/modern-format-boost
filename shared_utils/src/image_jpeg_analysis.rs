@@ -225,7 +225,6 @@ fn detect_encoder(
 
     let luma = &tables[0];
 
-
     if let Some(c_sse) = chroma_sse {
         if (720.0..735.0).contains(&luma_sse) && (5.0..12.0).contains(&c_sse) {
             return Some("Apple iOS Camera (高质量)".to_string());

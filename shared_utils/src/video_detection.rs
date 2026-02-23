@@ -200,7 +200,11 @@ pub fn calculate_quality_score(
         CompressionType::LowQuality => 40,
     };
     let depth_bonus = if bit_depth >= 10 { 5 } else { 0 };
-    let res_bonus = if width >= 3840 || height >= 2160 { 3 } else { 0 };
+    let res_bonus = if width >= 3840 || height >= 2160 {
+        3
+    } else {
+        0
+    };
     (base_score + depth_bonus + res_bonus).min(100)
 }
 

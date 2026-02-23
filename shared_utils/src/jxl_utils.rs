@@ -27,7 +27,10 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
         if let Ok(output) = result {
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("JXL health check failed (jxlinfo): {}", stderr.trim()));
+                return Err(format!(
+                    "JXL health check failed (jxlinfo): {}",
+                    stderr.trim()
+                ));
             }
         }
     }
@@ -80,7 +83,11 @@ pub fn convert_to_temp_png(
             eprintln!(
                 "   {} {}",
                 style("⚠️").yellow(),
-                style(format!("{} pre-processing failed, trying direct cjxl", tool)).dim()
+                style(format!(
+                    "{} pre-processing failed, trying direct cjxl",
+                    tool
+                ))
+                .dim()
             );
             Ok((input.to_path_buf(), None))
         }
@@ -168,7 +175,9 @@ pub fn try_imagemagick_fallback(
                                 if magick_ok { "✓" } else { "✗" },
                                 if cjxl_ok { "✓" } else { "✗" }
                             );
-                            Err(std::io::Error::other("ImageMagick fallback pipeline failed"))
+                            Err(std::io::Error::other(
+                                "ImageMagick fallback pipeline failed",
+                            ))
                         }
                     }
                     Err(e) => {
@@ -180,7 +189,9 @@ pub fn try_imagemagick_fallback(
             } else {
                 eprintln!("   ❌ Failed to capture ImageMagick stdout");
                 let _ = magick_proc.kill();
-                Err(std::io::Error::other("Failed to capture ImageMagick stdout"))
+                Err(std::io::Error::other(
+                    "Failed to capture ImageMagick stdout",
+                ))
             }
         }
         Err(e) => {

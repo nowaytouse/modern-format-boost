@@ -170,7 +170,6 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
     let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
 
-
     let mut output = Command::new("exiftool")
         .arg("-tagsfromfile")
         .arg(crate::safe_path_arg(src).as_ref())

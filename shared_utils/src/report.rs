@@ -115,11 +115,9 @@ pub fn print_health_report(passed: usize, failed: usize, warnings: usize) {
     println!("╚══════════════════════════════════════════════╝");
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_print_simple_summary_no_panic() {
@@ -167,10 +165,8 @@ mod tests {
         print_health_report(0, 100, 0);
     }
 
-
     #[test]
     fn test_size_reduction_formula() {
-
         let input = 1000u64;
         let output = 500u64;
         let expected_reduction = (1.0 - output as f64 / input as f64) * 100.0;
@@ -223,7 +219,6 @@ mod tests {
         };
         assert!((health_rate - 100.0).abs() < 0.01);
     }
-
 
     #[test]
     fn test_strict_avg_time_calculation() {

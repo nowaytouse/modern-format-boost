@@ -295,17 +295,15 @@ fn generate_jxl_indicator(
     let output_path = path.with_extension("jxl").display().to_string();
 
     match format {
-        ImageFormat::Png | ImageFormat::Gif | ImageFormat::Tiff => {
-            JxlIndicator {
-                should_convert: true,
-                reason: "Lossless image; strongly recommend converting to JXL".to_string(),
-                command: format!(
-                    "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
-                    file_path, output_path
-                ),
-                benefit: "30-60% size reduction while preserving full quality".to_string(),
-            }
-        }
+        ImageFormat::Png | ImageFormat::Gif | ImageFormat::Tiff => JxlIndicator {
+            should_convert: true,
+            reason: "Lossless image; strongly recommend converting to JXL".to_string(),
+            command: format!(
+                "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
+                file_path, output_path
+            ),
+            benefit: "30-60% size reduction while preserving full quality".to_string(),
+        },
         ImageFormat::Jpeg => {
             if let Some(ref jpeg) = jpeg_analysis {
                 let quality_info = format!("original quality Q={}", jpeg.estimated_quality);
@@ -313,7 +311,9 @@ fn generate_jxl_indicator(
                     should_convert: true,
                     reason: format!("JPEG ({}), lossless transcode to JXL", quality_info),
                     command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
-                    benefit: "Keeps original JPEG DCT coefficients, reversible, ~20% size reduction".to_string(),
+                    benefit:
+                        "Keeps original JPEG DCT coefficients, reversible, ~20% size reduction"
+                            .to_string(),
                 }
             } else {
                 JxlIndicator {
@@ -344,14 +344,12 @@ fn generate_jxl_indicator(
                 }
             }
         }
-        ImageFormat::Avif => {
-            JxlIndicator {
-                should_convert: false,
-                reason: "AVIF is already a modern efficient format; no conversion needed".to_string(),
-                command: String::new(),
-                benefit: String::new(),
-            }
-        }
+        ImageFormat::Avif => JxlIndicator {
+            should_convert: false,
+            reason: "AVIF is already a modern efficient format; no conversion needed".to_string(),
+            command: String::new(),
+            benefit: String::new(),
+        },
         _ => JxlIndicator {
             should_convert: false,
             reason: "Unsupported format or no conversion needed".to_string(),
@@ -440,7 +438,6 @@ fn estimate_ssim_from_quality(quality: u8) -> f64 {
         _ => 0.60 + (quality as f64) * 0.003,
     }
 }
-
 
 fn format_to_string(format: &ImageFormat) -> String {
     match format {
@@ -638,7 +635,8 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
 }
 
 fn try_imagemagick_identify(path: &Path) -> Option<f32> {
-    if let Some((duration_secs, frame_count)) = get_animation_duration_and_frames_imagemagick(path) {
+    if let Some((duration_secs, frame_count)) = get_animation_duration_and_frames_imagemagick(path)
+    {
         eprintln!(
             "📊 ImageMagick: WebP/GIF animation detected ({} frames, {:.2}s)",
             frame_count, duration_secs
@@ -795,7 +793,11 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             || pix_fmt.contains("rgba")
             || pix_fmt.contains("gbrap")
             || pix_fmt.starts_with("p4");
-        let depth = if probe.bit_depth > 0 { probe.bit_depth } else { 8 };
+        let depth = if probe.bit_depth > 0 {
+            probe.bit_depth
+        } else {
+            8
+        };
         (probe.width, probe.height, alpha, depth)
     } else if let Ok(img) = image::open(path) {
         let (w, h) = img.dimensions();

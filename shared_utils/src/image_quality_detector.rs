@@ -19,7 +19,6 @@
 
 use serde::{Deserialize, Serialize};
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageQualityAnalysis {
     pub width: u32,
@@ -102,7 +101,6 @@ pub struct RoutingDecision {
     pub should_skip: bool,
     pub skip_reason: Option<String>,
 }
-
 
 pub fn analyze_image_quality(
     width: u32,
@@ -188,7 +186,6 @@ pub fn analyze_image_quality(
         confidence,
     })
 }
-
 
 fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
     if width < 3 || height < 3 {
@@ -476,7 +473,6 @@ fn calculate_overall_complexity(
     complexity.clamp(0.0, 1.0)
 }
 
-
 fn classify_content_type(
     complexity: f64,
     edge_density: f64,
@@ -543,7 +539,6 @@ fn calculate_compression_potential(
 
     potential.clamp(0.0, 1.0)
 }
-
 
 fn make_routing_decision(
     source_format: &str,
@@ -640,7 +635,6 @@ fn calculate_analysis_confidence(
     confidence.clamp(0.0, 1.0)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,7 +690,6 @@ mod tests {
         }
         data
     }
-
 
     #[test]
     fn test_analyze_solid_color() {
@@ -814,7 +807,6 @@ mod tests {
         assert_eq!(animated_result.content_type, ImageContentType::Animation);
     }
 
-
     #[test]
     fn test_classify_icon() {
         let data = create_solid_color(64, 64, 100, 150, 200, 200);
@@ -886,7 +878,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_skip_modern_formats() {
         let data = create_gradient(500, 500);
@@ -943,7 +934,6 @@ mod tests {
             "Animation should recommend WebP"
         );
     }
-
 
     #[test]
     fn test_strict_solid_complexity() {
@@ -1010,7 +1000,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_edge_minimum_size() {
         let data = create_solid_color(10, 10, 128, 128, 128, 255);
@@ -1045,7 +1034,6 @@ mod tests {
         let result = analyze_image_quality(100, 100, &data, 100, "png", 1);
         assert!(result.is_err(), "Should fail on insufficient data");
     }
-
 
     #[test]
     fn test_metric_edge_density_isolation() {
@@ -1111,7 +1099,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_consistency_same_input() {
         let data = create_gradient(300, 300);
@@ -1149,6 +1136,5 @@ mod tests {
             large_result.color_diversity < 0.2,
             "Large checkerboard should have low color diversity"
         );
-
     }
 }
