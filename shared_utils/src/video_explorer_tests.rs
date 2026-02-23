@@ -287,7 +287,6 @@ mod precision_tests {
     }
 }
 
-
 #[cfg(test)]
 mod three_phase_search_tests {
     use super::super::video_explorer::precision::*;
@@ -364,7 +363,6 @@ mod three_phase_search_tests {
 
     #[test]
     fn prop_cache_key_unified() {
-
         assert_eq!(crf_to_cache_key(18.0), 180);
         assert_eq!(crf_to_cache_key(18.1), 181);
         assert_eq!(crf_to_cache_key(18.5), 185);
@@ -408,7 +406,6 @@ mod three_phase_search_tests {
         assert_eq!(SearchPhase::CpuFinest.next(), None);
     }
 }
-
 
 #[cfg(test)]
 mod transparency_prop_tests {
@@ -467,7 +464,6 @@ mod transparency_prop_tests {
     }
 }
 
-
 #[cfg(test)]
 mod psnr_transparency_tests {
     use super::super::video_explorer::*;
@@ -520,7 +516,6 @@ mod psnr_transparency_tests {
     }
 }
 
-
 #[cfg(test)]
 mod preset_consistency_tests {
     use super::super::video_explorer::*;
@@ -569,7 +564,6 @@ mod preset_consistency_tests {
     }
 }
 
-
 #[cfg(test)]
 mod mock_tests {
 
@@ -587,7 +581,6 @@ mod mock_tests {
     fn mock_psnr(crf: f32) -> f64 {
         (50.0_f64 - (crf as f64 - 10.0) * 0.5).max(25.0)
     }
-
 
     #[test]
     fn test_mock_cannot_compress_scenario() {
@@ -655,7 +648,6 @@ mod mock_tests {
         assert!((psnr1 - psnr2).abs() < 0.0001);
     }
 }
-
 
 #[cfg(test)]
 mod vmaf_ssim_synergy_tests {
@@ -865,7 +857,6 @@ mod quality_report_tests {
     }
 }
 
-
 #[cfg(test)]
 mod smart_wall_collision_tests {
     use proptest::prelude::*;
@@ -1022,7 +1013,6 @@ mod smart_wall_collision_tests {
         assert_eq!(detector.consecutive_zeros, 1, "小于阈值算零增益");
     }
 }
-
 
 #[cfg(test)]
 mod metadata_margin_tests {
@@ -1223,7 +1213,6 @@ mod metadata_margin_tests {
     }
 }
 
-
 #[cfg(test)]
 mod boundary_tests {
     use super::super::video_explorer::*;
@@ -1324,7 +1313,6 @@ mod boundary_tests {
     }
 }
 
-
 #[cfg(test)]
 mod strategy_helper_tests {
     use super::super::explore_strategy::*;
@@ -1349,14 +1337,7 @@ mod strategy_helper_tests {
     fn test_build_result_basic() {
         let ctx = create_test_context();
 
-        let result = ctx.build_result(
-            20.0,
-            800_000,
-            None,
-            5,
-            true,
-            0.85,
-        );
+        let result = ctx.build_result(20.0, 800_000, None, 5, true, 0.85);
 
         assert_eq!(result.optimal_crf, 20.0);
         assert_eq!(result.output_size, 800_000);
@@ -1412,7 +1393,6 @@ mod strategy_helper_tests {
         assert!(predicted.is_predicted());
     }
 }
-
 
 #[cfg(test)]
 mod evaluation_consistency_tests {

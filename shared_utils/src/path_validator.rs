@@ -7,20 +7,7 @@ use std::fmt;
 use std::path::Path;
 
 const DANGEROUS_CHARS: &[char] = &[
-    ';',
-    '|',
-    '&',
-    '$',
-    '`',
-    '(',
-    ')',
-    '{',
-    '}',
-    '<',
-    '>',
-    '\n',
-    '\r',
-    '\0',
+    ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r', '\0',
 ];
 
 #[derive(Debug, Clone)]
@@ -63,7 +50,6 @@ impl fmt::Display for PathValidationError {
 }
 
 impl std::error::Error for PathValidationError {}
-
 
 #[derive(Debug, Clone)]
 pub struct PathConversionError {
@@ -156,7 +142,6 @@ pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), Pa
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

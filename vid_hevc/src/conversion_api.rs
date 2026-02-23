@@ -326,81 +326,87 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         video_stream_compressed
                     );
 
-                    let (fail_reason, fail_message, protect_msg, delete_msg) = if !video_stream_compressed {
-                        let input_b = explore_result.input_video_stream_size as f64;
-                        let output_b = explore_result.output_video_stream_size as f64;
-                        let stream_change_pct = if input_b > 0.0 {
-                            (output_b / input_b - 1.0) * 100.0
-                        } else {
-                            0.0
-                        };
-                        // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
-                        let msg = if input_b < 1024.0 * 1024.0 {
-                            format!(
+                    let (fail_reason, fail_message, protect_msg, delete_msg) =
+                        if !video_stream_compressed {
+                            let input_b = explore_result.input_video_stream_size as f64;
+                            let output_b = explore_result.output_video_stream_size as f64;
+                            let stream_change_pct = if input_b > 0.0 {
+                                (output_b / input_b - 1.0) * 100.0
+                            } else {
+                                0.0
+                            };
+                            // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
+                            let msg = if input_b < 1024.0 * 1024.0 {
+                                format!(
                                 "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
                                 input_b / 1024.0,
                                 output_b / 1024.0,
                                 stream_change_pct
                             )
-                        } else {
-                            format!(
+                            } else {
+                                format!(
                                 "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
                                 input_b / 1024.0 / 1024.0,
                                 output_b / 1024.0 / 1024.0,
                                 stream_change_pct
                             )
-                        };
-                        warn!("{}", msg);
-                        if total_file_compressed {
-                            warn!("   ⚠️  Total file smaller but video stream larger (audio/container overhead)");
+                            };
+                            warn!("{}", msg);
+                            if total_file_compressed {
+                                warn!("   ⚠️  Total file smaller but video stream larger (audio/container overhead)");
+                            } else {
+                                warn!(
+                                    "   ⚠️  Total file and video stream both larger than original"
+                                );
+                            }
+                            warn!("   ⚠️  File may already be highly optimized");
+                            (
+                                format!(
+                                    "Video stream compression failed: {:+.1}%",
+                                    stream_change_pct
+                                ),
+                                format!(
+                                    "Skipped: video stream larger ({:+.1}%)",
+                                    stream_change_pct
+                                ),
+                                "Original file PROTECTED (output did not compress)".to_string(),
+                                "Output discarded (video stream larger than original)".to_string(),
+                            )
+                        } else if explore_result.ssim.is_none() {
+                            warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
+                            warn!("   ⚠️  This may indicate codec compatibility issues (VP8/VP9/alpha channel)");
+                            (
+                                "SSIM calculation failed".to_string(),
+                                "Skipped: SSIM calculation failed".to_string(),
+                                "Original file PROTECTED (SSIM not available)".to_string(),
+                                "Output discarded (SSIM calculation failed)".to_string(),
+                            )
+                        } else if actual_ssim < threshold {
+                            warn!(
+                                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
+                                actual_ssim, threshold
+                            );
+                            (
+                                format!(
+                                    "Quality validation failed: SSIM {:.4} < {:.4}",
+                                    actual_ssim, threshold
+                                ),
+                                format!(
+                                    "Skipped: SSIM {:.4} below threshold {:.4}",
+                                    actual_ssim, threshold
+                                ),
+                                "Original file PROTECTED (quality below threshold)".to_string(),
+                                "Output discarded (quality below threshold)".to_string(),
+                            )
                         } else {
-                            warn!("   ⚠️  Total file and video stream both larger than original");
-                        }
-                        warn!("   ⚠️  File may already be highly optimized");
-                        (
-                            format!(
-                                "Video stream compression failed: {:+.1}%",
-                                stream_change_pct
-                            ),
-                            format!("Skipped: video stream larger ({:+.1}%)", stream_change_pct),
-                            "Original file PROTECTED (output did not compress)".to_string(),
-                            "Output discarded (video stream larger than original)".to_string(),
-                        )
-                    } else if explore_result.ssim.is_none() {
-                        warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
-                        warn!("   ⚠️  This may indicate codec compatibility issues (VP8/VP9/alpha channel)");
-                        (
-                            "SSIM calculation failed".to_string(),
-                            "Skipped: SSIM calculation failed".to_string(),
-                            "Original file PROTECTED (SSIM not available)".to_string(),
-                            "Output discarded (SSIM calculation failed)".to_string(),
-                        )
-                    } else if actual_ssim < threshold {
-                        warn!(
-                            "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
-                            actual_ssim, threshold
-                        );
-                        (
-                            format!(
-                                "Quality validation failed: SSIM {:.4} < {:.4}",
-                                actual_ssim, threshold
-                            ),
-                            format!(
-                                "Skipped: SSIM {:.4} below threshold {:.4}",
-                                actual_ssim, threshold
-                            ),
-                            "Original file PROTECTED (quality below threshold)".to_string(),
-                            "Output discarded (quality below threshold)".to_string(),
-                        )
-                    } else {
-                        warn!("   ⚠️  Quality validation FAILED: unknown reason");
-                        (
-                            "Quality validation failed: unknown reason".to_string(),
-                            "Skipped: quality validation failed".to_string(),
-                            "Original file PROTECTED (quality/size check failed)".to_string(),
-                            "Output discarded (quality/size check failed)".to_string(),
-                        )
-                    };
+                            warn!("   ⚠️  Quality validation FAILED: unknown reason");
+                            (
+                                "Quality validation failed: unknown reason".to_string(),
+                                "Skipped: quality validation failed".to_string(),
+                                "Original file PROTECTED (quality/size check failed)".to_string(),
+                                "Output discarded (quality/size check failed)".to_string(),
+                            )
+                        };
                     warn!("   🛡️  {}", protect_msg);
 
                     if config.apple_compat {
@@ -779,7 +785,6 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> f32 {
     }
 }
 
-
 fn execute_hevc_conversion(
     detection: &VideoDetectionResult,
     output: &Path,
@@ -894,7 +899,6 @@ fn execute_hevc_lossless(
     Ok(std::fs::metadata(output)?.len())
 }
 
-
 pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     auto_convert(input, config)
 }
@@ -908,7 +912,6 @@ mod tests {
         assert_eq!(TargetVideoFormat::HevcLosslessMkv.extension(), "mkv");
         assert_eq!(TargetVideoFormat::HevcMp4.extension(), "mp4");
     }
-
 
     #[test]
     fn test_config_default_apple_compat() {
@@ -1145,7 +1148,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_apple_compat_av1_to_hevc() {
         use crate::detection_api::{ColorSpace, CompressionType, DetectedCodec};
@@ -1214,7 +1216,6 @@ mod tests {
             "VVC should convert in Apple compat mode"
         );
     }
-
 
     #[test]
     fn test_apple_compat_crf_precision_vp9() {
@@ -1292,7 +1293,6 @@ mod tests {
             crf
         );
     }
-
 
     #[test]
     fn test_apple_compat_lossless_source() {

@@ -13,7 +13,6 @@ use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractionMethod {
     FfprobeDirect,
@@ -68,7 +67,6 @@ impl StreamSizeInfo {
     }
 }
 
-
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 struct FfprobeStreamInfo {
@@ -101,7 +99,6 @@ struct FfprobeFullOutput {
     format: FfprobeFormatInfo,
 }
 
-
 pub const MOV_OVERHEAD_PERCENT: f64 = 0.005;
 pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
 pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
@@ -121,7 +118,6 @@ pub fn get_container_overhead_percent(path: &Path) -> f64 {
         _ => DEFAULT_OVERHEAD_PERCENT,
     }
 }
-
 
 pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
     let total_file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
@@ -262,7 +258,6 @@ fn estimate_stream_sizes(path: &Path, total_file_size: u64) -> StreamSizeInfo {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,7 +324,6 @@ mod tests {
         assert!(info.is_overhead_excessive());
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

@@ -7,7 +7,6 @@ use crate::types::{CrfError, IterationError, SsimError};
 use std::fmt;
 use std::path::PathBuf;
 
-
 #[derive(Debug)]
 pub enum AppError {
     FileNotFound {
@@ -262,7 +261,6 @@ impl AppError {
         matches!(self, AppError::OutputExists { .. })
     }
 
-
     pub fn with_file_path(self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         match self {
@@ -388,7 +386,6 @@ impl AppError {
         }
     }
 }
-
 
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -536,7 +533,6 @@ impl std::error::Error for AppError {
     }
 }
 
-
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
         AppError::Io(e)
@@ -566,7 +562,6 @@ impl From<anyhow::Error> for AppError {
         AppError::Other(e)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -683,12 +678,10 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod property_tests {
     use super::*;
     use proptest::prelude::*;
-
 
     fn arb_app_error() -> impl Strategy<Value = AppError> {
         prop_oneof![

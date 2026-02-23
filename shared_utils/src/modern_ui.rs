@@ -10,7 +10,6 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-
 pub mod colors {
     pub const RESET: &str = "\x1b[0m";
     pub const BOLD: &str = "\x1b[1m";
@@ -60,7 +59,6 @@ pub mod symbols {
     pub const INFO: &str = "ℹ️";
 }
 
-
 pub mod progress_style {
     pub const PROGRESS_CHARS: &str = "█▓░";
 
@@ -82,7 +80,6 @@ pub mod progress_style {
         "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed_precise} • {msg}";
 }
 
-
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const SPINNER_DOTS: &[&str] = &["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
@@ -97,7 +94,6 @@ pub fn spinner_dots() -> &'static str {
     let frame = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) as usize;
     SPINNER_DOTS[frame % SPINNER_DOTS.len()]
 }
-
 
 #[derive(Clone, Copy)]
 pub enum ProgressStyle {
@@ -169,7 +165,6 @@ pub fn render_colored_progress(progress: f64, width: usize) -> String {
 
     format!("{}{}{}", color, bar, RESET)
 }
-
 
 pub struct ExploreProgressState {
     pub stage: String,
@@ -291,7 +286,6 @@ impl ExploreProgressState {
     }
 }
 
-
 pub fn print_result_box(title: &str, lines: &[&str]) {
     use colors::*;
 
@@ -357,7 +351,6 @@ fn strip_ansi(s: &str) -> String {
     result
 }
 
-
 pub fn print_stage(_icon: &str, title: &str) {
     use colors::*;
     eprintln!("{}📍{} {}{}{}", DIM, RESET, BOLD, title, RESET);
@@ -368,7 +361,6 @@ pub fn print_substage(title: &str) {
     use colors::*;
     eprintln!("   {}{}•{} {}", DIM, colors::CYAN, RESET, title);
 }
-
 
 pub fn print_success(msg: &str) {
     use colors::*;
@@ -389,7 +381,6 @@ pub fn print_info(msg: &str) {
     use colors::*;
     eprintln!("{}{} {}{}", BRIGHT_CYAN, symbols::INFO, msg, RESET);
 }
-
 
 pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;

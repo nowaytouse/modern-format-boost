@@ -10,7 +10,6 @@ pub const METADATA_MARGIN_MIN: u64 = 2048;
 
 pub const METADATA_MARGIN_MAX: u64 = 102400;
 
-
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileSize(u64);
 
@@ -99,7 +98,6 @@ impl FileSize {
     }
 }
 
-
 impl fmt::Debug for FileSize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "FileSize({} = {})", self.0, self.display())
@@ -129,7 +127,6 @@ impl From<FileSize> for u64 {
         size.0
     }
 }
-
 
 #[cfg(test)]
 mod tests {

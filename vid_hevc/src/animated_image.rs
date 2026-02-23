@@ -15,7 +15,6 @@ use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
 
-
 fn get_output_path(
     input: &Path,
     extension: &str,
@@ -41,15 +40,18 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
 }
 
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    shared_utils::conversion::get_input_dimensions(input)
-        .map_err(VidQualityError::ConversionError)
+    shared_utils::conversion::get_input_dimensions(input).map_err(VidQualityError::ConversionError)
 }
 
 fn get_max_threads(options: &ConvertOptions) -> usize {
     if options.child_threads > 0 {
         options.child_threads
     } else {
-        (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4)
+        (std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            / 2)
+        .clamp(1, 4)
     }
 }
 
@@ -57,7 +59,6 @@ pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
     let total_pixels = width as u64 * height as u64;
     width >= 1280 || height >= 720 || total_pixels >= 921600
 }
-
 
 fn skipped_already_processed(input: &Path) -> ConversionResult {
     ConversionResult {
@@ -144,7 +145,10 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
-                format!("HEVC conversion successful: size reduced {:.1}%", reduction_pct)
+                format!(
+                    "HEVC conversion successful: size reduced {:.1}%",
+                    reduction_pct
+                )
             } else {
                 format!(
                     "HEVC conversion successful: size increased {:.1}%",
@@ -417,8 +421,7 @@ pub fn convert_to_hevc_mp4_matched(
 
     if options.should_delete_original()
         && shared_utils::conversion::safe_delete_original(input, &output, 100).is_ok()
-    {
-    }
+    {}
 
     let reduction_pct = -explore_result.size_change_pct;
     let explored_msg = if (explore_result.optimal_crf - initial_crf).abs() > 0.1 {
@@ -434,7 +437,11 @@ pub fn convert_to_hevc_mp4_matched(
 
     let message = format!(
         "HEVC (CRF {:.1}{}, {} iter{}): -{:.1}%",
-        explore_result.optimal_crf, explored_msg, explore_result.iterations, ssim_msg, reduction_pct
+        explore_result.optimal_crf,
+        explored_msg,
+        explore_result.iterations,
+        ssim_msg,
+        reduction_pct
     );
 
     Ok(ConversionResult {
@@ -620,7 +627,9 @@ pub fn convert_to_gif_apple_compat(
             }
         }
     }
-    let _palette_guard = PaletteGuard { path: &palette_path };
+    let _palette_guard = PaletteGuard {
+        path: &palette_path,
+    };
 
     let palette_result = Command::new("ffmpeg")
         .arg("-y")
@@ -655,18 +664,20 @@ pub fn convert_to_gif_apple_compat(
         .arg(shared_utils::safe_path_arg(&output).as_ref())
         .output();
 
-
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
-            let tolerance_ratio = if options.allow_size_tolerance { 1.01 } else { 1.0 };
+            let tolerance_ratio = if options.allow_size_tolerance {
+                1.01
+            } else {
+                1.0
+            };
             let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
             if output_size > max_allowed_size {
-                let size_increase_pct =
-                    ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
+                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
                 if let Err(e) = fs::remove_file(&output) {
                     eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
                 }

@@ -887,11 +887,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(pool_size)
         .build()
-        .or_else(|_| {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(2)
-                .build()
-        })
+        .or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(2).build())
         .map_err(|e| anyhow::anyhow!("Failed to create thread pool: {}", e))?;
 
     if config.verbose {
@@ -899,7 +895,9 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             pool_size,
             thread_config.child_threads,
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
         );
     }
 

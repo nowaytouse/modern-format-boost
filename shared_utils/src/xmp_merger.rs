@@ -1,4 +1,3 @@
-
 use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -831,7 +830,6 @@ impl MergeSummary {
         summary
     }
 }
-
 
 pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("");

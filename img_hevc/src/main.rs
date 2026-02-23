@@ -934,11 +934,7 @@ fn auto_convert_directory(
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(max_threads)
         .build()
-        .or_else(|_| {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(2)
-                .build()
-        })
+        .or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(2).build())
         .map_err(|e| anyhow::anyhow!("Failed to create thread pool: {}", e))?;
 
     if config.verbose {
@@ -946,10 +942,11 @@ fn auto_convert_directory(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
             child_threads,
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
         );
     }
-
 
     pool.install(|| {
         files.par_iter().for_each(|path| {
@@ -1021,7 +1018,6 @@ fn auto_convert_directory(
         final_output_bytes,
         "Image Conversion",
     );
-
 
     if let Some(ref output_dir) = config.output_dir {
         if let Some(ref base_dir) = config.base_dir {

@@ -256,9 +256,7 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
             Ok(CompressionType::Lossy)
         }
 
-        DetectedFormat::JXL => {
-            Ok(CompressionType::Lossy)
-        }
+        DetectedFormat::JXL => Ok(CompressionType::Lossy),
 
         _ => Ok(CompressionType::Lossy),
     }
@@ -307,7 +305,6 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
     let mut factors = PngQuantizationFactors::default();
     let mut detected_tool: Option<String> = None;
     let mut explanations: Vec<String> = Vec::new();
-
 
     if png_info.color_type == 3 {
         let pixel_count = png_info.width as u64 * png_info.height as u64;
@@ -383,14 +380,12 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
         }
     }
 
-
     let tool_signatures = detect_quantization_tool_signature(&data);
     if let Some(ref tool) = tool_signatures {
         factors.tool_signature = 1.0;
         detected_tool = Some(tool.clone());
         explanations.push(format!("Tool signature detected: {}", tool));
     }
-
 
     if png_info.color_type == 3 {
         if let Ok(img) = image::open(path) {
@@ -446,7 +441,6 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
         }
     }
 
-
     let expected_size = estimate_uncompressed_size(&png_info);
     let actual_size = data.len() as u64;
     let compression_ratio = actual_size as f64 / expected_size as f64;
@@ -461,7 +455,6 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
             compression_ratio * 100.0
         ));
     }
-
 
     let weights = PngQuantizationWeights {
         structural: 0.55,
@@ -521,7 +514,6 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
         );
     }
 
-
     if png_info.bit_depth == 16 {
         return Ok(PngQuantizationAnalysis {
             is_quantized: false,
@@ -541,7 +533,6 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
             explanation: "Truecolor PNG without quantization indicators".to_string(),
         });
     }
-
 
     if detected_tool.is_some() {
         return Ok(PngQuantizationAnalysis {
@@ -673,7 +664,6 @@ fn detect_quantization_tool_signature(data: &[u8]) -> Option<String> {
             return Some(tool_name.to_string());
         }
     }
-
 
     None
 }
@@ -920,7 +910,6 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
-
 
     #[test]
     fn test_detect_png_format() {

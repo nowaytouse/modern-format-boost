@@ -14,7 +14,6 @@ pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct IterationError {
     pub current: u32,
@@ -33,7 +32,6 @@ impl fmt::Display for IterationError {
 }
 
 impl std::error::Error for IterationError {}
-
 
 #[derive(Debug, Clone)]
 pub struct IterationGuard {
@@ -107,7 +105,6 @@ impl IterationGuard {
     }
 }
 
-
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
         VERY_LONG_VIDEO_FALLBACK_ITERATIONS
@@ -119,7 +116,6 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
         NORMAL_MAX_ITERATIONS
     }
 }
-
 
 #[cfg(test)]
 mod tests {

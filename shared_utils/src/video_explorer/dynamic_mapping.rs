@@ -395,7 +395,9 @@ pub fn quick_calibrate(
             crate::verbose_eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
             crate::verbose_eprintln!(
                 "      GPU: {} bytes, CPU: {} bytes (ratio: {:.2})",
-                gpu_size, cpu_size, ratio
+                gpu_size,
+                cpu_size,
+                ratio
             );
             calibration_success = true;
             break;
@@ -416,7 +418,10 @@ pub fn quick_calibrate(
         let cpu_size = mapper.anchors[0].cpu_size;
         crate::verbose_eprintln!(
             "✅ Calibration complete: GPU {} → CPU {} (ratio {:.3}, offset +{:.1})",
-            gpu_size, cpu_size, ratio, offset
+            gpu_size,
+            cpu_size,
+            ratio,
+            offset
         );
     }
 

@@ -32,7 +32,6 @@ use std::thread::JoinHandle;
 
 use crate::explore_strategy::CrfCache;
 
-
 fn beijing_time_now() -> String {
     // UTC+8 (28800 seconds) is always a valid fixed offset
     let beijing = FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid fixed offset");
@@ -41,7 +40,6 @@ fn beijing_time_now() -> String {
         .format("%Y-%m-%d %H:%M:%S (UTC+8)")
         .to_string()
 }
-
 
 struct StderrCapture {
     lines: Arc<Mutex<VecDeque<String>>>,
@@ -85,7 +83,6 @@ impl StderrCapture {
     }
 }
 
-
 struct HeartbeatMonitor {
     last_activity: Arc<Mutex<std::time::Instant>>,
     stop_signal: Arc<AtomicBool>,
@@ -127,7 +124,8 @@ impl HeartbeatMonitor {
                     break;
                 }
 
-                let elapsed = self.last_activity
+                let elapsed = self
+                    .last_activity
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .elapsed();
@@ -186,7 +184,6 @@ impl HeartbeatMonitor {
     }
 }
 
-
 pub const GPU_SAMPLE_DURATION: f32 = 50.0;
 
 pub const GPU_SEGMENT_DURATION: f32 = 10.0;
@@ -204,7 +201,6 @@ pub const GPU_DEFAULT_MIN_CRF: f32 = 1.0;
 pub const GPU_DEFAULT_MAX_CRF: f32 = 48.0;
 
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
-
 
 fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
     let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
@@ -302,9 +298,7 @@ impl Default for GpuAccel {
 
 impl GpuAccel {
     pub fn detect() -> &'static GpuAccel {
-        GPU_ACCEL.get_or_init(|| {
-            Self::detect_internal()
-        })
+        GPU_ACCEL.get_or_init(|| Self::detect_internal())
     }
 
     pub fn detect_fresh() -> GpuAccel {
@@ -340,7 +334,6 @@ impl GpuAccel {
     fn detect_internal() -> GpuAccel {
         let encoders = get_available_encoders();
 
-
         #[cfg(target_os = "macos")]
         {
             if let Some(accel) = Self::try_videotoolbox(&encoders) {
@@ -357,7 +350,6 @@ impl GpuAccel {
                 return accel;
             }
         }
-
 
         #[cfg(target_os = "windows")]
         if let Some(accel) = Self::try_amf(&encoders) {
@@ -394,12 +386,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "q:v",
                     crf_range: (0, 100),
-                    extra_args: vec![
-                        "-profile:v",
-                        "main",
-                        "-tag:v",
-                        "hvc1",
-                    ],
+                    extra_args: vec!["-profile:v", "main", "-tag:v", "hvc1"],
                 })
             } else {
                 None
@@ -771,7 +758,6 @@ fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
     (base_bitrate as f32 * crf_factor) as u32
 }
 
-
 #[derive(Debug, Clone)]
 pub struct SmartSampleResult {
     pub sample_filter: String,
@@ -800,7 +786,6 @@ pub fn calculate_smart_sample(
 
     let sample_ratio = target_sample_duration / total_duration;
     let sample_percentage = sample_ratio * 100.0;
-
 
     let scene_threshold = 0.3;
     let entropy_threshold = 6.0;
@@ -862,7 +847,6 @@ pub fn calculate_smart_sample(
     })
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub struct QualityScore {
     pub ssim: f64,
@@ -871,7 +855,6 @@ pub struct QualityScore {
 }
 
 impl QualityScore {
-
     #[inline]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
@@ -931,7 +914,6 @@ pub fn is_quality_better(
         (new_score.combined_score - old_score.combined_score) / old_score.combined_score;
     improvement > 0.005
 }
-
 
 pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary: f32,
@@ -1006,7 +988,6 @@ pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center(gpu_crf, gpu_type, codec)
 }
 
-
 #[derive(Debug, Clone)]
 pub struct GpuCoarseResult {
     pub gpu_boundary_crf: f32,
@@ -1024,7 +1005,6 @@ pub struct GpuCoarseResult {
 }
 
 impl GpuCoarseResult {
-
     #[inline]
     pub fn best_ssim_typed(&self) -> Option<crate::types::Ssim> {
         self.gpu_best_ssim
@@ -1105,7 +1085,9 @@ impl CrfMapping {
         );
         if self.gpu_type == GpuType::Apple {
             crate::log_eprintln!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
-            crate::log_eprintln!("      • SSIM ceiling: 0.91~0.97 (content-dependent, cannot reach 0.98+)");
+            crate::log_eprintln!(
+                "      • SSIM ceiling: 0.91~0.97 (content-dependent, cannot reach 0.98+)"
+            );
             crate::log_eprintln!("      • Best value: q:v 75-80 (SSIM ~0.97, good compression)");
         } else {
             crate::log_eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
@@ -1138,7 +1120,6 @@ impl Default for GpuCoarseConfig {
         }
     }
 }
-
 
 fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
     let psnr_output = Command::new("ffmpeg")
@@ -1173,7 +1154,6 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
 
     Err("Failed to parse PSNR from ffmpeg output".to_string())
 }
-
 
 #[derive(Debug)]
 struct QualityCeilingDetector {
@@ -1227,7 +1207,6 @@ impl QualityCeilingDetector {
         }
     }
 }
-
 
 #[derive(Debug)]
 struct PsnrSsimMapper {
@@ -1439,7 +1418,6 @@ pub fn gpu_coarse_search_with_log(
             });
         }
     };
-
 
     const SKIP_GPU_SIZE_THRESHOLD: u64 = 500 * 1024;
     const SKIP_GPU_DURATION_THRESHOLD: f32 = 3.0;
@@ -1707,10 +1685,7 @@ pub fn gpu_coarse_search_with_log(
         );
         let heartbeat_handle = heartbeat.spawn();
 
-        crate::verbose_eprintln!(
-            "GPU encoding started - Beijing: {}",
-            beijing_time_now()
-        );
+        crate::verbose_eprintln!("GPU encoding started - Beijing: {}", beijing_time_now());
 
         let mut last_progress_time = Instant::now();
         let mut fallback_logged = false;
@@ -1760,9 +1735,9 @@ pub fn gpu_coarse_search_with_log(
                                     }
                                     Err(_) => {
                                         if !fallback_logged {
-                        crate::log_eprintln!(
-                                "Using linear estimation (metadata unavailable)"
-                            );
+                                            crate::log_eprintln!(
+                                                "Using linear estimation (metadata unavailable)"
+                                            );
                                             fallback_logged = true;
                                         }
                                         (sample_input_size as f64 * (1.0 / pct.max(0.1)))
@@ -1807,10 +1782,7 @@ pub fn gpu_coarse_search_with_log(
             );
         }
 
-        crate::verbose_eprintln!(
-            "Encoding completed - Beijing: {}",
-            beijing_time_now()
-        );
+        crate::verbose_eprintln!("Encoding completed - Beijing: {}", beijing_time_now());
 
         Ok(std::fs::metadata(output)?.len())
     };
@@ -1897,7 +1869,6 @@ pub fn gpu_coarse_search_with_log(
         cache.insert(crf, size);
         Ok(size)
     };
-
 
     const WINDOW_SIZE: usize = 3;
     const CHANGE_RATE_THRESHOLD: f64 = 0.02;
@@ -2052,7 +2023,6 @@ pub fn gpu_coarse_search_with_log(
             }
         }
     }
-
 
     const GPU_DECAY_FACTOR: f32 = 0.5;
     const GPU_MAX_WALL_HITS: u32 = 4;
@@ -2308,7 +2278,6 @@ pub fn gpu_coarse_search_with_log(
     } else if skip_stage2 {
         log_msg!("   ⚡ Skip Stage2: boundary at 0.5 precision");
     }
-
 
     let mut ceiling_detector = QualityCeilingDetector::new();
     let mut psnr_ssim_mapper = PsnrSsimMapper::new();
@@ -2687,7 +2656,6 @@ mod tests {
         assert!((low - 12.0).abs() < 0.1, "low should be GPU boundary");
     }
 
-
     #[test]
     fn test_videotoolbox_crf_mapping_crf_0() {
         let encoder = GpuEncoder {
@@ -2773,7 +2741,6 @@ mod tests {
         }
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

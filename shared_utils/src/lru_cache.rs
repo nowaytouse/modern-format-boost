@@ -133,7 +133,6 @@ impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SerializableCache<K, V> {
     pub capacity: usize,
@@ -257,7 +256,6 @@ mod tests {
         assert_eq!(cache.get(&3), Some(&"three".to_string()));
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

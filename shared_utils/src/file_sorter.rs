@@ -83,7 +83,6 @@ pub fn sort_by_name(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::NameAscending).sort(files)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

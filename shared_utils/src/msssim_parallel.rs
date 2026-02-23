@@ -204,12 +204,10 @@ impl ParallelMsssimCalculator {
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
 
         match ms_ssim_result {
-            Ok(_) => {
-                progress_monitor.get_channel_score(channel).ok_or_else(|| {
-                    eprintln!("❌ Failed to get {} channel score", channel);
-                    AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
-                })
-            }
+            Ok(_) => progress_monitor.get_channel_score(channel).ok_or_else(|| {
+                eprintln!("❌ Failed to get {} channel score", channel);
+                AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
+            }),
             Err(_) => {
                 eprintln!(
                     "⚠️  MS-SSIM failed for channel {}, falling back to SSIM",

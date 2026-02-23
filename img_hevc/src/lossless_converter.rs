@@ -9,19 +9,10 @@ use std::path::Path;
 use std::process::Command;
 
 pub use shared_utils::conversion::{
-    check_size_tolerance,
-    clear_processed_list,
-    determine_output_path_with_base,
-    finalize_conversion,
-    format_size_change,
-    is_already_processed,
-    load_processed_list,
-    mark_as_processed,
-    save_processed_list,
-    ConversionResult,
-    ConvertOptions,
+    check_size_tolerance, clear_processed_list, determine_output_path_with_base,
+    finalize_conversion, format_size_change, is_already_processed, load_processed_list,
+    mark_as_processed, save_processed_list, ConversionResult, ConvertOptions,
 };
-
 
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
     shared_utils::copy_on_skip_or_fail(
@@ -52,7 +43,10 @@ pub fn convert_to_jxl(
             copy_original_on_skip(input, options);
             mark_as_processed(input);
             return Ok(ConversionResult::skipped_custom(
-                input, input_size, "Skipped: Small PNG (< 500KB)", "small_file",
+                input,
+                input_size,
+                "Skipped: Small PNG (< 500KB)",
+                "small_file",
             ));
         }
     }
@@ -71,7 +65,11 @@ pub fn convert_to_jxl(
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
-        (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4)
+        (std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            / 2)
+        .clamp(1, 4)
     };
 
     let mut cmd = Command::new("cjxl");
@@ -91,7 +89,6 @@ pub fn convert_to_jxl(
         .arg(shared_utils::safe_path_arg(&output).as_ref());
 
     let result = cmd.output();
-
 
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
@@ -285,7 +282,9 @@ pub fn convert_to_jxl(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
 
-            if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
+            {
                 return Ok(skipped);
             }
 
@@ -325,7 +324,11 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let max_threads = (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4);
+    let max_threads = (std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        / 2)
+    .clamp(1, 4);
     let mut cmd = Command::new("cjxl");
     cmd.arg("--lossless_jpeg=1")
         .arg("-j")
@@ -350,8 +353,15 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 return Err(e);
             }
 
-            finalize_conversion(input, &output, input_size, "JPEG lossless transcode", None, options)
-                .map_err(ImgQualityError::IoError)
+            finalize_conversion(
+                input,
+                &output,
+                input_size,
+                "JPEG lossless transcode",
+                None,
+                options,
+            )
+            .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -372,10 +382,15 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 );
 
                 match try_imagemagick_fallback(input, &output, 0.0, max_threads) {
-                    Ok(_) => {
-                        finalize_conversion(input, &output, input_size, "JPEG (Sanitized) -> JXL", None, options)
-                            .map_err(ImgQualityError::IoError)
-                    }
+                    Ok(_) => finalize_conversion(
+                        input,
+                        &output,
+                        input_size,
+                        "JPEG (Sanitized) -> JXL",
+                        None,
+                        options,
+                    )
+                    .map_err(ImgQualityError::IoError),
                     Err(e) => Err(ImgQualityError::ConversionError(format!(
                         "Fallback failed after JPEG corruption: {}",
                         e
@@ -608,7 +623,11 @@ pub fn convert_to_jxl_matched(
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
-        (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).clamp(1, 4)
+        (std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            / 2)
+        .clamp(1, 4)
     };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
@@ -658,7 +677,11 @@ pub fn convert_to_jxl_matched(
                 );
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
-                return Ok(ConversionResult::skipped_size_increase(input, input_size, output_size));
+                return Ok(ConversionResult::skipped_size_increase(
+                    input,
+                    input_size,
+                    output_size,
+                ));
             }
 
             if let Err(e) = verify_jxl_health(&output) {
@@ -669,8 +692,15 @@ pub fn convert_to_jxl_matched(
             }
 
             let extra = format!("d={:.2}", distance);
-            finalize_conversion(input, &output, input_size, "Quality-matched JXL", Some(&extra), options)
-                .map_err(ImgQualityError::IoError)
+            finalize_conversion(
+                input,
+                &output,
+                input_size,
+                "Quality-matched JXL",
+                Some(&extra),
+                options,
+            )
+            .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -694,7 +724,6 @@ pub fn convert_to_hevc_mkv_lossless(
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
-
 fn try_imagemagick_fallback(
     input: &Path,
     output: &Path,
@@ -711,8 +740,14 @@ fn convert_to_temp_png(
     args_after_input: &[&str],
     label: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    shared_utils::jxl_utils::convert_to_temp_png(input, tool, args_before_input, args_after_input, label)
-        .map_err(ImgQualityError::IoError)
+    shared_utils::jxl_utils::convert_to_temp_png(
+        input,
+        tool,
+        args_before_input,
+        args_after_input,
+        label,
+    )
+    .map_err(ImgQualityError::IoError)
 }
 
 fn prepare_input_for_cjxl(
@@ -801,29 +836,29 @@ fn prepare_input_for_cjxl(
             }
         }
 
-        "webp" => {
-            convert_to_temp_png(
-                input, "dwebp", &[],
-                &["-o", "__OUTPUT__"],
-                "WebP detected, using dwebp for ICC profile compatibility",
-            )
-        }
+        "webp" => convert_to_temp_png(
+            input,
+            "dwebp",
+            &[],
+            &["-o", "__OUTPUT__"],
+            "WebP detected, using dwebp for ICC profile compatibility",
+        ),
 
-        "tiff" | "tif" => {
-            convert_to_temp_png(
-                input, "magick", &["--"],
-                &["-depth", "16", "__OUTPUT__"],
-                "TIFF detected, using ImageMagick for cjxl compatibility",
-            )
-        }
+        "tiff" | "tif" => convert_to_temp_png(
+            input,
+            "magick",
+            &["--"],
+            &["-depth", "16", "__OUTPUT__"],
+            "TIFF detected, using ImageMagick for cjxl compatibility",
+        ),
 
-        "bmp" => {
-            convert_to_temp_png(
-                input, "magick", &["--"],
-                &["__OUTPUT__"],
-                "BMP detected, using ImageMagick for cjxl compatibility",
-            )
-        }
+        "bmp" => convert_to_temp_png(
+            input,
+            "magick",
+            &["--"],
+            &["__OUTPUT__"],
+            "BMP detected, using ImageMagick for cjxl compatibility",
+        ),
 
         "heic" | "heif" => {
             use console::style;
@@ -875,13 +910,13 @@ fn prepare_input_for_cjxl(
             }
         }
 
-        "gif" => {
-            convert_to_temp_png(
-                input, "ffmpeg", &["-y", "-i"],
-                &["-frames:v", "1", "__OUTPUT__"],
-                "GIF detected, using FFmpeg for static frame extraction",
-            )
-        }
+        "gif" => convert_to_temp_png(
+            input,
+            "ffmpeg",
+            &["-y", "-i"],
+            &["-frames:v", "1", "__OUTPUT__"],
+            "GIF detected, using FFmpeg for static frame extraction",
+        ),
 
         _ => {
             if let Some(actual_ext) = input.extension().and_then(|e| e.to_str()) {
@@ -943,10 +978,8 @@ pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
     vid_hevc::animated_image::is_high_quality_animated(width, height)
 }
 
-
 fn verify_jxl_health(path: &Path) -> Result<()> {
-    shared_utils::jxl_utils::verify_jxl_health(path)
-        .map_err(ImgQualityError::ConversionError)
+    shared_utils::jxl_utils::verify_jxl_health(path).map_err(ImgQualityError::ConversionError)
 }
 
 #[cfg(test)]
@@ -990,7 +1023,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-
     #[test]
     fn test_is_high_quality_720p() {
         assert!(is_high_quality_animated(1280, 720));
@@ -1032,7 +1064,6 @@ mod tests {
         assert!(!is_high_quality_animated(500, 500));
         assert!(!is_high_quality_animated(320, 240));
     }
-
 
     fn should_convert_to_video_format(duration: f32, width: u32, height: u32) -> bool {
         const DURATION_THRESHOLD: f32 = 3.0;
@@ -1078,7 +1109,6 @@ mod tests {
             "2.99秒+低质量应该转GIF"
         );
     }
-
 
     #[test]
     fn test_format_classification_no_overlap() {

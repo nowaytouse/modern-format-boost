@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
-    if which::which(\"powershell\").is_ok() {
+    if which::which("powershell").is_ok() {
         // Use -LiteralPath to avoid command injection via filenames containing quotes
         let ps_script = format!(
             "Get-Acl -LiteralPath '{}' | Set-Acl -LiteralPath '{}'",

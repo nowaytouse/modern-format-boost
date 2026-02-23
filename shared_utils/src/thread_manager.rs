@@ -61,7 +61,9 @@ impl ThreadConfig {
 }
 
 pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
-    let cpu_count = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let cpu_count = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
 
     let effective_percentage = if config.multi_instance_aware && is_multi_instance() {
         config.core_percentage / 2
@@ -87,7 +89,9 @@ pub enum WorkloadType {
 }
 
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
-    let total_cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let total_cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
 
     let reserved = (total_cores as f64 * 0.2).ceil() as usize;
     let reserved = reserved.clamp(1, 2);
@@ -96,7 +100,6 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
 
     match workload {
         WorkloadType::Image => {
-
             let child_threads = 2;
 
             let parallel_tasks = (available_cores / child_threads).max(1);
@@ -109,12 +112,7 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
             }
         }
         WorkloadType::Video => {
-
-            let parallel_tasks = if available_cores >= 8 {
-                2
-            } else {
-                1
-            };
+            let parallel_tasks = if available_cores >= 8 { 2 } else { 1 };
 
             let child_threads = (available_cores / parallel_tasks).max(1);
 
@@ -127,9 +125,7 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
 }
 
 pub fn get_optimal_threads() -> usize {
-    *OPTIMAL_THREADS.get_or_init(|| {
-        get_balanced_thread_config(WorkloadType::Image).parallel_tasks
-    })
+    *OPTIMAL_THREADS.get_or_init(|| get_balanced_thread_config(WorkloadType::Image).parallel_tasks)
 }
 
 pub fn get_ffmpeg_threads() -> usize {

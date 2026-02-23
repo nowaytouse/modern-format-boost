@@ -10,9 +10,7 @@
 use std::path::Path;
 use std::process::Command;
 
-
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
-
 
 #[derive(Debug, Clone)]
 pub struct QualityThresholds {
@@ -45,7 +43,6 @@ pub enum CrossValidationResult {
     MajorityAgree,
     Divergent,
 }
-
 
 pub fn get_video_duration(input: &Path) -> Option<f64> {
     let output = Command::new("ffprobe")
@@ -106,11 +103,7 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
 }
 
 /// Run ffmpeg with the given lavfi filter and parse SSIM Y/U/V/All from stderr.
-fn run_ssim_all_filter(
-    input: &Path,
-    output: &Path,
-    lavfi: &str,
-) -> Option<(f64, f64, f64, f64)> {
+fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64, f64, f64, f64)> {
     let out = Command::new("ffmpeg")
         .arg("-i")
         .arg(crate::safe_path_arg(input).as_ref())
@@ -155,7 +148,6 @@ pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64,
         .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
         .or_else(|| run_ssim_all_filter(input, output, ALPHA_FLATTEN))
 }
-
 
 fn parse_ssim_from_output(stderr: &str) -> Option<f64> {
     for line in stderr.lines() {

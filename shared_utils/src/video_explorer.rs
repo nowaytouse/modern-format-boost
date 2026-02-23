@@ -15,10 +15,9 @@ use std::process::Command;
 
 use crate::explore_strategy::CrfCache;
 
-use crate::types::{FileSize, Ssim};
-use crate::float_compare::SSIM_EPSILON;
 use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
-
+use crate::float_compare::SSIM_EPSILON;
+use crate::types::{FileSize, Ssim};
 
 pub mod codec_detection;
 pub mod metadata;
@@ -46,7 +45,6 @@ macro_rules! progress_done {
         crate::log_eprintln!();
     }};
 }
-
 
 pub const ABSOLUTE_MIN_CRF: f32 = 10.0;
 
@@ -136,7 +134,6 @@ pub fn verify_compression_simple(
     (can_compress, compare_size)
 }
 
-
 pub const ULTIMATE_MIN_WALL_HITS: u32 = 4;
 
 pub const ULTIMATE_MAX_WALL_HITS: u32 = 28;
@@ -158,7 +155,6 @@ pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
 
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
-
     if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
         VERY_LONG_VIDEO_FALLBACK_ITERATIONS
     } else if duration_secs >= LONG_VIDEO_THRESHOLD_SECS {
@@ -208,13 +204,11 @@ pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
     total.clamp(ULTIMATE_MIN_WALL_HITS, ULTIMATE_MAX_WALL_HITS)
 }
 
-
 pub const MIN_ENCODE_THREADS: usize = 1;
 
 pub const DEFAULT_MAX_ENCODE_THREADS: usize = 4;
 
 pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
-
 
 pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = 18.0;
 
@@ -246,7 +240,6 @@ pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -
     half_cpus.clamp(MIN_ENCODE_THREADS, resolution_limit)
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExploreMode {
     SizeOnly,
@@ -262,7 +255,6 @@ pub enum ExploreMode {
     CompressWithQuality,
 }
 
-
 /// Per-component confidence; overall() is computed from weights.
 /// Explore results currently use a fixed confidence value per mode; this breakdown is not yet filled.
 #[derive(Debug, Clone, Default)]
@@ -272,7 +264,6 @@ pub struct ConfidenceBreakdown {
     pub margin_safety: f64,
     pub ssim_confidence: f64,
 }
-
 
 pub const CONFIDENCE_WEIGHT_SAMPLING: f64 = 0.3;
 pub const CONFIDENCE_WEIGHT_PREDICTION: f64 = 0.3;
@@ -374,7 +365,6 @@ impl Default for ExploreResult {
 }
 
 impl ExploreResult {
-
     #[inline]
     pub fn ssim_typed(&self) -> Option<Ssim> {
         self.ssim.and_then(|v| Ssim::new(v).ok())
@@ -556,7 +546,6 @@ pub enum VideoEncoder {
     H264,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncoderPreset {
     Ultrafast,
@@ -599,7 +588,9 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx265") {
                     "libx265"
                 } else {
-                    crate::log_eprintln!("⚠️  libx265 not available, falling back to hevc_videotoolbox");
+                    crate::log_eprintln!(
+                        "⚠️  libx265 not available, falling back to hevc_videotoolbox"
+                    );
                     "hevc_videotoolbox"
                 }
             }
@@ -608,7 +599,9 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx264") {
                     "libx264"
                 } else {
-                    crate::log_eprintln!("⚠️  libx264 not available, falling back to h264_videotoolbox");
+                    crate::log_eprintln!(
+                        "⚠️  libx264 not available, falling back to h264_videotoolbox"
+                    );
                     "h264_videotoolbox"
                 }
             }
@@ -679,7 +672,6 @@ impl VideoEncoder {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SsimSource {
@@ -796,7 +788,6 @@ impl TransparencyReport {
         }
     }
 }
-
 
 pub struct VideoExplorer {
     config: ExploreConfig,
@@ -1200,7 +1191,7 @@ impl VideoExplorer {
             if self.can_compress_with_margin(size) {
                 best_crf = Some(mid);
                 best_size = Some(size);
-                    best_crf_so_far = mid;
+                best_crf_so_far = mid;
                 high = mid;
             } else {
                 low = mid;
@@ -1335,7 +1326,9 @@ impl VideoExplorer {
             if ssim >= min_ssim {
                 log_realtime!("      ✅ Valid: compresses + SSIM OK");
             } else {
-                log_realtime!("      ⚠️ SSIM below threshold, accepting best available (no lower-CRF retry)");
+                log_realtime!(
+                    "      ⚠️ SSIM below threshold, accepting best available (no lower-CRF retry)"
+                );
             }
         }
 
@@ -1499,7 +1492,10 @@ impl VideoExplorer {
                         "   ⚠️ EMERGENCY LIMIT: Reached {} iterations, stopping search!",
                         EMERGENCY_MAX_ITERATIONS
                     );
-                    crate::log_eprintln!("   ⚠️ Using best result found so far: CRF {:.1}", best_crf);
+                    crate::log_eprintln!(
+                        "   ⚠️ Using best result found so far: CRF {:.1}",
+                        best_crf
+                    );
                     break;
                 }
 
@@ -1552,7 +1548,8 @@ impl VideoExplorer {
                     let ssim = quality.0.unwrap_or(0.0);
                     log_realtime!("      CRF {:.1}: SSIM {:.6}", crf, ssim);
 
-                    if ssim > best_ssim + SSIM_EPSILON || (ssim >= best_ssim - SSIM_EPSILON && crf > best_crf)
+                    if ssim > best_ssim + SSIM_EPSILON
+                        || (ssim >= best_ssim - SSIM_EPSILON && crf > best_crf)
                     {
                         best_crf = crf;
                         best_size = size;
@@ -2090,13 +2087,13 @@ impl VideoExplorer {
         let size_change_pct = self.calc_change_pct(final_size);
         let status = if ssim >= 0.999 {
             "Excellent"
-            } else if ssim >= 0.99 {
+        } else if ssim >= 0.99 {
             "Very good"
-            } else if ssim >= 0.98 {
+        } else if ssim >= 0.98 {
             "Good"
-            } else {
+        } else {
             "Acceptable"
-            };
+        };
 
         let elapsed = start_time.elapsed();
         let saved = self.input_size - final_size;
@@ -2451,7 +2448,9 @@ impl VideoExplorer {
                         && !self.config.quality_thresholds.force_ms_ssim_long
                 }
                 None => {
-                    crate::log_eprintln!("   ⚠️  Cannot detect video duration, skipping MS-SSIM verification");
+                    crate::log_eprintln!(
+                        "   ⚠️  Cannot detect video duration, skipping MS-SSIM verification"
+                    );
                     true
                 }
             };
@@ -2542,7 +2541,8 @@ impl VideoExplorer {
                     .unwrap_or_else(|| "N/A".to_string());
                 crate::log_eprintln!(
                     "\r      📊 SSIM: {} | PSNR: {} dB          ",
-                    ssim_str, psnr_str
+                    ssim_str,
+                    psnr_str
                 );
 
                 Ok((ssim, psnr))
@@ -2707,7 +2707,9 @@ impl VideoExplorer {
                 let mid_end = dur * 0.55;
                 let tail_start = dur * 0.90;
 
-                crate::log_eprintln!("   MS-SSIM: 3-segment sampling (start 10% + mid 10% + end 10%)");
+                crate::log_eprintln!(
+                    "   MS-SSIM: 3-segment sampling (start 10% + mid 10% + end 10%)"
+                );
                 format!(
                     "[0:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})',\
                      scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
@@ -2723,10 +2725,8 @@ impl VideoExplorer {
                     tail_start
                 )
             }
-            _ => {
-                "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]libvmaf"
-                    .to_string()
-            }
+            _ => "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]libvmaf"
+                .to_string(),
         };
 
         let use_sampling = duration.map(|d| d > 60.0).unwrap_or(false);
@@ -2822,7 +2822,6 @@ impl VideoExplorer {
     }
 }
 
-
 pub fn explore_size_only(
     input: &Path,
     output: &Path,
@@ -2902,7 +2901,6 @@ pub fn explore_compress_with_quality(
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
 }
-
 
 pub fn explore_precise_quality_match_with_compression_gpu(
     input: &Path,
@@ -3087,7 +3085,6 @@ pub fn full_explore(
         max_threads,
     )
 }
-
 
 pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f32, f64) {
     let (crf_scale, max_crf_cap) = match encoder {
@@ -3303,18 +3300,13 @@ pub fn explore_av1_compress_with_quality(
     )
 }
 
-
 pub mod precision;
-
 
 pub mod precheck;
 
-
 pub mod calibration;
 
-
 pub mod dynamic_mapping;
-
 
 pub mod gpu_coarse_search;
 #[allow(unused_imports)]
@@ -3324,7 +3316,6 @@ pub use gpu_coarse_search::*;
 mod tests {
     use super::precision::*;
     use super::*;
-
 
     #[test]
     fn test_precision_crf_search_range_hevc() {
@@ -3388,10 +3379,8 @@ mod tests {
         assert_eq!(ssim_quality_grade(0.80), "Poor (明显质量损失)");
     }
 
-
     #[test]
     fn test_binary_search_precision_proof() {
-
         let range = 28.0 - 10.0;
         let coarse_iterations = (range / COARSE_STEP).ceil() as u32;
         let fine_iterations = (COARSE_STEP / FINE_STEP).ceil() as u32;
@@ -3423,7 +3412,6 @@ mod tests {
             "Range [0,51] coarse search should need <= 26 iterations"
         );
     }
-
 
     #[test]
     fn test_quality_check_ssim_only() {
@@ -3520,7 +3508,6 @@ mod tests {
         assert!((ACCEPTABLE_MIN_SSIM - 0.90).abs() < 1e-10);
     }
 
-
     #[test]
     fn test_vmaf_validity() {
         assert!(is_valid_ms_ssim(0.0));
@@ -3532,7 +3519,6 @@ mod tests {
 
     #[test]
     fn test_self_calibration_logic() {
-
         let config = ExploreConfig::precise_quality_match(25.0, 35.0, 0.95);
 
         assert!(
@@ -3605,7 +3591,6 @@ mod tests {
         assert!((((23.2_f64 * 2.0).round() / 2.0) - 23.0).abs() < 0.01);
         assert!((((23.8_f64 * 2.0).round() / 2.0) - 24.0).abs() < 0.01);
     }
-
 
     #[test]
     fn test_three_phase_iteration_estimate() {
@@ -3685,7 +3670,6 @@ mod tests {
             worst_total
         );
     }
-
 
     #[test]
     fn test_smart_thresholds_hevc_high_quality() {
@@ -3817,7 +3801,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_v4_target_ssim_near_lossless() {
         let target_ssim = 0.9999_f64;
@@ -3875,7 +3858,6 @@ mod tests {
         let phase3_range = 1.0_f32;
         let phase3_iterations = (phase3_range / phase3_step).ceil() as u32;
         assert_eq!(phase3_iterations, 10, "Phase 3 should test 10 CRF values");
-
     }
 
     #[test]
@@ -3982,13 +3964,11 @@ mod tests {
             "Low quality source cannot reach target SSIM {}",
             target_ssim
         );
-
     }
 
     #[test]
     fn test_v4_crf_cache_mechanism() {
         let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
-
 
         cache.insert(precision::crf_to_cache_key(20.0), 0.9850);
         cache.insert(precision::crf_to_cache_key(20.1), 0.9855);
@@ -4019,7 +3999,6 @@ mod tests {
 
     #[test]
     fn test_v4_no_iteration_limit() {
-
         let range = 51.0_f64 - 0.0;
         let phase1 = (range / 1.0_f64).ceil() as u32;
         let phase2 = (4.0_f64 / 0.5_f64).ceil() as u32;
@@ -4033,12 +4012,10 @@ mod tests {
             "Total iterations should be reasonable: {}",
             total_max
         );
-
     }
 
     #[test]
     fn test_v4_content_type_ssim_convergence() {
-
         let animation_convergence_rate = 0.002_f64;
 
         let live_action_convergence_rate = 0.001_f64;
@@ -4078,7 +4055,6 @@ mod tests {
             "SSIM compare epsilon should be 0.0001"
         );
     }
-
 
     #[test]
     fn test_v413_sliding_window_variance() {
@@ -4223,7 +4199,6 @@ mod tests {
         assert_eq!(FINE_STEP, 0.5, "FINE_STEP should be 0.5");
     }
 
-
     #[test]
     fn test_adaptive_max_walls_boundary_conditions() {
         assert_eq!(calculate_adaptive_max_walls(0.0), ULTIMATE_MIN_WALL_HITS);
@@ -4309,7 +4284,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_crf_to_cache_key_precision() {
         use precision::crf_to_cache_key;
@@ -4354,7 +4328,6 @@ mod tests {
             );
         }
     }
-
 
     #[test]
     fn test_zero_gains_scaling_basic() {
@@ -4402,7 +4375,6 @@ mod tests {
         );
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests_v69 {

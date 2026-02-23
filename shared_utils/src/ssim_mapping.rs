@@ -18,7 +18,6 @@ pub struct MappingPoint {
 }
 
 impl MappingPoint {
-
     #[inline]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()

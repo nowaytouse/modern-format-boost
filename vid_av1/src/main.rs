@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
-use walkdir::WalkDir;
 use serde_json;
+use std::path::PathBuf;
 use tracing::info;
+use walkdir::WalkDir;
 
 use vid_av1::{auto_convert, detect_video, determine_strategy, ConversionConfig};
-
 
 #[derive(Parser)]
 #[command(name = "vid-av1")]

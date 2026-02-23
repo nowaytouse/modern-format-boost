@@ -10,7 +10,6 @@ pub const ULTRA_FINE_STEP: f32 = 0.25;
 
 pub const CPU_FINEST_STEP: f32 = 0.1;
 
-
 pub const CACHE_KEY_MULTIPLIER: f32 = 10.0;
 
 #[inline]
@@ -183,7 +182,6 @@ pub fn format_psnr(psnr: f64) -> String {
         format!("{:.2} dB", psnr)
     }
 }
-
 
 pub const DEFAULT_MIN_MS_SSIM: f64 = 0.90;
 

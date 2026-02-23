@@ -274,7 +274,6 @@ pub struct MatchedQuality {
 }
 
 impl MatchedQuality {
-
     #[inline]
     pub fn crf_hevc_typed(&self) -> Option<crate::types::Crf<crate::types::HevcEncoder>> {
         crate::types::Crf::<crate::types::HevcEncoder>::new(self.crf).ok()
@@ -629,7 +628,6 @@ fn calculate_effective_bpp_with_options(
     Ok((effective_bpp, details))
 }
 
-
 fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, String> {
     if analysis.bpp > 0.0 {
         return Ok(analysis.bpp);
@@ -753,7 +751,6 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 
     base_efficiency
 }
-
 
 fn calculate_resolution_factor(pixels: u64) -> f64 {
     let megapixels = pixels as f64 / 1_000_000.0;
@@ -1352,11 +1349,11 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
 
     let should_skip = matches!(
         codec,
-        SourceCodec::H265 |
-        SourceCodec::Av1 |
-        SourceCodec::Vp9 |
-        SourceCodec::Vvc |
-        SourceCodec::Av2
+        SourceCodec::H265
+            | SourceCodec::Av1
+            | SourceCodec::Vp9
+            | SourceCodec::Vvc
+            | SourceCodec::Av2
     );
 
     let reason = if should_skip {
@@ -1546,7 +1543,6 @@ mod tests {
         assert!((result.distance - 1.5).abs() < 0.2);
     }
 
-
     #[test]
     fn test_gop_factor() {
         assert!(calculate_gop_factor(Some(1), 0) < 0.8);
@@ -1724,7 +1720,6 @@ mod tests {
         assert!(!should_skip_image_format("png", true).should_skip);
         assert!(!should_skip_image_format("gif", true).should_skip);
     }
-
 
     #[test]
     fn test_precision_1080p_h264_8mbps() {
@@ -2173,7 +2168,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_strict_1080p_5mbps() {
         let analysis = VideoAnalysisBuilder::new()
@@ -2227,7 +2221,6 @@ mod tests {
             result.crf
         );
     }
-
 
     #[test]
     fn test_edge_extremely_low_bitrate() {
@@ -2456,7 +2449,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_factor_gop_isolation() {
         let short_gop = VideoAnalysisBuilder::new()
@@ -2624,7 +2616,6 @@ mod tests {
     }
 }
 
-
 #[test]
 fn test_apple_compat_skip_hevc_only() {
     let hevc = should_skip_video_codec_apple_compat("hevc");
@@ -2783,7 +2774,6 @@ fn test_strict_apple_compat_routing() {
     }
 }
 
-
 #[test]
 fn test_apple_compat_hevc_crf_vp9_source() {
     let analysis = VideoAnalysisBuilder::new()
@@ -2852,7 +2842,6 @@ fn test_apple_compat_codec_efficiency() {
     );
     assert!(SourceCodec::Vvc.efficiency_factor() < SourceCodec::Av1.efficiency_factor());
 }
-
 
 #[test]
 fn test_h264_to_hevc_crf_1080p_8mbps() {

@@ -146,7 +146,9 @@ fn calculate_ms_ssim_channel_sampled(
 ) -> Option<f64> {
     if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
         if matches!(ext.to_lowercase().as_str(), "gif") {
-            eprintln!("      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)");
+            eprintln!(
+                "      ℹ️  GIF format: skipping YUV channel extraction (use SSIM-All instead)"
+            );
             return None;
         }
     }
@@ -184,11 +186,16 @@ fn calculate_ms_ssim_channel_sampled(
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!("\n      ❌ Channel {} MS-SSIM failed!", channel.to_uppercase());
+            eprintln!(
+                "\n      ❌ Channel {} MS-SSIM failed!",
+                channel.to_uppercase()
+            );
 
             if stderr.contains("No such filter: 'libvmaf'") {
                 eprintln!("         Cause: libvmaf filter not available in ffmpeg");
-                eprintln!("         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf");
+                eprintln!(
+                    "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
+                );
             } else if stderr.contains("Invalid pixel format") || stderr.contains("format") {
                 eprintln!("         Cause: Pixel format incompatibility");
                 eprintln!("         Input: {}", input.display());
@@ -207,7 +214,11 @@ fn calculate_ms_ssim_channel_sampled(
             None
         }
         Err(e) => {
-            eprintln!("\n      ❌ Channel {} command failed: {}", channel.to_uppercase(), e);
+            eprintln!(
+                "\n      ❌ Channel {} command failed: {}",
+                channel.to_uppercase(),
+                e
+            );
             None
         }
     }

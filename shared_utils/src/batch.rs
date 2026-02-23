@@ -36,9 +36,7 @@ pub fn collect_files_sorted(
     match sort_strategy {
         SortStrategy::None => files,
         SortStrategy::SizeAscending => sort_by_size_ascending(files),
-        _ => {
-            crate::file_sorter::FileSorter::new(sort_strategy).sort(files)
-        }
+        _ => crate::file_sorter::FileSorter::new(sort_strategy).sort(files),
     }
 }
 
@@ -72,9 +70,7 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
     "jxl", "bmp",
 ];
 
-pub const ANIMATED_EXTENSIONS: &[&str] = &[
-    "gif", "webp", "png",
-];
+pub const ANIMATED_EXTENSIONS: &[&str] = &["gif", "webp", "png"];
 
 #[derive(Debug, Clone)]
 pub struct BatchResult {
@@ -127,11 +123,9 @@ impl Default for BatchResult {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_batch_result_new() {
@@ -189,7 +183,6 @@ mod tests {
         assert_eq!(result.failed, 1);
         assert_eq!(result.skipped, 1);
     }
-
 
     #[test]
     fn test_success_rate_empty() {
@@ -251,7 +244,6 @@ mod tests {
             result.success_rate()
         );
     }
-
 
     #[test]
     fn test_strict_success_rate_formula() {
@@ -316,7 +308,6 @@ mod tests {
             "STRICT: Large batch should calculate correctly"
         );
     }
-
 
     #[test]
     fn test_consistency_success_rate() {

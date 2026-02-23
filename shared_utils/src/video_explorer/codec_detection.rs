@@ -24,7 +24,6 @@
 
 use std::process::Command;
 
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VideoEncoder {
     Hevc,
@@ -42,7 +41,6 @@ pub enum EncoderPreset {
     Slower,
     Veryslow,
 }
-
 
 impl EncoderPreset {
     pub fn x26x_name(&self) -> &'static str {
@@ -67,7 +65,6 @@ impl EncoderPreset {
         }
     }
 }
-
 
 impl VideoEncoder {
     pub fn ffmpeg_name(&self) -> &'static str {

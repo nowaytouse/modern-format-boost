@@ -470,7 +470,10 @@ mod tests {
 
         let strategy = determine_strategy(&detection);
         assert_eq!(strategy.target, TargetFormat::JXL);
-        assert!(strategy.command.as_ref().map_or(false, |c| c.contains("--lossless_jpeg=1")));
+        assert!(strategy
+            .command
+            .as_ref()
+            .map_or(false, |c| c.contains("--lossless_jpeg=1")));
     }
 
     #[test]

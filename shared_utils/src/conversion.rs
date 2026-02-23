@@ -46,7 +46,6 @@ pub fn clear_processed_list() {
     processed.clear();
 }
 
-
 pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
 
 pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -75,7 +74,6 @@ pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 
     Ok(())
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversionResult {
@@ -206,7 +204,6 @@ impl ConversionResult {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ConvertOptions {
     pub force: bool,
@@ -269,7 +266,6 @@ impl ConvertOptions {
         }
     }
 }
-
 
 pub fn determine_output_path(
     input: &Path,
@@ -360,7 +356,6 @@ pub fn determine_output_path_with_base(
     Ok(output)
 }
 
-
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
         0.0
@@ -383,7 +378,6 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     (1.0 - (output_size as f64 / input_size as f64)) * 100.0
 }
 
-
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
@@ -399,7 +393,6 @@ pub fn pre_conversion_check(
 
     None
 }
-
 
 pub fn finalize_conversion(
     input: &Path,
@@ -449,7 +442,6 @@ pub fn post_conversion_actions(
     Ok(())
 }
 
-
 /// Get image/video dimensions using ffprobe → image crate → ImageMagick fallback chain.
 ///
 /// Returns (width, height) or an error if all methods fail.
@@ -486,8 +478,7 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
                 if let Some(line) = s.lines().next() {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 2 {
-                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
-                        {
+                        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
                             if w > 0 && h > 0 {
                                 return Ok((w, h));
                             }
@@ -504,7 +495,6 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
         input.display(),
     ))
 }
-
 
 /// Check if output exceeds size tolerance and clean up if so.
 ///
@@ -562,13 +552,14 @@ pub fn check_size_tolerance(
     mark_as_processed(input);
 
     Some(ConversionResult::skipped_size_increase(
-        input, input_size, output_size,
+        input,
+        input_size,
+        output_size,
     ))
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_strict_size_reduction_formula() {
@@ -630,7 +621,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_format_size_change_reduction() {
         let msg = format_size_change(1000, 500);
@@ -661,7 +651,6 @@ mod tests {
         assert!(msg.contains("0.0%"), "Should show 0.0% for same size");
     }
 
-
     #[test]
     fn test_determine_output_path() {
         let input = Path::new("/path/to/image.png");
@@ -687,7 +676,6 @@ mod tests {
         let mkv = determine_output_path(input, "mkv", &None).unwrap();
         assert_eq!(mkv, Path::new("/path/to/video.mkv"));
     }
-
 
     #[test]
     fn test_conversion_result_success() {
@@ -716,7 +704,6 @@ mod tests {
         assert!(result.message.contains("larger"));
     }
 
-
     #[test]
     fn test_convert_options_default() {
         let opts = ConvertOptions::default();
@@ -743,7 +730,6 @@ mod tests {
 
         assert!(opts.should_delete_original());
     }
-
 
     #[test]
     fn test_flag_mode_with_gpu() {
@@ -820,7 +806,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_convert_options_all_flags_enabled() {
         let mut opts = ConvertOptions::default();
@@ -871,5 +856,4 @@ mod tests {
             crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
         );
     }
-
 }

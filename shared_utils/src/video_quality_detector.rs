@@ -20,7 +20,6 @@ use crate::quality_matcher::{
 };
 use serde::{Deserialize, Serialize};
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoQualityAnalysis {
     pub width: u32,
@@ -205,7 +204,6 @@ pub struct VideoRoutingDecision {
     pub reason: String,
 }
 
-
 /// Analyze video quality and routing. Consider using a struct (e.g. VideoQualityInput) when passing many arguments to avoid parameter order bugs.
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
@@ -320,7 +318,11 @@ pub fn analyze_video_quality(
 
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
     let gop_fallback = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
-    let color_fallback = if analysis.height <= 576 { "bt601" } else { "bt709" };
+    let color_fallback = if analysis.height <= 576 {
+        "bt601"
+    } else {
+        "bt709"
+    };
     VideoAnalysisBuilder::new()
         .basic(
             &analysis.codec,
@@ -331,7 +333,10 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         )
         .file_size(analysis.file_size)
         .video_bitrate(analysis.video_bitrate.unwrap_or(analysis.total_bitrate))
-        .gop(analysis.gop_size.unwrap_or(gop_fallback), analysis.b_frame_count)
+        .gop(
+            analysis.gop_size.unwrap_or(gop_fallback),
+            analysis.b_frame_count,
+        )
         .pix_fmt(&analysis.pix_fmt)
         .color(
             analysis.color_space.as_deref().unwrap_or(color_fallback),
@@ -341,7 +346,6 @@ pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
         .bit_depth(analysis.bit_depth)
         .build()
 }
-
 
 fn estimate_content_type(
     bpp: f64,
@@ -526,11 +530,9 @@ fn calculate_video_confidence(
     confidence.clamp(0.0, 1.0)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_analyze_h264_1080p() {
@@ -658,7 +660,6 @@ mod tests {
         assert_eq!(result.chroma, ChromaSubsampling::Yuv444);
     }
 
-
     #[test]
     fn test_skip_modern_codecs() {
         let hevc = analyze_video_quality(
@@ -736,7 +737,6 @@ mod tests {
         assert!(!prores.should_skip, "ProRes should NOT be skipped");
     }
 
-
     #[test]
     fn test_chroma_detection() {
         assert_eq!(
@@ -788,7 +788,6 @@ mod tests {
             ChromaSubsampling::Rgb.quality_factor() > ChromaSubsampling::Yuv444.quality_factor()
         );
     }
-
 
     #[test]
     fn test_bpp_calculation_accuracy() {
@@ -845,7 +844,6 @@ mod tests {
             result.bpp
         );
     }
-
 
     #[test]
     fn test_compression_level_lossless() {
@@ -923,7 +921,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_crf_estimation_high_quality() {
         let result = analyze_video_quality(
@@ -998,7 +995,6 @@ mod tests {
         assert_eq!(result.estimated_crf, 0, "Lossless should have CRF 0");
     }
 
-
     #[test]
     fn test_hdr_detection_bt2020() {
         let result = analyze_video_quality(
@@ -1057,7 +1053,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_routing_skip_modern() {
         let result = analyze_video_quality(
@@ -1066,10 +1061,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            result.should_skip,
-            "HEVC routing should skip"
-        );
+        assert!(result.should_skip, "HEVC routing should skip");
         assert_eq!(result.routing_decision.primary_format, "skip");
     }
 
@@ -1132,7 +1124,6 @@ mod tests {
         assert!(!result.should_skip);
         assert_eq!(result.routing_decision.primary_format, "av1");
     }
-
 
     #[test]
     fn test_invalid_zero_width() {
@@ -1198,7 +1189,6 @@ mod tests {
         assert!(result.is_err(), "Should fail on negative duration");
     }
 
-
     #[test]
     fn test_extreme_low_bitrate() {
         let result = analyze_video_quality(
@@ -1255,7 +1245,6 @@ mod tests {
             "High bitrate should be VisuallyLossless or HighQuality"
         );
     }
-
 
     #[test]
     fn test_resolution_sd_480p() {
@@ -1356,7 +1345,6 @@ mod tests {
         assert_eq!(result.height, 1080);
     }
 
-
     #[test]
     fn test_fps_24_film() {
         let result = analyze_video_quality(
@@ -1414,7 +1402,6 @@ mod tests {
 
         assert!((result.fps - 29.97).abs() < 0.01);
     }
-
 
     #[test]
     fn test_codec_type_lossless() {
@@ -1557,7 +1544,6 @@ mod tests {
         assert_eq!(gif.codec_type, VideoCodecType::Inefficient);
     }
 
-
     #[test]
     fn test_confidence_with_video_bitrate() {
         let with_vbr = analyze_video_quality(
@@ -1653,7 +1639,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_to_quality_analysis_conversion() {
         let analysis = analyze_video_quality(
@@ -1681,7 +1666,6 @@ mod tests {
         assert!((qa.duration_secs.unwrap() - 60.0).abs() < 0.01);
         assert_eq!(qa.video_bitrate, Some(7_500_000));
     }
-
 
     #[test]
     fn test_consistency_same_input() {
@@ -1727,7 +1711,6 @@ mod tests {
         assert_eq!(result1.should_skip, result2.should_skip);
         assert_eq!(result1.estimated_crf, result2.estimated_crf);
     }
-
 
     #[test]
     fn test_strict_bpp_formula() {

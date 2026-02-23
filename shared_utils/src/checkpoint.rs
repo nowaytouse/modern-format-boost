@@ -40,12 +40,10 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-
 const PROGRESS_DIR_NAME: &str = ".mfb_progress";
 const LOCK_FILE_NAME: &str = "processing.lock";
 const PROGRESS_FILE_PREFIX: &str = "completed_";
 const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LockInfo {
@@ -143,7 +141,6 @@ fn get_hostname() -> String {
         "unknown".to_string()
     }
 }
-
 
 pub struct CheckpointManager {
     #[allow(dead_code)]
@@ -338,7 +335,6 @@ impl CheckpointManager {
         &self.progress_dir
     }
 
-
     fn hash_path(path: &Path) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -381,7 +377,6 @@ impl Drop for CheckpointManager {
         let _ = self.release_lock();
     }
 }
-
 
 pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), String> {
     if !output.exists() {
@@ -426,13 +421,11 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
-
 
     #[test]
     fn test_checkpoint_new_creates_progress_dir() {
@@ -554,7 +547,6 @@ mod tests {
         assert!(!checkpoint.lock_file.exists());
     }
 
-
     #[test]
     fn test_verify_output_integrity_valid_file() {
         let temp = TempDir::new().unwrap();
@@ -640,7 +632,6 @@ mod tests {
 
         assert!(input.exists());
     }
-
 
     #[test]
     fn test_full_workflow_with_interruption() {

@@ -219,11 +219,9 @@ pub fn get_codec_info(codec_name: &str) -> CodecInfo {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_detected_codec_from_ffprobe() {
@@ -288,7 +286,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_codec_properties() {
         let cases: &[(DetectedCodec, bool, bool, bool)] = &[
@@ -311,10 +308,14 @@ mod tests {
         for (codec, modern, lossless, production) in cases {
             assert_eq!(codec.is_modern(), *modern, "{:?}.is_modern()", codec);
             assert_eq!(codec.is_lossless(), *lossless, "{:?}.is_lossless()", codec);
-            assert_eq!(codec.is_production(), *production, "{:?}.is_production()", codec);
+            assert_eq!(
+                codec.is_production(),
+                *production,
+                "{:?}.is_production()",
+                codec
+            );
         }
     }
-
 
     #[test]
     fn test_codec_info_h264() {
@@ -364,7 +365,6 @@ mod tests {
         assert_eq!(info.name, "Unknown");
         assert_eq!(info.category, CodecCategory::Unknown);
     }
-
 
     #[test]
     fn test_strict_codec_names() {

@@ -97,10 +97,7 @@ pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
 
 /// Returns true if a log file has been configured.
 pub fn has_log_file() -> bool {
-    LOG_FILE_WRITER
-        .lock()
-        .map(|g| g.is_some())
-        .unwrap_or(false)
+    LOG_FILE_WRITER.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
 /// Write a line to the log file (no-op if no log file is configured).
@@ -233,7 +230,11 @@ pub fn xmp_merge_success() {
     let success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if xmp_milestone_interval(success) {
         let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
-        let line = format!("{}{}", pad_tag("[XMP]"), format!("XMP merge: {} OK/{}", success, total));
+        let line = format!(
+            "{}{}",
+            pad_tag("[XMP]"),
+            format!("XMP merge: {} OK/{}", success, total)
+        );
         write_to_log(&line);
         eprintln!("{}", line);
     }
@@ -241,7 +242,11 @@ pub fn xmp_merge_success() {
 
 /// Call on failed merge. Logs the error on its own line.
 pub fn xmp_merge_failure(msg: &str) {
-    let line = format!("{}{}", pad_tag("[XMP]"), format!("⚠️  XMP merge failed: {}", msg));
+    let line = format!(
+        "{}{}",
+        pad_tag("[XMP]"),
+        format!("⚠️  XMP merge failed: {}", msg)
+    );
     write_to_log(&line);
     eprintln!("{}", line);
 }
@@ -251,7 +256,11 @@ pub fn xmp_merge_finalize() {
     let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     if total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
-        let line = format!("{}{}", pad_tag("[XMP]"), format!("XMP merge done: {} OK/{}", success, total));
+        let line = format!(
+            "{}{}",
+            pad_tag("[XMP]"),
+            format!("XMP merge done: {} OK/{}", success, total)
+        );
         write_to_log(&line);
         eprintln!("{}", line);
     }
