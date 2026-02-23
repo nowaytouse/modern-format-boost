@@ -294,7 +294,7 @@ pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
 
 pub use explore_strategy::{
-    create_strategy, strategy_name, CompressOnlyStrategy, CompressWithQualityStrategy,
+    create_strategy, CompressOnlyStrategy, CompressWithQualityStrategy,
     ExploreContext, ExploreStrategy, PreciseQualityMatchStrategy,
     PreciseQualityMatchWithCompressionStrategy, ProgressConfig, QualityMatchStrategy,
     SizeOnlyStrategy, SsimResult,

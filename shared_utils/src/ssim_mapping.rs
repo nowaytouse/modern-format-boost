@@ -4,6 +4,13 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Uncalibrated PSNR→SSIM estimate used when no mapping/calibration is available.
+/// Single formula shared by explore_strategy and other fallbacks so quality decisions are consistent.
+#[inline]
+pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
+    (1.0 - 10_f64.powf(-psnr_db / 20.0)).min(0.9999)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MappingPoint {
     pub psnr: f64,
