@@ -157,6 +157,14 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 }
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
+    let _label = input
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    shared_utils::progress_mode::set_log_context(&_label);
+    let _log_guard = shared_utils::progress_mode::LogContextGuard;
+
     let detection = detect_video(input)?;
     let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat);
 
