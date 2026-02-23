@@ -1929,7 +1929,7 @@ impl VideoExplorer {
         let mut size_history: Vec<(f32, u64)> = Vec::new();
 
         let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
-            if history.len() < WINDOW_SIZE {
+            if history.len() < WINDOW_SIZE || input_size == 0 {
                 return f64::MAX;
             }
             let recent: Vec<f64> = history

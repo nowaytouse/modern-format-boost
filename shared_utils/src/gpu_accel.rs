@@ -888,7 +888,9 @@ pub fn is_quality_better(
     if new_score.ssim < min_ssim_threshold {
         return false;
     }
-
+    if old_score.combined_score <= 0.0 {
+        return new_score.combined_score > 0.0;
+    }
     let improvement =
         (new_score.combined_score - old_score.combined_score) / old_score.combined_score;
     improvement > 0.005
