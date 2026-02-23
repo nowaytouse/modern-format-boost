@@ -125,18 +125,18 @@ impl HeartbeatMonitor {
                     .elapsed();
                 let elapsed_secs = elapsed.as_secs();
 
-                eprintln!(
-                    "💓 Heartbeat: {}s ago (Beijing: {})",
+                crate::log_eprintln!(
+                    "Heartbeat: {}s ago (Beijing: {})",
                     elapsed_secs,
                     beijing_time_now()
                 );
 
                 if elapsed > self.timeout {
-                    eprintln!(
+                    crate::log_eprintln!(
                         "⚠️  FREEZE DETECTED: No activity for {} seconds!",
                         elapsed_secs
                     );
-                    eprintln!(
+                    crate::log_eprintln!(
                         "   Terminating frozen ffmpeg process (PID: {})...",
                         self.child_pid
                     );
@@ -169,7 +169,7 @@ pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
 pub const GPU_COARSE_STEP: f32 = 2.0;
 
-pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 500;
+pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
 
 pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 
@@ -280,20 +280,28 @@ impl GpuAccel {
     }
 
     pub fn print_detection_info(&self) {
-        eprintln!("🔍 Detecting GPU acceleration...");
+        if !crate::progress_mode::is_verbose_mode() {
+            if self.enabled {
+                crate::log_eprintln!("GPU: {}", self.gpu_type);
+            } else {
+                crate::log_eprintln!("⚠️ No GPU acceleration, using CPU encoding");
+            }
+            return;
+        }
+        crate::log_eprintln!("Detecting GPU acceleration...");
         if self.enabled {
-            eprintln!("   ✅ GPU: {} detected", self.gpu_type);
+            crate::log_eprintln!("   ✅ GPU: {} detected", self.gpu_type);
             if let Some(enc) = &self.hevc_encoder {
-                eprintln!("      • HEVC: {}", enc.name);
+                crate::log_eprintln!("      • HEVC: {}", enc.name);
             }
             if let Some(enc) = &self.av1_encoder {
-                eprintln!("      • AV1: {}", enc.name);
+                crate::log_eprintln!("      • AV1: {}", enc.name);
             }
             if let Some(enc) = &self.h264_encoder {
-                eprintln!("      • H.264: {}", enc.name);
+                crate::log_eprintln!("      • H.264: {}", enc.name);
             }
         } else {
-            eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");
+            crate::log_eprintln!("   ⚠️ No GPU acceleration available, using CPU encoding");
         }
     }
 
@@ -1051,23 +1059,23 @@ impl CrfMapping {
     }
 
     pub fn print_mapping_info(&self) {
-        eprintln!(
+        crate::log_eprintln!(
             "   📊 GPU/CPU CRF Mapping ({} - {}):",
             self.gpu_type,
             self.codec.to_uppercase()
         );
         if self.gpu_type == GpuType::Apple {
-            eprintln!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
-            eprintln!("      • SSIM ceiling: 0.91~0.97 (content-dependent, cannot reach 0.98+)");
-            eprintln!("      • Best value: q:v 75-80 (SSIM ~0.97, good compression)");
+            crate::log_eprintln!("      • VideoToolbox q:v: 1=lowest, 100=highest quality");
+            crate::log_eprintln!("      • SSIM ceiling: 0.91~0.97 (content-dependent, cannot reach 0.98+)");
+            crate::log_eprintln!("      • Best value: q:v 75-80 (SSIM ~0.97, good compression)");
         } else {
-            eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
+            crate::log_eprintln!("      • GPU 60s sampling + step=2 → accurate boundary");
         }
-        eprintln!(
+        crate::log_eprintln!(
             "      • CPU offset: +{:.1} (CPU needs higher CRF for same compression)",
             self.offset
         );
-        eprintln!("      • 💡 CPU fine-tunes for SSIM 0.98+ (GPU max ~0.97)");
+        crate::log_eprintln!("      • 💡 CPU fine-tunes for SSIM 0.98+ (GPU max ~0.97)");
     }
 }
 
@@ -1259,26 +1267,26 @@ impl PsnrSsimMapper {
 
     fn print_report(&self) {
         if !self.calibrated {
-            eprintln!("   ⚠️ PSNR-SSIM mapping not calibrated");
+            crate::log_eprintln!("   ⚠️ PSNR-SSIM mapping not calibrated");
             return;
         }
 
-        eprintln!("   📊 PSNR-SSIM Mapping Report:");
-        eprintln!(
+        crate::log_eprintln!("   📊 PSNR-SSIM Mapping Report:");
+        crate::log_eprintln!(
             "      Calibration points: {}",
             self.calibration_points.len()
         );
-        eprintln!(
+        crate::log_eprintln!(
             "      Mapping quality: {:.1}%",
             self.get_mapping_quality() * 100.0
         );
 
         if self.calibration_points.len() >= 2 {
             let test_psnrs = vec![35.0, 38.0, 40.0, 42.0, 45.0];
-            eprintln!("      Example mappings:");
+            crate::log_eprintln!("      Example mappings:");
             for psnr in test_psnrs {
                 if let Some(ssim) = self.predict_ssim_from_psnr(psnr) {
-                    eprintln!("         PSNR {:.1}dB → SSIM {:.4}", psnr, ssim);
+                    crate::log_eprintln!("         PSNR {:.1}dB → SSIM {:.4}", psnr, ssim);
                 }
             }
         }
@@ -1327,7 +1335,7 @@ pub fn gpu_coarse_search_with_log(
                 if let Some(cb) = &log_cb {
                     cb(&msg);
                 } else {
-                    eprintln!("{}", msg);
+                    crate::log_eprintln!("{}", msg);
                 }
             }
             log.push(msg);
@@ -1664,7 +1672,7 @@ pub fn gpu_coarse_search_with_log(
         let startup_handle = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(30));
             if !first_output_clone.load(Ordering::Relaxed) && !stop_clone.load(Ordering::Relaxed) {
-                eprintln!(
+                crate::log_eprintln!(
                     "❌ STARTUP FAILED: No output in 30s (Beijing: {})",
                     beijing_time_now()
                 );
@@ -1675,8 +1683,8 @@ pub fn gpu_coarse_search_with_log(
             }
         });
 
-        eprintln!(
-            "🔄 GPU Encoding started (heartbeat active) - Beijing: {}",
+        crate::verbose_eprintln!(
+            "GPU encoding started - Beijing: {}",
             beijing_time_now()
         );
 
@@ -1728,9 +1736,9 @@ pub fn gpu_coarse_search_with_log(
                                     }
                                     Err(_) => {
                                         if !fallback_logged {
-                                            eprintln!(
-                                                "📍 Using linear estimation (metadata unavailable)"
-                                            );
+                        crate::log_eprintln!(
+                                "Using linear estimation (metadata unavailable)"
+                            );
                                             fallback_logged = true;
                                         }
                                         (sample_input_size as f64 * (1.0 / pct.max(0.1)))
@@ -1739,7 +1747,7 @@ pub fn gpu_coarse_search_with_log(
                                     }
                                 };
 
-                                eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
+                                crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
                                     pct, current_secs, actual_sample_duration, eta, speed);
 
                                 if let Some(cb) = progress_cb {
@@ -1763,7 +1771,7 @@ pub fn gpu_coarse_search_with_log(
         }
 
         if start_time.elapsed() > absolute_timeout {
-            eprintln!("⏰ WARNING: GPU encoding took longer than 12 hours!");
+            crate::log_eprintln!("⏰ WARNING: GPU encoding took longer than 12 hours!");
             bail!("GPU encoding exceeded 12-hour timeout");
         }
 
@@ -1781,8 +1789,8 @@ pub fn gpu_coarse_search_with_log(
             );
         }
 
-        eprintln!(
-            "✅ Encoding completed, heartbeat stopped - Beijing: {}",
+        crate::verbose_eprintln!(
+            "Encoding completed - Beijing: {}",
             beijing_time_now()
         );
 
