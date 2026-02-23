@@ -336,6 +336,8 @@ pub fn explore_with_gpu_coarse_search(
     crate::verbose_eprintln!();
     crate::verbose_eprintln!("Phase 3: Quality Verification");
 
+    let mut quality_verification_skipped_for_format = false;
+
     if let Ok(probe_result) = crate::ffprobe::probe_video(input) {
         let duration = probe_result.duration;
         crate::verbose_eprintln!(
@@ -375,6 +377,7 @@ pub fn explore_with_gpu_coarse_search(
                 }
                 result.ms_ssim_score = Some(all);
         } else {
+            quality_verification_skipped_for_format = true;
             let msg = "⚠️  SSIM verification failed (GIF format) - accepting based on size compression only";
             result.log.push(msg.to_string());
                 result.ms_ssim_passed = None;
@@ -621,6 +624,9 @@ pub fn explore_with_gpu_coarse_search(
         (_, true) => "   QualityCheck: PASSED (quality + total file size target met)",
         (Some(true), false) => "   QualityCheck: FAILED (quality met but total file not smaller)",
         (Some(false), _) => "   QualityCheck: FAILED (below target or verification failed)",
+        (None, false) if quality_verification_skipped_for_format => {
+            "   QualityCheck: N/A (GIF/size-only, quality not measured)"
+        }
         (None, false) => "   QualityCheck: FAILED (quality not verified)",
     };
     result.log.push(quality_check_line.to_string());
