@@ -17,7 +17,6 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-
 pub struct CoarseProgressBar {
     total: u64,
     current: AtomicU64,
@@ -164,7 +163,6 @@ impl Drop for CoarseProgressBar {
         }
     }
 }
-
 
 pub struct DetailedCoarseProgressBar {
     prefix: String,
@@ -395,7 +393,6 @@ fn format_eta_simple(seconds: u64) -> String {
     }
 }
 
-
 pub struct FixedBottomProgress {
     bar: ProgressBar,
     start_time: Instant,
@@ -551,7 +548,6 @@ pub struct ProgressStats {
     pub compression_ratio: f64,
 }
 
-
 pub struct ExploreProgress {
     start_time: Instant,
     input_size: u64,
@@ -659,7 +655,6 @@ impl ExploreProgress {
     }
 }
 
-
 pub struct ExploreLogger {
     input_size: u64,
     start_time: Instant,
@@ -764,7 +759,6 @@ impl ExploreLogger {
         );
     }
 }
-
 
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
@@ -1014,7 +1008,6 @@ impl BatchProgress {
     }
 }
 
-
 fn truncate_filename(filename: &str, max_len: usize) -> String {
     if filename.len() <= max_len {
         filename.to_string()
@@ -1057,7 +1050,6 @@ pub fn format_duration(duration: Duration) -> String {
     }
 }
 
-
 pub struct GlobalProgressManager {
     multi: MultiProgress,
     main_bar: Option<ProgressBar>,
@@ -1093,7 +1085,9 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(100));
         }
         self.main_bar = Some(bar);
-        self.main_bar.as_ref().expect("main_bar set to Some immediately above")
+        self.main_bar
+            .as_ref()
+            .expect("main_bar set to Some immediately above")
     }
 
     pub fn create_sub(&mut self, prefix: &str) -> &ProgressBar {
@@ -1112,7 +1106,9 @@ impl GlobalProgressManager {
             bar.enable_steady_tick(Duration::from_millis(80));
         }
         self.sub_bar = Some(bar);
-        self.sub_bar.as_ref().expect("sub_bar set to Some immediately above")
+        self.sub_bar
+            .as_ref()
+            .expect("sub_bar set to Some immediately above")
     }
 
     pub fn inc_main(&self) {

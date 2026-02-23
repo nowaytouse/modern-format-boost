@@ -28,7 +28,6 @@ use crate::video_explorer::{
     EncoderPreset, ExploreConfig, ExploreMode, ExploreResult, SsimSource, VideoEncoder,
 };
 
-
 pub trait ExploreStrategy: Send + Sync {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult>;
 
@@ -36,7 +35,6 @@ pub trait ExploreStrategy: Send + Sync {
 
     fn description(&self) -> &'static str;
 }
-
 
 #[derive(Debug, Clone)]
 pub struct SsimResult {
@@ -72,7 +70,6 @@ impl SsimResult {
         matches!(self.source, SsimSource::Predicted)
     }
 
-
     #[inline]
     pub fn value_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.value).ok()
@@ -84,13 +81,11 @@ impl SsimResult {
     }
 }
 
-
 #[deprecated(since = "8.5.0", note = "Use SsimResult directly")]
 pub type SsimCalculationResult = SsimResult;
 
 #[deprecated(since = "8.5.0", note = "Use SsimSource directly")]
 pub type SsimDataSource = SsimSource;
-
 
 #[derive(Debug, Clone)]
 pub struct ProgressConfig {
@@ -108,7 +103,6 @@ impl Default for ProgressConfig {
         }
     }
 }
-
 
 use crate::crf_constants::{CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID};
 
@@ -187,7 +181,6 @@ impl<T: Clone> CrfCache<T> {
     }
 }
 
-
 pub struct ExploreContext {
     pub input_path: PathBuf,
     pub output_path: PathBuf,
@@ -261,7 +254,6 @@ impl ExploreContext {
         self.ssim_cache.insert(crf, result);
     }
 
-
     pub fn progress_start(&mut self, name: &str) {
         let pb = crate::progress::create_professional_spinner(name);
         self.progress = Some(pb);
@@ -302,7 +294,6 @@ impl ExploreContext {
     pub fn can_compress(&self, output_size: u64) -> bool {
         output_size < self.input_size
     }
-
 
     pub fn build_result(
         &self,
@@ -431,7 +422,6 @@ impl ExploreContext {
             )),
         }
     }
-
 
     pub fn encode(&mut self, crf: f32) -> Result<u64> {
         if let Some(size) = self.get_cached_size(crf) {
@@ -611,7 +601,6 @@ impl ExploreContext {
         Ok(None)
     }
 }
-
 
 pub fn create_strategy(mode: ExploreMode) -> Box<dyn ExploreStrategy> {
     match mode {
@@ -940,7 +929,6 @@ impl ExploreStrategy for CompressWithQualityStrategy {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,7 +946,11 @@ mod tests {
 
         for mode in modes {
             let strategy = create_strategy(mode);
-            assert!(!strategy.name().is_empty(), "strategy.name() should not be empty for {:?}", mode);
+            assert!(
+                !strategy.name().is_empty(),
+                "strategy.name() should not be empty for {:?}",
+                mode
+            );
         }
     }
 
@@ -972,7 +964,6 @@ mod tests {
         assert_eq!(predicted.source, SsimSource::Predicted);
         assert_eq!(predicted.psnr, Some(40.0));
     }
-
 
     #[test]
     fn test_crf_cache_basic_operations() {
@@ -1027,7 +1018,6 @@ mod tests {
         assert_eq!(cache.get(23.5), Some(&200));
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

@@ -107,7 +107,6 @@ pub fn print_flag_help() {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_only_recommended_combination_valid() {
         assert!(matches!(

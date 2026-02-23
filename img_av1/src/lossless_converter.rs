@@ -69,7 +69,12 @@ pub fn convert_to_jxl(
                 );
                 eprintln!("   🔧 FALLBACK: Using ImageMagick pipeline to re-encode PNG");
 
-                match shared_utils::jxl_utils::try_imagemagick_fallback(input, &output, distance, max_threads) {
+                match shared_utils::jxl_utils::try_imagemagick_fallback(
+                    input,
+                    &output,
+                    distance,
+                    max_threads,
+                ) {
                     Ok(out) => Ok(out),
                     Err(_) => cmd_result,
                 }
@@ -84,7 +89,9 @@ pub fn convert_to_jxl(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
 
-            if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
+            {
                 return Ok(skipped);
             }
 
@@ -153,8 +160,15 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 return Err(e);
             }
 
-            finalize_conversion(input, &output, input_size, "JPEG lossless transcode", None, options)
-                .map_err(ImgQualityError::IoError)
+            finalize_conversion(
+                input,
+                &output,
+                input_size,
+                "JPEG lossless transcode",
+                None,
+                options,
+            )
+            .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&output);
@@ -417,8 +431,15 @@ pub fn convert_to_av1_mp4_matched(
         return Err(ImgQualityError::ConversionError(e));
     }
     let extra = format!("CRF {:.1}", explore_result.optimal_crf);
-    finalize_conversion(input, &output, input_size, "Quality-matched AV1", Some(&extra), options)
-        .map_err(ImgQualityError::IoError)
+    finalize_conversion(
+        input,
+        &output,
+        input_size,
+        "Quality-matched AV1",
+        Some(&extra),
+        options,
+    )
+    .map_err(ImgQualityError::IoError)
 }
 
 fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
@@ -536,7 +557,9 @@ pub fn convert_to_jxl_matched(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
 
-            if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
+            {
                 return Ok(skipped);
             }
 
@@ -548,8 +571,15 @@ pub fn convert_to_jxl_matched(
             }
 
             let extra = format!("d={:.2}", distance);
-            finalize_conversion(input, &output, input_size, "Quality-matched JXL", Some(&extra), options)
-                .map_err(ImgQualityError::IoError)
+            finalize_conversion(
+                input,
+                &output,
+                input_size,
+                "Quality-matched JXL",
+                Some(&extra),
+                options,
+            )
+            .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -635,10 +665,8 @@ pub fn convert_to_av1_mp4_lossless(
     }
 }
 
-
 fn verify_jxl_health(path: &Path) -> Result<()> {
-    shared_utils::jxl_utils::verify_jxl_health(path)
-        .map_err(ImgQualityError::ConversionError)
+    shared_utils::jxl_utils::verify_jxl_health(path).map_err(ImgQualityError::ConversionError)
 }
 
 fn convert_to_temp_png(
@@ -648,8 +676,14 @@ fn convert_to_temp_png(
     args_after_input: &[&str],
     label: &str,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
-    shared_utils::jxl_utils::convert_to_temp_png(input, tool, args_before_input, args_after_input, label)
-        .map_err(ImgQualityError::IoError)
+    shared_utils::jxl_utils::convert_to_temp_png(
+        input,
+        tool,
+        args_before_input,
+        args_after_input,
+        label,
+    )
+    .map_err(ImgQualityError::IoError)
 }
 
 fn prepare_input_for_cjxl(
@@ -736,29 +770,29 @@ fn prepare_input_for_cjxl(
             }
         }
 
-        "webp" => {
-            convert_to_temp_png(
-                input, "dwebp", &[],
-                &["-o", "__OUTPUT__"],
-                "WebP detected, using dwebp for ICC profile compatibility",
-            )
-        }
+        "webp" => convert_to_temp_png(
+            input,
+            "dwebp",
+            &[],
+            &["-o", "__OUTPUT__"],
+            "WebP detected, using dwebp for ICC profile compatibility",
+        ),
 
-        "tiff" | "tif" => {
-            convert_to_temp_png(
-                input, "magick", &["--"],
-                &["-depth", "16", "__OUTPUT__"],
-                "TIFF detected, using ImageMagick for cjxl compatibility",
-            )
-        }
+        "tiff" | "tif" => convert_to_temp_png(
+            input,
+            "magick",
+            &["--"],
+            &["-depth", "16", "__OUTPUT__"],
+            "TIFF detected, using ImageMagick for cjxl compatibility",
+        ),
 
-        "bmp" => {
-            convert_to_temp_png(
-                input, "magick", &["--"],
-                &["__OUTPUT__"],
-                "BMP detected, using ImageMagick for cjxl compatibility",
-            )
-        }
+        "bmp" => convert_to_temp_png(
+            input,
+            "magick",
+            &["--"],
+            &["__OUTPUT__"],
+            "BMP detected, using ImageMagick for cjxl compatibility",
+        ),
 
         "heic" | "heif" => {
             eprintln!("   🔧 PRE-PROCESSING: HEIC/HEIF detected, using sips/ImageMagick for cjxl compatibility");
@@ -829,8 +863,7 @@ fn get_output_path(
 }
 
 fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    shared_utils::conversion::get_input_dimensions(input)
-        .map_err(ImgQualityError::ConversionError)
+    shared_utils::conversion::get_input_dimensions(input).map_err(ImgQualityError::ConversionError)
 }
 
 #[cfg(test)]

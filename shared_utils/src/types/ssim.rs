@@ -12,7 +12,6 @@ pub const SSIM_MAX: f64 = 1.0;
 
 pub const SSIM_DISPLAY_PRECISION: usize = 6;
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum SsimError {
     OutOfRange { value: f64 },
@@ -33,7 +32,6 @@ impl fmt::Display for SsimError {
 }
 
 impl std::error::Error for SsimError {}
-
 
 #[derive(Clone, Copy)]
 pub struct Ssim(f64);
@@ -102,7 +100,6 @@ impl Ssim {
     }
 }
 
-
 impl fmt::Debug for Ssim {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Ssim({:.6})", self.0)
@@ -126,7 +123,6 @@ impl PartialOrd for Ssim {
         self.0.partial_cmp(&other.0)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -17,21 +17,26 @@ pub mod batch;
 pub mod checkpoint;
 pub mod codecs;
 pub mod conversion;
+pub mod crf_constants;
 pub mod date_analysis;
 pub mod error_handler;
 pub mod explore_strategy;
+pub mod ffmpeg_process;
 pub mod ffprobe;
 pub mod flag_validator;
+pub mod float_compare;
 pub mod gpu_accel;
 pub mod image_quality_detector;
 pub mod lru_cache;
 pub mod metadata;
 pub mod modern_ui;
+pub mod path_validator;
 pub mod progress;
 pub mod quality_matcher;
 pub mod report;
 pub mod safety;
 pub mod ssim_mapping;
+pub mod thread_manager;
 pub mod tools;
 pub mod video;
 pub mod video_explorer;
@@ -39,22 +44,17 @@ pub mod video_explorer;
 mod video_explorer_tests;
 pub mod video_quality_detector;
 pub mod xmp_merger;
-pub mod ffmpeg_process;
-pub mod crf_constants;
-pub mod float_compare;
-pub mod path_validator;
-pub mod thread_manager;
 
 pub mod path_safety;
 pub use path_safety::safe_path_arg;
+pub mod app_error;
 pub mod ffprobe_json;
-pub mod stream_size;
+pub mod file_copier;
 pub mod pure_media_verifier;
 pub mod quality_verifier_enhanced;
-pub mod types;
-pub mod app_error;
-pub mod file_copier;
 pub mod smart_file_copier;
+pub mod stream_size;
+pub mod types;
 
 pub mod progress_mode;
 
@@ -78,8 +78,8 @@ pub mod logging;
 
 pub mod common_utils;
 
-pub mod jxl_utils;
 pub mod avif_av1_health;
+pub mod jxl_utils;
 
 pub mod x265_encoder;
 
@@ -93,7 +93,6 @@ pub mod conversion_types;
 
 pub mod video_detection;
 
-pub mod img_errors;
 pub mod image_analyzer;
 pub mod image_detection;
 pub mod image_formats;
@@ -102,6 +101,7 @@ pub mod image_jpeg_analysis;
 pub mod image_metrics;
 pub mod image_quality_core;
 pub mod image_recommender;
+pub mod img_errors;
 
 pub use batch::*;
 pub use codecs::*;
@@ -121,48 +121,18 @@ pub use metadata::{
     save_directory_timestamps,
 };
 pub use progress::{
-    create_compact_progress_bar,
-    create_detailed_progress_bar,
-    create_multi_progress,
-    create_progress_bar,
-    create_progress_bar_with_eta,
-    create_spinner,
-    format_bytes,
-    format_duration,
-    BatchProgress,
-    CoarseProgressBar,
-    DetailedCoarseProgressBar,
-    ExploreLogger,
-    ExploreProgress,
-    FixedBottomProgress,
-    GlobalProgressManager,
-    ProgressStats,
-    SmartProgressBar,
+    create_compact_progress_bar, create_detailed_progress_bar, create_multi_progress,
+    create_progress_bar, create_progress_bar_with_eta, create_spinner, format_bytes,
+    format_duration, BatchProgress, CoarseProgressBar, DetailedCoarseProgressBar, ExploreLogger,
+    ExploreProgress, FixedBottomProgress, GlobalProgressManager, ProgressStats, SmartProgressBar,
 };
 pub use quality_matcher::{
-    calculate_av1_crf,
-    calculate_av1_crf_with_options,
-    calculate_hevc_crf,
-    calculate_hevc_crf_with_options,
-    calculate_jxl_distance,
-    calculate_jxl_distance_with_options,
-    from_image_analysis,
-    from_video_detection,
-    log_quality_analysis,
-    parse_source_codec,
-    should_skip_image_format,
-    should_skip_video_codec,
-    should_skip_video_codec_apple_compat,
-    AnalysisDetails,
-    ContentType,
-    EncoderType,
-    MatchMode,
-    MatchedQuality,
-    QualityAnalysis,
-    QualityBias,
-    SkipDecision,
-    SourceCodec,
-    VideoAnalysisBuilder,
+    calculate_av1_crf, calculate_av1_crf_with_options, calculate_hevc_crf,
+    calculate_hevc_crf_with_options, calculate_jxl_distance, calculate_jxl_distance_with_options,
+    from_image_analysis, from_video_detection, log_quality_analysis, parse_source_codec,
+    should_skip_image_format, should_skip_video_codec, should_skip_video_codec_apple_compat,
+    AnalysisDetails, ContentType, EncoderType, MatchMode, MatchedQuality, QualityAnalysis,
+    QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
 };
 pub use report::*;
 pub use safety::*;
@@ -170,65 +140,27 @@ pub use tools::*;
 pub use video::*;
 
 pub use image_quality_detector::{
-    analyze_image_quality,
-    ImageContentType,
-    ImageQualityAnalysis,
-    RoutingDecision,
+    analyze_image_quality, ImageContentType, ImageQualityAnalysis, RoutingDecision,
 };
 
 pub use video_quality_detector::{
-    analyze_video_quality,
-    to_quality_analysis as video_to_quality_analysis,
-    ChromaSubsampling,
-    CompressionLevel,
-    VideoCodecType,
-    VideoContentType,
-    VideoQualityAnalysis,
-    VideoRoutingDecision,
+    analyze_video_quality, to_quality_analysis as video_to_quality_analysis, ChromaSubsampling,
+    CompressionLevel, VideoCodecType, VideoContentType, VideoQualityAnalysis, VideoRoutingDecision,
 };
 
 pub use video_explorer::{
-    calculate_metadata_margin,
-    can_compress_with_metadata,
-    compression_target_size,
-    detect_metadata_size,
-    explore_av1,
-    explore_av1_compress_only,
-    explore_av1_compress_with_quality,
-    explore_av1_quality_match,
-    explore_av1_size_only,
-    explore_compress_only,
-    explore_compress_with_quality,
-    explore_hevc,
-    explore_hevc_compress_only,
-    explore_hevc_compress_with_quality,
-    explore_hevc_quality_match,
-    explore_hevc_size_only,
-    explore_precise_quality_match,
-    explore_precise_quality_match_with_compression,
-    explore_quality_match,
-    explore_size_only,
-    precision,
-    precision::SearchPhase,
-    precision::ThreePhaseSearch,
-    pure_video_size,
-    verify_compression_precise,
-    verify_compression_simple,
-    CompressionVerifyStrategy,
-    EncoderPreset,
-    ExploreConfig,
-    ExploreMode,
-    ExploreResult,
-    IterationMetrics,
-    QualityThresholds,
-    SsimSource,
-    TransparencyReport,
-    VideoEncoder,
-    VideoExplorer,
-    METADATA_MARGIN_MAX,
-    METADATA_MARGIN_MIN,
-    METADATA_MARGIN_PERCENT,
-    SMALL_FILE_THRESHOLD,
+    calculate_metadata_margin, can_compress_with_metadata, compression_target_size,
+    detect_metadata_size, explore_av1, explore_av1_compress_only,
+    explore_av1_compress_with_quality, explore_av1_quality_match, explore_av1_size_only,
+    explore_compress_only, explore_compress_with_quality, explore_hevc, explore_hevc_compress_only,
+    explore_hevc_compress_with_quality, explore_hevc_quality_match, explore_hevc_size_only,
+    explore_precise_quality_match, explore_precise_quality_match_with_compression,
+    explore_quality_match, explore_size_only, precision, precision::SearchPhase,
+    precision::ThreePhaseSearch, pure_video_size, verify_compression_precise,
+    verify_compression_simple, CompressionVerifyStrategy, EncoderPreset, ExploreConfig,
+    ExploreMode, ExploreResult, IterationMetrics, QualityThresholds, SsimSource,
+    TransparencyReport, VideoEncoder, VideoExplorer, METADATA_MARGIN_MAX, METADATA_MARGIN_MIN,
+    METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
 };
 
 #[allow(deprecated)]
@@ -246,20 +178,12 @@ pub use video_explorer::quick_explore;
 pub use checkpoint::{safe_delete_original, verify_output_integrity, CheckpointManager};
 
 pub use quality_verifier_enhanced::{
-    verify_after_encode,
-    verify_output_file,
-    EnhancedVerifyResult,
-    VerifyOptions,
+    verify_after_encode, verify_output_file, EnhancedVerifyResult, VerifyOptions,
     DEFAULT_MIN_FILE_SIZE,
 };
 
 pub use xmp_merger::{
-    merge_xmp_for_copied_file,
-    MergeResult,
-    MergeSummary,
-    XmpFile,
-    XmpMerger,
-    XmpMergerConfig,
+    merge_xmp_for_copied_file, MergeResult, MergeSummary, XmpFile, XmpMerger, XmpMergerConfig,
 };
 
 pub use flag_validator::{
@@ -268,25 +192,14 @@ pub use flag_validator::{
 };
 
 pub use gpu_accel::{
-    estimate_cpu_search_center,
-    get_cpu_search_range_from_gpu,
-    gpu_boundary_to_cpu_range,
-    gpu_coarse_search,
-    gpu_coarse_search_with_log,
-    CrfMapping,
-    GpuAccel,
-    GpuCoarseConfig,
-    GpuCoarseResult,
-    GpuEncoder,
-    GpuType,
+    estimate_cpu_search_center, get_cpu_search_range_from_gpu, gpu_boundary_to_cpu_range,
+    gpu_coarse_search, gpu_coarse_search_with_log, CrfMapping, GpuAccel, GpuCoarseConfig,
+    GpuCoarseResult, GpuEncoder, GpuType,
 };
 
 pub use video_explorer::{
-    explore_av1_with_gpu_coarse,
-    explore_hevc_with_gpu_coarse,
-    explore_hevc_with_gpu_coarse_full,
-    explore_hevc_with_gpu_coarse_ultimate,
-    explore_with_gpu_coarse_search,
+    explore_av1_with_gpu_coarse, explore_hevc_with_gpu_coarse, explore_hevc_with_gpu_coarse_full,
+    explore_hevc_with_gpu_coarse_ultimate, explore_with_gpu_coarse_search,
 };
 
 pub use modern_ui::{
@@ -303,10 +216,9 @@ pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
 
 pub use explore_strategy::{
-    create_strategy, CompressOnlyStrategy, CompressWithQualityStrategy,
-    ExploreContext, ExploreStrategy, PreciseQualityMatchStrategy,
-    PreciseQualityMatchWithCompressionStrategy, ProgressConfig, QualityMatchStrategy,
-    SizeOnlyStrategy, SsimResult,
+    create_strategy, CompressOnlyStrategy, CompressWithQualityStrategy, ExploreContext,
+    ExploreStrategy, PreciseQualityMatchStrategy, PreciseQualityMatchWithCompressionStrategy,
+    ProgressConfig, QualityMatchStrategy, SizeOnlyStrategy, SsimResult,
 };
 
 pub use ffmpeg_process::{
@@ -314,48 +226,20 @@ pub use ffmpeg_process::{
 };
 
 pub use float_compare::{
-    approx_eq_crf,
-    approx_eq_f32,
-    approx_eq_f64,
-    approx_eq_psnr,
-    approx_eq_ssim,
-    approx_ge_f64,
-    approx_le_f64,
-    approx_zero_f32,
-    approx_zero_f64,
-    crf_in_range,
-    ssim_below_threshold,
-    ssim_meets_threshold,
-    CRF_EPSILON,
-    F32_EPSILON,
-    F64_EPSILON,
-    PSNR_EPSILON,
+    approx_eq_crf, approx_eq_f32, approx_eq_f64, approx_eq_psnr, approx_eq_ssim, approx_ge_f64,
+    approx_le_f64, approx_zero_f32, approx_zero_f64, crf_in_range, ssim_below_threshold,
+    ssim_meets_threshold, CRF_EPSILON, F32_EPSILON, F64_EPSILON, PSNR_EPSILON,
     SSIM_EPSILON as FLOAT_SSIM_EPSILON,
 };
 
 pub use path_validator::{validate_path, validate_paths, PathValidationError};
 
 pub use crf_constants::{
-    AV1_CRF_DEFAULT,
-    AV1_CRF_MAX,
-    AV1_CRF_MIN,
-    AV1_CRF_PRACTICAL_MAX,
-    AV1_CRF_VISUALLY_LOSSLESS,
-    CRF_CACHE_KEY_MULTIPLIER,
-    CRF_CACHE_MAX_VALID,
-    EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS,
-    HEVC_CRF_DEFAULT,
-    HEVC_CRF_MAX,
-    HEVC_CRF_MIN,
-    HEVC_CRF_PRACTICAL_MAX,
-    HEVC_CRF_VISUALLY_LOSSLESS,
-    NORMAL_MAX_ITERATIONS,
-    VP9_CRF_DEFAULT,
-    VP9_CRF_MAX,
-    VP9_CRF_MIN,
-    X264_CRF_DEFAULT,
-    X264_CRF_MAX,
-    X264_CRF_MIN,
+    AV1_CRF_DEFAULT, AV1_CRF_MAX, AV1_CRF_MIN, AV1_CRF_PRACTICAL_MAX, AV1_CRF_VISUALLY_LOSSLESS,
+    CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID,
+    EMERGENCY_MAX_ITERATIONS as CRF_EMERGENCY_MAX_ITERATIONS, HEVC_CRF_DEFAULT, HEVC_CRF_MAX,
+    HEVC_CRF_MIN, HEVC_CRF_PRACTICAL_MAX, HEVC_CRF_VISUALLY_LOSSLESS, NORMAL_MAX_ITERATIONS,
+    VP9_CRF_DEFAULT, VP9_CRF_MAX, VP9_CRF_MIN, X264_CRF_DEFAULT, X264_CRF_MAX, X264_CRF_MIN,
 };
 
 pub use ffprobe_json::{extract_color_info as ffprobe_extract_color_info, ColorInfo};
@@ -407,21 +291,10 @@ pub use logging::{
 };
 
 pub use common_utils::{
-    compute_relative_path,
-    copy_file_with_context,
-    ensure_dir_exists,
-    ensure_parent_dir_exists,
-    execute_command_with_logging,
-    extract_digits,
-    extract_suggested_extension,
-    format_command_string,
-    get_command_version,
-    get_extension_lowercase,
-    has_extension,
-    is_command_available,
-    is_hidden_file,
-    normalize_path_string,
-    parse_float_or_default,
+    compute_relative_path, copy_file_with_context, ensure_dir_exists, ensure_parent_dir_exists,
+    execute_command_with_logging, extract_digits, extract_suggested_extension,
+    format_command_string, get_command_version, get_extension_lowercase, has_extension,
+    is_command_available, is_hidden_file, normalize_path_string, parse_float_or_default,
     truncate_string,
 };
 

@@ -304,7 +304,10 @@ pub fn parse_frame_rate(s: &str) -> f64 {
         Ok(v) if v > 0.0 => v,
         _ => {
             if !s.is_empty() && s != "0" && s != "0/1" {
-                eprintln!("⚠️ [ffprobe] Failed to parse frame rate '{}', using fallback {}fps", s, FALLBACK_FRAME_RATE);
+                eprintln!(
+                    "⚠️ [ffprobe] Failed to parse frame rate '{}', using fallback {}fps",
+                    s, FALLBACK_FRAME_RATE
+                );
             }
             FALLBACK_FRAME_RATE
         }
@@ -312,10 +315,12 @@ pub fn parse_frame_rate(s: &str) -> f64 {
 }
 
 pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
-
-    if pix_fmt.contains("16le") || pix_fmt.contains("16be") ||
-       pix_fmt.contains("48le") || pix_fmt.contains("48be") ||
-       pix_fmt.contains("64le") || pix_fmt.contains("64be")
+    if pix_fmt.contains("16le")
+        || pix_fmt.contains("16be")
+        || pix_fmt.contains("48le")
+        || pix_fmt.contains("48be")
+        || pix_fmt.contains("64le")
+        || pix_fmt.contains("64be")
     {
         return 16;
     }
@@ -336,11 +341,9 @@ pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
     8
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_parse_frame_rate() {
@@ -365,7 +368,9 @@ mod tests {
             assert!(
                 (result - expected).abs() < *tolerance,
                 "parse_frame_rate({:?}): expected {}, got {}",
-                input, expected, result
+                input,
+                expected,
+                result
             );
         }
     }
@@ -378,24 +383,40 @@ mod tests {
         assert_eq!(parse_frame_rate("30/1/extra"), FALLBACK_FRAME_RATE);
     }
 
-
     #[test]
     fn test_detect_bit_depth() {
         let cases: &[(&str, u8)] = &[
-            ("yuv420p", 8), ("yuv422p", 8), ("yuv444p", 8),
-            ("rgb24", 8), ("bgr24", 8), ("nv12", 8), ("yuvj420p", 8),
-            ("yuv420p10le", 10), ("yuv420p10be", 10), ("yuv422p10le", 10),
-            ("yuv444p10le", 10), ("p010le", 10), ("p010", 10),
-            ("yuv420p12le", 12), ("yuv420p12be", 12),
-            ("yuv422p12le", 12), ("yuv444p12le", 12),
-            ("yuv420p16le", 16), ("yuv420p16be", 16), ("rgb48le", 16),
-            ("unknown", 8), ("", 8), ("custom_format", 8),
+            ("yuv420p", 8),
+            ("yuv422p", 8),
+            ("yuv444p", 8),
+            ("rgb24", 8),
+            ("bgr24", 8),
+            ("nv12", 8),
+            ("yuvj420p", 8),
+            ("yuv420p10le", 10),
+            ("yuv420p10be", 10),
+            ("yuv422p10le", 10),
+            ("yuv444p10le", 10),
+            ("p010le", 10),
+            ("p010", 10),
+            ("yuv420p12le", 12),
+            ("yuv420p12be", 12),
+            ("yuv422p12le", 12),
+            ("yuv444p12le", 12),
+            ("yuv420p16le", 16),
+            ("yuv420p16be", 16),
+            ("rgb48le", 16),
+            ("unknown", 8),
+            ("", 8),
+            ("custom_format", 8),
         ];
 
         for (fmt, expected) in cases {
             assert_eq!(
-                detect_bit_depth(fmt), *expected,
-                "detect_bit_depth({:?}) mismatch", fmt
+                detect_bit_depth(fmt),
+                *expected,
+                "detect_bit_depth({:?}) mismatch",
+                fmt
             );
         }
     }

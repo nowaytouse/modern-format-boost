@@ -37,13 +37,11 @@ pub fn approx_ge_f64(a: f64, b: f64) -> bool {
     a > b - F64_EPSILON
 }
 
-
 pub const SSIM_EPSILON: f64 = 1e-4;
 
 pub const CRF_EPSILON: f32 = 0.01;
 
 pub const PSNR_EPSILON: f64 = 0.1;
-
 
 #[inline]
 pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
@@ -74,7 +72,6 @@ pub fn ssim_below_threshold(ssim: f64, threshold: f64) -> bool {
 pub fn crf_in_range(crf: f32, min: f32, max: f32) -> bool {
     crf >= min - CRF_EPSILON && crf <= max + CRF_EPSILON
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -184,7 +181,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_approx_eq_ssim() {
         assert!(approx_eq_ssim(0.95, 0.95));
@@ -216,7 +212,6 @@ mod tests {
         assert!(!crf_in_range(-1.0, 0.0, 51.0));
     }
 }
-
 
 #[cfg(test)]
 mod property_tests {

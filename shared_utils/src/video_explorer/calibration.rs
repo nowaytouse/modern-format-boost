@@ -63,10 +63,7 @@ impl CalibrationPoint {
         if let Some(ssim) = self.gpu_ssim {
             eprintln!("│ GPU SSIM: {:.4}", ssim);
         }
-        eprintln!(
-            "│ Predicted CPU Start: CRF {:.1}",
-            self.predicted_cpu_crf
-        );
+        eprintln!("│ Predicted CPU Start: CRF {:.1}", self.predicted_cpu_crf);
         eprintln!("│ Confidence: {:.0}%", self.confidence * 100.0);
         eprintln!("│ Reason: {}", self.reason);
         eprintln!("└─────────────────────────────────────────────────────");
