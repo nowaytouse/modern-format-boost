@@ -16,12 +16,38 @@ thread_local! {
     static LOG_PREFIX: RefCell<String> = RefCell::new(String::new());
 }
 
-const LOG_PREFIX_MAX_LEN: usize = 40;
+const LOG_PREFIX_MAX_LEN: usize = 28;
+
+/// Width of the tag column so all message bodies align.
+const LOG_TAG_WIDTH: usize = 34;
+
+/// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Pad tag (e.g. `[file.jpeg]` or `[XMP]`) to LOG_TAG_WIDTH for aligned message body.
+fn pad_tag(tag: &str) -> String {
+    let w = LOG_TAG_WIDTH;
+    if tag.len() >= w {
+        format!("{} ", tag)
+    } else {
+        format!("{}{}", tag, " ".repeat(w - tag.len()))
+    }
+}
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
 pub fn set_log_context(prefix: &str) {
     let s = if prefix.len() > LOG_PREFIX_MAX_LEN {
-        format!("{}…", &prefix[..LOG_PREFIX_MAX_LEN.saturating_sub(1)])
+        let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_LEN.saturating_sub(1));
+        format!("{}…", head)
     } else {
         prefix.to_string()
     };
@@ -33,14 +59,14 @@ pub fn clear_log_context() {
     LOG_PREFIX.with(|p| p.borrow_mut().clear());
 }
 
-/// Prefix the given line with current context if set. Used by log macros.
+/// Format a log line with optional tag and padded indent so message bodies align.
 pub fn format_log_line(line: &str) -> String {
     LOG_PREFIX.with(|p| {
         let prefix = p.borrow();
         if prefix.is_empty() {
-            line.to_string()
+            format!("{}{}", " ".repeat(LOG_TAG_WIDTH), line)
         } else {
-            format!("[{}] {}", prefix, line)
+            format!("{}{}", pad_tag(&format!("[{}]", prefix)), line)
         }
     })
 }
@@ -207,15 +233,15 @@ pub fn xmp_merge_success() {
     let success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if xmp_milestone_interval(success) {
         let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
-        let msg = format!("[XMP] XMP merge: {} OK/{}", success, total);
-        write_to_log(&msg);
-        eprintln!("{}", msg);
+        let line = format!("{}{}", pad_tag("[XMP]"), format!("XMP merge: {} OK/{}", success, total));
+        write_to_log(&line);
+        eprintln!("{}", line);
     }
 }
 
 /// Call on failed merge. Logs the error on its own line.
 pub fn xmp_merge_failure(msg: &str) {
-    let line = format!("[XMP] ⚠️  XMP merge failed: {}", msg);
+    let line = format!("{}{}", pad_tag("[XMP]"), format!("⚠️  XMP merge failed: {}", msg));
     write_to_log(&line);
     eprintln!("{}", line);
 }
@@ -225,8 +251,8 @@ pub fn xmp_merge_finalize() {
     let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     if total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
-        let msg = format!("[XMP] XMP merge done: {} OK/{}", success, total);
-        write_to_log(&msg);
-        eprintln!("{}", msg);
+        let line = format!("{}{}", pad_tag("[XMP]"), format!("XMP merge done: {} OK/{}", success, total));
+        write_to_log(&line);
+        eprintln!("{}", line);
     }
 }
