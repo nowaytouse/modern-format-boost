@@ -5,14 +5,13 @@
 //! - PSNR: Peak Signal-to-Noise Ratio with parallel MSE calculation
 //! - SSIM: Structural Similarity Index with 11x11 Gaussian window (Wang et al. 2004)
 
-#![allow(clippy::needless_range_loop)]
-
 use image::{DynamicImage, GenericImageView, GrayImage};
 use rayon::prelude::*;
 
 const K1: f64 = 0.01;
 const K2: f64 = 0.03;
 const L: f64 = 255.0;
+/// Wang et al. SSIM stability constants: (k_i * L)^2 to avoid division-by-zero in low-contrast regions.
 const C1: f64 = (K1 * L) * (K1 * L);
 const C2: f64 = (K2 * L) * (K2 * L);
 
@@ -24,22 +23,20 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
     let center = (WINDOW_SIZE / 2) as f64;
     let mut sum = 0.0;
 
-    for i in 0..WINDOW_SIZE {
-        for j in 0..WINDOW_SIZE {
+    for (i, row) in window.iter_mut().enumerate() {
+        for (j, cell) in row.iter_mut().enumerate() {
             let x = i as f64 - center;
             let y = j as f64 - center;
             let g = (-((x * x + y * y) / (2.0 * sigma * sigma))).exp();
-            window[i][j] = g;
+            *cell = g;
             sum += g;
         }
     }
-
-    for i in 0..WINDOW_SIZE {
-        for j in 0..WINDOW_SIZE {
-            window[i][j] /= sum;
+    for row in &mut window {
+        for cell in row.iter_mut() {
+            *cell /= sum;
         }
     }
-
     window
 }
 
@@ -99,7 +96,6 @@ pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Opti
 
     let window = get_gaussian_window();
 
-    let _half_win = WINDOW_SIZE / 2;
     let valid_width = width - WINDOW_SIZE + 1;
     let valid_height = height - WINDOW_SIZE + 1;
 
@@ -126,33 +122,34 @@ fn calculate_window_ssim(
     y: usize,
     window: &[[f64; WINDOW_SIZE]; WINDOW_SIZE],
 ) -> f64 {
-    let mut mean_x = 0.0;
-    let mut mean_y = 0.0;
-    let mut var_x = 0.0;
-    let mut var_y = 0.0;
-    let mut cov_xy = 0.0;
-
-    for i in 0..WINDOW_SIZE {
-        for j in 0..WINDOW_SIZE {
+    // Single read of the window to avoid repeated get_pixel (cache-friendly).
+    let mut buf_x = [[0.0f64; WINDOW_SIZE]; WINDOW_SIZE];
+    let mut buf_y = [[0.0f64; WINDOW_SIZE]; WINDOW_SIZE];
+    for (i, row) in window.iter().enumerate() {
+        for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
-            let w = window[i][j];
-            let vx = orig.get_pixel(px as u32, py as u32)[0] as f64;
-            let vy = conv.get_pixel(px as u32, py as u32)[0] as f64;
-            mean_x += w * vx;
-            mean_y += w * vy;
+            buf_x[i][j] = orig.get_pixel(px as u32, py as u32)[0] as f64;
+            buf_y[i][j] = conv.get_pixel(px as u32, py as u32)[0] as f64;
         }
     }
 
-    for i in 0..WINDOW_SIZE {
-        for j in 0..WINDOW_SIZE {
-            let px = x + j;
-            let py = y + i;
-            let w = window[i][j];
-            let vx = orig.get_pixel(px as u32, py as u32)[0] as f64;
-            let vy = conv.get_pixel(px as u32, py as u32)[0] as f64;
-            let dx = vx - mean_x;
-            let dy = vy - mean_y;
+    let mut mean_x = 0.0;
+    let mut mean_y = 0.0;
+    for (i, row) in window.iter().enumerate() {
+        for (j, &w) in row.iter().enumerate() {
+            mean_x += w * buf_x[i][j];
+            mean_y += w * buf_y[i][j];
+        }
+    }
+
+    let mut var_x = 0.0;
+    let mut var_y = 0.0;
+    let mut cov_xy = 0.0;
+    for (i, row) in window.iter().enumerate() {
+        for (j, &w) in row.iter().enumerate() {
+            let dx = buf_x[i][j] - mean_x;
+            let dy = buf_y[i][j] - mean_y;
             var_x += w * dx * dx;
             var_y += w * dy * dy;
             cov_xy += w * dx * dy;
@@ -169,33 +166,34 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let pixel_count = (orig_gray.width() * orig_gray.height()) as f64;
-    if pixel_count < 1.0 {
+    let n = (orig_gray.width() * orig_gray.height()) as f64;
+    if n < 2.0 {
         return None;
     }
 
-    let orig_pixels: Vec<f64> = orig_gray.pixels().map(|p| p[0] as f64).collect();
-    let conv_pixels: Vec<f64> = conv_gray.pixels().map(|p| p[0] as f64).collect();
+    // Single-pass: compute sum_x, sum_y, sum_xx, sum_yy, sum_xy (no Vec allocation).
+    let mut sum_x = 0.0f64;
+    let mut sum_y = 0.0f64;
+    let mut sum_xx = 0.0f64;
+    let mut sum_yy = 0.0f64;
+    let mut sum_xy = 0.0f64;
+    for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
+        let x = p_orig[0] as f64;
+        let y = p_conv[0] as f64;
+        sum_x += x;
+        sum_y += y;
+        sum_xx += x * x;
+        sum_yy += y * y;
+        sum_xy += x * y;
+    }
 
-    let mean_x: f64 = orig_pixels.iter().sum::<f64>() / pixel_count;
-    let mean_y: f64 = conv_pixels.iter().sum::<f64>() / pixel_count;
-
-    let var_x: f64 = orig_pixels
-        .iter()
-        .map(|x| (x - mean_x).powi(2))
-        .sum::<f64>()
-        / pixel_count;
-    let var_y: f64 = conv_pixels
-        .iter()
-        .map(|y| (y - mean_y).powi(2))
-        .sum::<f64>()
-        / pixel_count;
-    let cov_xy: f64 = orig_pixels
-        .iter()
-        .zip(conv_pixels.iter())
-        .map(|(x, y)| (x - mean_x) * (y - mean_y))
-        .sum::<f64>()
-        / pixel_count;
+    let mean_x = sum_x / n;
+    let mean_y = sum_y / n;
+    // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
+    let n1 = n - 1.0;
+    let var_x = (sum_xx - n * mean_x * mean_x) / n1;
+    let var_y = (sum_yy - n * mean_y * mean_y) / n1;
+    let cov_xy = (sum_xy - n * mean_x * mean_y) / n1;
 
     let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
     let denominator = (mean_x.powi(2) + mean_y.powi(2) + C1) * (var_x + var_y + C2);
@@ -212,6 +210,7 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     let mut orig = original.clone();
     let mut conv = converted.clone();
     let mut ms_ssim = 1.0;
+    let mut used_weight_sum = 0.0;
 
     for i in 0..scales {
         let (w, h) = orig.dimensions();
@@ -220,6 +219,7 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
         }
 
         if let Some(ssim) = calculate_ssim(&orig, &conv) {
+            used_weight_sum += weights[i];
             ms_ssim *= ssim.powf(weights[i]);
         }
 
@@ -229,7 +229,11 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
         }
     }
 
-    Some(ms_ssim)
+    // Normalize by actual weight sum so result stays in [0, 1] when only a subset of scales run.
+    if used_weight_sum < 1e-10 {
+        return None;
+    }
+    Some(ms_ssim.powf(1.0 / used_weight_sum))
 }
 
 pub fn psnr_quality_description(psnr: f64) -> &'static str {
@@ -305,5 +309,49 @@ mod tests {
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
         assert!(ssim.unwrap() < 0.1);
+    }
+
+    #[test]
+    fn test_ssim_different_dimensions_returns_none() {
+        let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(50, 50, |_, _| image::Rgb([128, 128, 128])));
+        let img2 = DynamicImage::ImageRgb8(RgbImage::from_fn(60, 60, |_, _| image::Rgb([128, 128, 128])));
+        assert!(calculate_ssim(&img1, &img2).is_none());
+        assert!(calculate_psnr(&img1, &img2).is_none());
+    }
+
+    #[test]
+    fn test_ssim_small_image_uses_simple_path() {
+        // < 11x11 hits calculate_ssim_simple (unbiased variance path).
+        let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(8, 8, |_, _| image::Rgb([100, 100, 100])));
+        let img2 = DynamicImage::ImageRgb8(RgbImage::from_fn(8, 8, |_, _| image::Rgb([100, 100, 100])));
+        let ssim = calculate_ssim(&img1, &img2);
+        assert!(ssim.is_some());
+        assert!((ssim.unwrap() - 1.0).abs() < 0.01, "identical 8x8 should give SSIM ≈ 1, got {:?}", ssim);
+    }
+
+    #[test]
+    fn test_ssim_constant_image_equals_one() {
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(20, 20, |_, _| image::Rgb([255, 255, 255])));
+        let ssim = calculate_ssim(&img, &img);
+        assert!(ssim.is_some());
+        assert!((ssim.unwrap() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_ms_ssim_identical() {
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 64, |x, y| {
+            image::Rgb([(x.wrapping_add(y) % 256) as u8, 128, 200])
+        }));
+        let result = calculate_ms_ssim(&img, &img);
+        assert!(result.is_some());
+        assert!(result.unwrap() >= 0.99 && result.unwrap() <= 1.01);
+    }
+
+    #[test]
+    fn test_ms_ssim_small_image_returns_none() {
+        // No scale has size >= 11; used_weight_sum == 0 -> None.
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(10, 10, |_, _| image::Rgb([0, 0, 0])));
+        let result = calculate_ms_ssim(&img, &img);
+        assert!(result.is_none());
     }
 }
