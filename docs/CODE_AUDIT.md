@@ -238,3 +238,25 @@
 
 - **distance 精度**: convert_to_jxl 的 distance 格式由 `{:.1}` 改为 `{:.2}`，与 convert_to_jxl_matched 一致。
 - **prepare_input_for_cjxl JPEG**: 为 SOI 两字节检查添加注释，说明此处仅为 SOI 校验，detect_real_extension 可能已做更完整的魔法字节检测。
+
+---
+
+## 16. video_explorer.rs 审计修复
+
+### 16.1 P1 — 算法与正确性
+
+- **Phase 2 搜索命名**: 原称 “Golden section search”，实现为每轮单点评估（`mid = low + (high - low) * PHI`），非标准 GSS 的双内点。已改为 “Phi-based single-point search” 并注明非完整 golden-section，避免误导。
+- **SSIM 计算时机**: 在 `explore_size_only` 中，`calculate_ssim()` 基于 `self.output_path`；已加注释说明必须在当前编码输出仍在原位时调用，避免隐式状态被破坏。
+
+### 16.2 P2 — 设计
+
+- **三个构造函数**: 抽取私有 `build(input, output, encoder, vf_args, config, use_gpu: Option<bool>, preset, max_threads)`，`new` / `new_with_gpu` / `new_with_preset` 均调用 `build`，消除约 30 行重复初始化。
+- **LONG_VIDEO_THRESHOLD 重复**: 删除重复常量 `LONG_VIDEO_THRESHOLD`，统一使用 `LONG_VIDEO_THRESHOLD_SECS`。
+- **Confidence**: 在 `ConfidenceBreakdown` 上增加注释：当前 explore 结果使用按模式固定的 confidence 值，breakdown 未填充。
+- **explore_compress_with_quality**: SSIM 达标与不达标分支合并为单次 `best_result = Some(...)`，仅用 if/else 区分日志；不达标时注明“接受当前最佳，无更低 CRF 重试”。
+
+### 16.3 P3 — 代码质量
+
+- **`_best_crf_so_far`**: 重命名为 `best_crf_so_far`（去掉 `_` 前缀），因其被读写，非“有意未使用”。
+- **prop_duration_fallback_calculation**: 原断言 `(expected_duration - (frame_count/fps)).abs() < 0.0001` 恒真；改为校验 `duration > 0` 且 `(duration * fps).round() - frame_count` 在 1 以内，具有实际覆盖意义。
+- **macro shadowing**: 模块级 `progress_line!` / `progress_done!` 与各 `explore_*` 内重定义并存；已保留现状，必要时可后续抽成方法替代宏遮蔽。
