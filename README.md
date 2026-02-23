@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-8.4.0-blue.svg)
+![Version](https://img.shields.io/badge/version-8.5.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
 
@@ -131,6 +131,11 @@ Release 构建已启用 LTO 与单 codegen-unit，以最大化运行效率。
 ---
 
 ## 📋 更新日志 / Changelog
+
+### v8.5.0 (2026-02-23)
+- **日志与并发**: 多文件并行时每行带 `[文件名]` 前缀，XMP 用 `[XMP]`；固定宽度缩进对齐；UTF-8 安全截断（CJK 文件名不再 panic）
+- **时长检测**: ffprobe 无法给出 WebP/GIF 时长时，使用 ImageMagick `identify` 回退，动图可正常转 HEVC
+- **GIF 质量**: 支持对 GIF 做 SSIM 验证（格式归一化 + 透明叠黑底与编码一致）；验证跳过时显示 N/A 而非 FAILED
 
 ### v8.4.0
 - **代码现代化**: 移除 `lazy_static` 和 `num_cpus` 外部依赖，改用标准库 `LazyLock` 和 `available_parallelism()`

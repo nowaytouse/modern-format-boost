@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [8.5.0] - 2026-02-23
+
+### 📋 Logging & Concurrency
+
+#### Per-file log context (fix interleaved output)
+- **Thread-local log prefix**: When processing multiple files in parallel, every `log_eprintln!` / `verbose_eprintln!` line is prefixed with `[filename]` so output can be attributed to the correct file.
+- **Set at entry points**: `vid_hevc` `auto_convert()` and `img_hevc` `auto_convert_single_file()` set the prefix from the input file name and clear it on drop via `LogContextGuard`.
+- **XMP distinct**: XMP merge milestone lines use a fixed `[XMP]` prefix so they are clearly separate from file-tagged lines.
+
+#### Formatted indentation
+- **Fixed-width tag column** (`LOG_TAG_WIDTH = 34`): All message bodies align so `[file.jpeg]`, `[file.webp]`, and `[XMP]` lines start the message at the same column.
+- **Padding**: `pad_tag()` pads the tag so SSIM/CRF/XMP lines are visually aligned and easier to scan.
+
+#### UTF-8 safe prefix
+- **No panic on CJK filenames**: Prefix truncation now uses `truncate_to_char_boundary()` so we never slice through a multi-byte character (e.g. Chinese/Japanese in file names).
+- **Shorter default**: `LOG_PREFIX_MAX_LEN` reduced to 28 to reduce log noise.
+
+### ⏱️ Duration detection
+
+#### ImageMagick fallback for WebP/GIF
+- **Problem**: Animated WebP (and some GIF) often have no `stream.duration`, `format.duration`, or usable `frame_count`/fps from ffprobe, causing "DURATION DETECTION FAILED" and conversion to abort.
+- **Solution**: In `detect_duration_comprehensive()` (precheck), after all ffprobe-based methods fail, try ImageMagick: `get_animation_duration_and_frames_imagemagick(path)` using `identify -format "%T"` to get (duration_secs, frame_count), then infer fps and return `(duration, fps, frame_count, "imagemagick")`.
+- **API**: `image_analyzer::get_animation_duration_and_frames_imagemagick(path)` returns `Option<(f64, u64)>` without logging; existing `try_imagemagick_identify` uses it and keeps the "WebP/GIF animation detected" log.
+
+### 🎬 GIF / animated quality verification
+
+#### QualityCheck message when verification skipped
+- When GIF input uses the size-only path (SSIM-All verification failed or unavailable), the summary line is now **"QualityCheck: N/A (GIF/size-only, quality not measured)"** instead of "FAILED (quality not verified)", so batch logs are less alarming and reflect expected behavior.
+
+#### Real quality verification for GIF (and transparent inputs)
+- **Direct + format normalization**: `calculate_ssim_all()` now tries (1) direct `[0:v][1:v]ssim`, (2) format normalization: both streams to `yuv420p` and even dimensions so GIF palette and HEVC output are comparable.
+- **Alpha flatten (transparent GIF/WebP/PNG)**: Third fallback matches the encoder: input is converted with `format=rgba,premultiply=inplace=1,format=rgb24,format=yuv420p` (composite on black) then compared to HEVC output, so transparent pixels are evaluated on the same basis as the encoded file.
+- **Helper**: `run_ssim_all_filter(input, output, lavfi)` runs a given lavfi graph and parses SSIM Y/U/V/All from stderr with validity checks.
+
+### 🛠️ Technical
+
+- **progress_mode** (`shared_utils`): `set_log_context`, `clear_log_context`, `format_log_line`, `LogContextGuard`, `pad_tag`, UTF-8-safe `set_log_context`.
+- **precheck** (`video_explorer`): ImageMagick duration fallback after stream/format/frame_count+fps.
+- **stream_analysis** (`video_explorer`): `calculate_ssim_all` multi-step fallback (direct → format_norm → alpha_flatten); `run_ssim_all_filter` for reusable lavfi + parse.
+- **gpu_coarse_search** (`video_explorer`): `quality_verification_skipped_for_format` flag for GIF and friendlier QualityCheck line.
+
 ## [8.2.2] - 2026-02-20
 
 ### 🔥 Critical Bug Fixes

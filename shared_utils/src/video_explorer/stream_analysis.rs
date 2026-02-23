@@ -105,34 +105,55 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     None
 }
 
-pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
-    let result = Command::new("ffmpeg")
+/// Run ffmpeg with the given lavfi filter and parse SSIM Y/U/V/All from stderr.
+fn run_ssim_all_filter(
+    input: &Path,
+    output: &Path,
+    lavfi: &str,
+) -> Option<(f64, f64, f64, f64)> {
+    let out = Command::new("ffmpeg")
         .arg("-i")
         .arg(crate::safe_path_arg(input).as_ref())
         .arg("-i")
         .arg(crate::safe_path_arg(output).as_ref())
         .arg("-lavfi")
-        .arg("[0:v][1:v]ssim")
+        .arg(lavfi)
         .arg("-f")
         .arg("null")
         .arg("-")
-        .output();
-
-    if let Ok(out) = result {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        for line in stderr.lines() {
-            if line.contains("SSIM Y:") && line.contains("All:") {
-                let y = extract_ssim_value(line, "Y:");
-                let u = extract_ssim_value(line, "U:");
-                let v = extract_ssim_value(line, "V:");
-                let all = extract_ssim_value(line, "All:");
-                if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all) {
+        .output()
+        .ok()?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for line in stderr.lines() {
+        if line.contains("SSIM Y:") && line.contains("All:") {
+            let y = extract_ssim_value(line, "Y:");
+            let u = extract_ssim_value(line, "U:");
+            let v = extract_ssim_value(line, "V:");
+            let all = extract_ssim_value(line, "All:");
+            if let (Some(y), Some(u), Some(v), Some(all)) = (y, u, v, all) {
+                if is_valid_ssim_value(y) && is_valid_ssim_value(all) {
                     return Some((y, u, v, all));
                 }
             }
         }
     }
     None
+}
+
+/// SSIM Y/U/V/All between input and output. Tries in order:
+/// 1. Direct ssim (when formats already match).
+/// 2. Format normalization (GIF palette / odd-size → yuv420p even).
+/// 3. Alpha flatten: composite input on black (same as encoder) then compare,
+///    so transparent GIF/WebP/PNG matches HEVC output that has no alpha.
+pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
+    const DIRECT: &str = "[0:v][1:v]ssim";
+    const FORMAT_NORM: &str = "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
+    // Match encoder: format=rgba, premultiply (composite on black), then yuv420p.
+    const ALPHA_FLATTEN: &str = "[0:v]format=rgba,premultiply=inplace=1,format=rgb24,format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";
+
+    run_ssim_all_filter(input, output, DIRECT)
+        .or_else(|| run_ssim_all_filter(input, output, FORMAT_NORM))
+        .or_else(|| run_ssim_all_filter(input, output, ALPHA_FLATTEN))
 }
 
 
