@@ -662,8 +662,8 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
             "stream=nb_read_packets",
             "-of",
             "csv=p=0",
-            path.to_str().unwrap_or(""),
         ])
+        .arg(crate::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 

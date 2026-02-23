@@ -1,4 +1,7 @@
 //! macOS native metadata preservation
+//!
+//! Uses `unsafe` only for FFI to system C APIs (`copyfile`, `getattrlist`).
+//! Invariants: CStrings and pointers are valid for the duration of each call; paths come from Rust `Path`.
 
 use std::ffi::CString;
 use std::io;
@@ -18,6 +21,7 @@ pub fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     }
     let src_c = CString::new(src.as_os_str().as_bytes())?;
     let dst_c = CString::new(dst.as_os_str().as_bytes())?;
+    // SAFETY: CStrings are valid until the end of the block; copyfile does not capture pointers.
     let ret = unsafe {
         copyfile(
             src_c.as_ptr(),
@@ -94,6 +98,7 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
             tv_nsec: 0,
         },
     };
+    // SAFETY: c_path and &mut attr_list / &mut buf are valid; getattrlist is synchronous and does not retain pointers.
     let ret = unsafe {
         getattrlist(
             c_path.as_ptr(),
@@ -138,6 +143,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
         tv_sec: duration.as_secs() as i64,
         tv_nsec: duration.subsec_nanos() as i64,
     };
+    // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and does not retain pointers.
     let ret = unsafe {
         setattrlist(
             c_path.as_ptr(),
