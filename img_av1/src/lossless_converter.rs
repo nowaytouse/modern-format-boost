@@ -207,6 +207,10 @@ pub fn convert_to_avif(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
+            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&output) {
+                let _ = fs::remove_file(&output);
+                return Err(ImgQualityError::ConversionError(e));
+            }
             finalize_conversion(input, &output, input_size, "AVIF", None, options)
                 .map_err(ImgQualityError::IoError)
         }
@@ -274,6 +278,10 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
+            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&output) {
+                let _ = fs::remove_file(&output);
+                return Err(ImgQualityError::ConversionError(e));
+            }
             finalize_conversion(input, &output, input_size, "AV1", None, options)
                 .map_err(ImgQualityError::IoError)
         }
@@ -326,6 +334,10 @@ pub fn convert_to_avif_lossless(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
+            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&output) {
+                let _ = fs::remove_file(&output);
+                return Err(ImgQualityError::ConversionError(e));
+            }
             finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
                 .map_err(ImgQualityError::IoError)
         }
@@ -400,6 +412,10 @@ pub fn convert_to_av1_mp4_matched(
         eprintln!("{}", log);
     }
 
+    if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&output) {
+        let _ = fs::remove_file(&output);
+        return Err(ImgQualityError::ConversionError(e));
+    }
     let extra = format!("CRF {:.1}", explore_result.optimal_crf);
     finalize_conversion(input, &output, input_size, "Quality-matched AV1", Some(&extra), options)
         .map_err(ImgQualityError::IoError)
@@ -597,6 +613,10 @@ pub fn convert_to_av1_mp4_lossless(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
+            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&output) {
+                let _ = fs::remove_file(&output);
+                return Err(ImgQualityError::ConversionError(e));
+            }
             finalize_conversion(input, &output, input_size, "Lossless AV1", None, options)
                 .map_err(ImgQualityError::IoError)
         }

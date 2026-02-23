@@ -34,11 +34,11 @@ use crate::explore_strategy::CrfCache;
 
 
 fn beijing_time_now() -> String {
-    // UTC+8 (28800 seconds) is always a valid offset
+    // UTC+8 (28800 seconds) is always a valid fixed offset
     let beijing = FixedOffset::east_opt(8 * 3600).expect("UTC+8 is a valid fixed offset");
     let now: DateTime<Utc> = Utc::now();
     now.with_timezone(&beijing)
-        .format("%Y-%m-%d %H:%M:%S")
+        .format("%Y-%m-%d %H:%M:%S (UTC+8)")
         .to_string()
 }
 
@@ -181,9 +181,15 @@ pub const GPU_DEFAULT_MAX_CRF: f32 = 48.0;
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
 
 
-pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
+fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
     let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-    format!("gpu_temp.{}", ext)
+    format!("{}.{}", suffix, ext)
+}
+
+/// Returns a temp extension string (e.g. "gpu_temp.mp4") for the given output path.
+/// Used by callers and by warmup encoding internally via temp_extension_for(_, "warmup").
+pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
+    temp_extension_for(output, "gpu_temp")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -243,8 +249,8 @@ impl GpuEncoder {
         }
     }
 
-    pub fn get_extra_args(&self) -> Vec<&'static str> {
-        self.extra_args.clone()
+    pub fn extra_args(&self) -> &[&'static str] {
+        &self.extra_args
     }
 }
 
@@ -317,13 +323,16 @@ impl GpuAccel {
             }
         }
 
-        if let Some(accel) = Self::try_nvenc(&encoders) {
-            return accel;
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Some(accel) = Self::try_nvenc(&encoders) {
+                return accel;
+            }
+            if let Some(accel) = Self::try_qsv(&encoders) {
+                return accel;
+            }
         }
 
-        if let Some(accel) = Self::try_qsv(&encoders) {
-            return accel;
-        }
 
         #[cfg(target_os = "windows")]
         if let Some(accel) = Self::try_amf(&encoders) {
@@ -388,6 +397,7 @@ impl GpuAccel {
         })
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn try_nvenc(encoders: &[String]) -> Option<GpuAccel> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_nvenc"));
         let has_av1 = encoders.iter().any(|e| e.contains("av1_nvenc"));
@@ -464,6 +474,7 @@ impl GpuAccel {
         })
     }
 
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn try_qsv(encoders: &[String]) -> Option<GpuAccel> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_qsv"));
         let has_av1 = encoders.iter().any(|e| e.contains("av1_qsv"));
@@ -1163,9 +1174,9 @@ impl QualityCeilingDetector {
         if self.samples.len() >= 2 {
             let last = self.samples[self.samples.len() - 1].1;
             let prev = self.samples[self.samples.len() - 2].1;
-            let improvement = last - prev;
+            let change = (last - prev).abs();
 
-            if improvement < self.plateau_threshold {
+            if change < self.plateau_threshold {
                 self.plateau_count += 1;
 
                 if self.plateau_count >= 3 {
@@ -1475,10 +1486,10 @@ pub fn gpu_coarse_search_with_log(
         (45.0_f32, true)
     } else {
         log_msg!(
-            "   ✅ Normal file → Sequential mode ({}s sample)",
+            "   ✅ Normal file → Parallel mode ({}s sample)",
             GPU_SAMPLE_DURATION
         );
-        (GPU_SAMPLE_DURATION, true)
+        (GPU_SAMPLE_DURATION, false)
     };
 
     let max_iterations_limit = GPU_ABSOLUTE_MAX_ITERATIONS;
@@ -1514,9 +1525,8 @@ pub fn gpu_coarse_search_with_log(
 
     let encode_warmup = |crf: f32| -> anyhow::Result<u64> {
         let crf_args = gpu_encoder.get_crf_args(crf);
-        let extra_args = gpu_encoder.get_extra_args();
-        let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-        let warmup_output = output.with_extension(format!("warmup.{}", ext));
+        let extra_args = gpu_encoder.extra_args();
+        let warmup_output = output.with_extension(temp_extension_for(output, "warmup"));
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
@@ -1530,8 +1540,8 @@ pub fn gpu_coarse_search_with_log(
         for arg in &crf_args {
             cmd.arg(arg);
         }
-        for arg in &extra_args {
-            cmd.arg(*arg);
+        for arg in extra_args {
+            cmd.arg(arg);
         }
 
         cmd.arg("-an")
@@ -1598,7 +1608,7 @@ pub fn gpu_coarse_search_with_log(
         use std::time::{Duration, Instant};
 
         let crf_args = gpu_encoder.get_crf_args(crf);
-        let extra_args = gpu_encoder.get_extra_args();
+        let extra_args = gpu_encoder.extra_args();
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y");
@@ -1637,8 +1647,8 @@ pub fn gpu_coarse_search_with_log(
         for arg in &crf_args {
             cmd.arg(arg);
         }
-        for arg in &extra_args {
-            cmd.arg(*arg);
+        for arg in extra_args {
+            cmd.arg(arg);
         }
 
         cmd.arg("-an")
@@ -1650,7 +1660,7 @@ pub fn gpu_coarse_search_with_log(
 
         let mut child = cmd.spawn().context("Failed to spawn ffmpeg")?;
         let start_time = Instant::now();
-        let absolute_timeout = Duration::from_secs(12 * 3600);
+        // Long-hanging processes are handled by HeartbeatMonitor (5-min timeout); no separate 12h check after wait().
         let child_pid = child.id();
 
         let stderr_capture = StderrCapture::new(100);
@@ -1675,6 +1685,7 @@ pub fn gpu_coarse_search_with_log(
         let startup_handle = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(30));
             if !first_output_clone.load(Ordering::Relaxed) && !stop_clone.load(Ordering::Relaxed) {
+                stop_clone.store(true, Ordering::Relaxed);
                 crate::log_eprintln!(
                     "❌ STARTUP FAILED: No output in 30s (Beijing: {})",
                     beijing_time_now()
@@ -1774,11 +1785,6 @@ pub fn gpu_coarse_search_with_log(
             let _ = handle.join();
         }
 
-        if start_time.elapsed() > absolute_timeout {
-            crate::log_eprintln!("⏰ WARNING: GPU encoding took longer than 12 hours!");
-            bail!("GPU encoding exceeded 12-hour timeout");
-        }
-
         if !status.success() {
             let stderr_lines = stderr_capture.get_lines();
             let stderr_text = if stderr_lines.is_empty() {
@@ -1810,7 +1816,7 @@ pub fn gpu_coarse_search_with_log(
             .map(|(i, &crf)| {
                 let crf_args = gpu_encoder.get_crf_args(crf);
                 let extra_args: Vec<String> = gpu_encoder
-                    .get_extra_args()
+                    .extra_args()
                     .iter()
                     .map(|s| s.to_string())
                     .collect();
@@ -1886,12 +1892,12 @@ pub fn gpu_coarse_search_with_log(
 
 
     const WINDOW_SIZE: usize = 3;
-    const _VARIANCE_THRESHOLD: f64 = 0.0001;
     const CHANGE_RATE_THRESHOLD: f64 = 0.02;
 
     let mut size_history: Vec<(f32, u64)> = Vec::new();
 
-    let _calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
+    // Reserved for future variance-based early exit; currently unused.
+    let _calc_window_variance = |history: &[(f32, u64)], _input_size: u64| -> f64 {
         if history.len() < WINDOW_SIZE {
             return f64::MAX;
         }

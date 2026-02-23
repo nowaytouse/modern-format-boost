@@ -78,6 +78,7 @@ pub mod logging;
 pub mod common_utils;
 
 pub mod jxl_utils;
+pub mod avif_av1_health;
 
 pub mod x265_encoder;
 

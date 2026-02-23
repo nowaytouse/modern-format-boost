@@ -260,3 +260,32 @@
 - **`_best_crf_so_far`**: 重命名为 `best_crf_so_far`（去掉 `_` 前缀），因其被读写，非“有意未使用”。
 - **prop_duration_fallback_calculation**: 原断言 `(expected_duration - (frame_count/fps)).abs() < 0.0001` 恒真；改为校验 `duration > 0` 且 `(duration * fps).round() - frame_count` 在 1 以内，具有实际覆盖意义。
 - **macro shadowing**: 模块级 `progress_line!` / `progress_done!` 与各 `explore_*` 内重定义并存；已保留现状，必要时可后续抽成方法替代宏遮蔽。
+
+---
+
+## 17. AVIF/AV1 健康检查
+
+- **shared_utils/avif_av1_health.rs**: 新增模块，提供 `verify_avif_health(path)` 与 `verify_av1_mp4_health(path)`，当前做最小长度校验（文件存在、大小 ≥ 32 字节）。后续可按需增加 ffprobe 或更严格的最小长度/关键帧检查。
+- **img_av1 lossless_converter**: 在 `convert_to_avif`、`convert_to_avif_lossless`、`convert_to_av1_mp4`、`convert_to_av1_mp4_lossless`、`convert_to_av1_mp4_matched` 成功编码后、`finalize_conversion` 前调用对应健康检查；失败时删除输出并返回错误。
+
+---
+
+## 18. gpu_accel.rs 审计修复
+
+### 18.1 P1 — 正确性
+
+- **startup_handle 超时**: 在 kill 前先 `stop_clone.store(true, Ordering::Relaxed)`，保证停止状态一致，避免后续逻辑误判。
+- **absolute_timeout**: 原 12 小时检查在 `child.wait()` 之后，无法中断已阻塞进程；已删除该段死代码，长时卡死由 HeartbeatMonitor（5 分钟）处理。
+- **QualityCeilingDetector**: 粗搜索从 min_crf 向 max_crf 递增，PSNR 随 CRF 升而降，`last - prev` 常为负。原逻辑 `improvement < threshold` 几乎恒真导致误判。改为用 `change = (last - prev).abs()`，仅当 `change < plateau_threshold` 时计高原，否则重置 `plateau_count`。
+
+### 18.2 P2 — 设计
+
+- **skip_parallel**: 原三分支均为 `true`，`encode_parallel` 从未被调用。已将“Normal file”分支改为 `(GPU_SAMPLE_DURATION, false)`，正常文件走并行编码；日志改为 “Parallel mode”。
+- **detect_internal**: `try_nvenc` / `try_qsv` 在 macOS 上也会执行，可能覆盖 VideoToolbox。已用 `#[cfg(not(target_os = "macos"))]` 包裹，仅在非 macOS 上尝试 NVENC/QSV；macOS 仅用 VideoToolbox。
+- **derive_gpu_temp_extension**: 新增内部 `temp_extension_for(output, suffix)`，`derive_gpu_temp_extension` 调用 `temp_extension_for(_, "gpu_temp")`；warmup 编码使用 `temp_extension_for(output, "warmup")`，公开 API 与内部逻辑统一。
+
+### 18.3 P3 — 代码质量
+
+- **_VARIANCE_THRESHOLD / _calc_window_variance**: 删除未使用的 `_VARIANCE_THRESHOLD`；保留 `_calc_window_variance` 并加注释“Reserved for future variance-based early exit”，参数 `input_size` 改为 `_input_size` 避免未使用警告。
+- **beijing_time_now**: 格式化输出增加 “ (UTC+8)” 后缀，避免国际用户误解为本地时间。
+- **get_extra_args**: 改为 `extra_args(&self) -> &[&'static str]`，避免每次分配 `Vec`；video_explorer 等处调用改为 `extra_args()`，CPU 分支使用 `&[] as &[&str]` 保持类型一致。
