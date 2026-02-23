@@ -89,22 +89,30 @@ impl StderrCapture {
 struct HeartbeatMonitor {
     last_activity: Arc<Mutex<std::time::Instant>>,
     stop_signal: Arc<AtomicBool>,
+    first_output: Arc<AtomicBool>,
     child_pid: u32,
+    /// Timeout after first output (e.g. 300s = freeze detection).
     timeout: std::time::Duration,
+    /// Timeout before first output (e.g. 30s = startup failed).
+    startup_timeout: std::time::Duration,
 }
 
 impl HeartbeatMonitor {
     fn new(
         last_activity: Arc<Mutex<std::time::Instant>>,
         stop_signal: Arc<AtomicBool>,
+        first_output: Arc<AtomicBool>,
         child_pid: u32,
         timeout: std::time::Duration,
+        startup_timeout: std::time::Duration,
     ) -> Self {
         Self {
             last_activity,
             stop_signal,
+            first_output,
             child_pid,
             timeout,
+            startup_timeout,
         }
     }
 
@@ -125,21 +133,38 @@ impl HeartbeatMonitor {
                     .elapsed();
                 let elapsed_secs = elapsed.as_secs();
 
+                let is_startup = !self.first_output.load(Ordering::Relaxed);
+                let limit = if is_startup {
+                    self.startup_timeout
+                } else {
+                    self.timeout
+                };
+
                 crate::log_eprintln!(
                     "Heartbeat: {}s ago (Beijing: {})",
                     elapsed_secs,
                     beijing_time_now()
                 );
 
-                if elapsed > self.timeout {
+                if elapsed > limit {
+                    if is_startup {
+                        crate::log_eprintln!(
+                            "❌ STARTUP FAILED: No output in {}s (Beijing: {})",
+                            elapsed_secs,
+                            beijing_time_now()
+                        );
+                    } else {
+                        crate::log_eprintln!(
+                            "⚠️  FREEZE DETECTED: No activity for {} seconds!",
+                            elapsed_secs
+                        );
+                    }
                     crate::log_eprintln!(
-                        "⚠️  FREEZE DETECTED: No activity for {} seconds!",
-                        elapsed_secs
-                    );
-                    crate::log_eprintln!(
-                        "   Terminating frozen ffmpeg process (PID: {})...",
+                        "   Terminating ffmpeg process (PID: {})...",
                         self.child_pid
                     );
+
+                    self.stop_signal.store(true, Ordering::Relaxed);
 
                     #[cfg(unix)]
                     // SAFETY: child_pid is the PID of the child process we spawned; we own it and may signal it.
@@ -1671,32 +1696,16 @@ pub fn gpu_coarse_search_with_log(
 
         let last_activity = Arc::new(Mutex::new(Instant::now()));
         let stop_signal = Arc::new(AtomicBool::new(false));
+        let first_output = Arc::new(AtomicBool::new(false));
         let heartbeat = HeartbeatMonitor::new(
             Arc::clone(&last_activity),
             Arc::clone(&stop_signal),
+            Arc::clone(&first_output),
             child_pid,
             Duration::from_secs(300),
+            Duration::from_secs(30),
         );
         let heartbeat_handle = heartbeat.spawn();
-
-        let first_output = Arc::new(AtomicBool::new(false));
-        let first_output_clone = Arc::clone(&first_output);
-        let stop_clone = Arc::clone(&stop_signal);
-        let startup_handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(30));
-            if !first_output_clone.load(Ordering::Relaxed) && !stop_clone.load(Ordering::Relaxed) {
-                stop_clone.store(true, Ordering::Relaxed);
-                crate::log_eprintln!(
-                    "❌ STARTUP FAILED: No output in 30s (Beijing: {})",
-                    beijing_time_now()
-                );
-                #[cfg(unix)]
-                // SAFETY: child_pid is the PID of the child we spawned; we may signal it on timeout.
-                unsafe {
-                    libc::kill(child_pid as i32, libc::SIGKILL);
-                }
-            }
-        });
 
         crate::verbose_eprintln!(
             "GPU encoding started - Beijing: {}",
@@ -1780,7 +1789,6 @@ pub fn gpu_coarse_search_with_log(
 
         stop_signal.store(true, Ordering::Relaxed);
         let _ = heartbeat_handle.join();
-        let _ = startup_handle.join();
         if let Some(handle) = stderr_handle {
             let _ = handle.join();
         }
