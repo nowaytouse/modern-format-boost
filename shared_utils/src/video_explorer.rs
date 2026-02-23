@@ -138,7 +138,9 @@ pub const ULTIMATE_MIN_WALL_HITS: u32 = 4;
 
 pub const ULTIMATE_MAX_WALL_HITS: u32 = 28;
 
-pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 10;
+/// In ultimate mode, SSIM saturation (Domain Wall) requires this many consecutive zero-gains.
+/// Kept 15–20 so short CRF ranges (e.g. GIF) still get a robust check (scaled minimum is 15).
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 20;
 
 pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 
@@ -190,7 +192,8 @@ pub fn calculate_zero_gains_for_duration_and_range(
     };
 
     let scaled = (base as f32 * factor).round() as u32;
-    scaled.max(3)
+    let min_gains = if ultimate_mode { 15 } else { 3 };
+    scaled.max(min_gains)
 }
 
 pub const ADAPTIVE_WALL_LOG_BASE: u32 = 8;
@@ -4340,37 +4343,45 @@ mod tests {
             ULTIMATE_REQUIRED_ZERO_GAINS
         );
 
+        // ultimate_mode: min 15, so scaled = 20*0.75 = 15
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 15.0, true),
-            8
+            15
         );
 
+        // crf_range 10 -> factor 0.5, scaled 10 -> clamped to min 15
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 10.0, true),
-            5
+            15
         );
 
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 5.0, true),
-            5
+            15
         );
     }
 
     #[test]
     fn test_zero_gains_minimum_guarantee() {
-        assert!(calculate_zero_gains_for_duration_and_range(60.0, 1.0, true) >= 3);
-        assert!(calculate_zero_gains_for_duration_and_range(60.0, 0.1, true) >= 3);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 1.0, true) >= 15);
+        assert!(calculate_zero_gains_for_duration_and_range(60.0, 0.1, true) >= 15);
         assert!(calculate_zero_gains_for_duration_and_range(60.0, 5.0, false) >= 3);
     }
 
     #[test]
     fn test_zero_gains_long_video_override() {
+        // Long video uses LONG_VIDEO_REQUIRED_ZERO_GAINS as base, but ultimate_mode still enforces min 15
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(300.0, 41.0, true),
-            LONG_VIDEO_REQUIRED_ZERO_GAINS
+            15
         );
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(600.0, 10.0, true),
+            15
+        );
+        // Non-ultimate: long video returns base (3) scaled
+        assert_eq!(
+            calculate_zero_gains_for_duration_and_range(300.0, 41.0, false),
             LONG_VIDEO_REQUIRED_ZERO_GAINS
         );
     }
@@ -4408,9 +4419,10 @@ mod prop_tests_v69 {
         ) {
             let result = calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode);
 
-            prop_assert!(result >= 3,
-                "zero-gains({}) 应 >= 3 (duration={}, crf_range={}, ultimate={})",
-                result, duration, crf_range, ultimate_mode);
+            let min_expected = if ultimate_mode { 15 } else { 3 };
+            prop_assert!(result >= min_expected,
+                "zero-gains({}) 应 >= {} (duration={}, crf_range={}, ultimate={})",
+                result, min_expected, duration, crf_range, ultimate_mode);
         }
     }
 
