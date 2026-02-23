@@ -136,3 +136,23 @@
 ### 10.3 unwrap / 测试
 
 - **img_av1 / img_hevc lossless_converter.rs**: `get_output_path(...).unwrap()` 仅出现在 `#[test]` 中，生产路径使用 `Result` + `?`，已接受。
+
+---
+
+## 11. 逻辑 / 数学 / 顺序 核心能力审计 (Logic, Math, Ordering)
+
+### 11.1 除零与数值稳定性
+
+- **gpu_accel.rs** `is_quality_better`: `old_score.combined_score <= 0.0` 时不再做除法，直接返回 `new_score.combined_score > 0.0`，避免除零与 NaN。
+- **video_explorer/dynamic_mapping.rs** `add_anchor`: `gpu_size == 0` 时直接 return，不计算 `size_ratio`，避免除零；调用方虽已有 `gpu_size > 0` 条件，此处做防御性保护。
+- **conversion.rs**:  
+  - `skipped_size_increase`、`success`、`format_size_change`、`calculate_size_reduction`、`check_size_tolerance` 中所有以 `input_size` 为分母的式子，在 `input_size == 0` 时均返回 0.0 或跳过除法，避免除零。
+- **video_explorer.rs** 二分搜索阶段: `calc_window_variance` 在 `input_size == 0` 时直接返回 `f64::MAX`，不参与方差计算，避免 0 作分母与无效比例。
+- **video_explorer/gpu_coarse_search.rs**:  
+  - `size_change_pct`、`total_file_pct` 在 `input_size == 0` 时设为 0.0。  
+  - `margin_safety` 在 `target > 0 && final_full_size < target` 时才用 `target` 作分母，避免 `target == 0` 除零。
+- **image_metrics.rs** `calculate_ssim_simple`: `pixel_count < 1.0` 时返回 `None`；`denominator < 1e-10` 时返回 `Some(1.0)`（常数图像 SSIM 视为 1），避免除零与数值不稳定。
+
+### 11.2 顺序与前置条件
+
+- 上述除零防护均保证“先判分母再除”的顺序；`dynamic_mapping` 的 `add_anchor` 在更新 `anchors` 前先校验 `gpu_size > 0`，与校准调用处的 `gpu_size > 0 && cpu_size > 0` 一致。

@@ -28,6 +28,9 @@ impl DynamicCrfMapper {
     }
 
     pub fn add_anchor(&mut self, crf: f32, gpu_size: u64, cpu_size: u64) {
+        if gpu_size == 0 {
+            return;
+        }
         let size_ratio = cpu_size as f64 / gpu_size as f64;
         self.anchors.push(AnchorPoint {
             crf,

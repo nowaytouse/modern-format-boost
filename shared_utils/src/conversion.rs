@@ -135,7 +135,11 @@ impl ConversionResult {
     }
 
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
-        let increase_pct = (output_size as f64 / input_size as f64 - 1.0) * 100.0;
+        let increase_pct = if input_size == 0 {
+            0.0
+        } else {
+            (output_size as f64 / input_size as f64 - 1.0) * 100.0
+        };
         Self {
             success: true,
             input_path: input.display().to_string(),
@@ -157,7 +161,11 @@ impl ConversionResult {
         format_name: &str,
         extra_info: Option<&str>,
     ) -> Self {
-        let reduction = 1.0 - (output_size as f64 / input_size as f64);
+        let reduction = if input_size == 0 {
+            0.0
+        } else {
+            1.0 - (output_size as f64 / input_size as f64)
+        };
         let reduction_pct = reduction * 100.0;
 
         let message = if reduction >= 0.0 {
@@ -354,7 +362,11 @@ pub fn determine_output_path_with_base(
 
 
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
-    let reduction = 1.0 - (output_size as f64 / input_size as f64);
+    let reduction = if input_size == 0 {
+        0.0
+    } else {
+        1.0 - (output_size as f64 / input_size as f64)
+    };
     let reduction_pct = reduction * 100.0;
 
     if reduction >= 0.0 {
@@ -365,6 +377,9 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
 }
 
 pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
+    if input_size == 0 {
+        return 0.0;
+    }
     (1.0 - (output_size as f64 / input_size as f64)) * 100.0
 }
 
@@ -514,7 +529,11 @@ pub fn check_size_tolerance(
         return None;
     }
 
-    let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
+    let size_increase_pct = if input_size == 0 {
+        0.0
+    } else {
+        ((output_size as f64 / input_size as f64) - 1.0) * 100.0
+    };
     if let Err(e) = fs::remove_file(output) {
         eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
     }
