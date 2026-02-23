@@ -305,7 +305,7 @@ pub fn convert_to_hevc_mp4_matched(
         let video_stream_compressed =
             explore_result.output_video_stream_size < explore_result.input_video_stream_size;
 
-        if !video_stream_compressed {
+        let (protect_msg, delete_msg) = if !video_stream_compressed {
             let input_stream_kb = explore_result.input_video_stream_size as f64 / 1024.0;
             let output_stream_kb = explore_result.output_video_stream_size as f64 / 1024.0;
             let stream_change_pct = if explore_result.input_video_stream_size > 0 {
@@ -319,27 +319,73 @@ pub fn convert_to_hevc_mp4_matched(
                 input_stream_kb, output_stream_kb, stream_change_pct
             );
             eprintln!("   ⚠️  File may already be highly optimized");
+            (
+                "Original file PROTECTED (output did not compress)".to_string(),
+                "Output discarded (video stream larger than original)".to_string(),
+            )
         } else if explore_result.ssim.is_none() {
             tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
             eprintln!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
             eprintln!("   ⚠️  This may indicate codec compatibility issues");
+            (
+                "Original file PROTECTED (SSIM not available)".to_string(),
+                "Output discarded (SSIM calculation failed)".to_string(),
+            )
         } else if actual_ssim < threshold {
             tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, "Quality validation failed");
             eprintln!(
                 "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
                 actual_ssim, threshold
             );
+            (
+                "Original file PROTECTED (quality below threshold)".to_string(),
+                "Output discarded (quality below threshold)".to_string(),
+            )
         } else {
             tracing::warn!(input = %input.display(), "Quality validation failed: unknown reason");
             eprintln!("   ⚠️  Quality validation FAILED: unknown reason");
+            (
+                "Original file PROTECTED (quality/size check failed)".to_string(),
+                "Output discarded (quality/size check failed)".to_string(),
+            )
+        };
+        eprintln!("   🛡️  {}", protect_msg);
+
+        if options.apple_compat {
+            eprintln!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
+            eprintln!(
+                "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
+                explore_result.optimal_crf,
+                explore_result.iterations
+            );
+            let out_size = fs::metadata(&output).ok().map(|m| m.len()).unwrap_or(0);
+            let size_reduction = if input_size > 0 {
+                Some(1.0 - out_size as f64 / input_size as f64)
+            } else {
+                None
+            };
+            return Ok(ConversionResult {
+                success: true,
+                input_path: input.display().to_string(),
+                output_path: Some(output.display().to_string()),
+                input_size,
+                output_size: Some(out_size),
+                size_reduction,
+                message: format!(
+                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is HEVC and importable",
+                    explore_result.optimal_crf,
+                    explore_result.iterations
+                ),
+                skipped: false,
+                skip_reason: None,
+            });
         }
-        eprintln!("   🛡️  Original file PROTECTED (quality too low to replace)");
 
         if output.exists() {
             if let Err(e) = fs::remove_file(&output) {
-                eprintln!("⚠️ [cleanup] Failed to remove low-quality output: {}", e);
+                eprintln!("⚠️ [cleanup] Failed to remove output: {}", e);
             } else {
-                eprintln!("   🗑️  Low-quality output deleted");
+                eprintln!("   🗑️  {}", delete_msg);
             }
         }
 

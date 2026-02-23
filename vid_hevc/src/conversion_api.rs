@@ -318,19 +318,35 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         video_stream_compressed
                     );
 
-                    let (fail_reason, fail_message) = if !video_stream_compressed {
-                        let input_stream_mb =
-                            explore_result.input_video_stream_size as f64 / 1024.0 / 1024.0;
-                        let output_stream_mb =
-                            explore_result.output_video_stream_size as f64 / 1024.0 / 1024.0;
-                        let stream_change_pct = (output_stream_mb / input_stream_mb - 1.0) * 100.0;
-
-                        warn!(
-                            "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.2} MB → {:.2} MB ({:+.1}%)",
-                            input_stream_mb, output_stream_mb, stream_change_pct
-                        );
+                    let (fail_reason, fail_message, protect_msg, delete_msg) = if !video_stream_compressed {
+                        let input_b = explore_result.input_video_stream_size as f64;
+                        let output_b = explore_result.output_video_stream_size as f64;
+                        let stream_change_pct = if input_b > 0.0 {
+                            (output_b / input_b - 1.0) * 100.0
+                        } else {
+                            0.0
+                        };
+                        // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
+                        let msg = if input_b < 1024.0 * 1024.0 {
+                            format!(
+                                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
+                                input_b / 1024.0,
+                                output_b / 1024.0,
+                                stream_change_pct
+                            )
+                        } else {
+                            format!(
+                                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
+                                input_b / 1024.0 / 1024.0,
+                                output_b / 1024.0 / 1024.0,
+                                stream_change_pct
+                            )
+                        };
+                        warn!("{}", msg);
                         if total_file_compressed {
                             warn!("   ⚠️  Total file smaller but video stream larger (audio/container overhead)");
+                        } else {
+                            warn!("   ⚠️  Total file and video stream both larger than original");
                         }
                         warn!("   ⚠️  File may already be highly optimized");
                         (
@@ -339,6 +355,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 stream_change_pct
                             ),
                             format!("Skipped: video stream larger ({:+.1}%)", stream_change_pct),
+                            "Original file PROTECTED (output did not compress)".to_string(),
+                            "Output discarded (video stream larger than original)".to_string(),
                         )
                     } else if explore_result.ssim.is_none() {
                         warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality!");
@@ -346,6 +364,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         (
                             "SSIM calculation failed".to_string(),
                             "Skipped: SSIM calculation failed".to_string(),
+                            "Original file PROTECTED (SSIM not available)".to_string(),
+                            "Output discarded (SSIM calculation failed)".to_string(),
                         )
                     } else if actual_ssim < threshold {
                         warn!(
@@ -361,19 +381,55 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 "Skipped: SSIM {:.4} below threshold {:.4}",
                                 actual_ssim, threshold
                             ),
+                            "Original file PROTECTED (quality below threshold)".to_string(),
+                            "Output discarded (quality below threshold)".to_string(),
                         )
                     } else {
                         warn!("   ⚠️  Quality validation FAILED: unknown reason");
                         (
                             "Quality validation failed: unknown reason".to_string(),
                             "Skipped: quality validation failed".to_string(),
+                            "Original file PROTECTED (quality/size check failed)".to_string(),
+                            "Output discarded (quality/size check failed)".to_string(),
                         )
                     };
-                    warn!("   🛡️  Original file PROTECTED (quality too low to replace)");
+                    warn!("   🛡️  {}", protect_msg);
+
+                    if config.apple_compat {
+                        warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
+                        warn!(
+                            "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
+                            explore_result.optimal_crf,
+                            explore_result.iterations
+                        );
+                        return Ok(ConversionOutput {
+                            input_path: input.display().to_string(),
+                            output_path: output_path.display().to_string(),
+                            strategy: ConversionStrategy {
+                                target: TargetVideoFormat::HevcMp4,
+                                reason: "Apple compat fallback: best-effort HEVC kept (quality/size below target)".to_string(),
+                                command: String::new(),
+                                preserve_audio: detection.has_audio,
+                                crf: explore_result.optimal_crf,
+                                lossless: false,
+                            },
+                            input_size: detection.file_size,
+                            output_size: explore_result.output_size,
+                            size_ratio: explore_result.output_size as f64 / detection.file_size as f64,
+                            success: true,
+                            message: format!(
+                                "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is HEVC and importable",
+                                explore_result.optimal_crf,
+                                explore_result.iterations
+                            ),
+                            final_crf: explore_result.optimal_crf,
+                            exploration_attempts: explore_result.iterations as u8,
+                        });
+                    }
 
                     if output_path.exists() {
                         let _ = std::fs::remove_file(&output_path);
-                        info!("   🗑️  Low-quality output deleted");
+                        info!("   🗑️  {}", delete_msg);
                     }
 
                     let _ = shared_utils::copy_on_skip_or_fail(
@@ -421,6 +477,39 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             let ms_ssim_score = result.ms_ssim_score.unwrap_or(0.0);
             warn!("   ❌ MS-SSIM TARGET FAILED: {:.4} < 0.90", ms_ssim_score);
             warn!("   🛡️  Original file PROTECTED (MS-SSIM quality too low)");
+
+            if config.apple_compat {
+                warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): MS-SSIM below target");
+                warn!(
+                    "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
+                    result.optimal_crf,
+                    result.iterations
+                );
+                return Ok(ConversionOutput {
+                    input_path: input.display().to_string(),
+                    output_path: output_path.display().to_string(),
+                    strategy: ConversionStrategy {
+                        target: TargetVideoFormat::HevcMp4,
+                        reason: "Apple compat fallback: best-effort HEVC kept (MS-SSIM below target)".to_string(),
+                        command: String::new(),
+                        preserve_audio: detection.has_audio,
+                        crf: result.optimal_crf,
+                        lossless: false,
+                    },
+                    input_size: detection.file_size,
+                    output_size: result.output_size,
+                    size_ratio: result.output_size as f64 / detection.file_size as f64,
+                    success: true,
+                    message: format!(
+                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); MS-SSIM {:.4} < 0.90 — file is HEVC and importable",
+                        result.optimal_crf,
+                        result.iterations,
+                        ms_ssim_score
+                    ),
+                    final_crf: result.optimal_crf,
+                    exploration_attempts: result.iterations as u8,
+                });
+            }
 
             if output_path.exists() {
                 let _ = std::fs::remove_file(&output_path);
@@ -505,6 +594,38 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             warn!("   ⚠️  Note: Container overhead caused total file to be larger");
         }
         warn!("   🛡️  Original file PROTECTED");
+
+        if config.apple_compat {
+            warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
+            warn!(
+                "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
+                final_crf,
+                attempts
+            );
+            return Ok(ConversionOutput {
+                input_path: input.display().to_string(),
+                output_path: output_path.display().to_string(),
+                strategy: ConversionStrategy {
+                    target: TargetVideoFormat::HevcMp4,
+                    reason: "Apple compat fallback: best-effort HEVC kept (compression check failed)".to_string(),
+                    command: String::new(),
+                    preserve_audio: detection.has_audio,
+                    crf: final_crf,
+                    lossless: false,
+                },
+                input_size: detection.file_size,
+                output_size: actual_output_size,
+                size_ratio: actual_output_size as f64 / detection.file_size as f64,
+                success: true,
+                message: format!(
+                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); compression check failed — file is HEVC and importable",
+                    final_crf,
+                    attempts
+                ),
+                final_crf,
+                exploration_attempts: attempts,
+            });
+        }
 
         if output_path.exists() {
             let _ = std::fs::remove_file(&output_path);
