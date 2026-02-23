@@ -219,8 +219,13 @@ pub fn execute_conversion(
     }
 
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
-
+    let size_reduction = output_size.map(|s| {
+        if detection.file_size == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - s as f32 / detection.file_size as f32)
+        }
+    });
 
     if config.preserve_metadata {
         preserve_metadata(input_path, &output_path)?;
@@ -260,16 +265,17 @@ fn path_to_str(path: &Path) -> Result<&str> {
 
 fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
     let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
-    let input_str = path_to_str(&input_abs)?;
-    let output_str = path_to_str(output)?;
 
-    let args = if *format == DetectedFormat::JPEG {
-        vec!["--lossless_jpeg=1", "--", input_str, output_str]
+    let mut cmd = Command::new("cjxl");
+    if *format == DetectedFormat::JPEG {
+        cmd.args(["--lossless_jpeg=1", "--"]);
     } else {
-        vec!["-d", "0.0", "-e", "7", "--", input_str, output_str]
-    };
-
-    let status = Command::new("cjxl").args(&args).output()?;
+        cmd.args(["-d", "0.0", "-e", "7", "--"]);
+    }
+    let status = cmd
+        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
+        .arg(shared_utils::safe_path_arg(output).as_ref())
+        .output()?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(
@@ -292,11 +298,10 @@ fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<(
             .join(output)
     };
 
-    let input_str = path_to_str(&input_abs)?;
-    let output_str = path_to_str(&output_abs)?;
-
     let status = Command::new("avifenc")
-        .args([input_str, output_str, "-q", &q])
+        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
+        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
+        .args(["-q", &q])
         .output()?;
 
     if !status.status.success() {
@@ -357,7 +362,7 @@ fn convert_to_hevc_mp4(
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(output)
     };
-    cmd.arg(&output_abs);
+    cmd.arg(shared_utils::safe_path_arg(&output_abs).as_ref());
 
     let process = FfmpegProcess::spawn(&mut cmd)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
@@ -392,11 +397,13 @@ fn build_even_dimension_filter(width: u32, height: u32) -> String {
 }
 
 fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
-    let source_str = path_to_str(source)?;
-    let dest_str = path_to_str(dest)?;
-
     let status = Command::new("touch")
-        .args(["-r", "--", source_str, dest_str])
+        .args([
+            "-r",
+            "--",
+            shared_utils::safe_path_arg(source).as_ref(),
+            shared_utils::safe_path_arg(dest).as_ref(),
+        ])
         .output()?;
 
     if !status.status.success() {
@@ -472,7 +479,13 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
     }
 
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| 100.0 * (1.0 - s as f32 / detection.file_size as f32));
+    let size_reduction = output_size.map(|s| {
+        if detection.file_size == 0 {
+            0.0
+        } else {
+            100.0 * (1.0 - s as f32 / detection.file_size as f32)
+        }
+    });
 
     Ok(ConversionOutput {
         original_path: detection.file_path.clone(),

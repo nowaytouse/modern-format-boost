@@ -454,7 +454,7 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
 
         let status = Command::new("djxl")
             .arg(shared_utils::safe_path_arg(path).as_ref())
-            .arg(temp_path)
+            .arg(shared_utils::safe_path_arg(temp_path).as_ref())
             .status()
             .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {}", e))?;
 
