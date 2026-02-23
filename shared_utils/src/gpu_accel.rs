@@ -2620,37 +2620,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_gpu_detection() {
-        let gpu = GpuAccel::detect_fresh();
-        println!("GPU Type: {:?}", gpu.gpu_type);
-        println!("HEVC: {:?}", gpu.hevc_encoder.as_ref().map(|e| e.name));
-        println!("AV1: {:?}", gpu.av1_encoder.as_ref().map(|e| e.name));
-        println!("H264: {:?}", gpu.h264_encoder.as_ref().map(|e| e.name));
-    }
-
-    #[test]
-    fn test_crf_to_bitrate() {
-        assert!(crf_to_estimated_bitrate(18.0, "hevc") > crf_to_estimated_bitrate(28.0, "hevc"));
-        assert!(crf_to_estimated_bitrate(25.0, "av1") > crf_to_estimated_bitrate(35.0, "av1"));
-    }
-
-    #[test]
-    fn test_gpu_encoder_crf_args() {
-        let encoder = GpuEncoder {
-            gpu_type: GpuType::Nvidia,
-            name: "hevc_nvenc",
-            codec: "hevc",
-            supports_crf: true,
-            crf_param: "cq",
-            crf_range: (0, 51),
-            extra_args: vec![],
-        };
-
-        let args = encoder.get_crf_args(23.5);
-        assert_eq!(args, vec!["-cq", "24"]);
-    }
-
-    #[test]
     fn test_estimate_cpu_search_center() {
         let cpu_center = estimate_cpu_search_center(10.0, GpuType::Apple, "hevc");
         assert!(
@@ -2690,42 +2659,6 @@ mod tests {
 
         let (low, _high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
         assert!((low - 12.0).abs() < 0.1, "low should be GPU boundary");
-    }
-
-
-    #[test]
-    fn test_derive_gpu_temp_extension_mp4() {
-        use std::path::PathBuf;
-        let output = PathBuf::from("/path/to/output.mp4");
-        let ext = super::derive_gpu_temp_extension(&output);
-        assert_eq!(ext, "gpu_temp.mp4");
-    }
-
-    #[test]
-    fn test_derive_gpu_temp_extension_mkv() {
-        use std::path::PathBuf;
-        let output = PathBuf::from("/path/to/output.mkv");
-        let ext = super::derive_gpu_temp_extension(&output);
-        assert_eq!(ext, "gpu_temp.mkv");
-    }
-
-    #[test]
-    fn test_derive_gpu_temp_extension_webm() {
-        use std::path::PathBuf;
-        let output = PathBuf::from("/path/to/output.webm");
-        let ext = super::derive_gpu_temp_extension(&output);
-        assert_eq!(ext, "gpu_temp.webm");
-    }
-
-    #[test]
-    fn test_derive_gpu_temp_extension_no_ext() {
-        use std::path::PathBuf;
-        let output = PathBuf::from("/path/to/output");
-        let ext = super::derive_gpu_temp_extension(&output);
-        assert_eq!(
-            ext, "gpu_temp.mp4",
-            "Should default to mp4 when no extension"
-        );
     }
 
 

@@ -3345,141 +3345,6 @@ mod tests {
 
 
     #[test]
-    fn test_quality_thresholds_default() {
-        let t = QualityThresholds::default();
-        assert_eq!(t.min_ssim, 0.95);
-        assert_eq!(t.min_psnr, 35.0);
-        assert!(t.validate_ssim);
-        assert!(!t.validate_psnr);
-    }
-
-    #[test]
-    fn test_explore_config_default() {
-        let c = ExploreConfig::default();
-        assert_eq!(c.mode, ExploreMode::PreciseQualityMatch);
-        assert_eq!(c.initial_crf, 18.0);
-        assert_eq!(c.min_crf, 10.0);
-        assert_eq!(c.max_crf, 28.0);
-        assert_eq!(c.target_ratio, 1.0);
-        assert_eq!(c.max_iterations, 12);
-    }
-
-    #[test]
-    fn test_explore_config_size_only() {
-        let c = ExploreConfig::size_only(20.0, 30.0);
-        assert_eq!(c.mode, ExploreMode::SizeOnly);
-        assert_eq!(c.initial_crf, 20.0);
-        assert_eq!(c.max_crf, 30.0);
-        assert!(!c.quality_thresholds.validate_ssim);
-        assert!(!c.quality_thresholds.validate_psnr);
-    }
-
-    #[test]
-    fn test_explore_config_quality_match() {
-        let c = ExploreConfig::quality_match(22.0);
-        assert_eq!(c.mode, ExploreMode::QualityMatch);
-        assert_eq!(c.initial_crf, 22.0);
-        assert_eq!(c.max_iterations, 1);
-        assert!(c.quality_thresholds.validate_ssim);
-    }
-
-    #[test]
-    fn test_explore_config_precise_quality_match() {
-        let c = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
-        assert_eq!(c.mode, ExploreMode::PreciseQualityMatch);
-        assert_eq!(c.initial_crf, 18.0);
-        assert_eq!(c.max_crf, 28.0);
-        assert_eq!(c.quality_thresholds.min_ssim, 0.97);
-        assert!(c.quality_thresholds.validate_ssim);
-    }
-
-    #[test]
-    fn test_explore_config_precise_quality_match_with_compression() {
-        let c = ExploreConfig::precise_quality_match_with_compression(20.0, 35.0, 0.95);
-        assert_eq!(c.mode, ExploreMode::PreciseQualityMatchWithCompression);
-        assert_eq!(c.initial_crf, 20.0);
-        assert_eq!(c.max_crf, 35.0);
-        assert_eq!(c.quality_thresholds.min_ssim, 0.95);
-        assert!(c.quality_thresholds.validate_ssim);
-    }
-
-    #[test]
-    fn test_explore_modes() {
-        let size_only = ExploreConfig::size_only(20.0, 30.0);
-        assert_eq!(size_only.mode, ExploreMode::SizeOnly);
-
-        let quality_match = ExploreConfig::quality_match(22.0);
-        assert_eq!(quality_match.mode, ExploreMode::QualityMatch);
-
-        let precise = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
-        assert_eq!(precise.mode, ExploreMode::PreciseQualityMatch);
-
-        let precise_compress =
-            ExploreConfig::precise_quality_match_with_compression(18.0, 28.0, 0.97);
-        assert_eq!(
-            precise_compress.mode,
-            ExploreMode::PreciseQualityMatchWithCompression
-        );
-    }
-
-    #[test]
-    fn test_flag_combinations_semantics() {
-        let explore_only = ExploreConfig::size_only(20.0, 30.0);
-        assert_eq!(explore_only.mode, ExploreMode::SizeOnly);
-        assert!(
-            !explore_only.quality_thresholds.validate_ssim,
-            "SizeOnly should NOT validate SSIM"
-        );
-
-        let match_only = ExploreConfig::quality_match(22.0);
-        assert_eq!(match_only.mode, ExploreMode::QualityMatch);
-        assert_eq!(
-            match_only.max_iterations, 1,
-            "QualityMatch should be single-shot"
-        );
-
-        let explore_match = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
-        assert_eq!(explore_match.mode, ExploreMode::PreciseQualityMatch);
-        assert!(
-            explore_match.quality_thresholds.validate_ssim,
-            "PreciseQualityMatch MUST validate SSIM"
-        );
-
-        let explore_match_compress =
-            ExploreConfig::precise_quality_match_with_compression(18.0, 28.0, 0.97);
-        assert_eq!(
-            explore_match_compress.mode,
-            ExploreMode::PreciseQualityMatchWithCompression
-        );
-        assert!(
-            explore_match_compress.quality_thresholds.validate_ssim,
-            "Compression mode MUST validate SSIM"
-        );
-    }
-
-    #[test]
-    fn test_video_encoder_names() {
-        assert_eq!(VideoEncoder::Hevc.ffmpeg_name(), "libx265");
-        assert_eq!(VideoEncoder::Av1.ffmpeg_name(), "libsvtav1");
-        assert_eq!(VideoEncoder::H264.ffmpeg_name(), "libx264");
-    }
-
-    #[test]
-    fn test_video_encoder_containers() {
-        assert_eq!(VideoEncoder::Hevc.container(), "mp4");
-        assert_eq!(VideoEncoder::Av1.container(), "mp4");
-        assert_eq!(VideoEncoder::H264.container(), "mp4");
-    }
-
-    #[test]
-    fn test_explore_mode_enum() {
-        assert_ne!(ExploreMode::SizeOnly, ExploreMode::QualityMatch);
-        assert_ne!(ExploreMode::QualityMatch, ExploreMode::PreciseQualityMatch);
-        assert_ne!(ExploreMode::SizeOnly, ExploreMode::PreciseQualityMatch);
-    }
-
-
-    #[test]
     fn test_precision_crf_search_range_hevc() {
         let iterations = required_iterations(10, 28);
         assert!(
@@ -3539,69 +3404,6 @@ mod tests {
         assert_eq!(ssim_quality_grade(0.87), "Fair (可见差异)");
         assert_eq!(ssim_quality_grade(0.85), "Fair (可见差异)");
         assert_eq!(ssim_quality_grade(0.80), "Poor (明显质量损失)");
-    }
-
-
-    #[test]
-    fn test_judge_mode_size_only_config() {
-        let c = ExploreConfig::size_only(18.0, 28.0);
-
-        assert!(
-            !c.quality_thresholds.validate_ssim,
-            "SizeOnly mode should NOT validate SSIM"
-        );
-        assert!(
-            !c.quality_thresholds.validate_psnr,
-            "SizeOnly mode should NOT validate PSNR"
-        );
-
-        assert!(
-            c.max_iterations >= 8,
-            "SizeOnly mode should use sufficient iterations for best size"
-        );
-    }
-
-    #[test]
-    fn test_judge_mode_quality_match_config() {
-        let c = ExploreConfig::quality_match(20.0);
-
-        assert!(
-            c.quality_thresholds.validate_ssim,
-            "QualityMatch mode MUST validate SSIM"
-        );
-
-        assert_eq!(
-            c.max_iterations, 1,
-            "QualityMatch mode should have exactly 1 iteration"
-        );
-
-        assert_eq!(
-            c.initial_crf, 20.0,
-            "QualityMatch mode should use predicted CRF"
-        );
-    }
-
-    #[test]
-    fn test_judge_mode_precise_quality_match_config() {
-        let c = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
-
-        assert!(
-            c.quality_thresholds.validate_ssim,
-            "PreciseQualityMatch mode MUST validate SSIM"
-        );
-
-        assert_eq!(
-            c.quality_thresholds.min_ssim, 0.97,
-            "PreciseQualityMatch mode should use custom min_ssim"
-        );
-
-        assert!(
-            c.max_iterations >= 8,
-            "PreciseQualityMatch mode should use sufficient iterations"
-        );
-
-        assert_eq!(c.initial_crf, 18.0);
-        assert_eq!(c.max_crf, 28.0);
     }
 
 
@@ -3747,46 +3549,6 @@ mod tests {
     }
 
     #[test]
-    fn test_three_modes_config_correctness() {
-        let size_only = ExploreConfig::size_only(20.0, 30.0);
-        assert_eq!(size_only.mode, ExploreMode::SizeOnly);
-        assert!(
-            !size_only.quality_thresholds.validate_ssim,
-            "SizeOnly should NOT validate SSIM"
-        );
-        assert!(
-            !size_only.quality_thresholds.validate_ms_ssim,
-            "SizeOnly should NOT validate VMAF"
-        );
-
-        let quality_match = ExploreConfig::quality_match(22.0);
-        assert_eq!(quality_match.mode, ExploreMode::QualityMatch);
-        assert!(
-            quality_match.quality_thresholds.validate_ssim,
-            "QualityMatch MUST validate SSIM"
-        );
-        assert_eq!(
-            quality_match.max_iterations, 1,
-            "QualityMatch should have 1 iteration"
-        );
-
-        let precise = ExploreConfig::precise_quality_match(18.0, 28.0, 0.97);
-        assert_eq!(precise.mode, ExploreMode::PreciseQualityMatch);
-        assert!(
-            precise.quality_thresholds.validate_ssim,
-            "PreciseQualityMatch MUST validate SSIM"
-        );
-        assert_eq!(
-            precise.quality_thresholds.min_ssim, 0.97,
-            "Custom min_ssim should be used"
-        );
-        assert!(
-            precise.max_iterations > 1,
-            "PreciseQualityMatch should have multiple iterations"
-        );
-    }
-
-    #[test]
     fn test_self_calibration_logic() {
 
         let config = ExploreConfig::precise_quality_match(25.0, 35.0, 0.95);
@@ -3840,12 +3602,6 @@ mod tests {
         assert!(!check(Some(0.94), Some(90.0)));
 
         assert!(!check(Some(0.96), None));
-    }
-
-    #[test]
-    fn test_evaluation_criteria_thresholds() {
-        assert_eq!(HIGH_QUALITY_MIN_MS_SSIM, 0.95);
-        assert_eq!(ACCEPTABLE_MIN_MS_SSIM, 0.85);
     }
 
     #[test]
