@@ -218,3 +218,23 @@
 
 - **NoConversion 只在一处处理**: 扩展名 match 中 NoConversion 改为 `unreachable!("handled above")`，避免重复分支。
 - **测试**: 新增 NoConversion 时 `command.is_none()`、execute_conversion 在输出已存在时返回 skipped、simple_convert 对 Static+Lossy 跳过行为与消息的断言。
+
+---
+
+## 15. img_av1 lossless_converter.rs 审计修复
+
+### 15.1 P1 — 正确性
+
+- **convert_to_jxl 变量遮蔽**: 将第一次 `result` 重命名为 `cmd_result`，fallback 分支中 `Err(_) => result` 改为 `Err(_) => cmd_result`，避免遮蔽导致误读。
+- **convert_to_av1_mp4_lossless**: 移除 `-crf 0`，仅保留 `-svtav1-params lossless=1:lp=...`；SVT-AV1 中 `lossless=1` 才是数学无损，`-crf 0` 与 lossless 并存存在冲突风险。
+- **calculate_matched_crf_for_animation 调用处**: 删除多余的 `as f32`（函数已返回 f32）。
+
+### 15.2 P2 — 设计
+
+- **create_dir_all 一致**: 在 convert_jpeg_to_jxl、convert_to_avif、convert_to_avif_lossless、convert_to_av1_mp4、convert_to_av1_mp4_lossless、convert_to_av1_mp4_matched 中，在写入 output 前对 `output.parent()` 调用 `fs::create_dir_all(parent)`。
+- **失败后清理残留**: convert_jpeg_to_jxl、convert_to_avif、convert_to_avif_lossless、convert_to_av1_mp4、convert_to_av1_mp4_lossless 在“进程成功但业务失败”或“进程失败”分支中调用 `fs::remove_file(&output)`；convert_to_av1_mp4_matched 在 explore 返回 Err 时同样清理 output。
+
+### 15.3 P3 — 代码质量
+
+- **distance 精度**: convert_to_jxl 的 distance 格式由 `{:.1}` 改为 `{:.2}`，与 convert_to_jxl_matched 一致。
+- **prepare_input_for_cjxl JPEG**: 为 SOI 两字节检查添加注释，说明此处仅为 SOI 校验，detect_real_extension 可能已做更完整的魔法字节检测。
