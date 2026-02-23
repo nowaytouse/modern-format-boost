@@ -43,7 +43,7 @@ pub fn convert_to_jxl(
     };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
-        .arg(format!("{:.1}", distance))
+        .arg(format!("{:.2}", distance))
         .arg("-e")
         .arg("7")
         .arg("-j")
@@ -57,10 +57,9 @@ pub fn convert_to_jxl(
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
         .arg(shared_utils::safe_path_arg(&output).as_ref());
 
-    let result = cmd.output();
+    let cmd_result = cmd.output();
 
-
-    let result = match &result {
+    let result = match &cmd_result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
@@ -71,14 +70,14 @@ pub fn convert_to_jxl(
                 eprintln!("   🔧 FALLBACK: Using ImageMagick pipeline to re-encode PNG");
 
                 match shared_utils::jxl_utils::try_imagemagick_fallback(input, &output, distance, max_threads) {
-                    Ok(output) => Ok(output),
-                    Err(_) => result,
+                    Ok(out) => Ok(out),
+                    Err(_) => cmd_result,
                 }
             } else {
-                result
+                cmd_result
             }
         }
-        _ => result,
+        _ => cmd_result,
     };
 
     match result {
@@ -121,6 +120,10 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "jxl", options)?;
 
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
     if output.exists() && !options.force {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
@@ -154,6 +157,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "cjxl JPEG transcode failed: {}",
@@ -179,6 +183,10 @@ pub fn convert_to_avif(
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
     if output.exists() && !options.force {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
@@ -203,6 +211,7 @@ pub fn convert_to_avif(
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc failed: {}",
@@ -223,6 +232,10 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
 
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mp4", options)?;
+
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
 
     if output.exists() && !options.force {
         return Ok(ConversionResult::skipped_exists(input, &output));
@@ -265,6 +278,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "ffmpeg failed: {}",
@@ -291,6 +305,10 @@ pub fn convert_to_avif_lossless(
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "avif", options)?;
 
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
     if output.exists() && !options.force {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
@@ -312,6 +330,7 @@ pub fn convert_to_avif_lossless(
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc lossless failed: {}",
@@ -337,11 +356,15 @@ pub fn convert_to_av1_mp4_matched(
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mp4", options)?;
 
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
     if output.exists() && !options.force {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size) as f32;
+    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size);
 
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, analysis.has_alpha);
@@ -356,7 +379,7 @@ pub fn convert_to_av1_mp4_matched(
         initial_crf
     );
 
-    let explore_result = shared_utils::explore_precise_quality_match_with_compression(
+    let explore_result = match shared_utils::explore_precise_quality_match_with_compression(
         input,
         &output,
         shared_utils::VideoEncoder::Av1,
@@ -365,8 +388,13 @@ pub fn convert_to_av1_mp4_matched(
         50.0,
         0.91,
         options.child_threads,
-    )
-    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = fs::remove_file(&output);
+            return Err(ImgQualityError::ConversionError(e.to_string()));
+        }
+    };
 
     for log in &explore_result.log {
         eprintln!("{}", log);
@@ -534,6 +562,10 @@ pub fn convert_to_av1_mp4_lossless(
     let input_size = fs::metadata(input)?.len();
     let output = get_output_path(input, "mp4", options)?;
 
+    if let Some(parent) = output.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
     if output.exists() && !options.force {
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
@@ -551,8 +583,6 @@ pub fn convert_to_av1_mp4_lossless(
         .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg("-c:v")
         .arg("libsvtav1")
-        .arg("-crf")
-        .arg("0")
         .arg("-preset")
         .arg("4")
         .arg("-svtav1-params")
@@ -571,6 +601,7 @@ pub fn convert_to_av1_mp4_lossless(
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "ffmpeg lossless failed: {}",
@@ -633,6 +664,7 @@ fn prepare_input_for_cjxl(
 
     match ext.as_str() {
         "jpg" | "jpeg" => {
+            // SOI marker only; detect_real_extension may have already done a fuller magic-byte check.
             let is_header_valid = std::fs::File::open(input)
                 .and_then(|mut f| {
                     use std::io::Read;
