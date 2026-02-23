@@ -453,3 +453,9 @@
 - **问题**：`unregister_progress_bar()` / `unregister_heartbeat()` 使用 `fetch_sub(1)`，在“注销次数多于注册次数”（如测试清理）时会发生原子下溢，`active_progress_count()` 返回 `usize::MAX`，导致 `test_progress_bar_guard` 失败。
 - **修复**：`unregister_progress_bar` 与 `unregister_heartbeat` 改为仅在 `count > 0` 时用 `compare_exchange` 递减，避免下溢。
 - **验证**：`cargo test -p shared_utils` 全部通过（含 heartbeat_manager 与 progress 相关测试）。
+
+### 23.3 实际使用与代码质量（quality_verifier_enhanced）
+
+- **实际使用**：在 `video_explorer/gpu_coarse_search.rs` 中，在最终编码完成后（输出 stream 信息打印之后）调用 `quality_verifier_enhanced::verify_after_encode(input, output, &VerifyOptions::strict_video())`，并以 `verbose_eprintln` 输出 `summary()` 与 `details`，实现编码后增强校验（文件完整性 + 时长匹配 + 视频流存在性）。
+- **API 暴露**：`lib.rs` 中通过 `pub use quality_verifier_enhanced::{ verify_after_encode, verify_output_file, EnhancedVerifyResult, VerifyOptions, DEFAULT_MIN_FILE_SIZE }` 对外提供，便于 vid_hevc、img_av1 等 crate 复用。
+- **代码质量**：`quality_verifier_enhanced.rs` 已加 `#[must_use]` 于 `VerifyOptions`、`EnhancedVerifyResult`；`verify_output_file` 直接返回 `verify_output_integrity` 的 `Result<(), String>`，无多余转换；语法与风格与仓库一致，clippy 对该文件无额外告警。

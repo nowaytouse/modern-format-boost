@@ -245,6 +245,14 @@ pub use video_explorer::quick_explore;
 
 pub use checkpoint::{safe_delete_original, verify_output_integrity, CheckpointManager};
 
+pub use quality_verifier_enhanced::{
+    verify_after_encode,
+    verify_output_file,
+    EnhancedVerifyResult,
+    VerifyOptions,
+    DEFAULT_MIN_FILE_SIZE,
+};
+
 pub use xmp_merger::{
     merge_xmp_for_copied_file,
     MergeResult,
