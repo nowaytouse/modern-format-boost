@@ -26,6 +26,9 @@ pub enum ImgQualityError {
 
     #[error("Image processing error: {0}")]
     ImageError(#[from] image::ImageError),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 pub type Result<T> = std::result::Result<T, ImgQualityError>;
