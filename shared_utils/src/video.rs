@@ -36,7 +36,10 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
     let mut filters = Vec::new();
 
     if has_alpha {
-        filters.push("format=rgba,colorchannelmixer=aa=1.0,format=rgb24".to_string());
+        // Composite on black background: premultiply multiplies RGB by alpha (R*A/255),
+        // which is equivalent to compositing on black since black contributes 0.
+        // This avoids exposing garbage RGB data in transparent pixels (common in PNG/WebP).
+        filters.push("format=rgba,premultiply=inplace=1,format=rgb24".to_string());
     }
 
     if let Some(crop_filter) = get_dimension_correction_filter(width, height) {
@@ -126,7 +129,7 @@ mod tests {
         let chain = build_video_filter_chain(1920, 1080, true);
         assert_eq!(
             chain,
-            "format=rgba,colorchannelmixer=aa=1.0,format=rgb24,format=yuv420p"
+            "format=rgba,premultiply=inplace=1,format=rgb24,format=yuv420p"
         );
     }
 
@@ -135,7 +138,7 @@ mod tests {
         let chain = build_video_filter_chain(1921, 1081, true);
         assert_eq!(
             chain,
-            "format=rgba,colorchannelmixer=aa=1.0,format=rgb24,crop=1920:1080:0:0,format=yuv420p"
+            "format=rgba,premultiply=inplace=1,format=rgb24,crop=1920:1080:0:0,format=yuv420p"
         );
     }
 

@@ -77,6 +77,8 @@ pub mod logging;
 
 pub mod common_utils;
 
+pub mod jxl_utils;
+
 pub mod x265_encoder;
 
 pub mod vmaf_standalone;

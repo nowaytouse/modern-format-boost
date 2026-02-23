@@ -28,9 +28,7 @@ pub mod stream_analysis;
 pub use codec_detection::*;
 #[allow(unused_imports)]
 pub use metadata::*;
-#[allow(unused_imports)]
 pub use stream_analysis::*;
-
 
 #[allow(unused_macros)]
 macro_rules! progress_line {
@@ -260,13 +258,6 @@ pub enum ExploreMode {
     CompressOnly,
 
     CompressWithQuality,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrossValidationResult {
-    AllAgree,
-    MajorityAgree,
-    Divergent,
 }
 
 
@@ -1310,13 +1301,6 @@ impl VideoExplorer {
         let mut high = self.config.max_crf;
         let mut compress_boundary: Option<f32> = None;
 
-        #[allow(unused_macros)]
-        macro_rules! progress_log {
-            ($($arg:tt)*) => {{
-                pb.set_message(format!($($arg)*));
-            }};
-        }
-
         while high - low > precision::COARSE_STEP / 2.0 && iterations < self.config.max_iterations {
             let mid = ((low + high) / 2.0).round();
 
@@ -2155,80 +2139,6 @@ impl VideoExplorer {
             actual_min_ssim: self.config.quality_thresholds.min_ssim,
             ..Default::default()
         })
-    }
-
-    #[allow(dead_code)]
-    fn check_cross_validation_consistency(
-        &self,
-        quality: &(Option<f64>, Option<f64>, Option<f64>),
-    ) -> CrossValidationResult {
-        let t = &self.config.quality_thresholds;
-
-        let ssim_pass = quality.0.map(|s| s >= t.min_ssim).unwrap_or(false);
-        let psnr_pass = if t.validate_psnr {
-            quality.1.map(|p| p >= t.min_psnr).unwrap_or(false)
-        } else {
-            true
-        };
-        let ms_ssim_pass = if t.validate_ms_ssim {
-            quality.2.map(|v| v >= t.min_ms_ssim).unwrap_or(false)
-        } else {
-            true
-        };
-
-        let pass_count = [ssim_pass, psnr_pass, ms_ssim_pass]
-            .iter()
-            .filter(|&&x| x)
-            .count();
-
-        match pass_count {
-            3 => CrossValidationResult::AllAgree,
-            2 => CrossValidationResult::MajorityAgree,
-            _ => CrossValidationResult::Divergent,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn calculate_composite_score(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> f64 {
-        let ssim = quality.0.unwrap_or(0.0);
-        let psnr = quality.1.unwrap_or(0.0);
-        let ms_ssim = quality.2.unwrap_or(0.0);
-
-        let ssim_norm = ssim;
-        let psnr_norm = (psnr / 60.0).clamp(0.0, 1.0);
-        let ms_ssim_norm = ms_ssim.clamp(0.0, 1.0);
-
-
-        if self.config.quality_thresholds.validate_ms_ssim
-            && self.config.quality_thresholds.validate_psnr
-        {
-            ssim_norm * 0.50 + ms_ssim_norm * 0.35 + psnr_norm * 0.15
-        } else if self.config.quality_thresholds.validate_ms_ssim {
-            ssim_norm * 0.60 + ms_ssim_norm * 0.40
-        } else if self.config.quality_thresholds.validate_psnr {
-            ssim_norm * 0.70 + psnr_norm * 0.30
-        } else {
-            ssim_norm
-        }
-    }
-
-    #[allow(dead_code)]
-    fn format_quality_metrics(&self, quality: &(Option<f64>, Option<f64>, Option<f64>)) -> String {
-        let mut parts = Vec::new();
-        if let Some(ssim) = quality.0 {
-            parts.push(format!("SSIM: {:.4}", ssim));
-        }
-        if let Some(psnr) = quality.1 {
-            parts.push(format!("PSNR: {:.2}dB", psnr));
-        }
-        if let Some(vmaf) = quality.2 {
-            parts.push(format!("MS-SSIM: {:.2}", vmaf));
-        }
-        if parts.is_empty() {
-            "N/A".to_string()
-        } else {
-            parts.join(", ")
-        }
     }
 
     fn encode(&self, crf: f32) -> Result<u64> {
@@ -3905,53 +3815,6 @@ pub mod precheck {
         bail!("Failed to detect video duration - all methods failed")
     }
 
-    #[allow(dead_code)]
-    pub fn get_duration_with_fallback(input: &Path, fps: f64, frame_count: u64) -> Option<f64> {
-        eprintln!("   ⚠️ DURATION: Primary method failed, trying format.duration...");
-        let output = Command::new("ffprobe")
-            .args([
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "csv=p=0",
-                "--",
-            ])
-            .arg(crate::safe_path_arg(input).as_ref())
-            .output();
-
-        if let Ok(output) = output {
-            if output.status.success() {
-                let duration_str = String::from_utf8_lossy(&output.stdout);
-                if let Ok(duration) = duration_str.trim().parse::<f64>() {
-                    if duration > 0.0 && !duration.is_nan() {
-                        eprintln!(
-                            "   ✅ DURATION RECOVERED via format.duration: {:.2}s",
-                            duration
-                        );
-                        return Some(duration);
-                    }
-                }
-            }
-        }
-
-        eprintln!("   ⚠️ DURATION: format.duration failed, trying frame_count/fps...");
-        if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
-            let duration = frame_count as f64 / fps;
-            if duration > 0.0 {
-                eprintln!(
-                    "   ✅ DURATION RECOVERED via frame_count/fps: {:.2}s ({} frames / {:.2} fps)",
-                    duration, frame_count, fps
-                );
-                return Some(duration);
-            }
-        }
-
-        eprintln!("   🔴 DURATION DETECTION FAILED - Cannot determine video duration");
-        None
-    }
-
     pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         let file_size = std::fs::metadata(input)
             .context("Failed to read file metadata")?
@@ -5558,15 +5421,6 @@ fn cpu_fine_tune_from_gpu_boundary(
         estimated_iterations,
     );
 
-    #[allow(unused_macros)]
-    macro_rules! log_msg {
-        ($($arg:tt)*) => {{
-            let msg = format!($($arg)*);
-            cpu_progress.println(&msg);
-            log.push(msg);
-        }};
-    }
-
 
     #[derive(Debug, Clone)]
     enum AudioTranscodeStrategy {
@@ -5803,11 +5657,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     );
     let step_size = 0.25_f32;
 
-    #[allow(dead_code)]
-    const MARGINAL_BENEFIT_THRESHOLD: f64 = 0.001;
     const MAX_CONSECUTIVE_FAILURES: u32 = 3;
-    #[allow(dead_code)]
-    const MAX_SIZE_OVERSHOOT_PCT: f64 = 5.0;
 
     let mut iterations = 0u32;
     let mut size_cache: CrfCache<u64> = CrfCache::new();
@@ -6886,11 +6736,6 @@ fn calculate_ms_ssim_channel_sampled(
             None
         }
     }
-}
-
-#[allow(dead_code)]
-fn calculate_ms_ssim_channel(input: &Path, output: &Path, channel: &str) -> Option<f64> {
-    calculate_ms_ssim_channel_sampled(input, output, channel, 1)
 }
 
 fn extract_ssim_value(line: &str, prefix: &str) -> Option<f64> {
