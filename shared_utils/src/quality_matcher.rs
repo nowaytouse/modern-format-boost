@@ -1095,6 +1095,9 @@ pub fn log_quality_analysis(
     result: &MatchedQuality,
     encoder: EncoderType,
 ) {
+    if !crate::progress_mode::is_verbose_mode() {
+        return;
+    }
     let encoder_name = match encoder {
         EncoderType::Av1 => "AV1",
         EncoderType::Hevc => "HEVC",
@@ -1104,7 +1107,7 @@ pub fn log_quality_analysis(
     let d = &result.analysis_details;
     let codec = parse_source_codec(&analysis.source_codec);
 
-    eprintln!("   📊 Quality Analysis v3.0 ({}):", encoder_name);
+    eprintln!("   Quality Analysis v3.0 ({}):", encoder_name);
     eprintln!(
         "      Mode: {:?} | Bias: {:?}",
         d.match_mode, d.quality_bias
@@ -1112,13 +1115,13 @@ pub fn log_quality_analysis(
     eprintln!("      Confidence: {:.0}%", d.confidence * 100.0);
     eprintln!();
 
-    eprintln!("      📹 Source:");
+    eprintln!("      Source:");
     eprintln!(
         "         Codec: {} ({:?}, efficiency: {:.2})",
         analysis.source_codec, codec, d.codec_factor
     );
     if codec.is_cutting_edge() {
-        eprintln!("         🚀 CUTTING-EDGE codec (VVC/AV2) - SKIP RECOMMENDED");
+        eprintln!("         CUTTING-EDGE codec (VVC/AV2) - SKIP RECOMMENDED");
     } else if codec.is_modern() {
         eprintln!("         ⚠️  Modern codec - consider skipping re-encode");
     }
@@ -1132,7 +1135,7 @@ pub fn log_quality_analysis(
     );
     eprintln!();
 
-    eprintln!("      🔴 High Priority Factors:");
+    eprintln!("      High Priority Factors:");
     eprintln!("         Raw BPP: {:.4}", d.raw_bpp);
     if let Some(vbr) = analysis.video_bitrate {
         eprintln!(
@@ -1167,7 +1170,7 @@ pub fn log_quality_analysis(
     }
     eprintln!();
 
-    eprintln!("      🟡 Medium Priority Factors:");
+    eprintln!("      Medium Priority Factors:");
     eprintln!("         Aspect factor: {:.2}", d.aspect_factor);
     eprintln!("         Complexity factor: {:.2}", d.complexity_factor);
     if analysis.spatial_complexity.is_some() || analysis.temporal_complexity.is_some() {
@@ -1181,7 +1184,7 @@ pub fn log_quality_analysis(
     eprintln!("         Alpha factor: {:.2}", d.alpha_factor);
     eprintln!();
 
-    eprintln!("      📈 Result:");
+    eprintln!("      Result:");
     eprintln!("         Effective BPP: {:.4}", result.effective_bpp);
     if let Some(fps) = analysis.fps {
         eprintln!("         FPS: {:.2}", fps);
