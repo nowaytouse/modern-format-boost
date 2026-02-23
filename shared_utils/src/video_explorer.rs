@@ -43,7 +43,7 @@ macro_rules! progress_line {
 #[allow(unused_macros)]
 macro_rules! progress_done {
     () => {{
-        eprintln!();
+        crate::log_eprintln!();
     }};
 }
 
@@ -139,9 +139,9 @@ pub fn verify_compression_simple(
 
 pub const ULTIMATE_MIN_WALL_HITS: u32 = 4;
 
-pub const ULTIMATE_MAX_WALL_HITS: u32 = 20;
+pub const ULTIMATE_MAX_WALL_HITS: u32 = 28;
 
-pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 8;
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 10;
 
 pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 
@@ -151,9 +151,9 @@ pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
 
 pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
 
-pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 100;
+pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 
-pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 80;
+pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
 
@@ -197,7 +197,7 @@ pub fn calculate_zero_gains_for_duration_and_range(
     scaled.max(3)
 }
 
-pub const ADAPTIVE_WALL_LOG_BASE: u32 = 6;
+pub const ADAPTIVE_WALL_LOG_BASE: u32 = 8;
 
 pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
     if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
@@ -287,39 +287,42 @@ impl ConfidenceBreakdown {
     }
 
     pub fn print_report(&self) {
+        if !crate::progress_mode::is_verbose_mode() {
+            return;
+        }
         let overall = self.overall();
         let grade = if overall >= 0.9 {
-            "🟢 Excellent"
+            "Excellent"
         } else if overall >= 0.75 {
-            "🟡 Good"
+            "Good"
         } else if overall >= 0.5 {
-            "🟠 Fair"
+            "Fair"
         } else {
-            "🔴 Low"
+            "Low"
         };
 
-        eprintln!("┌─────────────────────────────────────────────────────");
-        eprintln!("│ 📊 Confidence Report");
-        eprintln!("├─────────────────────────────────────────────────────");
-        eprintln!("│ 📈 Overall Confidence: {:.0}% {}", overall * 100.0, grade);
-        eprintln!("├─────────────────────────────────────────────────────");
-        eprintln!(
-            "│ 📹 Sampling Coverage: {:.0}% (weight 30%)",
+        crate::log_eprintln!("┌─────────────────────────────────────────────────────");
+        crate::log_eprintln!("│ Confidence Report");
+        crate::log_eprintln!("├─────────────────────────────────────────────────────");
+        crate::log_eprintln!("│ Overall Confidence: {:.0}% ({})", overall * 100.0, grade);
+        crate::log_eprintln!("├─────────────────────────────────────────────────────");
+        crate::log_eprintln!(
+            "│ Sampling Coverage: {:.0}% (weight 30%)",
             self.sampling_coverage * 100.0
         );
-        eprintln!(
-            "│ 🎯 Prediction Accuracy: {:.0}% (weight 30%)",
+        crate::log_eprintln!(
+            "│ Prediction Accuracy: {:.0}% (weight 30%)",
             self.prediction_accuracy * 100.0
         );
-        eprintln!(
-            "│ 💾 Safety Margin: {:.0}% (weight 20%)",
+        crate::log_eprintln!(
+            "│ Safety Margin: {:.0}% (weight 20%)",
             self.margin_safety * 100.0
         );
-        eprintln!(
-            "│ 📊 SSIM Reliability: {:.0}% (weight 20%)",
+        crate::log_eprintln!(
+            "│ SSIM Reliability: {:.0}% (weight 20%)",
             self.ssim_confidence * 100.0
         );
-        eprintln!("└─────────────────────────────────────────────────────");
+        crate::log_eprintln!("└─────────────────────────────────────────────────────");
     }
 }
 
@@ -596,7 +599,7 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx265") {
                     "libx265"
                 } else {
-                    eprintln!("⚠️  libx265 not available, falling back to hevc_videotoolbox");
+                    crate::log_eprintln!("⚠️  libx265 not available, falling back to hevc_videotoolbox");
                     "hevc_videotoolbox"
                 }
             }
@@ -605,7 +608,7 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx264") {
                     "libx264"
                 } else {
-                    eprintln!("⚠️  libx264 not available, falling back to h264_videotoolbox");
+                    crate::log_eprintln!("⚠️  libx264 not available, falling back to h264_videotoolbox");
                     "h264_videotoolbox"
                 }
             }
@@ -718,7 +721,7 @@ impl IterationMetrics {
             None => "--",
         };
 
-        eprintln!(
+        crate::log_eprintln!(
             "│ {:>2} │ {:>12} │ CRF {:>5.1} │ {:>+6.1}% {} │ SSIM {} {} │ PSNR {} │ {}",
             self.iteration,
             self.phase,
@@ -761,15 +764,15 @@ impl TransparencyReport {
     }
 
     pub fn print_header(&self) {
-        eprintln!("┌────────────────────────────────────────────────────────────────────────────────────────────┐");
-        eprintln!("│ 📊 Transparency Report - CRF Search Process                                               │");
-        eprintln!("├────┬──────────────┬───────────┬─────────────┬─────────────┬──────────┬────────────────────┤");
-        eprintln!("│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │ PSNR     │ Decision           │");
-        eprintln!("├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤");
+        crate::log_eprintln!("┌────────────────────────────────────────────────────────────────────────────────────────────┐");
+        crate::log_eprintln!("│ 📊 Transparency Report - CRF Search Process                                               │");
+        crate::log_eprintln!("├────┬──────────────┬───────────┬─────────────┬─────────────┬──────────┬────────────────────┤");
+        crate::log_eprintln!("│ #  │ Phase        │ CRF       │ Size Change │ SSIM        │ PSNR     │ Decision           │");
+        crate::log_eprintln!("├────┼──────────────┼───────────┼─────────────┼─────────────┼──────────┼────────────────────┤");
     }
 
     pub fn print_summary(&self) {
-        eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
+        crate::log_eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
 
         let elapsed = self
             .start_time
@@ -777,19 +780,19 @@ impl TransparencyReport {
             .unwrap_or(0.0);
         let total_iterations = self.iterations.len();
 
-        eprintln!();
-        eprintln!("📈 Summary:");
-        eprintln!("   • Total iterations: {}", total_iterations);
-        eprintln!("   • Time elapsed: {:.1}s", elapsed);
+        crate::log_eprintln!();
+        crate::log_eprintln!("📈 Summary:");
+        crate::log_eprintln!("   • Total iterations: {}", total_iterations);
+        crate::log_eprintln!("   • Time elapsed: {:.1}s", elapsed);
 
         if let Some(crf) = self.final_crf {
-            eprintln!("   • Final CRF: {:.1}", crf);
+            crate::log_eprintln!("   • Final CRF: {:.1}", crf);
         }
         if let Some(ssim) = self.final_ssim {
-            eprintln!("   • Final SSIM: {:.4}", ssim);
+            crate::log_eprintln!("   • Final SSIM: {:.4}", ssim);
         }
         if let Some(psnr) = self.final_psnr {
-            eprintln!("   • Final PSNR: {:.1} dB", psnr);
+            crate::log_eprintln!("   • Final PSNR: {:.1} dB", psnr);
         }
     }
 }
@@ -967,7 +970,7 @@ impl VideoExplorer {
         );
 
         let strategy = create_strategy(self.config.mode);
-        eprintln!(
+        crate::log_eprintln!(
             "🔥 Using Strategy: {} - {}",
             strategy.name(),
             strategy.description()
@@ -992,8 +995,8 @@ impl VideoExplorer {
         }
 
         pb.suspend(|| {
-            eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
-            eprintln!(
+            crate::log_eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
+            crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
                 self.input_size as f64 / 1024.0 / 1024.0
             );
@@ -1024,7 +1027,7 @@ impl VideoExplorer {
             .map(|s| format!("{:.4}", s))
             .unwrap_or_else(|| "---".to_string());
         let status = if quality_passed { "💾" } else { "⚠️" };
-        eprintln!(
+        crate::log_eprintln!(
             "✅ Result: CRF {:.1} • SSIM {} • Size {:+.1}% ({}) • {:.1}s",
             best_crf,
             ssim_str,
@@ -1135,8 +1138,8 @@ impl VideoExplorer {
         }
 
         pb.suspend(|| {
-            eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
-            eprintln!(
+            crate::log_eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
+            crate::log_eprintln!(
                 "└ 📁 Input: {:.2} MB",
                 self.input_size as f64 / 1024.0 / 1024.0
             );
@@ -1161,7 +1164,7 @@ impl VideoExplorer {
             let elapsed = start_time.elapsed();
 
             pb.finish_and_clear();
-            eprintln!(
+            crate::log_eprintln!(
                 "✅ Result: CRF {:.1} • {:+.1}% ✅ • ({:.1}s)",
                 self.config.initial_crf,
                 size_pct,
@@ -1234,7 +1237,7 @@ impl VideoExplorer {
 
         pb.finish_and_clear();
         let status = if compressed { "✅" } else { "⚠️" };
-        eprintln!(
+        crate::log_eprintln!(
             "✅ Result: CRF {:.1} • {:+.1}% {} • Iter {} ({:.1}s)",
             final_crf,
             size_change_pct,
@@ -1283,16 +1286,16 @@ impl VideoExplorer {
         macro_rules! log_realtime {
             ($($arg:tt)*) => {{
                 let msg = format!($($arg)*);
-                pb.suspend(|| eprintln!("{}", msg));
+                pb.suspend(|| crate::log_eprintln!("{}", msg));
                 log.push(msg);
             }};
         }
 
         let min_ssim = self.config.quality_thresholds.min_ssim;
         pb.suspend(|| {
-            eprintln!("┌ 📦 Compress + Quality v4.8 ({:?})", self.encoder);
-            eprintln!("├ 📁 Input: {} bytes", self.input_size);
-            eprintln!("└ 🎯 Goal: output < input + SSIM >= {:.2}", min_ssim);
+            crate::log_eprintln!("┌ 📦 Compress + Quality v4.8 ({:?})", self.encoder);
+            crate::log_eprintln!("├ 📁 Input: {} bytes", self.input_size);
+            crate::log_eprintln!("└ 🎯 Goal: output < input + SSIM >= {:.2}", min_ssim);
         });
 
         let mut iterations = 0u32;
@@ -1409,7 +1412,7 @@ impl VideoExplorer {
         macro_rules! log_realtime {
             ($($arg:tt)*) => {{
                 let msg = format!($($arg)*);
-                eprintln!("{}", msg);
+                crate::log_eprintln!("{}", msg);
                 log.push(msg);
             }};
         }
@@ -1509,11 +1512,11 @@ impl VideoExplorer {
 
             while high - low > 0.5 && iterations < max_iterations {
                 if iterations >= EMERGENCY_MAX_ITERATIONS {
-                    eprintln!(
+                    crate::log_eprintln!(
                         "   ⚠️ EMERGENCY LIMIT: Reached {} iterations, stopping search!",
                         EMERGENCY_MAX_ITERATIONS
                     );
-                    eprintln!("   ⚠️ Using best result found so far: CRF {:.1}", best_crf);
+                    crate::log_eprintln!("   ⚠️ Using best result found so far: CRF {:.1}", best_crf);
                     break;
                 }
 
@@ -1696,7 +1699,7 @@ impl VideoExplorer {
         macro_rules! log_header {
             ($($arg:tt)*) => {{
                 let msg = format!($($arg)*);
-                pb.suspend(|| eprintln!("{}", msg));
+                pb.suspend(|| crate::log_eprintln!("{}", msg));
                 log.push(msg);
             }};
         }
@@ -1766,7 +1769,7 @@ impl VideoExplorer {
 
         let mut iterations = 0u32;
 
-        log_header!("   📍 Stage A: 大小搜索");
+        log_header!("   Stage A: Size search");
 
         let min_size = encode_size_only(
             self.config.min_crf,
@@ -1783,7 +1786,7 @@ impl VideoExplorer {
 
             let mut best_crf = self.config.min_crf;
             let mut best_size = min_size;
-            log_header!("   📍 Stage B-1: 快速搜索 (0.5 步长)");
+            log_header!("   Stage B-1: Fast search (0.5 step)");
             let mut test_crf = self.config.min_crf - 0.5;
             while test_crf >= ABSOLUTE_MIN_CRF && iterations < STAGE_B1_MAX_ITERATIONS {
                 let size =
@@ -1802,7 +1805,7 @@ impl VideoExplorer {
             }
             progress_done!();
 
-            log_header!("   📍 Stage B-2: 精细调整 (0.1 步长)");
+            log_header!("   Stage B-2: Fine tune (0.1 step)");
             for offset in [-0.25_f32, -0.5, -0.75, -1.0] {
                 let fine_crf = best_crf + offset;
                 if fine_crf < ABSOLUTE_MIN_CRF {
@@ -1832,32 +1835,32 @@ impl VideoExplorer {
             progress_done!();
 
             if last_encoded_crf != Some(best_crf) {
-                progress_line!("│ 重新编码到最佳 CRF {:.1}... │", best_crf);
+                progress_line!("│ Re-encoding to best CRF {:.1}... │", best_crf);
                 let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_crf, self)?;
                 progress_done!();
             }
 
-            log_header!("   📍 Stage C: SSIM 验证");
-            progress_line!("│ 计算 SSIM... │");
+            log_header!("   Stage C: SSIM verification");
+            progress_line!("│ Computing SSIM... │");
             let quality = validate_ssim(best_crf, &mut quality_cache, self)?;
             let ssim = quality.0.unwrap_or(0.0);
 
             progress_done!();
 
             let status = if ssim >= 0.999 {
-                "✅ 极佳"
+                "Excellent"
             } else if ssim >= 0.99 {
-                "✅ 优秀"
+                "Very good"
             } else if ssim >= 0.98 {
-                "✅ 良好"
+                "Good"
             } else {
-                "✅ 可接受"
+                "Acceptable"
             };
 
             let elapsed = start_time.elapsed();
             let saved = self.input_size - best_size;
             pb.finish_and_clear();
-            eprintln!("✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
+            crate::log_eprintln!("✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
                 best_crf, ssim, status, self.calc_change_pct(best_size), saved as f64 / 1024.0 / 1024.0, iterations, elapsed.as_secs_f64());
 
             return Ok(ExploreResult {
@@ -1895,7 +1898,7 @@ impl VideoExplorer {
 
             let elapsed = start_time.elapsed();
             pb.finish_and_clear();
-            eprintln!(
+            crate::log_eprintln!(
                 "⚠️ Cannot compress file (already optimized) • {} iter in {:.1}s",
                 iterations,
                 elapsed.as_secs_f64()
@@ -1946,7 +1949,7 @@ impl VideoExplorer {
             ((curr as f64 - prev as f64) / prev as f64).abs()
         };
 
-        log_header!("   📍 Stage A: 二分搜索 (0.5 步长)");
+        log_header!("   Stage A: Binary search (0.5 step)");
         let mut low = self.config.min_crf;
         let mut high = self.config.max_crf;
         let mut boundary_crf = self.config.max_crf;
@@ -1996,7 +1999,7 @@ impl VideoExplorer {
         }
         progress_done!();
 
-        log_header!("   📍 Stage B: 精细调整 (0.1 步长)");
+        log_header!("   Stage B: Fine tune (0.1 step)");
 
         let mut best_boundary = boundary_crf;
         let mut fine_tune_history: Vec<u64> = Vec::new();
@@ -2018,7 +2021,7 @@ impl VideoExplorer {
             let size = encode_size_only(test_crf, &mut size_cache, &mut last_encoded_crf, self)?;
             iterations += 1;
             fine_tune_history.push(size);
-            log_progress!("精细调整↓", test_crf, size, iterations);
+            log_progress!("Fine tune down", test_crf, size, iterations);
 
             if size < target_size {
                 best_boundary = test_crf;
@@ -2059,7 +2062,7 @@ impl VideoExplorer {
                     encode_size_only(test_crf, &mut size_cache, &mut last_encoded_crf, self)?;
                 iterations += 1;
                 fine_tune_history.push(size);
-                log_progress!("精细调整↑", test_crf, size, iterations);
+                log_progress!("Fine tune up", test_crf, size, iterations);
 
                 if size < target_size {
                     best_boundary = test_crf;
@@ -2085,7 +2088,7 @@ impl VideoExplorer {
             boundary_crf = best_boundary;
         }
 
-        log_header!("   📍 Stage C: SSIM 验证");
+        log_header!("   Stage C: SSIM verification");
 
         if last_encoded_crf != Some(boundary_crf) {
             progress_line!("│ 重新编码到 CRF {:.1}... │", boundary_crf);
@@ -2103,19 +2106,19 @@ impl VideoExplorer {
 
         let size_change_pct = self.calc_change_pct(final_size);
         let status = if ssim >= 0.999 {
-            "✅ 极佳"
-        } else if ssim >= 0.99 {
-            "✅ 优秀"
-        } else if ssim >= 0.98 {
-            "✅ 良好"
-        } else {
-            "✅ 可接受"
-        };
+            "Excellent"
+            } else if ssim >= 0.99 {
+            "Very good"
+            } else if ssim >= 0.98 {
+            "Good"
+            } else {
+            "Acceptable"
+            };
 
         let elapsed = start_time.elapsed();
         let saved = self.input_size - final_size;
         pb.finish_and_clear();
-        eprintln!(
+        crate::log_eprintln!(
             "✅ Result: CRF {:.1} • SSIM {:.4} {} • {:+.1}% ({:.2} MB saved) • {} iter in {:.1}s",
             boundary_crf,
             ssim,
@@ -2151,7 +2154,7 @@ impl VideoExplorer {
         let result = self.encode_with_ffmpeg(crf);
 
         if result.is_err() && self.use_gpu && self.encoder == VideoEncoder::Hevc {
-            eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (x265 CLI)");
+            crate::log_eprintln!("      ⚠️  GPU encoding failed, falling back to CPU (x265 CLI)");
             return self.encode_with_x265_cli(crf);
         }
 
@@ -2161,7 +2164,7 @@ impl VideoExplorer {
     fn encode_with_x265_cli(&self, crf: f32) -> Result<u64> {
         use crate::x265_encoder::{encode_with_x265, X265Config};
 
-        eprintln!("      🖥️  CPU Encoding with x265 CLI (CRF {:.1})", crf);
+        crate::log_eprintln!("      🖥️  CPU Encoding with x265 CLI (CRF {:.1})", crf);
 
         let config = X265Config {
             crf,
@@ -2362,7 +2365,7 @@ impl VideoExplorer {
 
         let status = child.wait().context("Failed to wait for ffmpeg")?;
 
-        eprintln!(
+        crate::log_eprintln!(
             "\r      ✅ {} Encoding complete                                    ",
             accel_type
         );
@@ -2465,18 +2468,18 @@ impl VideoExplorer {
                         && !self.config.quality_thresholds.force_ms_ssim_long
                 }
                 None => {
-                    eprintln!("   ⚠️ 无法检测视频时长，跳过 MS-SSIM 验证");
+                    crate::log_eprintln!("   ⚠️  Cannot detect video duration, skipping MS-SSIM verification");
                     true
                 }
             };
 
             if should_skip {
                 if let Some(d) = duration {
-                    eprintln!(
-                        "   ⏭️ 长视频 ({:.1}min > 5min) - 跳过 MS-SSIM 验证",
+                    crate::log_eprintln!(
+                        "   Long video ({:.1}min > 5min), skipping MS-SSIM verification",
                         d / 60.0
                     );
-                    eprintln!("   💡 使用 --force-ms-ssim-long 强制启用");
+                    crate::log_eprintln!("   Use --force-ms-ssim-long to enable");
                 }
                 None
             } else {
@@ -2554,7 +2557,7 @@ impl VideoExplorer {
                 let psnr_str = psnr
                     .map(|p| format!("{:.1}", p))
                     .unwrap_or_else(|| "N/A".to_string());
-                eprintln!(
+                crate::log_eprintln!(
                     "\r      📊 SSIM: {} | PSNR: {} dB          ",
                     ssim_str, psnr_str
                 );
@@ -2562,7 +2565,7 @@ impl VideoExplorer {
                 Ok((ssim, psnr))
             }
             Err(e) => {
-                eprintln!("\r      ⚠️  SSIM+PSNR calculation failed: {}          ", e);
+                crate::log_eprintln!("\r      ⚠️  SSIM+PSNR calculation failed: {}          ", e);
                 Ok((None, None))
             }
         }
@@ -2587,7 +2590,7 @@ impl VideoExplorer {
 
             match result {
                 Ok(Some(ssim)) if precision::is_valid_ssim(ssim) => {
-                    eprintln!(
+                    crate::log_eprintln!(
                         "\r      📊 SSIM: {:.6} (method {})          ",
                         ssim,
                         idx + 1
@@ -2595,7 +2598,7 @@ impl VideoExplorer {
                     return Ok(Some(ssim));
                 }
                 Ok(Some(ssim)) => {
-                    eprintln!(
+                    crate::log_eprintln!(
                         "\r      ⚠️  Method {} returned invalid SSIM: {:.6}, trying next...",
                         idx + 1,
                         ssim
@@ -2614,14 +2617,10 @@ impl VideoExplorer {
             }
         }
 
-        eprintln!(
-            "\r      ⚠️  SSIM CALCULATION FAILED (all {} methods tried)",
+        crate::log_eprintln!(
+            "\r      ⚠️  SSIM calculation failed (all {} methods tried; pixel format/resolution/corruption possible)",
             filters.len()
         );
-        eprintln!("      ⚠️  Possible causes:");
-        eprintln!("         - Incompatible pixel format");
-        eprintln!("         - Resolution mismatch");
-        eprintln!("         - Corrupted video file");
 
         Ok(None)
     }
@@ -2725,7 +2724,7 @@ impl VideoExplorer {
                 let mid_end = dur * 0.55;
                 let tail_start = dur * 0.90;
 
-                eprintln!("   📊 MS-SSIM: 三段采样 (开头10% + 中间10% + 结尾10%)");
+                crate::log_eprintln!("   MS-SSIM: 3-segment sampling (start 10% + mid 10% + end 10%)");
                 format!(
                     "[0:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})',\
                      scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
@@ -2772,7 +2771,7 @@ impl VideoExplorer {
                         if let Ok(vmaf) = value_str.parse::<f64>() {
                             if precision::is_valid_ms_ssim(vmaf) {
                                 if use_sampling {
-                                    eprintln!("   📊 VMAF (采样): {:.2}", vmaf);
+                                    crate::log_eprintln!("   VMAF (sampled): {:.2}", vmaf);
                                 }
                                 return Ok(Some(vmaf));
                             }
@@ -4285,17 +4284,17 @@ mod tests {
 
     #[test]
     fn test_adaptive_max_walls_formula_correctness() {
-        assert_eq!(calculate_adaptive_max_walls(10.0), 10);
+        assert_eq!(calculate_adaptive_max_walls(10.0), 12);
 
-        assert_eq!(calculate_adaptive_max_walls(18.0), 11);
+        assert_eq!(calculate_adaptive_max_walls(18.0), 13);
 
-        assert_eq!(calculate_adaptive_max_walls(30.0), 11);
+        assert_eq!(calculate_adaptive_max_walls(30.0), 13);
 
-        assert_eq!(calculate_adaptive_max_walls(50.0), 12);
+        assert_eq!(calculate_adaptive_max_walls(50.0), 14);
 
         assert_eq!(
             calculate_adaptive_max_walls(100000.0),
-            ULTIMATE_MAX_WALL_HITS
+            (100000.0f32.log2().ceil() as u32 + ADAPTIVE_WALL_LOG_BASE).min(ULTIMATE_MAX_WALL_HITS)
         );
     }
 
@@ -4387,17 +4386,17 @@ mod tests {
 
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 15.0, true),
-            6
+            8
         );
 
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 10.0, true),
-            4
+            5
         );
 
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 5.0, true),
-            4
+            5
         );
     }
 
