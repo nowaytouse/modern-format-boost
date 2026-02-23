@@ -27,7 +27,19 @@ impl HeartbeatManager {
     }
 
     pub fn unregister_progress_bar() {
-        ACTIVE_PROGRESS_BARS.fetch_sub(1, Ordering::Relaxed);
+        // Avoid underflow when unregister is called more times than register (e.g. test cleanup).
+        let mut current = ACTIVE_PROGRESS_BARS.load(Ordering::Relaxed);
+        while current > 0 {
+            match ACTIVE_PROGRESS_BARS.compare_exchange(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     pub fn has_active_progress() -> bool {
@@ -55,7 +67,18 @@ impl HeartbeatManager {
     }
 
     pub fn unregister_heartbeat(operation: &str) {
-        ACTIVE_HEARTBEATS.fetch_sub(1, Ordering::Relaxed);
+        let mut current = ACTIVE_HEARTBEATS.load(Ordering::Relaxed);
+        while current > 0 {
+            match ACTIVE_HEARTBEATS.compare_exchange(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
 
         if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
             if let Some(map) = registry.as_mut() {
