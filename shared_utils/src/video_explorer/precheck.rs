@@ -111,15 +111,7 @@ const LEGACY_CODECS_STRONGLY_RECOMMENDED: &[&str] = &[
     "huffyuv",
 ];
 
-const OPTIMAL_CODECS: &[&str] = &[
-    "hevc",
-    "h265",
-    "x265",
-    "hvc1",
-    "av1",
-    "av01",
-    "libaom-av1",
-];
+const OPTIMAL_CODECS: &[&str] = &["hevc", "h265", "x265", "hvc1", "av1", "av01", "libaom-av1"];
 
 const FPS_RANGE_NORMAL: (f64, f64) = (1.0, 240.0);
 const FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0);
@@ -274,7 +266,9 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     }
 
     eprintln!("   ⚠️ DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)...");
-    if let Some((duration_secs, frames)) = crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input) {
+    if let Some((duration_secs, frames)) =
+        crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
+    {
         if duration_secs > 0.0 && frames > 0 {
             let inferred_fps = frames as f64 / duration_secs;
             eprintln!(
@@ -379,15 +373,8 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         Compressibility::Medium
     };
 
-    let recommendation = evaluate_processing_recommendation(
-        &codec,
-        width,
-        height,
-        duration,
-        fps,
-        bitrate_kbps,
-        bpp,
-    );
+    let recommendation =
+        evaluate_processing_recommendation(&codec, width, height, duration, fps, bitrate_kbps, bpp);
 
     let (color_space, pix_fmt, bit_depth) = extract_color_info(input);
 
@@ -433,7 +420,6 @@ fn evaluate_processing_recommendation(
     bpp: f64,
 ) -> ProcessingRecommendation {
     let codec_lower = codec.to_lowercase();
-
 
     if width < 16 || height < 16 {
         return ProcessingRecommendation::CannotProcess {
@@ -512,7 +498,6 @@ fn evaluate_processing_recommendation(
         };
     }
 
-
     use crate::quality_matcher::parse_source_codec;
     let source_codec = parse_source_codec(codec);
     let codec_efficiency = source_codec.efficiency_factor();
@@ -583,11 +568,7 @@ pub fn print_precheck_report(info: &VideoInfo) {
         "│ Duration: {:.1}s ({} frames)",
         info.duration, info.frame_count
     );
-    eprintln!(
-        "│ FPS: {:.2} {}",
-        info.fps,
-        info.fps_category.description()
-    );
+    eprintln!("│ FPS: {:.2} {}", info.fps, info.fps_category.description());
 
     eprintln!(
         "│ File Size: {:.2} MB",
@@ -690,8 +671,7 @@ pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
         }
 
         ProcessingRecommendation::Recommended { .. }
-        | ProcessingRecommendation::Optional { .. } => {
-        }
+        | ProcessingRecommendation::Optional { .. } => {}
     }
 
     Ok(info)

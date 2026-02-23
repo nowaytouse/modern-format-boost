@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tracing::{debug, error, info};
 
-
 #[inline]
 pub fn get_extension_lowercase(path: &Path) -> String {
     path.extension()
@@ -166,7 +165,6 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     None
 }
 
-
 pub fn normalize_path_string(path_str: &str) -> String {
     let mut result = path_str.replace('\\', "/");
     while result.contains("//") {
@@ -192,7 +190,6 @@ pub fn extract_digits(s: &str) -> String {
 pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     s.parse::<f64>().unwrap_or(default)
 }
-
 
 pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     let command_str = format!("{:?}", cmd);
@@ -264,7 +261,6 @@ pub fn format_command_string(command: &str, args: &[&str]) -> String {
         format!("{} {}", command, args.join(" "))
     }
 }
-
 
 pub fn validate_file_integrity(path: &std::path::Path) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;

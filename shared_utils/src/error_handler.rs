@@ -131,7 +131,6 @@ macro_rules! handle_fatal {
     }};
 }
 
-
 pub fn report_error<E: std::error::Error + ?Sized>(error: &E) {
     eprintln!("🔥 ERROR: {}", error);
 
@@ -245,7 +244,6 @@ mod tests {
         assert!(matches!(action, ErrorAction::Continue));
     }
 
-
     #[test]
     fn test_report_error() {
         let error = io::Error::new(io::ErrorKind::NotFound, "test file not found");
@@ -283,7 +281,6 @@ mod tests {
     #[test]
     fn test_install_panic_handler() {
         install_panic_handler();
-
     }
 
     #[test]
@@ -294,7 +291,6 @@ mod tests {
         report_error(outer_error.as_ref());
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {

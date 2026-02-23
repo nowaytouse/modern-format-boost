@@ -44,28 +44,24 @@ pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     }
 
     let (target, reason, crf, lossless) = match result.compression {
-        CompressionType::Lossless => {
-            (
-                TargetVideoFormat::Av1Mp4,
-                format!(
-                    "Source is {} (lossless) - converting to AV1 Lossless",
-                    result.codec.as_str()
-                ),
-                0.0,
-                true,
-            )
-        }
-        CompressionType::VisuallyLossless => {
-            (
-                TargetVideoFormat::Av1Mp4,
-                format!(
-                    "Source is {} (visually lossless) - compressing with AV1 CRF 0",
-                    result.codec.as_str()
-                ),
-                0.0,
-                false,
-            )
-        }
+        CompressionType::Lossless => (
+            TargetVideoFormat::Av1Mp4,
+            format!(
+                "Source is {} (lossless) - converting to AV1 Lossless",
+                result.codec.as_str()
+            ),
+            0.0,
+            true,
+        ),
+        CompressionType::VisuallyLossless => (
+            TargetVideoFormat::Av1Mp4,
+            format!(
+                "Source is {} (visually lossless) - compressing with AV1 CRF 0",
+                result.codec.as_str()
+            ),
+            0.0,
+            false,
+        ),
         _ => (
             TargetVideoFormat::Av1Mp4,
             format!(
@@ -142,7 +138,6 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         exploration_attempts: 0,
     })
 }
-
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     let detection = detect_video(input)?;
@@ -350,7 +345,6 @@ fn execute_ffv1_conversion(
     output: &Path,
     max_threads: usize,
 ) -> Result<u64> {
-
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
     let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
         .as_ref()
@@ -455,7 +449,6 @@ fn execute_av1_lossless(
 
     Ok(std::fs::metadata(output)?.len())
 }
-
 
 pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     auto_convert(input, config)

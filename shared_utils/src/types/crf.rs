@@ -14,7 +14,6 @@ use std::marker::PhantomData;
 pub use crate::crf_constants::CRF_CACHE_KEY_MULTIPLIER;
 pub use crate::float_compare::CRF_EPSILON;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HevcEncoder;
 
@@ -26,7 +25,6 @@ pub struct Vp9Encoder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct X264Encoder;
-
 
 pub trait EncoderBounds: Clone + Copy {
     const MIN: f32;
@@ -68,7 +66,6 @@ impl EncoderBounds for X264Encoder {
     const NAME: &'static str = "x264";
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum CrfError {
     OutOfRange {
@@ -77,8 +74,13 @@ pub enum CrfError {
         max: f32,
         encoder: &'static str,
     },
-    InvalidCacheKey { key: u32, encoder: &'static str },
-    InvalidFloat { encoder: &'static str },
+    InvalidCacheKey {
+        key: u32,
+        encoder: &'static str,
+    },
+    InvalidFloat {
+        encoder: &'static str,
+    },
 }
 
 impl fmt::Display for CrfError {
@@ -107,7 +109,6 @@ impl fmt::Display for CrfError {
 }
 
 impl std::error::Error for CrfError {}
-
 
 #[derive(Clone, Copy)]
 pub struct Crf<E: EncoderBounds> {
@@ -196,7 +197,6 @@ impl<E: EncoderBounds> Crf<E> {
     }
 }
 
-
 impl<E: EncoderBounds> fmt::Debug for Crf<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Crf<{}>({:.2})", E::NAME, self.value)
@@ -220,7 +220,6 @@ impl<E: EncoderBounds> Default for Crf<E> {
         Self::default_value()
     }
 }
-
 
 #[cfg(test)]
 mod tests {

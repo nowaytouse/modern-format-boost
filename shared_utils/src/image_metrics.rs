@@ -313,8 +313,12 @@ mod tests {
 
     #[test]
     fn test_ssim_different_dimensions_returns_none() {
-        let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(50, 50, |_, _| image::Rgb([128, 128, 128])));
-        let img2 = DynamicImage::ImageRgb8(RgbImage::from_fn(60, 60, |_, _| image::Rgb([128, 128, 128])));
+        let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(50, 50, |_, _| {
+            image::Rgb([128, 128, 128])
+        }));
+        let img2 = DynamicImage::ImageRgb8(RgbImage::from_fn(60, 60, |_, _| {
+            image::Rgb([128, 128, 128])
+        }));
         assert!(calculate_ssim(&img1, &img2).is_none());
         assert!(calculate_psnr(&img1, &img2).is_none());
     }
@@ -322,16 +326,24 @@ mod tests {
     #[test]
     fn test_ssim_small_image_uses_simple_path() {
         // < 11x11 hits calculate_ssim_simple (unbiased variance path).
-        let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(8, 8, |_, _| image::Rgb([100, 100, 100])));
-        let img2 = DynamicImage::ImageRgb8(RgbImage::from_fn(8, 8, |_, _| image::Rgb([100, 100, 100])));
+        let img1 =
+            DynamicImage::ImageRgb8(RgbImage::from_fn(8, 8, |_, _| image::Rgb([100, 100, 100])));
+        let img2 =
+            DynamicImage::ImageRgb8(RgbImage::from_fn(8, 8, |_, _| image::Rgb([100, 100, 100])));
         let ssim = calculate_ssim(&img1, &img2);
         assert!(ssim.is_some());
-        assert!((ssim.unwrap() - 1.0).abs() < 0.01, "identical 8x8 should give SSIM ≈ 1, got {:?}", ssim);
+        assert!(
+            (ssim.unwrap() - 1.0).abs() < 0.01,
+            "identical 8x8 should give SSIM ≈ 1, got {:?}",
+            ssim
+        );
     }
 
     #[test]
     fn test_ssim_constant_image_equals_one() {
-        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(20, 20, |_, _| image::Rgb([255, 255, 255])));
+        let img = DynamicImage::ImageRgb8(RgbImage::from_fn(20, 20, |_, _| {
+            image::Rgb([255, 255, 255])
+        }));
         let ssim = calculate_ssim(&img, &img);
         assert!(ssim.is_some());
         assert!((ssim.unwrap() - 1.0).abs() < 1e-6);

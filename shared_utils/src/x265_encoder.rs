@@ -68,7 +68,6 @@ pub fn encode_with_x265(
 
     debug!(hevc_temp_file = ?hevc_file, "Using temporary HEVC file");
 
-
     info!("Step 1/2: Decode + x265 encode...");
     let encode_result = encode_to_hevc(input, &hevc_file, config, vf_args)?;
 
@@ -278,9 +277,7 @@ fn mux_hevc_to_container(
             .arg("-b:a")
             .arg("256k");
     } else {
-        cmd.arg("-c:v")
-            .arg("copy")
-            .arg("-an");
+        cmd.arg("-c:v").arg("copy").arg("-an");
     }
 
     if config.container == "mp4" || config.container == "mov" {

@@ -9,7 +9,6 @@
 
 use crate::stream_size::StreamSizeInfo;
 
-
 #[derive(Debug, Clone)]
 pub struct PureMediaVerifyResult {
     pub video_compressed: bool,
@@ -58,7 +57,6 @@ impl PureMediaVerifyResult {
         }
     }
 }
-
 
 pub fn verify_pure_media_compression(
     input_info: &StreamSizeInfo,
@@ -109,7 +107,6 @@ pub fn video_compression_ratio(input_video_size: u64, output_video_size: u64) ->
         1.0
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -178,7 +175,6 @@ mod tests {
         assert!((video_compression_ratio(0, 100) - 1.0).abs() < 0.001);
     }
 }
-
 
 #[cfg(test)]
 mod prop_tests {
