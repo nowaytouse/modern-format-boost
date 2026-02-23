@@ -37,9 +37,47 @@ show_cursor() { printf '\033[?25h'; }
 # Clear screen
 clear_screen() { printf '\033[2J\033[H'; }
 
+# Spinner + elapsed time at bottom (shows program is running, not frozen)
+SPINNER_PID=""
+ELAPSED_START=0
+start_elapsed_spinner() {
+    ELAPSED_START=$(date +%s)
+    (
+        local idx=0
+        local sp
+        while true; do
+            now=$(date +%s)
+            elapsed_sec=$(( now - ELAPSED_START ))
+            h=$(( elapsed_sec / 3600 ))
+            m=$(( (elapsed_sec % 3600) / 60 ))
+            s=$(( elapsed_sec % 60 ))
+            elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
+            case $(( idx % 4 )) in 0) sp='|';; 1) sp='/';; 2) sp='-';; *) sp='\';; esac
+            printf '\r   %s Running: %s   ' "$sp" "$elapsed_str"
+            idx=$(( idx + 1 ))
+            sleep 0.15
+        done
+    ) &
+    SPINNER_PID=$!
+}
+stop_elapsed_spinner() {
+    [[ -z "$SPINNER_PID" ]] && return
+    kill "$SPINNER_PID" 2>/dev/null
+    wait "$SPINNER_PID" 2>/dev/null
+    SPINNER_PID=""
+    now=$(date +%s)
+    elapsed_sec=$(( now - ELAPSED_START ))
+    h=$(( elapsed_sec / 3600 ))
+    m=$(( (elapsed_sec % 3600) / 60 ))
+    s=$(( elapsed_sec % 60 ))
+    elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
+    printf '\r   %s Total time: %s    \n' "✅" "$elapsed_str"
+}
+
 # 📝 Log directory and file
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE=""
+VERBOSE_LOG_FILE=""   # full verbose log written by the Rust binary
 SESSION_START_TIME=""
 
 # Initialize log file
@@ -47,6 +85,7 @@ init_log() {
     SESSION_START_TIME=$(date +"%Y-%m-%d_%H-%M-%S")
     mkdir -p "$LOG_DIR"
     LOG_FILE="$LOG_DIR/drag_drop_${SESSION_START_TIME}.log"
+    VERBOSE_LOG_FILE="$LOG_DIR/verbose_${SESSION_START_TIME}.log"
 }
 
 # Save log to file (called automatically at exit)
@@ -80,7 +119,8 @@ save_log() {
         echo "========================================"
     } >> "$LOG_FILE"
     
-    echo -e "   ${DIM}📝 Log saved to: $LOG_FILE${RESET}"
+    echo -e "   ${DIM}📝 Session log:  $LOG_FILE${RESET}"
+    [[ -f "$VERBOSE_LOG_FILE" ]] && echo -e "   ${DIM}📋 Verbose log:  $VERBOSE_LOG_FILE${RESET}"
 }
 
 # Draw a centered header
@@ -277,6 +317,7 @@ process_images() {
     local args=(run --recursive)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
+    [[ -n "$VERBOSE_LOG_FILE" ]] && args+=(--log-file "$VERBOSE_LOG_FILE")
 
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
@@ -305,6 +346,7 @@ process_videos() {
     [[ -n "${NO_ALLOW_SIZE_TOLERANCE:-}" ]] && args+=(--no-allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
+    [[ -n "$VERBOSE_LOG_FILE" ]] && args+=(--log-file "$VERBOSE_LOG_FILE")
     
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
@@ -467,6 +509,10 @@ _main() {
     # Note: Modern tools (v6.9.13+) handle recursion and structure internally/robustly
     # We delegate the heavy lifting to them for progress bars and logic
     
+    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
+        start_elapsed_spinner
+    fi
+    
     if [[ $IMG_COUNT -gt 0 ]]; then
         process_images
     fi
@@ -518,6 +564,10 @@ _main() {
     # 🔥 v8.2.5: 后处理（JXL fix / rsync）会更新时间戳，统一用 shared_utils 逻辑恢复（脚本只调用）
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         "$IMGQUALITY_HEVC" restore-timestamps "$TARGET_DIR" "$OUTPUT_DIR" 2>/dev/null && echo -e "   ${GREEN}✅ Timestamps restored.${RESET}" || true
+    fi
+
+    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
+        stop_elapsed_spinner
     fi
 
     show_summary
