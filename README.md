@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost
 
-![Version](https://img.shields.io/badge/version-8.5.0-blue.svg)
+![Version](https://img.shields.io/badge/version-8.6.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
 
@@ -157,6 +157,13 @@ Release 构建已启用 LTO 与单 codegen-unit，以最大化运行效率。
 ---
 
 ## 📋 更新日志 / Changelog
+
+### v8.6.0 (2026-02-24)
+- **全面审计 (Audit)**: 安全性修复，消除流分析、GPU搜索、图像压缩中的潜在除零错误
+- **健壮性 (Robustness)**: GPU 并发数与 VAAPI 路径可配置 (`MODERN_FORMAT_BOOST_GPU_CONCURRENCY`)
+- **日志 (Logging)**: 日志格式统一与去色处理，提升多线程并行时的可读性
+- **管道 (Pipeline)**: 优化 `x265`/`ffmpeg` 管道错误处理，避免死锁
+- **策略 (Strategy)**: "Ultimate mode" 域墙阈值优化 (15-20次零增益尝试)
 
 ### v8.5.0 (2026-02-23)
 - **日志与并发**: 多文件并行时每行带 `[文件名]` 前缀，XMP 用 `[XMP]`；固定宽度缩进对齐；UTF-8 安全截断（CJK 文件名不再 panic）

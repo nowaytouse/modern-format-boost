@@ -1,5 +1,30 @@
 # Release Notes (for GitHub Release page)
 
+**Version:** 8.6.0  
+**Date:** 2026-02-24
+
+---
+
+## Highlights
+
+### Comprehensive Audit & Robustness
+- **Safety**: Fixed multiple potential divide-by-zero errors in stream analysis, GPU search, and image size reduction logic.
+- **Path Safety**: Enhanced argument sanitization for external commands (ffmpeg, ffprobe, cjxl) to prevent path injection and handle non-UTF-8 paths correctly.
+- **Concurrency**: Configurable GPU concurrency limit (`MODERN_FORMAT_BOOST_GPU_CONCURRENCY`) and VAAPI device path.
+- **Pipeline**: Improved pipe error handling for x265/ffmpeg to avoid deadlocks and provide clearer error messages.
+- **Logic**: Refined logic in `video_explorer`, `explore_strategy`, and `image_metrics` (SSIM/MS-SSIM correctness).
+- **Domain Wall**: Adjusted "Ultimate mode" domain wall to require 15-20 zero-gain attempts, improving convergence.
+
+### Logging & UX
+- **Clean Logging**: Strip ANSI color codes when outputting to files or non-TTY environments.
+- **Unified Output**: Standardized log prefixes and indentation across all modules for better readability in parallel execution.
+
+### Fixes
+- **Img**: Unified compression checks for all image conversion paths.
+- **Video**: Corrected codec detection and GIF verification logic.
+
+---
+
 **Version:** 8.5.0  
 **Date:** 2026-02-24
 
