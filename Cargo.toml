@@ -43,9 +43,9 @@ console = "0.16"
 chrono = { version = "0.4", features = ["serde"] }
 
 image = { version = "0.25", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
-libheif-rs = "2.6"
+libheif-rs = "2.6.1"
 
-tempfile = "3.25"
+tempfile = "3.26"
 proptest = "1.10"
 
 shared_utils = { path = "shared_utils" }
