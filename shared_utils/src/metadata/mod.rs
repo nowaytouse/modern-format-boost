@@ -81,6 +81,11 @@ pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     preserve_pro(src, dst)
 }
 
+/// Merge source's XMP sidecar into destination (for conversion output). Idempotent if no sidecar.
+pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) {
+    merge_xmp_sidecar(src, dst);
+}
+
 pub fn copy_metadata(src: &Path, dst: &Path) {
     if let Err(e) = preserve_metadata(src, dst) {
         eprintln!("⚠️ Failed to preserve metadata: {}", e);
