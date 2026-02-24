@@ -27,8 +27,8 @@ use chrono::{DateTime, FixedOffset, Utc};
 use std::collections::VecDeque;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::thread::JoinHandle;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::thread::{self, JoinHandle};
 
 use crate::explore_strategy::CrfCache;
 
@@ -201,6 +201,54 @@ pub const GPU_DEFAULT_MIN_CRF: f32 = 1.0;
 pub const GPU_DEFAULT_MAX_CRF: f32 = 48.0;
 
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
+
+/// Maximum concurrent GPU encode tasks (probe/encode). Read from env `MODERN_FORMAT_BOOST_GPU_CONCURRENCY` (default 4).
+fn gpu_concurrency_max() -> usize {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::env::var("MODERN_FORMAT_BOOST_GPU_CONCURRENCY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4)
+    })
+}
+
+static GPU_CONCURRENCY_CURRENT: Mutex<usize> = Mutex::new(0);
+static GPU_CONCURRENCY_CVAR: Condvar = Condvar::new();
+
+fn acquire_gpu_slot() {
+    let max = gpu_concurrency_max();
+    let mut g = GPU_CONCURRENCY_CURRENT.lock().unwrap();
+    while *g >= max {
+        g = GPU_CONCURRENCY_CVAR.wait(g).unwrap();
+    }
+    *g += 1;
+}
+
+fn release_gpu_slot() {
+    let mut g = GPU_CONCURRENCY_CURRENT.lock().unwrap();
+    *g = g.saturating_sub(1);
+    GPU_CONCURRENCY_CVAR.notify_one();
+}
+
+/// Guard that releases a GPU concurrency slot on drop.
+struct GpuSlotGuard;
+
+impl Drop for GpuSlotGuard {
+    fn drop(&mut self) {
+        release_gpu_slot();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn vaapi_device_path() -> &'static str {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        std::env::var("MODERN_FORMAT_BOOST_VAAPI_DEVICE")
+            .or_else(|_| std::env::var("VAAPI_DEVICE"))
+            .unwrap_or_else(|_| "/dev/dri/renderD128".to_string())
+    }).as_str()
+}
 
 fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
     let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
@@ -629,7 +677,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "qp",
                     crf_range: (0, 52),
-                    extra_args: vec!["-vaapi_device", "/dev/dri/renderD128", "-profile:v", "main"],
+                    extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "main"],
                 })
             } else {
                 None
@@ -642,7 +690,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "qp",
                     crf_range: (0, 63),
-                    extra_args: vec!["-vaapi_device", "/dev/dri/renderD128"],
+                    extra_args: vec!["-vaapi_device", vaapi_device_path()],
                 })
             } else {
                 None
@@ -655,7 +703,7 @@ impl GpuAccel {
                     supports_crf: true,
                     crf_param: "qp",
                     crf_range: (0, 52),
-                    extra_args: vec!["-vaapi_device", "/dev/dri/renderD128", "-profile:v", "high"],
+                    extra_args: vec!["-vaapi_device", vaapi_device_path(), "-profile:v", "high"],
                 })
             } else {
                 None
@@ -1789,8 +1837,6 @@ pub fn gpu_coarse_search_with_log(
     };
 
     let encode_parallel = |crfs: &[f32]| -> Vec<(f32, anyhow::Result<u64>)> {
-        use std::thread;
-
         let handles: Vec<_> = crfs
             .iter()
             .enumerate()
@@ -1807,6 +1853,8 @@ pub fn gpu_coarse_search_with_log(
                 let sample_dur = actual_sample_duration;
 
                 thread::spawn(move || {
+                    let _guard = GpuSlotGuard;
+                    acquire_gpu_slot();
                     let mut cmd = Command::new("ffmpeg");
                     cmd.arg("-y")
                         .arg("-t")

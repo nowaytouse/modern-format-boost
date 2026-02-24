@@ -601,3 +601,13 @@
 
 - **现象**：ffmpeg 解码 → 管道 → x265 编码 的管道拷贝由线程执行，BrokenPipe 时难以区分是解码端还是编码端先退出。
 - **已做**：先 join 管道拷贝线程并捕获 `io::copy` 的 `Result`；若为 `BrokenPipe` / `ConnectionReset` 则记入 `is_broken_pipe`。在 FFmpeg 失败或 x265 失败的分支中增加 `pipe_broken` 字段与 warn 提示（「Pipe broken: decoder (ffmpeg) likely exited first」或「encoder (x265) likely exited first」），便于日志中区分是编码器崩溃还是解码器崩溃。若两进程均成功但管道拷贝返回 I/O 错误，则单独打 error 并 bail。
+
+### 29.3 并发资源控制 (gpu_accel encode_parallel)
+
+- **现象**：`encode_parallel` 会并发启动多个 FFmpeg GPU 探针；显存小或 Session 受限（如 NVIDIA 消费级 3–5 路）或 CPU 核数极多时易失败。
+- **已做**：引入全局并发上限，由环境变量 `MODERN_FORMAT_BOOST_GPU_CONCURRENCY` 配置（默认 4）。`gpu_accel` 内用 `Mutex<usize>` + `Condvar` 实现信号量，`encode_parallel` 中每个探针线程先 `acquire_gpu_slot()`，结束时由 `GpuSlotGuard` 的 drop 调用 `release_gpu_slot()`，从而限制同时进行的 GPU 编码/探针数量。
+
+### 29.4 VAAPI 设备路径可配置
+
+- **现象**：shared_utils 中 VAAPI 设备硬编码为 `/dev/dri/renderD128`，多显卡 Linux 可能使用不同节点。
+- **已做**：新增 `vaapi_device_path()`（仅 `#[cfg(target_os = "linux")]`），优先读 `MODERN_FORMAT_BOOST_VAAPI_DEVICE`，其次 `VAAPI_DEVICE`，缺省为 `/dev/dri/renderD128`。hevc_vaapi / av1_vaapi / h264_vaapi 的 `extra_args` 均改为使用该函数。
