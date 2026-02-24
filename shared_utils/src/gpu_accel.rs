@@ -184,9 +184,11 @@ impl HeartbeatMonitor {
     }
 }
 
-pub const GPU_SAMPLE_DURATION: f32 = 50.0;
+/// Total duration (seconds) to sample for GPU probe/SSIM when video is short. Longer segments improve adaptation to varying content.
+pub const GPU_SAMPLE_DURATION: f32 = 60.0;
 
-pub const GPU_SEGMENT_DURATION: f32 = 10.0;
+/// Duration (seconds) per segment in multi-segment sampling (5 segments). Longer segments improve SSIM representativeness across media types.
+pub const GPU_SEGMENT_DURATION: f32 = 15.0;
 
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
