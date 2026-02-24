@@ -48,13 +48,38 @@ pub fn clear_processed_list() {
 
 pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
 
+#[cfg(unix)]
+fn flock_exclusive(file: &fs::File) -> std::io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+struct ProcessedListLockGuard(std::os::unix::io::RawFd);
+
+#[cfg(unix)]
+impl Drop for ProcessedListLockGuard {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.0, libc::LOCK_UN) };
+    }
+}
+
 pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if !list_path.exists() {
         return Ok(());
     }
 
     let file = fs::File::open(list_path)?;
-    let reader = BufReader::new(file);
+    #[cfg(unix)]
+    flock_exclusive(&file)?;
+    #[cfg(unix)]
+    let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
+    let reader = BufReader::new(&file);
     let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
 
     for path in reader.lines().map_while(Result::ok) {
@@ -67,10 +92,15 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let mut file = fs::File::create(list_path)?;
+    #[cfg(unix)]
+    flock_exclusive(&file)?;
+    #[cfg(unix)]
+    let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
 
     for path in processed.iter() {
         writeln!(file, "{}", path)?;
     }
+    file.flush()?;
 
     Ok(())
 }

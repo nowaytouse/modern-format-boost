@@ -152,17 +152,10 @@ pub fn get_rsync_path() -> &'static str {
     static RSYNC_PATH: OnceLock<String> = OnceLock::new();
 
     RSYNC_PATH.get_or_init(|| {
-        let brew_rsync = "/opt/homebrew/opt/rsync/bin/rsync";
-        if std::path::Path::new(brew_rsync).exists() {
-            return brew_rsync.to_string();
-        }
-
-        let intel_brew_rsync = "/usr/local/opt/rsync/bin/rsync";
-        if std::path::Path::new(intel_brew_rsync).exists() {
-            return intel_brew_rsync.to_string();
-        }
-
-        "rsync".to_string()
+        which::which("rsync")
+            .ok()
+            .and_then(|p| p.to_str().map(String::from))
+            .unwrap_or_else(|| "rsync".to_string())
     })
 }
 
