@@ -651,3 +651,13 @@
   - **gpu_accel.rs**：`GPU_SAMPLE_DURATION` 50s → 60s；`GPU_SEGMENT_DURATION` 10s → 15s（多段采样时每段 15s，5 段共 75s）。
   - **dynamic_mapping.rs**：校准与提取时 `sample_duration.min(10.0)` → `sample_duration.min(15.0)`，与段长一致。
   - **video_explorer.rs**（MS-SSIM 长视频）：3 段采样由 10% 改为 15%（start 15% + mid 15% + end 15%），每段时长增加 50%。
+
+---
+
+## 33. 极限模式下调取时长同步增加 (Ultimate mode longer SSIM segments)
+
+- **目的**：极限模式追求极致质量，SSIM 调取时的抽取片段时长同步增大，与模式目标一致。
+- **已做**：
+  - **gpu_accel.rs**：新增 `GPU_SAMPLE_DURATION_ULTIMATE = 90`、`GPU_SEGMENT_DURATION_ULTIMATE = 25`；`GpuCoarseConfig` 增加 `ultimate_mode: bool`。正常文件下 ultimate 用 90s 总采样与 25s/段（5 段共 125s）；大文件 45s→70s、超大文件 30s→50s。
+  - **gpu_coarse_search.rs**：构建 `GpuCoarseConfig` 时传入 `ultimate_mode`；Phase 1 样本时长与校准用 `sample_dur`（ultimate 时取 ULTIMATE 常量）。
+  - **video_explorer.rs**：`calculate_ms_ssim` 长视频 3 段采样在 `ultimate_mode` 下由 15% 改为 25%（start/mid/end 各 25%）。

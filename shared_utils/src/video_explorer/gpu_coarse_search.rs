@@ -93,10 +93,15 @@ pub fn explore_with_gpu_coarse_search(
                 .unwrap_or("h264_videotoolbox"),
         };
 
-        let gpu_sample_input_size = if duration <= crate::gpu_accel::GPU_SAMPLE_DURATION {
+        let sample_dur = if ultimate_mode {
+            crate::gpu_accel::GPU_SAMPLE_DURATION_ULTIMATE
+        } else {
+            crate::gpu_accel::GPU_SAMPLE_DURATION
+        };
+        let gpu_sample_input_size = if duration <= sample_dur {
             input_size
         } else {
-            let ratio = crate::gpu_accel::GPU_SAMPLE_DURATION / duration;
+            let ratio = sample_dur / duration;
             (input_size as f64 * ratio as f64) as u64
         };
 
@@ -106,6 +111,7 @@ pub fn explore_with_gpu_coarse_search(
             max_crf,
             step: 2.0,
             max_iterations: crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS,
+            ultimate_mode,
         };
 
         let gpu_progress = crate::UnifiedProgressBar::new_iteration(
@@ -146,14 +152,13 @@ pub fn explore_with_gpu_coarse_search(
                     let gpu_crf = gpu_result.gpu_boundary_crf;
                     let gpu_size = gpu_result.gpu_best_size.unwrap_or(input_size);
 
-                    let sample_duration = crate::gpu_accel::GPU_SAMPLE_DURATION;
                     let dynamic_mapper = dynamic_mapping::quick_calibrate(
                         input,
                         input_size,
                         encoder,
                         &vf_args,
                         gpu_encoder_name,
-                        sample_duration,
+                        sample_dur,
                     )
                     .unwrap_or_else(|_| dynamic_mapping::DynamicCrfMapper::new(input_size));
 

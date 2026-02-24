@@ -190,6 +190,12 @@ pub const GPU_SAMPLE_DURATION: f32 = 60.0;
 /// Duration (seconds) per segment in multi-segment sampling (5 segments). Longer segments improve SSIM representativeness across media types.
 pub const GPU_SEGMENT_DURATION: f32 = 15.0;
 
+/// Ultimate mode: longer sample for pursuit of best quality (SSIM saturation search).
+pub const GPU_SAMPLE_DURATION_ULTIMATE: f32 = 90.0;
+
+/// Ultimate mode: longer segment per position in multi-segment sampling (5 segments = 125s total).
+pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 25.0;
+
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
 pub const GPU_COARSE_STEP: f32 = 2.0;
@@ -1158,6 +1164,8 @@ pub struct GpuCoarseConfig {
     pub max_crf: f32,
     pub step: f32,
     pub max_iterations: u32,
+    /// When true (ultimate mode), use longer sample/segment durations for SSIM.
+    pub ultimate_mode: bool,
 }
 
 impl Default for GpuCoarseConfig {
@@ -1168,6 +1176,7 @@ impl Default for GpuCoarseConfig {
             max_crf: GPU_DEFAULT_MAX_CRF,
             step: GPU_COARSE_STEP,
             max_iterations: GPU_MAX_ITERATIONS,
+            ultimate_mode: false,
         }
     }
 }
@@ -1533,17 +1542,30 @@ pub fn gpu_coarse_search_with_log(
     let is_very_long_video = quick_duration >= VERY_LONG_DURATION_THRESHOLD;
 
     let (sample_duration_limit, skip_parallel) = if is_very_large_file || is_very_long_video {
-        log_msg!("   ⚠️ Very large file detected → Conservative mode (30s sample)");
-        (30.0_f32, true)
+        let limit = if config.ultimate_mode { 50.0_f32 } else { 30.0_f32 };
+        log_msg!(
+            "   ⚠️ Very large file detected → Conservative mode ({}s sample)",
+            limit as u32
+        );
+        (limit, true)
     } else if is_large_file || is_long_video {
-        log_msg!("   📊 Large file detected → Sequential mode (45s sample)");
-        (45.0_f32, true)
+        let limit = if config.ultimate_mode { 70.0_f32 } else { 45.0_f32 };
+        log_msg!(
+            "   📊 Large file detected → Sequential mode ({}s sample)",
+            limit as u32
+        );
+        (limit, true)
     } else {
+        let limit = if config.ultimate_mode {
+            GPU_SAMPLE_DURATION_ULTIMATE
+        } else {
+            GPU_SAMPLE_DURATION
+        };
         log_msg!(
             "   ✅ Normal file → Parallel mode ({}s sample)",
-            GPU_SAMPLE_DURATION
+            limit as u32
         );
-        (GPU_SAMPLE_DURATION, false)
+        (limit, false)
     };
 
     let max_iterations_limit = GPU_ABSOLUTE_MAX_ITERATIONS;
@@ -1569,7 +1591,11 @@ pub fn gpu_coarse_search_with_log(
     let sample_input_size = if duration < 60.0 {
         input_size
     } else {
-        let multi_segment_duration = GPU_SAMPLE_DURATION;
+        let multi_segment_duration = if config.ultimate_mode {
+            GPU_SAMPLE_DURATION_ULTIMATE
+        } else {
+            GPU_SAMPLE_DURATION
+        };
         let ratio = multi_segment_duration / duration;
         (input_size as f64 * ratio as f64) as u64
     };
@@ -1679,7 +1705,11 @@ pub fn gpu_coarse_search_with_log(
             .arg(gpu_encoder.name);
 
         if use_multi_segment {
-            let seg_dur = GPU_SEGMENT_DURATION;
+            let seg_dur = if config.ultimate_mode {
+                GPU_SEGMENT_DURATION_ULTIMATE
+            } else {
+                GPU_SEGMENT_DURATION
+            };
             let positions = [
                 0.0,
                 duration * 0.25,
