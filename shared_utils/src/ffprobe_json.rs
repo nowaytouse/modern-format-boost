@@ -10,6 +10,8 @@ pub struct FfprobeStream {
     #[serde(default)]
     pub color_space: Option<String>,
     #[serde(default)]
+    pub color_transfer: Option<String>,
+    #[serde(default)]
     pub pix_fmt: Option<String>,
     #[serde(default)]
     pub bits_per_raw_sample: Option<String>,
@@ -24,6 +26,7 @@ pub struct FfprobeOutput {
 #[derive(Debug, Clone, Default)]
 pub struct ColorInfo {
     pub color_space: Option<String>,
+    pub color_transfer: Option<String>,
     pub pix_fmt: Option<String>,
     pub bit_depth: Option<u8>,
 }
@@ -86,8 +89,14 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         .clone()
         .filter(|s| !s.is_empty() && s != "unknown");
 
+    let color_transfer = stream
+        .color_transfer
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
+
     ColorInfo {
         color_space,
+        color_transfer,
         pix_fmt: stream.pix_fmt.clone(),
         bit_depth,
     }

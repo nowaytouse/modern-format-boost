@@ -3976,28 +3976,29 @@ mod tests {
         cache.insert(precision::crf_to_cache_key(20.0), 0.9850);
         cache.insert(precision::crf_to_cache_key(20.1), 0.9855);
         cache.insert(precision::crf_to_cache_key(20.5), 0.9860);
+        cache.insert(precision::crf_to_cache_key(20.05), 0.9852);
+        cache.insert(precision::crf_to_cache_key(20.45), 0.9858);
 
         assert!(cache.contains_key(&precision::crf_to_cache_key(20.0)));
         assert!(cache.contains_key(&precision::crf_to_cache_key(20.1)));
         assert!(cache.contains_key(&precision::crf_to_cache_key(20.5)));
-
         assert!(
             cache.contains_key(&precision::crf_to_cache_key(20.05)),
-            "20.05 should round to 201 and hit cache"
+            "20.05 should have its own key and hit cache"
         );
         assert!(
             cache.contains_key(&precision::crf_to_cache_key(20.45)),
-            "20.45 should round to 205 and hit cache"
+            "20.45 should have its own key and hit cache"
         );
 
         assert!(!cache.contains_key(&precision::crf_to_cache_key(20.75)));
         assert!(!cache.contains_key(&precision::crf_to_cache_key(19.75)));
 
-        assert_eq!(precision::crf_to_cache_key(20.0), 200);
-        assert_eq!(precision::crf_to_cache_key(20.1), 201);
-        assert_eq!(precision::crf_to_cache_key(20.5), 205);
-        assert_eq!(precision::crf_to_cache_key(20.05), 201);
-        assert_eq!(precision::crf_to_cache_key(20.15), 202);
+        assert_eq!(precision::crf_to_cache_key(20.0), 2000);
+        assert_eq!(precision::crf_to_cache_key(20.1), 2010);
+        assert_eq!(precision::crf_to_cache_key(20.5), 2050);
+        assert_eq!(precision::crf_to_cache_key(20.05), 2005);
+        assert_eq!(precision::crf_to_cache_key(20.15), 2015);
     }
 
     #[test]
@@ -4291,16 +4292,16 @@ mod tests {
     fn test_crf_to_cache_key_precision() {
         use precision::crf_to_cache_key;
 
-        assert_eq!(crf_to_cache_key(20.0), 200);
-        assert_eq!(crf_to_cache_key(20.1), 201);
-        assert_eq!(crf_to_cache_key(20.5), 205);
+        assert_eq!(crf_to_cache_key(20.0), 2000);
+        assert_eq!(crf_to_cache_key(20.1), 2010);
+        assert_eq!(crf_to_cache_key(20.5), 2050);
 
         assert_eq!(crf_to_cache_key(0.0), 0);
-        assert_eq!(crf_to_cache_key(51.0), 510);
-        assert_eq!(crf_to_cache_key(63.0), 630);
+        assert_eq!(crf_to_cache_key(51.0), 5100);
+        assert_eq!(crf_to_cache_key(63.0), 6300);
 
-        assert_eq!(crf_to_cache_key(20.05), 201);
-        assert_eq!(crf_to_cache_key(20.04), 200);
+        assert_eq!(crf_to_cache_key(20.05), 2005);
+        assert_eq!(crf_to_cache_key(20.04), 2004);
     }
 
     #[test]

@@ -1,4 +1,7 @@
 //! MS-SSIM quality metric calculations (multi-scale, YUV channel-wise)
+//!
+//! Primary entry: `calculate_ms_ssim_yuv` (used by gpu_coarse_search Phase 3).  
+//! `calculate_ms_ssim` is single-channel luma with standalone-vmaf fallback for other callers.
 
 use std::path::Path;
 use std::process::Command;
@@ -25,12 +28,11 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
     };
     let duration_min = duration / 60.0;
 
+    // Align with gpu_coarse_search::VMAF_DURATION_THRESHOLD (5 min): MS-SSIM only for ≤5 min.
     let (sample_rate, should_calculate) = if duration_min <= 1.0 {
         (1, true)
     } else if duration_min <= 5.0 {
         (3, true)
-    } else if duration_min <= 30.0 {
-        (10, true)
     } else {
         (0, false)
     };
@@ -44,9 +46,9 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
         return None;
     }
 
-    let beijing_time = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let start_ts = Local::now().format("%Y-%m-%d %H:%M:%S");
     eprintln!("   📊 Calculating 3-channel MS-SSIM (Y+U+V)...");
-    eprintln!("   🕐 Start time: {} (Beijing)", beijing_time);
+    eprintln!("   🕐 Start time: {}", start_ts);
     eprintln!("   📹 Video: {:.1}s ({:.1}min)", duration, duration_min);
 
     if sample_rate > 1 {
@@ -70,32 +72,9 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
 
     let start_time = std::time::Instant::now();
 
-    let y_handle = thread::spawn(move || {
-        eprint!("      Y channel... ");
-        let result = calculate_ms_ssim_channel_sampled(&input_y, &output_y, "y", sample_rate);
-        if let Some(score) = result {
-            eprintln!("{:.4} ✅", score);
-        }
-        result
-    });
-
-    let u_handle = thread::spawn(move || {
-        eprint!("      U channel... ");
-        let result = calculate_ms_ssim_channel_sampled(&input_u, &output_u, "u", sample_rate);
-        if let Some(score) = result {
-            eprintln!("{:.4} ✅", score);
-        }
-        result
-    });
-
-    let v_handle = thread::spawn(move || {
-        eprint!("      V channel... ");
-        let result = calculate_ms_ssim_channel_sampled(&input_v, &output_v, "v", sample_rate);
-        if let Some(score) = result {
-            eprintln!("{:.4} ✅", score);
-        }
-        result
-    });
+    let y_handle = thread::spawn(move || calculate_ms_ssim_channel_sampled(&input_y, &output_y, "y", sample_rate));
+    let u_handle = thread::spawn(move || calculate_ms_ssim_channel_sampled(&input_u, &output_u, "u", sample_rate));
+    let v_handle = thread::spawn(move || calculate_ms_ssim_channel_sampled(&input_v, &output_v, "v", sample_rate));
 
     let y_ms_ssim = match y_handle.join() {
         Ok(Some(v)) => v,
@@ -104,7 +83,6 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
             return None;
         }
     };
-
     let u_ms_ssim = match u_handle.join() {
         Ok(Some(v)) => v,
         _ => {
@@ -112,7 +90,6 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
             return None;
         }
     };
-
     let v_ms_ssim = match v_handle.join() {
         Ok(Some(v)) => v,
         _ => {
@@ -121,13 +98,15 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
         }
     };
 
-    let elapsed = start_time.elapsed().as_secs();
-    let beijing_time_end = Local::now().format("%Y-%m-%d %H:%M:%S");
-    eprintln!(
-        "   ⏱️  Completed in {}s (End: {} Beijing)",
-        elapsed, beijing_time_end
-    );
+    eprintln!("      Y channel... {:.4} ✅", y_ms_ssim);
+    eprintln!("      U channel... {:.4} ✅", u_ms_ssim);
+    eprintln!("      V channel... {:.4} ✅", v_ms_ssim);
 
+    let elapsed = start_time.elapsed().as_secs();
+    let end_time = Local::now().format("%Y-%m-%d %H:%M:%S");
+    eprintln!("   ⏱️  Completed in {}s (End: {})", elapsed, end_time);
+
+    // BT.601 luma-weighted approx (Y dominant); chroma MS-SSIM on 4:2:0 subsampled planes may be lower than perceptual weight.
     let weighted_avg = (y_ms_ssim * 6.0 + u_ms_ssim + v_ms_ssim) / 8.0;
 
     Some((

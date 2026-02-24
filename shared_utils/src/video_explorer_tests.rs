@@ -261,18 +261,18 @@ mod precision_tests {
 
     #[test]
     fn test_crf_key_generation() {
-        assert_eq!(crf_to_cache_key(20.0), 200);
-        assert_eq!(crf_to_cache_key(20.1), 201);
-        assert_eq!(crf_to_cache_key(20.5), 205);
+        assert_eq!(crf_to_cache_key(20.0), 2000);
+        assert_eq!(crf_to_cache_key(20.1), 2010);
+        assert_eq!(crf_to_cache_key(20.5), 2050);
 
         let crf2 = 20.55_f32;
         let key2 = crf_to_cache_key(crf2);
-        assert_eq!(key2, 206);
+        assert_eq!(key2, 2055);
 
-        assert!((cache_key_to_crf(200) - 20.0).abs() < 0.01);
-        assert!((cache_key_to_crf(205) - 20.5).abs() < 0.01);
+        assert!((cache_key_to_crf(2000) - 20.0).abs() < 0.01);
+        assert!((cache_key_to_crf(2050) - 20.5).abs() < 0.01);
 
-        assert_eq!(CACHE_KEY_MULTIPLIER, 10.0);
+        assert_eq!(CACHE_KEY_MULTIPLIER, 100.0);
     }
 
     #[test]
@@ -363,10 +363,10 @@ mod three_phase_search_tests {
 
     #[test]
     fn prop_cache_key_unified() {
-        assert_eq!(crf_to_cache_key(18.0), 180);
-        assert_eq!(crf_to_cache_key(18.1), 181);
-        assert_eq!(crf_to_cache_key(18.5), 185);
-        assert_eq!(crf_to_cache_key(18.25), 183);
+        assert_eq!(crf_to_cache_key(18.0), 1800);
+        assert_eq!(crf_to_cache_key(18.1), 1810);
+        assert_eq!(crf_to_cache_key(18.5), 1850);
+        assert_eq!(crf_to_cache_key(18.25), 1825);
 
         let crfs = vec![18.0, 18.1, 18.2, 18.3, 18.4, 18.5];
         let keys: Vec<i32> = crfs.iter().map(|&crf| crf_to_cache_key(crf)).collect();
