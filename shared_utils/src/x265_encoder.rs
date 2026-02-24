@@ -193,10 +193,16 @@ fn encode_to_hevc(
         let transfer_thread =
             std::thread::spawn(move || std::io::copy(&mut ffmpeg_out, &mut x265_in));
 
+        // Join pipe-copy thread first so we see BrokenPipe before process exit codes.
+        let copy_result: Result<Result<u64, std::io::Error>, _> = transfer_thread.join();
+        let pipe_io_error = copy_result.as_ref().ok().and_then(|r| r.as_ref().err());
+        let is_broken_pipe = pipe_io_error.map_or(false, |e| {
+            use std::io::ErrorKind;
+            matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset)
+        });
+
         let x265_status = x265_child.wait().context("Failed to wait for x265")?;
         let ffmpeg_status = ffmpeg_child.wait().context("Failed to wait for ffmpeg")?;
-
-        let _ = transfer_thread.join();
 
         let duration = start_time.elapsed();
 
@@ -213,8 +219,12 @@ fn encode_to_hevc(
                 exit_code = ?ffmpeg_status.code(),
                 duration_secs = duration.as_secs_f64(),
                 stderr = %ffmpeg_stderr,
+                pipe_broken = is_broken_pipe,
                 "FFmpeg decode failed"
             );
+            if is_broken_pipe {
+                warn!("Pipe broken: decoder (ffmpeg) likely exited first; check FFmpeg stderr above");
+            }
             if !ffmpeg_stderr.is_empty() {
                 eprintln!("FFmpeg error output:\n{}", ffmpeg_stderr);
             }
@@ -227,14 +237,32 @@ fn encode_to_hevc(
                 exit_code = ?x265_status.code(),
                 duration_secs = duration.as_secs_f64(),
                 stderr = %x265_stderr,
+                pipe_broken = is_broken_pipe,
                 "x265 encode failed"
             );
-
+            if is_broken_pipe {
+                warn!("Pipe broken: encoder (x265) likely exited first; check x265 stderr above");
+            }
             if !x265_stderr.is_empty() {
                 eprintln!("x265 error output:\n{}", x265_stderr);
             }
-
             bail!("x265 encode failed with exit code {:?}", x265_status.code());
+        }
+
+        if let Ok(Err(io_err)) = &copy_result {
+            error!(
+                io_error = %io_err,
+                kind = ?io_err.kind(),
+                "Pipe copy failed (decoder and encoder both reported success)"
+            );
+            if is_broken_pipe {
+                bail!("Pipe broken during copy (ffmpeg→x265): {}", io_err);
+            }
+            bail!("Pipe I/O error: {}", io_err);
+        }
+        if let Err(join_err) = copy_result {
+            error!("Pipe copy thread panicked: {:?}", join_err);
+            bail!("Pipe copy thread panicked: {:?}", join_err);
         }
 
         info!(
