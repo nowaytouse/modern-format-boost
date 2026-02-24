@@ -4,6 +4,7 @@
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
+use tracing::warn;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct FfprobeStream {
@@ -49,11 +50,11 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     {
         Ok(o) if o.status.success() => o,
         Ok(_) => {
-            eprintln!("⚠️ FFPROBE FAILED: non-zero exit for {}", input_str);
+            warn!(input = %input_str, "FFPROBE FAILED: non-zero exit");
             return ColorInfo::default();
         }
         Err(e) => {
-            eprintln!("⚠️ FFPROBE ERROR: {} for {}", e, input_str);
+            warn!(error = %e, input = %input_str, "FFPROBE ERROR");
             return ColorInfo::default();
         }
     };
@@ -61,7 +62,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let json_str = match String::from_utf8(output.stdout) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("⚠️ FFPROBE UTF8 ERROR: {}", e);
+            warn!(error = %e, "FFPROBE UTF8 ERROR");
             return ColorInfo::default();
         }
     };
@@ -69,7 +70,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let parsed: FfprobeOutput = match serde_json::from_str(&json_str) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("⚠️ FFPROBE JSON PARSE ERROR: {}", e);
+            warn!(error = %e, "FFPROBE JSON PARSE ERROR");
             return ColorInfo::default();
         }
     };
