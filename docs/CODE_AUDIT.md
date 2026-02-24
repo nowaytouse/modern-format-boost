@@ -85,8 +85,9 @@
 | 除零/数值      | ✅ 已修复   | gpu_coarse_search 使用 `stream_size_change_pct` 及 prev_size 分支，无 inf% |
 | unwrap 使用    | ✅ 已核查   | 高风险处均在测试代码中，生产路径可接受 |
 | unsafe         | ✅ 已注释   | gpu_accel、metadata/macos 已加 SAFETY 与模块头说明 |
+| 正确性/健壮性  | ✅ 已修复 3 处 | GIF 解析越界防护（image_formats）、rsync 用 which 查找（thread_manager）、processed list 文件锁 Unix flock（conversion）；详见 §30 |
 
-**本轮修复**: 路径安全（前轮 + vid_hevc/vid_av1 conversion_api）+ 除零保护（stream_size_change_pct、prev_size）+ progress expect + unsafe 注释 + 审计文档更新。
+**本轮修复**: 路径安全（前轮 + vid_hevc/vid_av1 conversion_api）+ 除零保护（stream_size_change_pct、prev_size）+ progress expect + unsafe 注释 + **§30 正确性/健壮性（GIF 越界、rsync which、processed list 文件锁）** + 审计文档更新。
 
 ---
 
@@ -611,3 +612,22 @@
 
 - **现象**：shared_utils 中 VAAPI 设备硬编码为 `/dev/dri/renderD128`，多显卡 Linux 可能使用不同节点。
 - **已做**：新增 `vaapi_device_path()`（仅 `#[cfg(target_os = "linux")]`），优先读 `MODERN_FORMAT_BOOST_VAAPI_DEVICE`，其次 `VAAPI_DEVICE`，缺省为 `/dev/dri/renderD128`。hevc_vaapi / av1_vaapi / h264_vaapi 的 `extra_args` 均改为使用该函数。
+
+---
+
+## 30. 正确性与健壮性后续修复（GIF / rsync / processed list）
+
+### 30.1 GIF 解析器越界防护 (image_formats.rs)
+
+- **现象**：`gif::count_frames_from_bytes` 在解析 Image Data / Extension 块时，`pos += block_size` 后未检查 `pos` 是否越界即进入下一轮读取 `data[pos]`，截断或恶意 GIF 可能导致 panic。
+- **已做**：在两处“跳过数据块”的循环中，在 `pos += block_size` 前增加 `if pos + block_size > data.len() { break; }`，越界时提前退出循环，避免 panic。
+
+### 30.2 rsync 路径查找 (thread_manager.rs)
+
+- **现象**：`get_rsync_path()` 使用 macOS Homebrew 硬编码路径 `/opt/homebrew/...`，非 macOS 上为死逻辑。
+- **已做**：改为使用 `which::which("rsync")` 查找可执行路径，未找到时回退为 `"rsync"`；移除硬编码路径，跨平台一致。
+
+### 30.3 已处理列表文件锁 (conversion.rs)
+
+- **现象**：`load_processed_list` / `save_processed_list` 无文件锁，多进程（如多个 img-av1 实例）同时读写同一列表文件可能导致损坏或竞态。
+- **已做**：在 **Unix** 上对列表文件使用 advisory `flock(LOCK_EX)`：加载/保存前加锁，使用 `ProcessedListLockGuard(RawFd)` 在 drop 时解锁，保证读/写期间独占；`libc::flock` 调用包在 `unsafe` 块并保留 fd 于 guard 内，避免与 `file` 可变借用冲突。
