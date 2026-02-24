@@ -154,6 +154,19 @@ fn xmp_milestone_interval(count: u64) -> bool {
     }
 }
 
+fn image_milestone_interval(total_processed: u64) -> bool {
+    if total_processed == 0 {
+        return false;
+    }
+    if total_processed <= 100 {
+        total_processed % 50 == 0
+    } else if total_processed <= 1000 {
+        total_processed % 200 == 0
+    } else {
+        total_processed % 500 == 0
+    }
+}
+
 static QUIET_MODE: AtomicBool = AtomicBool::new(false);
 
 pub fn enable_quiet_mode() {
@@ -238,11 +251,86 @@ macro_rules! log_eprintln {
     }};
 }
 
-// ── XMP merge live counter ─────────────────────────────────────────────────
-// Tracks XMP sidecar merge attempts/successes and prints a live \r status line.
+// ── XMP merge + JXL + Images live counter ────────────────────────────────────
+// Tracks XMP sidecar merge, JXL success, and image conversion success/failure; same line.
 
 static XMP_ATTEMPT_COUNT: AtomicU64 = AtomicU64::new(0);
 static XMP_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
+static JXL_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
+static IMAGE_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
+static IMAGE_FAIL_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Call when a JXL conversion completes successfully (e.g. from finalize_conversion).
+pub fn jxl_success() {
+    JXL_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Call when an image conversion completes successfully (not skipped).
+/// May emit a combined status line (XMP + JXL + Images) at image milestones.
+pub fn image_processed_success() {
+    let img_ok = IMAGE_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    if image_milestone_interval(img_ok + img_fail) {
+        emit_combined_status_line(img_ok, img_fail);
+    }
+}
+
+/// Call when an image conversion fails.
+/// May emit a combined status line (XMP + JXL + Images) at image milestones.
+pub fn image_processed_failure() {
+    let _ = IMAGE_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    if image_milestone_interval(img_ok + img_fail) {
+        emit_combined_status_line(img_ok, img_fail);
+    }
+}
+
+fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
+    let xmp_ok = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
+    let xmp_done = false;
+    let xmp_failed = xmp_total.saturating_sub(xmp_ok);
+    let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail);
+    let line = format!("{}{}", pad_tag("[XMP]"), msg);
+    write_to_log(&line);
+    emit_stderr(&line);
+}
+
+fn format_xmp_jxl_images_line(
+    xmp_ok: u64,
+    xmp_done: bool,
+    xmp_failed: u64,
+    jxl_ok: u64,
+    img_ok: u64,
+    img_fail: u64,
+) -> String {
+    let xmp_part = if xmp_done {
+        if xmp_failed > 0 {
+            format!("XMP merge done: {} OK, {} failed", xmp_ok, xmp_failed)
+        } else {
+            format!("XMP merge done: {} OK", xmp_ok)
+        }
+    } else {
+        format!("XMP merge: {} OK", xmp_ok)
+    };
+    let with_jxl = if jxl_ok > 0 {
+        format!("{}   JXL: {} OK", xmp_part, jxl_ok)
+    } else {
+        xmp_part
+    };
+    if img_ok > 0 || img_fail > 0 {
+        let img_part = if img_fail > 0 {
+            format!("Images: {} OK, {} failed", img_ok, img_fail)
+        } else {
+            format!("Images: {} OK", img_ok)
+        };
+        format!("{}   {}", with_jxl, img_part)
+    } else {
+        with_jxl
+    }
+}
 
 /// Call when an XMP sidecar is found and a merge is about to be attempted.
 pub fn xmp_merge_attempt() {
@@ -250,17 +338,13 @@ pub fn xmp_merge_attempt() {
 }
 
 /// Call on successful merge. Prints a milestone line every N merges (no \r interleaving).
-/// Single number only (e.g. "60 OK") to avoid confusion with directory Metadata total.
+/// Same line shows XMP count, JXL count, and Images OK/failed when non-zero.
 pub fn xmp_merge_success() {
     let success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if xmp_milestone_interval(success) {
-        let line = format!(
-            "{}{}",
-            pad_tag("[XMP]"),
-            format!("XMP merge: {} OK", success)
-        );
-        write_to_log(&line);
-        emit_stderr(&line);
+        let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+        let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+        emit_combined_status_line(img_ok, img_fail);
     }
 }
 
@@ -276,17 +360,33 @@ pub fn xmp_merge_failure(msg: &str) {
 }
 
 /// Call after all processing is done to print the final summary.
-/// Single number; only show failed count when non-zero.
+/// Same line shows XMP summary, JXL count, and Images OK/failed when non-zero.
 pub fn xmp_merge_finalize() {
     let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
+    let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
     if total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
         let failed = total.saturating_sub(success);
-        let msg = if failed > 0 {
-            format!("XMP merge done: {} OK, {} failed", success, failed)
-        } else {
-            format!("XMP merge done: {} OK", success)
-        };
+        let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail);
+        let line = format!("{}{}", pad_tag("[XMP]"), msg);
+        write_to_log(&line);
+        emit_stderr(&line);
+    } else if jxl_ok > 0 || img_ok > 0 || img_fail > 0 {
+        let mut parts: Vec<String> = Vec::new();
+        if jxl_ok > 0 {
+            parts.push(format!("JXL: {} OK", jxl_ok));
+        }
+        if img_ok > 0 || img_fail > 0 {
+            let img_part = if img_fail > 0 {
+                format!("Images: {} OK, {} failed", img_ok, img_fail)
+            } else {
+                format!("Images: {} OK", img_ok)
+            };
+            parts.push(img_part);
+        }
+        let msg = parts.join("   ");
         let line = format!("{}{}", pad_tag("[XMP]"), msg);
         write_to_log(&line);
         emit_stderr(&line);
