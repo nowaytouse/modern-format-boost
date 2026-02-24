@@ -631,3 +631,13 @@
 
 - **现象**：`load_processed_list` / `save_processed_list` 无文件锁，多进程（如多个 img-av1 实例）同时读写同一列表文件可能导致损坏或竞态。
 - **已做**：在 **Unix** 上对列表文件使用 advisory `flock(LOCK_EX)`：加载/保存前加锁，使用 `ProcessedListLockGuard(RawFd)` 在 drop 时解锁，保证读/写期间独占；`libc::flock` 调用包在 `unsafe` 块并保留 fd 于 guard 内，避免与 `file` 可变借用冲突。
+
+---
+
+## 31. 启发式提前终止阈值 (video_explorer Stage A)
+
+- **现象**：Stage A 二分搜索中，方差阈值 `0.00001` 与变化率阈值 `0.005` 为硬编码；比特率曲线极平缓的视频（如静态画面多）在少数几次迭代后即满足“方差收敛”或“变化率极小”，导致过早提前终止，未充分搜索 CRF 范围。
+- **已做**：
+  - **最小迭代数**：新增 `MIN_ITERATIONS_BEFORE_VARIANCE_EXIT = 6`，方差或变化率提前终止仅在 `iterations >= 6` 时允许，避免 3～4 个样本就退出。
+  - **方差阈值**：由 `0.00001` 改为 `1e-6`，仅在窗口内 size ratio 几乎恒定时才判定收敛。
+  - **日志**：提前终止日志改为英文并输出迭代次数，便于排查。
