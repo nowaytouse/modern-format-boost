@@ -20,8 +20,8 @@ thread_local! {
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
 
-/// Width of the tag column so all message bodies align.
-const LOG_TAG_WIDTH: usize = 34;
+/// Width of the tag column so all message bodies align (e.g. [file.jpeg], [XMP]).
+const LOG_TAG_WIDTH: usize = 24;
 
 /// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
@@ -112,13 +112,17 @@ pub fn write_to_log(line: &str) {
     }
 }
 
+/// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
+const STDERR_INDENT: &str = "  ";
+
 /// Emit a line to stderr via tracing (so it appears when a tracing subscriber is initialized).
+/// Applies a uniform 2-space indent so multi-line blocks (e.g. precheck report) stay aligned.
 #[inline]
 pub fn emit_stderr(line: &str) {
     if line.is_empty() {
         tracing::info!("");
     } else {
-        tracing::info!("{}", line);
+        tracing::info!("{}{}", STDERR_INDENT, line);
     }
 }
 
