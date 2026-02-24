@@ -587,3 +587,17 @@
 
 - **目标**：所有图片转换在「编码成功、取得 output_size 后、finalize 前」统一走 `check_size_tolerance`，当 `options.compress` 为 true 时仅接受 output < input，否则跳过并保留原文件。
 - **已覆盖路径**（img_hevc lossless_converter）：`convert_to_jxl`、`convert_jpeg_to_jxl`（含 ImageMagick fallback）、`convert_to_avif`、`convert_to_avif_lossless`、`convert_to_jxl_matched`。动图→HEVC 仍走 vid_hevc 的 size/compress 逻辑。
+
+---
+
+## 29. CLI 重复与管道错误处理（审计建议）
+
+### 29.1 代码重复 (vid_hevc / vid_av1 main.rs)
+
+- **现象**：vid_av1 与 vid_hevc 的 `main.rs` 中 `run` 命令的 base_dir 解析逻辑完全一致。
+- **已做**：在 `shared_utils::cli_runner` 中新增 `resolve_video_run_base_dir(input, recursive, base_dir_override)`，vid_hevc 与 vid_av1 的 Run 分支改为调用该函数，减少样板代码；后续若将更多 run 逻辑（如 flag 校验、banner）抽象到 shared_utils 可继续复用。
+
+### 29.2 管道错误处理 (x265_encoder.rs)
+
+- **现象**：ffmpeg 解码 → 管道 → x265 编码 的管道拷贝由线程执行，BrokenPipe 时难以区分是解码端还是编码端先退出。
+- **已做**：先 join 管道拷贝线程并捕获 `io::copy` 的 `Result`；若为 `BrokenPipe` / `ConnectionReset` 则记入 `is_broken_pipe`。在 FFmpeg 失败或 x265 失败的分支中增加 `pipe_broken` 字段与 warn 提示（「Pipe broken: decoder (ffmpeg) likely exited first」或「encoder (x265) likely exited first」），便于日志中区分是编码器崩溃还是解码器崩溃。若两进程均成功但管道拷贝返回 I/O 错误，则单独打 error 并 bail。
