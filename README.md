@@ -91,12 +91,38 @@ For advanced users:
 高级用户模式：
 
 ```bash
-# Convert a folder to JXL (Images)
-./target/release/img_av1 --input "/path/to/photos" --quality 100 --effort 7
+# Image: analyze or run (HEVC path → JXL/HEIC)
+./target/release/img-hevc analyze /path/to/img
+./target/release/img-hevc run /path/to/photos --output /path/to/out
 
-# Convert a folder to HEVC (Videos)
-./target/release/vid_hevc --input "/path/to/videos" --crf 18
+# Image: analyze or run (AV1 path → JXL/AVIF)
+./target/release/img-av1 analyze /path/to/img
+./target/release/img-av1 run /path/to/photos --output /path/to/out
+
+# Video: analyze or run (HEVC)
+./target/release/vid-hevc analyze /path/to/video
+./target/release/vid-hevc run /path/to/videos --output /path/to/out
+
+# Video: analyze or run (AV1)
+./target/release/vid-av1 analyze /path/to/video
+./target/release/vid-av1 run /path/to/videos --output /path/to/out
 ```
+
+---
+
+## 📐 Processing Flow / 处理流程
+
+**English:**  
+There are **four binaries**: `img_hevc`, `img_av1`, `vid_hevc`, `vid_av1`. Each supports **analyze** (inspect only) and **run** (convert).  
+- **Images:** `analyze` → single file or directory; `run` → per-file: detect format → choose target (JXL/AVIF/HEIC, or skip) → convert (lossless or quality-matched). Animated images (e.g. GIF ≥3s) can go to HEVC/AV1 MP4.  
+- **Videos:** `analyze` → detect codec/resolution; `run` → per-file: detect → strategy (skip / HEVC or AV1) → encode (optionally with SSIM exploration to match quality).  
+**Simple** (vid_hevc / vid_av1): one file, fixed CRF. **Strategy**: print recommendation only.
+
+**中文：**  
+共 **四个二进制**：`img_hevc`、`img_av1`、`vid_hevc`、`vid_av1`。均支持 **analyze**（仅分析）与 **run**（转换）。  
+- **图片**：analyze 单文件或目录；run 对每个文件检测格式 → 选择目标（JXL/AVIF/HEIC 或跳过）→ 执行转换（无损或质量匹配）。动图（如 GIF ≥3s）可转为 HEVC/AV1 MP4。  
+- **视频**：analyze 检测编码/分辨率；run 对每个文件检测 → 策略（跳过或转 HEVC/AV1）→ 编码（可选 SSIM 探索以匹配画质）。  
+**Simple**（vid_hevc / vid_av1）：单文件固定 CRF。**Strategy**：仅打印推荐策略。
 
 ---
 
