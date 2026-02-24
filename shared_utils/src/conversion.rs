@@ -458,6 +458,10 @@ pub fn finalize_conversion(
 
     mark_as_processed(input);
 
+    if format_name.eq_ignore_ascii_case("JXL") {
+        crate::progress_mode::jxl_success();
+    }
+
     if options.should_delete_original() {
         let _ = safe_delete_original(input, output, 100);
     }

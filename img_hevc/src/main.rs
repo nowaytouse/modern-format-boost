@@ -956,6 +956,7 @@ fn auto_convert_directory(
                         skipped.fetch_add(1, Ordering::Relaxed);
                     } else {
                         success.fetch_add(1, Ordering::Relaxed);
+                        shared_utils::progress_mode::image_processed_success();
                         actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
                         if let Some(out_size) = result.output_size {
                             actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
@@ -969,6 +970,7 @@ fn auto_convert_directory(
                     } else {
                         eprintln!("❌ Conversion failed {}: {}", path.display(), e);
                         failed.fetch_add(1, Ordering::Relaxed);
+                        shared_utils::progress_mode::image_processed_failure();
 
                         if let Some(ref output_dir) = config.output_dir {
                             let _ = shared_utils::copy_on_skip_or_fail(
