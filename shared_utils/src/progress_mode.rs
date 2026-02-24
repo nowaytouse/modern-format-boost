@@ -250,14 +250,14 @@ pub fn xmp_merge_attempt() {
 }
 
 /// Call on successful merge. Prints a milestone line every N merges (no \r interleaving).
+/// Single number only (e.g. "60 OK") to avoid confusion with directory Metadata total.
 pub fn xmp_merge_success() {
     let success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if xmp_milestone_interval(success) {
-        let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
         let line = format!(
             "{}{}",
             pad_tag("[XMP]"),
-            format!("XMP merge: {} OK/{}", success, total)
+            format!("XMP merge: {} OK", success)
         );
         write_to_log(&line);
         emit_stderr(&line);
@@ -276,15 +276,18 @@ pub fn xmp_merge_failure(msg: &str) {
 }
 
 /// Call after all processing is done to print the final summary.
+/// Single number; only show failed count when non-zero.
 pub fn xmp_merge_finalize() {
     let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     if total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
-        let line = format!(
-            "{}{}",
-            pad_tag("[XMP]"),
-            format!("XMP merge done: {} OK/{}", success, total)
-        );
+        let failed = total.saturating_sub(success);
+        let msg = if failed > 0 {
+            format!("XMP merge done: {} OK, {} failed", success, failed)
+        } else {
+            format!("XMP merge done: {} OK", success)
+        };
+        let line = format!("{}{}", pad_tag("[XMP]"), msg);
         write_to_log(&line);
         emit_stderr(&line);
     }
