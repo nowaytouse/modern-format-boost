@@ -22,10 +22,84 @@
 //! ```
 
 use anyhow::{Context, Result};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+/// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text, not raw codes.
+fn strip_ansi_bytes(buf: &[u8]) -> Vec<u8> {
+    let s = match std::str::from_utf8(buf) {
+        Ok(s) => s,
+        Err(_) => return buf.to_vec(),
+    };
+    let mut result = String::new();
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' || c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result.into_bytes()
+}
+
+/// Wraps a writer and strips ANSI from each line before writing (so log files are readable, not raw `\x1b[92m`).
+struct StripAnsiWriter<W: Write + Send> {
+    buffer: Vec<u8>,
+    inner: Mutex<W>,
+}
+
+impl<W: Write + Send> StripAnsiWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            buffer: Vec::new(),
+            inner: Mutex::new(inner),
+        }
+    }
+
+    fn flush_buffer(&mut self) -> io::Result<()> {
+        if self.buffer.is_empty() {
+            return Ok(());
+        }
+        let stripped = strip_ansi_bytes(&self.buffer);
+        self.buffer.clear();
+        let mut w = self.inner.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        w.write_all(&stripped)?;
+        Ok(())
+    }
+}
+
+impl<W: Write + Send> Write for StripAnsiWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        // Flush complete lines (ending with \n) so we strip and write them.
+        while let Some(i) = self.buffer.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.buffer.drain(..=i).collect();
+            let stripped = strip_ansi_bytes(&line);
+            let mut w = self.inner.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            w.write_all(&stripped)?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buffer()?;
+        let mut w = self.inner.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        w.flush()?;
+        Ok(())
+    }
+}
+
+// Safe: buffer is process-local; inner is Mutex<W> and W: Send.
+unsafe impl<W: Write + Send> Send for StripAnsiWriter<W> {}
 
 #[derive(Debug, Clone)]
 pub struct LogConfig {
@@ -79,6 +153,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     let log_file_name = format!("{}.log", program_name);
 
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
+    let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
 
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::new(format!(
@@ -88,8 +163,9 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     });
 
     // File: no thread_id/line_number so prefix width is stable and message bodies align in the log file.
+    // StripAnsiWriter strips \x1b[...m so log files are plain text, not raw ANSI codes.
     let file_layer = fmt::layer()
-        .with_writer(file_appender)
+        .with_writer(file_writer)
         .with_ansi(false)
         .with_target(true)
         .with_level(true)
