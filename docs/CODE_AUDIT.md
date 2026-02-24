@@ -641,3 +641,13 @@
   - **最小迭代数**：新增 `MIN_ITERATIONS_BEFORE_VARIANCE_EXIT = 6`，方差或变化率提前终止仅在 `iterations >= 6` 时允许，避免 3～4 个样本就退出。
   - **方差阈值**：由 `0.00001` 改为 `1e-6`，仅在窗口内 size ratio 几乎恒定时才判定收敛。
   - **日志**：提前终止日志改为英文并输出迭代次数，便于排查。
+
+---
+
+## 32. SSIM 抽取片段时长 (gpu_accel / dynamic_mapping / video_explorer)
+
+- **目的**：增多 SSIM 调取时抽取片段的时长，更好适配不同类型媒体（如静态多、场景变化多的视频）。
+- **已做**：
+  - **gpu_accel.rs**：`GPU_SAMPLE_DURATION` 50s → 60s；`GPU_SEGMENT_DURATION` 10s → 15s（多段采样时每段 15s，5 段共 75s）。
+  - **dynamic_mapping.rs**：校准与提取时 `sample_duration.min(10.0)` → `sample_duration.min(15.0)`，与段长一致。
+  - **video_explorer.rs**（MS-SSIM 长视频）：3 段采样由 10% 改为 15%（start 15% + mid 15% + end 15%），每段时长增加 50%。
