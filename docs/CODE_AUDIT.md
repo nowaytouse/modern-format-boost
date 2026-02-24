@@ -573,6 +573,8 @@
 
 - **文件日志**：去掉 `with_thread_ids` 和 `with_line_number`，使每行前缀宽度稳定（仅 timestamp + level + target），**消息正文左对齐**，便于阅读和检索。写入文件前经 **StripAnsiWriter** 去除 ANSI 转义（如 `\x1b[92m`），避免日志文件中出现乱码式原始控制码。
 - **Stderr 统一缩进**：`progress_mode::emit_stderr` 对所有非空行增加固定 **2 空格** 前导（`STDERR_INDENT`），多行块（如 Precheck Report、XMP 汇总）整体缩进一致。
+- **Stderr 非 TTY 时去 ANSI**：当 stderr 被重定向或脚本捕获时（非 TTY），`emit_stderr` 会先对消息做 `strip_ansi_str` 再输出，避免出现 `\x1b[92m` 等乱码；终端内仍保留颜色。
+- **终端降噪**：`target: "gpu_detection"` 的日志（如「GPU: Apple VideoToolbox」）仅写入文件层，stderr 层用 `FilterFn` 排除该 target，减少终端吵闹信息。
 - **Tag 列宽**：`LOG_TAG_WIDTH` 由 34 调整为 24，带 tag 的日志（如 `[file.jpeg]`、`[XMP]`）消息列仍对齐，左侧留白更紧凑。
 
 ### 28.3 使用说明
