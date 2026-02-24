@@ -1,7 +1,12 @@
 //! Lossless Converter Module
 //!
-//! Provides conversion API for verified lossless/lossy images
+//! Provides conversion API for verified lossless/lossy images.
 //! Uses shared_utils for common functionality (anti-duplicate, ConversionResult, etc.)
+//!
+//! **Compress 判断统一**: 所有图片转换在编码成功、取得 output_size 后，在 finalize 前均调用
+//! `check_size_tolerance`；当 `options.compress` 为 true 时，仅当 output < input 才接受，
+//! 否则跳过并保留原文件。覆盖路径：convert_to_jxl、convert_jpeg_to_jxl（含 fallback）、
+//! convert_to_avif、convert_to_avif_lossless、convert_to_jxl_matched。
 
 use crate::{ImgQualityError, Result};
 use std::fs;
@@ -353,6 +358,13 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 return Err(e);
             }
 
+            let output_size = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "JPEG lossless transcode")
+            {
+                return Ok(skipped);
+            }
+
             finalize_conversion(
                 input,
                 &output,
@@ -382,15 +394,23 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                 );
 
                 match try_imagemagick_fallback(input, &output, 0.0, max_threads) {
-                    Ok(_) => finalize_conversion(
-                        input,
-                        &output,
-                        input_size,
-                        "JPEG (Sanitized) -> JXL",
-                        None,
-                        options,
-                    )
-                    .map_err(ImgQualityError::IoError),
+                    Ok(_) => {
+                        let output_size = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+                        if let Some(skipped) =
+                            check_size_tolerance(input, &output, input_size, output_size, options, "JPEG (Sanitized) -> JXL")
+                        {
+                            return Ok(skipped);
+                        }
+                        finalize_conversion(
+                            input,
+                            &output,
+                            input_size,
+                            "JPEG (Sanitized) -> JXL",
+                            None,
+                            options,
+                        )
+                        .map_err(ImgQualityError::IoError)
+                    }
                     Err(e) => Err(ImgQualityError::ConversionError(format!(
                         "Fallback failed after JPEG corruption: {}",
                         e
@@ -442,6 +462,12 @@ pub fn convert_to_avif(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
+            let output_size = fs::metadata(&output)?.len();
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "AVIF")
+            {
+                return Ok(skipped);
+            }
             finalize_conversion(input, &output, input_size, "AVIF", None, options)
                 .map_err(ImgQualityError::IoError)
         }
@@ -496,6 +522,12 @@ pub fn convert_to_avif_lossless(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
+            let output_size = fs::metadata(&output)?.len();
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "Lossless AVIF")
+            {
+                return Ok(skipped);
+            }
             finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
                 .map_err(ImgQualityError::IoError)
         }
@@ -655,33 +687,10 @@ pub fn convert_to_jxl_matched(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
 
-            let tolerance_ratio = 1.01;
-            let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
-
-            if output_size > max_allowed_size {
-                let size_increase_pct = if input_size == 0 {
-                    0.0
-                } else {
-                    ((output_size as f64 / input_size as f64) - 1.0) * 100.0
-                };
-                if let Err(e) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove oversized JXL output: {}", e);
-                }
-                eprintln!(
-                    "   ⏭️  Skipping: JXL output larger than input by {:.1}% (tolerance: 1.0%)",
-                    size_increase_pct
-                );
-                eprintln!(
-                    "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-                    input_size, output_size, size_increase_pct
-                );
-                copy_original_on_skip(input, options);
-                mark_as_processed(input);
-                return Ok(ConversionResult::skipped_size_increase(
-                    input,
-                    input_size,
-                    output_size,
-                ));
+            if let Some(skipped) =
+                check_size_tolerance(input, &output, input_size, output_size, options, "Quality-matched JXL")
+            {
+                return Ok(skipped);
             }
 
             if let Err(e) = verify_jxl_health(&output) {

@@ -151,6 +151,24 @@ impl ConversionResult {
         }
     }
 
+    /// Used when compress mode is on and output size equals input (goal: must be strictly smaller).
+    pub fn skipped_size_unchanged(input: &Path, input_size: u64, format_label: &str) -> Self {
+        Self {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: format!(
+                "Skipped: {} output size unchanged (compression goal not achieved)",
+                format_label
+            ),
+            skipped: true,
+            skip_reason: Some("size_unchanged".to_string()),
+        }
+    }
+
     pub fn success(
         input: &Path,
         output: &Path,
@@ -498,7 +516,14 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 
 /// Check if output exceeds size tolerance and clean up if so.
 ///
-/// Returns `Some(ConversionResult)` if the output is too large (caller should return it),
+/// **Two independent flags:**
+/// - `allow_size_tolerance` (1%): only affects the **oversized** threshold: when true,
+///   we treat output as "too big" only when `output > input * 1.01`; when false, when `output > input`.
+///   This does **not** mean "accept up to 1% larger as success".
+/// - `compress`: when true, **success requires output < input** (strictly smaller).
+///   Equal or larger → skip (goal not achieved). Works together with the 1% threshold above.
+///
+/// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
 pub fn check_size_tolerance(
     input: &Path,
@@ -515,47 +540,75 @@ pub fn check_size_tolerance(
     };
     let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
-    if output_size <= max_allowed_size {
-        return None;
-    }
-
-    let size_increase_pct = if input_size == 0 {
-        0.0
-    } else {
-        ((output_size as f64 / input_size as f64) - 1.0) * 100.0
-    };
-    if let Err(e) = fs::remove_file(output) {
-        eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
-    }
-    if options.verbose {
-        let mode = if options.allow_size_tolerance {
-            "tolerance: 1.0%"
+    // Over tolerance: output larger than allowed (e.g. > input or > input*1.01)
+    if output_size > max_allowed_size {
+        let size_increase_pct = if input_size == 0 {
+            0.0
         } else {
-            "strict mode: no tolerance"
+            ((output_size as f64 / input_size as f64) - 1.0) * 100.0
         };
-        eprintln!(
-            "   ⏭️  Skipping: {} output larger than input by {:.1}% ({})",
-            format_label, size_increase_pct, mode
+        if let Err(e) = fs::remove_file(output) {
+            eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
+        }
+        if options.verbose {
+            let mode = if options.allow_size_tolerance {
+                "tolerance: 1.0%"
+            } else {
+                "strict mode: no tolerance"
+            };
+            eprintln!(
+                "   ⏭️  Skipping: {} output larger than input by {:.1}% ({})",
+                format_label, size_increase_pct, mode
+            );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+                input_size, output_size, size_increase_pct
+            );
+        }
+        let _ = crate::copy_on_skip_or_fail(
+            input,
+            options.output_dir.as_deref(),
+            options.base_dir.as_deref(),
+            false,
         );
-        eprintln!(
-            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-            input_size, output_size, size_increase_pct
-        );
+        mark_as_processed(input);
+        return Some(ConversionResult::skipped_size_increase(
+            input,
+            input_size,
+            output_size,
+        ));
     }
 
-    let _ = crate::copy_on_skip_or_fail(
-        input,
-        options.output_dir.as_deref(),
-        options.base_dir.as_deref(),
-        false,
-    );
-    mark_as_processed(input);
+    // Compress mode: goal is strictly smaller; equal = not achieved
+    if options.compress && output_size >= input_size {
+        if let Err(e) = fs::remove_file(output) {
+            eprintln!("⚠️ [cleanup] Failed to remove unchanged-size output: {}", e);
+        }
+        if options.verbose {
+            eprintln!(
+                "   ⏭️  Skipping: {} output size unchanged (compression goal not achieved)",
+                format_label
+            );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes (0%)",
+                input_size, output_size
+            );
+        }
+        let _ = crate::copy_on_skip_or_fail(
+            input,
+            options.output_dir.as_deref(),
+            options.base_dir.as_deref(),
+            false,
+        );
+        mark_as_processed(input);
+        return Some(ConversionResult::skipped_size_unchanged(
+            input,
+            input_size,
+            format_label,
+        ));
+    }
 
-    Some(ConversionResult::skipped_size_increase(
-        input,
-        input_size,
-        output_size,
-    ))
+    None
 }
 #[cfg(test)]
 mod tests {
@@ -702,6 +755,20 @@ mod tests {
         assert!(result.skipped);
         assert_eq!(result.skip_reason, Some("size_increase".to_string()));
         assert!(result.message.contains("larger"));
+    }
+
+    #[test]
+    fn test_conversion_result_size_unchanged() {
+        let input = Path::new("/test/input.png");
+
+        let result =
+            ConversionResult::skipped_size_unchanged(input, 1000, "JXL");
+
+        assert!(result.success);
+        assert!(result.skipped);
+        assert_eq!(result.skip_reason, Some("size_unchanged".to_string()));
+        assert!(result.message.contains("unchanged"));
+        assert!(result.message.contains("compression goal not achieved"));
     }
 
     #[test]
