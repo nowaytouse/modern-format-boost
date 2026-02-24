@@ -582,3 +582,8 @@
 - 各二进制（vid_hevc、vid_av1、img_hevc、img_av1）已在启动时调用 `shared_utils::logging::init_logging`，tracing 事件会写入 stderr 与日志文件。
 - 可通过 `RUST_LOG` 控制级别（如 `RUST_LOG=debug`、`RUST_LOG=shared_utils=info`）。
 - 未调用 `init_logging` 的场合（如仅链接 shared_utils 的测试或工具），tracing 事件不会输出；原有 `write_to_log` 的日志文件写入逻辑保留，与 tracing 并行。
+
+### 28.4 图片转换 compress 判断统一
+
+- **目标**：所有图片转换在「编码成功、取得 output_size 后、finalize 前」统一走 `check_size_tolerance`，当 `options.compress` 为 true 时仅接受 output < input，否则跳过并保留原文件。
+- **已覆盖路径**（img_hevc lossless_converter）：`convert_to_jxl`、`convert_jpeg_to_jxl`（含 ImageMagick fallback）、`convert_to_avif`、`convert_to_avif_lossless`、`convert_to_jxl_matched`。动图→HEVC 仍走 vid_hevc 的 size/compress 逻辑。
