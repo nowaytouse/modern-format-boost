@@ -80,8 +80,12 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
 
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("{}={}", program_name, config.level)));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!(
+            "{}={},shared_utils={}",
+            program_name, config.level, config.level
+        ))
+    });
 
     let file_layer = fmt::layer()
         .with_writer(file_appender)

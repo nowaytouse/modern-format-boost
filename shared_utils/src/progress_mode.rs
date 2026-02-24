@@ -1,8 +1,10 @@
 //! v7.3.2: Progress Mode - controls progress bar display
 //!
 //! Avoids progress output clutter when processing in parallel.
+//! Stderr output is routed through tracing when a subscriber is set (init_logging).
 
 use std::cell::RefCell;
+use tracing;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -110,6 +112,16 @@ pub fn write_to_log(line: &str) {
     }
 }
 
+/// Emit a line to stderr via tracing (so it appears when a tracing subscriber is initialized).
+#[inline]
+pub fn emit_stderr(line: &str) {
+    if line.is_empty() {
+        tracing::info!("");
+    } else {
+        tracing::info!("{}", line);
+    }
+}
+
 /// Flush the log file buffer. Call at program exit.
 pub fn flush_log_file() {
     if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
@@ -148,7 +160,7 @@ pub fn is_quiet_mode() -> bool {
 macro_rules! quiet_eprintln {
     ($($arg:tt)*) => {
         if !$crate::progress_mode::is_quiet_mode() {
-            eprintln!($($arg)*);
+            $crate::progress_mode::emit_stderr(&format!($($arg)*));
         }
     };
 }
@@ -183,7 +195,7 @@ macro_rules! verbose_eprintln {
     () => {{
         $crate::progress_mode::write_to_log("");
         if $crate::progress_mode::is_verbose_mode() {
-            eprintln!();
+            $crate::progress_mode::emit_stderr("");
         }
     }};
     ($($arg:tt)*) => {{
@@ -192,7 +204,7 @@ macro_rules! verbose_eprintln {
             let _line = $crate::progress_mode::format_log_line(&_msg);
             $crate::progress_mode::write_to_log(&_line);
             if $crate::progress_mode::is_verbose_mode() {
-                eprintln!("{}", _line);
+                $crate::progress_mode::emit_stderr(&_line);
             }
         }
     }};
@@ -204,13 +216,13 @@ macro_rules! verbose_eprintln {
 macro_rules! log_eprintln {
     () => {{
         $crate::progress_mode::write_to_log("");
-        eprintln!();
+        $crate::progress_mode::emit_stderr("");
     }};
     ($($arg:tt)*) => {{
         let _msg = format!($($arg)*);
         let _line = $crate::progress_mode::format_log_line(&_msg);
         $crate::progress_mode::write_to_log(&_line);
-        eprintln!("{}", _line);
+        $crate::progress_mode::emit_stderr(&_line);
     }};
 }
 
@@ -236,7 +248,7 @@ pub fn xmp_merge_success() {
             format!("XMP merge: {} OK/{}", success, total)
         );
         write_to_log(&line);
-        eprintln!("{}", line);
+        emit_stderr(&line);
     }
 }
 
@@ -248,7 +260,7 @@ pub fn xmp_merge_failure(msg: &str) {
         format!("⚠️  XMP merge failed: {}", msg)
     );
     write_to_log(&line);
-    eprintln!("{}", line);
+    emit_stderr(&line);
 }
 
 /// Call after all processing is done to print the final summary.
@@ -262,6 +274,6 @@ pub fn xmp_merge_finalize() {
             format!("XMP merge done: {} OK/{}", success, total)
         );
         write_to_log(&line);
-        eprintln!("{}", line);
+        emit_stderr(&line);
     }
 }
