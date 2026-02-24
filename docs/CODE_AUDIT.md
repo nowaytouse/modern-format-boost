@@ -571,7 +571,7 @@
 
 ### 28.2 日志格式与缩进（美观化）
 
-- **文件日志**：去掉 `with_thread_ids` 和 `with_line_number`，使每行前缀宽度稳定（仅 timestamp + level + target），**消息正文左对齐**，便于阅读和检索。
+- **文件日志**：去掉 `with_thread_ids` 和 `with_line_number`，使每行前缀宽度稳定（仅 timestamp + level + target），**消息正文左对齐**，便于阅读和检索。写入文件前经 **StripAnsiWriter** 去除 ANSI 转义（如 `\x1b[92m`），避免日志文件中出现乱码式原始控制码。
 - **Stderr 统一缩进**：`progress_mode::emit_stderr` 对所有非空行增加固定 **2 空格** 前导（`STDERR_INDENT`），多行块（如 Precheck Report、XMP 汇总）整体缩进一致。
 - **Tag 列宽**：`LOG_TAG_WIDTH` 由 34 调整为 24，带 tag 的日志（如 `[file.jpeg]`、`[XMP]`）消息列仍对齐，左侧留白更紧凑。
 
