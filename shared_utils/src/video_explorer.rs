@@ -2717,13 +2717,14 @@ impl VideoExplorer {
 
         let filter = match duration {
             Some(dur) if dur > 60.0 => {
-                let start_end = dur * 0.10;
-                let mid_start = dur * 0.45;
-                let mid_end = dur * 0.55;
-                let tail_start = dur * 0.90;
+                let segment_pct = 0.15;
+                let start_end = dur * segment_pct;
+                let mid_start = dur * (0.5 - segment_pct / 2.0);
+                let mid_end = dur * (0.5 + segment_pct / 2.0);
+                let tail_start = dur * (1.0 - segment_pct);
 
                 crate::log_eprintln!(
-                    "   MS-SSIM: 3-segment sampling (start 10% + mid 10% + end 10%)"
+                    "   MS-SSIM: 3-segment sampling (start 15% + mid 15% + end 15%)"
                 );
                 format!(
                     "[0:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})',\
