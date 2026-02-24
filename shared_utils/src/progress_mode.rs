@@ -117,12 +117,20 @@ const STDERR_INDENT: &str = "  ";
 
 /// Emit a line to stderr via tracing (so it appears when a tracing subscriber is initialized).
 /// Applies a uniform 2-space indent so multi-line blocks (e.g. precheck report) stay aligned.
+/// When stderr is not a TTY (e.g. redirect/script), ANSI is stripped so output is plain text.
 #[inline]
 pub fn emit_stderr(line: &str) {
-    if line.is_empty() {
+    use std::borrow::Cow;
+    use std::io::IsTerminal;
+    let msg: Cow<str> = if std::io::stderr().is_terminal() {
+        Cow::Borrowed(line)
+    } else {
+        Cow::Owned(crate::logging::strip_ansi_str(line))
+    };
+    if msg.is_empty() {
         tracing::info!("");
     } else {
-        tracing::info!("{}{}", STDERR_INDENT, line);
+        tracing::info!("{}{}", STDERR_INDENT, msg);
     }
 }
 
