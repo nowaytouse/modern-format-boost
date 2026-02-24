@@ -1,5 +1,7 @@
 //! CRF precision constants and quality grade helpers
 
+use crate::crf_constants::{CRF_CACHE_KEY_MULTIPLIER, CRF_CACHE_MAX_VALID};
+
 pub const CRF_PRECISION: f32 = 0.25;
 
 pub const COARSE_STEP: f32 = 2.0;
@@ -10,25 +12,31 @@ pub const ULTRA_FINE_STEP: f32 = 0.25;
 
 pub const CPU_FINEST_STEP: f32 = 0.1;
 
-pub const CACHE_KEY_MULTIPLIER: f32 = 10.0;
+/// Same as `crf_constants::CRF_CACHE_KEY_MULTIPLIER` so cache keys match CrfCache / Crf::to_cache_key.
+pub const CACHE_KEY_MULTIPLIER: f32 = CRF_CACHE_KEY_MULTIPLIER;
 
 #[inline]
 pub fn crf_to_cache_key(crf: f32) -> i32 {
-    let normalized = (crf * CACHE_KEY_MULTIPLIER).round();
+    if !crf.is_finite() || crf < 0.0 {
+        return 0;
+    }
+    let capped = crf.min(CRF_CACHE_MAX_VALID);
+    let normalized = (capped * CACHE_KEY_MULTIPLIER).round();
     let key = normalized as i32;
-
     debug_assert!(
-        (0..=630).contains(&key),
-        "Cache key {} out of expected range [0, 630] for CRF {}",
+        key >= 0 && key <= (CRF_CACHE_MAX_VALID * CACHE_KEY_MULTIPLIER) as i32,
+        "Cache key {} out of expected range for CRF {}",
         key,
         crf
     );
-
     key
 }
 
 #[inline]
 pub fn cache_key_to_crf(key: i32) -> f32 {
+    if key <= 0 {
+        return 0.0;
+    }
     key as f32 / CACHE_KEY_MULTIPLIER
 }
 
@@ -73,6 +81,7 @@ impl SearchPhase {
     }
 }
 
+/// Step sizes per phase; mirrors SearchPhase::step_size() but allows runtime override (e.g. tests). Defaults match SearchPhase.
 #[derive(Debug, Clone)]
 pub struct ThreePhaseSearch {
     pub gpu_coarse_step: f32,
@@ -124,8 +133,12 @@ pub const DEFAULT_MIN_PSNR: f64 = 35.0;
 
 pub const HIGH_QUALITY_MIN_PSNR: f64 = 40.0;
 
+/// Returns binary-search iteration count for CRF range. Requires `max_crf >= min_crf` (otherwise saturates to 0 range).
 pub fn required_iterations(min_crf: u8, max_crf: u8) -> u32 {
-    let range = (max_crf - min_crf) as f64;
+    let range = (max_crf.saturating_sub(min_crf)) as f64;
+    if range <= 0.0 {
+        return 1;
+    }
     (range.log2().ceil() as u32) + 1
 }
 
@@ -141,6 +154,7 @@ pub fn is_valid_psnr(psnr: f64) -> bool {
     psnr >= 0.0 || psnr.is_infinite()
 }
 
+/// Do not use for fixed-width terminal alignment; string length != display width (CJK).
 pub fn ssim_quality_grade(ssim: f64) -> &'static str {
     if ssim >= 0.98 {
         "Excellent (几乎无法区分)"
@@ -193,6 +207,7 @@ pub fn is_valid_ms_ssim(ms_ssim: f64) -> bool {
     (0.0..=1.0).contains(&ms_ssim)
 }
 
+/// Do not use for fixed-width terminal alignment; string length != display width (CJK).
 pub fn ms_ssim_quality_grade(ms_ssim: f64) -> &'static str {
     if ms_ssim >= 0.95 {
         "Excellent (几乎无法区分)"
