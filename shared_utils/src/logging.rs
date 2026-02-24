@@ -27,7 +27,31 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{
+    filter::FilterFn,
+    fmt,
+    layer::{Layer, SubscriberExt},
+    util::SubscriberInitExt,
+    EnvFilter,
+};
+
+/// Strip ANSI escape sequences from a string (for stderr when not a TTY so captured output is plain text).
+pub fn strip_ansi_str(s: &str) -> String {
+    let mut result = String::new();
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' || c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
 
 /// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text, not raw codes.
 fn strip_ansi_bytes(buf: &[u8]) -> Vec<u8> {
@@ -173,13 +197,15 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with_line_number(false);
 
     // Stderr: message only (uniform indent applied in progress_mode::emit_stderr).
+    // Exclude target "gpu_detection" so "GPU: Apple VideoToolbox" etc. go to file only (less noise on terminal).
     let stderr_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(true)
         .with_target(false)
         .with_level(false)
         .with_line_number(false)
-        .without_time();
+        .without_time()
+        .with_filter(FilterFn::new(|m: &tracing::Metadata| m.target() != "gpu_detection"));
 
     tracing_subscriber::registry()
         .with(env_filter)

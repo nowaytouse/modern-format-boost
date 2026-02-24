@@ -308,7 +308,8 @@ impl GpuAccel {
     pub fn print_detection_info(&self) {
         if !crate::progress_mode::is_verbose_mode() {
             if self.enabled {
-                crate::log_eprintln!("GPU: {}", self.gpu_type);
+                // Log to file only (stderr layer filters out target "gpu_detection" for less terminal noise).
+                tracing::info!(target: "gpu_detection", "  GPU: {}", self.gpu_type);
             } else {
                 crate::log_eprintln!("⚠️ No GPU acceleration, using CPU encoding");
             }
