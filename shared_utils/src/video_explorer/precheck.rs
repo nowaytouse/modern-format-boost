@@ -54,7 +54,7 @@ impl FpsCategory {
     pub fn from_fps(fps: f64) -> Self {
         if fps <= 0.0 || fps > FPS_THRESHOLD_INVALID {
             FpsCategory::Invalid
-        } else if fps <= FPS_RANGE_NORMAL.1 {
+        } else if fps < FPS_RANGE_NORMAL.1 {
             FpsCategory::Normal
         } else if fps <= FPS_RANGE_EXTENDED.1 {
             FpsCategory::Extended
@@ -67,8 +67,8 @@ impl FpsCategory {
 
     pub fn description(&self) -> &'static str {
         match self {
-            FpsCategory::Normal => "normal range (1-240 fps)",
-            FpsCategory::Extended => "extended range (240-2000 fps)",
+            FpsCategory::Normal => "normal range (1–239 fps)",
+            FpsCategory::Extended => "extended range (240–2000 fps)",
             FpsCategory::Extreme => "extreme range (2000-10000 fps)",
             FpsCategory::Invalid => "invalid (>10000 fps, possible metadata error)",
         }
@@ -108,7 +108,7 @@ const LEGACY_CODECS_STRONGLY_RECOMMENDED: &[&str] = &[
     "rpza",
     "mjpeg",
     "mjpegb",
-    "huffyuv",
+    // huffyuv omitted: lossless codec; video_quality_detector routes to FFV1, not "strongly upgrade to lossy"
 ];
 
 const OPTIMAL_CODECS: &[&str] = &["hevc", "h265", "x265", "hvc1", "av1", "av01", "libaom-av1"];
@@ -118,7 +118,8 @@ const FPS_RANGE_EXTENDED: (f64, f64) = (240.0, 2000.0);
 const FPS_RANGE_EXTREME: (f64, f64) = (2000.0, 10000.0);
 const FPS_THRESHOLD_INVALID: f64 = 10000.0;
 
-fn get_codec_info(input: &Path) -> Result<String> {
+/// Single ffprobe run for precheck: stream (codec, size, duration, fps, bit_rate, color) + format.duration.
+fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -126,55 +127,154 @@ fn get_codec_info(input: &Path) -> Result<String> {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name",
+            "stream=codec_name,width,height,r_frame_rate,duration,nb_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample",
+            "-show_entries",
+            "format=duration",
             "-of",
-            "default=noprint_wrappers=1:nokey=1",
+            "json",
             "--",
         ])
         .arg(crate::safe_path_arg(input).as_ref())
         .output()
-        .context("ffprobe failed to get codec")?;
+        .context("ffprobe failed")?;
 
     if !output.status.success() {
-        bail!("ffprobe failed to get codec");
+        bail!("ffprobe failed");
     }
 
-    let codec = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_lowercase();
-
-    if codec.is_empty() {
-        bail!("Could not detect video codec");
-    }
-
-    Ok(codec)
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("ffprobe JSON parse failed")?;
+    Ok(json)
 }
 
-fn get_bitrate(input: &Path) -> Result<f64> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=bit_rate",
-            "-of",
-            "default=noprint_wrappers=1:nokey=1",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(input).as_ref())
-        .output()
-        .context("ffprobe failed to get bitrate")?;
+fn parse_fps_from_stream(stream: &serde_json::Value) -> f64 {
+    stream["r_frame_rate"]
+        .as_str()
+        .and_then(|s| {
+            let parts: Vec<&str> = s.split('/').collect();
+            if parts.len() == 2 {
+                let num: f64 = parts[0].parse().ok()?;
+                let den: f64 = parts[1].parse().ok()?;
+                if den > 0.0 {
+                    Some(num / den)
+                } else {
+                    None
+                }
+            } else {
+                s.parse().ok()
+            }
+        })
+        .unwrap_or(30.0)
+}
 
-    if output.status.success() {
-        let bitrate_str = String::from_utf8_lossy(&output.stdout);
-        if let Ok(bitrate_bps) = bitrate_str.trim().parse::<f64>() {
-            return Ok(bitrate_bps / 1000.0);
+fn parse_duration_from_precheck_json(
+    json: &serde_json::Value,
+    fps: f64,
+    frame_count: u64,
+    input: &Path,
+) -> Result<(f64, f64, u64)> {
+    let stream = json["streams"].get(0);
+    let stream_duration: Option<f64> = stream
+        .and_then(|s| s["duration"].as_str())
+        .and_then(|s| s.parse().ok())
+        .filter(|&d: &f64| d > 0.0 && !d.is_nan());
+
+    if let Some(duration) = stream_duration {
+        return Ok((duration, fps, frame_count));
+    }
+
+    eprintln!("   ⚠️ DURATION: stream.duration unavailable, trying format.duration...");
+    let format_duration: Option<f64> = json["format"]["duration"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .filter(|&d: &f64| d > 0.0 && !d.is_nan());
+
+    if let Some(duration) = format_duration {
+        eprintln!(
+            "   ✅ DURATION RECOVERED via format.duration: {:.2}s",
+            duration
+        );
+        return Ok((duration, fps, frame_count));
+    }
+
+    eprintln!("   ⚠️ DURATION: format.duration failed, trying frame_count/fps...");
+    if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
+        let duration = frame_count as f64 / fps;
+        if duration > 0.0 {
+            eprintln!(
+                "   ✅ DURATION RECOVERED via frame_count/fps: {:.2}s ({} frames / {:.2} fps)",
+                duration, frame_count, fps
+            );
+            return Ok((duration, fps, frame_count));
         }
     }
 
-    Ok(0.0)
+    eprintln!("   ⚠️ DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)...");
+    if let Some((duration_secs, frames)) =
+        crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
+    {
+        if duration_secs > 0.0 && frames > 0 {
+            let inferred_fps = frames as f64 / duration_secs;
+            eprintln!(
+                "   ✅ DURATION RECOVERED via ImageMagick: {:.2}s ({} frames, {:.2} fps)",
+                duration_secs, frames, inferred_fps
+            );
+            return Ok((duration_secs, inferred_fps, frames));
+        }
+    }
+
+    eprintln!("   ❌ DURATION DETECTION FAILED - Cannot determine video duration");
+    eprintln!("   File: {}", input.display());
+    bail!("Failed to detect video duration - all methods failed")
+}
+
+/// P3: Compute only BPP from precheck JSON (one ffprobe, no full VideoInfo).
+fn bpp_from_precheck_json(
+    json: &serde_json::Value,
+    file_size: u64,
+    input: &Path,
+) -> Result<f64> {
+    let stream = json["streams"]
+        .get(0)
+        .context("No video stream in ffprobe output")?;
+    let width: u32 = stream["width"]
+        .as_u64()
+        .and_then(|w| u32::try_from(w).ok())
+        .context("Missing or invalid video width")?;
+    let height: u32 = stream["height"]
+        .as_u64()
+        .and_then(|h| u32::try_from(h).ok())
+        .context("Missing or invalid video height")?;
+    let fps = parse_fps_from_stream(stream);
+    let frame_count_raw: u64 = stream["nb_frames"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| stream["nb_frames"].as_u64())
+        .unwrap_or(0);
+    let (duration, fps, frame_count_raw) =
+        parse_duration_from_precheck_json(json, fps, frame_count_raw, input)?;
+    let frame_count = if frame_count_raw == 0 && duration > 0.0 {
+        (duration * fps) as u64
+    } else {
+        frame_count_raw.max(1)
+    };
+    let video_bytes = stream["bit_rate"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&br| br > 0)
+        .map(|br| (br as f64 * duration / 8.0) as u64)
+        .unwrap_or(0);
+    let bytes_for_bpp = if video_bytes > 0 {
+        video_bytes
+    } else {
+        file_size
+    };
+    let total_pixels = width as u64 * height as u64 * frame_count;
+    Ok(if total_pixels > 0 {
+        (bytes_for_bpp as f64 * 8.0) / total_pixels as f64
+    } else {
+        0.5
+    })
 }
 
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
@@ -289,63 +389,70 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .context("Failed to read file metadata")?
         .len();
 
-    let codec = get_codec_info(input)?;
+    let json = run_precheck_ffprobe(input)?;
+    let stream = json["streams"]
+        .get(0)
+        .context("No video stream in ffprobe output")?;
 
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=width,height",
-            "-of",
-            "csv=p=0",
-            "--",
-        ])
-        .arg(crate::safe_path_arg(input).as_ref())
-        .output()
-        .context("ffprobe failed")?;
-
-    if !output.status.success() {
-        bail!("ffprobe failed to get video info");
+    let codec = stream["codec_name"]
+        .as_str()
+        .unwrap_or("")
+        .to_string()
+        .to_lowercase();
+    if codec.is_empty() {
+        bail!("Could not detect video codec");
     }
 
-    let info_str = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = info_str.trim().split(',').collect();
+    let width: u32 = stream["width"]
+        .as_u64()
+        .and_then(|w| u32::try_from(w).ok())
+        .context("Missing or invalid video width")?;
+    let height: u32 = stream["height"]
+        .as_u64()
+        .and_then(|h| u32::try_from(h).ok())
+        .context("Missing or invalid video height")?;
 
-    if parts.len() < 2 {
-        bail!("ffprobe output format abnormal: {}", info_str);
-    }
-
-    let width: u32 = parts
-        .first()
+    let fps = parse_fps_from_stream(stream);
+    let frame_count_raw: u64 = stream["nb_frames"]
+        .as_str()
         .and_then(|s| s.parse().ok())
-        .context("Failed to parse video width")?;
-    let height: u32 = parts
-        .get(1)
-        .and_then(|s| s.parse().ok())
-        .context("Failed to parse video height")?;
+        .or_else(|| stream["nb_frames"].as_u64())
+        .unwrap_or(0);
 
-    let (duration, fps, frame_count_raw, _method) = detect_duration_comprehensive(input)?;
-
+    let (duration, fps, frame_count_raw) =
+        parse_duration_from_precheck_json(&json, fps, frame_count_raw, input)?;
     let frame_count = if frame_count_raw == 0 && duration > 0.0 {
         (duration * fps) as u64
     } else {
         frame_count_raw.max(1)
     };
 
-    let bitrate_kbps = get_bitrate(input).unwrap_or_else(|_| {
-        if duration > 0.0 {
-            (file_size as f64 * 8.0) / (duration * 1000.0)
-        } else {
-            0.0
-        }
-    });
+    let bitrate_kbps = stream["bit_rate"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|bps| bps / 1000.0)
+        .unwrap_or_else(|| {
+            if duration > 0.0 {
+                (file_size as f64 * 8.0) / (duration * 1000.0)
+            } else {
+                0.0
+            }
+        });
 
+    let video_bytes = stream["bit_rate"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|&br| br > 0)
+        .map(|br| (br as f64 * duration / 8.0) as u64)
+        .unwrap_or(0);
+    let bytes_for_bpp = if video_bytes > 0 {
+        video_bytes
+    } else {
+        file_size
+    };
     let total_pixels = width as u64 * height as u64 * frame_count;
     let bpp = if total_pixels > 0 {
-        (file_size as f64 * 8.0) / total_pixels as f64
+        (bytes_for_bpp as f64 * 8.0) / total_pixels as f64
     } else {
         0.5
     };
@@ -355,13 +462,13 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
 
     let compressibility = if source_codec_enum.is_modern() {
         Compressibility::VeryLow
-    } else if codec.to_lowercase().contains("theora")
-        || codec.to_lowercase().contains("rv")
-        || codec.to_lowercase().contains("real")
-        || codec.to_lowercase().contains("mjpeg")
-        || codec.to_lowercase().contains("cinepak")
-        || codec.to_lowercase().contains("indeo")
-        || codec.to_lowercase().contains("gif")
+    } else if codec.contains("theora")
+        || codec.contains("rv")
+        || codec.contains("real")
+        || codec.contains("mjpeg")
+        || codec.contains("cinepak")
+        || codec.contains("indeo")
+        || codec.contains("gif")
         || bpp > 0.50
     {
         Compressibility::VeryHigh
@@ -376,18 +483,35 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let recommendation =
         evaluate_processing_recommendation(&codec, width, height, duration, fps, bitrate_kbps, bpp);
 
-    let (color_space, pix_fmt, bit_depth) = extract_color_info(input);
+    let color_space = stream["color_space"]
+        .as_str()
+        .filter(|s| !s.is_empty() && *s != "unknown")
+        .map(String::from);
+    let color_transfer = stream["color_transfer"]
+        .as_str()
+        .filter(|s| !s.is_empty() && *s != "unknown")
+        .map(String::from);
+    let pix_fmt = stream["pix_fmt"].as_str().map(String::from);
+    let bit_depth = stream["bits_per_raw_sample"]
+        .as_str()
+        .and_then(|s| s.parse::<u8>().ok());
 
     let fps_category = FpsCategory::from_fps(fps);
 
+    // HDR: require BT.2020 (or 2020) and PQ/HLG transfer; 10-bit alone is not HDR (ProRes/DPX SDR).
     let is_hdr = color_space
         .as_ref()
         .map(|cs| cs.contains("bt2020") || cs.contains("2020"))
         .unwrap_or(false)
-        || bit_depth.map(|bd| bd >= 10).unwrap_or(false)
-        || pix_fmt
+        && color_transfer
             .as_ref()
-            .map(|pf| pf.contains("10le") || pf.contains("10be") || pf.contains("p10"))
+            .map(|t| {
+                let lower = t.to_lowercase();
+                lower.contains("smpte2084")
+                    || lower.contains("arib-std-b67")
+                    || lower.contains("pq")
+                    || lower.contains("hlg")
+            })
             .unwrap_or(false);
 
     Ok(VideoInfo {
@@ -410,6 +534,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     })
 }
 
+/// Caller must pass lowercase codec (e.g. from get_video_info).
 fn evaluate_processing_recommendation(
     codec: &str,
     width: u32,
@@ -419,8 +544,6 @@ fn evaluate_processing_recommendation(
     bitrate_kbps: f64,
     bpp: f64,
 ) -> ProcessingRecommendation {
-    let codec_lower = codec.to_lowercase();
-
     if width < 16 || height < 16 {
         return ProcessingRecommendation::CannotProcess {
             reason: format!("Resolution too small {}x{} (< 16px)", width, height),
@@ -457,25 +580,25 @@ fn evaluate_processing_recommendation(
 
     if LEGACY_CODECS_STRONGLY_RECOMMENDED
         .iter()
-        .any(|&c| codec_lower.contains(c))
+        .any(|&c| codec.contains(c))
     {
-        let codec_category = if codec_lower.contains("theora") {
+        let codec_category = if codec.contains("theora") {
             "Theora (Open Source, WebM predecessor)"
-        } else if codec_lower.contains("rv") || codec_lower.contains("real") {
+        } else if codec.contains("rv") || codec.contains("real") {
             "RealVideo (Legacy streaming standard)"
-        } else if codec_lower.contains("vp6") || codec_lower.contains("vp7") {
+        } else if codec.contains("vp6") || codec.contains("vp7") {
             "VP6/VP7 (Flash Video era)"
-        } else if codec_lower.contains("wmv") {
+        } else if codec.contains("wmv") {
             "Windows Media Video"
-        } else if codec_lower.contains("cinepak") {
+        } else if codec.contains("cinepak") {
             "Cinepak (CD-ROM era)"
-        } else if codec_lower.contains("indeo") || codec_lower.contains("iv") {
+        } else if codec.contains("indeo") || codec.contains("iv") {
             "Intel Indeo"
-        } else if codec_lower.contains("svq") {
+        } else if codec.contains("svq") {
             "Sorenson Video (QuickTime)"
-        } else if codec_lower.contains("flv") {
+        } else if codec.contains("flv") {
             "Flash Video H.263"
-        } else if codec_lower.contains("mjpeg") {
+        } else if codec.contains("mjpeg") {
             "Motion JPEG (Inefficient intra-frame only)"
         } else {
             "Legacy codec"
@@ -490,7 +613,7 @@ fn evaluate_processing_recommendation(
         };
     }
 
-    if OPTIMAL_CODECS.iter().any(|&c| codec_lower.contains(c)) {
+    if OPTIMAL_CODECS.iter().any(|&c| codec.contains(c)) {
         return ProcessingRecommendation::NotRecommended {
             codec: codec.to_string(),
             reason: "File already uses modern codec (HEVC/AV1), re-encoding may cause quality loss"
@@ -545,14 +668,11 @@ fn evaluate_processing_recommendation(
     }
 }
 
-fn extract_color_info(input: &Path) -> (Option<String>, Option<String>, Option<u8>) {
-    let info = crate::ffprobe_json::extract_color_info(input);
-    (info.color_space, info.pix_fmt, info.bit_depth)
-}
-
+/// Returns bits-per-pixel from video stream (one ffprobe, minimal parse; P3 lightweight path).
 pub fn calculate_bpp(input: &Path) -> Result<f64> {
-    let info = get_video_info(input)?;
-    Ok(info.bpp)
+    let file_size = std::fs::metadata(input).context("Failed to read file metadata")?.len();
+    let json = run_precheck_ffprobe(input)?;
+    bpp_from_precheck_json(&json, file_size, input)
 }
 
 pub fn print_precheck_report(info: &VideoInfo) {
@@ -653,9 +773,8 @@ pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
 
     match &info.recommendation {
         ProcessingRecommendation::CannotProcess { reason } => {
-            eprintln!("⚠️  PRECHECK WARNING: {}", reason);
-            eprintln!("    → Possible metadata issue, attempting conversion anyway...");
-            eprintln!("    → If conversion fails, check source file integrity");
+            eprintln!("⚠️  PRECHECK: {}", reason);
+            bail!("Precheck cannot process this file: {}", reason);
         }
 
         ProcessingRecommendation::NotRecommended { codec, reason } => {

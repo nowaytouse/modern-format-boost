@@ -1,7 +1,7 @@
 # 代码审计报告 / Code Audit Report
 
 **日期 / Date**: 2026-02-23  
-**范围 / Scope**: modern_format_boost 仓库（重点 shared_utils、video_explorer、ffprobe、image_analyzer、progress_mode）
+**范围 / Scope**: modern_format_boost 仓库（重点 shared_utils、video_explorer、ffprobe、image_analyzer、progress_mode、ssim_calculator、stream_analysis、precision）
 
 ---
 
@@ -472,3 +472,85 @@
 
 - 已执行 `cargo update`，Cargo.lock 更新至当前 workspace 版本约束内最新（如 chrono 0.4.43 → 0.4.44）。
 - workspace 中声明的版本（anyhow 1.0、thiserror 2.0、clap 4.5、indicatif 0.18、tempfile 3.25、proptest 1.10 等）保持不变，与现有测试兼容。
+
+---
+
+## 25. gpu_coarse_search.rs 审计修复（P1/P2）
+
+依据审计报告对 `shared_utils/src/video_explorer/gpu_coarse_search.rs` 做了以下修正。
+
+### 25.1 P1 正确性
+
+- **GpuAccel::detect() 重复调用与变量遮蔽**：删除第一次 `detect()` 与 `print_detection_info()`，在 `input_size` 之后保留单次 `let gpu = GpuAccel::detect(); gpu.print_detection_info();`。
+- **伪 fallback**：边界校验失败时不再“Retrying with CPU encoding”并重复调用同一 `encode_cached`；改为一次失败即返回清晰错误（`Boundary verification failed at CRF ...`）。
+- **quality_wall_hit 分支**：`domain_wall_hit` 与 `quality_wall_hit` 后处理逻辑一致，合并为 `if domain_wall_hit || quality_wall_hit { ... }`，保留两变量赋值以便区分日志含义。
+- **Phase 3 向下搜索步长**：由固定 0.25 改为与主路径一致的 **0.1**（`PHASE3_DOWNWARD_STEP`）；向上搜索仍用 `step_size_upward = 0.25`，向下用 0.1 以对齐主路径 fine-tune 精度。
+
+### 25.2 P2 设计
+
+- **H.264 CrfMapping**：两处 `VideoEncoder::H264 => CrfMapping::hevc(...)` 增加注释，说明 H.264 CRF 范围与 HEVC 一致，有意复用 HEVC 映射。
+- **min_ssim 在 GIF/长视频/无时长路径生效**：GIF、长视频、无时长三条 SSIM 校验路径由硬编码 0.92 改为 `result.actual_min_ssim.max(0.92)`，使调用方传入的 `min_ssim` 生效。
+- **ffprobe 只执行一次**：在 `explore_with_gpu_coarse_search` 顶层统一获取 `duration`（一次 ffprobe），传入 `cpu_fine_tune_from_gpu_boundary(..., duration)`；`cpu_fine_tune_from_gpu_boundary` 内删除重复的 ffprobe 调用。
+- **stderr_temp 的 else 死分支**：删除 `if let Some(ref temp) = stderr_temp { ... } else { File::create(...) }` 中永远不执行的 else 分支。
+
+### 25.3 未改动（P3）
+
+- `#[allow(unused_assignments)]` / 未使用变量、以及将 `cpu_fine_tune_from_gpu_boundary` 拆分为多函数等 P3 项暂未改动，可按后续重构计划处理。
+
+---
+
+## 26. precheck.rs / dynamic_mapping.rs 审计修复（P1/P2）
+
+依据审计报告对 `precheck.rs` 与 `dynamic_mapping.rs` 做了以下修正。
+
+### 26.1 precheck.rs
+
+- **BPP 计算**：改为使用视频流大小（`stream_size::extract_stream_sizes` 的 `video_stream_size`），与 `video_quality_detector` 的“视频流码率/像素”一致；无法取得流大小时回退到文件总大小。
+- **huffyuv**：从 `LEGACY_CODECS_STRONGLY_RECOMMENDED` 中移除；HuffYuv 为无损，与 video_quality_detector 的 Lossless/FFV1 路由一致，不再建议“强烈升级到有损”。
+- **is_hdr**：仅当色域为 BT.2020（或 2020）**且** 传输函数为 PQ/HLG（smpte2084、arib-std-b67、pq、hlg）时判为 HDR；不再以 10-bit 或像素格式单独判 HDR，避免 ProRes/DPX 等 SDR 被误标。`ffprobe_json` 增加 `color_transfer` 字段以支持判断。
+- **FPS 240 边界**：`FpsCategory::from_fps` 中 Normal 改为 `fps < 240`，使 240 fps 归入 Extended；描述更新为 "1–239 fps" / "240–2000 fps"。
+- **CannotProcess**：`run_precheck` 在推荐为 `CannotProcess` 时改为 `bail!(...)`，调用方可正确收到错误并中止，不再静默继续。
+- **冗余 to_lowercase**：`get_video_info` 中 codec 已由 `get_codec_info` 转为小写，压缩率判断改为直接 `codec.contains(...)`。
+- **单次 ffprobe**：`get_video_info` 改为只执行一次 ffprobe（`run_precheck_ffprobe`：`-show_entries stream=codec_name,width,height,r_frame_rate,duration,nb_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample` + `format=duration`，`-of json`），从同一份 JSON 解析 codec、宽高、时长/帧率/帧数、码率、色彩信息；时长仍按 stream.duration → format.duration → frame_count/fps → ImageMagick 回退，仅在无时长时调用 ImageMagick。删除仅被 precheck 使用的 `get_codec_info`、`get_bitrate`、`extract_color_info`（precheck 内解析 color）；`detect_duration_comprehensive` 保留为公共 API 供其他调用方使用。
+
+### 26.2 dynamic_mapping.rs
+
+- **AV1 CRF 上界**：`gpu_to_cpu` 增加参数 `max_crf`；调用方（gpu_coarse_search）对 AV1 传 63.0、HEVC/H264 传 51.0，避免 AV1 高 CRF 被截断到 51。
+- **size_ratio ≥ 1.0**：`calculate_offset_from_ratio` 在 CPU 输出大于等于 GPU 时返回偏移 0，不再使用 +2.5。
+- **AV1 路径 vf_args**：非 GIF/非 HEVC 的 CPU 校准中，将多个滤镜用 `;` 拼接为单条 `-vf` 参数，避免重复 `-vf` 导致后者覆盖前者。
+- **多锚点分支**：在 `gpu_to_cpu` 多锚点插值处增加注释，说明当前 `quick_calibrate` 首次成功即 break，多锚点分支为未使用代码。
+- **temp 文件**：删除与 RAII 重复的手动 `fs::remove_file`，仅依赖 `NamedTempFile` 的 Drop 清理。
+- **P3**：删除未使用的 `_offset` 计算；`add_anchor` 中 `self.calibrated = !self.anchors.is_empty()` 改为 `self.calibrated = true`。
+
+### 26.3 P3 收尾（precheck / dynamic_mapping）
+
+- **precheck**  
+  - **calculate_bpp 轻量路径**：不再通过完整 `get_video_info` 取 bpp；改为一次 `run_precheck_ffprobe` + 私有 `bpp_from_precheck_json` 仅解析并计算 bpp（仍 1 次 ffprobe，不构建 recommendation/compressibility/color 等）。  
+  - **evaluate_processing_recommendation**：唯一调用方 `get_video_info` 已传入小写 codec，去掉冗余 `codec.to_lowercase()`，改为直接使用 `codec`，并注明「caller must pass lowercase codec」。  
+- **dynamic_mapping**：P3 已在 26.2 中完成（`_offset` 已删、`calibrated = true`）。
+
+---
+
+## 27. ssim_calculator.rs / stream_analysis.rs / precision.rs 审计修复
+
+依据审计报告对上述三个文件做了以下修正。
+
+### 27.1 P1 正确性
+
+- **ssim_calculator：MS-SSIM 并行 stderr 交错**：Y/U/V 三路不再在子线程内 `eprint!`/`eprintln!`；子线程只返回 `Option<f64>`，主线程在 `join` 后统一打印 `Y channel... {:.4} ✅` 等，避免输出交错、通道对应关系混乱。
+- **ssim_calculator：weighted_avg**：保留 6:1:1 权重，在旁加注释说明为 BT.601 近似，且 chroma 平面在 4:2:0 下 MS-SSIM 可能系统性偏低。
+- **precision：CACHE_KEY_MULTIPLIER 与 CrfCache 一致**：`precision::CACHE_KEY_MULTIPLIER` 改为使用 `crf_constants::CRF_CACHE_KEY_MULTIPLIER`（100.0），与 `explore_strategy::CrfCache`、`Crf::to_cache_key` 的 key 一致；`crf_to_cache_key` 对非有限或负 CRF 返回 0，对超过 `CRF_CACHE_MAX_VALID` 的 CRF 截断后再算 key；`cache_key_to_crf` 对 key≤0 返回 0。相关单元测试与属性测试的期望值已按 0.01 分辨率更新（如 20.0→2000）。
+- **stream_analysis：get_video_duration**：在路径参数前增加 `--`，与同文件其他 ffprobe 调用及 precheck 一致，避免路径以 `-` 开头时被当成选项。
+
+### 27.2 P2 设计
+
+- **ssim_calculator：MS-SSIM 时长阈值**：与 `gpu_coarse_search::VMAF_DURATION_THRESHOLD`（5 分钟）对齐，仅对 ≤5 分钟视频计算 MS-SSIM（原 5–30 分钟分支删除），避免与调用方策略不一致。
+- **ssim_calculator：calculate_ms_ssim 与 _yuv**：在模块头注释中说明 `calculate_ms_ssim_yuv` 为 gpu_coarse_search Phase 3 主入口，`calculate_ms_ssim` 为单通道 luma + standalone vmaf fallback，供其他调用方使用。
+- **precision：required_iterations**：使用 `max_crf.saturating_sub(min_crf)` 避免 u8 下溢；若 range≤0 直接返回 1。
+- **precision：ssim_quality_grade / ms_ssim_quality_grade**：增加文档注释，说明返回值含中英文混排，勿用于等宽终端对齐（string len ≠ display width）。
+- **precision：ThreePhaseSearch**：增加文档注释，说明与 `SearchPhase::step_size()` 一致、用于可选运行时覆盖。
+
+### 27.3 P3
+
+- **ssim_calculator**：去掉 "(Beijing)" 和 "End: ... Beijing"，改为使用系统本地时间的 "Start time"/"End" 显示。
+- **stream_analysis**：删除本文件内未使用的 `CrossValidationResult` 枚举。
