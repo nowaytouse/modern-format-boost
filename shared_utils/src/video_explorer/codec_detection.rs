@@ -23,6 +23,7 @@
 //! - `veryslow`: 极慢，极致压缩
 
 use std::process::Command;
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VideoEncoder {
@@ -73,7 +74,7 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx265") {
                     "libx265"
                 } else {
-                    eprintln!("⚠️  libx265 not available, falling back to hevc_videotoolbox");
+                    warn!("⚠️  libx265 not available, falling back to hevc_videotoolbox");
                     "hevc_videotoolbox"
                 }
             }
@@ -82,7 +83,7 @@ impl VideoEncoder {
                 if Self::is_encoder_available("libx264") {
                     "libx264"
                 } else {
-                    eprintln!("⚠️  libx264 not available, falling back to h264_videotoolbox");
+                    warn!("⚠️  libx264 not available, falling back to h264_videotoolbox");
                     "h264_videotoolbox"
                 }
             }
@@ -126,14 +127,27 @@ impl VideoEncoder {
 
     pub fn extra_args_with_preset(&self, max_threads: usize, preset: EncoderPreset) -> Vec<String> {
         match self {
-            VideoEncoder::Hevc => vec![
-                "-preset".to_string(),
-                preset.x26x_name().to_string(),
-                "-tag:v".to_string(),
-                "hvc1".to_string(),
-                "-x265-params".to_string(),
-                format!("log-level=error:pools={}", max_threads),
-            ],
+            VideoEncoder::Hevc => {
+                if Self::is_encoder_available("libx265") {
+                    vec![
+                        "-preset".to_string(),
+                        preset.x26x_name().to_string(),
+                        "-tag:v".to_string(),
+                        "hvc1".to_string(),
+                        "-x265-params".to_string(),
+                        format!("log-level=error:pools={}", max_threads),
+                    ]
+                } else {
+                    // Fallback for hevc_videotoolbox
+                    // Note: videotoolbox doesn't support -x265-params or standard presets
+                    vec![
+                        "-tag:v".to_string(),
+                        "hvc1".to_string(),
+                        "-allow_sw".to_string(),
+                        "1".to_string(),
+                    ]
+                }
+            }
             VideoEncoder::Av1 => vec![
                 "-svtav1-params".to_string(),
                 format!(
@@ -142,12 +156,24 @@ impl VideoEncoder {
                     max_threads
                 ),
             ],
-            VideoEncoder::H264 => vec![
-                "-preset".to_string(),
-                preset.x26x_name().to_string(),
-                "-profile:v".to_string(),
-                "high".to_string(),
-            ],
+            VideoEncoder::H264 => {
+                if Self::is_encoder_available("libx264") {
+                    vec![
+                        "-preset".to_string(),
+                        preset.x26x_name().to_string(),
+                        "-profile:v".to_string(),
+                        "high".to_string(),
+                    ]
+                } else {
+                    // Fallback for h264_videotoolbox
+                    vec![
+                        "-profile:v".to_string(),
+                        "high".to_string(),
+                        "-allow_sw".to_string(),
+                        "1".to_string(),
+                    ]
+                }
+            }
         }
     }
 }
