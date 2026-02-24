@@ -148,6 +148,9 @@ pub mod gif {
                         if block_size == 0 {
                             break;
                         }
+                        if pos + block_size > data.len() {
+                            break;
+                        }
                         pos += block_size;
                     }
                 }
@@ -160,6 +163,9 @@ pub mod gif {
                         let block_size = data[pos] as usize;
                         pos += 1;
                         if block_size == 0 {
+                            break;
+                        }
+                        if pos + block_size > data.len() {
                             break;
                         }
                         pos += block_size;
