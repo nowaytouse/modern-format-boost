@@ -1906,9 +1906,13 @@ impl VideoExplorer {
 
         progress_done!();
 
+        // Heuristic early exit: only after enough iterations to avoid premature stop on flat
+        // bitrate curves (e.g. static/scene-heavy content). Variance threshold is strict so
+        // we only exit when size ratio over the window is effectively constant.
         const WINDOW_SIZE: usize = 3;
-        const VARIANCE_THRESHOLD: f64 = 0.00001;
+        const VARIANCE_THRESHOLD: f64 = 1e-6;
         const CHANGE_RATE_THRESHOLD: f64 = 0.005;
+        const MIN_ITERATIONS_BEFORE_VARIANCE_EXIT: u32 = 6;
         let mut size_history: Vec<(f32, u64)> = Vec::new();
 
         let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
@@ -1959,21 +1963,29 @@ impl VideoExplorer {
                 low = mid;
             }
 
-            if variance < VARIANCE_THRESHOLD && size_history.len() >= WINDOW_SIZE {
+            if iterations >= MIN_ITERATIONS_BEFORE_VARIANCE_EXIT
+                && variance < VARIANCE_THRESHOLD
+                && size_history.len() >= WINDOW_SIZE
+            {
                 progress_done!();
                 log_header!(
-                    "   ⚡ 提前终止: 方差完全收敛 {:.8} < {:.8}",
+                    "   ⚡ Early exit: variance converged {:.2e} < {:.2e} (after {} iterations)",
                     variance,
-                    VARIANCE_THRESHOLD
+                    VARIANCE_THRESHOLD,
+                    iterations
                 );
                 break;
             }
-            if change_rate < CHANGE_RATE_THRESHOLD && prev_size.is_some() {
+            if iterations >= MIN_ITERATIONS_BEFORE_VARIANCE_EXIT
+                && change_rate < CHANGE_RATE_THRESHOLD
+                && prev_size.is_some()
+            {
                 progress_done!();
                 log_header!(
-                    "   ⚡ 提前终止: 变化率极小 {:.4}% < {:.4}%",
+                    "   ⚡ Early exit: change rate negligible {:.4}% < {:.4}% (after {} iterations)",
                     change_rate * 100.0,
-                    CHANGE_RATE_THRESHOLD * 100.0
+                    CHANGE_RATE_THRESHOLD * 100.0,
+                    iterations
                 );
                 break;
             }
