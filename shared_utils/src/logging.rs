@@ -87,13 +87,16 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         ))
     });
 
+    // File: no thread_id/line_number so prefix width is stable and message bodies align in the log file.
     let file_layer = fmt::layer()
         .with_writer(file_appender)
         .with_ansi(false)
         .with_target(true)
-        .with_thread_ids(true)
-        .with_line_number(true);
+        .with_level(true)
+        .with_thread_ids(false)
+        .with_line_number(false);
 
+    // Stderr: message only (uniform indent applied in progress_mode::emit_stderr).
     let stderr_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(true)
