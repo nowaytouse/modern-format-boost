@@ -554,3 +554,23 @@
 
 - **ssim_calculator**：去掉 "(Beijing)" 和 "End: ... Beijing"，改为使用系统本地时间的 "Start time"/"End" 显示。
 - **stream_analysis**：删除本文件内未使用的 `CrossValidationResult` 枚举。
+
+---
+
+## 28. 日志统一为 tracing（审计建议）
+
+审计意见：「模块大量使用 eprintln! 进行日志输出。虽然符合 CLI 工具特性，但如果能统一集成到 tracing 结构化日志中会更利于维护和调试。」
+
+### 28.1 已做修改
+
+- **progress_mode**：新增 `emit_stderr(line)`，内部使用 `tracing::info!` 输出到 stderr；`quiet_eprintln!`、`verbose_eprintln!`、`log_eprintln!` 以及 XMP 相关计数/失败/汇总的 stderr 输出均改为经 `emit_stderr`，在已初始化 tracing 时走结构化日志（stderr + 可选文件）。
+- **logging (init_logging)**：默认 `EnvFilter` 改为同时允许主程序与 `shared_utils`（例如 `vid_hevc=INFO,shared_utils=INFO`），保证库内 tracing 事件能输出到 stderr/文件。
+- **ffprobe_json**：`extract_color_info` 中的 FFPROBE 错误由 `eprintln!` 改为 `tracing::warn!`（带 `input`/`error` 等字段）。
+- **stream_analysis**：SSIM 计算相关提示由 `eprintln!` 改为 `tracing::info!` / `tracing::warn!` / `tracing::error!`。
+- **precheck**：时长回退提示、Precheck Report 行、run_precheck 的提示由 `eprintln!` 改为 `tracing::info!` / `tracing::warn!` / `tracing::error!`；Report 仍按行逐条 `info!` 以便检索。
+
+### 28.2 使用说明
+
+- 各二进制（vid_hevc、vid_av1、img_hevc、img_av1）已在启动时调用 `shared_utils::logging::init_logging`，tracing 事件会写入 stderr 与日志文件。
+- 可通过 `RUST_LOG` 控制级别（如 `RUST_LOG=debug`、`RUST_LOG=shared_utils=info`）。
+- 未调用 `init_logging` 的场合（如仅链接 shared_utils 的测试或工具），tracing 事件不会输出；原有 `write_to_log` 的日志文件写入逻辑保留，与 tracing 并行。

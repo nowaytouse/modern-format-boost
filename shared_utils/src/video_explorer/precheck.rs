@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Compressibility {
@@ -183,48 +184,38 @@ fn parse_duration_from_precheck_json(
         return Ok((duration, fps, frame_count));
     }
 
-    eprintln!("   ⚠️ DURATION: stream.duration unavailable, trying format.duration...");
+    warn!("DURATION: stream.duration unavailable, trying format.duration");
     let format_duration: Option<f64> = json["format"]["duration"]
         .as_str()
         .and_then(|s| s.parse().ok())
         .filter(|&d: &f64| d > 0.0 && !d.is_nan());
 
     if let Some(duration) = format_duration {
-        eprintln!(
-            "   ✅ DURATION RECOVERED via format.duration: {:.2}s",
-            duration
-        );
+        info!(duration_secs = %duration, "DURATION RECOVERED via format.duration");
         return Ok((duration, fps, frame_count));
     }
 
-    eprintln!("   ⚠️ DURATION: format.duration failed, trying frame_count/fps...");
+    warn!("DURATION: format.duration failed, trying frame_count/fps");
     if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
         let duration = frame_count as f64 / fps;
         if duration > 0.0 {
-            eprintln!(
-                "   ✅ DURATION RECOVERED via frame_count/fps: {:.2}s ({} frames / {:.2} fps)",
-                duration, frame_count, fps
-            );
+            info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
             return Ok((duration, fps, frame_count));
         }
     }
 
-    eprintln!("   ⚠️ DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)...");
+    warn!("DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)");
     if let Some((duration_secs, frames)) =
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
     {
         if duration_secs > 0.0 && frames > 0 {
             let inferred_fps = frames as f64 / duration_secs;
-            eprintln!(
-                "   ✅ DURATION RECOVERED via ImageMagick: {:.2}s ({} frames, {:.2} fps)",
-                duration_secs, frames, inferred_fps
-            );
+            info!(duration_secs = %duration_secs, frames, fps = %inferred_fps, "DURATION RECOVERED via ImageMagick");
             return Ok((duration_secs, inferred_fps, frames));
         }
     }
 
-    eprintln!("   ❌ DURATION DETECTION FAILED - Cannot determine video duration");
-    eprintln!("   File: {}", input.display());
+    error!(file = %input.display(), "DURATION DETECTION FAILED - Cannot determine video duration");
     bail!("Failed to detect video duration - all methods failed")
 }
 
@@ -339,48 +330,38 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         return Ok((duration, fps, frame_count, "stream.duration"));
     }
 
-    eprintln!("   ⚠️ DURATION: stream.duration unavailable, trying format.duration...");
+    warn!("DURATION: stream.duration unavailable, trying format.duration");
     let format_duration: Option<f64> = json["format"]["duration"]
         .as_str()
         .and_then(|s| s.parse().ok())
         .filter(|&d: &f64| d > 0.0 && !d.is_nan());
 
     if let Some(duration) = format_duration {
-        eprintln!(
-            "   ✅ DURATION RECOVERED via format.duration: {:.2}s",
-            duration
-        );
+        info!(duration_secs = %duration, "DURATION RECOVERED via format.duration");
         return Ok((duration, fps, frame_count, "format.duration"));
     }
 
-    eprintln!("   ⚠️ DURATION: format.duration failed, trying frame_count/fps...");
+    warn!("DURATION: format.duration failed, trying frame_count/fps");
     if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
         let duration = frame_count as f64 / fps;
         if duration > 0.0 {
-            eprintln!(
-                "   ✅ DURATION RECOVERED via frame_count/fps: {:.2}s ({} frames / {:.2} fps)",
-                duration, frame_count, fps
-            );
+            info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
             return Ok((duration, fps, frame_count, "frame_count/fps"));
         }
     }
 
-    eprintln!("   ⚠️ DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)...");
+    warn!("DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)");
     if let Some((duration_secs, frames)) =
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
     {
         if duration_secs > 0.0 && frames > 0 {
             let inferred_fps = frames as f64 / duration_secs;
-            eprintln!(
-                "   ✅ DURATION RECOVERED via ImageMagick: {:.2}s ({} frames, {:.2} fps)",
-                duration_secs, frames, inferred_fps
-            );
+            info!(duration_secs = %duration_secs, frames, fps = %inferred_fps, "DURATION RECOVERED via ImageMagick");
             return Ok((duration_secs, inferred_fps, frames, "imagemagick"));
         }
     }
 
-    eprintln!("   ❌ DURATION DETECTION FAILED - Cannot determine video duration");
-    eprintln!("   File: {}", input.display());
+    error!(file = %input.display(), "DURATION DETECTION FAILED - Cannot determine video duration");
     bail!("Failed to detect video duration - all methods failed")
 }
 
@@ -679,92 +660,94 @@ pub fn print_precheck_report(info: &VideoInfo) {
     if !crate::progress_mode::is_verbose_mode() {
         return;
     }
-    eprintln!("┌─────────────────────────────────────────────────────");
-    eprintln!("│ Precheck Report v5.75");
-    eprintln!("├─────────────────────────────────────────────────────");
-    eprintln!("│ Codec: {}", info.codec);
-    eprintln!("│ Resolution: {}x{}", info.width, info.height);
-    eprintln!(
+    let mut lines = Vec::new();
+    lines.push("┌─────────────────────────────────────────────────────".to_string());
+    lines.push("│ Precheck Report v5.75".to_string());
+    lines.push("├─────────────────────────────────────────────────────".to_string());
+    lines.push(format!("│ Codec: {}", info.codec));
+    lines.push(format!("│ Resolution: {}x{}", info.width, info.height));
+    lines.push(format!(
         "│ Duration: {:.1}s ({} frames)",
         info.duration, info.frame_count
-    );
-    eprintln!("│ FPS: {:.2} {}", info.fps, info.fps_category.description());
-
-    eprintln!(
+    ));
+    lines.push(format!("│ FPS: {:.2} {}", info.fps, info.fps_category.description()));
+    lines.push(format!(
         "│ File Size: {:.2} MB",
         info.file_size as f64 / 1024.0 / 1024.0
-    );
-    eprintln!("│ Bitrate: {:.0} kbps", info.bitrate_kbps);
-    eprintln!("│ BPP: {:.4} bits/pixel", info.bpp);
+    ));
+    lines.push(format!("│ Bitrate: {:.0} kbps", info.bitrate_kbps));
+    lines.push(format!("│ BPP: {:.4} bits/pixel", info.bpp));
 
     if info.color_space.is_some() || info.pix_fmt.is_some() || info.bit_depth.is_some() {
-        eprintln!("├─────────────────────────────────────────────────────");
+        lines.push("├─────────────────────────────────────────────────────".to_string());
         if let Some(ref cs) = info.color_space {
             let hdr_indicator = if info.is_hdr { " HDR" } else { "" };
-            eprintln!("│ Color Space: {}{}", cs, hdr_indicator);
+            lines.push(format!("│ Color Space: {}{}", cs, hdr_indicator));
         }
         if let Some(ref pf) = info.pix_fmt {
-            eprintln!("│ Pixel Format: {}", pf);
+            lines.push(format!("│ Pixel Format: {}", pf));
         }
         if let Some(bd) = info.bit_depth {
-            eprintln!("│ Bit Depth: {}-bit", bd);
+            lines.push(format!("│ Bit Depth: {}-bit", bd));
         }
     }
 
-    eprintln!("├─────────────────────────────────────────────────────");
-
+    lines.push("├─────────────────────────────────────────────────────".to_string());
     match info.compressibility {
         Compressibility::VeryHigh => {
-            eprintln!("│ Compression Potential: VERY HIGH");
-            eprintln!("│    → Ancient codec or extremely high BPP");
-            eprintln!("│    → Expected 10-50x compression improvement!");
+            lines.push("│ Compression Potential: VERY HIGH".to_string());
+            lines.push("│    → Ancient codec or extremely high BPP".to_string());
+            lines.push("│    → Expected 10-50x compression improvement!".to_string());
         }
         Compressibility::High => {
-            eprintln!("│ ✅ Compression Potential: High");
-            eprintln!("│    → Large compression space expected");
+            lines.push("│ ✅ Compression Potential: High".to_string());
+            lines.push("│    → Large compression space expected".to_string());
         }
         Compressibility::Medium => {
-            eprintln!("│ Compression Potential: Medium");
-            eprintln!("│    → Moderate compression potential");
+            lines.push("│ Compression Potential: Medium".to_string());
+            lines.push("│    → Moderate compression potential".to_string());
         }
         Compressibility::Low => {
-            eprintln!("│ ⚠️  Compression Potential: Low");
-            eprintln!("│    → File already optimized");
+            lines.push("│ ⚠️  Compression Potential: Low".to_string());
+            lines.push("│    → File already optimized".to_string());
         }
         Compressibility::VeryLow => {
-            eprintln!("│ Compression Potential: VERY LOW");
-            eprintln!("│    → Already using modern codec (HEVC/AV1)");
-            eprintln!("│    → Re-encoding may cause quality loss");
+            lines.push("│ Compression Potential: VERY LOW".to_string());
+            lines.push("│    → Already using modern codec (HEVC/AV1)".to_string());
+            lines.push("│    → Re-encoding may cause quality loss".to_string());
         }
     }
 
-    eprintln!("├─────────────────────────────────────────────────────");
+    lines.push("├─────────────────────────────────────────────────────".to_string());
     match &info.recommendation {
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
-            eprintln!("│ STRONGLY RECOMMENDED: Upgrade to modern codec!");
-            eprintln!("│    → Source: {} (legacy/inefficient)", codec);
-            eprintln!("│    → {}", reason);
+            lines.push("│ STRONGLY RECOMMENDED: Upgrade to modern codec!".to_string());
+            lines.push(format!("│    → Source: {} (legacy/inefficient)", codec));
+            lines.push(format!("│    → {}", reason));
         }
         ProcessingRecommendation::Recommended { reason } => {
-            eprintln!("│ ✅ RECOMMENDED: Convert to modern codec");
-            eprintln!("│    → {}", reason);
+            lines.push("│ ✅ RECOMMENDED: Convert to modern codec".to_string());
+            lines.push(format!("│    → {}", reason));
         }
         ProcessingRecommendation::Optional { reason } => {
-            eprintln!("│ OPTIONAL: Marginal benefit expected");
-            eprintln!("│    → {}", reason);
+            lines.push("│ OPTIONAL: Marginal benefit expected".to_string());
+            lines.push(format!("│    → {}", reason));
         }
         ProcessingRecommendation::NotRecommended { codec, reason } => {
-            eprintln!("│ ⚠️  NOT RECOMMENDED: Already optimal");
-            eprintln!("│    → Codec: {}", codec);
-            eprintln!("│    → {}", reason);
+            lines.push("│ ⚠️  NOT RECOMMENDED: Already optimal".to_string());
+            lines.push(format!("│    → Codec: {}", codec));
+            lines.push(format!("│    → {}", reason));
         }
         ProcessingRecommendation::CannotProcess { reason } => {
-            eprintln!("│ ❌ CANNOT PROCESS: File issue detected");
-            eprintln!("│    → {}", reason);
+            lines.push("│ ❌ CANNOT PROCESS: File issue detected".to_string());
+            lines.push(format!("│    → {}", reason));
         }
     }
 
-    eprintln!("└─────────────────────────────────────────────────────");
+    lines.push("└─────────────────────────────────────────────────────".to_string());
+    for line in &lines {
+        info!("{}", line);
+    }
 }
 
 pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
@@ -773,20 +756,16 @@ pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
 
     match &info.recommendation {
         ProcessingRecommendation::CannotProcess { reason } => {
-            eprintln!("⚠️  PRECHECK: {}", reason);
+            warn!(reason = %reason, "PRECHECK: cannot process");
             bail!("Precheck cannot process this file: {}", reason);
         }
 
         ProcessingRecommendation::NotRecommended { codec, reason } => {
-            eprintln!("⚠️  WARNING: {} is already a modern codec", codec);
-            eprintln!("    {}", reason);
-            eprintln!("    (Continuing anyway, but quality loss may occur...)");
+            warn!(codec = %codec, reason = %reason, "WARNING: already modern codec (continuing anyway)");
         }
 
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
-            eprintln!("EXCELLENT TARGET: {} is a legacy codec!", codec);
-            eprintln!("    {}", reason);
-            eprintln!("    (This file will benefit greatly from modern encoding!)");
+            info!(codec = %codec, reason = %reason, "EXCELLENT TARGET: legacy codec, will benefit from modern encoding");
         }
 
         ProcessingRecommendation::Recommended { .. }

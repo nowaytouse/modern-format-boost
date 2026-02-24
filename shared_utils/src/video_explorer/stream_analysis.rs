@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use tracing::{info, warn};
 
 pub const LONG_VIDEO_THRESHOLD: f32 = 300.0;
 
@@ -78,21 +79,21 @@ pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 if let Some(ssim) = parse_ssim_from_output(&stderr) {
                     if is_valid_ssim_value(ssim) {
-                        eprintln!("   📊 SSIM calculated using {} method: {:.6}", name, ssim);
+                        info!(method = %name, ssim = %ssim, "SSIM calculated");
                         return Some(ssim);
                     }
                 }
             }
             Ok(_) => {
-                eprintln!("   ⚠️  SSIM {} method failed, trying next...", name);
+                warn!(method = %name, "SSIM method failed, trying next");
             }
             Err(e) => {
-                eprintln!("   ⚠️  ffmpeg {} failed: {}", name, e);
+                warn!(method = %name, error = %e, "ffmpeg failed");
             }
         }
     }
 
-    eprintln!("   ❌ ALL SSIM CALCULATION METHODS FAILED!");
+    tracing::error!("ALL SSIM CALCULATION METHODS FAILED");
     None
 }
 
