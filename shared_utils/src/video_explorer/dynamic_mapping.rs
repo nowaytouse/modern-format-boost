@@ -38,11 +38,14 @@ impl DynamicCrfMapper {
             cpu_size,
             size_ratio,
         });
-        self.calibrated = !self.anchors.is_empty();
+        self.calibrated = true;
     }
 
     fn calculate_offset_from_ratio(size_ratio: f64) -> f32 {
-        if size_ratio < 0.70 {
+        if size_ratio >= 1.0 {
+            // CPU output larger than GPU at same CRF; don't add positive offset.
+            0.0
+        } else if size_ratio < 0.70 {
             4.0
         } else if size_ratio < 0.80 {
             3.5
@@ -53,16 +56,18 @@ impl DynamicCrfMapper {
         }
     }
 
-    pub fn gpu_to_cpu(&self, gpu_crf: f32, base_offset: f32) -> (f32, f64) {
+    /// Maps GPU CRF to CPU CRF. `max_crf`: HEVC/H264 use 51.0, AV1 use 63.0.
+    pub fn gpu_to_cpu(&self, gpu_crf: f32, base_offset: f32, max_crf: f32) -> (f32, f64) {
         if self.anchors.is_empty() {
-            return (gpu_crf + base_offset, 0.5);
+            return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5);
         }
 
         if self.anchors.len() == 1 {
             let offset = Self::calculate_offset_from_ratio(self.anchors[0].size_ratio);
-            return (gpu_crf + offset, 0.75);
+            return ((gpu_crf + offset).clamp(10.0, max_crf), 0.75);
         }
 
+        // Multi-anchor interpolation (currently unused: quick_calibrate stops after first success).
         let p1 = &self.anchors[0];
         let p2 = &self.anchors[1];
 
@@ -79,7 +84,7 @@ impl DynamicCrfMapper {
         let confidence = 0.85;
 
         (
-            (gpu_crf + interpolated_offset).clamp(10.0, 51.0),
+            (gpu_crf + interpolated_offset).clamp(10.0, max_crf),
             confidence,
         )
     }
@@ -193,7 +198,6 @@ pub fn quick_calibrate(
 
         if gpu_size == 0 {
             eprintln!("   ❌ GPU output file is empty");
-            let _ = fs::remove_file(&temp_gpu);
             continue;
         }
 
@@ -243,12 +247,10 @@ pub fn quick_calibrate(
                     if !error_lines.is_empty() {
                         eprintln!("      Cause: {}", error_lines.join(" | "));
                     }
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
                 Err(e) => {
                     eprintln!("   ❌ CPU calibration (GIF) command failed: {}", e);
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
             }
@@ -307,28 +309,21 @@ pub fn quick_calibrate(
                     if !error_lines.is_empty() {
                         eprintln!("      Cause: {}", error_lines.join(" | "));
                     }
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
                 Err(e) => {
                     eprintln!("   ❌ Extract command failed: {}", e);
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
             }
 
             match encode_with_x265(&temp_input, &temp_cpu, &config, vf_args) {
-                Ok(_) => {
-                    let _ = fs::remove_file(&temp_input);
-                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
-                }
+                Ok(_) => fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0),
                 Err(e) => {
                     eprintln!(
                         "   ❌ CPU x265 encoding failed for CRF {:.1}: {}",
                         anchor_crf, e
                     );
-                    let _ = fs::remove_file(&temp_input);
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
             }
@@ -349,10 +344,9 @@ pub fn quick_calibrate(
                 cpu_cmd.arg(arg);
             }
 
-            for arg in vf_args {
-                if !arg.is_empty() {
-                    cpu_cmd.arg("-vf").arg(arg);
-                }
+            let vf_joined: String = vf_args.iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(";");
+            if !vf_joined.is_empty() {
+                cpu_cmd.arg("-vf").arg(vf_joined);
             }
 
             cpu_cmd
@@ -372,25 +366,19 @@ pub fn quick_calibrate(
                     if stderr.contains("No such encoder") {
                         eprintln!("      Cause: CPU encoder not available");
                     }
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
                 Err(e) => {
                     eprintln!("   ❌ CPU command failed: {}", e);
-                    let _ = fs::remove_file(&temp_gpu);
                     continue;
                 }
             }
         };
 
-        let _ = fs::remove_file(&temp_gpu);
-        let _ = fs::remove_file(&temp_cpu);
-
         if gpu_size > 0 && cpu_size > 0 {
             mapper.add_anchor(*anchor_crf, gpu_size, cpu_size);
 
             let ratio = cpu_size as f64 / gpu_size as f64;
-            let _offset = DynamicCrfMapper::calculate_offset_from_ratio(ratio);
 
             crate::verbose_eprintln!("   ✅ Calibration successful at CRF {:.1}", anchor_crf);
             crate::verbose_eprintln!(

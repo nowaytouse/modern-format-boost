@@ -37,18 +37,12 @@ impl Default for QualityThresholds {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CrossValidationResult {
-    AllAgree,
-    MajorityAgree,
-    Divergent,
-}
-
 pub fn get_video_duration(input: &Path) -> Option<f64> {
     let output = Command::new("ffprobe")
         .args(["-v", "error"])
         .args(["-show_entries", "format=duration"])
         .args(["-of", "default=noprint_wrappers=1:nokey=1"])
+        .arg("--")
         .arg(crate::safe_path_arg(input).as_ref())
         .output()
         .ok()?;
