@@ -174,17 +174,8 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
 
-            let base_dir = if let Some(explicit_base) = base_dir {
-                Some(explicit_base)
-            } else if recursive {
-                if input.is_dir() {
-                    Some(input.clone())
-                } else {
-                    input.parent().map(|p| p.to_path_buf())
-                }
-            } else {
-                input.parent().map(|p| p.to_path_buf())
-            };
+            let base_dir =
+                shared_utils::cli_runner::resolve_video_run_base_dir(&input, recursive, base_dir);
 
             let config = ConversionConfig {
                 output_dir: output.clone(),
