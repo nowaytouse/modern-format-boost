@@ -455,6 +455,7 @@ pub fn finalize_conversion(
     if let Err(e) = crate::preserve_metadata(input, output) {
         eprintln!("\u{26a0}\u{fe0f} Failed to preserve metadata: {}", e);
     }
+    crate::metadata::merge_xmp_sidecar_into_dest(input, output);
 
     mark_as_processed(input);
 
