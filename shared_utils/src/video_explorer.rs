@@ -150,8 +150,12 @@ pub const LONG_VIDEO_THRESHOLD_SECS: f32 = 300.0;
 
 pub const VERY_LONG_VIDEO_THRESHOLD_SECS: f32 = 600.0;
 
+/// Max iterations for 5–10 min videos. Longer videos use a *lower* cap (see below) because each
+/// encode/decode test is more expensive; this is an intentional cost vs. precision tradeoff.
 pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 
+/// Max iterations for ≥10 min videos. Lower than LONG_VIDEO_FALLBACK_ITERATIONS: longer videos
+/// cost more per iteration, so we cap iterations to keep total runtime reasonable.
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
@@ -1482,6 +1486,16 @@ impl VideoExplorer {
             best_quality = max_quality;
             best_ssim = max_ssim;
         } else {
+            // Phase 2: single-point golden-ratio search (mid = low + (high - low) * PHI).
+            // Assumption: CRF–SSIM curve is monotonic (higher CRF → lower SSIM). If the curve
+            // were non-monotonic, this could converge slowly or to a suboptimal point.
+            //
+            // Why not full golden-section search? Full GSS keeps two interior points and reuses
+            // one when shrinking the interval, so it also does 1 eval per iteration (after 2
+            // initial evals) and minimizes total evals. We use a single probe from the low end
+            // each time for simplicity: no tracking of which point to keep, and the same 1
+            // encode per iteration. We may do 1–2 extra encodes over the whole Phase 2 vs.
+            // full GSS; the tradeoff is lower code complexity and easier maintenance.
             log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
             const PHI: f32 = 0.618;
 
@@ -2473,10 +2487,10 @@ impl VideoExplorer {
             if should_skip {
                 if let Some(d) = duration {
                     crate::log_eprintln!(
-                        "   Long video ({:.1}min > 5min), skipping MS-SSIM verification",
+                        "   ⚠️  Quality verification: long video ({:.1}min > 5min), MS-SSIM skipped.",
                         d / 60.0
                     );
-                    crate::log_eprintln!("   Use --force-ms-ssim-long to enable");
+                    crate::log_eprintln!("   Use --force-ms-ssim-long to enable.");
                 }
                 None
             } else {
