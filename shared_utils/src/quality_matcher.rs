@@ -14,7 +14,9 @@
 //! Different codecs have different efficiency, so we normalize using:
 //!
 //! 1. **Bits per pixel (bpp)** - Primary quality indicator
-//! 2. **Codec efficiency factor** - H.264 baseline, HEVC ~30% better, AV1 ~50% better
+//! 2. **Codec efficiency factor** - H.264 baseline (1.0), HEVC ~0.65, AV1 ~0.50 (empirical
+//!    relative efficiency; see `SourceCodec::efficiency_factor()` and literature on
+//!    codec bitrate comparisons, e.g. Netflix VMAF/codec studies).
 //! 3. **Content complexity** - Resolution, B-frames, color depth
 //!
 //! ## 🔥 Quality Manifesto (质量宣言)
@@ -79,6 +81,9 @@ pub enum SourceCodec {
 }
 
 impl SourceCodec {
+    /// Relative encoding efficiency vs. H.264 (1.0). Lower value = more efficient at same quality.
+    /// H.265/HEVC ≈ 0.65 and AV1 ≈ 0.50 are empirical from bitrate comparison studies; no single
+    /// canonical reference—values tuned for CRF mapping consistency across codecs.
     pub fn efficiency_factor(&self) -> f64 {
         match self {
             SourceCodec::H264 => 1.0,

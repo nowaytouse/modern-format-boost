@@ -103,7 +103,7 @@ impl SamplingConfig {
         match self.strategy {
             SamplingStrategy::Skip => {
                 eprintln!(
-                    "⚠️  Video too long ({:.1}s), MS-SSIM skipped (using SSIM only)",
+                    "⚠️  Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM only).",
                     self.duration_secs
                 );
             }
