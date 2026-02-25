@@ -713,3 +713,13 @@
   - 动图（GIF/WebP/AVIF）只会被修正为 .gif / .webp / .avif，不会变成 .mp4/.mov；
   - 真实视频文件若扩展名错误，`detect_content_format` 可能返回 `None`，不会误判为动图格式。
 - 动图与视频流的区分在「扩展名修正」阶段不会混淆；后续路由（按扩展名走视频或图片流程）在修正后执行，逻辑一致。
+
+---
+
+## 37. GIF 排除 Apple 兼容 fallback（校验）
+
+- **策略**：GIF 作为源没有任何苹果兼容问题，**完全不应**进入「Apple compat fallback」逻辑。转换失败时：不保留 best-effort HEVC，直接删除输出、将**原始文件**复制到目标目录并返回失败。
+- **校验**：
+  - **vid_hevc/conversion_api.rs**：`source_is_gif = input_ext.eq_ignore_ascii_case("gif")`；三处 fallback（quality/size 未达标、MS-SSIM 未达标、压缩检查未通过）均为 `if config.apple_compat && !source_is_gif` 才进入「保留 HEVC 并返回成功」。GIF 时跳过该分支，走统一失败路径：删输出、`copy_on_skip_or_fail(input, ...)`、返回 `success: false`。
+  - **vid_hevc/animated_image.rs**：动图→视频入口已移除「apple_compat 时保留 best-effort 输出」分支；失败时一律删输出、`copy_on_skip_or_fail`、返回 `success: false, skipped: true`。
+- **结论**：GIF 不会出现「APPLE COMPAT FALLBACK」提示，也不会在失败时保留 HEVC；仅复制原文件到目标目录。
