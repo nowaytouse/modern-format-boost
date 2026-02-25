@@ -549,9 +549,10 @@ pub fn explore_with_gpu_coarse_search(
             }
         } else {
             crate::log_eprintln!(
-                "   Long video (>{:.0}min) - skipping MS-SSIM, using SSIM All verification",
+                "   ⚠️  Quality verification: long video (>{:.0}min), MS-SSIM skipped.",
                 VMAF_DURATION_THRESHOLD / 60.0
             );
+            crate::log_eprintln!("   Using SSIM-All verification only.");
 
             if let Some((y, u, v, all)) = calculate_ssim_all(input, output) {
                 crate::log_eprintln!("   SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}", y, u, v, all);

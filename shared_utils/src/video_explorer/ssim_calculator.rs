@@ -39,10 +39,10 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
 
     if !should_calculate {
         eprintln!(
-            "   ⏭️  Video too long ({:.1}min), skipping MS-SSIM calculation",
+            "   ⚠️  Quality verification: video too long ({:.1}min > 5min), MS-SSIM skipped.",
             duration_min
         );
-        eprintln!("   📊 Using SSIM-only verification (faster & reliable)");
+        eprintln!("   📊 Using SSIM-only verification (faster; multi-scale not computed).");
         return None;
     }
 
