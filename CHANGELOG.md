@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [8.5.1] - 2026-02-23
+
+### 📋 Audit follow-up (文档与可见性)
+
+#### 算法与设计文档
+- **Phase 2 搜索**（`video_explorer.rs`）：补充注释——CRF–SSIM 单调性假设；为何采用单点黄金比例而非完整黄金分割搜索（实现简单、每轮同样 1 次编码，仅可能多 1～2 次编码）。
+- **迭代上限**（`video_explorer.rs`）：为长视频/超长视频的迭代上限常量添加文档，说明「更长视频 → 更低迭代上限」为有意为之的成本/精度权衡。
+- **效率因子**（`quality_matcher.rs`）：模块与 `efficiency_factor()` 的文档中注明 H.264/HEVC/AV1 等为经验相对效率，可参考编解码比较研究，无单一权威引用。
+
+#### 质量验证可见性
+- **长视频跳过 MS-SSIM**：在 `ssim_calculator.rs`、`gpu_coarse_search.rs`、`video_explorer.rs`、`msssim_sampling.rs` 四处，将「跳过 MS-SSIM」的日志统一为带 ⚠️ 的警告级表述（"Quality verification: … MS-SSIM skipped"），便于用户知晓质量验证降级为仅 SSIM。
+
+#### 审计文档
+- **CODE_AUDIT.md**：新增「为何不用完整黄金分割搜索」说明；与代码注释一致。
+
 ## [8.5.0] - 2026-02-23
 
 ### 📋 Logging & Concurrency

@@ -247,6 +247,7 @@
 ### 16.1 P1 — 算法与正确性
 
 - **Phase 2 搜索命名**: 原称 “Golden section search”，实现为每轮单点评估（`mid = low + (high - low) * PHI`），非标准 GSS 的双内点。已改为 “Phi-based single-point search” 并注明非完整 golden-section，避免误导。
+- **为何不用完整黄金分割搜索**: 完整 GSS 维护两个内点并在缩区间时复用其中一个，因此也是每轮 1 次评估（首轮 2 次），总评估次数理论最优。当前实现每轮从区间左端按 PHI 取单点，实现简单、无需维护“保留哪一侧内点”的状态，每轮同样 1 次编码；整段 Phase 2 可能多 1～2 次编码，换得代码更简单、易维护。若将来需要极致减少编码次数，可再实现完整 GSS。
 - **SSIM 计算时机**: 在 `explore_size_only` 中，`calculate_ssim()` 基于 `self.output_path`；已加注释说明必须在当前编码输出仍在原位时调用，避免隐式状态被破坏。
 
 ### 16.2 P2 — 设计
