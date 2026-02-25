@@ -684,3 +684,32 @@
   - **effective_bpp 安全区间**：在代入 CRF 公式前将 `effective_bpp` 钳位到 `[SAFE_BPP_MIN, SAFE_BPP_MAX]`（1e-6～50），保证 `log2(effective_bpp * 100)` 有限且合理。
   - **CRF 输出钳位**：AV1 使用 `AV1_CRF_CLAMP_MIN/MAX`（15～40），HEVC 使用 `HEVC_CRF_CLAMP_MIN/MAX`（0～35），作为最后一层防护，确保 content-type 与 bias 调整后仍不越界。
 - **文档**：模块头新增「Extreme BPP (defensive design)」说明；常量与最终 clamp 处均有注释。
+
+---
+
+## 36. 文件复制策略与扩展名「先修正再校验」设计
+
+### 36.1 复制逻辑（程序内，非 rsync）
+
+- **位置**：全部在程序内完成。`shared_utils::smart_file_copier`（`copy_on_skip_or_fail`、`smart_copy_with_structure`）与 `shared_utils::file_copier`（`copy_unsupported_files`、`verify_output_completeness`）。**未使用 rsync**；`thread_manager::get_rsync_path` 仅作探测，当前复制均为 Rust std::fs + 目录遍历。
+- **无遗漏设计**：
+  1. **单文件/批量转换失败或跳过**：`copy_on_skip_or_fail(source, output_dir, base_dir)` 将源文件按目录结构复制到输出目录，保证「未成功转换的也出现在输出里」。
+  2. **批量结束后**：`copy_unsupported_files(input_dir, output_dir, recursive)` 遍历输入目录，将「扩展名不在支持列表」的文件复制到输出目录（支持列表外的都复制，避免遗漏）。
+  3. **校验**：`verify_output_completeness(input_dir, output_dir, recursive)` 比较输入/输出文件数量，输出是否缺失或多余。
+- **冲突**：同一路径不会既被转换写入又被 copy 覆盖——转换成功时写入的是目标路径（如 .mp4/.mov），copy_unsupported 只复制「扩展名不在 SUPPORTED_VIDEO/IMAGE 等列表」的文件；已转换文件扩展名在列表内，不会进入 copy_unsupported。唯一需注意：扩展名修正后若文件从「支持列表」变为「非支持」（如 .mp4 修正为 .gif），会在当轮被 copy 到输出而非转换，与预期一致。
+
+### 36.2 扩展名：统一「先修正再校验」
+
+- **原则**：所有**仅凭扩展名**做的分支（如是否视频、是否 GIF、输出命名）应在**扩展名已按内容修正后**再执行，避免伪装扩展名导致误判或 panic。
+- **已做**：
+  - **img_hevc / img_av1**：入口即 `fix_extension_if_mismatch(input)`，后续一律用修正后的路径。
+  - **视频路径（vid_hevc / vid_av1）**：在 `cli_runner::process_single_file` 与 `process_directory` 中，**先**对每个输入调用 `fix_extension_if_mismatch`，得到 `fixed`；**再**用 `has_extension(fixed, SUPPORTED_VIDEO_EXTENSIONS)` 判断是否按视频处理。若修正后扩展名不在视频列表（如内容实为 GIF 的 .mp4 被改为 .gif），则仅复制到输出、不进入视频转换，并 continue/return。
+  - **copy 时**：`smart_copy_with_structure` 在复制到目标路径后对**目标路径**调用 `fix_extension_if_mismatch(dest)`，保证写出的文件扩展名与内容一致。
+- **结果**：扩展名校验统一在「修正后」进行，避免因错误/伪装扩展名走入错误分支或 panic。
+
+### 36.3 修正扩展名时动图与视频流是否混淆
+
+- **不会**。`smart_file_copier::detect_content_format` 仅根据文件头魔数识别：jpeg、png、gif、webp、heic、avif、tiff、jxl 等**图片/容器**格式；**不识别** MP4/MOV/MKV 等视频容器。因此：
+  - 动图（GIF/WebP/AVIF）只会被修正为 .gif / .webp / .avif，不会变成 .mp4/.mov；
+  - 真实视频文件若扩展名错误，`detect_content_format` 可能返回 `None`，不会误判为动图格式。
+- 动图与视频流的区分在「扩展名修正」阶段不会混淆；后续路由（按扩展名走视频或图片流程）在修正后执行，逻辑一致。

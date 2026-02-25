@@ -1,8 +1,10 @@
 use crate::batch::BatchResult;
+use crate::common_utils::has_extension;
 use crate::file_copier::{
     copy_unsupported_files, verify_output_completeness, SUPPORTED_VIDEO_EXTENSIONS,
 };
 use crate::report::print_summary_report;
+use crate::smart_file_copier::fix_extension_if_mismatch;
 use anyhow::Result;
 use log::{error, info, warn};
 use std::path::{Path, PathBuf};
@@ -111,19 +113,44 @@ where
     let mut total_output_bytes: u64 = 0;
 
     for file in &files {
-        match converter(file) {
+        // Fix extension by content first; after fix, only treat as video if extension still in list (avoids disguised-extension panic).
+        let fixed = match fix_extension_if_mismatch(file) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("❌ Extension fix failed for {}: {}", file.display(), e);
+                batch_result.fail(file.clone(), e.to_string());
+                continue;
+            }
+        };
+        if !has_extension(&fixed, SUPPORTED_VIDEO_EXTENSIONS) {
+            if let Some(ref out) = config.output {
+                if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                    &fixed,
+                    Some(out),
+                    config.base_dir.as_deref(),
+                    true,
+                ) {
+                    error!("❌ Failed to copy {}: {}", fixed.display(), copy_err);
+                } else {
+                    info!("📋 Copied (content not video after fix): {}", fixed.display());
+                }
+            }
+            batch_result.skip();
+            continue;
+        }
+        match converter(fixed.as_path()) {
             Ok(result) => {
                 if result.is_skipped() {
                     info!(
                         "⏭️ {} → SKIP ({})",
-                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        fixed.file_name().unwrap_or_default().to_string_lossy(),
                         result.skip_reason().unwrap_or("unknown")
                     );
                     batch_result.skip();
                 } else if result.is_success() {
                     info!(
                         "✅ {} → {} ({})",
-                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        fixed.file_name().unwrap_or_default().to_string_lossy(),
                         result.output_path().unwrap_or("?"),
                         result.message()
                     );
@@ -133,10 +160,10 @@ where
                 } else {
                     info!(
                         "❌ {} → FAILED ({})",
-                        file.file_name().unwrap_or_default().to_string_lossy(),
+                        fixed.file_name().unwrap_or_default().to_string_lossy(),
                         result.message()
                     );
-                    batch_result.fail(file.clone(), result.message().to_string());
+                    batch_result.fail(fixed.clone(), result.message().to_string());
                 }
             }
             Err(e) => {
@@ -144,22 +171,22 @@ where
                 if error_msg.contains("Output exists:") {
                     info!(
                         "⏭️ {} → SKIP (output exists)",
-                        file.file_name().unwrap_or_default().to_string_lossy()
+                        fixed.file_name().unwrap_or_default().to_string_lossy()
                     );
                     batch_result.skip();
                 } else {
-                    info!("❌ {} failed: {}", file.display(), e);
-                    batch_result.fail(file.clone(), e.to_string());
+                    info!("❌ {} failed: {}", fixed.display(), e);
+                    batch_result.fail(fixed.clone(), e.to_string());
 
                     if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
-                        file,
+                        &fixed,
                         config.output.as_deref(),
                         config.base_dir.as_deref(),
                         true,
                     ) {
                         error!("❌ Failed to copy original: {}", copy_err);
                     } else {
-                        info!("📋 Copied original (conversion failed): {}", file.display());
+                        info!("📋 Copied original (conversion failed): {}", fixed.display());
                     }
                 }
             }
@@ -209,21 +236,36 @@ where
     F: Fn(&Path) -> Result<R>,
     R: CliProcessingResult,
 {
-    let input = &config.input;
+    // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
+    let fixed_input = fix_extension_if_mismatch(&config.input)?;
+    let input = fixed_input.as_path();
 
-    if let Some(ext) = input.extension() {
-        let ext_str = ext.to_string_lossy().to_lowercase();
-        if !SUPPORTED_VIDEO_EXTENSIONS.contains(&ext_str.as_str()) {
-            anyhow::bail!(
-                "❌ Not a video file: {}\n\
-                 💡 Extension: .{}\n\
-                 💡 Supported video formats: {}\n\
-                 💡 Use imgquality tool for images",
-                input.display(),
-                ext_str,
-                SUPPORTED_VIDEO_EXTENSIONS.join(", ")
-            );
+    if !has_extension(input, SUPPORTED_VIDEO_EXTENSIONS) {
+        let ext_str = input
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("(none)");
+        if let Some(ref out) = config.output {
+            if let Err(copy_err) = crate::smart_file_copier::copy_on_skip_or_fail(
+                input,
+                Some(out),
+                config.base_dir.as_deref(),
+                true,
+            ) {
+                error!("❌ Failed to copy to output: {}", copy_err);
+            } else {
+                info!("📋 Copied to output (not a video after content check): {}", input.display());
+            }
         }
+        anyhow::bail!(
+            "❌ Not a video file: {}\n\
+             💡 Extension (after content fix): .{}\n\
+             💡 Supported video formats: {}\n\
+             💡 Use imgquality tool for images",
+            input.display(),
+            ext_str,
+            SUPPORTED_VIDEO_EXTENSIONS.join(", ")
+        );
     }
 
     let result = match converter(input) {
