@@ -19,6 +19,14 @@
 //!    codec bitrate comparisons, e.g. Netflix VMAF/codec studies).
 //! 3. **Content complexity** - Resolution, B-frames, color depth
 //!
+//! ## Extreme BPP (defensive design)
+//! For extreme inputs (very low or very high effective BPP):
+//! - Reject `effective_bpp <= 0` or non-finite (NaN/Inf) with an error.
+//! - Clamp `effective_bpp` to `[SAFE_BPP_MIN, SAFE_BPP_MAX]` (1e-6..50) before the CRF formula
+//!   so `log2(effective_bpp * 100)` is always finite and in a reasonable range.
+//! - Final CRF is always clamped to encoder range (AV1 [15, 40], HEVC [0, 35]) as the last line
+//!   of defense against content-type adjustment and bias pushing out of range.
+//!
 //! ## 🔥 Quality Manifesto (质量宣言)
 //!
 //! - **No silent fallback**: If quality analysis fails, report error loudly
@@ -348,6 +356,18 @@ impl Default for AnalysisDetails {
     }
 }
 
+/// Safe BPP range for CRF formula: avoids log2(0), NaN, and overflow. Final CRF is still clamped to [15, 40] (AV1) or [0, 35] (HEVC).
+const SAFE_BPP_MIN: f64 = 1e-6;
+const SAFE_BPP_MAX: f64 = 50.0;
+
+/// AV1 CRF output range; final clamp is the last line of defense for extreme BPP or content/bias adjustments.
+const AV1_CRF_CLAMP_MIN: f32 = 15.0;
+const AV1_CRF_CLAMP_MAX: f32 = 40.0;
+
+/// HEVC CRF output range (x265 0–51, we use 0–35 for quality matching).
+const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
+const HEVC_CRF_CLAMP_MAX: f32 = 35.0;
+
 pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_av1_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
@@ -357,7 +377,7 @@ pub fn calculate_av1_crf_with_options(
     mode: MatchMode,
     bias: QualityBias,
 ) -> Result<MatchedQuality, String> {
-    let (effective_bpp, details) =
+    let (mut effective_bpp, details) =
         calculate_effective_bpp_with_options(analysis, EncoderType::Av1, mode, bias)?;
 
     if effective_bpp <= 0.0 {
@@ -373,6 +393,15 @@ pub fn calculate_av1_crf_with_options(
             details.confidence * 100.0
         ));
     }
+    if !effective_bpp.is_finite() {
+        return Err(format!(
+            "❌ Cannot calculate AV1 CRF: effective_bpp is non-finite (NaN/Inf)\n\
+             💡 Confidence: {:.0}%",
+            details.confidence * 100.0
+        ));
+    }
+    // Defensive clamp so formula inputs are always in a safe range; final CRF clamp [15, 40] remains the safeguard.
+    effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < 0.03 {
         35.0_f64.min(50.0 - 6.0 * (effective_bpp * 100.0).max(0.001).log2())
@@ -391,7 +420,8 @@ pub fn calculate_av1_crf_with_options(
     };
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
-    let crf = (crf_rounded as f32).clamp(15.0, 40.0);
+    // Last line of defense: guarantee CRF in valid range regardless of extreme BPP or content/bias.
+    let crf = (crf_rounded as f32).clamp(AV1_CRF_CLAMP_MIN, AV1_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,
@@ -410,7 +440,7 @@ pub fn calculate_hevc_crf_with_options(
     mode: MatchMode,
     bias: QualityBias,
 ) -> Result<MatchedQuality, String> {
-    let (effective_bpp, details) =
+    let (mut effective_bpp, details) =
         calculate_effective_bpp_with_options(analysis, EncoderType::Hevc, mode, bias)?;
 
     if effective_bpp <= 0.0 {
@@ -426,6 +456,14 @@ pub fn calculate_hevc_crf_with_options(
             details.confidence * 100.0
         ));
     }
+    if !effective_bpp.is_finite() {
+        return Err(format!(
+            "❌ Cannot calculate HEVC CRF: effective_bpp is non-finite (NaN/Inf)\n\
+             💡 Confidence: {:.0}%",
+            details.confidence * 100.0
+        ));
+    }
+    effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < 0.02 {
         35.0_f64.min(46.0 - 5.0 * (effective_bpp * 100.0).max(0.001).log2())
@@ -444,7 +482,7 @@ pub fn calculate_hevc_crf_with_options(
     };
 
     let crf_rounded = (crf_with_bias * 2.0).round() / 2.0;
-    let crf = (crf_rounded as f32).clamp(0.0, 35.0);
+    let crf = (crf_rounded as f32).clamp(HEVC_CRF_CLAMP_MIN, HEVC_CRF_CLAMP_MAX);
 
     Ok(MatchedQuality {
         crf,

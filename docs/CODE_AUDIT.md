@@ -673,3 +673,14 @@
   - **video_explorer.rs**：新增 `MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS = 1500`；`validate_quality` 中 MS-SSIM 跳过阈值在 ultimate 下为 25 min，否则 5 min；日志中显示对应阈值。
   - **ssim_calculator.rs**：`calculate_ms_ssim_yuv` 增加参数 `max_duration_min`，由调用方传入 5.0（正常）或 25.0（极限），跳过逻辑与提示文案据此动态显示。
 - **文档**：YUV 加权与采样策略仍为「<1 分钟全帧，1–5 分钟 1/3，>5 分钟跳过」；极限模式下「>25 分钟才跳过」由上述三处阈值控制，见本段与代码注释。
+
+---
+
+## 35. 极端 BPP 的防御性设计（quality_matcher）
+
+- **目的**：在超低/超高 effective BPP 或非有限值（NaN/Inf）输入下，保证 CRF 公式不产生无效结果，且输出 CRF 始终落在编码器合法范围内。
+- **已做**：
+  - **effective_bpp 前置检查**：`effective_bpp <= 0` 返回 Err；`!effective_bpp.is_finite()` 返回 Err，避免 log2 与公式收到非有限或零。
+  - **effective_bpp 安全区间**：在代入 CRF 公式前将 `effective_bpp` 钳位到 `[SAFE_BPP_MIN, SAFE_BPP_MAX]`（1e-6～50），保证 `log2(effective_bpp * 100)` 有限且合理。
+  - **CRF 输出钳位**：AV1 使用 `AV1_CRF_CLAMP_MIN/MAX`（15～40），HEVC 使用 `HEVC_CRF_CLAMP_MIN/MAX`（0～35），作为最后一层防护，确保 content-type 与 bias 调整后仍不越界。
+- **文档**：模块头新增「Extreme BPP (defensive design)」说明；常量与最终 clamp 处均有注释。
