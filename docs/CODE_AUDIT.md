@@ -662,3 +662,14 @@
   - **gpu_accel.rs**：新增 `GPU_SAMPLE_DURATION_ULTIMATE = 90`、`GPU_SEGMENT_DURATION_ULTIMATE = 25`；`GpuCoarseConfig` 增加 `ultimate_mode: bool`。正常文件下 ultimate 用 90s 总采样与 25s/段（5 段共 125s）；大文件 45s→70s、超大文件 30s→50s。
   - **gpu_coarse_search.rs**：构建 `GpuCoarseConfig` 时传入 `ultimate_mode`；Phase 1 样本时长与校准用 `sample_dur`（ultimate 时取 ULTIMATE 常量）。
   - **video_explorer.rs**：`calculate_ms_ssim` 长视频 3 段采样在 `ultimate_mode` 下由 15% 改为 25%（start/mid/end 各 25%）。
+
+---
+
+## 34. 极限模式下 MS-SSIM 跳过阈值延长（25 分钟）
+
+- **目的**：正常模式 >5 分钟跳过 MS-SSIM（成本/质量权衡）；极限模式使用更长时长参数，仅当视频 >25 分钟才跳过，以加强质量验证。
+- **已做**：
+  - **gpu_coarse_search.rs**：新增 `VMAF_DURATION_THRESHOLD_ULTIMATE_SECS = 1500`（25 min）。`should_run_vmaf` 在 ultimate 下用 25 min 阈值，日志显示「≤5min」或「≤25min」；`calculate_ms_ssim_yuv` 传入 `max_duration_min`（5.0 或 25.0）。
+  - **video_explorer.rs**：新增 `MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS = 1500`；`validate_quality` 中 MS-SSIM 跳过阈值在 ultimate 下为 25 min，否则 5 min；日志中显示对应阈值。
+  - **ssim_calculator.rs**：`calculate_ms_ssim_yuv` 增加参数 `max_duration_min`，由调用方传入 5.0（正常）或 25.0（极限），跳过逻辑与提示文案据此动态显示。
+- **文档**：YUV 加权与采样策略仍为「<1 分钟全帧，1–5 分钟 1/3，>5 分钟跳过」；极限模式下「>25 分钟才跳过」由上述三处阈值控制，见本段与代码注释。
