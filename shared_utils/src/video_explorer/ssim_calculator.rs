@@ -6,7 +6,12 @@
 use std::path::Path;
 use std::process::Command;
 
-pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
+/// `max_duration_min`: skip MS-SSIM when video longer than this (e.g. 5.0 normal, 25.0 ultimate).
+pub fn calculate_ms_ssim_yuv(
+    input: &Path,
+    output: &Path,
+    max_duration_min: f64,
+) -> Option<(f64, f64, f64, f64)> {
     use chrono::Local;
     use std::thread;
 
@@ -28,10 +33,10 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
     };
     let duration_min = duration / 60.0;
 
-    // Align with gpu_coarse_search::VMAF_DURATION_THRESHOLD (5 min): MS-SSIM only for ≤5 min.
+    // Caller sets max_duration_min (e.g. 5 min normal, 25 min ultimate) to control skip threshold.
     let (sample_rate, should_calculate) = if duration_min <= 1.0 {
         (1, true)
-    } else if duration_min <= 5.0 {
+    } else if duration_min <= max_duration_min {
         (3, true)
     } else {
         (0, false)
@@ -39,8 +44,9 @@ pub fn calculate_ms_ssim_yuv(input: &Path, output: &Path) -> Option<(f64, f64, f
 
     if !should_calculate {
         eprintln!(
-            "   ⚠️  Quality verification: video too long ({:.1}min > 5min), MS-SSIM skipped.",
-            duration_min
+            "   ⚠️  Quality verification: video too long ({:.1}min > {:.0}min), MS-SSIM skipped.",
+            duration_min,
+            max_duration_min
         );
         eprintln!("   📊 Using SSIM-only verification (faster; multi-scale not computed).");
         return None;

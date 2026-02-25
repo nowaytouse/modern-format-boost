@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [8.5.2] - 2026-02-23
+
+### 🎬 MS-SSIM 极限模式时长参数
+
+- **极限模式（--ultimate）**：MS-SSIM 跳过阈值由 5 分钟改为 **25 分钟**；仅当视频 >25 分钟时才跳过 MS-SSIM、仅用 SSIM 验证。
+- **实现**：`gpu_coarse_search`、`video_explorer.validate_quality` 在 ultimate 下使用 25 min 阈值；`ssim_calculator.calculate_ms_ssim_yuv` 新增参数 `max_duration_min`（5.0 或 25.0），日志中显示对应阈值（如「≤25min」/「>25min」）。
+- **文档**：CODE_AUDIT.md 新增 34 节「极限模式下 MS-SSIM 跳过阈值延长（25 分钟）」。
+
 ## [8.5.1] - 2026-02-23
 
 ### 📋 Audit follow-up (文档与可见性)
