@@ -220,6 +220,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         strategy.target.extension()
     };
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
+    // GIF as source has no Apple compatibility issue; do not show "APPLE COMPAT FALLBACK" for GIF→video.
+    let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
 
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext)
         || (config.apple_compat && input_ext.eq_ignore_ascii_case("mov"))
@@ -409,7 +411,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         };
                     warn!("   🛡️  {}", protect_msg);
 
-                    if config.apple_compat {
+                    // GIF has no Apple compatibility issue; exclude from Apple compat fallback — on fail, copy original only.
+                    if config.apple_compat && !source_is_gif {
                         warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
                         warn!(
                             "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -492,7 +495,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             warn!("   ❌ MS-SSIM TARGET FAILED: {:.4} < 0.90", ms_ssim_score);
             warn!("   🛡️  Original file PROTECTED (MS-SSIM quality too low)");
 
-            if config.apple_compat {
+            // GIF excluded from Apple compat fallback — on fail, copy original only.
+            if config.apple_compat && !source_is_gif {
                 warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): MS-SSIM below target");
                 warn!(
                     "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -609,7 +613,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         }
         warn!("   🛡️  Original file PROTECTED");
 
-        if config.apple_compat {
+        // GIF excluded from Apple compat fallback — on fail, copy original only.
+        if config.apple_compat && !source_is_gif {
             warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
             warn!(
                 "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",

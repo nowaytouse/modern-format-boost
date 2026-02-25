@@ -355,36 +355,7 @@ pub fn convert_to_hevc_mp4_matched(
         };
         eprintln!("   🛡️  {}", protect_msg);
 
-        if options.apple_compat {
-            eprintln!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
-            eprintln!(
-                "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
-                explore_result.optimal_crf,
-                explore_result.iterations
-            );
-            let out_size = fs::metadata(&output).ok().map(|m| m.len()).unwrap_or(0);
-            let size_reduction = if input_size > 0 {
-                Some(1.0 - out_size as f64 / input_size as f64)
-            } else {
-                None
-            };
-            return Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(out_size),
-                size_reduction,
-                message: format!(
-                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is HEVC and importable",
-                    explore_result.optimal_crf,
-                    explore_result.iterations
-                ),
-                skipped: false,
-                skip_reason: None,
-            });
-        }
-
+        // GIF/animated image has no Apple compatibility issue; exclude from Apple compat fallback. On fail: discard output, copy original only.
         if output.exists() {
             if let Err(e) = fs::remove_file(&output) {
                 eprintln!("⚠️ [cleanup] Failed to remove output: {}", e);
