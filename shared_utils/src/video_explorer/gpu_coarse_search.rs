@@ -371,12 +371,20 @@ pub fn explore_with_gpu_coarse_search(
             duration / 60.0
         );
 
-        const VMAF_DURATION_THRESHOLD: f64 = 300.0;
+        /// Normal mode: skip MS-SSIM for videos longer than 5 min (cost/quality tradeoff).
+        const VMAF_DURATION_THRESHOLD_SECS: f64 = 300.0;
+        /// Ultimate mode: allow MS-SSIM up to 25 min for stricter quality verification.
+        const VMAF_DURATION_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0;
 
+        let ms_ssim_duration_threshold_secs = if ultimate_mode {
+            VMAF_DURATION_THRESHOLD_ULTIMATE_SECS
+        } else {
+            VMAF_DURATION_THRESHOLD_SECS
+        };
         let is_gif_format = probe_result.format_name.eq_ignore_ascii_case("gif");
 
         let should_run_vmaf =
-            !is_gif_format && (duration <= VMAF_DURATION_THRESHOLD || force_ms_ssim_long);
+            !is_gif_format && (duration <= ms_ssim_duration_threshold_secs || force_ms_ssim_long);
 
         if is_gif_format {
             crate::verbose_eprintln!(
@@ -410,10 +418,15 @@ pub fn explore_with_gpu_coarse_search(
                 result.ms_ssim_score = None;
             }
         } else if should_run_vmaf {
-            crate::log_eprintln!("   ✅ Short video detected (≤5min)");
+            let threshold_min = ms_ssim_duration_threshold_secs / 60.0;
+            crate::log_eprintln!(
+                "   ✅ Video within MS-SSIM limit (≤{:.0}min)",
+                threshold_min
+            );
             crate::log_eprintln!("   Enabling fusion quality verification (MS-SSIM + SSIM)...");
 
-            let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output);
+            let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
+            let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output, max_duration_min);
             let ssim_all_result = calculate_ssim_all(input, output);
 
             crate::log_eprintln!("   ═══════════════════════════════════════════════════");
@@ -550,7 +563,7 @@ pub fn explore_with_gpu_coarse_search(
         } else {
             crate::log_eprintln!(
                 "   ⚠️  Quality verification: long video (>{:.0}min), MS-SSIM skipped.",
-                VMAF_DURATION_THRESHOLD / 60.0
+                ms_ssim_duration_threshold_secs / 60.0
             );
             crate::log_eprintln!("   Using SSIM-All verification only.");
 

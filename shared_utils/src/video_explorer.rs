@@ -160,6 +160,9 @@ pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
 pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
 
+/// When to skip MS-SSIM in ultimate mode (longer than this → skip). Normal mode uses LONG_VIDEO_THRESHOLD_SECS (5 min).
+pub const MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0; // 25 min
+
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
         VERY_LONG_VIDEO_FALLBACK_ITERATIONS
@@ -2471,9 +2474,14 @@ impl VideoExplorer {
 
         let ms_ssim = if self.config.quality_thresholds.validate_ms_ssim {
             let duration = get_video_duration(&self.input_path);
+            let ms_ssim_skip_threshold_secs = if self.config.ultimate_mode {
+                MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS
+            } else {
+                LONG_VIDEO_THRESHOLD_SECS as f64
+            };
             let should_skip = match duration {
                 Some(d) => {
-                    d >= LONG_VIDEO_THRESHOLD_SECS as f64
+                    d >= ms_ssim_skip_threshold_secs
                         && !self.config.quality_thresholds.force_ms_ssim_long
                 }
                 None => {
@@ -2486,9 +2494,11 @@ impl VideoExplorer {
 
             if should_skip {
                 if let Some(d) = duration {
+                    let threshold_min = ms_ssim_skip_threshold_secs / 60.0;
                     crate::log_eprintln!(
-                        "   ⚠️  Quality verification: long video ({:.1}min > 5min), MS-SSIM skipped.",
-                        d / 60.0
+                        "   ⚠️  Quality verification: long video ({:.1}min > {:.0}min), MS-SSIM skipped.",
+                        d / 60.0,
+                        threshold_min
                     );
                     crate::log_eprintln!("   Use --force-ms-ssim-long to enable.");
                 }
