@@ -779,3 +779,218 @@
     - **内容实为图片/动图、扩展名伪造成视频**（如 .mp4 实为 GIF）：修正为 .gif 等，不会当视频转换。
     - **内容实为视频、扩展名错误**（如 .jpg 实为 MP4）：修正为 .mp4/.mov 等，修正后可被 vid_hevc 当视频处理。
   - 结论：先修正再校验；**图片与视频的检测顺序保证动图（GIF/WebP/AVIF）不会与视频混淆**。
+
+---
+
+## 第三轮审计 / Round 3 Audit (2026-02-26)
+
+### 39. HEIC/HEIF 品牌检测不完整 — 已修复
+
+**位置**: `shared_utils/src/image_detection.rs`
+
+**问题**: `detect_format_from_bytes()` 中 HEIC 品牌检测缺少 `heim`、`heis`、`msf1` 三个变体，与 `smart_file_copier.rs` 中的完整检测不一致。
+
+**修复**: 补全所有 6 个 HEIC 品牌标识：
+
+```rust
+// 修复前
+if brand == b"heic" || brand == b"heix" || brand == b"mif1" {
+
+// 修复后
+if brand == b"heic" || brand == b"heix" || brand == b"heim"
+    || brand == b"heis" || brand == b"mif1" || brand == b"msf1" {
+```
+
+---
+
+### 40. AVIF 品牌检测缺少 "avis" 变体 — 已修复
+
+**位置**: `shared_utils/src/image_detection.rs`
+
+**问题**: AVIF 序列文件使用 `avis` 品牌，原先只检测 `avif`，导致 AVIF 序列被误识别为 Unknown。
+
+**修复**:
+
+```rust
+// 修复前
+if brand == b"avif" {
+
+// 修复后
+if brand == b"avif" || brand == b"avis" {
+```
+
+---
+
+### 41. 非 UTF-8 路径处理缺少日志 — 已修复
+
+**位置**: `shared_utils/src/path_safety.rs`
+
+**问题**: `safe_path_arg()` 使用 `to_string_lossy()` 时，若路径含非 UTF-8 字节会静默替换为 U+FFFD，可能导致路径混淆且无任何提示。
+
+**修复**: 检测到 lossy 转换时输出 `eprintln!` 警告，便于排查问题。
+
+---
+
+### 42. 格式支持列表不完整 — 已修复
+
+**位置**: `shared_utils/src/file_copier.rs`
+
+**问题**: `SUPPORTED_IMAGE_EXTENSIONS` 和 `SUPPORTED_VIDEO_EXTENSIONS` 缺少多种常见格式。
+
+**修复**:
+
+- 图片新增：`ico`, `svg`, `jp2`, `j2k`, `jxl`
+- 视频新增：`m2ts`, `m2v`, `3gp`, `3g2`, `ogv`, `f4v`, `asf`
+
+---
+
+### 43. 视频编解码器识别不完整 — 已修复
+
+**位置**: `shared_utils/src/video_detection.rs`
+
+**问题**: `DetectedCodec::from_ffprobe()` 缺少 VC-1、Dirac、Theora、VP8 等编解码器，这些文件会被标记为 `Unknown`，但 Unknown 字符串内容不统一。
+
+**修复**: 为上述编解码器添加具名 Unknown 映射，保证显示名称一致：
+
+```rust
+"vc1" | "wmv3" => DetectedCodec::Unknown("VC-1".to_string()),
+"dirac"        => DetectedCodec::Unknown("Dirac".to_string()),
+"theora"       => DetectedCodec::Unknown("Theora".to_string()),
+"vp8" | "libvpx" => DetectedCodec::Unknown("VP8".to_string()),
+```
+
+---
+
+### 44. APNG 帧数硬编码为 2 — 已修复
+
+**位置**: `shared_utils/src/image_detection.rs`
+
+**问题**: PNG 动画检测时，只要发现 `acTL` chunk 就将帧数硬编码为 `2`，实际 APNG 可能有任意帧数。
+
+**修复**: 新增 `parse_apng_frames()` 函数，正确解析 PNG chunk 结构，从 `acTL` chunk 的 `num_frames` 字段读取真实帧数。
+
+---
+
+## 第四轮审计 / Round 4 Audit (2026-02-26) - img_hevc & vid_hevc 设计完成度
+
+### 45. unreachable!() 使用不当 — 已修复
+
+**位置**: `img_hevc/src/conversion_api.rs:216`
+
+**问题**: `execute_conversion()` 中使用 `unreachable!()`，若逻辑变更可能导致 panic。
+
+**修复**: 改为返回错误：
+
+```rust
+// 修复前
+TargetFormat::NoConversion => unreachable!(),
+
+// 修复后
+TargetFormat::NoConversion => {
+    return Err(ImgQualityError::ConversionError(
+        "NoConversion should have been handled earlier".to_string(),
+    ))
+}
+```
+
+---
+
+### 46. JXL 编码参数不一致 — 已修复
+
+**位置**: `img_hevc/src/conversion_api.rs`
+
+**问题**:
+- `convert_to_jxl()` 使用 effort=7，没有线程参数
+- `convert_to_jxl_lossless()` 使用 effort=9 + modular=1，没有线程参数
+- 与 `lossless_converter.rs` 中的实现不一致（后者使用 `-j` 线程参数）
+
+**修复**:
+1. 为两个函数都添加 `-j` 线程参数，使用 `shared_utils::thread_manager::get_child_threads()`
+2. 统一使用 `safe_path_arg()` 处理路径
+3. 保持 effort 差异（convert_to_jxl=7, convert_to_jxl_lossless=9），因为 lossless 需要更高质量
+
+---
+
+### 已知遗留问题 / Known Remaining Issues
+
+#### img_hevc 模块
+
+1. **simple_convert() 功能不完整** (conversion_api.rs:457-529)
+   - 缺少 compress 检查
+   - 缺少 preserve_metadata/timestamps 逻辑
+   - 缺少 delete_original 逻辑
+   - 不接受 ConversionConfig，只接受 output_dir
+   - **建议**: 重构为调用 smart_convert() 的简化包装
+
+2. **输出路径处理不一致**
+   - `execute_conversion()` (第 186-190 行): 简单的 `if let Some(ref dir)` 逻辑
+   - `convert_to_avif()` (第 319-325 行): 使用 `canonicalize` + `is_absolute` 检查
+   - `convert_to_hevc_mp4()` (第 384-390 行): 也使用 `is_absolute` 检查
+   - **建议**: 创建统一的 `resolve_output_path()` 函数
+
+3. **metadata/timestamps 保留不一致**
+   - `conversion_api.rs` 使用 `ConversionConfig` 控制
+   - `lossless_converter.rs` 依赖 `finalize_conversion()` 自动处理
+   - **建议**: 统一为 ConversionConfig 控制
+
+4. **Apple Compat 支持不一致**
+   - `lossless_converter.rs` 的 JXL 函数支持 `--compress_boxes=0`
+   - `conversion_api.rs` 的 JXL 函数不支持
+   - **建议**: 为 conversion_api.rs 添加 apple_compat 参数
+
+5. **代码重复：路径规范化逻辑**
+   - `convert_to_jxl()`, `convert_to_avif()`, `convert_to_hevc_mp4()`, `convert_to_jxl_lossless()` 都使用相同的 `canonicalize` 逻辑
+   - **建议**: 提取为 `canonicalize_input()` 函数
+
+#### vid_hevc 模块
+
+6. **质量检查逻辑不完整**
+   - `convert_to_hevc_mp4()` (animated_image.rs:91-191): 没有 SSIM 检查
+   - `convert_to_gif_apple_compat()` (animated_image.rs:531-734): 没有质量检查
+   - 只有 `convert_to_hevc_mp4_matched()` 有完整的质量验证
+   - **建议**: 为 convert_to_hevc_mp4() 添加基本的质量验证（至少检查输出文件是否有效）
+
+7. **静态 GIF 处理不一致**
+   - `img_hevc/main.rs` (第 764-772 行): 检测到静态 GIF 时转换为 JXL
+   - `vid_hevc/animated_image.rs`: 没有类似检查，会盲目转换为视频
+   - **建议**: 在 vid_hevc 中添加静态 GIF 检测
+
+#### 通用问题
+
+8. **错误消息风格不统一**
+   - 有的使用中文符号 `⚠️`，有的使用英文
+   - **约定**: 新增错误与日志消息统一使用英文；既有中文提示可保留，逐步替换
+
+9. **TOCTOU 竞态条件** (所有转换模块)
+   - `output_path.exists() && !config.force` 检查与实际写入之间存在时间窗口
+   - **建议**: 使用 `OpenOptions::create_new()` 等原子操作
+
+---
+
+### 第四轮审计遗留问题修复 (Round 4 follow-up)
+
+以下项已在不进行大规模重构的前提下完成：
+
+- **§45–46** 已在之前提交中修复（unreachable→Err；JXL 线程/路径）。
+- **img_hevc**
+  - **simple_convert**：改为基于 `ConversionConfig` 调用 `smart_convert()`，获得 compress / preserve_metadata / preserve_timestamps / delete_original 等一致行为。
+  - **输出路径**：新增 `resolve_output_path()`、`canonicalize_input()`、`resolve_output_absolute()`，在 `execute_conversion` 与各 convert_* 中统一使用。
+  - **Apple Compat**：`ConversionConfig` 增加 `apple_compat`；JXL 编码（`convert_to_jxl` / `convert_to_jxl_lossless`）在 `apple_compat` 时传入 `--compress_boxes=0`。
+  - **路径规范化**：所有 convert_* 使用 `canonicalize_input()` / `resolve_output_absolute()`，去除重复逻辑。
+- **vid_hevc**
+  - **convert_to_hevc_mp4**：编码成功后增加输出校验（非空 + `get_input_dimensions` 可读），否则删输出并返回错误。
+  - **convert_to_gif_apple_compat**：同上，增加输出非空与可读性校验。
+  - **静态动图**：新增 `is_static_animated_image()`（基于 `shared_utils::image_analyzer::analyze_image`，duration_secs < 0.01 视为静态）；在 `convert_to_hevc_mp4` 与 `convert_to_gif_apple_compat` 入口处若检测为静态则跳过并复制原文件，与 img_hevc 行为一致。
+- **错误消息约定**：新代码中错误与日志消息统一使用英文（见上 §8）。
+
+**未做（需大规模重构）**：TOCTOU 竞态（§9）仍保留现状，建议后续用 `OpenOptions::create_new()` 等原子方式统一处理。
+
+---
+
+### 设计良好的部分
+
+1. ✅ **vid_hevc/animated_image.rs** 的 `convert_to_hevc_mp4_matched()` 质量检查逻辑非常完整
+2. ✅ **img_hevc/lossless_converter.rs** 使用统一的 `check_size_tolerance()` 函数
+3. ✅ 临时文件使用 RAII guard 自动清理
+4. ✅ 错误处理基本完整，失败时会删除不完整的输出文件
+5. ✅ `build_even_dimension_filter()` 正确处理奇数尺寸
