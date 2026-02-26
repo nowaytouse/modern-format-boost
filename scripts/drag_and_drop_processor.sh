@@ -523,6 +523,11 @@ _main() {
         process_videos
     fi
 
+    # Stop spinner before non-media copy/repair so this phase shows clear messages (no "Running" overwrite)
+    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
+        stop_elapsed_spinner
+    fi
+
     # Handle "Others" copying if in adjacent mode (Tools handle media, but what about others?)
     # Wait, the tool handles image formats. 
     # v6.9.13 says "Process all files". 
@@ -559,17 +564,13 @@ _main() {
         echo -e "\r   ${GREEN}✅ Non-media files synced.${RESET}         "
         echo ""
     fi
-    
-    # 🔥 v8.2: Unified Apple Photos compatibility repair
-    repair_apple_photos_compat
+
+    # Apple Photos Compatibility Repair: no longer run automatically after conversion.
+    # Run repair_apple_photos.sh manually on the output folder if needed.
 
     # 🔥 v8.2.5: 后处理（JXL fix / rsync）会更新时间戳，统一用 shared_utils 逻辑恢复（脚本只调用）
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         "$IMGQUALITY_HEVC" restore-timestamps "$TARGET_DIR" "$OUTPUT_DIR" 2>/dev/null && echo -e "   ${GREEN}✅ Timestamps restored.${RESET}" || true
-    fi
-
-    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
-        stop_elapsed_spinner
     fi
 
     show_summary
