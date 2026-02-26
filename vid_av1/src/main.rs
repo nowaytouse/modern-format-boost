@@ -69,22 +69,7 @@ enum Commands {
         ultimate: bool,
 
         #[arg(long, default_value_t = false)]
-        ms_ssim: bool,
-
-        #[arg(long, default_value_t = 0.90)]
-        ms_ssim_threshold: f64,
-
-        #[arg(long, default_value_t = false)]
         force_ms_ssim_long: bool,
-
-        #[arg(long)]
-        ms_ssim_sampling: Option<u32>,
-
-        #[arg(long, default_value_t = false)]
-        full_ms_ssim: bool,
-
-        #[arg(long, default_value_t = false)]
-        skip_ms_ssim: bool,
 
         #[arg(long, default_value_t = false)]
         cpu: bool,
@@ -167,12 +152,7 @@ fn main() -> anyhow::Result<()> {
             apple_compat,
             no_apple_compat,
             ultimate,
-            ms_ssim,
-            ms_ssim_threshold,
             force_ms_ssim_long,
-            ms_ssim_sampling,
-            full_ms_ssim,
-            skip_ms_ssim,
             cpu,
             base_dir,
             allow_size_tolerance,
@@ -204,17 +184,11 @@ fn main() -> anyhow::Result<()> {
                 base_dir,
                 force,
                 delete_original,
-                preserve_metadata: true,
                 explore_smaller: explore,
                 use_lossless: lossless,
                 match_quality,
                 in_place,
                 min_ssim: 0.95,
-                validate_ms_ssim: ms_ssim,
-                ms_ssim_sampling,
-                full_ms_ssim,
-                skip_ms_ssim,
-                min_ms_ssim: ms_ssim_threshold,
                 require_compression: compress,
                 apple_compat,
                 use_gpu: !cpu,
@@ -222,7 +196,6 @@ fn main() -> anyhow::Result<()> {
                 ultimate_mode: ultimate,
                 child_threads: thread_config.child_threads,
                 allow_size_tolerance,
-                verbose,
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
@@ -254,25 +227,8 @@ fn main() -> anyhow::Result<()> {
             if cpu {
                 info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
-            if ms_ssim {
-                info!(
-                    "   📊 MS-SSIM Verification: ENABLED (threshold: {:.2})",
-                    ms_ssim_threshold
-                );
-                if force_ms_ssim_long {
-                    info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
-                }
-                if skip_ms_ssim {
-                    eprintln!("⚠️  Warning: --skip-ms-ssim conflicts with --ms-ssim, MS-SSIM will be skipped");
-                } else if full_ms_ssim {
-                    info!("   🔥 Full MS-SSIM: ENABLED (no sampling)");
-                } else if let Some(rate) = ms_ssim_sampling {
-                    info!("   📊 MS-SSIM Sampling: 1/{} frames", rate);
-                } else {
-                    info!("   📊 MS-SSIM Sampling: AUTO (based on video duration)");
-                }
-            } else if skip_ms_ssim {
-                info!("   ⏭️  MS-SSIM: SKIPPED");
+            if force_ms_ssim_long {
+                info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
             }
             info!("");
 

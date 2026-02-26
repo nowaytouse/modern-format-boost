@@ -198,9 +198,10 @@ pub fn create_conditional_progress(total: u64, prefix: &str) -> indicatif::Progr
     }
 }
 
-// ── Verbose mode ──────────────────────────────────────────────────────────────
+// ── Verbose mode (single source of truth for process-wide verbose logging) ───
 // Default OFF: noisy success messages (XMP merge, JXL info) are hidden.
-// Call `set_verbose_mode(true)` at startup when --verbose is passed.
+// CLI should call `set_verbose_mode(true)` at startup when --verbose is passed;
+// all verbose output uses `is_verbose_mode()` / `verbose_eprintln!` — no per-config flag.
 
 static VERBOSE_MODE: AtomicBool = AtomicBool::new(false);
 

@@ -972,7 +972,7 @@ TargetFormat::NoConversion => {
 | **img_hevc** main + lossless_converter | `ConvertOptions` (shared_utils) | CLI 主流程：convert_to_jxl、convert_to_hevc_mp4_matched、convert_to_gif_apple_compat 等 | 同上 + explore, match_quality, use_gpu, ultimate, allow_size_tolerance, verbose, child_threads |
 | **img_av1** conversion_api | `ConversionConfig` (crate 内定义) | `smart_convert` / `execute_conversion` | 无 **apple_compat**；有 compress, preserve_*, delete_original |
 | **img_av1** main + lossless_converter | `ConvertOptions` (shared_utils) | CLI 主流程 | 与 img_hevc 类似 |
-| **vid_hevc** / **vid_av1** | `ConversionConfig` (shared_utils conversion_types) | `auto_convert` / `smart_convert` | 视频专用：explore_smaller, use_lossless, match_quality, min_ssim, validate_ms_ssim, require_compression, apple_compat, use_gpu, ultimate_mode 等 |
+| **vid_hevc** / **vid_av1** | `ConversionConfig` (shared_utils conversion_types) | `auto_convert` / `smart_convert` | 视频专用：explore_smaller, use_lossless, match_quality, min_ssim, require_compression, apple_compat, use_gpu, force_ms_ssim_long, ultimate_mode 等 |
 
 **结论**：图片侧存在两套配置——CLI 用 `ConvertOptions`，库用各 crate 的 `ConversionConfig`；视频侧统一用 `shared_utils::conversion_types::ConversionConfig`。设计上为「CLI 选项 → ConvertOptions / ConversionConfig 分别填充」，无需强行合并，但需保证各路径下选项传递完整。
 
@@ -1131,12 +1131,62 @@ TargetFormat::NoConversion => {
 4. **TOCTOU**：临时路径 `stem.tmp.ext`（与最终扩展名一致，避免 FFmpeg muxer 因扩展名误判）、原子 rename，失败删除 temp，不污染最终路径。
 5. **错误与清理**：失败时删除不完整输出；copy_on_skip 保证未转换文件仍进入输出目录。
 
+### TOCTOU 与元数据保留（审查结论）
+
+**结论**：TOCTOU 全面修复（写 temp → rename → 后续处理）**不会**导致元数据保留出问题。
+
+- **顺序**：所有模块均先 `commit_temp_to_output(&temp, &output)`，再对**最终路径** `output` 做 `copy_metadata` / `preserve_metadata` / `finalize_conversion`。元数据（时间戳、EXIF/XMP 等）始终作用在 rename 后的正式输出文件上。
+- **已核对**：img_hevc（conversion_api、lossless_converter 各分支）、vid_hevc（conversion_api、animated_image 四处）、img_av1、vid_av1 的 conversion_api，均为「commit → copy_metadata(input, &output_path) 或 finalize_conversion(input, &output)」。
+- **commit 返回 false**：若因并发导致未 rename（temp 已删、跳过），则不会执行 copy_metadata，不会误改他人创建的文件。
+
 ### 事后修复与复验（收尾后 1 次）
 
 - **问题**：用户批量 GIF→MOV（Apple 兼容）时报错 `Error initializing the muxer for ... .mov.tmp: Invalid argument`。
 - **根因**：`temp_path_for_output` 原为 `output.with_extension("mov.tmp")`，生成 `file.mov.tmp`。FFmpeg 按**输出文件扩展名**选择 muxer，扩展名 `.mov.tmp` 导致 MOV muxer 无法识别、初始化失败。
 - **修复**：`shared_utils::conversion::temp_path_for_output` 改为 `stem + ".tmp." + ext`（如 `file.mov` → `file.tmp.mov`），临时文件扩展名与最终一致；单测 `test_temp_path_for_output_keeps_extension` 锁定行为。
 - **复验**：两条 HEVC 工具核心路径（含 animated_image 的 HEVC MP4/MOV、GIF、MKV）再次核对，所有传入 FFmpeg 的路径均为 stem.tmp.ext，无其他路径/扩展名问题；**结论仍为收尾基线有效**。
+
+### 极限模式 (Ultimate Mode) 传递与生效
+
+**结论**：`--ultimate` 会**实际触发**所有极限相关行为，传递链完整，无“只配不跑”的分支。
+
+- **入口**：vid_hevc / img_hevc 的 Run 子命令解析 `--ultimate` → `config.ultimate_mode` / `config.ultimate`；需同时开启 `--explore --match-quality --compress` 时 `validate_flags_result_with_ultimate(..., ultimate)` 才返回 `FlagMode::UltimateExplore`。
+- **视频 (vid_hevc conversion_api)**：`flag_mode.is_ultimate()` → `explore_hevc_with_gpu_coarse_full(..., ultimate, force_ms_ssim_long, ...)` → `explore_with_gpu_coarse_search(..., ultimate_mode, ...)`。
+- **动图 (img_hevc → vid_hevc animated_image)**：`ConvertOptions { ultimate: config.ultimate }` → `options.flag_mode()` 内部调用 `validate_flags_result_with_ultimate(..., self.ultimate)` → `flag_mode.is_ultimate()` 为 true 时调用 `explore_hevc_with_gpu_coarse_ultimate`（内部即 `explore_hevc_with_gpu_coarse_full(..., ultimate_mode=true)`）。
+- **实际生效的差异**（均在 `shared_utils::video_explorer::gpu_coarse_search` / `video_explorer` / `gpu_accel` 中）：
+  - **MS-SSIM 时长**：普通模式 5 分钟以上跳过 MS-SSIM；极限模式 25 分钟以内仍跑 MS-SSIM（`VMAF_DURATION_THRESHOLD_ULTIMATE_SECS = 1500`），用于更严质量验证。
+  - **GPU 采样时长**：极限用 `GPU_SAMPLE_DURATION_ULTIMATE`（90s），普通用较短采样。
+  - **迭代与饱和**：极限用 `calculate_max_iterations_for_duration(..., true)`、`calculate_zero_gains_for_duration_and_range(..., true)`（更多迭代、更高“零增益”要求），以及 `calculate_adaptive_max_walls` 等，直到 SSIM 饱和（Domain Wall）。
+
+### 只配不跑 (Configured but not used)
+
+**结论**：原「只配不跑」的 MS-SSIM 细粒度选项已移除，当前无此类项。
+
+- **已移除**：`--ms-ssim`、`--ms-ssim-threshold`、`--ms-ssim-sampling`、`--full-ms-ssim`、`--skip-ms-ssim` 五个 CLI 选项及其在 `ConversionConfig` 中的对应字段（`validate_ms_ssim`、`min_ms_ssim`、`ms_ssim_sampling`、`full_ms_ssim`、`skip_ms_ssim`）已删除。原因系 vid_hevc/vid_av1 探索仅使用 `force_ms_ssim_long` 与 `ultimate_mode` 控制 MS-SSIM 行为，上述 5 项从未传入探索逻辑。
+- **保留**：`--force-ms-ssim-long` 与 `force_ms_ssim_long` 仍保留并实际参与探索（如 `explore_hevc_with_gpu_coarse_full(..., force_ms_ssim_long, ...)`）。
+- **其他**：img_hevc / img_av1 的 conversion_api 与 lossless_converter 所用选项均已与调用链对齐，未发现其他「只配不跑」项。
+
+#### 进一步冗余排查 (Additional redundancy audit) — 已修复
+
+此前列出的四项已全部按设计对称与统一日志处理完成修复：
+
+| 项 | 处理方式 |
+|----|----------|
+| **min_ssim（vid_hevc 未用）** | **设计对称**：`explore_hevc_with_gpu_coarse_full` 增加参数 `min_ssim: f64`，vid_hevc conversion_api 传入 `config.min_ssim`；内部仍用 `calculate_smart_thresholds` 取 `max_crf`，min_ssim 由调用方指定，与 vid_av1 一致。 |
+| **preserve_metadata** | **删除配置**：从 `ConversionConfig` 与 vid_hevc/vid_av1 的 config 构造中移除；视频路径始终无条件 `copy_metadata`，行为固定为「始终完整保留元数据」。 |
+| **verbose** | **统一日志**：从 `ConversionConfig` 移除 `verbose` 字段；CLI 仅通过 `set_verbose_mode(verbose)` 设置，全进程统一使用 `progress_mode::is_verbose_mode()` / `verbose_eprintln!`，progress_mode 注释已标明为 single source of truth。 |
+| **allow_size_tolerance（vid_av1 未用）** | **设计对称**：在 vid_av1 conversion_api 中增加与 vid_hevc 一致的压缩校验：commit 后 `extract_stream_sizes` + `verify_pure_media_compression` → `can_compress`（含 `allow_size_tolerance`）→ `require_compression && !can_compress` 时删输出、copy_on_skip、返回 Skip；并支持 apple_compat fallback。 |
+
+#### 举一反三：vid_av1 与 vid_hevc 的进一步对称（已修复）
+
+对 **ConversionConfig** 在 vid_hevc 与 vid_av1 的「写入 → 读取」再次逐项对照，发现 vid_hevc 中有使用而 vid_av1 中仅写入未读的字段，已按设计对称修复：
+
+| 项 | 问题 | 处理方式 |
+|----|------|----------|
+| **use_lossless** | vid_hevc 在 HevcMp4 分支中读 `config.use_lossless`，可强制走 lossless；vid_av1 仅用 `strategy.lossless`（来自 detection），**未读** `config.use_lossless`，故 `--lossless` 对 AV1 无效果。 | **设计对称**：vid_av1 在 Av1Mp4 分支中改为 `if strategy.lossless \|\| config.use_lossless` 再走 lossless；当 `config.use_lossless && !strategy.lossless` 时打 "forced" 日志，与 vid_hevc 行为一致。 |
+| **use_gpu** | vid_hevc 在探索前读 `config.use_gpu` 并据此选 GPU/CPU（并打 CPU 模式日志）；vid_av1 固定调用 `explore_precise_quality_match_with_compression`（CPU），**未读** `config.use_gpu`，故 `--cpu` 对 AV1 无效果。 | **设计对称**：vid_av1 在 lossy 探索分支根据 `config.use_gpu` 选择：为 true 时调用 `explore_precise_quality_match_with_compression_gpu(..., use_gpu: true)`，为 false 时打 "CPU Mode: Using libaom" 并调用原 CPU 版，与 vid_hevc 的 GPU/CPU 选择一致。 |
+
+**审查方法**：对每个 config 字段在 vid_hevc 与 vid_av1 的 conversion_api 中分别 grep 读取点；若一方读、另一方仅 main 写入，则视为不对称并补全读取或对称逻辑。
 
 ### 收尾约定
 
