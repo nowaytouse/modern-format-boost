@@ -164,13 +164,13 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 
     if header[4..8] == *b"ftyp" {
         let brand = &header[8..12];
-        if brand == b"heic" || brand == b"heix" || brand == b"mif1" {
+        if brand == b"heic" || brand == b"heix" || brand == b"heim" || brand == b"heis" || brand == b"mif1" || brand == b"msf1" {
             return Ok(DetectedFormat::HEIC);
         }
         if brand == b"heif" {
             return Ok(DetectedFormat::HEIF);
         }
-        if brand == b"avif" {
+        if brand == b"avif" || brand == b"avis" {
             return Ok(DetectedFormat::AVIF);
         }
     }
@@ -223,8 +223,8 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let is_animated = data.windows(4).any(|w| w == b"acTL");
-            Ok((is_animated, if is_animated { 2 } else { 1 }, None))
+            let (is_animated, frame_count) = parse_apng_frames(&data);
+            Ok((is_animated, frame_count, None))
         }
         _ => Ok((false, 1, None)),
     }
@@ -994,4 +994,43 @@ mod tests {
         let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
         assert!(result.is_err(), "不存在的文件应该返回错误");
     }
+}
+
+/// Parse APNG (Animated PNG) frame count from PNG data
+/// Returns (is_animated, frame_count)
+fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
+    // Look for acTL (Animation Control) chunk
+    let mut pos = 8; // Skip PNG signature
+    while pos + 12 <= data.len() {
+        if pos + 4 > data.len() {
+            break;
+        }
+
+        // Read chunk length (big-endian)
+        let length = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+        pos += 4;
+
+        if pos + 4 > data.len() {
+            break;
+        }
+
+        // Read chunk type
+        let chunk_type = &data[pos..pos + 4];
+        pos += 4;
+
+        // Check if this is acTL chunk
+        if chunk_type == b"acTL" {
+            if pos + 4 <= data.len() {
+                // Read num_frames (first 4 bytes of acTL data)
+                let num_frames = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                return (true, num_frames.max(1));
+            }
+            return (true, 2); // Fallback if we can't read frame count
+        }
+
+        // Skip chunk data and CRC
+        pos += length as usize + 4;
+    }
+
+    (false, 1)
 }

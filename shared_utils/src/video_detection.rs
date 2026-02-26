@@ -43,6 +43,10 @@ impl DetectedCodec {
             "rawvideo" => DetectedCodec::Uncompressed,
             "huffyuv" | "ffvhuff" => DetectedCodec::HuffYUV,
             "utvideo" => DetectedCodec::UTVideo,
+            "vc1" | "wmv3" => DetectedCodec::Unknown("VC-1".to_string()),
+            "dirac" => DetectedCodec::Unknown("Dirac".to_string()),
+            "theora" => DetectedCodec::Unknown("Theora".to_string()),
+            "vp8" | "libvpx" => DetectedCodec::Unknown("VP8".to_string()),
             _ => DetectedCodec::Unknown(codec_name.to_string()),
         }
     }
