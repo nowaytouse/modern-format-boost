@@ -565,8 +565,8 @@ _main() {
         echo ""
     fi
 
-    # Apple Photos Compatibility Repair: no longer run automatically after conversion.
-    # Run repair_apple_photos.sh manually on the output folder if needed.
+    # Apple Photos compatibility repair: not run automatically to avoid touching normal files.
+    # Users can run manually if needed: ./scripts/repair_apple_photos.sh "/path/to/folder"
 
     # 🔥 v8.2.5: 后处理（JXL fix / rsync）会更新时间戳，统一用 shared_utils 逻辑恢复（脚本只调用）
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
