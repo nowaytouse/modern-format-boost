@@ -181,17 +181,18 @@ pub fn execute_conversion(
         });
     }
 
+    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
     let result = match strategy.target {
-        TargetFormat::JXL => convert_to_jxl(input_path, &output_path, &detection.format, config),
+        TargetFormat::JXL => convert_to_jxl(input_path, &temp_path, &detection.format, config),
         TargetFormat::AVIF => convert_to_avif(
             input_path,
-            &output_path,
+            &temp_path,
             detection.estimated_quality,
             config,
         ),
         TargetFormat::AV1MP4 => convert_to_av1_mp4(
             input_path,
-            &output_path,
+            &temp_path,
             detection.fps,
             config,
         ),
@@ -199,8 +200,22 @@ pub fn execute_conversion(
     };
 
     if let Err(e) = result {
-        let _ = std::fs::remove_file(&output_path);
+        let _ = std::fs::remove_file(&temp_path);
         return Err(ImgQualityError::ConversionError(e.to_string()));
+    }
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
+    {
+        return Ok(ConversionOutput {
+            original_path: detection.file_path.clone(),
+            output_path: output_path.display().to_string(),
+            skipped: true,
+            message: "Skipped: output was created concurrently".to_string(),
+            original_size: detection.file_size,
+            output_size: None,
+            size_reduction: None,
+        });
     }
 
     let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());

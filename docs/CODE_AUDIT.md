@@ -1022,9 +1022,27 @@ TargetFormat::NoConversion => {
 
 | 类别 | 状态 | 说明 |
 |------|------|------|
-| TOCTOU | 未修复 | 所有转换模块中 `output_path.exists() && !config.force` 与写入之间存在竞态；建议后续用 `OpenOptions::create_new()` 等原子方式统一处理。 |
+| TOCTOU | 已缓解 | conversion_api 已采用「临时文件 + 原子 rename」缩小竞态窗口；见 §38.12。lossless_converter / animated_image / shared_utils 内同类检查仍可后续统一。 |
 | img_av1 / vid_av1 与 hevc 对齐 | 已完成 | 见 §38.8；img_av1、vid_av1 已补全 config、输出校验与路径/日志一致。 |
 | 错误消息风格 | 已统一 | 用户可见错误/日志/质量等级/建议等已统一为英文（§38.11）。 |
+
+---
+
+### 38.12 TOCTOU 缓解（临时文件 + 原子提交）
+
+**问题**：`output_path.exists() && !config.force` 与后续实际写入之间存在时间窗口，并发或外部进程可能在此期间创建目标文件，导致误覆盖或竞态。
+
+**方案**：在 `shared_utils::conversion` 中新增：
+
+- **`temp_path_for_output(output)`**：在同目录下生成临时路径（如 `file.mp4.tmp`），保证与 `output` 同卷以便 `fs::rename` 原子。
+- **`commit_temp_to_output(temp, output, force)`**：若 `!force && output.exists()` 则删除 `temp` 并返回 `false`（由调用方按「跳过」处理）；否则 `rename(temp, output)` 并返回 `true`。非 Unix 平台在 `force` 时先删除已存在的 `output` 再 rename。
+
+**已应用**：
+
+- **img_hevc / img_av1 conversion_api**：`execute_conversion` 中先解析 `output_path`，再得到 `temp_path`，各 `convert_*` 写入 `temp_path`；成功后在提交前调用 `commit_temp_to_output`，若返回 `false` 则返回「Skipped: output was created concurrently」。
+- **vid_hevc / vid_av1 conversion_api**：`auto_convert` 中同样使用 `temp_path` 传入 `execute_hevc_lossless` / `execute_av1_lossless` / `explore_*`；在 match 成功后统一 `commit_temp_to_output`；vid_hevc 中 Apple compat fallback 分支在 return 前先 commit，失败分支删除 `temp_path`。
+
+**仍为「检查后写」的路径**（可后续按需统一）：img_hevc/img_av1 的 lossless_converter、vid_hevc 的 animated_image、shared_utils 的 `pre_conversion_check` 等，仍直接使用 `output.exists() && !force` 后写最终路径。
 
 ---
 

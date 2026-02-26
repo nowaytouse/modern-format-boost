@@ -220,6 +220,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         });
     }
 
+    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
     info!(
         "🎬 Auto Mode: {} → {}",
         input.display(),
@@ -229,13 +230,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
     let (output_size, final_crf, attempts) = match strategy.target {
         TargetVideoFormat::Ffv1Mkv => {
-            let size = execute_ffv1_conversion(&detection, &output_path, config.child_threads)?;
+            let size =
+                execute_ffv1_conversion(&detection, &temp_path, config.child_threads)?;
             (size, 0.0, 0)
         }
         TargetVideoFormat::Av1Mp4 => {
             if strategy.lossless {
                 info!("   🚀 Using AV1 Mathematical Lossless Mode");
-                let size = execute_av1_lossless(&detection, &output_path, config.child_threads)?;
+                let size =
+                    execute_av1_lossless(&detection, &temp_path, config.child_threads)?;
                 (size, 0.0, 0)
             } else {
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(
@@ -260,7 +263,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 );
                 let explore_result = shared_utils::explore_precise_quality_match_with_compression(
                     input_path,
-                    &output_path,
+                    &temp_path,
                     shared_utils::VideoEncoder::Av1,
                     vf_args,
                     initial_crf as f32,
@@ -284,6 +287,24 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::Skip => unreachable!(),
         _ => unreachable!("AV1 tool should not return HEVC target"),
     };
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
+    {
+        info!("⏭️ Output was created concurrently, skipping overwrite");
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: String::new(),
+            strategy: strategy.clone(),
+            input_size: detection.file_size,
+            output_size: 0,
+            size_ratio: 1.0,
+            success: true,
+            message: "Skipped: output was created concurrently".to_string(),
+            final_crf: 0.0,
+            exploration_attempts: 0,
+        });
+    }
 
     shared_utils::copy_metadata(input, &output_path);
 
