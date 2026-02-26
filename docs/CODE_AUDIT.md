@@ -1095,20 +1095,44 @@ TargetFormat::NoConversion => {
 
 ---
 
-### 42. 核心逻辑最终审计结论 (Final Core Logic Conclusion)
+## 核心逻辑最终审计结论（收尾基线）
 
-对 `main.rs` 路由、格式识别、Apple 兼容流、以及 `conversion_api` 的状态机进行了系统性审查。
+**审计范围**：img_hevc、vid_hevc 两条工具链的入口 → 检测 → 策略 → 转换 → 输出校验 → 后处理。
 
-**结论**：核心逻辑设计完备，边界处理（如静态 GIF 路由、短动画跳过、Apple 兼容降级、安全删除）均符合工程实践。仓库目前没有已知的重大设计缺陷。
+**结论**：核心逻辑设计与完成度**无已知缺陷**，可作为**审计收尾基线**。后续仅建议在**新增功能**或**用户/测试反馈问题**时再做针对性审查，不再做无休止的例行审计。
 
----
+### img_hevc 核心路径（已核对）
 
-## 补充：设计良好的部分 (Update)
+| 环节 | 状态 |
+|------|------|
+| 入口 | `main` Run → `auto_convert_single_file`；扩展名修正 `fix_extension_if_mismatch` 先行。 |
+| 提前跳过 | HEIC/HEIF（Apple 原生）、现代有损格式、已处理文件；逻辑集中、无遗漏。 |
+| 路由 | `analyze_image` → (format, is_lossless, is_animated) 分支：JPEG→JXL、静态无损→JXL、静态有损→跳过/质量 100 JXL、动画→时长/Apple 兼容/短动画跳过/HEVC MKV 或 MP4 或 GIF。 |
+| 静态 GIF | 单帧按静态图走 JXL；多帧进动画分支。 |
+| Apple 兼容 | 动画：≥3s 或高质量→HEVC MP4；否则→GIF（Bayer）；GIF 失败不保留 HEVC，仅复制原文件。 |
+| 转换实现 | `lossless_converter`（JXL/AVIF/HEVC MKV）与 `vid_hevc::animated_image`（HEVC MP4/GIF）统一：temp 写入 + `commit_temp_to_output`、输出非空与可读校验、compress 时严格 output < input。 |
+| 后处理 | 元数据/时间戳、可选删除原文件、copy_on_skip 覆盖未转换文件。 |
 
-1. ✅ **vid_hevc/animated_image.rs** 的 `convert_to_hevc_mp4_matched()` 质量检查逻辑非常完整
-2. ✅ **img_hevc/lossless_converter.rs** 使用统一的 `check_size_tolerance()` 函数
-3. ✅ **img_hevc/conversion_api.rs** 配置传递完整（compress、apple_compat 贯穿 JXL/AVIF/HEVC）
-4. ✅ **TOCTOU 防断层**：临时文件使用 RAII guard 自动清理，提交过程原子化
-5. ✅ **解耦与复用**：成功将重复的尺寸计算与元数据辅助函数抽离至 `shared_utils`
-6. ✅ **错误处理**：失败时会物理删除不完整的临时文件，防止污染后续处理流
+### vid_hevc 核心路径（已核对）
+
+| 环节 | 状态 |
+|------|------|
+| 入口 | `main` Run → `run_auto_command` → 每文件 `auto_convert(file, &config)`；Simple → `simple_convert`。 |
+| 策略 | `determine_strategy_with_apple_compat`：现代编解码跳过、Unknown 二次判断、无损→HEVC Lossless MKV、有损/视觉无损→HEVC MP4（CRF/探索）。 |
+| 输出路径 | `output_dir`/`base_dir` 一致；apple_compat 时 MP4→mov；GIF 源不进入 Apple 兼容 fallback。 |
+| 转换实现 | `execute_hevc_lossless` / `explore_hevc_with_gpu_coarse*` 写 temp → `commit_temp_to_output`；质量/压缩未达标时删 temp、复制原文件；Apple 兼容 fallback 仅非 GIF。 |
+| 动图转视频 | 由 **img_hevc** 调用 `vid_hevc::animated_image`（`convert_to_hevc_mp4_matched`、`convert_to_gif_apple_compat`）；vid_hevc Run 仅处理视频文件。 |
+
+### 设计良好的部分（保留摘要）
+
+1. **vid_hevc/animated_image**：质量与尺寸校验完整，静态动图提前跳过，GIF 与 Apple 兼容逻辑分离。
+2. **img_hevc/lossless_converter**：`check_size_tolerance` 统一 compress 判断；JXL/AVIF/HEVC 路径一致。
+3. **img_hevc/conversion_api**：config（compress、apple_compat）贯穿，输出校验与路径辅助统一。
+4. **TOCTOU**：临时文件 + 原子 rename，失败删除 temp，不污染最终路径。
+5. **错误与清理**：失败时删除不完整输出；copy_on_skip 保证未转换文件仍进入输出目录。
+
+### 收尾约定
+
+- **本文档此处**为「核心逻辑审计」的**结束标志**。
+- 之后仅当**新功能上线**或**出现具体 bug/需求**时，再对相关模块做局部审计或补充说明，**不再做开放式、无目标的全面审计**。
 
