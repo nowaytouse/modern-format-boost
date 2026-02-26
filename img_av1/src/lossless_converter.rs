@@ -34,6 +34,8 @@ pub fn convert_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
 
     let max_threads = if options.child_threads > 0 {
@@ -55,7 +57,7 @@ pub fn convert_to_jxl(
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref());
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     let cmd_result = cmd.output();
 
@@ -71,7 +73,7 @@ pub fn convert_to_jxl(
 
                 match shared_utils::jxl_utils::try_imagemagick_fallback(
                     input,
-                    &output,
+                    &temp_output,
                     distance,
                     max_threads,
                 ) {
@@ -87,19 +89,21 @@ pub fn convert_to_jxl(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
+                return Err(e);
+            }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
+            }
 
             if let Some(skipped) =
                 check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
             {
                 return Ok(skipped);
-            }
-
-            if let Err(e) = verify_jxl_health(&output) {
-                if let Err(re) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
-                }
-                return Err(e);
             }
 
             finalize_conversion(input, &output, input_size, "JXL", None, options)
@@ -135,6 +139,8 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let mut cmd = Command::new("cjxl");
     cmd.arg("--lossless_jpeg=1")
@@ -147,17 +153,19 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref());
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = verify_jxl_health(&output) {
-                if let Err(re) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
-                }
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
                 return Err(e);
+            }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
             }
 
             finalize_conversion(
@@ -171,7 +179,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&output);
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "cjxl JPEG transcode failed: {}",
@@ -205,6 +213,7 @@ pub fn convert_to_avif(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
     let q = quality.unwrap_or(85);
 
     let result = Command::new("avifenc")
@@ -216,20 +225,23 @@ pub fn convert_to_avif(
         .arg(q.to_string())
         .arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref())
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
         .output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&output) {
-                let _ = fs::remove_file(&output);
+            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
+            }
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
             }
             finalize_conversion(input, &output, input_size, "AVIF", None, options)
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&output);
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc failed: {}",
@@ -259,6 +271,8 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -287,20 +301,23 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         cmd.arg(arg);
     }
 
-    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
+    cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&output) {
-                let _ = fs::remove_file(&output);
+            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
+            }
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
             }
             finalize_conversion(input, &output, input_size, "AV1", None, options)
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&output);
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "ffmpeg failed: {}",
@@ -335,6 +352,8 @@ pub fn convert_to_avif_lossless(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let result = Command::new("avifenc")
         .arg("--lossless")
         .arg("-s")
@@ -343,20 +362,23 @@ pub fn convert_to_avif_lossless(
         .arg("all")
         .arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref())
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
         .output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&output) {
-                let _ = fs::remove_file(&output);
+            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
+            }
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
             }
             finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&output);
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc lossless failed: {}",
@@ -390,6 +412,8 @@ pub fn convert_to_av1_mp4_matched(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let initial_crf = calculate_matched_crf_for_animation(analysis, input_size);
 
     let (width, height) = get_input_dimensions(input)?;
@@ -401,13 +425,13 @@ pub fn convert_to_av1_mp4_matched(
 
     eprintln!(
         "   {} Mode: CRF {:.1} (based on input analysis)",
-        flag_mode.description_cn(),
+        flag_mode.description_en(),
         initial_crf
     );
 
     let explore_result = match shared_utils::explore_precise_quality_match_with_compression(
         input,
-        &output,
+        &temp_output,
         shared_utils::VideoEncoder::Av1,
         vf_args,
         initial_crf,
@@ -417,7 +441,7 @@ pub fn convert_to_av1_mp4_matched(
     ) {
         Ok(r) => r,
         Err(e) => {
-            let _ = fs::remove_file(&output);
+            let _ = fs::remove_file(&temp_output);
             return Err(ImgQualityError::ConversionError(e.to_string()));
         }
     };
@@ -426,9 +450,12 @@ pub fn convert_to_av1_mp4_matched(
         eprintln!("{}", log);
     }
 
-    if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&output) {
-        let _ = fs::remove_file(&output);
+    if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&temp_output) {
+        let _ = fs::remove_file(&temp_output);
         return Err(ImgQualityError::ConversionError(e));
+    }
+    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+        return Ok(ConversionResult::skipped_exists(input, &output));
     }
     let extra = format!("CRF {:.1}", explore_result.optimal_crf);
     finalize_conversion(
@@ -527,6 +554,8 @@ pub fn convert_to_jxl_matched(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let distance = calculate_matched_distance_for_static(analysis, input_size);
     eprintln!("   🎯 Matched JXL distance: {:.2}", distance);
 
@@ -549,25 +578,27 @@ pub fn convert_to_jxl_matched(
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref());
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
+                return Err(e);
+            }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
+            }
 
             if let Some(skipped) =
                 check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
             {
                 return Ok(skipped);
-            }
-
-            if let Err(e) = verify_jxl_health(&output) {
-                if let Err(re) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
-                }
-                return Err(e);
             }
 
             let extra = format!("d={:.2}", distance);
@@ -582,6 +613,7 @@ pub fn convert_to_jxl_matched(
             .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "cjxl failed: {}",
@@ -616,6 +648,8 @@ pub fn convert_to_av1_mp4_lossless(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -638,20 +672,23 @@ pub fn convert_to_av1_mp4_lossless(
         cmd.arg(arg);
     }
 
-    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
+    cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&output) {
-                let _ = fs::remove_file(&output);
+            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
+            }
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
             }
             finalize_conversion(input, &output, input_size, "Lossless AV1", None, options)
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&output);
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "ffmpeg lossless failed: {}",
