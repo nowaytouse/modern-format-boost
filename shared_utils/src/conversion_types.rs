@@ -46,14 +46,11 @@ pub struct ConversionConfig {
     pub base_dir: Option<PathBuf>,
     pub force: bool,
     pub delete_original: bool,
-    pub preserve_metadata: bool,
     pub explore_smaller: bool,
     pub use_lossless: bool,
     pub match_quality: bool,
     pub in_place: bool,
     pub min_ssim: f64,
-    pub validate_ms_ssim: bool,
-    pub min_ms_ssim: f64,
     pub require_compression: bool,
     pub apple_compat: bool,
     pub use_gpu: bool,
@@ -61,13 +58,8 @@ pub struct ConversionConfig {
     pub force_ms_ssim_long: bool,
     pub ultimate_mode: bool,
 
-    pub ms_ssim_sampling: Option<u32>,
-    pub full_ms_ssim: bool,
-    pub skip_ms_ssim: bool,
-
     pub child_threads: usize,
     pub allow_size_tolerance: bool,
-    pub verbose: bool,
 }
 
 impl Default for ConversionConfig {
@@ -77,25 +69,18 @@ impl Default for ConversionConfig {
             base_dir: None,
             force: false,
             delete_original: false,
-            preserve_metadata: true,
             explore_smaller: false,
             use_lossless: false,
             match_quality: false,
             in_place: false,
             min_ssim: 0.95,
-            validate_ms_ssim: false,
-            min_ms_ssim: 0.90,
             require_compression: false,
             apple_compat: false,
             use_gpu: true,
             force_ms_ssim_long: false,
             ultimate_mode: false,
-            ms_ssim_sampling: None,
-            full_ms_ssim: false,
-            skip_ms_ssim: false,
             child_threads: 0,
             allow_size_tolerance: true,
-            verbose: false,
         }
     }
 }

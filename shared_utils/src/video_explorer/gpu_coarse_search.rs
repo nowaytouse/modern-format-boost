@@ -1798,6 +1798,7 @@ pub fn explore_hevc_with_gpu_coarse(
     initial_crf: f32,
     max_threads: usize,
 ) -> Result<ExploreResult> {
+    let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full(
         input,
         output,
@@ -1805,6 +1806,7 @@ pub fn explore_hevc_with_gpu_coarse(
         initial_crf,
         false,
         false,
+        min_ssim,
         max_threads,
     )
 }
@@ -1817,6 +1819,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     ultimate_mode: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
+    let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full(
         input,
         output,
@@ -1824,6 +1827,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
         initial_crf,
         ultimate_mode,
         false,
+        min_ssim,
         max_threads,
     )
 }
@@ -1835,9 +1839,10 @@ pub fn explore_hevc_with_gpu_coarse_full(
     initial_crf: f32,
     ultimate_mode: bool,
     force_ms_ssim_long: bool,
+    min_ssim: f64,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_with_gpu_coarse_search(
         input,
         output,

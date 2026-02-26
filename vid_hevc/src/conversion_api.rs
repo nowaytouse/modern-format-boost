@@ -127,7 +127,14 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     )
     .child_threads;
 
-    let output_size = execute_hevc_conversion(&detection, &output_path, 18, max_threads)?;
+    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let output_size = execute_hevc_conversion(&detection, &temp_path, 18, max_threads)?;
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, true)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
+    {
+        return Err(VidQualityError::ConversionError("Failed to commit temporary file to output".to_string()));
+    }
 
     shared_utils::copy_metadata(input, &output_path);
 
@@ -307,6 +314,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     initial_crf,
                     ultimate,
                     config.force_ms_ssim_long,
+                    config.min_ssim,
                     config.child_threads,
                 )
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;

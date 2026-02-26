@@ -121,7 +121,14 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let thread_config = shared_utils::thread_manager::get_balanced_thread_config(
         shared_utils::thread_manager::WorkloadType::Video,
     );
-    let output_size = execute_av1_lossless(&detection, &output_path, thread_config.child_threads)?;
+    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let output_size = execute_av1_lossless(&detection, &temp_path, thread_config.child_threads)?;
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, true)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
+    {
+        return Err(VidQualityError::ConversionError("Failed to commit temporary file to output".to_string()));
+    }
 
     shared_utils::copy_metadata(input, &output_path);
 
@@ -235,8 +242,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             (size, 0.0, 0)
         }
         TargetVideoFormat::Av1Mp4 => {
-            if strategy.lossless {
-                info!("   🚀 Using AV1 Mathematical Lossless Mode");
+            if strategy.lossless || config.use_lossless {
+                if config.use_lossless && !strategy.lossless {
+                    info!("   🚀 Using AV1 Mathematical Lossless Mode (forced)");
+                } else {
+                    info!("   🚀 Using AV1 Mathematical Lossless Mode");
+                }
                 let size =
                     execute_av1_lossless(&detection, &temp_path, config.child_threads)?;
                 (size, 0.0, 0)
@@ -261,16 +272,33 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     shared_utils::FlagMode::PreciseQualityWithCompress.description_en(),
                     initial_crf
                 );
-                let explore_result = shared_utils::explore_precise_quality_match_with_compression(
-                    input_path,
-                    &temp_path,
-                    shared_utils::VideoEncoder::Av1,
-                    vf_args,
-                    initial_crf as f32,
-                    50.0,
-                    config.min_ssim,
-                    config.child_threads,
-                )
+                if !config.use_gpu {
+                    info!("   🖥️  CPU Mode: Using libaom for maximum SSIM");
+                }
+                let explore_result = if config.use_gpu {
+                    shared_utils::explore_precise_quality_match_with_compression_gpu(
+                        input_path,
+                        &temp_path,
+                        shared_utils::VideoEncoder::Av1,
+                        vf_args,
+                        initial_crf as f32,
+                        50.0,
+                        config.min_ssim,
+                        true,
+                        config.child_threads,
+                    )
+                } else {
+                    shared_utils::explore_precise_quality_match_with_compression(
+                        input_path,
+                        &temp_path,
+                        shared_utils::VideoEncoder::Av1,
+                        vf_args,
+                        initial_crf as f32,
+                        50.0,
+                        config.min_ssim,
+                        config.child_threads,
+                    )
+                }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
                 for log_line in &explore_result.log {
@@ -308,7 +336,129 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
     shared_utils::copy_metadata(input, &output_path);
 
-    let size_ratio = output_size as f64 / detection.file_size as f64;
+    let actual_output_size = std::fs::metadata(&output_path)
+        .map(|m| m.len())
+        .unwrap_or(output_size);
+
+    let input_stream_info = shared_utils::extract_stream_sizes(input);
+    let output_stream_info = shared_utils::extract_stream_sizes(&output_path);
+    let verify_result =
+        shared_utils::verify_pure_media_compression(&input_stream_info, &output_stream_info);
+
+    if output_stream_info.container_overhead > 10000 {
+        info!(
+            "   📦 Container overhead: {} bytes ({:.1}%)",
+            output_stream_info.container_overhead,
+            output_stream_info.container_overhead_percent()
+        );
+    }
+    info!(
+        "   🎬 Video stream: {} → {} ({:+.1}%)",
+        shared_utils::format_bytes(input_stream_info.video_stream_size),
+        shared_utils::format_bytes(output_stream_info.video_stream_size),
+        verify_result.video_size_change_percent()
+    );
+
+    let can_compress = if config.allow_size_tolerance {
+        verify_result.video_compression_ratio < 1.01
+    } else {
+        verify_result.video_compressed
+    };
+
+    if config.require_compression && !can_compress {
+        warn!("   ⚠️  COMPRESSION FAILED (pure video stream comparison):");
+        warn!(
+            "   ⚠️  Video stream: {} bytes >= {} bytes",
+            output_stream_info.video_stream_size, input_stream_info.video_stream_size
+        );
+        if verify_result.is_container_overhead_issue() {
+            warn!("   ⚠️  Note: Container overhead caused total file to be larger");
+        }
+        warn!("   🛡️  Original file PROTECTED");
+
+        if config.apple_compat {
+            warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
+            warn!(
+                "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is AV1 and importable",
+                final_crf, attempts
+            );
+            return Ok(ConversionOutput {
+                input_path: input.display().to_string(),
+                output_path: output_path.display().to_string(),
+                strategy: ConversionStrategy {
+                    target: strategy.target,
+                    reason: "Apple compat fallback: best-effort AV1 kept (compression check failed)".to_string(),
+                    command: String::new(),
+                    preserve_audio: detection.has_audio,
+                    crf: final_crf,
+                    lossless: strategy.lossless,
+                },
+                input_size: detection.file_size,
+                output_size: actual_output_size,
+                size_ratio: actual_output_size as f64 / detection.file_size as f64,
+                success: true,
+                message: format!(
+                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); compression check failed — file is AV1 and importable",
+                    final_crf, attempts
+                ),
+                final_crf,
+                exploration_attempts: attempts,
+            });
+        }
+
+        if output_path.exists() {
+            let _ = std::fs::remove_file(&output_path);
+            info!("   🗑️  Output deleted (cannot compress)");
+        }
+        let _ = shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        );
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            strategy: ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: format!(
+                    "Compression failed: video stream {} >= {}",
+                    output_stream_info.video_stream_size, input_stream_info.video_stream_size
+                ),
+                command: String::new(),
+                preserve_audio: detection.has_audio,
+                crf: final_crf,
+                lossless: strategy.lossless,
+            },
+            input_size: detection.file_size,
+            output_size: detection.file_size,
+            size_ratio: 1.0,
+            success: false,
+            message: format!(
+                "Skipped: video stream {} >= {} (container overhead: {})",
+                output_stream_info.video_stream_size,
+                input_stream_info.video_stream_size,
+                output_stream_info.container_overhead
+            ),
+            final_crf,
+            exploration_attempts: attempts,
+        });
+    }
+
+    if verify_result.video_compressed && verify_result.total_compression_ratio >= 1.0 {
+        warn!(
+            "   ⚠️  Video stream compressed ({:+.1}%) but total file larger ({:+.1}%)",
+            verify_result.video_size_change_percent(),
+            verify_result.total_size_change_percent()
+        );
+        warn!(
+            "   ⚠️  Cause: Container overhead (+{} bytes)",
+            verify_result.container_overhead_diff
+        );
+        info!("   ✅ Keeping output (video stream is smaller)");
+    }
+
+    let size_ratio = actual_output_size as f64 / detection.file_size as f64;
 
     if config.should_delete_original() {
         if let Err(e) = shared_utils::conversion::safe_delete_original(input, &output_path, 1000) {
@@ -332,7 +482,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             lossless: strategy.lossless,
         },
         input_size: detection.file_size,
-        output_size,
+        output_size: actual_output_size,
         size_ratio,
         success: true,
         message: if attempts > 0 {
