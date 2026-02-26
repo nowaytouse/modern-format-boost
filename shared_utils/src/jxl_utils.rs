@@ -221,7 +221,8 @@ pub fn try_imagemagick_fallback(
         }
         Err((magick_ok, cjxl_ok, stderr)) => {
             eprintln!(
-                "   ❌ ImageMagick pipeline failed (magick: {}, cjxl: {})",
+                "   ❌ ImageMagick pipeline failed for file: {} (magick: {}, cjxl: {})",
+                input.display(),
                 if magick_ok { "✓" } else { "✗" },
                 if cjxl_ok { "✓" } else { "✗" }
             );
@@ -240,7 +241,8 @@ pub fn try_imagemagick_fallback(
                     }
                     Err((m, c, _)) => {
                         eprintln!(
-                            "   ❌ Retry failed (magick: {}, cjxl: {})",
+                            "   ❌ ImageMagick retry failed for file: {} (magick: {}, cjxl: {})",
+                            input.display(),
                             if m { "✓" } else { "✗" },
                             if c { "✓" } else { "✗" }
                         );

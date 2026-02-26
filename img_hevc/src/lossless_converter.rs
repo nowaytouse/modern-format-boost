@@ -237,7 +237,8 @@ pub fn convert_to_jxl(
                                         })
                                     } else {
                                         eprintln!(
-                                            "   ❌ FFmpeg pipeline failed (ffmpeg: {}, cjxl: {})",
+                                            "   ❌ FFmpeg pipeline failed for file: {} (ffmpeg: {}, cjxl: {})",
+                                            input.display(),
                                             if ffmpeg_ok { "✓" } else { "✗" },
                                             if cjxl_ok { "✓" } else { "✗" }
                                         );
