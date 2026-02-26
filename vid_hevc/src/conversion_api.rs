@@ -250,6 +250,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         });
     }
 
+    let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
     info!(
         "🎬 Auto Mode: {} → {}",
         input.display(),
@@ -260,13 +261,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
         TargetVideoFormat::HevcLosslessMkv => {
             info!("   🚀 Using HEVC Lossless Mode");
-            let size = execute_hevc_lossless(&detection, &output_path, config.child_threads)?;
+            let size =
+                execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
             (size, 0.0, 0, None)
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
                 info!("   🚀 Using HEVC Lossless Mode (forced)");
-                let size = execute_hevc_lossless(&detection, &output_path, config.child_threads)?;
+                let size =
+                    execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
                 (size, 0.0, 0, None)
             } else {
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(
@@ -299,7 +302,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 );
                 let explore_result = shared_utils::explore_hevc_with_gpu_coarse_full(
                     input_path,
-                    &output_path,
+                    &temp_path,
                     vf_args,
                     initial_crf,
                     ultimate,
@@ -419,6 +422,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             explore_result.optimal_crf,
                             explore_result.iterations
                         );
+                        let _ = shared_utils::conversion::commit_temp_to_output(
+                            &temp_path,
+                            &output_path,
+                            config.force,
+                        );
                         return Ok(ConversionOutput {
                             input_path: input.display().to_string(),
                             output_path: output_path.display().to_string(),
@@ -444,10 +452,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         });
                     }
 
-                    if output_path.exists() {
-                        let _ = std::fs::remove_file(&output_path);
-                        info!("   🗑️  {}", delete_msg);
-                    }
+                    let _ = std::fs::remove_file(&temp_path);
+                    info!("   🗑️  {}", delete_msg);
 
                     let _ = shared_utils::copy_on_skip_or_fail(
                         input,
@@ -488,6 +494,24 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::Skip => unreachable!(),
         _ => unreachable!("HEVC tool should not return AV1/FFV1 target"),
     };
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
+        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
+    {
+        info!("⏭️ Output was created concurrently, skipping overwrite");
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: String::new(),
+            strategy: strategy.clone(),
+            input_size: detection.file_size,
+            output_size: 0,
+            size_ratio: 1.0,
+            success: true,
+            message: "Skipped: output was created concurrently".to_string(),
+            final_crf: 0.0,
+            exploration_attempts: 0,
+        });
+    }
 
     if let Some(ref result) = explore_result_opt {
         if let Some(false) = result.ms_ssim_passed {
