@@ -1893,7 +1893,7 @@ impl VideoExplorer {
 
         if max_size >= self.input_size {
             progress_done!();
-            log_header!("   ⚠️ 文件已高度压缩，无法进一步压缩");
+            log_header!("   ⚠️ File already highly compressed; cannot compress further");
             let quality = validate_ssim(self.config.max_crf, &mut quality_cache, self)?;
 
             let elapsed = start_time.elapsed();
@@ -1965,7 +1965,7 @@ impl VideoExplorer {
             let size = encode_size_only(mid, &mut size_cache, &mut last_encoded_crf, self)?;
             iterations += 1;
             size_history.push((mid, size));
-            log_progress!("二分搜索", mid, size, iterations);
+            log_progress!("Binary search", mid, size, iterations);
 
             let variance = calc_window_variance(&size_history, self.input_size);
             let change_rate = prev_size
@@ -2044,7 +2044,7 @@ impl VideoExplorer {
                     let rate = calc_change_rate(prev, size);
                     if rate < CHANGE_RATE_THRESHOLD {
                         progress_done!();
-                        log_header!("   ⚡ 提前终止: Δ{:.3}%", rate * 100.0);
+                        log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0);
                         break;
                     }
                 }
@@ -2085,7 +2085,7 @@ impl VideoExplorer {
                         let rate = calc_change_rate(prev, size);
                         if rate < CHANGE_RATE_THRESHOLD {
                             progress_done!();
-                            log_header!("   ⚡ 提前终止: Δ{:.3}%", rate * 100.0);
+                            log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0);
                             break;
                         }
                     }
@@ -2103,12 +2103,12 @@ impl VideoExplorer {
         log_header!("   Stage C: SSIM verification");
 
         if last_encoded_crf != Some(boundary_crf) {
-            progress_line!("│ 重新编码到 CRF {:.1}... │", boundary_crf);
+            progress_line!("│ Re-encoding to CRF {:.1}... │", boundary_crf);
             let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_crf, self)?;
             progress_done!();
         }
 
-        progress_line!("│ 计算 SSIM... │");
+        progress_line!("│ Computing SSIM... │");
         let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
         let ssim = quality.0.unwrap_or(0.0);
 
@@ -3410,15 +3410,15 @@ mod tests {
 
     #[test]
     fn test_precision_ssim_quality_grades() {
-        assert_eq!(ssim_quality_grade(0.99), "Excellent (几乎无法区分)");
-        assert_eq!(ssim_quality_grade(0.98), "Excellent (几乎无法区分)");
-        assert_eq!(ssim_quality_grade(0.97), "Good (视觉无损)");
-        assert_eq!(ssim_quality_grade(0.95), "Good (视觉无损)");
-        assert_eq!(ssim_quality_grade(0.92), "Acceptable (轻微差异)");
-        assert_eq!(ssim_quality_grade(0.90), "Acceptable (轻微差异)");
-        assert_eq!(ssim_quality_grade(0.87), "Fair (可见差异)");
-        assert_eq!(ssim_quality_grade(0.85), "Fair (可见差异)");
-        assert_eq!(ssim_quality_grade(0.80), "Poor (明显质量损失)");
+        assert_eq!(ssim_quality_grade(0.99), "Excellent (visually indistinguishable)");
+        assert_eq!(ssim_quality_grade(0.98), "Excellent (visually indistinguishable)");
+        assert_eq!(ssim_quality_grade(0.97), "Good (visually lossless)");
+        assert_eq!(ssim_quality_grade(0.95), "Good (visually lossless)");
+        assert_eq!(ssim_quality_grade(0.92), "Acceptable (minor difference)");
+        assert_eq!(ssim_quality_grade(0.90), "Acceptable (minor difference)");
+        assert_eq!(ssim_quality_grade(0.87), "Fair (visible difference)");
+        assert_eq!(ssim_quality_grade(0.85), "Fair (visible difference)");
+        assert_eq!(ssim_quality_grade(0.80), "Poor (noticeable quality loss)");
     }
 
     #[test]
@@ -4444,8 +4444,8 @@ mod prop_tests_v69 {
             let large_result = calculate_zero_gains_for_duration_and_range(duration, crf_range_large, true);
 
             prop_assert!(small_result <= large_result,
-                "小CRF范围({})的zero-gains({}) 应 <= 大CRF范围({})的zero-gains({})",
-                crf_range_small, small_result, crf_range_large, large_result);
+                "zero-gains({}) for small CRF range ({}) should be <= zero-gains({}) for large CRF range ({})",
+                small_result, crf_range_small, large_result, crf_range_large);
         }
     }
 
@@ -4461,7 +4461,7 @@ mod prop_tests_v69 {
 
             let min_expected = if ultimate_mode { 15 } else { 3 };
             prop_assert!(result >= min_expected,
-                "zero-gains({}) 应 >= {} (duration={}, crf_range={}, ultimate={})",
+                "zero-gains({}) should be >= {} (duration={}, crf_range={}, ultimate={})",
                 result, min_expected, duration, crf_range, ultimate_mode);
         }
     }

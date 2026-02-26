@@ -295,25 +295,25 @@ impl std::error::Error for FfmpegError {}
 
 pub fn get_error_suggestion(stderr: &str) -> Option<String> {
     let patterns = [
-        ("No such file or directory", "检查输入文件路径是否正确"),
-        ("Invalid data found", "输入文件可能已损坏，尝试重新下载"),
-        ("Encoder", "安装对应的编码器 (如 libx265, libsvtav1)"),
-        ("not found", "检查 FFmpeg 是否正确安装"),
-        ("Permission denied", "检查文件权限，确保有读写权限"),
-        ("Output file is empty", "编码失败，尝试降低质量参数"),
-        ("Avi header", "AVI 文件头损坏，尝试使用 -fflags +genpts"),
+        ("No such file or directory", "Check input file path"),
+        ("Invalid data found", "Input file may be corrupted; try re-downloading"),
+        ("Encoder", "Install encoder (e.g. libx265, libsvtav1)"),
+        ("not found", "Check that FFmpeg is installed correctly"),
+        ("Permission denied", "Check file permissions (read/write)"),
+        ("Output file is empty", "Encode failed; try lowering quality parameters"),
+        ("Avi header", "AVI header corrupted; try -fflags +genpts"),
         (
             "moov atom not found",
-            "MP4 文件不完整，尝试使用 -movflags faststart",
+            "MP4 file incomplete; try -movflags faststart",
         ),
         (
             "Invalid NAL unit size",
-            "视频流损坏，尝试使用 -err_detect ignore_err",
+            "Video stream corrupted; try -err_detect ignore_err",
         ),
-        ("Discarding", "部分帧被丢弃，可能是时间戳问题"),
+        ("Discarding", "Some frames discarded; possible timestamp issue"),
         (
             "Too many packets buffered",
-            "增加 -max_muxing_queue_size 参数",
+            "Increase -max_muxing_queue_size",
         ),
     ];
 
