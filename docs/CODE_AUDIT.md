@@ -723,3 +723,59 @@
   - **vid_hevc/conversion_api.rs**：`source_is_gif = input_ext.eq_ignore_ascii_case("gif")`；三处 fallback（quality/size 未达标、MS-SSIM 未达标、压缩检查未通过）均为 `if config.apple_compat && !source_is_gif` 才进入「保留 HEVC 并返回成功」。GIF 时跳过该分支，走统一失败路径：删输出、`copy_on_skip_or_fail(input, ...)`、返回 `success: false`。
   - **vid_hevc/animated_image.rs**：动图→视频入口已移除「apple_compat 时保留 best-effort 输出」分支；失败时一律删输出、`copy_on_skip_or_fail`、返回 `success: false, skipped: true`。
 - **结论**：GIF 不会出现「APPLE COMPAT FALLBACK」提示，也不会在失败时保留 HEVC；仅复制原文件到目标目录。
+
+---
+
+## 38. 视频处理策略总览（含 ProRes、动图→视频）
+
+### 38.1 入口与文件归属
+
+- **vid_hevc（视频 CLI）**：输入按**扩展名**收集，`SUPPORTED_VIDEO_EXTENSIONS` = mp4, mov, avi, mkv, webm, m4v, wmv, flv, mpg, mpeg, ts, mts。**不含** gif/webp/avif（属图片扩展名）。因此「动图」若扩展名为 .gif/.webp 等，**不会**被 vid_hevc 的 run 模式收集，不会走视频管线。
+- **img_hevc（图片 CLI）**：输入按 `SUPPORTED_IMAGE_EXTENSIONS` 收集（含 png, jpg, webp, gif, heic, avif 等）。**动图→视频**由此入口处理：分析为动图后调用 `vid_hevc::animated_image`（如 `convert_to_hevc_mp4` / `convert_to_hevc_mp4_matched`），或 Apple 兼容下 `convert_to_gif_apple_compat`。
+
+### 38.2 视频策略决定（vid_hevc）
+
+1. **detect_video(path)**：ffprobe 得到 codec、码率、分辨率、帧率等，并算得 **CompressionType**：
+   - **Lossless**：codec 为 FFV1 / Uncompressed / HuffYUV / UTVideo。
+   - **VisuallyLossless**：codec 为 **ProRes / DNxHD**，或 bits_per_pixel > 2.0。
+   - HighQuality / Standard / LowQuality：按 bits_per_pixel 分段。
+
+2. **determine_strategy_with_apple_compat(detection, apple_compat)**：
+   - 先做 **skip**：`should_skip_video_codec(_apple_compat)(codec)`。HEVC 在 Apple 模式下跳过；VP9/AV1 不跳过（转 HEVC）；**ProRes 不跳过**（正常转 HEVC）。
+   - 再按 **CompressionType**：
+     - **Lossless** → `HevcLosslessMkv`（HEVC 无损 MKV）。
+     - **VisuallyLossless** → `HevcMp4`，理由如 "Source is ProRes (visually lossless) - compressing with HEVC CRF 18"，策略里 crf=18（仅 simple 模式用；auto 用 matched CRF）。
+     - **其它** → `HevcMp4`，Standard/Low 等，策略 crf=20。
+
+3. **执行**：
+   - **HevcLosslessMkv**：`execute_hevc_lossless`，无 CRF 探索。
+   - **HevcMp4**：`calculate_matched_crf(&detection)` 得初始 CRF（quality_matcher 按 codec/码率/分辨率等算），再 `explore_hevc_with_gpu_coarse_full(..., initial_crf, ultimate, ...)` 做 GPU 粗搜 + CPU 细搜；之后做质量/压缩校验，失败时 **非 GIF** 且 **apple_compat** 才走 Apple compat fallback（保留 best-effort HEVC），GIF 仅复制原文件（见 §37）。
+
+### 38.3 ProRes 在当前策略下的路径
+
+- **不跳过**：`should_skip_video_codec("prores")` 与 `should_skip_video_codec_apple_compat("prores")` 均为 **false**，ProRes 会进入转换。
+- **CompressionType**：`DetectedCodec::ProRes` 在 `determine_compression_type` 中固定为 **VisuallyLossless**（与 DNxHD 一致）。
+- **策略结果**：**HevcMp4**（不选 HevcLosslessMkv）。理由文案："Source is ProRes (visually lossless) - compressing with HEVC CRF 18"。
+- **实际编码**：走 **HevcMp4** 分支，`initial_crf = calculate_matched_crf(&detection)`（由 quality_matcher 按 ProRes 的 bpp/分辨率等算出），再 GPU+CPU 探索；输出 HEVC MP4，做 SSIM/MS-SSIM 与压缩检查。若未达标且为 Apple 模式，走 Apple compat fallback（保留 HEVC）；ProRes 非 GIF，故会走该 fallback。
+
+### 38.4 动图→视频（img_hevc → animated_image）
+
+- **入口**：仅当使用 **img_hevc**（图片工具）且分析结果为**动图**（is_animated，格式 GIF/WebP/AVIF/HEIC 等）时，才进入动图逻辑；**vid_hevc** 不按扩展名收集 .gif/.webp，故不会把「未改扩展名的动图」当视频输入。
+- **分支概要**：
+  - **静态 GIF（1 帧）**：按静态图转 JXL。
+  - **duration < 3s**：可跳过或按 Apple 兼容转 GIF（Bayer 256）。
+  - **duration ≥ 3s 或高质量**：`convert_to_hevc_mp4_matched` 或 `convert_to_hevc_mkv_lossless`（若 --lossless），即调用 **vid_hevc::animated_image** 做 HEVC 探索与质量校验。
+- **animated_image 内**：与 vid_hevc 的 conversion_api 类似，做 explore、SSIM/压缩校验；**不做** Apple compat fallback（§37）：失败则删输出、`copy_on_skip_or_fail`、返回失败。
+- **扩展名修正**：若先经 `fix_extension_if_mismatch` 将 .mp4 改为 .gif，则该文件不会进入 vid_hevc 的视频列表，会在 copy_unsupported 或「非视频则复制」时被复制到输出（见 §36）。
+
+### 38.5 视频是否「只按扩展名」？有无伪扩展名修复？
+
+- **收集阶段**：是，视频文件列表按**扩展名**收集（`SUPPORTED_VIDEO_EXTENSIONS`），目录下只有扩展名在该列表中的文件才会被当作视频处理。
+- **伪扩展名修复（双方向）**：
+  - 在 **cli_runner** 的视频路径中，**先**对每个文件调用 `fix_extension_if_mismatch`，**再**用 `has_extension(fixed, SUPPORTED_VIDEO_EXTENSIONS)` 判断是否当视频处理（§36.2）。
+  - `detect_content_format` 按**固定顺序**读文件头魔数：**先图片/动图，再视频**。识别：jpeg, png, gif, webp, heic, avif, tiff, jxl；以及 mp4, mov, avi, flv, mkv, wmv 等视频容器。
+  - **不会把动图误判为视频**：GIF（GIF8）、WebP（RIFF+WEBP）、AVIF（ftyp+avif/avis）均在代码中先于视频分支判定；RIFF 先按 WEBP 区分，ftyp 先按 heic/avif 再按 isom/qt 等。因此 GIF/WebP/AVIF 动态图即使用错扩展名，也只会被修正为对应图片扩展名，不会被当作 MP4/MOV 等处理。
+  - 效果：
+    - **内容实为图片/动图、扩展名伪造成视频**（如 .mp4 实为 GIF）：修正为 .gif 等，不会当视频转换。
+    - **内容实为视频、扩展名错误**（如 .jpg 实为 MP4）：修正为 .mp4/.mov 等，修正后可被 vid_hevc 当视频处理。
+  - 结论：先修正再校验；**图片与视频的检测顺序保证动图（GIF/WebP/AVIF）不会与视频混淆**。
