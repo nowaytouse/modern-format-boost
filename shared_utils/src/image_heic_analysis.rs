@@ -47,7 +47,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let bit_depth = handle.luma_bits_per_pixel();
     let is_lossless = false;
 
-    let image_count = ctx.number_of_top_level_images();
+    let image_count = ctx.image_ids().len();
 
     let has_auxiliary = handle.number_of_depth_images() > 0;
 
