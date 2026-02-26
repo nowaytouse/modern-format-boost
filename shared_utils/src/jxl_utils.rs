@@ -133,7 +133,12 @@ pub fn try_imagemagick_fallback(
                 match cjxl_result {
                     Ok(mut cjxl_proc) => {
                         let magick_status = magick_proc.wait();
+                        let cjxl_stderr_handle = cjxl_proc.stderr.take();
                         let cjxl_status = cjxl_proc.wait();
+                        let cjxl_stderr = cjxl_stderr_handle.and_then(|mut s| {
+                            let mut v = String::new();
+                            std::io::Read::read_to_string(&mut s, &mut v).ok().map(|_| v.trim().to_string())
+                        });
 
                         let magick_ok = match magick_status {
                             Ok(status) if status.success() => true,
@@ -154,6 +159,11 @@ pub fn try_imagemagick_fallback(
                             Ok(status) if status.success() => true,
                             Ok(status) => {
                                 eprintln!("   ❌ cjxl failed with exit code: {:?}", status.code());
+                                if let Some(ref stderr) = cjxl_stderr {
+                                    if !stderr.is_empty() {
+                                        eprintln!("   📋 cjxl stderr: {}", stderr);
+                                    }
+                                }
                                 false
                             }
                             Err(e) => {

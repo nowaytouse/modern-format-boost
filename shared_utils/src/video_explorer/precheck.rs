@@ -204,7 +204,7 @@ fn parse_duration_from_precheck_json(
         }
     }
 
-    warn!("DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)");
+    warn!("DURATION: frame_count/fps failed, trying ImageMagick (animated image fallback)");
     if let Some((duration_secs, frames)) =
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
     {
@@ -350,7 +350,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         }
     }
 
-    warn!("DURATION: frame_count/fps failed, trying ImageMagick (WebP/GIF)");
+    warn!("DURATION: frame_count/fps failed, trying ImageMagick (animated image fallback)");
     if let Some((duration_secs, frames)) =
         crate::image_analyzer::get_animation_duration_and_frames_imagemagick(input)
     {
