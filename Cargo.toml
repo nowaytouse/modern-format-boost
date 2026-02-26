@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "8.6.0"
+version = "8.7.0"
 edition = "2021"
 license = "MIT"
 authors = ["Modern Format Boost Contributors"]
