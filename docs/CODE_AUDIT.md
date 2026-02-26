@@ -913,53 +913,28 @@ TargetFormat::NoConversion => {
 
 ### 已知遗留问题 / Known Remaining Issues
 
-#### img_hevc 模块
+#### img_hevc 模块（1–5 已在第四轮修复中完成，见 §38.7）
 
-1. **simple_convert() 功能不完整** (conversion_api.rs:457-529)
-   - 缺少 compress 检查
-   - 缺少 preserve_metadata/timestamps 逻辑
-   - 缺少 delete_original 逻辑
-   - 不接受 ConversionConfig，只接受 output_dir
-   - **建议**: 重构为调用 smart_convert() 的简化包装
+1. ~~**simple_convert() 功能不完整**~~ → **已修复**：改为调用 `smart_convert()`，获得完整 config 行为。
+2. ~~**输出路径处理不一致**~~ → **已修复**：`resolve_output_path()`、`canonicalize_input()`、`resolve_output_absolute()` 统一使用。
+3. ~~**metadata/timestamps 保留不一致**~~ → conversion_api 已由 `ConversionConfig` 统一控制；lossless_converter 仍用 `finalize_conversion()`，两套路径并存可接受。
+4. ~~**Apple Compat 支持不一致**~~ → **已修复**：conversion_api 的 JXL 已支持 `apple_compat`（`--compress_boxes=0`）。
+5. ~~**代码重复：路径规范化逻辑**~~ → **已修复**：提取为 `canonicalize_input()` / `resolve_output_absolute()`。
 
-2. **输出路径处理不一致**
-   - `execute_conversion()` (第 186-190 行): 简单的 `if let Some(ref dir)` 逻辑
-   - `convert_to_avif()` (第 319-325 行): 使用 `canonicalize` + `is_absolute` 检查
-   - `convert_to_hevc_mp4()` (第 384-390 行): 也使用 `is_absolute` 检查
-   - **建议**: 创建统一的 `resolve_output_path()` 函数
+#### vid_hevc 模块（6–7 已在第四轮修复中完成）
 
-3. **metadata/timestamps 保留不一致**
-   - `conversion_api.rs` 使用 `ConversionConfig` 控制
-   - `lossless_converter.rs` 依赖 `finalize_conversion()` 自动处理
-   - **建议**: 统一为 ConversionConfig 控制
+6. ~~**质量检查逻辑不完整**~~ → **已修复**：convert_to_hevc_mp4 / convert_to_gif_apple_compat 增加输出非空与可读性校验。
+7. ~~**静态 GIF 处理不一致**~~ → **已修复**：`is_static_animated_image()` + 入口跳过并复制原文件。
 
-4. **Apple Compat 支持不一致**
-   - `lossless_converter.rs` 的 JXL 函数支持 `--compress_boxes=0`
-   - `conversion_api.rs` 的 JXL 函数不支持
-   - **建议**: 为 conversion_api.rs 添加 apple_compat 参数
+#### img_av1 模块（可选对齐，见 §38.8）
 
-5. **代码重复：路径规范化逻辑**
-   - `convert_to_jxl()`, `convert_to_avif()`, `convert_to_hevc_mp4()`, `convert_to_jxl_lossless()` 都使用相同的 `canonicalize` 逻辑
-   - **建议**: 提取为 `canonicalize_input()` 函数
-
-#### vid_hevc 模块
-
-6. **质量检查逻辑不完整**
-   - `convert_to_hevc_mp4()` (animated_image.rs:91-191): 没有 SSIM 检查
-   - `convert_to_gif_apple_compat()` (animated_image.rs:531-734): 没有质量检查
-   - 只有 `convert_to_hevc_mp4_matched()` 有完整的质量验证
-   - **建议**: 为 convert_to_hevc_mp4() 添加基本的质量验证（至少检查输出文件是否有效）
-
-7. **静态 GIF 处理不一致**
-   - `img_hevc/main.rs` (第 764-772 行): 检测到静态 GIF 时转换为 JXL
-   - `vid_hevc/animated_image.rs`: 没有类似检查，会盲目转换为视频
-   - **建议**: 在 vid_hevc 中添加静态 GIF 检测
+- **ConversionConfig** 无 `apple_compat`；**convert_to_jxl** / **convert_to_avif** / **convert_to_av1_mp4** 未接收 config，无输出校验与路径辅助；与 img_hevc 设计存在差距，按需对齐。
 
 #### 通用问题
 
 8. **错误消息风格不统一**
    - 有的使用中文符号 `⚠️`，有的使用英文
-   - **约定**: 新增错误与日志消息统一使用英文；既有中文提示可保留，逐步替换
+   - **已统一**: 用户可见的错误与日志信息已统一为英文（见 §38.11）
 
 9. **TOCTOU 竞态条件** (所有转换模块)
    - `output_path.exists() && !config.force` 检查与实际写入之间存在时间窗口
@@ -987,10 +962,87 @@ TargetFormat::NoConversion => {
 
 ---
 
+## 第五轮审计 / Round 5 Audit — 代码设计与完整度 (Design & Completeness)
+
+### 38.6 配置类型与职责划分
+
+| 模块 | 配置类型 | 用途 | 字段要点 |
+|------|----------|------|----------|
+| **img_hevc** conversion_api | `ConversionConfig` (crate 内定义) | `smart_convert` / `execute_conversion` / `simple_convert` | output_dir, base_dir, force, delete_original, preserve_timestamps, preserve_metadata, **compress**, **apple_compat** |
+| **img_hevc** main + lossless_converter | `ConvertOptions` (shared_utils) | CLI 主流程：convert_to_jxl、convert_to_hevc_mp4_matched、convert_to_gif_apple_compat 等 | 同上 + explore, match_quality, use_gpu, ultimate, allow_size_tolerance, verbose, child_threads |
+| **img_av1** conversion_api | `ConversionConfig` (crate 内定义) | `smart_convert` / `execute_conversion` | 无 **apple_compat**；有 compress, preserve_*, delete_original |
+| **img_av1** main + lossless_converter | `ConvertOptions` (shared_utils) | CLI 主流程 | 与 img_hevc 类似 |
+| **vid_hevc** / **vid_av1** | `ConversionConfig` (shared_utils conversion_types) | `auto_convert` / `smart_convert` | 视频专用：explore_smaller, use_lossless, match_quality, min_ssim, validate_ms_ssim, require_compression, apple_compat, use_gpu, ultimate_mode 等 |
+
+**结论**：图片侧存在两套配置——CLI 用 `ConvertOptions`，库用各 crate 的 `ConversionConfig`；视频侧统一用 `shared_utils::conversion_types::ConversionConfig`。设计上为「CLI 选项 → ConvertOptions / ConversionConfig 分别填充」，无需强行合并，但需保证各路径下选项传递完整。
+
+---
+
+### 38.7 img_hevc conversion_api 完整度（当前状态）
+
+- **配置传递**：`execute_conversion` 将完整 `config` 传给 `convert_to_jxl`、`convert_to_avif`、`convert_to_hevc_mp4`；三者均使用 `config.compress`、`config.apple_compat`（JXL 用 `--compress_boxes=0`）。
+- **输出校验**：三条路径均在做编码成功后做「输出非空 +（HEVC/AVIF 可读性）」校验；**compress 模式**在各自 convert_* 内若 output ≥ input 则删输出并返回 `Err`，与 `execute_conversion` 内兜底逻辑一致。
+- **后处理**：`preserve_metadata`、`preserve_timestamps`、`delete_original` 在 `execute_conversion` 中统一执行。
+- **路径**：`resolve_output_path`、`canonicalize_input`、`resolve_output_absolute` 统一使用，无重复实现。
+- **simple_convert**：仅构建默认 `ConversionConfig` 并调用 `smart_convert`，行为与完整 config 一致（默认 compress/apple_compat 为 false）。
+
+**结论**：img_hevc conversion_api 在「配置传递、输出校验、compress、apple_compat、后处理、路径」上已对齐且完整。
+
+---
+
+### 38.8 img_av1 conversion_api 与 img_hevc 的差距
+
+| 项目 | img_hevc | img_av1 |
+|------|----------|---------|
+| **ConversionConfig** | 含 `apple_compat` | **无** `apple_compat` |
+| **convert_to_jxl** | 接收 `config`；输出校验 + compress 检查；`--compress_boxes=0` 当 apple_compat | 仅 `(input, output, format)`；无 config、无输出校验、无线程参数 `-j` |
+| **convert_to_avif** | 接收 `config`；输出非空 + compress 检查 | 仅 `(input, output, quality)`；无输出校验 |
+| **convert_to_av1_mp4** | — | 无 config；无输出校验 |
+| **execute_conversion** | 各 convert_* 内建 compress 校验，外层兜底 | 仅外层 compress 块；convert_* 内无校验 |
+| **路径** | `canonicalize_input` / `resolve_output_absolute` 统一 | 直接 `safe_path_arg(input/output)`，无统一 canonicalize/resolve |
+
+**建议**（可选，按需对齐）：
+
+1. 为 img_av1 `ConversionConfig` 增加 `apple_compat`；`convert_to_jxl` 在 apple_compat 时传 `--compress_boxes=0`。
+2. 为 img_av1 各 convert_* 传入 `config`，增加输出非空（及可读性）校验，并在 compress 模式下在 convert_* 内做 output < input 检查（与 img_hevc 一致）。
+3. 抽取路径辅助（如 `canonicalize_input` / `resolve_output_absolute`）到 shared_utils 或与 img_hevc 一致实现，避免重复。
+
+---
+
+### 38.9 入口与配置传递（谁用谁）
+
+- **img_hevc main**：仅使用 `ConvertOptions` + `lossless_converter`（convert_to_jxl、convert_to_hevc_mp4_matched、convert_to_gif_apple_compat 等）；**不**构建 conversion_api 的 `ConversionConfig`。因此 CLI 的 compress、apple_compat 等均由 ConvertOptions 传递，conversion_api 仅被库调用（如 `smart_convert(config)`）或 `simple_convert(path, output_dir)`。
+- **vid_hevc / vid_av1 main**：从 CLI 构建 `shared_utils::conversion_types::ConversionConfig`，传入 `auto_convert` / `smart_convert`，配置传递完整。
+- **库使用者**：若调用 img_hevc 的 `smart_convert`，需自行构建 `ConversionConfig` 并设置 compress、apple_compat 等；`simple_convert` 仅提供默认 config（全 false）。
+
+**结论**：入口与配置对应关系清晰；img_hevc main 不经过 conversion_api 不影响 CLI 功能完整性。
+
+---
+
+### 38.10 已知遗留与建议汇总
+
+| 类别 | 状态 | 说明 |
+|------|------|------|
+| TOCTOU | 未修复 | 所有转换模块中 `output_path.exists() && !config.force` 与写入之间存在竞态；建议后续用 `OpenOptions::create_new()` 等原子方式统一处理。 |
+| img_av1 与 img_hevc 对齐 | 可选 | 见 §38.8；按需补全 apple_compat、convert_* 收 config、输出校验与路径辅助。 |
+| 错误消息风格 | 已统一 | 用户可见错误/日志/质量等级/建议等已统一为英文（§38.11）。 |
+
+---
+
+### 38.11 错误与日志信息统一为英文
+
+用户可见的错误与日志已统一为英文（emoji 保留）：
+
+- **img_hevc**: main 使用 `flag_mode.description_en()`；lossless_converter 扩展名修正为 `[Smart fix] Extension mismatch:`；测试断言改为英文。
+- **shared_utils**: `ffmpeg_process::get_error_suggestion` 建议改为英文；`precision.rs` 质量等级描述改为英文（如 "visually indistinguishable"）；`video_explorer.rs` 的 log_header/progress_line 改为英文；`image_jpeg_analysis` 编码器与质量描述、`stream_size::ExtractionMethod::description`、`image_recommender` 测试文案、`flag_validator` 测试改用 `description_en()`；相关测试与 proptest 消息改为英文。模块级 `//!` 文档中的中文未改。
+
+---
+
 ### 设计良好的部分
 
 1. ✅ **vid_hevc/animated_image.rs** 的 `convert_to_hevc_mp4_matched()` 质量检查逻辑非常完整
 2. ✅ **img_hevc/lossless_converter.rs** 使用统一的 `check_size_tolerance()` 函数
-3. ✅ 临时文件使用 RAII guard 自动清理
-4. ✅ 错误处理基本完整，失败时会删除不完整的输出文件
-5. ✅ `build_even_dimension_filter()` 正确处理奇数尺寸
+3. ✅ **img_hevc/conversion_api.rs** 配置传递完整（compress、apple_compat 贯穿 JXL/AVIF/HEVC），输出校验与路径辅助统一
+4. ✅ 临时文件使用 RAII guard 自动清理
+5. ✅ 错误处理基本完整，失败时会删除不完整的输出文件
+6. ✅ `build_even_dimension_filter()` 正确处理奇数尺寸

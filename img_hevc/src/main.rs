@@ -185,7 +185,7 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
                 eprintln!("   Smart quality matching: DISABLED");
             } else if verbose {
-                eprintln!("🎬 {} (for animated→video)", flag_mode.description_cn());
+                eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);

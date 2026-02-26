@@ -220,23 +220,23 @@ fn detect_encoder(
     }
 
     if luma_exact && (tables.len() < 2 || chroma_exact) {
-        return Some("IJG/libjpeg (标准)".to_string());
+        return Some("IJG/libjpeg (standard)".to_string());
     }
 
     let luma = &tables[0];
 
     if let Some(c_sse) = chroma_sse {
         if (720.0..735.0).contains(&luma_sse) && (5.0..12.0).contains(&c_sse) {
-            return Some("Apple iOS Camera (高质量)".to_string());
+            return Some("Apple iOS Camera (high quality)".to_string());
         }
         if (150.0..165.0).contains(&luma_sse) && (2.0..10.0).contains(&c_sse) {
-            return Some("Apple iOS Camera (极高质量)".to_string());
+            return Some("Apple iOS Camera (very high quality)".to_string());
         }
     }
 
     if luma[0][0] <= 2 && luma[0][1] <= 2 && luma[1][0] <= 2 {
         if luma_sse < 100.0 {
-            return Some("Adobe Photoshop (最高质量)".to_string());
+            return Some("Adobe Photoshop (highest quality)".to_string());
         }
         return Some("Adobe Photoshop".to_string());
     }
@@ -252,11 +252,11 @@ fn detect_encoder(
     }
 
     if luma_sse > 1000.0 {
-        return Some("非标准编码器 (高度自定义)".to_string());
+        return Some("Non-standard encoder (highly custom)".to_string());
     }
 
     if !luma_exact {
-        return Some("自定义编码器".to_string());
+        return Some("Custom encoder".to_string());
     }
 
     None
@@ -406,12 +406,12 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     );
 
     let quality_description = match final_quality {
-        95..=100 => "极高质量 (接近无损)".to_string(),
-        90..=94 => "高质量 (专业级)".to_string(),
-        80..=89 => "良好质量 (标准照片)".to_string(),
-        70..=79 => "中等质量 (网络优化)".to_string(),
-        60..=69 => "较低质量 (高压缩)".to_string(),
-        _ => "低质量 (明显压缩伪影)".to_string(),
+        95..=100 => "Very high quality (near lossless)".to_string(),
+        90..=94 => "High quality (professional)".to_string(),
+        80..=89 => "Good quality (standard photo)".to_string(),
+        70..=79 => "Medium quality (web optimized)".to_string(),
+        60..=69 => "Lower quality (high compression)".to_string(),
+        _ => "Low quality (visible compression artifacts)".to_string(),
     };
 
     let is_high_quality_original = final_quality >= 90 && is_standard_table && confidence >= 0.95;

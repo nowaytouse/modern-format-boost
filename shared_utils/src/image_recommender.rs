@@ -67,9 +67,9 @@ mod tests {
             },
             jxl_indicator: JxlIndicator {
                 should_convert: true,
-                reason: "无损图像，强烈建议转换为JXL格式".to_string(),
+                reason: "Lossless image; strongly recommend converting to JXL".to_string(),
                 command: "cjxl 'test.png' 'test.jxl' -d 0.0 -e 8".to_string(),
-                benefit: "可减少30-60%体积".to_string(),
+                benefit: "May reduce size by 30–60%".to_string(),
             },
             psnr: None,
             ssim: None,

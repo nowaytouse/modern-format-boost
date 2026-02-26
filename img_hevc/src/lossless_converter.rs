@@ -778,7 +778,7 @@ fn prepare_input_for_cjxl(
                 use console::style;
                 eprintln!(
                     "   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
-                    style("⚠️  [智能修正] 扩展名不匹配:").yellow().bold(),
+                    style("⚠️  [Smart fix] Extension mismatch:").yellow().bold(),
                     input.display(),
                     literal_ext,
                     real.to_uppercase()
@@ -1083,7 +1083,7 @@ mod tests {
     fn test_apple_compat_routing_short_low_quality() {
         assert!(
             !should_convert_to_video_format(2.0, 400, 300),
-            "短动画(2s)+低质量(400x300)应该转GIF"
+            "Short animation (2s) + low quality (400x300) should convert to GIF"
         );
     }
 
@@ -1091,7 +1091,7 @@ mod tests {
     fn test_apple_compat_routing_short_high_quality() {
         assert!(
             should_convert_to_video_format(2.0, 1920, 1080),
-            "短动画(2s)+高质量(1920x1080)应该转视频"
+            "Short animation (2s) + high quality (1920x1080) should convert to video"
         );
     }
 
@@ -1099,7 +1099,7 @@ mod tests {
     fn test_apple_compat_routing_long_low_quality() {
         assert!(
             should_convert_to_video_format(5.0, 400, 300),
-            "长动画(5s)应该转视频，不管质量"
+            "Long animation (5s) should convert to video regardless of quality"
         );
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
     fn test_apple_compat_routing_boundary_3_seconds() {
         assert!(
             should_convert_to_video_format(3.0, 400, 300),
-            "正好3秒应该转视频"
+            "Exactly 3 seconds should convert to video"
         );
     }
 
@@ -1115,7 +1115,7 @@ mod tests {
     fn test_apple_compat_routing_boundary_under_3_seconds() {
         assert!(
             !should_convert_to_video_format(2.99, 400, 300),
-            "2.99秒+低质量应该转GIF"
+            "2.99s + low quality should convert to GIF"
         );
     }
 
@@ -1127,7 +1127,7 @@ mod tests {
         for fmt in &preprocess_formats {
             assert!(
                 !direct_formats.contains(fmt),
-                "格式 '{}' 同时出现在预处理和直接格式列表中，这是配置Error",
+                "Format '{}' appears in both preprocess and direct format lists; configuration error",
                 fmt
             );
         }

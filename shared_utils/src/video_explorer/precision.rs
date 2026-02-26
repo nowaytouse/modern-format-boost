@@ -157,31 +157,31 @@ pub fn is_valid_psnr(psnr: f64) -> bool {
 /// Do not use for fixed-width terminal alignment; string length != display width (CJK).
 pub fn ssim_quality_grade(ssim: f64) -> &'static str {
     if ssim >= 0.98 {
-        "Excellent (几乎无法区分)"
+        "Excellent (visually indistinguishable)"
     } else if ssim >= 0.95 {
-        "Good (视觉无损)"
+        "Good (visually lossless)"
     } else if ssim >= 0.90 {
-        "Acceptable (轻微差异)"
+        "Acceptable (minor difference)"
     } else if ssim >= 0.85 {
-        "Fair (可见差异)"
+        "Fair (visible difference)"
     } else {
-        "Poor (明显质量损失)"
+        "Poor (noticeable quality loss)"
     }
 }
 
 pub fn psnr_quality_grade(psnr: f64) -> &'static str {
     if psnr.is_infinite() {
-        "Lossless (完全相同)"
+        "Lossless (identical)"
     } else if psnr >= 45.0 {
-        "Excellent (几乎无法区分)"
+        "Excellent (visually indistinguishable)"
     } else if psnr >= 40.0 {
-        "Good (视觉无损)"
+        "Good (visually lossless)"
     } else if psnr >= 35.0 {
-        "Acceptable (轻微差异)"
+        "Acceptable (minor difference)"
     } else if psnr >= 30.0 {
-        "Fair (可见差异)"
+        "Fair (visible difference)"
     } else {
-        "Poor (明显质量损失)"
+        "Poor (noticeable quality loss)"
     }
 }
 
@@ -210,15 +210,15 @@ pub fn is_valid_ms_ssim(ms_ssim: f64) -> bool {
 /// Do not use for fixed-width terminal alignment; string length != display width (CJK).
 pub fn ms_ssim_quality_grade(ms_ssim: f64) -> &'static str {
     if ms_ssim >= 0.95 {
-        "Excellent (几乎无法区分)"
+        "Excellent (visually indistinguishable)"
     } else if ms_ssim >= 0.90 {
-        "Good (流媒体质量)"
+        "Good (streaming quality)"
     } else if ms_ssim >= 0.85 {
-        "Acceptable (移动端质量)"
+        "Acceptable (mobile quality)"
     } else if ms_ssim >= 0.80 {
-        "Fair (可见差异)"
+        "Fair (visible difference)"
     } else {
-        "Poor (明显质量损失)"
+        "Poor (noticeable quality loss)"
     }
 }
 

@@ -23,9 +23,9 @@ pub enum ExtractionMethod {
 impl ExtractionMethod {
     pub fn description(&self) -> &'static str {
         match self {
-            ExtractionMethod::FfprobeDirect => "ffprobe 直接获取",
-            ExtractionMethod::BitrateCalculation => "bitrate × duration 计算",
-            ExtractionMethod::Estimated => "估算（文件大小 - 容器开销）",
+            ExtractionMethod::FfprobeDirect => "ffprobe direct",
+            ExtractionMethod::BitrateCalculation => "bitrate × duration",
+            ExtractionMethod::Estimated => "estimated (file size − container overhead)",
         }
     }
 

@@ -138,7 +138,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
              );
 
             apple_warning = format!(
-                 "⚠️ Extension mismatch (.{} vs {})。This will prevent Apple Photos import. Run repair_apple_photos.sh to fix.",
+                 "⚠️ Extension mismatch (.{} vs {}). This will prevent Apple Photos import. Run repair_apple_photos.sh to fix.",
                  ext_str, format_str
              );
         }
