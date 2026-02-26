@@ -1055,11 +1055,50 @@ TargetFormat::NoConversion => {
 
 ---
 
-### 设计良好的部分
+---
+
+### 40. TOCTOU 安全性增强 (TOCTOU Safety)
+
+在 `img_av1`、`img_hevc` 和 `vid_hevc` 模块中，对 **17 个** 核心转换函数实现了「临时文件 + 原子重命名」模式：
+
+- **实现机制**：所有编码器直接写入 `.tmp` 临时文件，仅在校验成功（健康检查 + 压缩检查）后，通过 `commit_temp_to_output` 原子地移动到最终路径。
+- **覆盖范围**：
+  - `img_av1/lossless_converter.rs` (8个函数)
+  - `img_hevc/lossless_converter.rs` (5个函数)
+  - `vid_hevc/animated_image.rs` (4个函数)
+
+**结论**：转换过程中的竞态条件风险已消除，不再有部分写入导致的不完整输出。
+
+---
+
+### 41. HEVC/AV1 深度设计审计 (Deep Design Audit)
+
+针对 `img_hevc` 和 `vid_hevc` 模块进行了两轮合规性审计，修复了以下设计缺陷与稳定性问题：
+
+- **完整性验证**：在转换流水线末端强制执行 `verify_avif_health` 和 `verify_jxl_health`，确保输出文件不仅存在且逻辑可读。
+- **参数顺序修正**：修复了 `cjxl` 参数位置 BUG —— `--compress_boxes=0` 移至 `--` 分隔符之前，避免其被误认为输入文件名。
+- **逻辑标准化**：
+  - 移除了冗余的 `build_even_dimension_filter`，统一使用 `shared_utils::get_ffmpeg_dimension_args`。
+  - 移除了 shell 命令 `touch -r`，统一使用 `shared_utils::copy_metadata`。
+  - 统一了多线程管理逻辑。
+- **死代码清理**：删除了 `convert_to_jxl_lossless`、`description_cn` 等无用函数与定义。
+
+---
+
+### 42. 核心逻辑最终审计结论 (Final Core Logic Conclusion)
+
+对 `main.rs` 路由、格式识别、Apple 兼容流、以及 `conversion_api` 的状态机进行了系统性审查。
+
+**结论**：核心逻辑设计完备，边界处理（如静态 GIF 路由、短动画跳过、Apple 兼容降级、安全删除）均符合工程实践。仓库目前没有已知的重大设计缺陷。
+
+---
+
+## 补充：设计良好的部分 (Update)
 
 1. ✅ **vid_hevc/animated_image.rs** 的 `convert_to_hevc_mp4_matched()` 质量检查逻辑非常完整
 2. ✅ **img_hevc/lossless_converter.rs** 使用统一的 `check_size_tolerance()` 函数
-3. ✅ **img_hevc/conversion_api.rs** 配置传递完整（compress、apple_compat 贯穿 JXL/AVIF/HEVC），输出校验与路径辅助统一
-4. ✅ 临时文件使用 RAII guard 自动清理
-5. ✅ 错误处理基本完整，失败时会删除不完整的输出文件
-6. ✅ `build_even_dimension_filter()` 正确处理奇数尺寸
+3. ✅ **img_hevc/conversion_api.rs** 配置传递完整（compress、apple_compat 贯穿 JXL/AVIF/HEVC）
+4. ✅ **TOCTOU 防断层**：临时文件使用 RAII guard 自动清理，提交过程原子化
+5. ✅ **解耦与复用**：成功将重复的尺寸计算与元数据辅助函数抽离至 `shared_utils`
+6. ✅ **错误处理**：失败时会物理删除不完整的临时文件，防止污染后续处理流
+
