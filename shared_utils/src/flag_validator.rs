@@ -167,9 +167,9 @@ mod tests {
             "--explore --match-quality --compress"
         );
         assert!(FlagMode::PreciseQualityWithCompress
-            .description_cn()
-            .contains("精确"));
-        assert!(FlagMode::UltimateExplore.description_cn().contains("极限"));
+            .description_en()
+            .contains("Precise"));
+        assert!(FlagMode::UltimateExplore.description_en().contains("Ultimate"));
         assert!(FlagMode::UltimateExplore.is_ultimate());
         assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
     }
