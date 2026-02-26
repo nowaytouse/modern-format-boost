@@ -142,7 +142,7 @@ pub fn convert_to_jxl(
                         if let Some(ffmpeg_stdout) = ffmpeg_proc.stdout.take() {
                             let mut cmd = Command::new("cjxl");
                             cmd.arg("-")
-                                .arg(shared_utils::safe_path_arg(&output).as_ref())
+                                .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
                                 .arg("-d")
                                 .arg(format!("{:.1}", distance))
                                 .arg("-e")
@@ -245,7 +245,7 @@ pub fn convert_to_jxl(
                                         eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
                                         try_imagemagick_fallback(
                                             input,
-                                            &output,
+                                            &temp_output,
                                             distance,
                                             max_threads,
                                         )
@@ -257,21 +257,21 @@ pub fn convert_to_jxl(
                                     eprintln!(
                                         "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline..."
                                     );
-                                    try_imagemagick_fallback(input, &output, distance, max_threads)
+                                    try_imagemagick_fallback(input, &temp_output, distance, max_threads)
                                 }
                             }
                         } else {
                             eprintln!("   ❌ Failed to capture FFmpeg stdout");
                             let _ = ffmpeg_proc.kill();
                             eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                            try_imagemagick_fallback(input, &output, distance, max_threads)
+                            try_imagemagick_fallback(input, &temp_output, distance, max_threads)
                         }
                     }
                     Err(e) => {
                         eprintln!("   ❌ FFmpeg not available or failed to start: {}", e);
                         eprintln!("      💡 Install: brew install ffmpeg");
                         eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                        try_imagemagick_fallback(input, &output, distance, max_threads)
+                        try_imagemagick_fallback(input, &temp_output, distance, max_threads)
                     }
                 }
             } else {
@@ -393,8 +393,11 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                     style("Using ImageMagick → cjxl pipeline to sanitize and re-encode").dim()
                 );
 
-                match try_imagemagick_fallback(input, &output, 0.0, max_threads) {
+                match try_imagemagick_fallback(input, &temp_output, 0.0, max_threads) {
                     Ok(_) => {
+                        if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                            return Ok(ConversionResult::skipped_exists(input, &output));
+                        }
                         let output_size = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
                         if let Some(skipped) =
                             check_size_tolerance(input, &output, input_size, output_size, options, "JPEG (Sanitized) -> JXL")
