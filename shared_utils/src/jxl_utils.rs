@@ -94,120 +94,163 @@ pub fn convert_to_temp_png(
     }
 }
 
+/// True when cjxl failed due to grayscale PNG + ICC profile (libpng: "RGB color space not permitted on grayscale").
+/// Only then do we retry with -strip to avoid metadata loss in the general case.
+fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    (s.contains("rgb color space not permitted on grayscale") || s.contains("iccp"))
+        && (s.contains("getting pixel data failed") || s.contains("grayscale"))
+}
+
+/// One attempt of ImageMagick → cjxl pipeline. `strip` = true adds -strip (drops ICC/EXIF) for the grayscale+ICC workaround.
+fn run_imagemagick_cjxl_pipeline(
+    input: &Path,
+    output: &Path,
+    distance: f32,
+    max_threads: usize,
+    strip: bool,
+) -> std::result::Result<std::process::Output, (bool, bool, String)> {
+    use std::process::Stdio;
+
+    let mut magick = Command::new("magick");
+    magick
+        .arg("--")
+        .arg(crate::safe_path_arg(input).as_ref());
+    if strip {
+        magick.arg("-strip");
+    }
+    magick
+        .arg("-depth")
+        .arg("16")
+        .arg("png:-")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut magick_proc = magick.spawn().map_err(|e| {
+        let _ = eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
+        (false, false, String::new())
+    })?;
+
+    let magick_stdout = magick_proc.stdout.take().ok_or_else(|| {
+        let _ = magick_proc.kill();
+        (false, false, String::new())
+    })?;
+
+    let mut cjxl_proc = Command::new("cjxl")
+        .arg("-")
+        .arg(output)
+        .arg("-d")
+        .arg(format!("{:.1}", distance))
+        .arg("-e")
+        .arg("7")
+        .arg("-j")
+        .arg(max_threads.to_string())
+        .stdin(magick_stdout)
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            eprintln!("   ❌ Failed to start cjxl process: {}", e);
+            let _ = magick_proc.kill();
+            (false, false, String::new())
+        })?;
+
+    let magick_status = magick_proc.wait();
+    let cjxl_stderr_handle = cjxl_proc.stderr.take();
+    let cjxl_status = cjxl_proc.wait();
+    let cjxl_stderr = cjxl_stderr_handle
+        .and_then(|mut s| {
+            let mut v = String::new();
+            std::io::Read::read_to_string(&mut s, &mut v).ok().map(|_| v.trim().to_string())
+        })
+        .unwrap_or_default();
+
+    let magick_ok = match magick_status {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!("   ❌ ImageMagick failed with exit code: {:?}", status.code());
+            false
+        }
+        Err(e) => {
+            eprintln!("   ❌ Failed to wait for ImageMagick: {}", e);
+            false
+        }
+    };
+
+    let cjxl_ok = match cjxl_status {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!("   ❌ cjxl failed with exit code: {:?}", status.code());
+            if !cjxl_stderr.is_empty() {
+                eprintln!("   📋 cjxl stderr: {}", cjxl_stderr);
+            }
+            false
+        }
+        Err(e) => {
+            eprintln!("   ❌ Failed to wait for cjxl: {}", e);
+            false
+        }
+    };
+
+    if magick_ok && cjxl_ok {
+        Ok(std::process::Output {
+            status: std::process::ExitStatus::default(),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        })
+    } else {
+        Err((magick_ok, cjxl_ok, cjxl_stderr))
+    }
+}
+
 /// ImageMagick → cjxl fallback pipeline for when direct cjxl encoding fails.
+/// Tries without -strip first (preserve metadata). Only if cjxl fails with the exact
+/// "grayscale PNG + ICC profile" error do we retry once with -strip.
 pub fn try_imagemagick_fallback(
     input: &Path,
     output: &Path,
     distance: f32,
     max_threads: usize,
 ) -> std::result::Result<std::process::Output, std::io::Error> {
-    use std::process::Stdio;
-
     eprintln!("   🔧 ImageMagick → cjxl pipeline");
 
-    let magick_result = Command::new("magick")
-        .arg("--")
-        .arg(crate::safe_path_arg(input).as_ref())
-        .arg("-depth")
-        .arg("16")
-        .arg("png:-")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
-
-    match magick_result {
-        Ok(mut magick_proc) => {
-            if let Some(magick_stdout) = magick_proc.stdout.take() {
-                let cjxl_result = Command::new("cjxl")
-                    .arg("-")
-                    .arg(output)
-                    .arg("-d")
-                    .arg(format!("{:.1}", distance))
-                    .arg("-e")
-                    .arg("7")
-                    .arg("-j")
-                    .arg(max_threads.to_string())
-                    .stdin(magick_stdout)
-                    .stderr(Stdio::piped())
-                    .spawn();
-                match cjxl_result {
-                    Ok(mut cjxl_proc) => {
-                        let magick_status = magick_proc.wait();
-                        let cjxl_stderr_handle = cjxl_proc.stderr.take();
-                        let cjxl_status = cjxl_proc.wait();
-                        let cjxl_stderr = cjxl_stderr_handle.and_then(|mut s| {
-                            let mut v = String::new();
-                            std::io::Read::read_to_string(&mut s, &mut v).ok().map(|_| v.trim().to_string())
-                        });
-
-                        let magick_ok = match magick_status {
-                            Ok(status) if status.success() => true,
-                            Ok(status) => {
-                                eprintln!(
-                                    "   ❌ ImageMagick failed with exit code: {:?}",
-                                    status.code()
-                                );
-                                false
-                            }
-                            Err(e) => {
-                                eprintln!("   ❌ Failed to wait for ImageMagick: {}", e);
-                                false
-                            }
-                        };
-
-                        let cjxl_ok = match cjxl_status {
-                            Ok(status) if status.success() => true,
-                            Ok(status) => {
-                                eprintln!("   ❌ cjxl failed with exit code: {:?}", status.code());
-                                if let Some(ref stderr) = cjxl_stderr {
-                                    if !stderr.is_empty() {
-                                        eprintln!("   📋 cjxl stderr: {}", stderr);
-                                    }
-                                }
-                                false
-                            }
-                            Err(e) => {
-                                eprintln!("   ❌ Failed to wait for cjxl: {}", e);
-                                false
-                            }
-                        };
-
-                        if magick_ok && cjxl_ok {
-                            eprintln!("   🎉 ImageMagick pipeline completed successfully");
-                            Ok(std::process::Output {
-                                status: std::process::ExitStatus::default(),
-                                stdout: Vec::new(),
-                                stderr: Vec::new(),
-                            })
-                        } else {
-                            eprintln!(
-                                "   ❌ ImageMagick pipeline failed (magick: {}, cjxl: {})",
-                                if magick_ok { "✓" } else { "✗" },
-                                if cjxl_ok { "✓" } else { "✗" }
-                            );
-                            Err(std::io::Error::other(
-                                "ImageMagick fallback pipeline failed",
-                            ))
-                        }
+    // First attempt: no -strip, preserve metadata
+    match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, false) {
+        Ok(out) => {
+            eprintln!("   🎉 ImageMagick pipeline completed successfully");
+            return Ok(out);
+        }
+        Err((magick_ok, cjxl_ok, stderr)) => {
+            eprintln!(
+                "   ❌ ImageMagick pipeline failed (magick: {}, cjxl: {})",
+                if magick_ok { "✓" } else { "✗" },
+                if cjxl_ok { "✓" } else { "✗" }
+            );
+            // Retry with -strip only when cjxl failed and reason is grayscale+ICC.
+            // -strip only affects the intermediate PNG→JXL stream. The final JXL still receives
+            // full metadata from the original file in finalize_conversion (ExifTool -tagsfromfile
+            // from original → output), so EXIF/ICC/XMP/timestamps are preserved in the output.
+            if magick_ok && !cjxl_ok && is_grayscale_icc_cjxl_error(&stderr) {
+                eprintln!(
+                    "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl); output will still get metadata from original in finalize step"
+                );
+                match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true) {
+                    Ok(out) => {
+                        eprintln!("   🎉 ImageMagick pipeline completed (with -strip fallback)");
+                        return Ok(out);
                     }
-                    Err(e) => {
-                        eprintln!("   ❌ Failed to start cjxl process: {}", e);
-                        let _ = magick_proc.kill();
-                        Err(e)
+                    Err((m, c, _)) => {
+                        eprintln!(
+                            "   ❌ Retry failed (magick: {}, cjxl: {})",
+                            if m { "✓" } else { "✗" },
+                            if c { "✓" } else { "✗" }
+                        );
                     }
                 }
-            } else {
-                eprintln!("   ❌ Failed to capture ImageMagick stdout");
-                let _ = magick_proc.kill();
-                Err(std::io::Error::other(
-                    "Failed to capture ImageMagick stdout",
-                ))
             }
         }
-        Err(e) => {
-            eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
-            eprintln!("      💡 Install: brew install imagemagick");
-            Err(e)
-        }
     }
+
+    Err(std::io::Error::other(
+        "ImageMagick fallback pipeline failed",
+    ))
 }
