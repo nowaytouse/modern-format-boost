@@ -17,14 +17,18 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+/// Minimum buffer size for format detection. Video containers need at least 12 bytes (e.g. RIFF+AVI), ftyp uses 8..12.
+const DETECT_BUF_LEN: usize = 32;
+
 fn detect_content_format(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
-    let mut buffer = [0u8; 24];
+    let mut buffer = [0u8; DETECT_BUF_LEN];
 
     if file.read_exact(&mut buffer).is_err() {
         return None;
     }
 
+    // --- Image formats (checked first so e.g. RIFF is not mistaken for AVI when it's WebP) ---
     if buffer.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some("jpeg".to_string());
     }
@@ -49,6 +53,16 @@ fn detect_content_format(path: &Path) -> Option<String> {
         if matches!(brand, "avif" | "avis") {
             return Some("avif".to_string());
         }
+        // MP4/MOV: ftyp with video brands (isom, mp41, mp42, M4V, qt  , etc.)
+        if matches!(
+            brand,
+            "isom" | "iso2" | "mp41" | "mp42" | "m4v " | "avc1" | "msdh" | "dash" | "ndas"
+        ) {
+            return Some("mp4".to_string());
+        }
+        if brand == "qt  " {
+            return Some("mov".to_string());
+        }
     }
 
     if buffer.starts_with(&[0x49, 0x49, 0x2A, 0x00])
@@ -65,6 +79,33 @@ fn detect_content_format(path: &Path) -> Option<String> {
         0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A,
     ]) {
         return Some("jxl".to_string());
+    }
+
+    // --- Video containers (checked after all image/anim formats so GIF/WebP/AVIF are never misclassified as video) ---
+    // AVI: RIFF....AVI 
+    if buffer.starts_with(&[0x52, 0x49, 0x46, 0x46])
+        && buffer.len() >= 12
+        && buffer[8..12] == [0x41, 0x56, 0x49, 0x20]
+    {
+        return Some("avi".to_string());
+    }
+
+    // FLV
+    if buffer.starts_with(&[0x46, 0x4C, 0x56]) {
+        return Some("flv".to_string());
+    }
+
+    // EBML → MKV/WebM (same magic; we use mkv as generic container)
+    if buffer.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return Some("mkv".to_string());
+    }
+
+    // ASF (WMV/WMA container)
+    if buffer.starts_with(&[
+        0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA,
+        0x00, 0x62, 0xCE, 0x6C,
+    ]) {
+        return Some("wmv".to_string());
     }
 
     None
@@ -87,6 +128,12 @@ pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
             "avif" => current_ext != "avif",
             "jxl" => current_ext != "jxl",
             "tiff" => !matches!(current_ext.as_str(), "tiff" | "tif"),
+            "mp4" => !matches!(current_ext.as_str(), "mp4" | "m4v"),
+            "mov" => current_ext != "mov",
+            "avi" => current_ext != "avi",
+            "flv" => current_ext != "flv",
+            "mkv" => !matches!(current_ext.as_str(), "mkv" | "webm"),
+            "wmv" => !matches!(current_ext.as_str(), "wmv" | "asf"),
             _ => false,
         };
 
@@ -228,5 +275,22 @@ mod tests {
 
         let result = copy_on_skip_or_fail(&source, None, None, false).unwrap();
         assert!(result.is_none());
+    }
+
+    /// Content is video (MP4 ftyp+isom) but extension was wrong → corrected to .mp4.
+    #[test]
+    fn test_fix_extension_video_content_wrong_ext() {
+        let temp = TempDir::new().unwrap();
+        // File named .jpg but content is MP4 (ftyp box, isom brand)
+        let wrong_ext = temp.path().join("video.jpg");
+        let mut header = [0u8; 32];
+        header[4..8].copy_from_slice(b"ftyp");
+        header[8..12].copy_from_slice(b"isom");
+        fs::write(&wrong_ext, &header).unwrap();
+
+        let fixed = fix_extension_if_mismatch(&wrong_ext).unwrap();
+        assert_eq!(fixed.extension().and_then(|e| e.to_str()), Some("mp4"));
+        assert!(fixed.exists());
+        assert!(!wrong_ext.exists());
     }
 }
