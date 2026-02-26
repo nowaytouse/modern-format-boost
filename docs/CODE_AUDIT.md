@@ -990,22 +990,21 @@ TargetFormat::NoConversion => {
 
 ---
 
-### 38.8 img_av1 conversion_api 与 img_hevc 的差距
+### 38.8 img_av1 conversion_api 与 img_hevc 的差距（已对齐）
 
-| 项目 | img_hevc | img_av1 |
-|------|----------|---------|
-| **ConversionConfig** | 含 `apple_compat` | **无** `apple_compat` |
-| **convert_to_jxl** | 接收 `config`；输出校验 + compress 检查；`--compress_boxes=0` 当 apple_compat | 仅 `(input, output, format)`；无 config、无输出校验、无线程参数 `-j` |
-| **convert_to_avif** | 接收 `config`；输出非空 + compress 检查 | 仅 `(input, output, quality)`；无输出校验 |
-| **convert_to_av1_mp4** | — | 无 config；无输出校验 |
-| **execute_conversion** | 各 convert_* 内建 compress 校验，外层兜底 | 仅外层 compress 块；convert_* 内无校验 |
-| **路径** | `canonicalize_input` / `resolve_output_absolute` 统一 | 直接 `safe_path_arg(input/output)`，无统一 canonicalize/resolve |
+**状态**：已按 §38.7 完成对齐。
 
-**建议**（可选，按需对齐）：
+| 项目 | img_hevc | img_av1（对齐后） |
+|------|----------|-------------------|
+| **ConversionConfig** | 含 `apple_compat` | 已增加 `apple_compat` |
+| **convert_to_jxl** | 接收 `config`；输出校验 + compress；`--compress_boxes=0` | 已对齐：接收 `config`，`-j` 线程，输出非空 + compress 检查，`apple_compat` → `--compress_boxes=0` |
+| **convert_to_avif** | 接收 `config`；输出非空 + compress | 已对齐：接收 `config`，路径辅助，输出非空 + compress |
+| **convert_to_av1_mp4** | — | 已对齐：接收 `config`，路径辅助，输出非空 + 可读性 + compress，失败时删输出 |
+| **execute_conversion** | 各 convert_* 内建校验 | 已使用 `resolve_output_path`，各 convert_* 内建校验 |
+| **路径** | `canonicalize_input` / `resolve_output_path` / `resolve_output_absolute` | 已实现相同辅助并统一使用 |
+| **simple_convert** | 委托 `smart_convert`(默认 config) | 已改为委托 `smart_convert`(默认 config) |
 
-1. 为 img_av1 `ConversionConfig` 增加 `apple_compat`；`convert_to_jxl` 在 apple_compat 时传 `--compress_boxes=0`。
-2. 为 img_av1 各 convert_* 传入 `config`，增加输出非空（及可读性）校验，并在 compress 模式下在 convert_* 内做 output < input 检查（与 img_hevc 一致）。
-3. 抽取路径辅助（如 `canonicalize_input` / `resolve_output_absolute`）到 shared_utils 或与 img_hevc 一致实现，避免重复。
+**vid_av1 与 vid_hevc 对齐**：vid_av1 已具备 `determine_strategy_with_apple_compat` 与 `config.apple_compat`；已补充 `execute_ffv1_conversion` / `execute_av1_lossless` 的输出校验（非空 + `get_input_dimensions` 可读性，失败时删输出），以及日志使用 `description_en()`。
 
 ---
 
@@ -1024,7 +1023,7 @@ TargetFormat::NoConversion => {
 | 类别 | 状态 | 说明 |
 |------|------|------|
 | TOCTOU | 未修复 | 所有转换模块中 `output_path.exists() && !config.force` 与写入之间存在竞态；建议后续用 `OpenOptions::create_new()` 等原子方式统一处理。 |
-| img_av1 与 img_hevc 对齐 | 可选 | 见 §38.8；按需补全 apple_compat、convert_* 收 config、输出校验与路径辅助。 |
+| img_av1 / vid_av1 与 hevc 对齐 | 已完成 | 见 §38.8；img_av1、vid_av1 已补全 config、输出校验与路径/日志一致。 |
 | 错误消息风格 | 已统一 | 用户可见错误/日志/质量等级/建议等已统一为英文（§38.11）。 |
 
 ---
