@@ -25,19 +25,19 @@ tell application "Terminal"
 end tell
 EOF
 else
-    # 双击模式：显示文件夹选择对话框
+    # 双击模式：显示文件夹选择对话框，确认后再运行，避免误操作
     SELECTED_DIR=$(osascript -e 'POSIX path of (choose folder with prompt "选择要处理的文件夹：")')
     
     if [[ -n "$SELECTED_DIR" ]]; then
-        # 去除末尾的斜杠
         SELECTED_DIR="${SELECTED_DIR%/}"
-        
-        # 在新终端窗口中运行
-        osascript <<EOF
+        # 安全确认：显示将处理的路径，仅当用户点击「开始优化」才执行（取消则退出）
+        if osascript -e "display dialog \"将优化以下文件夹：\n\n$SELECTED_DIR\" with title \"Modern Format Boost\" buttons {\"取消\", \"开始优化\"} default button 2 cancel button 1 with icon caution" 2>/dev/null; then
+            osascript <<EOF
 tell application "Terminal"
     activate
     do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
 end tell
 EOF
+        fi
     fi
 fi
