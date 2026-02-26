@@ -47,9 +47,11 @@ start_elapsed_spinner() {
     (
         local idx=0
         local sp
+        local start=$ELAPSED_START
         while true; do
             now=$(date +%s)
-            elapsed_sec=$(( now - ELAPSED_START ))
+            elapsed_sec=$(( now - start ))
+            [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
             h=$(( elapsed_sec / 3600 ))
             m=$(( (elapsed_sec % 3600) / 60 ))
             s=$(( elapsed_sec % 60 ))
@@ -59,7 +61,7 @@ start_elapsed_spinner() {
             idx=$(( idx + 1 ))
             sleep 0.15
         done
-    ) &
+    ) 2>/dev/null &
     SPINNER_PID=$!
 }
 stop_elapsed_spinner() {
@@ -69,6 +71,7 @@ stop_elapsed_spinner() {
     SPINNER_PID=""
     now=$(date +%s)
     elapsed_sec=$(( now - ELAPSED_START ))
+    [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
     h=$(( elapsed_sec / 3600 ))
     m=$(( (elapsed_sec % 3600) / 60 ))
     s=$(( elapsed_sec % 60 ))
