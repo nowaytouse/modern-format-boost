@@ -2,7 +2,75 @@
 
 All notable changes to this project will be documented in this file.
 
-## [8.5.2] - 2026-02-23
+## [8.7.0] - 2026-02-27
+
+### 🔧 Critical Bug Fixes
+
+#### GIF Quality Verification (Root Out False Success)
+- **Removed Unsafe Fallback**: GIF files no longer use SSIM-only or explore-SSIM as a兜底 (fallback) when MS-SSIM fails. Previously, this could mark verification as "passed" when it was incomplete.
+- **Explicit Error Reporting**: Now loudly reports error to stderr and `result.log` when GIF quality verification cannot be completed. `ms_ssim_passed = Some(false)` is set explicitly.
+- **Impact**: Prevents potential quality loss from false-positive verification results.
+
+#### Single-File Copy-on-Fail
+- **No Data Loss Guarantee**: When converting a single file with `--output` directory specified, if conversion fails, the original file is now copied to the output directory before returning the error.
+- **Implementation**: `cli_runner.rs` now calls `copy_on_skip_or_fail` before propagating `Err` in single-file mode.
+
+#### Calibration Diagnostics
+- **Full stderr Output**: When FFmpeg calibration fails (e.g., decode failed for CRF values), the complete FFmpeg stderr is now printed for troubleshooting.
+- **Y4M Extract**: Added `-an` (no audio) flag to Y4M extraction command to avoid unnecessary audio stream processing.
+
+### 🍎 Apple Ecosystem
+
+#### Script Behavior Change
+- **No Auto-Repair**: Disabled automatic Apple Photos Compatibility Repair run in scripts. User confirmation is now required before processing.
+- **JXL Metadata Preservation**: Metadata stripping now only occurs on grayscale+ICC retry path, preserving metadata in normal conversion flows.
+
+#### Extension Mismatch Handling
+- **Format Confusion Prevention**: Fixed detection order to ensure GIF/WebP/AVIF are detected before video path, preventing animated images from being confused with video formats.
+
+### 🔒 Code Quality & Audit
+
+#### Comprehensive Audit Completion
+- **CODE_AUDIT.md**: Completed with 39+ sections covering:
+  - Path safety and argument sanitization
+  - Concurrency and poison recovery
+  - Division-by-zero guards
+  - unwrap/expect/panic analysis
+  - TOCTOU mitigation
+
+#### TOCTOU Mitigation
+- **Atomic Conversion**: Implemented temp file + atomic rename pattern in conversion APIs (`conversion.rs`) to prevent time-of-check-time-of-use race conditions.
+- **Safe Temp Paths**: Temp files now use pattern `stem.tmp.ext` for safer intermediate file handling.
+
+#### Dependency Updates
+- `libheif-rs`: 2.6.0 → 2.6.1
+- `tempfile`: 3.25 → 3.26
+
+### 📊 Logging & UX
+
+#### Per-File Log Context
+- **Parallel Output Attribution**: When processing multiple files in parallel, each log line is now prefixed with `[filename]` so output can be attributed to the correct file.
+- **ANSI Stripping**: Color codes are stripped when output is not a TTY or when writing to log files.
+
+#### Progress Display Improvements
+- **Compact Milestones**: Images OK/failed counts now displayed on same line as XMP/JXL milestones.
+- **XMP Clarity**: XMP merge milestone lines use fixed `[XMP]` prefix to avoid confusion with Metadata total.
+
+#### Ultimate Mode Enhancement
+- **MS-SSIM Threshold**: Extended MS-SSIM skip threshold from 5 minutes to **25 minutes** in ultimate mode. Only videos >25 minutes will skip MS-SSIM and use SSIM-only verification.
+
+### 🛠️ Technical
+
+- **video_explorer.rs**: GIF quality verification explicit failure, calibration stderr printing, Y4M `-an` flag
+- **cli_runner.rs**: Single-file copy-on-fail logic
+- **conversion.rs**: TOCTOU-safe temp file + atomic rename
+- **msssim_parallel.rs**: GIF returns `Err` instead of `Ok(skipped)`
+- **flag_validator.rs**: Simplified to only accept recommended combination (`explore && match_quality && compress`)
+- **scripts/drag_and_drop_processor.sh**: Subcommand unified to `run`, recursive forced on, no auto Apple Photos repair
+
+---
+
+## [8.6.0] - 2026-02-24
 
 ### 🎬 MS-SSIM 极限模式时长参数
 

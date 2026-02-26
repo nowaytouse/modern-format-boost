@@ -1,6 +1,36 @@
 # Release Notes (for GitHub Release page)
 
-**Version:** 8.6.0  
+**Version:** 8.7.0
+**Date:** 2026-02-27
+
+---
+
+## Highlights
+
+### Critical Bug Fixes & Robustness
+- **GIF Quality Verification**: Removed unsafe SSIM-only fallback for GIF files. Now explicitly fails with clear error message instead of false success, preventing potential quality loss.
+- **Single-File Copy-on-Fail**: When converting a single file with `--output` fails, the original file is now copied to the output directory before returning error, ensuring no data loss.
+- **Calibration stderr Diagnostics**: FFmpeg stderr is now printed in full when calibration fails, aiding troubleshooting.
+- **TOCTOU-Safe Conversion**: Implemented temp file + atomic rename pattern in conversion APIs to prevent time-of-check-time-of-use race conditions.
+
+### Apple Ecosystem Improvements
+- **Script Behavior**: Disabled automatic Apple Photos Compatibility Repair run; user confirmation required before processing.
+- **JXL Metadata**: Strip metadata only on grayscale+ICC retry path; preserved metadata documented.
+- **Extension Correction**: Fixed extension mismatch handling to prevent format confusion (e.g., animated GIF/WebP not confused with video).
+
+### Code Quality & Audit
+- **Comprehensive Audit**: Completed CODE_AUDIT.md with 39+ sections covering path safety, concurrency, div-by-zero, and panic analysis.
+- **Dependency Updates**: Bumped `libheif-rs` to 2.6.1, `tempfile` to 3.26.
+- **Logging Unification**: All user-facing errors and logs unified to English; ANSI stripped for non-TTY and log files.
+
+### Logging & UX
+- **Per-File Log Context**: Parallel file processing now prefixes each line with `[filename]` for clear attribution.
+- **Progress Display**: Images OK/failed displayed on same line as XMP/JXL milestones for compact output.
+- **Ultimate Mode**: Extended MS-SSIM skip threshold to 25 minutes for long-form video optimization.
+
+---
+
+**Version:** 8.6.0
 **Date:** 2026-02-24
 
 ---
