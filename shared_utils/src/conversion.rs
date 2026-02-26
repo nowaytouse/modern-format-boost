@@ -308,10 +308,8 @@ impl ConvertOptions {
     }
 
     pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
-        match self.flag_mode() {
-            Ok(_) => crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
-            Err(_) => crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
-        }
+        // flag_mode() result is irrelevant — always use PreciseQualityMatchWithCompression
+        crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
     }
 }
 
@@ -426,6 +424,11 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     (1.0 - (output_size as f64 / input_size as f64)) * 100.0
 }
 
+/// Pre-conversion check: tests duplicate and output-exists skip conditions.
+///
+/// **TOCTOU note**: The `output.exists()` check here is advisory only.
+/// Callers MUST use `temp_path_for_output()` + `commit_temp_to_output()`
+/// to write atomically; do NOT rely on this check as a write guard.
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,

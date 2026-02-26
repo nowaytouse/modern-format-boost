@@ -337,15 +337,14 @@ fn convert_to_jxl(
     if *format == DetectedFormat::JPEG {
         cmd.args(["--lossless_jpeg=1", "-j"]);
         cmd.arg(max_threads.to_string());
-        cmd.arg("--");
     } else {
         cmd.args(["-d", "0.0", "-e", "7", "-j"]);
         cmd.arg(max_threads.to_string());
-        cmd.arg("--");
     }
     if config.apple_compat {
         cmd.arg("--compress_boxes=0");
     }
+    cmd.arg("--");
     let status = cmd
         .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
         .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
@@ -366,6 +365,14 @@ fn convert_to_jxl(
         return Err(ImgQualityError::ConversionError(
             "JXL output file is empty (encoding may have failed)".to_string(),
         ));
+    }
+
+    // Verify JXL file integrity
+    if let Err(e) = shared_utils::jxl_utils::verify_jxl_health(output) {
+        let _ = std::fs::remove_file(output);
+        return Err(ImgQualityError::ConversionError(format!(
+            "JXL health check failed: {}", e
+        )));
     }
 
     // Compress mode: only accept if output is strictly smaller than input
@@ -427,6 +434,14 @@ fn convert_to_avif(
         ));
     }
 
+    // Verify AVIF file integrity
+    if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(output) {
+        let _ = std::fs::remove_file(output);
+        return Err(ImgQualityError::ConversionError(format!(
+            "AVIF health check failed: {}", e
+        )));
+    }
+
     // Check compress mode: skip if output is not smaller than input
     if config.compress {
         let input_size = std::fs::metadata(input)?.len();
@@ -454,7 +469,7 @@ fn convert_to_hevc_mp4(
 
     let fps_str = fps.unwrap_or(10.0).to_string();
 
-    let vf_args = build_even_dimension_filter(width, height);
+    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let x265_params = format!("log-level=error:pools={}", max_threads);
@@ -481,8 +496,8 @@ fn convert_to_hevc_mp4(
         .arg("-r")
         .arg(&fps_str);
 
-    if !vf_args.is_empty() {
-        cmd.arg("-vf").arg(&vf_args);
+    for arg in &vf_args {
+        cmd.arg(arg);
     }
     cmd.arg("-pix_fmt").arg("yuv420p");
     cmd.arg(shared_utils::safe_path_arg(&output_abs).as_ref());
@@ -530,39 +545,10 @@ fn convert_to_hevc_mp4(
     Ok(())
 }
 
-fn build_even_dimension_filter(width: u32, height: u32) -> String {
-    let need_pad = !width.is_multiple_of(2) || !height.is_multiple_of(2);
-    if need_pad {
-        let new_width = if !width.is_multiple_of(2) {
-            width + 1
-        } else {
-            width
-        };
-        let new_height = if !height.is_multiple_of(2) {
-            height + 1
-        } else {
-            height
-        };
-        format!("pad={}:{}:0:0:black", new_width, new_height)
-    } else {
-        String::new()
-    }
-}
+
 
 fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
-    let status = Command::new("touch")
-        .args([
-            "-r",
-            "--",
-            shared_utils::safe_path_arg(source).as_ref(),
-            shared_utils::safe_path_arg(dest).as_ref(),
-        ])
-        .output()?;
-
-    if !status.status.success() {
-        eprintln!("⚠️ Warning: Failed to preserve timestamps");
-    }
-
+    shared_utils::copy_metadata(source, dest);
     Ok(())
 }
 
@@ -597,48 +583,7 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
     smart_convert(path, &config)
 }
 
-/// Lossless JXL (modular, effort 9). Kept for API completeness; execute_conversion uses convert_to_jxl.
-#[allow(dead_code)]
-fn convert_to_jxl_lossless(
-    input: &Path,
-    output: &Path,
-    format: &DetectedFormat,
-    apple_compat: bool,
-) -> Result<()> {
-    let input_abs = canonicalize_input(input);
-    let output_abs = resolve_output_absolute(output);
-    let max_threads = shared_utils::thread_manager::get_balanced_thread_config(
-        shared_utils::thread_manager::WorkloadType::Image,
-    )
-    .child_threads;
 
-    let mut cmd = Command::new("cjxl");
-    if *format == DetectedFormat::JPEG {
-        cmd.args(["--lossless_jpeg=1", "-j"]);
-        cmd.arg(max_threads.to_string());
-        cmd.arg("--");
-    } else {
-        cmd.args(["-d", "0.0", "--modular=1", "-e", "9", "-j"]);
-        cmd.arg(max_threads.to_string());
-        cmd.arg("--");
-    }
-    if apple_compat {
-        cmd.arg("--compress_boxes=0");
-    }
-
-    let status = cmd
-        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
-        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
-        .output()?;
-
-    if !status.status.success() {
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
-    }
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
