@@ -502,12 +502,19 @@ pub fn post_conversion_actions(
 
 /// Returns a path for temporary output in the same directory as `output`, so that
 /// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
+/// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so FFmpeg and other
+/// tools that infer format from extension still see the correct extension (mov, mp4, mkv, etc.).
 pub fn temp_path_for_output(output: &Path) -> PathBuf {
+    let stem = output
+        .file_stem()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
     let ext = output
         .extension()
         .map(|e| e.to_string_lossy())
         .unwrap_or_default();
-    output.with_extension(format!("{}.tmp", ext))
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!("{}.tmp.{}", stem, ext))
 }
 
 /// Commits a temp file to the final output path. Reduces TOCTOU window to the instant before rename.
@@ -755,6 +762,27 @@ mod tests {
             "Should say 'reduced' for smaller output"
         );
         assert!(msg.contains("50.0%"), "Should show 50.0% for half size");
+    }
+
+    #[test]
+    fn test_temp_path_for_output_keeps_extension() {
+        // Temp path must end with same extension as output so FFmpeg/muxers see correct format.
+        assert_eq!(
+            temp_path_for_output(Path::new("/dir/file.mov")).to_string_lossy(),
+            "/dir/file.tmp.mov"
+        );
+        assert_eq!(
+            temp_path_for_output(Path::new("out.mp4")).to_string_lossy(),
+            "out.tmp.mp4"
+        );
+        assert_eq!(
+            temp_path_for_output(Path::new("a/b/c.mkv")).to_string_lossy(),
+            "a/b/c.tmp.mkv"
+        );
+        assert_eq!(
+            temp_path_for_output(Path::new("name.with.dots.mov")).to_string_lossy(),
+            "name.with.dots.tmp.mov"
+        );
     }
 
     #[test]
