@@ -297,7 +297,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 info!(
                     "   {} {}: CRF {:.1}",
                     if ultimate { "🔥" } else { "🔬" },
-                    flag_mode.description_cn(),
+                    flag_mode.description_en(),
                     initial_crf
                 );
                 let explore_result = shared_utils::explore_hevc_with_gpu_coarse_full(
