@@ -1110,7 +1110,7 @@ TargetFormat::NoConversion => {
 | 路由 | `analyze_image` → (format, is_lossless, is_animated) 分支：JPEG→JXL、静态无损→JXL、静态有损→跳过/质量 100 JXL、动画→时长/Apple 兼容/短动画跳过/HEVC MKV 或 MP4 或 GIF。 |
 | 静态 GIF | 单帧按静态图走 JXL；多帧进动画分支。 |
 | Apple 兼容 | 动画：≥3s 或高质量→HEVC MP4；否则→GIF（Bayer）；GIF 失败不保留 HEVC，仅复制原文件。 |
-| 转换实现 | `lossless_converter`（JXL/AVIF/HEVC MKV）与 `vid_hevc::animated_image`（HEVC MP4/GIF）统一：temp 写入 + `commit_temp_to_output`、输出非空与可读校验、compress 时严格 output < input。 |
+| 转换实现 | `lossless_converter`（JXL/AVIF/HEVC MKV）与 `vid_hevc::animated_image`（HEVC MP4/GIF）统一：**临时路径 stem.tmp.ext**（保证 FFmpeg/muxer 看到正确扩展名）、temp 写入 + `commit_temp_to_output`、输出非空与可读校验、compress 时严格 output < input。 |
 | 后处理 | 元数据/时间戳、可选删除原文件、copy_on_skip 覆盖未转换文件。 |
 
 ### vid_hevc 核心路径（已核对）
@@ -1120,7 +1120,7 @@ TargetFormat::NoConversion => {
 | 入口 | `main` Run → `run_auto_command` → 每文件 `auto_convert(file, &config)`；Simple → `simple_convert`。 |
 | 策略 | `determine_strategy_with_apple_compat`：现代编解码跳过、Unknown 二次判断、无损→HEVC Lossless MKV、有损/视觉无损→HEVC MP4（CRF/探索）。 |
 | 输出路径 | `output_dir`/`base_dir` 一致；apple_compat 时 MP4→mov；GIF 源不进入 Apple 兼容 fallback。 |
-| 转换实现 | `execute_hevc_lossless` / `explore_hevc_with_gpu_coarse*` 写 temp → `commit_temp_to_output`；质量/压缩未达标时删 temp、复制原文件；Apple 兼容 fallback 仅非 GIF。 |
+| 转换实现 | 临时路径 stem.tmp.ext（mov/mp4/mkv）；`execute_hevc_lossless` / `explore_hevc_with_gpu_coarse*` 写 temp → `commit_temp_to_output`；质量/压缩未达标时删 temp、复制原文件；Apple 兼容 fallback 仅非 GIF。 |
 | 动图转视频 | 由 **img_hevc** 调用 `vid_hevc::animated_image`（`convert_to_hevc_mp4_matched`、`convert_to_gif_apple_compat`）；vid_hevc Run 仅处理视频文件。 |
 
 ### 设计良好的部分（保留摘要）
@@ -1128,8 +1128,15 @@ TargetFormat::NoConversion => {
 1. **vid_hevc/animated_image**：质量与尺寸校验完整，静态动图提前跳过，GIF 与 Apple 兼容逻辑分离。
 2. **img_hevc/lossless_converter**：`check_size_tolerance` 统一 compress 判断；JXL/AVIF/HEVC 路径一致。
 3. **img_hevc/conversion_api**：config（compress、apple_compat）贯穿，输出校验与路径辅助统一。
-4. **TOCTOU**：临时文件 + 原子 rename，失败删除 temp，不污染最终路径。
+4. **TOCTOU**：临时路径 `stem.tmp.ext`（与最终扩展名一致，避免 FFmpeg muxer 因扩展名误判）、原子 rename，失败删除 temp，不污染最终路径。
 5. **错误与清理**：失败时删除不完整输出；copy_on_skip 保证未转换文件仍进入输出目录。
+
+### 事后修复与复验（收尾后 1 次）
+
+- **问题**：用户批量 GIF→MOV（Apple 兼容）时报错 `Error initializing the muxer for ... .mov.tmp: Invalid argument`。
+- **根因**：`temp_path_for_output` 原为 `output.with_extension("mov.tmp")`，生成 `file.mov.tmp`。FFmpeg 按**输出文件扩展名**选择 muxer，扩展名 `.mov.tmp` 导致 MOV muxer 无法识别、初始化失败。
+- **修复**：`shared_utils::conversion::temp_path_for_output` 改为 `stem + ".tmp." + ext`（如 `file.mov` → `file.tmp.mov`），临时文件扩展名与最终一致；单测 `test_temp_path_for_output_keeps_extension` 锁定行为。
+- **复验**：两条 HEVC 工具核心路径（含 animated_image 的 HEVC MP4/MOV、GIF、MKV）再次核对，所有传入 FFmpeg 的路径均为 stem.tmp.ext，无其他路径/扩展名问题；**结论仍为收尾基线有效**。
 
 ### 收尾约定
 
