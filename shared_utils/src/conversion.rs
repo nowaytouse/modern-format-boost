@@ -495,6 +495,41 @@ pub fn post_conversion_actions(
     Ok(())
 }
 
+// --- Atomic output (TOCTOU mitigation) ---
+
+/// Returns a path for temporary output in the same directory as `output`, so that
+/// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
+pub fn temp_path_for_output(output: &Path) -> PathBuf {
+    let ext = output
+        .extension()
+        .map(|e| e.to_string_lossy())
+        .unwrap_or_default();
+    output.with_extension(format!("{}.tmp", ext))
+}
+
+/// Commits a temp file to the final output path. Reduces TOCTOU window to the instant before rename.
+/// - If `!force` and `output` already exists: removes `temp` and returns `Ok(false)` (caller should treat as skip).
+/// - Otherwise: renames `temp` → `output` (overwriting if `force` and target exists on Unix) and returns `Ok(true)`.
+pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io::Result<bool> {
+    if !force && output.exists() {
+        let _ = fs::remove_file(temp);
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        fs::rename(temp, output)?;
+        return Ok(true);
+    }
+    #[cfg(not(unix))]
+    {
+        if output.exists() {
+            fs::remove_file(output)?;
+        }
+        fs::rename(temp, output)?;
+        Ok(true)
+    }
+}
+
 /// Get image/video dimensions using ffprobe → image crate → ImageMagick fallback chain.
 ///
 /// Returns (width, height) or an error if all methods fail.
