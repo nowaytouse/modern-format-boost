@@ -20,7 +20,7 @@ use walkdir::WalkDir;
 
 pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
-    "bmp",
+    "bmp", "ico", "svg", "jp2", "j2k", "jxl",
 ];
 
 pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
@@ -29,6 +29,7 @@ pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
 
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
+    "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
 ];
 
 pub const SIDECAR_EXTENSIONS: &[&str] = &["xmp"];

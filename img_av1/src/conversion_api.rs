@@ -34,6 +34,7 @@ pub struct ConversionConfig {
     pub delete_original: bool,
     pub preserve_timestamps: bool,
     pub preserve_metadata: bool,
+    pub compress: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +210,37 @@ pub fn execute_conversion(
             100.0 * (1.0 - s as f32 / detection.file_size as f32)
         }
     });
+
+    // Compress mode: skip if output is not smaller than input
+    if config.compress {
+        let out_size = output_size.unwrap_or(0);
+        if out_size >= detection.file_size {
+            let _ = std::fs::remove_file(&output_path);
+
+            // Copy original to output directory if specified
+            if let Some(ref out_dir) = config.output_dir {
+                let _ = shared_utils::copy_on_skip_or_fail(
+                    input_path,
+                    Some(out_dir),
+                    config.base_dir.as_deref(),
+                    false,
+                );
+            }
+
+            return Ok(ConversionOutput {
+                original_path: detection.file_path.clone(),
+                output_path: detection.file_path.clone(),
+                skipped: true,
+                message: format!(
+                    "Skipped: output ({} bytes) not smaller than input ({} bytes) in compress mode",
+                    out_size, detection.file_size
+                ),
+                original_size: detection.file_size,
+                output_size: Some(detection.file_size),
+                size_reduction: Some(0.0),
+            });
+        }
+    }
 
     if config.preserve_metadata || config.preserve_timestamps {
         shared_utils::copy_metadata(input_path, &output_path);

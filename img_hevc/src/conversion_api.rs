@@ -35,6 +35,8 @@ pub struct ConversionConfig {
     pub preserve_metadata: bool,
     /// When true, conversion is only accepted if output is strictly smaller than input (unchanged = goal not achieved).
     pub compress: bool,
+    /// When true, JXL uses --compress_boxes=0 for Apple compatibility.
+    pub apple_compat: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,15 +181,8 @@ pub fn execute_conversion(
         }
     };
 
-    let file_stem = input_path.file_stem().ok_or_else(|| {
-        ImgQualityError::ConversionError("Invalid file path: no file stem".to_string())
-    })?;
-
-    let output_path = if let Some(ref dir) = config.output_dir {
-        dir.join(file_stem).with_extension(extension)
-    } else {
-        input_path.with_extension(extension)
-    };
+    let output_path =
+        resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
 
     if output_path.exists() && !config.force {
         return Ok(ConversionOutput {
@@ -202,7 +197,12 @@ pub fn execute_conversion(
     }
 
     let result = match strategy.target {
-        TargetFormat::JXL => convert_to_jxl(input_path, &output_path, &detection.format),
+        TargetFormat::JXL => convert_to_jxl(
+            input_path,
+            &output_path,
+            &detection.format,
+            config.apple_compat,
+        ),
         TargetFormat::AVIF => {
             convert_to_avif(input_path, &output_path, detection.estimated_quality)
         }
@@ -213,7 +213,11 @@ pub fn execute_conversion(
             detection.width,
             detection.height,
         ),
-        TargetFormat::NoConversion => unreachable!(),
+        TargetFormat::NoConversion => {
+            return Err(ImgQualityError::ConversionError(
+                "NoConversion should have been handled earlier".to_string(),
+            ))
+        }
     };
 
     if let Err(e) = result {
@@ -283,24 +287,56 @@ pub fn execute_conversion(
     })
 }
 
-fn path_to_str(path: &Path) -> Result<&str> {
-    path.to_str().ok_or_else(|| {
-        ImgQualityError::ConversionError(format!("Invalid UTF-8 in path: {:?}", path))
+/// Canonicalize input path for safe use with external tools.
+fn canonicalize_input(input: &Path) -> PathBuf {
+    std::fs::canonicalize(input).unwrap_or_else(|_| input.to_path_buf())
+}
+
+/// Resolve output path: if output_dir is set, join dir + stem + extension; else same dir as input with new extension.
+fn resolve_output_path(
+    input: &Path,
+    output_dir: Option<&Path>,
+    extension: &str,
+) -> Result<PathBuf> {
+    let file_stem = input
+        .file_stem()
+        .ok_or_else(|| ImgQualityError::ConversionError("Invalid file path: no file stem".to_string()))?;
+    Ok(if let Some(dir) = output_dir {
+        dir.join(file_stem).with_extension(extension)
+    } else {
+        input.with_extension(extension)
     })
 }
 
-fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+fn convert_to_jxl(
+    input: &Path,
+    output: &Path,
+    format: &DetectedFormat,
+    apple_compat: bool,
+) -> Result<()> {
+    let input_abs = canonicalize_input(input);
+    let output_abs = resolve_output_absolute(output);
+    let max_threads = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Image,
+    )
+    .child_threads;
 
     let mut cmd = Command::new("cjxl");
     if *format == DetectedFormat::JPEG {
-        cmd.args(["--lossless_jpeg=1", "--"]);
+        cmd.args(["--lossless_jpeg=1", "-j"]);
+        cmd.arg(max_threads.to_string());
+        cmd.arg("--");
     } else {
-        cmd.args(["-d", "0.0", "-e", "7", "--"]);
+        cmd.args(["-d", "0.0", "-e", "7", "-j"]);
+        cmd.arg(max_threads.to_string());
+        cmd.arg("--");
+    }
+    if apple_compat {
+        cmd.arg("--compress_boxes=0");
     }
     let status = cmd
         .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
-        .arg(shared_utils::safe_path_arg(output).as_ref())
+        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
         .output()?;
 
     if !status.status.success() {
@@ -312,17 +348,21 @@ fn convert_to_jxl(input: &Path, output: &Path, format: &DetectedFormat) -> Resul
     Ok(())
 }
 
-fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
-    let q = quality.unwrap_or(85).to_string();
-
-    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
-    let output_abs = if output.is_absolute() {
+/// Make output path absolute for tools that require it (e.g. avifenc).
+fn resolve_output_absolute(output: &Path) -> PathBuf {
+    if output.is_absolute() {
         output.to_path_buf()
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(output)
-    };
+    }
+}
+
+fn convert_to_avif(input: &Path, output: &Path, quality: Option<u8>) -> Result<()> {
+    let q = quality.unwrap_or(85).to_string();
+    let input_abs = canonicalize_input(input);
+    let output_abs = resolve_output_absolute(output);
 
     let status = Command::new("avifenc")
         .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
@@ -355,7 +395,8 @@ fn convert_to_hevc_mp4(
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let x265_params = format!("log-level=error:pools={}", max_threads);
 
-    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
+    let input_abs = canonicalize_input(input);
+    let output_abs = resolve_output_absolute(output);
 
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
@@ -380,14 +421,6 @@ fn convert_to_hevc_mp4(
         cmd.arg("-vf").arg(&vf_args);
     }
     cmd.arg("-pix_fmt").arg("yuv420p");
-
-    let output_abs = if output.is_absolute() {
-        output.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(output)
-    };
     cmd.arg(shared_utils::safe_path_arg(&output_abs).as_ref());
 
     let process = FfmpegProcess::spawn(&mut cmd)
@@ -454,101 +487,55 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
     execute_conversion(&detection, &strategy, config)
 }
 
+/// Simplified wrapper: builds a default ConversionConfig and delegates to smart_convert.
+/// Use smart_convert when you need compress, preserve_metadata, preserve_timestamps, delete_original, or apple_compat.
 pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
-    use crate::detection_api::detect_image;
-
-    let detection = detect_image(path)?;
-    let input_path = Path::new(&detection.file_path);
-
-    let (extension, is_animated) = match detection.image_type {
-        ImageType::Static => ("jxl", false),
-        ImageType::Animated => ("mp4", true),
+    let config = ConversionConfig {
+        output_dir: output_dir.map(PathBuf::from),
+        base_dir: None,
+        force: false,
+        delete_original: false,
+        preserve_timestamps: false,
+        preserve_metadata: false,
+        compress: false,
+        apple_compat: false,
     };
-
-    let file_stem = input_path.file_stem().ok_or_else(|| {
-        ImgQualityError::ConversionError("Invalid file path: no file stem".to_string())
-    })?;
-
-    let output_path = if let Some(dir) = output_dir {
-        std::fs::create_dir_all(dir)?;
-        dir.join(file_stem).with_extension(extension)
-    } else {
-        input_path.with_extension(extension)
-    };
-
-    if output_path.exists() {
-        return Ok(ConversionOutput {
-            original_path: detection.file_path.clone(),
-            output_path: output_path.display().to_string(),
-            skipped: true,
-            message: "Output file already exists".to_string(),
-            original_size: detection.file_size,
-            output_size: None,
-            size_reduction: None,
-        });
-    }
-
-    let result = if is_animated {
-        convert_to_hevc_mp4(
-            input_path,
-            &output_path,
-            detection.fps,
-            detection.width,
-            detection.height,
-        )
-    } else {
-        convert_to_jxl_lossless(input_path, &output_path, &detection.format)
-    };
-
-    if let Err(e) = result {
-        return Err(ImgQualityError::ConversionError(e.to_string()));
-    }
-
-    let output_size = std::fs::metadata(&output_path).ok().map(|m| m.len());
-    let size_reduction = output_size.map(|s| {
-        if detection.file_size == 0 {
-            0.0
-        } else {
-            100.0 * (1.0 - s as f32 / detection.file_size as f32)
-        }
-    });
-
-    Ok(ConversionOutput {
-        original_path: detection.file_path.clone(),
-        output_path: output_path.display().to_string(),
-        skipped: false,
-        message: if is_animated {
-            "Animated → HEVC MP4 (high quality)".to_string()
-        } else {
-            "Static → JXL (mathematical lossless)".to_string()
-        },
-        original_size: detection.file_size,
-        output_size,
-        size_reduction,
-    })
+    smart_convert(path, &config)
 }
 
-fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let input_abs = std::fs::canonicalize(input).unwrap_or(input.to_path_buf());
-    let input_str = path_to_str(&input_abs)?;
-    let output_str = path_to_str(output)?;
+/// Lossless JXL (modular, effort 9). Kept for API completeness; execute_conversion uses convert_to_jxl.
+#[allow(dead_code)]
+fn convert_to_jxl_lossless(
+    input: &Path,
+    output: &Path,
+    format: &DetectedFormat,
+    apple_compat: bool,
+) -> Result<()> {
+    let input_abs = canonicalize_input(input);
+    let output_abs = resolve_output_absolute(output);
+    let max_threads = shared_utils::thread_manager::get_balanced_thread_config(
+        shared_utils::thread_manager::WorkloadType::Image,
+    )
+    .child_threads;
 
-    let args = if *format == DetectedFormat::JPEG {
-        vec!["--lossless_jpeg=1", "--", input_str, output_str]
+    let mut cmd = Command::new("cjxl");
+    if *format == DetectedFormat::JPEG {
+        cmd.args(["--lossless_jpeg=1", "-j"]);
+        cmd.arg(max_threads.to_string());
+        cmd.arg("--");
     } else {
-        vec![
-            "-d",
-            "0.0",
-            "--modular=1",
-            "-e",
-            "9",
-            "--",
-            input_str,
-            output_str,
-        ]
-    };
+        cmd.args(["-d", "0.0", "--modular=1", "-e", "9", "-j"]);
+        cmd.arg(max_threads.to_string());
+        cmd.arg("--");
+    }
+    if apple_compat {
+        cmd.arg("--compress_boxes=0");
+    }
 
-    let status = Command::new("cjxl").args(&args).output()?;
+    let status = cmd
+        .arg(shared_utils::safe_path_arg(&input_abs).as_ref())
+        .arg(shared_utils::safe_path_arg(&output_abs).as_ref())
+        .output()?;
 
     if !status.status.success() {
         return Err(ImgQualityError::ConversionError(

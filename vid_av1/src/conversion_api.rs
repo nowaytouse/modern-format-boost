@@ -16,7 +16,18 @@ use std::process::Command;
 use tracing::{info, warn};
 
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
-    let skip_decision = shared_utils::should_skip_video_codec(result.codec.as_str());
+    determine_strategy_with_apple_compat(result, false)
+}
+
+pub fn determine_strategy_with_apple_compat(
+    result: &VideoDetectionResult,
+    apple_compat: bool,
+) -> ConversionStrategy {
+    let skip_decision = if apple_compat {
+        shared_utils::should_skip_video_codec_apple_compat(result.codec.as_str())
+    } else {
+        shared_utils::should_skip_video_codec(result.codec.as_str())
+    };
 
     if skip_decision.should_skip {
         return ConversionStrategy {
@@ -141,7 +152,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     let detection = detect_video(input)?;
-    let strategy = determine_strategy(&detection);
+    let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat);
 
     if strategy.target == TargetVideoFormat::Skip {
         info!("🎬 Auto Mode: {} → SKIP", input.display());

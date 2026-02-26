@@ -88,9 +88,59 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
     }
 }
 
+/// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
+/// Callers should skip video conversion and treat as static image (e.g. route to JXL in img_hevc).
+fn is_static_animated_image(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif") {
+        return false;
+    }
+    if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
+        if analysis.is_animated {
+            let duration_secs = analysis.duration_secs.unwrap_or(1.0);
+            if duration_secs < 0.01 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
+    ConversionResult {
+        success: true,
+        input_path: input.display().to_string(),
+        output_path: None,
+        input_size,
+        output_size: None,
+        size_reduction: None,
+        message: "Skipped: Static image (1 frame), use image conversion path instead"
+            .to_string(),
+        skipped: true,
+        skip_reason: Some("static_animated".to_string()),
+    }
+}
+
 pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
+    }
+
+    if is_static_animated_image(input) {
+        let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        if options.verbose {
+            eprintln!(
+                "   ⏭️  Detected static animated image (1 frame), skipping video conversion: {}",
+                input.display()
+            );
+        }
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(skipped_static_animated(input, input_size));
     }
 
     let input_size = fs::metadata(input)?.len();
@@ -133,6 +183,22 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
+            if output_size == 0 {
+                if output.exists() {
+                    let _ = fs::remove_file(&output);
+                }
+                return Err(VidQualityError::ConversionError(
+                    "HEVC output file is empty (encoding may have failed)".to_string(),
+                ));
+            }
+            if get_input_dimensions(&output).is_err() {
+                if output.exists() {
+                    let _ = fs::remove_file(&output);
+                }
+                return Err(VidQualityError::ConversionError(
+                    "HEVC output file is not readable (invalid or corrupted)".to_string(),
+                ));
+            }
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             shared_utils::copy_metadata(input, &output);
@@ -537,6 +603,19 @@ pub fn convert_to_gif_apple_compat(
         return Ok(skipped_already_processed(input));
     }
 
+    if is_static_animated_image(input) {
+        let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        if options.verbose {
+            eprintln!(
+                "   ⏭️  Detected static animated image (1 frame), skipping GIF conversion: {}",
+                input.display()
+            );
+        }
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(skipped_static_animated(input, input_size));
+    }
+
     let input_size = fs::metadata(input)?.len();
 
     let input_ext = input
@@ -638,6 +717,22 @@ pub fn convert_to_gif_apple_compat(
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&output)?.len();
+            if output_size == 0 {
+                if output.exists() {
+                    let _ = fs::remove_file(&output);
+                }
+                return Err(VidQualityError::ConversionError(
+                    "GIF output file is empty (encoding may have failed)".to_string(),
+                ));
+            }
+            if get_input_dimensions(&output).is_err() {
+                if output.exists() {
+                    let _ = fs::remove_file(&output);
+                }
+                return Err(VidQualityError::ConversionError(
+                    "GIF output file is not readable (invalid or corrupted)".to_string(),
+                ));
+            }
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             let tolerance_ratio = if options.allow_size_tolerance {
