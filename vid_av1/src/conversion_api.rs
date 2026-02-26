@@ -255,7 +255,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 let initial_crf = calculate_matched_crf(&detection);
                 info!(
                     "   🔬 {}: CRF {}",
-                    shared_utils::FlagMode::PreciseQualityWithCompress.description_cn(),
+                    shared_utils::FlagMode::PreciseQualityWithCompress.description_en(),
                     initial_crf
                 );
                 let explore_result = shared_utils::explore_precise_quality_match_with_compression(
@@ -399,12 +399,30 @@ fn execute_ffv1_conversion(
     let result = Command::new("ffmpeg").args(&args).output()?;
 
     if !result.status.success() {
+        let _ = std::fs::remove_file(output);
         return Err(VidQualityError::FFmpegError(
             String::from_utf8_lossy(&result.stderr).to_string(),
         ));
     }
 
-    Ok(std::fs::metadata(output)?.len())
+    let size = std::fs::metadata(output).map_err(|e| {
+        VidQualityError::ConversionError(format!("Failed to read FFV1 output: {}", e))
+    })?;
+    let size = size.len();
+    if size == 0 {
+        let _ = std::fs::remove_file(output);
+        return Err(VidQualityError::ConversionError(
+            "FFV1 output file is empty (encoding may have failed)".to_string(),
+        ));
+    }
+    if shared_utils::conversion::get_input_dimensions(output).is_err() {
+        let _ = std::fs::remove_file(output);
+        return Err(VidQualityError::ConversionError(
+            "FFV1 output file is not readable (invalid or corrupted)".to_string(),
+        ));
+    }
+
+    Ok(size)
 }
 
 fn execute_av1_lossless(
@@ -453,12 +471,30 @@ fn execute_av1_lossless(
     let result = Command::new("ffmpeg").args(&args).output()?;
 
     if !result.status.success() {
+        let _ = std::fs::remove_file(output);
         return Err(VidQualityError::FFmpegError(
             String::from_utf8_lossy(&result.stderr).to_string(),
         ));
     }
 
-    Ok(std::fs::metadata(output)?.len())
+    let size = std::fs::metadata(output).map_err(|e| {
+        VidQualityError::ConversionError(format!("Failed to read AV1 output: {}", e))
+    })?;
+    let size = size.len();
+    if size == 0 {
+        let _ = std::fs::remove_file(output);
+        return Err(VidQualityError::ConversionError(
+            "AV1 output file is empty (encoding may have failed)".to_string(),
+        ));
+    }
+    if shared_utils::conversion::get_input_dimensions(output).is_err() {
+        let _ = std::fs::remove_file(output);
+        return Err(VidQualityError::ConversionError(
+            "AV1 output file is not readable (invalid or corrupted)".to_string(),
+        ));
+    }
+
+    Ok(size)
 }
 
 pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
