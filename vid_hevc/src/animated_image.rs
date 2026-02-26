@@ -151,6 +151,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -177,28 +179,29 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         cmd.arg(arg);
     }
 
-    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
+    cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
             if output_size == 0 {
-                if output.exists() {
-                    let _ = fs::remove_file(&output);
-                }
+                let _ = fs::remove_file(&temp_output);
                 return Err(VidQualityError::ConversionError(
                     "HEVC output file is empty (encoding may have failed)".to_string(),
                 ));
             }
-            if get_input_dimensions(&output).is_err() {
-                if output.exists() {
-                    let _ = fs::remove_file(&output);
-                }
+            if get_input_dimensions(&temp_output).is_err() {
+                let _ = fs::remove_file(&temp_output);
                 return Err(VidQualityError::ConversionError(
                     "HEVC output file is not readable (invalid or corrupted)".to_string(),
                 ));
             }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(skipped_output_exists(input, &output, input_size));
+            }
+
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             shared_utils::copy_metadata(input, &output);
@@ -236,18 +239,14 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if output.exists() {
-                let _ = fs::remove_file(&output);
-            }
+            let _ = fs::remove_file(&temp_output);
             Err(VidQualityError::ConversionError(format!(
                 "ffmpeg failed: {}",
                 stderr
             )))
         }
         Err(e) => {
-            if output.exists() {
-                let _ = fs::remove_file(&output);
-            }
+            let _ = fs::remove_file(&temp_output);
             Err(VidQualityError::ConversionError(format!(
                 "ffmpeg not found: {}",
                 e
@@ -274,6 +273,8 @@ pub fn convert_to_hevc_mp4_matched(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
 
@@ -289,7 +290,7 @@ pub fn convert_to_hevc_mp4_matched(
     if options.verbose {
         eprintln!(
             "   {} Mode: CRF {:.1} (based on input analysis)",
-            flag_mode.description_cn(),
+            flag_mode.description_en(),
             initial_crf
         );
     }
@@ -302,7 +303,7 @@ pub fn convert_to_hevc_mp4_matched(
     let explore_result = if flag_mode.is_ultimate() {
         shared_utils::explore_hevc_with_gpu_coarse_ultimate(
             input,
-            &output,
+            &temp_output,
             vf_args,
             initial_crf,
             true,
@@ -311,7 +312,7 @@ pub fn convert_to_hevc_mp4_matched(
     } else {
         shared_utils::explore_hevc_with_gpu_coarse(
             input,
-            &output,
+            &temp_output,
             vf_args,
             initial_crf,
             options.child_threads,
@@ -333,7 +334,7 @@ pub fn convert_to_hevc_mp4_matched(
     if explore_result.output_size > max_allowed_size {
         let size_increase_pct =
             ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
-        if let Err(e) = fs::remove_file(&output) {
+        if let Err(e) = fs::remove_file(&temp_output) {
             eprintln!("⚠️ [cleanup] Failed to remove oversized HEVC output: {}", e);
         }
         if options.allow_size_tolerance {
@@ -422,12 +423,10 @@ pub fn convert_to_hevc_mp4_matched(
         eprintln!("   🛡️  {}", protect_msg);
 
         // GIF/animated image has no Apple compatibility issue; exclude from Apple compat fallback. On fail: discard output, copy original only.
-        if output.exists() {
-            if let Err(e) = fs::remove_file(&output) {
-                eprintln!("⚠️ [cleanup] Failed to remove output: {}", e);
-            } else {
-                eprintln!("   🗑️  {}", delete_msg);
-            }
+        if let Err(e) = fs::remove_file(&temp_output) {
+            eprintln!("⚠️ [cleanup] Failed to remove output: {}", e);
+        } else {
+            eprintln!("   🗑️  {}", delete_msg);
         }
 
         let _ = shared_utils::copy_on_skip_or_fail(
@@ -451,6 +450,10 @@ pub fn convert_to_hevc_mp4_matched(
             skipped: true,
             skip_reason: Some("quality_failed".to_string()),
         });
+    }
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+        return Ok(skipped_output_exists(input, &output, input_size));
     }
 
     shared_utils::copy_metadata(input, &output);
@@ -513,6 +516,8 @@ pub fn convert_to_hevc_mkv_lossless(
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -537,12 +542,17 @@ pub fn convert_to_hevc_mkv_lossless(
         cmd.arg(arg);
     }
 
-    cmd.arg(shared_utils::safe_path_arg(&output).as_ref());
+    cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(skipped_output_exists(input, &output, input_size));
+            }
+
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             shared_utils::copy_metadata(input, &output);
@@ -574,18 +584,14 @@ pub fn convert_to_hevc_mkv_lossless(
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if output.exists() {
-                let _ = fs::remove_file(&output);
-            }
+            let _ = fs::remove_file(&temp_output);
             Err(VidQualityError::ConversionError(format!(
                 "ffmpeg lossless failed: {}",
                 stderr
             )))
         }
         Err(e) => {
-            if output.exists() {
-                let _ = fs::remove_file(&output);
-            }
+            let _ = fs::remove_file(&temp_output);
             Err(VidQualityError::ConversionError(format!(
                 "ffmpeg not found: {}",
                 e
@@ -660,6 +666,8 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (width, height) = get_input_dimensions(input)?;
     let fps_val = fps.unwrap_or(10.0);
 
@@ -711,24 +719,20 @@ pub fn convert_to_gif_apple_compat(
             "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
             fps_val, width, height
         ))
-        .arg(shared_utils::safe_path_arg(&output).as_ref())
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
         .output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
             if output_size == 0 {
-                if output.exists() {
-                    let _ = fs::remove_file(&output);
-                }
+                let _ = fs::remove_file(&temp_output);
                 return Err(VidQualityError::ConversionError(
                     "GIF output file is empty (encoding may have failed)".to_string(),
                 ));
             }
-            if get_input_dimensions(&output).is_err() {
-                if output.exists() {
-                    let _ = fs::remove_file(&output);
-                }
+            if get_input_dimensions(&temp_output).is_err() {
+                let _ = fs::remove_file(&temp_output);
                 return Err(VidQualityError::ConversionError(
                     "GIF output file is not readable (invalid or corrupted)".to_string(),
                 ));
@@ -744,7 +748,7 @@ pub fn convert_to_gif_apple_compat(
 
             if output_size > max_allowed_size {
                 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
-                if let Err(e) = fs::remove_file(&output) {
+                if let Err(e) = fs::remove_file(&temp_output) {
                     eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
                 }
                 if options.allow_size_tolerance {
@@ -780,6 +784,20 @@ pub fn convert_to_gif_apple_compat(
                 });
             }
 
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult {
+                    success: true,
+                    input_path: input.display().to_string(),
+                    output_path: Some(output.display().to_string()),
+                    input_size,
+                    output_size: Some(fs::metadata(&output)?.len()),
+                    size_reduction: None,
+                    message: "Skipped: Output already exists".to_string(),
+                    skipped: true,
+                    skip_reason: Some("exists".to_string()),
+                });
+            }
+
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
@@ -808,18 +826,14 @@ pub fn convert_to_gif_apple_compat(
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if output.exists() {
-                let _ = fs::remove_file(&output);
-            }
+            let _ = fs::remove_file(&temp_output);
             Err(VidQualityError::ConversionError(format!(
                 "ffmpeg GIF conversion failed: {}",
                 stderr
             )))
         }
         Err(e) => {
-            if output.exists() {
-                let _ = fs::remove_file(&output);
-            }
+            let _ = fs::remove_file(&temp_output);
             Err(VidQualityError::ConversionError(format!(
                 "ffmpeg not found: {}",
                 e

@@ -26,13 +26,6 @@ impl fmt::Display for FlagMode {
 }
 
 impl FlagMode {
-    pub fn description_cn(&self) -> &'static str {
-        match self {
-            FlagMode::PreciseQualityWithCompress => "精确质量匹配+必须压缩",
-            FlagMode::UltimateExplore => "🔥 极限探索（SSIM饱和）",
-        }
-    }
-
     pub fn description_en(&self) -> &'static str {
         match self {
             FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",

@@ -65,21 +65,19 @@ pub fn convert_to_jxl(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
 
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
-        (std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            / 2)
-        .clamp(1, 4)
+        shared_utils::thread_manager::get_optimal_threads()
     };
 
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
-        .arg(format!("{:.1}", distance))
+        .arg(format!("{:.2}", distance))
         .arg("-e")
         .arg("7")
         .arg("-j")
@@ -91,7 +89,7 @@ pub fn convert_to_jxl(
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref());
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     let result = cmd.output();
 
@@ -285,19 +283,21 @@ pub fn convert_to_jxl(
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
+                return Err(e);
+            }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
+            }
 
             if let Some(skipped) =
                 check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
             {
                 return Ok(skipped);
-            }
-
-            if let Err(e) = verify_jxl_health(&output) {
-                if let Err(re) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
-                }
-                return Err(e);
             }
 
             finalize_conversion(input, &output, input_size, "JXL", None, options)
@@ -329,11 +329,9 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
-    let max_threads = (std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        / 2)
-    .clamp(1, 4);
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
+    let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let mut cmd = Command::new("cjxl");
     cmd.arg("--lossless_jpeg=1")
         .arg("-j")
@@ -345,17 +343,19 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref());
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = verify_jxl_health(&output) {
-                if let Err(re) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
-                }
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
                 return Err(e);
+            }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
             }
 
             let output_size = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
@@ -446,6 +446,7 @@ pub fn convert_to_avif(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
     let q = quality.unwrap_or(85);
 
     let result = Command::new("avifenc")
@@ -457,12 +458,21 @@ pub fn convert_to_avif(
         .arg(q.to_string())
         .arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref())
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
         .output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "AVIF health check failed: {}", e
+                )));
+            }
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
+            }
             if let Some(skipped) =
                 check_size_tolerance(input, &output, input_size, output_size, options, "AVIF")
             {
@@ -472,6 +482,7 @@ pub fn convert_to_avif(
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc failed: {}",
@@ -509,6 +520,8 @@ pub fn convert_to_avif_lossless(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let result = Command::new("avifenc")
         .arg("--lossless")
         .arg("-s")
@@ -517,12 +530,21 @@ pub fn convert_to_avif_lossless(
         .arg("all")
         .arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref())
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
         .output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+            if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
+                return Err(ImgQualityError::ConversionError(format!(
+                    "Lossless AVIF health check failed: {}", e
+                )));
+            }
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
+            }
             if let Some(skipped) =
                 check_size_tolerance(input, &output, input_size, output_size, options, "Lossless AVIF")
             {
@@ -532,6 +554,7 @@ pub fn convert_to_avif_lossless(
                 .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc lossless failed: {}",
@@ -649,17 +672,15 @@ pub fn convert_to_jxl_matched(
         return Ok(ConversionResult::skipped_exists(input, &output));
     }
 
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
     let distance = calculate_matched_distance_for_static(analysis, input_size);
     eprintln!("   🎯 Matched JXL distance: {:.2}", distance);
 
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
-        (std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            / 2)
-        .clamp(1, 4)
+        shared_utils::thread_manager::get_optimal_threads()
     };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
@@ -679,25 +700,27 @@ pub fn convert_to_jxl_matched(
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&output).as_ref());
+        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     let result = cmd.output();
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&output)?.len();
+            let output_size = fs::metadata(&temp_output)?.len();
+
+            if let Err(e) = verify_jxl_health(&temp_output) {
+                let _ = fs::remove_file(&temp_output);
+                return Err(e);
+            }
+
+            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                return Ok(ConversionResult::skipped_exists(input, &output));
+            }
 
             if let Some(skipped) =
                 check_size_tolerance(input, &output, input_size, output_size, options, "Quality-matched JXL")
             {
                 return Ok(skipped);
-            }
-
-            if let Err(e) = verify_jxl_health(&output) {
-                if let Err(re) = fs::remove_file(&output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove invalid JXL output: {}", re);
-                }
-                return Err(e);
             }
 
             let extra = format!("d={:.2}", distance);
@@ -712,6 +735,7 @@ pub fn convert_to_jxl_matched(
             .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "cjxl failed: {}",
