@@ -593,7 +593,8 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
     duration_str.parse::<f32>().ok()
 }
 
-/// Returns (duration_secs, frame_count) from ImageMagick identify (WebP/GIF animation).
+/// Returns (duration_secs, frame_count) from ImageMagick `identify -format "%T"`.
+/// Works for any format ImageMagick can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
 /// Use as fallback when ffprobe has no stream/format duration. Does not log.
 pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
     use std::process::Command;
@@ -638,7 +639,7 @@ fn try_imagemagick_identify(path: &Path) -> Option<f32> {
     if let Some((duration_secs, frame_count)) = get_animation_duration_and_frames_imagemagick(path)
     {
         eprintln!(
-            "📊 ImageMagick: WebP/GIF animation detected ({} frames, {:.2}s)",
+            "📊 ImageMagick: animation detected ({} frames, {:.2}s)",
             frame_count, duration_secs
         );
         return Some(duration_secs as f32);
