@@ -87,6 +87,46 @@ pub mod webp {
         count.max(1)
     }
 
+    /// Parse animated WebP RIFF/ANMF chunks and return total duration in seconds.
+    /// ANMF payload: 24-byte header, bytes 16..20 = frame duration in ms (uint32 LE).
+    /// Returns None if not animated WebP or no ANMF chunks.
+    pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
+        if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
+            return None;
+        }
+        if !data.windows(4).any(|w| w == b"ANIM") {
+            return None;
+        }
+        let mut pos = 12u32 as usize;
+        let mut total_ms = 0u64;
+        while pos + 8 <= data.len() {
+            let chunk_id = &data[pos..pos + 4];
+            let chunk_size = u32::from_le_bytes([
+                data[pos + 4],
+                data[pos + 5],
+                data[pos + 6],
+                data[pos + 7],
+            ]) as usize;
+            let payload_start = pos + 8;
+            let payload_end = (payload_start + chunk_size).min(data.len());
+            if chunk_id == b"ANMF" && payload_end >= payload_start + 20 {
+                let duration_ms = u32::from_le_bytes([
+                    data[payload_start + 16],
+                    data[payload_start + 17],
+                    data[payload_start + 18],
+                    data[payload_start + 19],
+                ]);
+                total_ms += duration_ms as u64;
+            }
+            let padded = (chunk_size + 1) & !1;
+            pos = payload_start + padded;
+        }
+        if total_ms == 0 {
+            return None;
+        }
+        Some((total_ms as f32) / 1000.0)
+    }
+
     pub fn is_lossless(path: &Path) -> bool {
         fs::read(path)
             .map(|b| is_lossless_from_bytes(&b))

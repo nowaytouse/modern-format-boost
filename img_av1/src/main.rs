@@ -791,14 +791,18 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
-                    eprintln!(
-                        "⚠️  Cannot get animation duration, skipping conversion: {}",
-                        input.display()
-                    );
-                    eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                    eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
-                    copy_original_if_adjacent_mode(input, config)?;
-                    return Ok(make_skipped("Cannot get animation duration"));
+                    if let Some(d) = shared_utils::image_analyzer::get_animation_duration_for_path(input) {
+                        d
+                    } else {
+                        eprintln!(
+                            "⚠️  Cannot get animation duration, skipping conversion: {}",
+                            input.display()
+                        );
+                        eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                        eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
+                        copy_original_if_adjacent_mode(input, config)?;
+                        return Ok(make_skipped("Cannot get animation duration"));
+                    }
                 }
             };
             if duration < 3.0 {
@@ -831,13 +835,17 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 _ => {
-                    eprintln!(
-                        "⚠️  Cannot get animation duration, skipping conversion: {}",
-                        input.display()
-                    );
-                    eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                    copy_original_if_adjacent_mode(input, config)?;
-                    return Ok(make_skipped("Cannot get animation duration"));
+                    if let Some(d) = shared_utils::image_analyzer::get_animation_duration_for_path(input) {
+                        d
+                    } else {
+                        eprintln!(
+                            "⚠️  Cannot get animation duration, skipping conversion: {}",
+                            input.display()
+                        );
+                        eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                        copy_original_if_adjacent_mode(input, config)?;
+                        return Ok(make_skipped("Cannot get animation duration"));
+                    }
                 }
             };
             if duration < 3.0 {

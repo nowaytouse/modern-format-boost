@@ -156,6 +156,17 @@
 
 综上：格式级有无损在 **image_detection::detect_compression** 中已实现；analyzer 侧 **HEIC / JXL / AVIF** 均已接格式级 + 像素级 fallback，通用路径同样在失败时走像素级 fallback。
 
+#### 静态图 vs 动图：格式级有无损都适用吗？
+
+**适用。** 现代格式的格式级有无损判断**不区分静态/动图**，同一套逻辑对静态和动图都生效：
+
+- **WebP**：动图时显式走 **detect_webp_animation_compression**，按 ANMF 逐帧看 VP8/VP8L（任一帧 VP8 → 整文件 Lossy）；静态时看单 VP8/VP8L 块。同属「格式级」，都适用于动图与静态图。
+- **AVIF**：av1C/colr/pixi 等盒子描述整文件的编码配置，动图 AVIF 通常全片共用同一配置，故 **detect_avif_compression** 对静态/动图 AVIF 均适用。
+- **HEIC**：hvcC 等描述主图（或序列）的编码，多图/连拍 HEIC 仍用同一套格式级判定。
+- **JXL**：jbrd/码流描述整文件，动图 JXL 同样适用 **detect_jxl_compression**。
+
+**is_animated** 只影响主流程中的**路由**（是否按“动图”做转码/跳过等），不影响「有无损」判定本身；有无损判定对静态与动图使用同一套格式级（+ 失败时像素级 fallback）逻辑。
+
 ---
 
 ### 2.5 视频：video_quality_detector（部分已接入）
