@@ -422,8 +422,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         };
                     warn!("   🛡️  {}", protect_msg);
 
-                    // GIF has no Apple compatibility issue; exclude from Apple compat fallback — on fail, copy original only.
-                    if config.apple_compat && !source_is_gif {
+                    // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
+                    if config.apple_compat
+                        && !source_is_gif
+                        && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
+                    {
                         warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
                         warn!(
                             "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -527,8 +530,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             warn!("   ❌ MS-SSIM TARGET FAILED: {:.4} < 0.90", ms_ssim_score);
             warn!("   🛡️  Original file PROTECTED (MS-SSIM quality too low)");
 
-            // GIF excluded from Apple compat fallback — on fail, copy original only.
-            if config.apple_compat && !source_is_gif {
+            // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
+            if config.apple_compat
+                && !source_is_gif
+                && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
+            {
                 warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): MS-SSIM below target");
                 warn!(
                     "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -645,8 +651,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         }
         warn!("   🛡️  Original file PROTECTED");
 
-        // GIF excluded from Apple compat fallback — on fail, copy original only.
-        if config.apple_compat && !source_is_gif {
+        // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
+        // If source is already H.264/HEVC/ProRes, keeping a larger re-encode adds no Apple benefit.
+        if config.apple_compat
+            && !source_is_gif
+            && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
+        {
             warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
             warn!(
                 "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -957,7 +967,7 @@ mod tests {
     }
 
     #[test]
-    fn test_strategy_normal_mode_skips_vp9() {
+    fn test_strategy_normal_mode_converts_vp9() {
         let detection = crate::detection_api::VideoDetectionResult {
             file_path: "/test/video.webm".to_string(),
             format: "webm".to_string(),
@@ -985,14 +995,10 @@ mod tests {
         };
 
         let strategy = determine_strategy(&detection);
-        assert_eq!(
+        assert_ne!(
             strategy.target,
             TargetVideoFormat::Skip,
-            "VP9 should be skipped in normal mode"
-        );
-        assert!(
-            strategy.reason.contains("VP9"),
-            "Skip reason should mention VP9"
+            "VP9 is in scope: convert to HEVC in normal mode"
         );
     }
 
@@ -1158,8 +1164,8 @@ mod tests {
         let test_cases = [
             (DetectedCodec::H264, false, false),
             (DetectedCodec::H265, true, true),
-            (DetectedCodec::VP9, true, false),
-            (DetectedCodec::AV1, true, false),
+            (DetectedCodec::VP9, false, false),
+            (DetectedCodec::AV1, false, false),
         ];
 
         for (codec, expected_skip_normal, expected_skip_apple) in test_cases {
@@ -1434,7 +1440,7 @@ mod tests {
             bits_per_pixel: 0.09,
         };
         let normal = determine_strategy(&det);
-        assert_eq!(normal.target, TargetVideoFormat::Skip);
+        assert_ne!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") parses to VP9, in scope");
         let apple = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(apple.target, TargetVideoFormat::Skip);
     }
