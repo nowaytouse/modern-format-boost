@@ -143,6 +143,34 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         return Ok(skipped_static_animated(input, input_size));
     }
 
+    const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
+    if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(input) {
+        if let Some(d) = analysis.duration_secs {
+            if d > 0.01 && d < MIN_DURATION {
+                let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+                if options.verbose {
+                    eprintln!(
+                        "   ⏭️  Short animation ({:.1}s < {:.1}s), skipping video conversion: {}",
+                        d, MIN_DURATION, input.display()
+                    );
+                }
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: true,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: format!("Skipped: Short animation ({:.1}s < {:.1}s)", d, MIN_DURATION),
+                    skipped: true,
+                    skip_reason: Some("short_animation".to_string()),
+                });
+            }
+        }
+    }
+
     let input_size = fs::metadata(input)?.len();
     let ext = if options.apple_compat { "mov" } else { "mp4" };
     let output = get_output_path(input, ext, options)?;
@@ -263,6 +291,40 @@ pub fn convert_to_hevc_mp4_matched(
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
+    }
+
+    if is_static_animated_image(input) {
+        let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(skipped_static_animated(input, input_size));
+    }
+    const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
+    if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(input) {
+        if let Some(d) = analysis.duration_secs {
+            if d > 0.01 && d < MIN_DURATION {
+                let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+                if options.verbose {
+                    eprintln!(
+                        "   ⏭️  Short animation ({:.1}s < {:.1}s), skipping video conversion: {}",
+                        d, MIN_DURATION, input.display()
+                    );
+                }
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: true,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: format!("Skipped: Short animation ({:.1}s < {:.1}s)", d, MIN_DURATION),
+                    skipped: true,
+                    skip_reason: Some("short_animation".to_string()),
+                });
+            }
+        }
     }
 
     let input_size = fs::metadata(input)?.len();
