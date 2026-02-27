@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Minimum duration (seconds) for converting animated images to HEVC video.
+/// Shorter animations are skipped (no conversion to video).
+pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = 4.5;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JxlIndicator {
     pub should_convert: bool,
