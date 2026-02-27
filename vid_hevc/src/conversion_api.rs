@@ -323,6 +323,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     info!("{}", log_line);
                 }
 
+                // --- Explore phase: quality/SSIM or size did not meet target; decide whether to keep or discard output. ---
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
@@ -330,6 +331,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
                         < explore_result.input_video_stream_size;
+                    let video_compression_ratio = shared_utils::video_compression_ratio(
+                        explore_result.input_video_stream_size,
+                        explore_result.output_video_stream_size,
+                    );
                     let total_file_compressed = explore_result.output_size < detection.file_size;
 
                     warn!(
@@ -422,11 +427,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         };
                     warn!("   🛡️  {}", protect_msg);
 
-                    // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
-                    if config.apple_compat
-                        && !source_is_gif
-                        && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
-                    {
+                    // Single predicate: keep Apple fallback only when video stream actually compressed or within 1% (allow_size_tolerance).
+                    if shared_utils::should_keep_apple_fallback_hevc_output(
+                        detection.codec.as_str(),
+                        video_stream_compressed,
+                        video_compression_ratio,
+                        config.allow_size_tolerance,
+                        config.apple_compat,
+                        source_is_gif,
+                    ) {
                         warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
                         warn!(
                             "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -640,23 +649,27 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         verify_result.video_compressed
     };
 
-    if config.require_compression && !can_compress {
-        warn!("   ⚠️  COMPRESSION FAILED (pure video stream comparison):");
-        warn!(
-            "   ⚠️  Video stream: {} bytes >= {} bytes",
-            output_stream_info.video_stream_size, input_stream_info.video_stream_size
-        );
-        if verify_result.is_container_overhead_issue() {
-            warn!("   ⚠️  Note: Container overhead caused total file to be larger");
-        }
-        warn!("   🛡️  Original file PROTECTED");
+        // --- require_compression phase: strict video-stream size check; may still allow Apple fallback via same predicate. ---
+        if config.require_compression && !can_compress {
+            warn!("   ⚠️  COMPRESSION FAILED (pure video stream comparison):");
+            warn!(
+                "   ⚠️  Video stream: {} bytes >= {} bytes",
+                output_stream_info.video_stream_size, input_stream_info.video_stream_size
+            );
+            if verify_result.is_container_overhead_issue() {
+                warn!("   ⚠️  Note: Container overhead caused total file to be larger");
+            }
+            warn!("   🛡️  Original file PROTECTED");
 
-        // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
-        // If source is already H.264/HEVC/ProRes, keeping a larger re-encode adds no Apple benefit.
-        if config.apple_compat
-            && !source_is_gif
-            && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
-        {
+            // Same predicate as explore phase: keep only when Apple-incompatible source and (video compressed or ratio < 1.01).
+            if shared_utils::should_keep_apple_fallback_hevc_output(
+                detection.codec.as_str(),
+                verify_result.video_compressed,
+                verify_result.video_compression_ratio,
+                config.allow_size_tolerance,
+                config.apple_compat,
+                source_is_gif,
+            ) {
             warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
             warn!(
                 "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
@@ -746,7 +759,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let size_ratio = output_size as f64 / detection.file_size as f64;
 
     if config.should_delete_original() {
-        if let Err(e) = shared_utils::conversion::safe_delete_original(input, &output_path, 1000) {
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
+                input,
+                &output_path,
+                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+            ) {
             warn!("   ⚠️  Safe delete failed: {}", e);
         } else {
             info!("   🗑️  Original deleted (integrity verified)");

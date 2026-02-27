@@ -6,6 +6,20 @@
 //! - Anti-duplicate mechanism: Track processed files
 //! - Result builders: Reduce boilerplate code
 //! - Size formatting: Unified message formatting
+//!
+//! ## Atomic output (TOCTOU)
+//! All conversion paths **must** write to a temp path via `temp_path_for_output()` then
+//! call `commit_temp_to_output(temp, output, force)`. Do not write directly to the final output.
+//!
+//! ## Compress mode (authoritative)
+//! When `options.compress` is true: **only** `output_size < input_size` is accepted.
+//! **Any** `output_size >= input_size` (including equal) is rejected — goal not achieved.
+//! All size checks use `>=` for this; do not change to `>`.
+//!
+//! ## allow_size_tolerance (default true)
+//! When true: "oversized" threshold is `output > input * 1.01` (reject). Video path may treat
+//! `video_compression_ratio < 1.01` as acceptable when require_compression is checked.
+//! Does **not** mean "accept up to 1% larger as success" for compress goal — compress still requires output < input.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
@@ -46,7 +60,10 @@ pub fn clear_processed_list() {
     processed.clear();
 }
 
-pub use crate::checkpoint::{safe_delete_original, verify_output_integrity};
+pub use crate::checkpoint::{
+    safe_delete_original, verify_output_integrity,
+    MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE, MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+};
 
 #[cfg(unix)]
 fn flock_exclusive(file: &fs::File) -> std::io::Result<()> {
@@ -467,7 +484,7 @@ pub fn finalize_conversion(
     }
 
     if options.should_delete_original() {
-        let _ = safe_delete_original(input, output, 100);
+        let _ = safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE);
     }
 
     Ok(ConversionResult::success(
@@ -492,7 +509,7 @@ pub fn post_conversion_actions(
     mark_as_processed(input);
 
     if options.should_delete_original() {
-        safe_delete_original(input, output, 100)?;
+        safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
     }
 
     Ok(())
@@ -518,9 +535,19 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
 }
 
 /// Commits a temp file to the final output path. Reduces TOCTOU window to the instant before rename.
+/// - Rejects empty output: if `temp` exists and has size 0, returns `Err` (caller must not commit or delete original).
 /// - If `!force` and `output` already exists: removes `temp` and returns `Ok(false)` (caller should treat as skip).
 /// - Otherwise: renames `temp` → `output` (overwriting if `force` and target exists on Unix) and returns `Ok(true)`.
 pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io::Result<bool> {
+    if temp.exists() {
+        let size = fs::metadata(temp)?.len();
+        if size == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Refusing to commit empty output (temp file size 0)",
+            ));
+        }
+    }
     if !force && output.exists() {
         let _ = fs::remove_file(temp);
         return Ok(false);
@@ -601,7 +628,8 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 ///   we treat output as "too big" only when `output > input * 1.01`; when false, when `output > input`.
 ///   This does **not** mean "accept up to 1% larger as success".
 /// - `compress`: when true, **success requires output < input** (strictly smaller).
-///   Equal or larger → skip (goal not achieved). Works together with the 1% threshold above.
+///   **Canonical rule: only `output_size < input_size` is accept; any `output_size >= input_size` is reject.**
+///   Equal or larger → skip (goal not achieved). All call sites use `>=`; do not change to `>`.
 ///
 /// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.

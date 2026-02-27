@@ -279,7 +279,11 @@ pub fn execute_conversion(
 
     if config.delete_original {
         if let Err(e) =
-            shared_utils::conversion::safe_delete_original(input_path, &output_path, 100)
+            shared_utils::conversion::safe_delete_original(
+                input_path,
+                &output_path,
+                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+            )
         {
             eprintln!("   ⚠️  Safe delete failed: {}", e);
         }

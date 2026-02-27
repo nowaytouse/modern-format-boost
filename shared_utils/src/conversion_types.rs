@@ -59,6 +59,9 @@ pub struct ConversionConfig {
     pub ultimate_mode: bool,
 
     pub child_threads: usize,
+    /// When true (default): "oversized" threshold is output > input * 1.01. Video path may treat
+    /// `video_compression_ratio < 1.01` as acceptable for require_compression / Apple fallback.
+    /// Does not relax compress goal: compress still requires output < input.
     pub allow_size_tolerance: bool,
 }
 
