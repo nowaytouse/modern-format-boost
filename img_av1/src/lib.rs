@@ -4,7 +4,6 @@ pub mod heic_analysis;
 pub mod jpeg_analysis;
 pub mod lossless_converter;
 pub mod metrics;
-pub mod quality_core;
 pub mod recommender;
 
 pub mod conversion_api;
@@ -18,7 +17,6 @@ pub use metrics::{
     calculate_ms_ssim, calculate_psnr, calculate_ssim, psnr_quality_description,
     ssim_quality_description,
 };
-pub use quality_core::{ConversionRecommendation, QualityAnalysis, QualityParams};
 pub use recommender::{get_recommendation, UpgradeRecommendation};
 
 pub use conversion_api::{

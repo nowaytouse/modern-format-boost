@@ -102,6 +102,19 @@ pub fn has_log_file() -> bool {
     LOG_FILE_WRITER.lock().map(|g| g.is_some()).unwrap_or(false)
 }
 
+/// If no log file is configured, open a default run log in the current directory
+/// (e.g. `./img_hevc_run.log`). Call this at Run startup so quality and progress
+/// are always written to a file without requiring `--log-file`.
+pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
+    if has_log_file() {
+        return Ok(());
+    }
+    let path = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        .join(format!("{}_run.log", binary_name));
+    set_log_file(&path)
+}
+
 /// Write a line to the log file (no-op if no log file is configured).
 /// Does NOT write to stderr — use log_eprintln! or verbose_eprintln! for dual output.
 pub fn write_to_log(line: &str) {
