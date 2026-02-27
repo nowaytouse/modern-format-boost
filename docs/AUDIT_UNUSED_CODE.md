@@ -96,7 +96,69 @@
 
 ---
 
-### 2.4 视频：video_quality_detector（部分已接入）
+### 2.4 现代格式动图的格式级有无损判断（已实现）
+
+项目在 **格式级**（容器/码流元数据）已实现「有无损」判定，用于路由与推荐，**不依赖像素解码**。各格式入口与逻辑如下。
+
+#### 格式级判定是否可靠？
+
+- **可靠场景**：当容器/码流信息完整且无歧义时，格式级判定是可靠的——直接读盒子/子块（如 av1C/hvcC 的 chroma、profile、colr/pixi 等），无歧义则结论明确（Lossy/Lossless）。
+- **不可靠或 Err 场景**：① 缺关键盒子（如 AVIF 缺 av1C、HEIC 缺 hvcC）→ 格式级返回 **Err**；② 4:4:4 等歧义配置且无 Identity/高比特深度等佐证时，部分格式会返回 **Err**。
+- **Fallback**：上述 Err 或 analyzer 中 `detect_lossless` 失败时，已接入 **像素级 fallback**：`pixel_fallback_lossless(path)` 解码图像并调用 `image_quality_detector::analyze_image_quality_from_path`，用其 `routing_decision.use_lossless`（基于 complexity / content_type / compression_potential 的启发式）作为 `is_lossless`；解码失败（如 HEIC/AVIF/JXL 无进程内解码器）时 fallback 返回 `false`。
+
+#### AVIF 格式级判定是否可靠？
+
+- **可靠**：当 **av1C** 盒子存在且结论明确时，AVIF 格式级判定可靠。具体为：① 4:2:0 / 4:2:2 → 直接判 **Lossy**；② 4:4:4 + colr Identity (MC=0)、或 4:4:4 + high_bitdepth/twelve_bit、或 Profile 0 + 4:4:4、或 pixi 深度≥12、或单色 4:4:4 → 判 **Lossless**。上述情况均基于 AV1/AVIF 规范，无歧义。
+- **返回 Err**：仅当 av1C 缺失，或 4:4:4 且无上述任一明确指标（存在 4:4:4 有损编码）时返回 **Err**，此时 analyzer 使用 **pixel_fallback_lossless**，不丢单。
+
+#### 像素级 fallback 接入清单（已全部接入）
+
+| 位置 | 触发条件 | 代码 |
+|------|----------|------|
+| **analyze_avif_image** | `detect_compression(AVIF, path)` 返回 Err | `Err(_) => pixel_fallback_lossless(path)` |
+| **analyze_heic_image** | `detect_compression(HEIC, path)` 返回 Err | `.unwrap_or_else(\|_\| pixel_fallback_lossless(path))` |
+| **analyze_jxl_image** | `detect_compression(JXL, path)` 返回 Err | `.unwrap_or_else(\|_\| pixel_fallback_lossless(path))` |
+| **analyze_image 通用路径** | `detect_lossless(&format, path)` 返回 Err（PNG/TIFF/WebP/AVIF 等） | `.unwrap_or_else(\|_\| pixel_fallback_lossless(path))` |
+
+上述 4 处均在 `shared_utils/src/image_analyzer.rs` 中实现，img_hevc / img_av1 通过 `analyze_image` 共用。
+
+#### 入口与数据流
+
+- **image_analyzer::analyze_image(path)** 按检测顺序：HEIC → JXL → AVIF → image crate（PNG/JPEG/WebP/GIF/TIFF）。
+- 返回的 **ImageAnalysis.is_lossless** 来自各格式专用分析或通用 **detect_lossless** / **image_detection::detect_compression**。
+- 动图（如 WebP 动图、未来 AVIF/HEIC 动图）在「格式级」与静态图共用同一套有无损判定逻辑；动图是否跳过/转码由 main 中时长、Apple 兼容等分支单独处理。
+
+#### 各格式的格式级有无损逻辑（image_detection）
+
+| 格式 | 判定方式 | 说明 |
+|------|----------|------|
+| **WebP（含动图）** | **detect_compression(WebP)** | 读文件后：若 **is_animated_from_bytes** 为真，则 **detect_webp_animation_compression(data)**：遍历顶层 RIFF 块，找 **ANMF**，每个 ANMF 内帧数据子块看前 4 字节；**VP8**（有空格）→ 整文件判为 **Lossy** 并立即返回；全部为 **VP8L** 或未发现 VP8 → **Lossless**。若未检测为动图，则 **is_lossless_from_bytes**：文件中是否存在 **VP8L** 四字节标识 → 有则 Lossless，否则 Lossy。 |
+| **HEIC** | **detect_heic_compression(path)** | 解析 **hvcC** 等盒子：**chromaFormatIdc** 为 4:2:0(1)/4:2:2(2) → 直接 **Lossy**；**profile_idc** 为 Main/Main10/MainStillPicture(1/2/3) → **Lossy**；RExt(4)/SCC(9) + **colr** 中 **matrix_coefficients==0**（Identity）或 **pixi** 高比特深度(≥12) 或 hvcC 内 4:4:4 且 luma/chroma 深度≥12 → **Lossless**；RExt/SCC + 4:4:4 无其他指标 → 倾向 **Lossless**。缺 hvcC → **Err**。 |
+| **AVIF** | **detect_avif_compression(path)** | 解析 **av1C**：**chroma_subsampling** 为 4:2:0 或 4:2:2 → **Lossy**；4:4:4 时再查 **colr**（nclx）**matrix_coefficients==0** → **Lossless**；或 4:4:4 + high_bitdepth/twelve_bit / seq_profile≥1 → **Lossless**；或 Profile 0 + 4:4:4（无效有损组合）→ **Lossless**；或 **pixi** 最大深度≥12 → **Lossless**；单色 4:4:4 等也按文档处理。缺 av1C 或 4:4:4 且无明确指标 → **Err**。 |
+| **JXL** | **detect_jxl_compression(path)** | 容器 **jbrd** 盒子存在 → **Lossless**；否则看码流 **xyb_encoded** 等 → Lossy/Modular；无法解析 → **Err**。 |
+| **PNG** | **detect_png_compression** | **analyze_png_quantization**：色型、调色板、透明度等启发式 → 量化/有损 vs 真无损。 |
+| **TIFF** | **detect_tiff_compression** | 遍历所有 IFD，压缩标签(259)：6/7(JPEG) → Lossy，其余/无标签 → Lossless；支持 BigTIFF。 |
+| **GIF** | 固定 | 始终 **Lossless**（格式本身无损）。 |
+| **JPEG** | 固定 | 始终 **Lossy**。 |
+
+#### 动图特例：WebP 动画
+
+- **detect_webp_animation_compression**：按 RIFF 结构走 **ANMF**，每帧子块 **VP8** / **VP8L** 区分；**任一帧为 VP8 → 整文件 Lossy**，全部 VP8L（或未找到 VP8）→ **Lossless**。与静态 WebP 的「单 VP8/VP8L 块」判定一致，只是改为按帧遍历。
+- 在 **image_analyzer** 的通用路径（image crate 解码得到 WebP）中，**is_lossless** 来自 **detect_lossless(WebP) → check_webp_lossless(path) → is_lossless_from_bytes**，即仅用「文件中是否出现 VP8L」；**未**在此路径对动图单独调用 **detect_compression(WebP)**（即未走 **detect_webp_animation_compression**）。因此若需与 **detect_compression** 完全一致（尤其动图含混合 VP8/VP8L 时），可在 analyzer 的 WebP 分支改为调用 **detect_compression(DetectedFormat::WebP, path)** 取 **is_lossless**。
+
+#### 与 analyzer 的对接情况（含像素级 fallback）
+
+- **HEIC**：**analyze_heic_image** 中 **is_lossless = detect_compression(HEIC, path)**；若返回 **Err** 则用 **pixel_fallback_lossless(path)**。已对接，img_hevc / img_av1 共用。
+- **JXL**：**analyze_jxl_image** 中 **is_lossless = detect_compression(JXL, path)**；若 **Err** 则 **pixel_fallback_lossless(path)**。已对接。
+- **AVIF**：**analyze_avif_image** 已接入 **detect_compression(AVIF, path)**，格式级成功则用其结果，**Err** 时用 **pixel_fallback_lossless(path)**。img_hevc / img_av1 两工具均通过 shared_utils 使用该逻辑。
+- **WebP（含动图）**：通用路径用 **detect_lossless(WebP) → check_webp_lossless**；若 **detect_lossless** 失败（或其它格式在通用路径失败），则 **unwrap_or_else** 使用 **pixel_fallback_lossless(path)**。
+- **通用路径**（PNG/TIFF/JPEG/WebP 等经 image crate 解码）：**is_lossless = detect_lossless(&format, path).unwrap_or_else(|_| pixel_fallback_lossless(path))**，格式级失败即回退到像素级。
+
+综上：格式级有无损在 **image_detection::detect_compression** 中已实现；analyzer 侧 **HEIC / JXL / AVIF** 均已接格式级 + 像素级 fallback，通用路径同样在失败时走像素级 fallback。
+
+---
+
+### 2.5 视频：video_quality_detector（部分已接入）
 
 | 符号 | 功能简述 | 现状 |
 |------|----------|------|
@@ -111,7 +173,7 @@
 
 ---
 
-### 2.5 已废弃且无生产调用的导出（含已删除）
+### 2.6 已废弃且无生产调用的导出（含已删除）
 
 | 符号 | 位置 | 说明 |
 |------|------|------|

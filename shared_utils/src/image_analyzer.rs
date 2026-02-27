@@ -161,7 +161,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
     let is_animated = is_animated_format(path, &format)?;
 
-    let is_lossless = detect_lossless(&format, path)?;
+    let is_lossless = detect_lossless(&format, path).unwrap_or_else(|_| pixel_fallback_lossless(path));
 
     let jpeg_analysis = if format == ImageFormat::Jpeg {
         analyze_jpeg_file(path).ok()
@@ -237,7 +237,8 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                     &crate::image_detection::DetectedFormat::HEIC,
                     path,
                 )
-                .map(|c| c == crate::image_detection::CompressionType::Lossless)?;
+                .map(|c| c == crate::image_detection::CompressionType::Lossless)
+                .unwrap_or_else(|_| pixel_fallback_lossless(path));
                 (
                     w,
                     h,
@@ -718,6 +719,16 @@ fn check_webp_lossless(path: &Path) -> Result<bool> {
     Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
 }
 
+/// Pixel-level fallback for is_lossless when format-level detection returns Err or is unavailable.
+/// Decodes the image and uses image_quality_detector routing heuristic (compression_potential, content_type).
+/// Returns false if decode fails (e.g. HEIC/AVIF/JXL without in-process decoder).
+#[allow(deprecated)]
+fn pixel_fallback_lossless(path: &Path) -> bool {
+    crate::image_quality_detector::analyze_image_quality_from_path(path)
+        .map(|a| a.routing_decision.use_lossless)
+        .unwrap_or(false)
+}
+
 fn is_jxl_file(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         if ext.to_str().unwrap_or("").to_lowercase() == "jxl" {
@@ -770,7 +781,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         &crate::image_detection::DetectedFormat::JXL,
         path,
     )
-    .map(|c| c == crate::image_detection::CompressionType::Lossless)?;
+    .map(|c| c == crate::image_detection::CompressionType::Lossless)
+    .unwrap_or_else(|_| pixel_fallback_lossless(path));
 
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
@@ -803,6 +815,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 }
 
 fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+    use crate::image_detection::{detect_compression, CompressionType, DetectedFormat};
+
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
     // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
     // correctly and also provides pix_fmt for accurate alpha and bit-depth detection.
@@ -824,6 +838,12 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     } else {
         (0u32, 0u32, false, 8u8)
     };
+
+    let is_lossless = match detect_compression(&DetectedFormat::AVIF, path) {
+        Ok(ct) => ct == CompressionType::Lossless,
+        Err(_) => pixel_fallback_lossless(path),
+    };
+
     let metadata = extract_metadata(path).unwrap_or_default();
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
@@ -836,7 +856,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         has_alpha,
         is_animated: false,
         duration_secs: None,
-        is_lossless: false,
+        is_lossless,
         jpeg_analysis: None,
         heic_analysis: None,
         features: ImageFeatures {
