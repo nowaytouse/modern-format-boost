@@ -655,6 +655,20 @@ fn auto_convert_single_file(
 
     let analysis = analyze_image(input)?;
 
+    // Already target format: skip to avoid JXL→JXL or unnecessary re-encode (format filter before dispatch).
+    if analysis.format.as_str() == "JXL" {
+        copy_original_if_adjacent_mode(input, config)?;
+        return Ok(ConversionOutput {
+            original_path: input.display().to_string(),
+            output_path: input.display().to_string(),
+            skipped: true,
+            message: "Already JXL, no conversion needed".to_string(),
+            original_size: analysis.file_size,
+            output_size: None,
+            size_reduction: None,
+        });
+    }
+
     let options = ConvertOptions {
         force: config.force,
         output_dir: config.output_dir.clone(),
@@ -697,6 +711,8 @@ fn auto_convert_single_file(
         }
     };
 
+    // Dispatch order: (1) format filter already applied above (HEIC/HEIF Apple skip, JXL skip).
+    // (2) Then by (format, is_lossless, is_animated): modern static → JXL or skip; JPEG → JXL; legacy lossless → JXL; animated → HEVC/GIF/skip; legacy lossy → JXL.
     let result = match (
         analysis.format.as_str(),
         analysis.is_lossless,
@@ -896,7 +912,7 @@ fn auto_convert_directory(
 
     let files = shared_utils::collect_files_small_first(
         input,
-        shared_utils::SUPPORTED_IMAGE_EXTENSIONS,
+        shared_utils::IMAGE_EXTENSIONS_FOR_CONVERT,
         recursive,
     );
 

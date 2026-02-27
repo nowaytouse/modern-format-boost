@@ -27,6 +27,7 @@ tempfile = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
 libheif-rs = { workspace = true }
+flate2 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

@@ -23,13 +23,23 @@ pub const SUPPORTED_IMAGE_EXTENSIONS: &[&str] = &[
     "bmp", "ico", "svg", "jp2", "j2k", "jxl",
 ];
 
-pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
+/// Image extensions to consider when collecting files for conversion (e.g. img-hevc → JXL).
+/// Excludes formats that are already the target: .jxl (no point converting JXL→JXL).
+pub const IMAGE_EXTENSIONS_FOR_CONVERT: &[&str] = &[
+    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif", "heic", "heif", "avif",
+    "bmp", "ico", "svg", "jp2", "j2k",
 ];
 
+/// Video extensions for conversion input. **Do not exclude mov/mp4** by extension:
+/// .mov can contain ProRes (must convert) or HEVC (skip by codec); .mp4 can contain H.264 or HEVC.
+/// Skip vs convert is decided by **codec detection** (e.g. should_skip_video_codec), not by extension.
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
     "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
+];
+
+pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
+    "png", "jpg", "jpeg", "jpe", "jfif", "webp", "gif", "tiff", "tif",
 ];
 
 pub const SIDECAR_EXTENSIONS: &[&str] = &["xmp"];
