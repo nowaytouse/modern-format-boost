@@ -333,9 +333,13 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Execution - capture output for statistics parsing
+    # Execution: capture for stats, show on tty, AND append full output to session log (so errors e.g. Broken pipe are recorded)
     local output
-    output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty)
+    if [[ -n "$LOG_FILE" ]]; then
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty | tee -a "$LOG_FILE")
+    else
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty)
+    fi
     parse_tool_stats "$output" "img"
     echo ""
 }
@@ -362,9 +366,13 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
     
-    # Execution - capture output for statistics parsing
+    # Execution: capture for stats, show on tty, AND append full output to session log (so errors e.g. Broken pipe are recorded)
     local output
-    output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty)
+    if [[ -n "$LOG_FILE" ]]; then
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty | tee -a "$LOG_FILE")
+    else
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty)
+    fi
     parse_tool_stats "$output" "vid"
     echo ""
 }
