@@ -1390,28 +1390,11 @@ pub struct SkipDecision {
 pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
-    let should_skip = matches!(
-        codec,
-        SourceCodec::H265
-            | SourceCodec::Av1
-            | SourceCodec::Vp9
-            | SourceCodec::Vvc
-            | SourceCodec::Av2
-    );
+    // Only skip H.265/HEVC (already target format). All other codecs — including AV1, VP9, VVC, AV2 — are in scope: convert to HEVC for compatibility/size.
+    let should_skip = matches!(codec, SourceCodec::H265);
 
     let reason = if should_skip {
-        let codec_name = match codec {
-            SourceCodec::H265 => "H.265/HEVC",
-            SourceCodec::Av1 => "AV1",
-            SourceCodec::Vp9 => "VP9",
-            SourceCodec::Vvc => "H.266/VVC (cutting-edge)",
-            SourceCodec::Av2 => "AV2 (cutting-edge)",
-            _ => "modern codec",
-        };
-        format!(
-            "Source is {} - skipping to avoid generational loss",
-            codec_name
-        )
+        "Source is H.265/HEVC - already target format, skipping".to_string()
     } else {
         String::new()
     };
@@ -1439,6 +1422,23 @@ pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
         reason,
         codec,
     }
+}
+
+/// True when the source codec is one that Apple devices do not support (or support poorly).
+pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
+    should_keep_best_effort_output_on_failure(codec_str)
+}
+
+/// True only when we may keep best-effort HEVC/AV1 output on compression/quality failure.
+/// - Apple-incompatible (AV1, VP9, VVC, AV2): user still gets an importable file.
+/// - ProRes/DNxHD are NOT included: they must pass strict size-shrink + SSIM; failure must not
+///   keep output when size got bigger — decision is strictly by SSIM and size balance, never allow larger output.
+pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
+    let codec = parse_source_codec(codec_str);
+    matches!(
+        codec,
+        SourceCodec::Av1 | SourceCodec::Vp9 | SourceCodec::Vvc | SourceCodec::Av2
+    )
 }
 
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
@@ -1734,12 +1734,12 @@ mod tests {
     fn test_should_skip_video_codec() {
         assert!(should_skip_video_codec("hevc").should_skip);
         assert!(should_skip_video_codec("h265").should_skip);
-        assert!(should_skip_video_codec("av1").should_skip);
-        assert!(should_skip_video_codec("vp9").should_skip);
 
-        assert!(should_skip_video_codec("vvc").should_skip);
-        assert!(should_skip_video_codec("h266").should_skip);
-        assert!(should_skip_video_codec("av2").should_skip);
+        assert!(!should_skip_video_codec("av1").should_skip);
+        assert!(!should_skip_video_codec("vp9").should_skip);
+        assert!(!should_skip_video_codec("vvc").should_skip);
+        assert!(!should_skip_video_codec("h266").should_skip);
+        assert!(!should_skip_video_codec("av2").should_skip);
 
         assert!(!should_skip_video_codec("h264").should_skip);
         assert!(!should_skip_video_codec("mpeg4").should_skip);
@@ -2736,10 +2736,10 @@ fn test_apple_compat_legacy_codecs() {
 
 #[test]
 fn test_apple_compat_vs_normal_mode() {
-    assert!(should_skip_video_codec("vp9").should_skip);
+    assert!(!should_skip_video_codec("vp9").should_skip);
     assert!(!should_skip_video_codec_apple_compat("vp9").should_skip);
 
-    assert!(should_skip_video_codec("av1").should_skip);
+    assert!(!should_skip_video_codec("av1").should_skip);
     assert!(!should_skip_video_codec_apple_compat("av1").should_skip);
 
     assert!(should_skip_video_codec("hevc").should_skip);
@@ -2785,6 +2785,37 @@ fn test_apple_compat_case_insensitive() {
 }
 
 #[test]
+fn test_is_apple_incompatible_video_codec() {
+    assert!(is_apple_incompatible_video_codec("av1"));
+    assert!(is_apple_incompatible_video_codec("vp9"));
+    assert!(is_apple_incompatible_video_codec("vvc"));
+    assert!(is_apple_incompatible_video_codec("h266"));
+    assert!(is_apple_incompatible_video_codec("av2"));
+    assert!(is_apple_incompatible_video_codec("AV1"));
+    assert!(is_apple_incompatible_video_codec("libaom-av1"));
+
+    assert!(!is_apple_incompatible_video_codec("hevc"));
+    assert!(!is_apple_incompatible_video_codec("h265"));
+    assert!(!is_apple_incompatible_video_codec("h264"));
+    assert!(!is_apple_incompatible_video_codec("H.264"));
+    assert!(!is_apple_incompatible_video_codec("prores"));
+    assert!(!is_apple_incompatible_video_codec("dnxhd"));
+    assert!(!is_apple_incompatible_video_codec("ffv1"));
+}
+
+#[test]
+fn test_should_keep_best_effort_output_on_failure() {
+    assert!(should_keep_best_effort_output_on_failure("av1"));
+    assert!(should_keep_best_effort_output_on_failure("vp9"));
+    assert!(should_keep_best_effort_output_on_failure("vvc"));
+    assert!(should_keep_best_effort_output_on_failure("av2"));
+    assert!(!should_keep_best_effort_output_on_failure("prores"));
+    assert!(!should_keep_best_effort_output_on_failure("dnxhd"));
+    assert!(!should_keep_best_effort_output_on_failure("h264"));
+    assert!(!should_keep_best_effort_output_on_failure("hevc"));
+}
+
+#[test]
 fn test_strict_apple_compat_routing() {
     let test_cases = [
         ("h264", false, false),
@@ -2792,11 +2823,11 @@ fn test_strict_apple_compat_routing() {
         ("prores", false, false),
         ("hevc", true, true),
         ("h265", true, true),
-        ("vp9", true, false),
-        ("av1", true, false),
-        ("vvc", true, false),
-        ("h266", true, false),
-        ("av2", true, false),
+        ("vp9", false, false),
+        ("av1", false, false),
+        ("vvc", false, false),
+        ("h266", false, false),
+        ("av2", false, false),
     ];
 
     for (codec, expected_normal, expected_apple) in test_cases {
