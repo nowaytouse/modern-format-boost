@@ -1456,6 +1456,24 @@ pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
     )
 }
 
+/// Single predicate for keeping Apple-compat fallback HEVC output (explore failure or require_compression path).
+/// Returns true only when: Apple compat is on, source is not GIF, source codec is Apple-incompatible (AV1/VP9/VVC/AV2),
+/// and either the video stream was compressed or (allow_size_tolerance && video_compression_ratio < 1.01).
+/// Use this in both "explore failed" and "require_compression" branches so behavior stays consistent.
+pub fn should_keep_apple_fallback_hevc_output(
+    codec_str: &str,
+    video_stream_compressed: bool,
+    video_compression_ratio: f64,
+    allow_size_tolerance: bool,
+    apple_compat: bool,
+    source_is_gif: bool,
+) -> bool {
+    if !apple_compat || source_is_gif || !is_apple_incompatible_video_codec(codec_str) {
+        return false;
+    }
+    video_stream_compressed || (allow_size_tolerance && video_compression_ratio < 1.01)
+}
+
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
 

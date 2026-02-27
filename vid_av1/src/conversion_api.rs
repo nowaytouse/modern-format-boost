@@ -464,7 +464,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let size_ratio = actual_output_size as f64 / detection.file_size as f64;
 
     if config.should_delete_original() {
-        if let Err(e) = shared_utils::conversion::safe_delete_original(input, &output_path, 1000) {
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
+                input,
+                &output_path,
+                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+            ) {
             warn!("   ⚠️  Safe delete failed: {}", e);
         } else {
             info!("   🗑️  Original deleted (integrity verified)");
