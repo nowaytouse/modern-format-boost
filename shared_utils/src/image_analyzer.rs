@@ -54,6 +54,8 @@ pub struct ImageAnalysis {
     pub metadata: HashMap<String, String>,
 }
 
+/// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
+/// Quality is then derived via detect_lossless / detect_compression per format; no conversion is done here.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     if !path.exists() {
         return Err(ImgQualityError::ImageReadError(format!(
@@ -231,12 +233,17 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             Ok((img, heic_analysis)) => {
                 let (w, h) = img.dimensions();
                 let feats = calculate_image_features(&img, file_size);
+                let is_lossless = crate::image_detection::detect_compression(
+                    &crate::image_detection::DetectedFormat::HEIC,
+                    path,
+                )
+                .map(|c| c == crate::image_detection::CompressionType::Lossless)?;
                 (
                     w,
                     h,
                     heic_analysis.has_alpha,
                     heic_analysis.bit_depth,
-                    heic_analysis.is_lossless,
+                    is_lossless,
                     heic_analysis.codec,
                     feats,
                 )
@@ -678,23 +685,30 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
     count_str.parse::<u32>().ok()
 }
 
+/// Determines if the image is stored in a lossless way for conversion decisions.
+/// Uses image_detection::detect_compression for PNG, TIFF, WebP, AVIF (and HEIC/JXL in their own analyzers).
 fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
+    use crate::image_detection::{
+        detect_compression, detect_format_from_bytes, CompressionType, DetectedFormat,
+    };
+
     match format {
         ImageFormat::Png => {
-            use crate::image_detection::{
-                detect_compression, detect_format_from_bytes, CompressionType,
-            };
-
             let detected_format = detect_format_from_bytes(path)?;
             let compression = detect_compression(&detected_format, path)?;
-
             Ok(compression == CompressionType::Lossless)
         }
         ImageFormat::Gif => Ok(true),
-        ImageFormat::Tiff => Ok(true),
+        ImageFormat::Tiff => {
+            let compression = detect_compression(&DetectedFormat::TIFF, path)?;
+            Ok(compression == CompressionType::Lossless)
+        }
         ImageFormat::Jpeg => Ok(false),
         ImageFormat::WebP => check_webp_lossless(path),
-        ImageFormat::Avif => check_avif_lossless(path),
+        ImageFormat::Avif => {
+            let compression = detect_compression(&DetectedFormat::AVIF, path)?;
+            Ok(compression == CompressionType::Lossless)
+        }
         _ => Ok(false),
     }
 }
@@ -702,12 +716,6 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
 fn check_webp_lossless(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
-}
-
-fn check_avif_lossless(path: &Path) -> Result<bool> {
-    let _bytes = std::fs::read(path)?;
-
-    Ok(false)
 }
 
 fn is_jxl_file(path: &Path) -> bool {
@@ -758,6 +766,12 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     let metadata = extract_metadata(path)?;
 
+    let is_lossless = crate::image_detection::detect_compression(
+        &crate::image_detection::DetectedFormat::JXL,
+        path,
+    )
+    .map(|c| c == crate::image_detection::CompressionType::Lossless)?;
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "JXL".to_string(),
@@ -769,7 +783,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         has_alpha,
         is_animated: false,
         duration_secs: None,
-        is_lossless: true,
+        is_lossless,
         jpeg_analysis: None,
         heic_analysis: None,
         features: ImageFeatures {
