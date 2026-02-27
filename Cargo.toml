@@ -47,6 +47,7 @@ libheif-rs = "2.6"
 
 tempfile = "3.26"
 proptest = "1.10"
+flate2 = "1.1"
 
 shared_utils = { path = "shared_utils" }
 
