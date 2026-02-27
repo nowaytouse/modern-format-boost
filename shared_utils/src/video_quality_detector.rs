@@ -14,11 +14,14 @@
 //! This module provides the detection layer, while quality_matcher
 //! provides the CRF calculation layer.
 
+use crate::progress_mode::write_to_log;
 use crate::quality_matcher::{
     parse_source_codec, should_skip_video_codec, ContentType, QualityAnalysis, SourceCodec,
     VideoAnalysisBuilder,
 };
+use crate::video_detection::VideoDetectionResult;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoQualityAnalysis {
@@ -55,8 +58,6 @@ pub struct VideoQualityAnalysis {
 
     pub quality_score: u8,
     pub estimated_crf: u8,
-
-    pub routing_decision: VideoRoutingDecision,
 
     pub confidence: f64,
 }
@@ -194,17 +195,8 @@ impl CompressionLevel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VideoRoutingDecision {
-    pub primary_format: String,
-    pub alternatives: Vec<String>,
-    pub encoder: String,
-    pub recommended_crf: u8,
-    pub use_lossless: bool,
-    pub reason: String,
-}
-
-/// Analyze video quality and routing. Consider using a struct (e.g. VideoQualityInput) when passing many arguments to avoid parameter order bugs.
+/// Analyze video quality (codec type, bpp, content type, compression level, etc.). Routing is
+/// handled by video_detection + quality_matcher in the main flow; this is for media info only. Consider using a struct (e.g. VideoQualityInput) when passing many arguments to avoid parameter order bugs.
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
     codec: &str,
@@ -265,14 +257,6 @@ pub fn analyze_video_quality(
 
     let estimated_crf = estimate_crf_from_bpp(bpp, codec_type);
 
-    let routing_decision = make_video_routing_decision(
-        codec_type,
-        compression_type,
-        skip_decision.should_skip,
-        &skip_decision.reason,
-        estimated_crf,
-    );
-
     let confidence = calculate_video_confidence(
         video_bitrate.is_some(),
         gop_size.is_some(),
@@ -311,9 +295,79 @@ pub fn analyze_video_quality(
         compression_type,
         quality_score,
         estimated_crf,
-        routing_decision,
         confidence,
     })
+}
+
+/// Build [VideoQualityAnalysis] from [VideoDetectionResult] for logging/display. Use when you
+/// already have detection (e.g. before SSIM exploration) and want media info for log file only.
+pub fn analyze_video_quality_from_detection(
+    detection: &VideoDetectionResult,
+) -> Result<VideoQualityAnalysis, String> {
+    if detection.duration_secs <= 0.0 {
+        return Err("Invalid duration: must be > 0".to_string());
+    }
+    if detection.fps <= 0.0 {
+        return Err("Invalid frame rate: fps must be > 0".to_string());
+    }
+    analyze_video_quality(
+        detection.codec.as_str(),
+        detection.width,
+        detection.height,
+        detection.fps,
+        detection.duration_secs,
+        detection.bitrate,
+        detection.video_bitrate,
+        &detection.pix_fmt,
+        detection.bit_depth,
+        detection.has_b_frames,
+        None,
+        Some(detection.color_space.as_str()),
+        detection.file_size,
+    )
+}
+
+/// Format [VideoQualityAnalysis] as multi-line media info. **Log file only** — does not write to
+/// terminal. Call when a log file is configured (e.g. alongside SSIM/quality runs).
+pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &Path) {
+    if !crate::progress_mode::has_log_file() {
+        return;
+    }
+    write_to_log(&format!("[Media info] {}", input_path.display()));
+    write_to_log(&format!(
+        "  codec={} type={:?} modern={}",
+        analysis.codec, analysis.codec_type, analysis.is_modern_codec
+    ));
+    write_to_log(&format!(
+        "  size={}x{} fps={:.2} duration={:.2}s frames={}",
+        analysis.width,
+        analysis.height,
+        analysis.fps,
+        analysis.duration_secs,
+        analysis.frame_count
+    ));
+    write_to_log(&format!(
+        "  bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={}",
+        analysis.total_bitrate,
+        analysis.video_bitrate,
+        analysis.bpp,
+        analysis.bit_depth
+    ));
+    write_to_log(&format!(
+        "  pix_fmt={} chroma={:?} has_b_frames={}",
+        analysis.pix_fmt, analysis.chroma, analysis.has_b_frames
+    ));
+    write_to_log(&format!(
+        "  content_type={:?} compression={:?} quality_score={} estimated_crf={}",
+        analysis.content_type,
+        analysis.compression_type,
+        analysis.quality_score,
+        analysis.estimated_crf
+    ));
+    if analysis.is_hdr {
+        write_to_log("  HDR: true");
+    }
+    write_to_log("");
 }
 
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
@@ -447,59 +501,6 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
         32
     } else {
         35
-    }
-}
-
-fn make_video_routing_decision(
-    codec_type: VideoCodecType,
-    compression: CompressionLevel,
-    should_skip: bool,
-    skip_reason: &str,
-    estimated_crf: u8,
-) -> VideoRoutingDecision {
-    if should_skip {
-        return VideoRoutingDecision {
-            primary_format: "skip".to_string(),
-            alternatives: vec![],
-            encoder: "none".to_string(),
-            recommended_crf: 0,
-            use_lossless: false,
-            reason: skip_reason.to_string(),
-        };
-    }
-
-    if codec_type == VideoCodecType::Lossless || compression == CompressionLevel::Lossless {
-        return VideoRoutingDecision {
-            primary_format: "ffv1".to_string(),
-            alternatives: vec!["av1".to_string()],
-            encoder: "ffv1".to_string(),
-            recommended_crf: 0,
-            use_lossless: true,
-            reason: "Lossless source - preserve with FFV1".to_string(),
-        };
-    }
-
-    if codec_type == VideoCodecType::Intermediate {
-        return VideoRoutingDecision {
-            primary_format: "av1".to_string(),
-            alternatives: vec!["hevc".to_string()],
-            encoder: "svt-av1".to_string(),
-            recommended_crf: estimated_crf.saturating_sub(2),
-            use_lossless: false,
-            reason: "Intermediate codec - convert to AV1 for efficiency".to_string(),
-        };
-    }
-
-    VideoRoutingDecision {
-        primary_format: "av1".to_string(),
-        alternatives: vec!["hevc".to_string()],
-        encoder: "svt-av1".to_string(),
-        recommended_crf: estimated_crf,
-        use_lossless: false,
-        reason: format!(
-            "Convert to AV1 for better compression (estimated CRF {})",
-            estimated_crf
-        ),
     }
 }
 
@@ -1035,19 +1036,17 @@ mod tests {
     }
 
     #[test]
-    fn test_routing_skip_modern() {
+    fn test_skip_modern_codec() {
         let result = analyze_video_quality(
             "hevc", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
         )
         .unwrap();
-
-        assert!(result.should_skip, "HEVC routing should skip");
-        assert_eq!(result.routing_decision.primary_format, "skip");
+        assert!(result.should_skip, "HEVC should be marked skip by should_skip_video_codec");
     }
 
     #[test]
-    fn test_routing_lossless_to_ffv1() {
+    fn test_lossless_source_not_skipped() {
         let result = analyze_video_quality(
             "ffv1",
             1920,
@@ -1064,14 +1063,11 @@ mod tests {
             1_500_000_000,
         )
         .unwrap();
-
         assert!(!result.should_skip);
-        assert_eq!(result.routing_decision.primary_format, "ffv1");
-        assert!(result.routing_decision.use_lossless);
     }
 
     #[test]
-    fn test_routing_prores_to_av1() {
+    fn test_prores_analysis() {
         let result = analyze_video_quality(
             "prores",
             1920,
@@ -1088,22 +1084,18 @@ mod tests {
             1_125_000_000,
         )
         .unwrap();
-
         assert!(!result.should_skip);
-        assert_eq!(result.routing_decision.primary_format, "av1");
-        assert!(!result.routing_decision.use_lossless);
+        assert_eq!(result.codec_type, VideoCodecType::Intermediate);
     }
 
     #[test]
-    fn test_routing_h264_to_av1() {
+    fn test_h264_analysis() {
         let result = analyze_video_quality(
             "h264", 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
             60_000_000,
         )
         .unwrap();
-
         assert!(!result.should_skip);
-        assert_eq!(result.routing_decision.primary_format, "av1");
     }
 
     #[test]

@@ -1,23 +1,29 @@
-//! 🔬 Image Quality Detector - Unified Quality Detection for Auto Routing
+//! 🔬 Image Quality Detector - Quality Dimensions (Routing Path Deprecated)
 //!
-//! This module provides precision-validated quality detection for:
-//! - Auto format routing decisions
-//! - Compression potential estimation
-//! - Content type classification
+//! This module provides **pixel-based quality dimensions** for quality judgment.
+//! Main conversion routing uses **image_analyzer** (container/metadata-based); do not use
+//! this module for routing decisions in img_hevc/img_av1.
 //!
-//! ## 🔥 Quality Manifesto Compliance
-//! - NO silent fallback - errors fail loudly
-//! - NO hardcoded defaults - all from actual content analysis
-//! - Base decisions on actual content detection, not format names
+//! ## Retained for quality judgment (保留的维度)
+//! The following dimensions remain available and are **not** deprecated:
+//! - **ImageContentType** (Photo, Artwork, Screenshot, Icon, Animation, Graphic)
+//! - **complexity**, **edge_density**, **color_diversity**, **texture_variance**
+//! - **noise_level**, **sharpness**, **contrast**
+//! - **compression_potential**, **confidence**
+//! Use these for quality analysis, tuning, or future quality gates; do not use `routing_decision`
+//! or this module's output for main-path format routing.
 //!
-//! ## Architecture
-//! ```text
-//! Input Image -> Feature Extraction -> Quality Analysis -> Routing Decision
-//!                    |                     |
-//!              128D Features         ContentType + Complexity
-//! ```
+//! ## Deprecated (早期路由方案，已废弃)
+//! - Using **analyze_image_quality** for conversion routing is deprecated.
+//! - **RoutingDecision** (should_skip, primary_format, etc.) is deprecated for routing; main flow
+//!   uses image_analyzer + image_recommender.
 
+#![allow(deprecated)] // internal use of deprecated RoutingDecision / analyze_image_quality; deprecation applies to external callers
+
+use crate::progress_mode::{has_log_file, write_to_log};
+use image::{open, GenericImageView};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageQualityAnalysis {
@@ -91,6 +97,14 @@ impl ImageContentType {
     }
 }
 
+/// Routing output from pixel-based analysis. **Deprecated for routing**: main flow uses
+/// image_analyzer + image_recommender. Kept only as part of [ImageQualityAnalysis] for
+/// dimension compatibility; use the other fields (content_type, complexity, compression_potential)
+/// for quality judgment.
+#[deprecated(
+    since = "8.8.0",
+    note = "Routing uses image_analyzer + image_recommender. Dimensions in ImageQualityAnalysis are retained for quality judgment."
+)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingDecision {
     pub primary_format: String,
@@ -102,6 +116,13 @@ pub struct RoutingDecision {
     pub skip_reason: Option<String>,
 }
 
+/// Pixel-based quality analysis. **Use for routing is deprecated**; main flow uses image_analyzer.
+/// The returned dimensions (content_type, complexity, compression_potential, edge_density, etc.)
+/// are retained for quality judgment.
+#[deprecated(
+    since = "8.8.0",
+    note = "Main conversion routing uses image_analyzer. Use this only for quality dimension extraction (content_type, complexity, compression_potential) for quality judgment."
+)]
 pub fn analyze_image_quality(
     width: u32,
     height: u32,
@@ -633,6 +654,54 @@ fn calculate_analysis_confidence(
     }
 
     confidence.clamp(0.0, 1.0)
+}
+
+/// Load image from path, run pixel-based quality analysis. Returns `None` if the file cannot be
+/// decoded (e.g. HEIC/JXL without in-process decoder). Used for quality-dimension logging and
+/// quality judgment; not used for routing.
+pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalysis> {
+    let img = open(path).ok()?;
+    let (width, height) = img.dimensions();
+    let rgba = img.to_rgba8();
+    let file_size = std::fs::metadata(path).ok()?.len();
+    let format = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_uppercase())
+        .unwrap_or_else(|| "unknown".to_string());
+    match analyze_image_quality(width, height, rgba.as_raw(), file_size, &format, 1) {
+        Ok(a) => Some(a),
+        Err(_) => None,
+    }
+}
+
+/// Format [ImageQualityAnalysis] as multi-line media info. **Log file only** — does not write to
+/// terminal. Call when a log file is configured (e.g. alongside image conversion runs).
+pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_path: &Path) {
+    if !has_log_file() {
+        return;
+    }
+    write_to_log(&format!("[Image quality] {}", input_path.display()));
+    write_to_log(&format!(
+        "  size={}x{} format={} file_size={}",
+        analysis.width, analysis.height, analysis.format, analysis.file_size
+    ));
+    write_to_log(&format!(
+        "  content_type={:?} complexity={:.4} edge_density={:.4} compression_potential={:.4}",
+        analysis.content_type,
+        analysis.complexity,
+        analysis.edge_density,
+        analysis.compression_potential
+    ));
+    write_to_log(&format!(
+        "  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}",
+        analysis.color_diversity,
+        analysis.texture_variance,
+        analysis.noise_level,
+        analysis.sharpness,
+        analysis.contrast,
+        analysis.confidence
+    ));
+    write_to_log("");
 }
 
 #[cfg(test)]

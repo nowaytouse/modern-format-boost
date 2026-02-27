@@ -28,7 +28,7 @@
 
 ## 二、未使用代码逐项说明（功能与现状）
 
-### 2.1 图像：image_quality_detector（质量维度已接入，仅路由未用）
+### 2.1 图像：image_quality_detector（质量维度与路由已接入）
 
 | 符号 | 功能简述 | 现状 |
 |------|----------|------|
@@ -36,16 +36,43 @@
 | **analyze_image_quality_from_path** | 按路径加载图像为 RGBA，调用 analyze_image_quality，返回质量维度 | **已用**：img_hevc / img_av1 在 run 且配置了 log 文件、静态图时调用，用于质量判断输出。 |
 | **log_media_info_for_image_quality** | 将 ImageQualityAnalysis 格式化为多行，**仅写入日志文件**（不输出到终端） | **已用**：同上，与视频的 log_media_info_for_quality 一致。 |
 | **ImageQualityAnalysis** | 分析结果（complexity, edge_density, content_type, compression_potential 等） | 随 from_path 与 log 在生产中用于质量维度输出。 |
-| **RoutingDecision** | primary_format, alternatives, use_lossless, should_skip 等 | 仍为 `#[deprecated]`：主路径格式路由不使用；仅作为 ImageQualityAnalysis 字段保留兼容。 |
+| **RoutingDecision** | primary_format, alternatives, use_lossless, should_skip 等 | 已参与路由：主路径用其 **should_skip**（是否再跳过）与 **use_lossless**（Legacy Lossy→JXL 用 0.0 或 0.1）；仍标 `#[deprecated]` 表“不用于替代 format 级路由”。 |
 | **ImageContentType** | Photo/Artwork/Screenshot/Icon/Animation/Graphic/Unknown 等 | 在日志中输出，供质量判断与调参参考。 |
 
-**结论**：像素级质量维度（content_type, complexity, compression_potential, edge_density 等）已接入：在配置了 log 文件且为静态图时，run 会加载像素、调用 `analyze_image_quality_from_path` 并将结果写入 log（README 的「判断质量输出」）。格式路由仍仅用 image_analyzer + image_recommender，不使用本模块的 RoutingDecision。
+**结论**：像素级质量维度与 **RoutingDecision** 已接入：静态图会做像素分析、写 log，并用 `routing_decision.should_skip` 与 `routing_decision.use_lossless` 参与「是否跳过」和「Legacy Lossy→JXL 无损/有损」两条路由；其余格式级路由仍以 image_analyzer + should_skip_image_format 为主。
 
-**已做**：路由用途保持 `#[deprecated]`；新增 `analyze_image_quality_from_path`、`log_media_info_for_image_quality`，并在 img_hevc / img_av1 的 auto_convert_single_file 中在转换前按需调用并仅写 log。
+**已做**：新增 `analyze_image_quality_from_path`、`log_media_info_for_image_quality`；在 auto_convert_single_file 中在转换前调用，并依 pixel_analysis 做跳过与 JXL distance 选择（见下「像素级参与路由」）。
 
 **接入前后行为对比（与 README 路由的关系）**  
 - **接入前**：图像转换**已按 README 表格执行**——用 `image_analyzer`（格式/无损）+ `should_skip_image_format` 做「检测格式 → 选择目标（JXL/AVIF/HEIC 或跳过）→ 转换（无损或质量匹配）」。缺少的是：① 没有基于像素的**质量维度输出**（无 content_type、complexity、compression_potential 等）；② 没有用像素级结果参与**路由**（是否跳过、无损 vs 有损）。  
 - **接入后**：在保持上述格式级路由不变的前提下，增加：① 对每个待转换的静态图做像素级分析，将质量维度写入 run log（`[Image quality]`）；② 用 `routing_decision.should_skip` 再跳过（与格式级互补）；③ 在「Legacy Lossy→JXL」分支用 `routing_decision.use_lossless` 决定 JXL distance 0.0 或 0.1。即：**接入前已按 README 做格式级路由，接入后补上了质量输出与像素级路由参与**。
+
+**「像素级参与路由」具体指什么？**  
+这里的**路由**指两件事：**① 是否跳过（不转换）**、**② 若转换，用无损还是用有损参数**。
+
+- **① 是否跳过（像素级补充）**  
+  先有**格式级**跳过：`should_skip_image_format(analysis.format, analysis.is_lossless)` 已把「现代有损（AVIF/WebP/HEIC 有损）、JXL」直接跳过。只有在格式级**没**被跳过的文件才会继续往下走、做像素级分析。  
+  像素级分析里会算出一个 `RoutingDecision`，其中 `should_skip` 由 `make_routing_decision` 决定：若源格式在像素侧被识别为「现代有损」（avif/jxl/heic/heif），会设 `should_skip: true`、`skip_reason: "Source is ... - already optimal"`。这类文件绝大多数已在格式级被跳过，像素级相当于**兜底**；少数边缘情况（例如扩展名/容器与像素侧判断不一致）下，像素级会再拦一次。  
+  **代码位置**：img_hevc/img_av1 的 `auto_convert_single_file` 里，在 `analyze_image_quality_from_path` 与 `log_media_info_for_image_quality` 之后，若 `pixel_analysis.routing_decision.should_skip == true`，直接 `return Ok(ConversionOutput { skipped: true, ... })`，不再进入后面的 `match (format, is_lossless, is_animated)` 分支。
+
+- **② 无损 vs 有损（仅影响「Legacy Lossy→JXL」这一条分支）**  
+  只有走到 **最后一个 match 臂** `(_, false, false)` 的文件会用到像素级的「无损 vs 有损」决策。该臂对应的是：**静态、且格式级判定为有损**（非现代无损、非 JPEG、非动图），例如某些老格式或误判为有损的静态图，实际常见的是「Legacy Lossy→JXL」这一类。  
+  **接入前**：这里固定调用 `convert_to_jxl(input, &options, 0.1)`，即**固定用有损**（JXL distance 0.1，约等于质量 100）。  
+  **接入后**：用 `pixel_analysis.routing_decision.use_lossless` 决定：  
+  - `use_lossless == true` → `convert_to_jxl(..., 0.0)`（**无损**）  
+  - `use_lossless == false` → `convert_to_jxl(..., 0.1)`（**有损**）  
+  `use_lossless` 在 `make_routing_decision` 中的逻辑是：  
+  - `compression_potential < 0.2`（像素算出的压缩潜力很低，适合无损）→ true；或  
+  - 源为 PNG 且带透明且 `content_type == Icon` → true；  
+  - 否则 false。  
+  即：**像素级的 compression_potential、content_type、has_alpha** 共同决定这条分支是「无损 JXL」还是「质量 100 的有损 JXL」。其他分支（如「Modern Lossless→JXL」「JPEG→JXL」「Legacy Lossless→JXL」、动图等）**不受**像素级影响，仍按格式与 is_lossless 走固定逻辑。
+
+**像素级在判定「无损 vs 有损」时是否可靠、精确？**  
+**结论：是启发式、非精确。** 适合当作「倾向无损/倾向有损」的参考，不能当作与编解码器或率失真严格一致的判定。
+
+- **判定链**：像素 → 边缘密度/色彩多样性/纹理方差/噪声等 → **complexity**（加权和并 clamp）→ **content_type**（规则：尺寸+透明+复杂度/边缘/色彩 → Icon/Screenshot/Graphic/Photo/Artwork，否则 **Unknown**）→ **compression_potential**（`1.0 - complexity` 再按 content_type、has_alpha、is_animated 加减）→ **use_lossless** = `compression_potential < 0.2` 或「PNG + 透明 + Icon」。
+- **为何不算精确**：① **complexity** 是单一标量，由多类统计量线性组合，不包含实际码率或编码器行为；② **content_type** 依赖阈值和规则，易落为 **Unknown**，且与「是否适合无损」无直接理论对应；③ **0.2** 为经验阈值，非率失真或码流分析得出；④ 不区分**源是否本就有损**（如已是 JPEG 再转），仅看当前解码后的像素统计。
+- **为何仍有一定参考价值**：低复杂度、图标/截图类往往无损压缩率不错；高复杂度、照片类用有损更省空间。因此作为「倾向用无损还是用有损」的**启发式**是合理的，只是不应期待与真实编码结果或主观质量严格一致。若需更稳妥，可依赖格式级（如源已是无损则走无损分支），或由用户通过选项固定无损/有损。
 
 ---
 
