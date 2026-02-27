@@ -102,7 +102,6 @@ pub mod image_formats;
 pub mod image_heic_analysis;
 pub mod image_jpeg_analysis;
 pub mod image_metrics;
-pub mod image_quality_core;
 pub mod image_recommender;
 pub mod img_errors;
 
@@ -145,13 +144,16 @@ pub use safety::*;
 pub use tools::*;
 pub use video::*;
 
+#[allow(deprecated)] // re-export for quality dimensions; routing use is deprecated
 pub use image_quality_detector::{
-    analyze_image_quality, ImageContentType, ImageQualityAnalysis, RoutingDecision,
+    analyze_image_quality, analyze_image_quality_from_path, log_media_info_for_image_quality,
+    ImageContentType, ImageQualityAnalysis, RoutingDecision,
 };
 
 pub use video_quality_detector::{
-    analyze_video_quality, to_quality_analysis as video_to_quality_analysis, ChromaSubsampling,
-    CompressionLevel, VideoCodecType, VideoContentType, VideoQualityAnalysis, VideoRoutingDecision,
+    analyze_video_quality, analyze_video_quality_from_detection, log_media_info_for_quality,
+    to_quality_analysis as video_to_quality_analysis, ChromaSubsampling, CompressionLevel,
+    VideoCodecType, VideoContentType, VideoQualityAnalysis,
 };
 
 pub use video_explorer::{
@@ -175,11 +177,6 @@ pub use video_explorer::{
     explore_precise_quality_match_gpu, explore_precise_quality_match_with_compression_gpu,
     explore_quality_match_gpu, explore_size_only_gpu,
 };
-
-#[allow(deprecated)]
-pub use video_explorer::full_explore;
-#[allow(deprecated)]
-pub use video_explorer::quick_explore;
 
 pub use checkpoint::{safe_delete_original, verify_output_integrity, CheckpointManager};
 

@@ -3084,50 +3084,6 @@ pub fn explore_quality_match_gpu(
     .explore()
 }
 
-#[deprecated(since = "2.0.0", note = "Use explore_size_only instead")]
-pub fn quick_explore(
-    input: &Path,
-    output: &Path,
-    encoder: VideoEncoder,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    max_crf: f32,
-) -> Result<ExploreResult> {
-    let max_threads = crate::thread_manager::get_optimal_threads();
-    explore_size_only(
-        input,
-        output,
-        encoder,
-        vf_args,
-        initial_crf,
-        max_crf,
-        max_threads,
-    )
-}
-
-#[deprecated(since = "2.0.0", note = "Use explore_precise_quality_match instead")]
-pub fn full_explore(
-    input: &Path,
-    output: &Path,
-    encoder: VideoEncoder,
-    vf_args: Vec<String>,
-    initial_crf: f32,
-    max_crf: f32,
-    min_ssim: f64,
-) -> Result<ExploreResult> {
-    let max_threads = crate::thread_manager::get_optimal_threads();
-    explore_precise_quality_match(
-        input,
-        output,
-        encoder,
-        vf_args,
-        initial_crf,
-        max_crf,
-        min_ssim,
-        max_threads,
-    )
-}
-
 pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f32, f64) {
     let (crf_scale, max_crf_cap) = match encoder {
         VideoEncoder::Hevc => (51.0_f32, 40.0_f32),
