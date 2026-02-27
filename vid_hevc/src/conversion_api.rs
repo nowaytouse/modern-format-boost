@@ -967,7 +967,7 @@ mod tests {
     }
 
     #[test]
-    fn test_strategy_normal_mode_converts_vp9() {
+    fn test_strategy_normal_mode_skips_vp9() {
         let detection = crate::detection_api::VideoDetectionResult {
             file_path: "/test/video.webm".to_string(),
             format: "webm".to_string(),
@@ -995,10 +995,10 @@ mod tests {
         };
 
         let strategy = determine_strategy(&detection);
-        assert_ne!(
+        assert_eq!(
             strategy.target,
             TargetVideoFormat::Skip,
-            "VP9 is in scope: convert to HEVC in normal mode"
+            "VP9 skipped in normal mode (modern format; use Apple-compat to convert)"
         );
     }
 
@@ -1164,8 +1164,8 @@ mod tests {
         let test_cases = [
             (DetectedCodec::H264, false, false),
             (DetectedCodec::H265, true, true),
-            (DetectedCodec::VP9, false, false),
-            (DetectedCodec::AV1, false, false),
+            (DetectedCodec::VP9, true, false),
+            (DetectedCodec::AV1, true, false),
         ];
 
         for (codec, expected_skip_normal, expected_skip_apple) in test_cases {
@@ -1440,7 +1440,7 @@ mod tests {
             bits_per_pixel: 0.09,
         };
         let normal = determine_strategy(&det);
-        assert_ne!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") parses to VP9, in scope");
+        assert_eq!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") skipped in normal mode");
         let apple = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(apple.target, TargetVideoFormat::Skip);
     }
