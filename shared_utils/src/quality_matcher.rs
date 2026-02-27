@@ -1390,11 +1390,26 @@ pub struct SkipDecision {
 pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
-    // Only skip H.265/HEVC (already target format). All other codecs — including AV1, VP9, VVC, AV2 — are in scope: convert to HEVC for compatibility/size.
-    let should_skip = matches!(codec, SourceCodec::H265);
+    // Normal mode: skip all modern codecs (HEVC, AV1, VP9, VVC, AV2) — already modern, no need to process.
+    // Only when Apple-compat flag is on do we convert AV1/VP9/VVC/AV2 via should_skip_video_codec_apple_compat (skip HEVC only).
+    let should_skip = matches!(
+        codec,
+        SourceCodec::H265 | SourceCodec::Av1 | SourceCodec::Vp9 | SourceCodec::Vvc | SourceCodec::Av2
+    );
 
     let reason = if should_skip {
-        "Source is H.265/HEVC - already target format, skipping".to_string()
+        let codec_name = match codec {
+            SourceCodec::H265 => "H.265/HEVC",
+            SourceCodec::Av1 => "AV1",
+            SourceCodec::Vp9 => "VP9",
+            SourceCodec::Vvc => "H.266/VVC (cutting-edge)",
+            SourceCodec::Av2 => "AV2 (cutting-edge)",
+            _ => "modern codec",
+        };
+        format!(
+            "Source is {} - skipping (modern format; use Apple-compat mode to convert to HEVC)",
+            codec_name
+        )
     } else {
         String::new()
     };
@@ -1734,12 +1749,11 @@ mod tests {
     fn test_should_skip_video_codec() {
         assert!(should_skip_video_codec("hevc").should_skip);
         assert!(should_skip_video_codec("h265").should_skip);
-
-        assert!(!should_skip_video_codec("av1").should_skip);
-        assert!(!should_skip_video_codec("vp9").should_skip);
-        assert!(!should_skip_video_codec("vvc").should_skip);
-        assert!(!should_skip_video_codec("h266").should_skip);
-        assert!(!should_skip_video_codec("av2").should_skip);
+        assert!(should_skip_video_codec("av1").should_skip);
+        assert!(should_skip_video_codec("vp9").should_skip);
+        assert!(should_skip_video_codec("vvc").should_skip);
+        assert!(should_skip_video_codec("h266").should_skip);
+        assert!(should_skip_video_codec("av2").should_skip);
 
         assert!(!should_skip_video_codec("h264").should_skip);
         assert!(!should_skip_video_codec("mpeg4").should_skip);
@@ -2736,10 +2750,10 @@ fn test_apple_compat_legacy_codecs() {
 
 #[test]
 fn test_apple_compat_vs_normal_mode() {
-    assert!(!should_skip_video_codec("vp9").should_skip);
+    assert!(should_skip_video_codec("vp9").should_skip);
     assert!(!should_skip_video_codec_apple_compat("vp9").should_skip);
 
-    assert!(!should_skip_video_codec("av1").should_skip);
+    assert!(should_skip_video_codec("av1").should_skip);
     assert!(!should_skip_video_codec_apple_compat("av1").should_skip);
 
     assert!(should_skip_video_codec("hevc").should_skip);
@@ -2823,11 +2837,11 @@ fn test_strict_apple_compat_routing() {
         ("prores", false, false),
         ("hevc", true, true),
         ("h265", true, true),
-        ("vp9", false, false),
-        ("av1", false, false),
-        ("vvc", false, false),
-        ("h266", false, false),
-        ("av2", false, false),
+        ("vp9", true, false),
+        ("av1", true, false),
+        ("vvc", true, false),
+        ("h266", true, false),
+        ("av2", true, false),
     ];
 
     for (codec, expected_normal, expected_apple) in test_cases {
