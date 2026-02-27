@@ -791,8 +791,9 @@ fn auto_convert_single_file(
                 false
             };
 
+            const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
             if config.apple_compat && is_modern_animated && !is_apple_native {
-                if duration >= 3.0 || is_high_quality {
+                if duration >= MIN_DURATION || is_high_quality {
                     verbose_log!(
                         "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s, {}): {}",
                         format,
@@ -807,17 +808,19 @@ fn auto_convert_single_file(
                     convert_to_hevc_mp4_matched(input, &options, &analysis)?
                 } else {
                     verbose_log!(
-                        "🍎 Animated {}→GIF (Apple Compat, {:.1}s, Bayer 256 colors): {}",
+                        "🍎 Animated {}→GIF (Apple Compat, {:.1}s < {:.1}s, Bayer 256 colors): {}",
                         format,
                         duration,
+                        MIN_DURATION,
                         input.display()
                     );
                     convert_to_gif_apple_compat(input, &options, None)?
                 }
-            } else if duration < 3.0 {
+            } else if duration < MIN_DURATION {
                 verbose_log!(
-                    "⏭️ Skipping short animation ({:.1}s < 3s): {}",
+                    "⏭️ Skipping short animation ({:.1}s < {:.1}s): {}",
                     duration,
+                    MIN_DURATION,
                     input.display()
                 );
                 copy_original_if_adjacent_mode(input, config)?;
