@@ -518,6 +518,12 @@ fn check_webp_animation(path: &Path) -> Result<bool> {
     Ok(crate::image_formats::webp::is_animated_from_bytes(&bytes))
 }
 
+/// Public entry for retrying animation duration (e.g. from main when analysis.duration_secs is None).
+/// Tries ffprobe, ImageMagick, WebP native parse, and GIF frame-count estimate.
+pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
+    get_animation_duration(path)
+}
+
 fn get_animation_duration(path: &Path) -> Option<f32> {
     if let Some(duration) = try_ffprobe_json(path) {
         return Some(duration);
@@ -529,6 +535,19 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
 
     if let Some(duration) = try_imagemagick_identify(path) {
         return Some(duration);
+    }
+
+    if path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .as_deref()
+        == Some("webp")
+    {
+        if let Ok(data) = std::fs::read(path) {
+            if let Some(secs) = crate::image_formats::webp::duration_secs_from_bytes(&data) {
+                return Some(secs);
+            }
+        }
     }
 
     if let Some(ext) = path.extension() {
