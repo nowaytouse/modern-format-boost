@@ -85,7 +85,19 @@ impl FfmpegProcess {
     }
 
     pub fn wait_with_output(mut self) -> Result<(ExitStatus, String)> {
+        // If caller never took stdout, drain it in background so FFmpeg does not block on write (pipe buffer full).
+        let stdout_drain = self.child.stdout.take().map(|stdout| {
+            thread::spawn(move || {
+                use std::io::Read;
+                let mut reader = BufReader::new(stdout);
+                let mut buf = [0u8; 4096];
+                while reader.read(&mut buf).map(|n| n > 0).unwrap_or(false) {}
+            })
+        });
         let status = self.child.wait().context("Failed to wait for FFmpeg")?;
+        if let Some(h) = stdout_drain {
+            let _ = h.join();
+        }
         let stderr = self
             .stderr_thread
             .take()

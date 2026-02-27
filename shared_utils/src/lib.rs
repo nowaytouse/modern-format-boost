@@ -47,6 +47,7 @@ pub mod xmp_merger;
 
 pub mod path_safety;
 pub use path_safety::safe_path_arg;
+pub mod system_memory;
 pub mod app_error;
 pub mod ffprobe_json;
 pub mod file_copier;
@@ -303,5 +304,6 @@ pub use common_utils::{
 pub use thread_manager::{
     calculate_optimal_threads, disable_multi_instance_mode, enable_multi_instance_mode,
     get_ffmpeg_threads, get_optimal_threads, get_rsync_path, get_rsync_version, is_multi_instance,
+    memory_cap_hint,
     ThreadConfig,
 };

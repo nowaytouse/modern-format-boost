@@ -949,6 +949,9 @@ fn auto_convert_directory(
                 .map(|n| n.get())
                 .unwrap_or(4)
         );
+        if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {
+            println!("   💡 {}", hint);
+        }
     }
 
     pool.install(|| {

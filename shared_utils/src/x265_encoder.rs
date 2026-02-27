@@ -94,6 +94,62 @@ pub fn encode_with_x265(
     Ok(output_size)
 }
 
+/// Encode a .y4m file directly with x265 (no FFmpeg pipe). Avoids Broken pipe when
+/// the pipeline FFmpeg stdout → x265 stdin is used with low-fps or odd y4m streams.
+fn encode_y4m_direct(
+    input: &Path,
+    hevc_output: &Path,
+    config: &X265Config,
+    start_time: std::time::Instant,
+) -> Result<bool> {
+    let x265_cmd_str = format!(
+        "x265 --y4m --input {:?} --output {:?} --crf {:.1} --preset {} --pools {} --log-level error",
+        input, hevc_output, config.crf, config.preset, config.threads
+    );
+    info!(command = %x265_cmd_str, "Executing x265 (direct .y4m input, no pipe)");
+
+    let output = Command::new("x265")
+        .arg("--y4m")
+        .arg("--input")
+        .arg(crate::safe_path_arg(input).as_ref())
+        .arg("--output")
+        .arg(crate::safe_path_arg(hevc_output).as_ref())
+        .arg("--crf")
+        .arg(format!("{:.1}", config.crf))
+        .arg("--preset")
+        .arg(&config.preset)
+        .arg("--pools")
+        .arg(config.threads.to_string())
+        .arg("--log-level")
+        .arg("error")
+        .output()
+        .context("Failed to run x265")?;
+
+    let duration = start_time.elapsed();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if !output.status.success() {
+        error!(
+            command = %x265_cmd_str,
+            exit_code = ?output.status.code(),
+            duration_secs = duration.as_secs_f64(),
+            stderr = %stderr,
+            "x265 direct encode failed"
+        );
+        if !stderr.is_empty() {
+            eprintln!("x265 stderr:\n{}", stderr);
+        }
+        bail!("x265 encode failed with exit code {:?}", output.status.code());
+    }
+
+    info!(
+        duration_secs = duration.as_secs_f64(),
+        output_file = ?hevc_output,
+        "x265 encoding completed successfully (direct .y4m)"
+    );
+    Ok(true)
+}
+
 fn encode_to_hevc(
     input: &Path,
     hevc_output: &Path,
@@ -101,6 +157,16 @@ fn encode_to_hevc(
     vf_args: &[String],
 ) -> Result<bool> {
     let start_time = std::time::Instant::now();
+
+    // When input is already .y4m (e.g. from dynamic_mapping temp), run x265 directly
+    // to avoid FFmpeg→pipe→x265 which can cause Broken pipe (x265 closing stdin early).
+    let is_y4m = input
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("y4m"))
+        .unwrap_or(false);
+    if is_y4m {
+        return encode_y4m_direct(input, hevc_output, config, start_time);
+    }
 
     let mut ffmpeg_cmd = Command::new("ffmpeg");
     ffmpeg_cmd
@@ -223,7 +289,10 @@ fn encode_to_hevc(
                 "FFmpeg decode failed"
             );
             if is_broken_pipe {
-                warn!("Pipe broken: decoder (ffmpeg) likely exited first; check FFmpeg stderr above");
+                warn!("Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream");
+                if !x265_stderr.is_empty() {
+                    eprintln!("x265 stderr (often shows why pipe closed):\n{}", x265_stderr);
+                }
             }
             if !ffmpeg_stderr.is_empty() {
                 eprintln!("FFmpeg error output:\n{}", ffmpeg_stderr);
