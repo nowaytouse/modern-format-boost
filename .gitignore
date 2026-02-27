@@ -20,8 +20,9 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
-# Session / drag-and-drop logs
+# Session / drag-and-drop logs and default run logs
 logs/
+*_run.log
 
 # Local test data (user-specific paths)
 # /path/to/local/test/data
