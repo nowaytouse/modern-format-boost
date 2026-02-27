@@ -376,7 +376,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         }
         warn!("   🛡️  Original file PROTECTED");
 
-        if config.apple_compat {
+        // Only keep best-effort output when source is Apple-incompatible (AV1/VP9/VVC/AV2).
+        if config.apple_compat
+            && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
+        {
             warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
             warn!(
                 "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is AV1 and importable",

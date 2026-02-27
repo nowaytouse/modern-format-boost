@@ -607,7 +607,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
-        assert!(result.should_skip, "AV1 should be skipped");
+        assert!(!result.should_skip, "AV1 is in scope (convert to HEVC)");
     }
 
     #[test]
@@ -667,28 +667,16 @@ mod tests {
             60_000_000,
         )
         .unwrap();
-        assert!(hevc.should_skip, "HEVC should be skipped");
+        assert!(hevc.should_skip, "HEVC should be skipped (already target format)");
 
-        let av1 = analyze_video_quality(
-            "av1", 1920, 1080, 30.0, 60.0, 5_000_000, None, "yuv420p", 8, true, None, None,
-            37_500_000,
-        )
-        .unwrap();
-        assert!(av1.should_skip, "AV1 should be skipped");
-
-        let vp9 = analyze_video_quality(
-            "vp9", 1920, 1080, 30.0, 60.0, 6_000_000, None, "yuv420p", 8, true, None, None,
-            45_000_000,
-        )
-        .unwrap();
-        assert!(vp9.should_skip, "VP9 should be skipped");
-
-        let vvc = analyze_video_quality(
-            "vvc", 1920, 1080, 30.0, 60.0, 4_000_000, None, "yuv420p", 8, true, None, None,
-            30_000_000,
-        )
-        .unwrap();
-        assert!(vvc.should_skip, "VVC should be skipped");
+        for (codec, _) in [("av1", 37_500_000), ("vp9", 45_000_000), ("vvc", 30_000_000)] {
+            let result = analyze_video_quality(
+                codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
+                60_000_000,
+            )
+            .unwrap();
+            assert!(!result.should_skip, "{} is in scope (convert to HEVC)", codec);
+        }
     }
 
     #[test]
@@ -1317,7 +1305,7 @@ mod tests {
 
         assert_eq!(result.width, 7680);
         assert_eq!(result.height, 4320);
-        assert!(result.should_skip, "8K AV1 should be skipped");
+        assert!(!result.should_skip, "8K AV1 is in scope");
     }
 
     #[test]
@@ -1778,19 +1766,20 @@ mod tests {
 
     #[test]
     fn test_strict_modern_always_skip() {
-        let modern_codecs = ["hevc", "h265", "av1", "vp9", "vvc", "av2"];
+        // Only HEVC is skipped (already target). AV1/VP9/VVC/AV2 are in scope (convert to HEVC).
+        let modern_skip = [("hevc", true), ("h265", true), ("av1", false), ("vp9", false), ("vvc", false), ("av2", false)];
 
-        for codec in modern_codecs {
+        for (codec, expected_skip) in modern_skip {
             let result = analyze_video_quality(
                 codec, 1920, 1080, 30.0, 60.0, 8_000_000, None, "yuv420p", 8, true, None, None,
                 60_000_000,
             )
             .unwrap();
 
-            assert!(
-                result.should_skip,
-                "STRICT: Modern codec {} must ALWAYS skip",
-                codec
+            assert_eq!(
+                result.should_skip, expected_skip,
+                "STRICT: {} expected skip={}, got {}",
+                codec, expected_skip, result.should_skip
             );
             assert!(
                 result.is_modern_codec,
