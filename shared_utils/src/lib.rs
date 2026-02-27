@@ -42,6 +42,8 @@ pub mod video;
 pub mod video_explorer;
 #[cfg(test)]
 mod video_explorer_tests;
+#[cfg(test)]
+mod image_detection_tests;
 pub mod video_quality_detector;
 pub mod xmp_merger;
 
@@ -266,7 +268,7 @@ pub use app_error::AppError;
 
 pub use file_copier::{
     copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
-    FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, SIDECAR_EXTENSIONS,
+    FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT, SIDECAR_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
 };
 pub use smart_file_copier::{
