@@ -331,11 +331,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
                         < explore_result.input_video_stream_size;
-                    let video_compression_ratio = shared_utils::video_compression_ratio(
-                        explore_result.input_video_stream_size,
-                        explore_result.output_video_stream_size,
-                    );
                     let total_file_compressed = explore_result.output_size < detection.file_size;
+                    let total_size_ratio = if detection.file_size > 0 {
+                        explore_result.output_size as f64 / detection.file_size as f64
+                    } else {
+                        1.0
+                    };
 
                     warn!(
                         "   📊 DEBUG: input_stream={} bytes, output_stream={} bytes, compressed={}",
@@ -427,11 +428,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         };
                     warn!("   🛡️  {}", protect_msg);
 
-                    // Single predicate: keep Apple fallback only when video stream actually compressed or within 1% (allow_size_tolerance).
+                    // Keep/discard by total file size only (video stream is internal metric).
                     if shared_utils::should_keep_apple_fallback_hevc_output(
                         detection.codec.as_str(),
-                        video_stream_compressed,
-                        video_compression_ratio,
+                        total_file_compressed,
+                        total_size_ratio,
                         config.allow_size_tolerance,
                         config.apple_compat,
                         source_is_gif,
@@ -661,11 +662,17 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             }
             warn!("   🛡️  Original file PROTECTED");
 
-            // Same predicate as explore phase: keep only when Apple-incompatible source and (video compressed or ratio < 1.01).
+            // Same predicate as explore: keep by total file size only (video stream is internal).
+            let total_file_compressed = actual_output_size < detection.file_size;
+            let total_size_ratio = if detection.file_size > 0 {
+                actual_output_size as f64 / detection.file_size as f64
+            } else {
+                1.0
+            };
             if shared_utils::should_keep_apple_fallback_hevc_output(
                 detection.codec.as_str(),
-                verify_result.video_compressed,
-                verify_result.video_compression_ratio,
+                total_file_compressed,
+                total_size_ratio,
                 config.allow_size_tolerance,
                 config.apple_compat,
                 source_is_gif,
