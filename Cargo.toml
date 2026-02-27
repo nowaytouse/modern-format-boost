@@ -43,7 +43,7 @@ console = "0.16"
 chrono = { version = "0.4", features = ["serde"] }
 
 image = { version = "0.25", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
-libheif-rs = "2.6.1"
+libheif-rs = "2.6"
 
 tempfile = "3.26"
 proptest = "1.10"
