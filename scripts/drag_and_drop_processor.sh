@@ -63,11 +63,13 @@ start_elapsed_spinner() {
         done
     ) 2>/dev/null &
     SPINNER_PID=$!
+    # Disown so shell does not report "Killed: 9" to stderr when we later kill the spinner (avoids log noise).
+    disown "$SPINNER_PID" 2>/dev/null || true
 }
 stop_elapsed_spinner() {
     [[ -z "$SPINNER_PID" ]] && return
-    kill "$SPINNER_PID" 2>/dev/null
-    wait "$SPINNER_PID" 2>/dev/null
+    # Suppress any "Killed: 9" or wait job-report to stderr so it does not appear in session log.
+    ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
     SPINNER_PID=""
     now=$(date +%s)
     elapsed_sec=$(( now - ELAPSED_START ))
