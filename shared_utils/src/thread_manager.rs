@@ -3,10 +3,13 @@
 //! Provides intelligent thread allocation that:
 //! - Maximizes performance on Apple Silicon chips
 //! - Prevents system overload during multi-instance scenarios
-//! - Allows environment-based configuration
+//! - Reduces parallelism when system memory is low (avoids OOM kills)
+//! - Allows environment-based configuration (MFB_LOW_MEMORY, MFB_MULTI_INSTANCE)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+
+use crate::system_memory::{self, MemoryPressure};
 
 static MULTI_INSTANCE_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -71,9 +74,15 @@ pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
         config.core_percentage
     };
 
-    let calculated = (cpu_count * effective_percentage / 100).max(1);
+    let mut calculated = (cpu_count * effective_percentage / 100).max(1);
+    calculated = calculated.clamp(config.min_threads, config.max_threads);
 
-    calculated.clamp(config.min_threads, config.max_threads)
+    let memory_cap = match (system_memory::memory_pressure_level(), system_memory::is_low_memory_env()) {
+        (_, true) | (Some(MemoryPressure::High), _) => 2,
+        (Some(MemoryPressure::Normal), _) => 4,
+        _ => calculated,
+    };
+    calculated.min(memory_cap).max(1)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -88,6 +97,22 @@ pub enum WorkloadType {
     Video,
 }
 
+/// Apply memory-pressure caps so we don't spawn too many heavy workers and trigger OOM.
+fn apply_memory_cap(parallel_tasks: usize, child_threads: usize) -> (usize, usize) {
+    let pressure = system_memory::memory_pressure_level();
+    let low_mem_env = system_memory::is_low_memory_env();
+
+    if low_mem_env || pressure == Some(MemoryPressure::High) {
+        return (1, 1);
+    }
+    if pressure == Some(MemoryPressure::Normal) {
+        let pt = parallel_tasks.min(2);
+        let ct = child_threads.min(2);
+        return (pt, ct);
+    }
+    (parallel_tasks, child_threads)
+}
+
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
     let total_cores = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -98,34 +123,40 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
 
     let available_cores = total_cores.saturating_sub(reserved).max(1);
 
-    match workload {
+    let (parallel_tasks, child_threads) = match workload {
         WorkloadType::Image => {
             let child_threads = 2;
-
             let parallel_tasks = (available_cores / child_threads).max(1);
-
             let parallel_tasks = parallel_tasks.clamp(1, 8);
-
-            ThreadAllocation {
-                parallel_tasks,
-                child_threads,
-            }
+            apply_memory_cap(parallel_tasks, child_threads)
         }
         WorkloadType::Video => {
             let parallel_tasks = if available_cores >= 8 { 2 } else { 1 };
-
             let child_threads = (available_cores / parallel_tasks).max(1);
-
-            ThreadAllocation {
-                parallel_tasks,
-                child_threads,
-            }
+            apply_memory_cap(parallel_tasks, child_threads)
         }
+    };
+
+    ThreadAllocation {
+        parallel_tasks: parallel_tasks.max(1),
+        child_threads: child_threads.max(1),
     }
 }
 
 pub fn get_optimal_threads() -> usize {
     *OPTIMAL_THREADS.get_or_init(|| get_balanced_thread_config(WorkloadType::Image).parallel_tasks)
+}
+
+/// Optional hint for logging when parallelism was reduced due to memory (e.g. "low memory: reduced parallelism").
+pub fn memory_cap_hint() -> Option<&'static str> {
+    if system_memory::is_low_memory_env() {
+        return Some("MFB_LOW_MEMORY=1: reduced parallelism");
+    }
+    match system_memory::memory_pressure_level() {
+        Some(MemoryPressure::High) => Some("low available RAM: parallelism reduced to avoid OOM"),
+        Some(MemoryPressure::Normal) => Some("moderate RAM: slightly reduced parallelism"),
+        _ => None,
+    }
 }
 
 pub fn get_ffmpeg_threads() -> usize {
@@ -185,14 +216,14 @@ mod tests {
     #[test]
     fn test_default_thread_calculation() {
         let threads = get_optimal_threads();
-        assert!(threads >= 2);
+        assert!(threads >= 1, "memory cap may reduce to 1");
         assert!(threads <= 16);
     }
 
     #[test]
     fn test_ffmpeg_threads() {
         let threads = get_ffmpeg_threads();
-        assert!(threads >= 2);
+        assert!(threads >= 1, "memory cap may reduce to 1");
         assert!(threads <= 12);
     }
 

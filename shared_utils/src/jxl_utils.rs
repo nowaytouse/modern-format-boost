@@ -136,6 +136,15 @@ fn run_imagemagick_cjxl_pipeline(
         (false, false, String::new())
     })?;
 
+    // Drain ImageMagick stderr in background to avoid blocking when pipe buffer fills.
+    let magick_stderr_thread = magick_proc.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
+            s
+        })
+    });
+
     let mut cjxl_proc = Command::new("cjxl")
         .arg("-")
         .arg(output)
@@ -154,20 +163,32 @@ fn run_imagemagick_cjxl_pipeline(
             (false, false, String::new())
         })?;
 
-    let magick_status = magick_proc.wait();
-    let cjxl_stderr_handle = cjxl_proc.stderr.take();
-    let cjxl_status = cjxl_proc.wait();
-    let cjxl_stderr = cjxl_stderr_handle
-        .and_then(|mut s| {
-            let mut v = String::new();
-            std::io::Read::read_to_string(&mut s, &mut v).ok().map(|_| v.trim().to_string())
+    // Drain cjxl stderr in background so cjxl does not block when pipe buffer fills.
+    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
+            s.trim().to_string()
         })
+    });
+
+    let magick_status = magick_proc.wait();
+    let cjxl_status = cjxl_proc.wait();
+
+    let magick_stderr = magick_stderr_thread
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let cjxl_stderr = cjxl_stderr_thread
+        .and_then(|h| h.join().ok())
         .unwrap_or_default();
 
     let magick_ok = match magick_status {
         Ok(status) if status.success() => true,
         Ok(status) => {
             eprintln!("   ❌ ImageMagick failed with exit code: {:?}", status.code());
+            if !magick_stderr.is_empty() {
+                eprintln!("   📋 ImageMagick stderr: {}", magick_stderr.lines().next().unwrap_or(""));
+            }
             false
         }
         Err(e) => {
