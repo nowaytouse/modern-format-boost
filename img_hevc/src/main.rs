@@ -853,14 +853,19 @@ fn auto_convert_single_file(
                     return Ok(convert_result_to_output(conv_result));
                 }
                 _ => {
-                    eprintln!(
-                        "⚠️  Cannot get animation duration, skipping conversion: {}",
-                        input.display()
-                    );
-                    eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                    eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
-                    copy_original_if_adjacent_mode(input, config)?;
-                    return Ok(make_skipped("Cannot get animation duration"));
+                    let retry = shared_utils::image_analyzer::get_animation_duration_for_path(input);
+                    if let Some(d) = retry {
+                        d
+                    } else {
+                        eprintln!(
+                            "⚠️  Cannot get animation duration, skipping conversion: {}",
+                            input.display()
+                        );
+                        eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                        eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
+                        copy_original_if_adjacent_mode(input, config)?;
+                        return Ok(make_skipped("Cannot get animation duration"));
+                    }
                 }
             };
 
