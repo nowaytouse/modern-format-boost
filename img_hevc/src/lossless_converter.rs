@@ -170,10 +170,22 @@ pub fn convert_to_jxl(
                                             })
                                         });
 
+                                    // Drain cjxl stderr in background so cjxl does not block when pipe buffer fills.
+                                    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|mut stderr| {
+                                        std::thread::spawn(move || {
+                                            let mut buf = String::new();
+                                            let _ = std::io::Read::read_to_string(&mut stderr, &mut buf);
+                                            buf
+                                        })
+                                    });
+
                                     let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
 
                                     let ffmpeg_stderr_str = ffmpeg_stderr_thread
+                                        .and_then(|h| h.join().ok())
+                                        .unwrap_or_default();
+                                    let cjxl_stderr_str = cjxl_stderr_thread
                                         .and_then(|h| h.join().ok())
                                         .unwrap_or_default();
 
@@ -208,17 +220,14 @@ pub fn convert_to_jxl(
                                                 "   ❌ cjxl failed with exit code: {:?}",
                                                 status.code()
                                             );
-                                            if let Some(mut stderr) = cjxl_proc.stderr {
-                                                use std::io::Read;
-                                                let mut err = String::new();
-                                                if stderr.read_to_string(&mut err).is_ok()
-                                                    && !err.is_empty()
-                                                {
-                                                    eprintln!(
-                                                        "      Error: {}",
-                                                        err.lines().next().unwrap_or("Unknown")
-                                                    );
-                                                }
+                                            if !cjxl_stderr_str.is_empty() {
+                                                eprintln!(
+                                                    "      Error: {}",
+                                                    cjxl_stderr_str
+                                                        .lines()
+                                                        .next()
+                                                        .unwrap_or("Unknown")
+                                                );
                                             }
                                             false
                                         }
