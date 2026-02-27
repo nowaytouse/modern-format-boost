@@ -113,6 +113,14 @@ enum Commands {
 
         #[arg(long)]
         no_allow_size_tolerance: bool,
+
+        /// Resume from last run: skip files already in progress file (default).
+        #[arg(long, default_value_t = true)]
+        resume: bool,
+
+        /// Start fresh: ignore previous progress file, process all files.
+        #[arg(long)]
+        no_resume: bool,
     },
 
     Verify {
@@ -179,7 +187,10 @@ fn main() -> anyhow::Result<()> {
             child_threads,
             allow_size_tolerance,
             no_allow_size_tolerance,
+            resume: resume_flag,
+            no_resume,
         } => {
+            let resume = resume_flag && !no_resume;
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
             let should_delete = delete_original || in_place;
@@ -205,6 +216,10 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);
+            // Run 时自动写入当前目录的 img_av1_run.log（质量/进度始终有据可查）
+            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_av1") {
+                eprintln!("⚠️  Could not open default log file: {}", e);
+            }
             if apple_compat {
                 eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
@@ -259,7 +274,28 @@ fn main() -> anyhow::Result<()> {
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
+                let progress_path = output.as_ref().unwrap_or(&input).join(".mfb_processed");
+                if resume {
+                    if let Err(e) = shared_utils::load_processed_list(&progress_path) {
+                        if config.verbose {
+                            eprintln!("⚠️  Could not load progress file: {}", e);
+                        }
+                    } else if config.verbose && progress_path.exists() {
+                        println!("📂 Resume: loading progress from {}", progress_path.display());
+                    }
+                } else {
+                    shared_utils::clear_processed_list();
+                    let _ = std::fs::remove_file(&progress_path);
+                    if config.verbose {
+                        println!("📂 Fresh run: previous progress cleared");
+                    }
+                }
                 auto_convert_directory(&input, &config)?;
+                if let Err(e) = shared_utils::save_processed_list(&progress_path) {
+                    if config.verbose {
+                        eprintln!("⚠️  Could not save progress file: {}", e);
+                    }
+                }
             } else {
                 eprintln!("❌ Error: Input path does not exist: {}", input.display());
                 std::process::exit(1);
@@ -632,6 +668,26 @@ fn auto_convert_single_file(
 
     let analysis = analyze_image(input)?;
 
+    // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
+    if !analysis.is_animated {
+        let skip = shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
+        if skip.should_skip {
+            if config.verbose {
+                println!("⏭️ {}: {}", skip.reason, input.display());
+            }
+            copy_original_if_adjacent_mode(input, config)?;
+            return Ok(ConversionOutput {
+                original_path: input.display().to_string(),
+                output_path: input.display().to_string(),
+                skipped: true,
+                message: skip.reason,
+                original_size: analysis.file_size,
+                output_size: None,
+                size_reduction: None,
+            });
+        }
+    }
+
     let options = ConvertOptions {
         force: config.force,
         output_dir: config.output_dir.clone(),
@@ -649,6 +705,40 @@ fn auto_convert_single_file(
         child_threads: config.child_threads,
         input_format: Some(analysis.format.clone()),
     };
+
+    // 完整接入图像质量分析：静态图始终做像素级分析，用于路由 + 质量输出（自动写入 run log）
+    let pixel_analysis = if !analysis.is_animated {
+        shared_utils::analyze_image_quality_from_path(input)
+    } else {
+        None
+    };
+    if let Some(ref q) = pixel_analysis {
+        shared_utils::log_media_info_for_image_quality(q, input);
+    }
+    // 路由：像素级建议跳过则跳过（与 format 级互补）
+    #[allow(deprecated)]
+    if let Some(ref q) = pixel_analysis {
+        let rd = &q.routing_decision;
+        if rd.should_skip {
+            let msg = rd
+                .skip_reason
+                .clone()
+                .unwrap_or_else(|| "Pixel-based: skip".to_string());
+            if config.verbose {
+                println!("⏭️ {}: {}", msg, input.display());
+            }
+            copy_original_if_adjacent_mode(input, config)?;
+            return Ok(ConversionOutput {
+                original_path: input.display().to_string(),
+                output_path: input.display().to_string(),
+                skipped: true,
+                message: msg,
+                original_size: analysis.file_size,
+                output_size: None,
+                size_reduction: None,
+            });
+        }
+    }
 
     macro_rules! verbose_log {
         ($($arg:tt)*) => {
@@ -682,17 +772,7 @@ fn auto_convert_single_file(
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
-        ("WebP", false, false)
-        | ("AVIF", false, false)
-        | ("HEIC", false, false)
-        | ("HEIF", false, false) => {
-            verbose_log!(
-                "⏭️ Skipping modern lossy format (avoid generation loss): {}",
-                input.display()
-            );
-            copy_original_if_adjacent_mode(input, config)?;
-            return Ok(make_skipped("Skipping modern lossy format"));
-        }
+        // Static modern lossy / JXL already handled by should_skip_image_format above.
 
         ("JPEG", _, false) => {
             if config.match_quality {
@@ -786,19 +866,35 @@ fn auto_convert_single_file(
                 convert_to_av1_mp4_matched(input, &options, &analysis)?
             }
         }
-        (format, false, false) => {
-            if format == "WebP" || format == "AVIF" || format == "HEIC" || format == "HEIF" {
-                verbose_log!("⏭️ Skipping modern lossy format: {}", input.display());
-                copy_original_if_adjacent_mode(input, config)?;
-                return Ok(make_skipped("Skipping modern lossy format"));
-            }
-
+        (_, false, false) => {
+            // Modern lossy static already skipped above; only legacy lossy reach here.
             if config.match_quality {
                 verbose_log!("🔄 Legacy Lossy→JXL (MATCH QUALITY): {}", input.display());
                 convert_to_jxl_matched(input, &options, &analysis)?
             } else {
-                verbose_log!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
-                convert_to_jxl(input, &options, 0.1)?
+                // 路由：像素级建议无损则用 0.0，否则 0.1
+                #[allow(deprecated)]
+                let jxl_distance = match &pixel_analysis {
+                    Some(q) => {
+                        let rd = &q.routing_decision;
+                        if rd.use_lossless {
+                            0.0
+                        } else {
+                            0.1
+                        }
+                    }
+                    None => 0.1,
+                };
+                verbose_log!(
+                    "🔄 Legacy Lossy→JXL ({}): {}",
+                    if jxl_distance == 0.0 {
+                        "Lossless"
+                    } else {
+                        "Quality 100"
+                    },
+                    input.display()
+                );
+                convert_to_jxl(input, &options, jxl_distance)?
             }
         }
     };
@@ -954,6 +1050,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     shared_utils::progress_mode::disable_quiet_mode();
     shared_utils::progress_mode::xmp_merge_finalize();
+    shared_utils::progress_mode::flush_log_file();
 
     let success_count = success.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);

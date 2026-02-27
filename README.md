@@ -31,7 +31,7 @@ Unlike simple converters, it features a robust **"Self-Healing" engine** specifi
 | **JPEG** | 有损 / Lossy | **JXL** | **DCT 系数保留转码** (Zero quality loss!) |
 | **WebP / AVIF** | 无损 / Lossless | **JXL** | 跨格式无损迁移，更佳的归档效率 |
 | **WebP / AVIF / HEIC** | 有损 / Lossy | **跳过 / SKIP** | **防止二代损耗** (Avoid generation loss) |
-| **GIF / 动态图片** | 任意 (时长>=3s) | **MP4** | **智能 SSIM 裁判** 寻找视觉无损平衡点 |
+| **GIF / 动态图片** | 任意 (时长≥4.5s) | **MP4** | **智能 SSIM 裁判** 寻找视觉无损平衡点 |
 | **损坏/有毒元数据** | 任意状态 | **Repair** | **元数据全量重构** + 结构修复 (Fix for Apple) |
 
 ---
@@ -106,6 +106,18 @@ For advanced users:
 # Video: analyze or run (AV1)
 ./target/release/vid-av1 analyze /path/to/video
 ./target/release/vid-av1 run /path/to/videos --output /path/to/out
+```
+
+### 断点续传 / Resume
+
+图像 Run（目录）支持断点续传：进度写入 `输出目录/.mfb_processed`（未指定 `--output` 时用输入目录）。再次运行会跳过已处理文件。
+
+- **默认**：`--resume`（从上次进度继续）
+- **重新开始**：`--no-resume`（忽略进度文件，处理全部文件）
+
+```bash
+./target/release/img-hevc run /path/to/photos --output /path/to/out   # 续传
+./target/release/img-hevc run /path/to/photos --no-resume             # 重新开始
 ```
 
 ---

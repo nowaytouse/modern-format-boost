@@ -1,0 +1,193 @@
+# 未使用代码与“仅测试出现”功能审计
+
+本文档说明：为何存在仅在测试中出现的功能、这些代码的实际用途、以及更多未使用/死代码的彻查结果。
+
+**说明**：以下列出的「未使用」或「仅测试」符号**保留不删**，不再以“死函数”为由移除；仅作审计与后续可选优化参考。
+
+---
+
+## 一、为何会有“仅在测试出现”的功能
+
+常见原因：
+
+1. **设计了两套方案，只接了一套**  
+   早期或并行设计了「基于像素的质量检测」与「基于容器/元数据的检测」，最终主流程只接了后者，前者保留为模块并写了大量单元测试，但从未在 img_hevc/img_av1 主路径中调用。
+
+2. **预留 API / 未完成的集成**  
+   如 `analyze_quality`、`check_avif_lossless` 等声明为 pub、文档写好了，但实现是 `NotImplemented` 或恒返回 false，也无人调用，属于未完成或预留接口。
+
+3. **旧实现被新实现替代，旧 API 未删**  
+   如 `generate_recommendation(format, is_lossless, is_animated, path)` 与后来的 `image_recommender::get_recommendation(ImageAnalysis)` 功能重叠，主流程只用后者，前者仅测试保留。
+
+4. **统一抽象与各端分支重复实现**  
+   如 `should_skip_image_format(format, is_lossless)` 与 main 里手写 `(format, is_lossless, is_animated)` 分支逻辑重复，主流程从未调用该函数，只在本模块测试里用。
+
+（原「已废弃但未删除的入口」如 `full_explore`、`quick_explore` 已**彻底删除**：从 video_explorer 与 lib 导出中移除，无生产调用。）
+
+---
+
+## 二、未使用代码逐项说明（功能与现状）
+
+### 2.1 图像：image_quality_detector（质量维度已接入，仅路由未用）
+
+| 符号 | 功能简述 | 现状 |
+|------|----------|------|
+| **analyze_image_quality** | 输入 (宽高 + RGBA 像素 + 文件大小 + 格式 + 帧数)，输出边缘密度、色彩多样性、纹理方差、内容类型、compression_potential 等 | 由 **analyze_image_quality_from_path** 在需要时加载像素后调用；路由仍不依赖本函数（主流程用 image_analyzer + image_recommender）。 |
+| **analyze_image_quality_from_path** | 按路径加载图像为 RGBA，调用 analyze_image_quality，返回质量维度 | **已用**：img_hevc / img_av1 在 run 且配置了 log 文件、静态图时调用，用于质量判断输出。 |
+| **log_media_info_for_image_quality** | 将 ImageQualityAnalysis 格式化为多行，**仅写入日志文件**（不输出到终端） | **已用**：同上，与视频的 log_media_info_for_quality 一致。 |
+| **ImageQualityAnalysis** | 分析结果（complexity, edge_density, content_type, compression_potential 等） | 随 from_path 与 log 在生产中用于质量维度输出。 |
+| **RoutingDecision** | primary_format, alternatives, use_lossless, should_skip 等 | 仍为 `#[deprecated]`：主路径格式路由不使用；仅作为 ImageQualityAnalysis 字段保留兼容。 |
+| **ImageContentType** | Photo/Artwork/Screenshot/Icon/Animation/Graphic/Unknown 等 | 在日志中输出，供质量判断与调参参考。 |
+
+**结论**：像素级质量维度（content_type, complexity, compression_potential, edge_density 等）已接入：在配置了 log 文件且为静态图时，run 会加载像素、调用 `analyze_image_quality_from_path` 并将结果写入 log（README 的「判断质量输出」）。格式路由仍仅用 image_analyzer + image_recommender，不使用本模块的 RoutingDecision。
+
+**已做**：路由用途保持 `#[deprecated]`；新增 `analyze_image_quality_from_path`、`log_media_info_for_image_quality`，并在 img_hevc / img_av1 的 auto_convert_single_file 中在转换前按需调用并仅写 log。
+
+**接入前后行为对比（与 README 路由的关系）**  
+- **接入前**：图像转换**已按 README 表格执行**——用 `image_analyzer`（格式/无损）+ `should_skip_image_format` 做「检测格式 → 选择目标（JXL/AVIF/HEIC 或跳过）→ 转换（无损或质量匹配）」。缺少的是：① 没有基于像素的**质量维度输出**（无 content_type、complexity、compression_potential 等）；② 没有用像素级结果参与**路由**（是否跳过、无损 vs 有损）。  
+- **接入后**：在保持上述格式级路由不变的前提下，增加：① 对每个待转换的静态图做像素级分析，将质量维度写入 run log（`[Image quality]`）；② 用 `routing_decision.should_skip` 再跳过（与格式级互补）；③ 在「Legacy Lossy→JXL」分支用 `routing_decision.use_lossless` 决定 JXL distance 0.0 或 0.1。即：**接入前已按 README 做格式级路由，接入后补上了质量输出与像素级路由参与**。
+
+---
+
+### 2.2 图像：quality_matcher::should_skip_image_format → 已统一
+
+| 对比项 | main 手写分支 | should_skip_image_format |
+|--------|----------------|---------------------------|
+| **输入** | (format, is_lossless, is_animated) 三元组 | (format_str, is_lossless) 二元；不区分动图 |
+| **格式识别** | 精确字符串 "WebP","AVIF","HEIC","HEIF","JXL" | parse_source_codec：大小写不敏感，"jxl"/"jpeg xl","avif","heic"/"heif","webp" → 统一 codec |
+| **跳过条件** | JXL 单独提前 return；静态现代有损用 (WebP\|AVIF\|HEIC\|HEIF, false, false)；末臂再判 format 是否现代有损 | is_modern_lossy = !is_lossless && (WebpStatic\|Avif\|Heic\|JpegXl)；is_jxl = (codec==JpegXl)；should_skip = is_modern_lossy \|\| is_jxl |
+| **动图** | 单独分支：时长、apple_compat、HEIC 原生、GIF/HEVC 等 | 不处理；仅静态「现代有损 / JXL」 |
+| **结论** | 静态跳过与函数等价；动图需 main 保留（apple_compat/时长/HEIC 原生等）。**最佳**：静态跳过以 should_skip_image_format 为单源真相，动图逻辑保留在 main。 |
+
+**已做**：main 在 `!analysis.is_animated` 时调用 `should_skip_image_format(analysis.format.as_str(), analysis.is_lossless)`，若 `should_skip` 则直接 return；移除重复的 JXL 提前判断与静态现代有损的 match 臂，实现统一。
+
+---
+
+### 2.3 图像：image_quality_core → **已删除**
+
+该模块（`shared_utils/src/image_quality_core.rs`）整文件未使用、属早期废弃设计，**已彻底删除**：删除 `image_quality_core.rs`，移除 shared_utils 的 `pub mod image_quality_core`，删除 img_hevc/img_av1 的 `quality_core.rs` 及对 `ConversionRecommendation`、`QualityAnalysis`、`QualityParams` 的 re-export。质量分析与推荐逻辑由 **image_analyzer**、**image_quality_detector**、**image_recommender** 承担。
+
+---
+
+### 2.4 视频：video_quality_detector（部分已接入）
+
+| 符号 | 功能简述 | 现状 |
+|------|----------|------|
+| **analyze_video_quality_from_detection** | 从 VideoDetectionResult 构建 VideoQualityAnalysis | **已用**：vid_hevc/vid_av1 在 SSIM 探索前调用，用于搭配 SSIM 的媒体信息展示。 |
+| **log_media_info_for_quality** | 将 VideoQualityAnalysis 格式化为多行，**仅写入日志文件**（不输出到终端） | **已用**：同上，在配置了 log file 时写入 codec/分辨率/码率/bpp/content_type 等。 |
+| **analyze_video_quality(...)** | 底层多参数分析（被 from_detection 调用） | 通过 from_detection 间接使用。 |
+| ~~**VideoRoutingDecision**~~ | ~~路由结论（primary_format/encoder/recommended_crf 等）~~ | **已删除**：结构体与 make_video_routing_decision 已移除；主流程始终用 video_detection + quality_matcher 做路由。 |
+| **to_quality_analysis** | 将 VideoQualityAnalysis 转为 quality_matcher::QualityAnalysis | 仍仅本模块及测试；主流程用 from_video_detection 构建。 |
+| **ChromaSubsampling, VideoCodecType, VideoContentType, CompressionLevel** | 视频分析用枚举/类型 | 作为 VideoQualityAnalysis 字段在日志中展示。 |
+
+**结论**：主流程路由仍用 video_detection + quality_matcher；**媒体信息**在 SSIM/质量探索时通过 analyze_video_quality_from_detection + log_media_info_for_quality 写入日志文件，终端不显示。
+
+---
+
+### 2.5 已废弃且无生产调用的导出（含已删除）
+
+| 符号 | 位置 | 说明 |
+|------|------|------|
+| ~~**full_explore**~~ ~~**quick_explore**~~ | ~~video_explorer~~ | **已删除**：已从 video_explorer 与 lib 导出中移除；原无生产调用，替代为 explore_size_only / explore_precise_quality_match。 |
+| **explore_compress_only_gpu** 等一批 `*_gpu` | video_explorer | 部分带 deprecated，实际探索路径走 explore_hevc_with_gpu_coarse 等，不直接调这些。 |
+| **SsimCalculationResult / SsimDataSource** | explore_strategy | 类型别名 deprecated，建议用 SsimResult / SsimSource。 |
+| **realtime_progress 中某旧类型** | realtime_progress | deprecated，建议用 SimpleIterationProgress。 |
+| **estimate_cpu_search_center 的旧版** | gpu_accel | deprecated，用 estimate_cpu_search_center 替代。 |
+
+---
+
+## 三、更多未使用/弱使用项（彻查摘要）
+
+- **image_quality_core::QualityAnalysis/ConversionRecommendation/QualityParams**  
+  在 img_hevc 中仅作类型 re-export，无任何业务逻辑使用；实际推荐与质量类型来自 image_analyzer + image_recommender + quality_matcher。
+
+- **video_quality_detector**  
+  analyze_video_quality_from_detection、log_media_info_for_quality 已由 vid_hevc/vid_av1 使用。**to_quality_analysis**：仅模块内测试与 lib 导出，主流程用 quality_matcher::from_video_detection，无生产调用。
+
+- **image_quality_detector**  
+  已接入：analyze_image_quality_from_path、log_media_info_for_image_quality 及 routing_decision（should_skip/use_lossless）在 img_hevc/img_av1 run 中使用。analyze_image_quality 由 from_path 内部调用；RoutingDecision 仅作结构体字段，主路由仍以 image_analyzer + should_skip_image_format 为主。
+
+- **log_quality_analysis**  
+  有使用：vid_hevc/vid_av1 conversion_api、img_hevc/img_av1 lossless_converter。非死代码。
+
+- **from_video_detection**  
+  有使用：vid_av1 conversion_api。非死代码。
+
+---
+
+## 四、建议（可选后续动作）
+
+1. **明确“保留但未接入”的模块**  
+   若计划日后接入「像素级图像质量」或「video_quality_detector 路由」：在模块顶或 README 注明「当前未接入主流程，仅测试与 API 保留」，避免误以为已在用。
+
+2. **删除或收敛未用 API**  
+   - 确定永不接入：可考虑删除或改为 `pub(crate)`，并删掉仅覆盖这些 API 的测试，减少维护成本。  
+   - 保留作备用：保留代码但去掉从 lib 的公开 re-export，仅 crate 内可用。
+
+3. **未实现/占位 API**  
+   - `analyze_quality`、`check_avif_lossless`：要么实现并接入，要么改为返回 `Option`/明确“未实现”文档并移除 pub，避免被误用。
+
+4. **废弃 API**  
+   - ~~`full_explore`、`quick_explore`~~：**已删除**。其余已 deprecated 且无调用方者可视情况在下一大版本移除或改为 `pub(crate)`。
+
+5. **统一图像跳过逻辑**  
+   若希望单源真相：可让 main 的分发逻辑改为调用 `should_skip_image_format(analysis.format.as_str(), analysis.is_lossless)`，再根据 SkipDecision 分支，避免与手写分支重复。
+
+---
+
+## 五、汇总表
+
+| 类别 | 模块/符号 | 生产使用 | 仅测试/未实现/废弃 |
+|------|-----------|----------|----------------------|
+| 图像 | image_quality_detector（from_path / log / routing） | **已用**（img_hevc、img_av1 run） | RoutingDecision 仅作字段保留 |
+| 图像 | should_skip_image_format | **已用**（静态跳过单源） | — |
+| 图像 | ~~image_quality_core~~ | — | **已删除**（整文件未使用、早期废弃） |
+| 视频 | video_quality_detector（from_detection / log） | **已用**（vid_hevc、vid_av1） | to_quality_analysis 仅测试/导出 |
+| 视频 | ~~full_explore, quick_explore~~ | — | **已删除** |
+| 其它 | 若干 deprecated 类型/函数；load/save/clear_processed_list；print_flag_help；calculate_bpp；部分 explore_*_gpu；count_all_files | 无 | 见第六节 |
+
+上述项均为「从未被主流程使用的代码或从未实现的占位 API」，可按产品与维护策略决定保留、隐藏或删除。
+
+---
+
+## 六、再次彻查：从未被调用的符号（2025 补充）
+
+以下为**从未被生产代码调用**的 API（仅定义/导出/测试内使用）。
+
+### 6.1 图像 / conversion
+
+| 符号 | 位置 | 说明 |
+|------|------|------|
+| **load_processed_list** | shared_utils/conversion.rs | 仅定义；img_hevc/img_av1 lossless_converter 仅 use，从未调用。 |
+| **save_processed_list** | shared_utils/conversion.rs | 同上。 |
+| **clear_processed_list** | shared_utils/conversion.rs | 同上。 |
+
+### 6.2 图像 / image_quality_core → **已删除**
+
+整模块已删除，见 2.3。
+
+### 6.3 视频 / video_quality_detector
+
+| 符号 | 说明 |
+|------|------|
+| **to_quality_analysis(analysis)** | 仅模块内测试与 lib 导出；主流程用 quality_matcher::from_video_detection。 |
+
+### 6.4 视频 / video_explorer（GPU 探索）
+
+| 符号 | 说明 |
+|------|------|
+| **explore_precise_quality_match_gpu** | 仅导出，无生产调用；vid_av1 实际调用的是 explore_precise_quality_match_**with_compression**_gpu。 |
+| **explore_compress_only_gpu** | 仅导出，无生产调用。 |
+| **explore_compress_with_quality_gpu** | 仅导出，无生产调用。 |
+| **explore_quality_match_gpu** | 仅导出，无生产调用。 |
+| **explore_size_only_gpu** | 仅导出，无生产调用。 |
+
+生产路径使用 explore_hevc_with_gpu_coarse* / explore_av1_with_gpu_coarse / explore_precise_quality_match_with_compression_gpu。
+
+### 6.5 其它
+
+| 符号 | 位置 | 说明 |
+|------|------|------|
+| **print_flag_help()** | flag_validator.rs | 仅导出，四个二进制均未调用。 |
+| **calculate_bpp(input)** | video_explorer/precheck.rs | 仅定义，无任何调用方。 |
+| **count_all_files** | lib 导出 (file_copier::count_files) | 仅 lib 导出，无二进制或其它 crate 调用。 |
