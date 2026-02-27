@@ -286,6 +286,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 );
                 let input_path = Path::new(&detection.file_path);
 
+                // Log media info to log file only (for SSIM/quality context); not shown on terminal.
+                if let Ok(quality_analysis) =
+                    shared_utils::analyze_video_quality_from_detection(&detection)
+                {
+                    shared_utils::log_media_info_for_quality(&quality_analysis, input_path);
+                }
+
                 let flag_mode = shared_utils::validate_flags_result_with_ultimate(
                     config.explore_smaller,
                     config.match_quality,

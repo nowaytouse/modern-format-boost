@@ -133,6 +133,16 @@ impl ColorSpace {
             _ => ColorSpace::Unknown(s.to_string()),
         }
     }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            ColorSpace::BT709 => "bt709",
+            ColorSpace::BT2020 => "bt2020",
+            ColorSpace::SRGB => "srgb",
+            ColorSpace::AdobeRGB => "adobergb",
+            ColorSpace::Unknown(s) => s.as_str(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
