@@ -67,21 +67,17 @@ pub fn convert_to_temp_png(
 
     match cmd.output() {
         Ok(output) if output.status.success() && temp_png.exists() => {
-            eprintln!(
-                "   {} {} {}",
-                style("🔧 PRE-PROCESSING:").cyan().bold(),
-                style(label).dim(),
-                style("→ ✅ done").green()
-            );
+            crate::progress_mode::preprocessing_success();
             Ok((temp_png, Some(temp_png_file)))
         }
         _ => {
-            eprintln!(
+            let line = format!(
                 "   {} {} {}",
                 style("🔧 PRE-PROCESSING:").cyan().bold(),
                 style(label).dim(),
                 style("→ ⚠️ failed, trying direct cjxl").yellow()
             );
+            crate::progress_mode::emit_stderr(&line);
             Ok((input.to_path_buf(), None))
         }
     }
@@ -120,7 +116,8 @@ fn run_imagemagick_cjxl_pipeline(
         .stderr(Stdio::piped());
 
     let mut magick_proc = magick.spawn().map_err(|e| {
-        let _ = eprintln!("   ❌ ImageMagick not available or failed to start: {}", e);
+        let line = format!("   ❌ ImageMagick not available or failed to start: {}", e);
+        crate::progress_mode::emit_stderr(&line);
         (false, false, String::new())
     })?;
 
@@ -151,7 +148,8 @@ fn run_imagemagick_cjxl_pipeline(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            eprintln!("   ❌ Failed to start cjxl process: {}", e);
+            let line = format!("   ❌ Failed to start cjxl process: {}", e);
+            crate::progress_mode::emit_stderr(&line);
             let _ = magick_proc.kill();
             (false, false, String::new())
         })?;
@@ -178,14 +176,17 @@ fn run_imagemagick_cjxl_pipeline(
     let magick_ok = match magick_status {
         Ok(status) if status.success() => true,
         Ok(status) => {
-            eprintln!("   ❌ ImageMagick failed with exit code: {:?}", status.code());
+            let line = format!("   ❌ ImageMagick failed with exit code: {:?}", status.code());
+            crate::progress_mode::emit_stderr(&line);
             if !magick_stderr.is_empty() {
-                eprintln!("   📋 ImageMagick stderr: {}", magick_stderr.lines().next().unwrap_or(""));
+                let line2 = format!("   📋 ImageMagick stderr: {}", magick_stderr.lines().next().unwrap_or(""));
+                crate::progress_mode::emit_stderr(&line2);
             }
             false
         }
         Err(e) => {
-            eprintln!("   ❌ Failed to wait for ImageMagick: {}", e);
+            let line = format!("   ❌ Failed to wait for ImageMagick: {}", e);
+            crate::progress_mode::emit_stderr(&line);
             false
         }
     };
@@ -193,14 +194,16 @@ fn run_imagemagick_cjxl_pipeline(
     let cjxl_ok = match cjxl_status {
         Ok(status) if status.success() => true,
         Ok(status) => {
-            eprintln!("   ❌ cjxl failed with exit code: {:?}", status.code());
+            let line = format!("   ❌ cjxl failed with exit code: {:?}", status.code());
+            crate::progress_mode::emit_stderr(&line);
             if !cjxl_stderr.is_empty() {
-                eprintln!("   📋 cjxl stderr: {}", cjxl_stderr);
+                crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {}", cjxl_stderr));
             }
             false
         }
         Err(e) => {
-            eprintln!("   ❌ Failed to wait for cjxl: {}", e);
+            let line = format!("   ❌ Failed to wait for cjxl: {}", e);
+            crate::progress_mode::emit_stderr(&line);
             false
         }
     };
@@ -225,41 +228,41 @@ pub fn try_imagemagick_fallback(
     distance: f32,
     max_threads: usize,
 ) -> std::result::Result<std::process::Output, std::io::Error> {
-    eprintln!("   🔧 ImageMagick → cjxl pipeline");
-
     // First attempt: no -strip, preserve metadata
     match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, false) {
         Ok(out) => {
-            eprintln!("   🎉 ImageMagick pipeline completed successfully");
+            crate::progress_mode::fallback_success();
             return Ok(out);
         }
         Err((magick_ok, cjxl_ok, stderr)) => {
-            eprintln!(
+            let line = format!(
                 "   ❌ ImageMagick pipeline failed for file: {} (magick: {}, cjxl: {})",
                 input.display(),
                 if magick_ok { "✓" } else { "✗" },
                 if cjxl_ok { "✓" } else { "✗" }
             );
+            crate::progress_mode::emit_stderr(&line);
             // Retry with -strip only when cjxl failed and reason is grayscale+ICC.
             // -strip only affects the intermediate PNG→JXL stream. The final JXL still receives
             // full metadata from the original file in finalize_conversion (ExifTool -tagsfromfile
             // from original → output), so EXIF/ICC/XMP/timestamps are preserved in the output.
             if magick_ok && !cjxl_ok && is_grayscale_icc_cjxl_error(&stderr) {
-                eprintln!(
-                    "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl); output will still get metadata from original in finalize step"
+                crate::progress_mode::emit_stderr(
+                    "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl); output will still get metadata from original in finalize step",
                 );
                 match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true) {
                     Ok(out) => {
-                        eprintln!("   🎉 ImageMagick pipeline completed (with -strip fallback)");
+                        crate::progress_mode::fallback_success();
                         return Ok(out);
                     }
                     Err((m, c, _)) => {
-                        eprintln!(
+                        let line = format!(
                             "   ❌ ImageMagick retry failed for file: {} (magick: {}, cjxl: {})",
                             input.display(),
                             if m { "✓" } else { "✗" },
                             if c { "✓" } else { "✗" }
                         );
+                        crate::progress_mode::emit_stderr(&line);
                     }
                 }
             }

@@ -217,14 +217,14 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 
-/// Emit a line to stderr via tracing (and to run log when level allows).
-/// Run log only gets the line when configured level includes INFO (so level has real effect).
+/// Emit a line to stderr via tracing (and to run log when a log file is configured).
+/// Run log always receives the line when configured so the file is complete and unfiltered.
 /// Applies a uniform 2-space indent so multi-line blocks (e.g. precheck report) stay aligned.
 /// When stderr is not a TTY (e.g. redirect/script), ANSI is stripped so output is plain text.
 #[inline]
 pub fn emit_stderr(line: &str) {
     if has_log_file() {
-        write_to_log_at_level(Level::INFO, line);
+        write_to_log(line);
     }
     use std::borrow::Cow;
     use std::io::IsTerminal;
@@ -367,6 +367,18 @@ static XMP_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static JXL_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static IMAGE_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static IMAGE_FAIL_COUNT: AtomicU64 = AtomicU64::new(0);
+static PREPROCESSING_COUNT: AtomicU64 = AtomicU64::new(0);
+static FALLBACK_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Call when a pre-processing step completes successfully (e.g. GIF→FFmpeg static frame). No per-line log; count is shown in the combined status line.
+pub fn preprocessing_success() {
+    PREPROCESSING_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Call when a fallback pipeline completes successfully (e.g. ImageMagick→cjxl, FFmpeg→cjxl). No per-line log; count is shown in the combined status line.
+pub fn fallback_success() {
+    FALLBACK_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Call when a JXL conversion completes successfully (e.g. from finalize_conversion).
 pub fn jxl_success() {
@@ -400,7 +412,9 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let xmp_done = false;
     let xmp_failed = xmp_total.saturating_sub(xmp_ok);
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
-    let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail);
+    let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
+    let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
     let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), msg);
     emit_stderr(&line);
 }
@@ -412,6 +426,8 @@ fn format_xmp_jxl_images_line(
     jxl_ok: u64,
     img_ok: u64,
     img_fail: u64,
+    preprocess_ok: u64,
+    fallback_ok: u64,
 ) -> String {
     let xmp_part = if xmp_done {
         if xmp_failed > 0 {
@@ -423,16 +439,22 @@ fn format_xmp_jxl_images_line(
         format!("XMP merge: {} OK", xmp_ok)
     };
     let images_ok = img_ok + jxl_ok;
+    let mut parts = vec![xmp_part];
     if images_ok > 0 || img_fail > 0 {
         let img_part = if img_fail > 0 {
             format!("Images: {} OK, {} failed", images_ok, img_fail)
         } else {
             format!("Images: {} OK", images_ok)
         };
-        format!("{}   {}", xmp_part, img_part)
-    } else {
-        xmp_part
+        parts.push(img_part);
     }
+    if preprocess_ok > 0 {
+        parts.push(format!("Pre-processing: {} done", preprocess_ok));
+    }
+    if fallback_ok > 0 {
+        parts.push(format!("Fallback: {} done", fallback_ok));
+    }
+    parts.join("   ")
 }
 
 /// Call when an XMP sidecar is found and a merge is about to be attempted.
@@ -462,26 +484,41 @@ pub fn xmp_merge_failure(msg: &str) {
 }
 
 /// Call after all processing is done to print the final summary.
-/// Same line shows XMP summary and Images OK/failed (JXL merged into Images) when non-zero.
+/// Same line shows XMP summary, Images OK/failed, and Pre-processing count when non-zero.
 pub fn xmp_merge_finalize() {
     let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     if total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
         let failed = total.saturating_sub(success);
-        let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail);
+        let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+        let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
         let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), msg);
         emit_stderr(&line);
-    } else if jxl_ok > 0 || img_ok > 0 || img_fail > 0 {
+    } else {
+        let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+        if jxl_ok > 0 || img_ok > 0 || img_fail > 0 || preprocess_ok > 0 || fallback_ok > 0 {
+        let mut parts = Vec::new();
         let images_ok = img_ok + jxl_ok;
-        let img_part = if img_fail > 0 {
-            format!("Images: {} OK, {} failed", images_ok, img_fail)
-        } else {
-            format!("Images: {} OK", images_ok)
-        };
-        let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), img_part);
+        if images_ok > 0 || img_fail > 0 {
+            let img_part = if img_fail > 0 {
+                format!("Images: {} OK, {} failed", images_ok, img_fail)
+            } else {
+                format!("Images: {} OK", images_ok)
+            };
+            parts.push(img_part);
+        }
+        if preprocess_ok > 0 {
+            parts.push(format!("Pre-processing: {} done", preprocess_ok));
+        }
+        if fallback_ok > 0 {
+            parts.push(format!("Fallback: {} done", fallback_ok));
+        }
+        let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), parts.join("   "));
         emit_stderr(&line);
+        }
     }
 }
