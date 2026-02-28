@@ -6,18 +6,56 @@ All notable changes to this project will be documented in this file.
 
 ## [0.8.8] - 2026-02-28
 
-### Version & Docs
+All changes below are since 8.7.0.
+
+### Version & docs
 - **Version numbering**: Switched from 8.x to **0.8.x**. Current release is **0.8.8**.
 - **Documentation**: README badge, RELEASE_NOTES, and CHANGELOG updated to 0.8.8.
 
-### Quality & Logging
-- **Enhanced verification failure reason**: When quality/size would pass but enhanced verification (duration match, output probe) fails, the failure reason is now surfaced in logs and UI instead of "unknown reason" or "total file not smaller". Added `ExploreResult.enhanced_verify_fail_reason` and use it in conversion_api and animated_image.
-- **Log level effectiveness**: Log level (TRACE/DEBUG/INFO/WARN/ERROR) now applies to direct run-log writes via `write_to_log_at_level` and `should_log(level)`. Removed `--log-file`; run logs are auto-created with timestamped names under `./logs/`.
-- **Regression tests**: Added tests using temp copies only (no original folder): `test_verify_after_encode_with_temp_copies_probe_fails`, and quality_check_line tests ensuring enhanced failure reason is shown.
+### Quality validation & failure reporting
+- **Enhanced verification failure reason**: When quality and file size would pass but enhanced verification fails (duration mismatch or output probe failure), the real reason is now shown instead of "unknown reason" or "total file not smaller". Added `ExploreResult.enhanced_verify_fail_reason`; set from `verify_after_encode` when it does not pass. QualityCheck log line shows "QualityCheck: FAILED (quality met but enhanced verification failed: &lt;reason&gt;)". conversion_api and animated_image use `enhanced_verify_fail_reason` for the former "unknown reason" branch.
+- **Output probe failure** (video): When output probe fails, `duration_match` / `has_video_stream` are set to `None` so `passed()` accepts the output with "Output probe failed" / "Accepting output (probe unavailable)" in details.
 
-### Fixes
-- **QualityCheck message**: When enhanced verification fails, log line now shows "QualityCheck: FAILED (quality met but enhanced verification failed: &lt;reason&gt;)" instead of the misleading "total file not smaller".
-- **Pipe handling**: No pipe-related errors in current logs; existing FFmpeg/x265/cjxl pipe drain and Broken pipe handling confirmed.
+### Logging system (overhaul)
+- **Log level has real effect**: Config level (default TRACE) and RUST_LOG apply to tracing; direct run-log writes use `write_to_log_at_level(level, line)` and `should_log(level)` so INFO/DEBUG/ERROR are respected everywhere.
+- **Run log comprehensive**: Init message, progress lines, emoji messages, and tracing events all reach the run log; forwarder and stored init message when run log opens.
+- **No `--log-file`**: Removed; run logs auto-created with timestamp under `./logs/`.
+- **System/temp logs**: Timestamp in filename; no 5-file or size limit by default.
+- **Run log lock**: Unix advisory exclusive lock (flock) when opening run log; doc for rename-while-open behavior.
+- **Emoji/status in run log**: User-facing emoji messages and progress updates written to run log via emit_stderr / write_progress_line_to_run_log.
+
+### XMP & progress
+- **XMP merge log**: JXL merged into "Images"; tag `[XMP]` → `[Info]`. Metadata Exiv2 fallback messages at INFO level.
+
+### Conversion & failure logging
+- **Conversion failure**: `log_conversion_failure(path, error)` writes full error to run log. JPEG→JXL tail / allow_jpeg_reconstruction flow and cjxl stderr in run log.
+
+### Regression tests
+- **Temp-copy test**: `test_verify_after_encode_with_temp_copies_probe_fails` (temp dir only). **QualityCheck line**: `format_quality_check_line` extracted; tests that enhanced reason is shown and "total file not smaller" is not when reason is set.
+
+### Image quality & format detection
+- **Image quality reliability**: AVIF/HEIC/JXL/PNG/TIFF/WebP and format extensions (QOI/JP2/ICO/TGA/EXR/FLIF/PSD/PNM/DDS); detect_compression unified; skip when already JXL; IMAGE_EXTENSIONS_FOR_CONVERT documented. **AVIF pixel fallback** on format-level Err. **image_quality_core** removed; use image_quality_detector.
+
+### Video codec & Apple fallback
+- **Normal**: Skip H.265/AV1/VP9/VVC/AV2. **Apple-compat**: Skip only H.265; convert AV1/VP9/VVC/AV2 to HEVC. **ProRes/DNxHD**: Strict only; no fallback on failure. **Apple fallback predicate**: by total file size only (total_size_ratio &lt; 1.01 with tolerance). P0–D6 audit: compress doc, safe_delete constants, reject size 0 temp.
+
+### Animated & WebP
+- **Min duration**: ANIMATED_MIN_DURATION_FOR_VIDEO_SECS = 4.5s. **WebP**: Native ANMF duration parse; no 5.0s fake default when duration unknown.
+
+### Resume
+- **img-hevc / img-av1**: --resume (default) / --no-resume; .mfb_processed in output or input dir.
+
+### Pipelines & memory
+- **x265**: encode_y4m_direct() when input is .y4m; stderr drain in jxl_utils and lossless_converter; FfmpegProcess stdout drain. **Spinner**: Killed:9 suppression; elapsed ≥ 0; pipeline failed path in message. **system_memory** + thread_manager: MFB_LOW_MEMORY, pressure-based parallel_tasks/child_threads cap.
+
+### Logging (additional)
+- Run logs under ./logs/ (gitignored); flush after each write; script save_log() merges VERBOSE_LOG_FILE into drag_drop_*.log.
+
+### Dependencies
+- libheif-rs 2.6.x; cargo update for transitive deps.
+
+### Scripts
+- **drag_and_drop_processor.sh**: No longer passes `--log-file`.
 
 ---
 
