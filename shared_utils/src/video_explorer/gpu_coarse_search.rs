@@ -16,6 +16,33 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     (output_size as f64 / denom - 1.0) * 100.0
 }
 
+/// Format the QualityCheck log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
+pub(crate) fn format_quality_check_line(
+    result: &ExploreResult,
+    quality_verification_skipped_for_format: bool,
+) -> String {
+    match (result.ms_ssim_passed, result.quality_passed) {
+        (_, true) => "   QualityCheck: PASSED (quality + total file size target met)".to_string(),
+        (Some(true), false) => {
+            if let Some(ref reason) = result.enhanced_verify_fail_reason {
+                format!(
+                    "   QualityCheck: FAILED (quality met but enhanced verification failed: {})",
+                    reason
+                )
+            } else {
+                "   QualityCheck: FAILED (quality met but total file not smaller)".to_string()
+            }
+        }
+        (Some(false), _) => {
+            "   QualityCheck: FAILED (below target or verification failed)".to_string()
+        }
+        (None, false) if quality_verification_skipped_for_format => {
+            "   QualityCheck: N/A (GIF/size-only, quality not measured)".to_string()
+        }
+        (None, false) => "   QualityCheck: FAILED (quality not verified)".to_string(),
+    }
+}
+
 pub fn explore_with_gpu_coarse_search(
     input: &Path,
     output: &Path,
@@ -668,16 +695,9 @@ pub fn explore_with_gpu_coarse_search(
     };
     result.log.push(quality_line);
 
-    let quality_check_line = match (result.ms_ssim_passed, result.quality_passed) {
-        (_, true) => "   QualityCheck: PASSED (quality + total file size target met)",
-        (Some(true), false) => "   QualityCheck: FAILED (quality met but total file not smaller)",
-        (Some(false), _) => "   QualityCheck: FAILED (below target or verification failed)",
-        (None, false) if quality_verification_skipped_for_format => {
-            "   QualityCheck: N/A (GIF/size-only, quality not measured)"
-        }
-        (None, false) => "   QualityCheck: FAILED (quality not verified)",
-    };
-    result.log.push(quality_check_line.to_string());
+    let quality_check_line =
+        format_quality_check_line(&result, quality_verification_skipped_for_format);
+    result.log.push(quality_check_line);
 
     crate::log_eprintln!();
 
@@ -1741,6 +1761,11 @@ fn cpu_fine_tune_from_gpu_boundary(
     for d in &enhanced.details {
         crate::verbose_eprintln!("      {}", d);
     }
+    let enhanced_verify_fail_reason = if enhanced.passed() {
+        None
+    } else {
+        Some(enhanced.message.clone())
+    };
     let quality_passed = quality_passed && enhanced.passed();
 
     let total_file_pct = if input_size == 0 {
@@ -1782,6 +1807,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         ms_ssim_score: None,
         iterations,
         quality_passed,
+        enhanced_verify_fail_reason,
         log,
         confidence,
         confidence_detail,
