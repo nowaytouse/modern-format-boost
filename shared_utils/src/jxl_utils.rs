@@ -277,3 +277,29 @@ pub fn try_imagemagick_fallback(
         "ImageMagick fallback pipeline failed",
     ))
 }
+
+/// Losslessly strip trailing data after JPEG EOI (0xFF 0xD9) so cjxl can use bitstream reconstruction.
+/// Returns (temp_path, guard) if tail was stripped, or None if no tail or strip failed.
+pub fn strip_jpeg_tail_to_temp(path: &Path) -> std::io::Result<Option<(std::path::PathBuf, tempfile::NamedTempFile)>> {
+    let data = std::fs::read(path)?;
+    if data.len() < 2 {
+        return Ok(None);
+    }
+    let last_eoi = data
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0] == 0xFF && w[1] == 0xD9)
+        .map(|(i, _)| i + 1)
+        .last();
+    let end = match last_eoi {
+        Some(e) if e < data.len() => e,
+        _ => return Ok(None),
+    };
+    if end == data.len() {
+        return Ok(None);
+    }
+    let temp = tempfile::Builder::new().suffix(".jpg").tempfile()?;
+    std::fs::write(temp.path(), &data[..end])?;
+    let temp_path = temp.path().to_path_buf();
+    Ok(Some((temp_path, temp)))
+}

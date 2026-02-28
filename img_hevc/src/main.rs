@@ -1077,7 +1077,9 @@ fn auto_convert_directory(
                     if msg.contains("Skipped") || msg.contains("skip") {
                         skipped.fetch_add(1, Ordering::Relaxed);
                     } else {
+                        let err_str = e.to_string();
                         eprintln!("❌ Conversion failed {}: {}", path.display(), e);
+                        shared_utils::progress_mode::log_conversion_failure(path, &err_str);
                         failed.fetch_add(1, Ordering::Relaxed);
                         shared_utils::progress_mode::image_processed_failure();
 
