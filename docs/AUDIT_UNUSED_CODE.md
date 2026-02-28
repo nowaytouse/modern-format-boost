@@ -239,6 +239,17 @@
 
 **结论**：当前日志中与「转换失败 / 验证伪造 / 元数据合并」相关的，仅包含上述已修复项；其余均为探索与质量未达标的正常输出，无需再修。
 
+#### 日志输出到文件的缺陷与修复（drag_drop 信息量少、未记录最完整输出）
+
+- **原因**：  
+  1. **drag_drop_*.log**：由脚本 `tee` 得到的是**二进制 stderr**（eprintln! / log_eprintln!）。Rust 里大量内容只走 **write_to_log()**（如 log_conversion_failure、XMP 失败、verbose_eprintln! 在非 verbose 时），写入的是 `--log-file` 指定的 **verbose_XXX.log**，不会出现在 session log 里。  
+  2. **img_hevc_run.log**：直接运行 img_hevc 时由 set_default_run_log_file 写入，内容完整；但通过脚本跑时若传了 `--log-file`，则写入 verbose_XXX.log，不写 img_hevc_run.log。  
+  3. **关键写入未 flush**：BufWriter 缓冲导致进程异常退出时，最后几条 write_to_log 可能未落盘。
+- **修改**：  
+  1. **脚本**（`scripts/drag_and_drop_processor.sh`）：在 `save_log()` 里，在统计 footer 之前，将 **VERBOSE_LOG_FILE**（img_hevc + vid_hevc 的 run log）整段追加到 **LOG_FILE**（drag_drop_*.log），并加「📋 Full run log」分隔，使**单次 session log 即包含完整 run log**。  
+  2. **Rust**（`shared_utils/src/progress_mode.rs`）：`log_conversion_failure`、`xmp_merge_failure` 在 `write_to_log` 后立即 **flush_log_file()**，避免关键失败行因缓冲未写入。
+- **结果**：drag_drop_*.log 同时拥有「脚本 + 二进制 stderr」与「Rust 内部完整 run log」；关键失败行会及时落盘。
+
 #### 用户五类问题复查（日志 / 动图验证 / XMP / 进度 / 其他）
 
 | # | 问题 | 状态 | 说明 |
