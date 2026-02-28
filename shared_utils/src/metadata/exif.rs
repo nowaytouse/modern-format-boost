@@ -164,6 +164,12 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     }
 
+    // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
+    if let Some(name) = dst.file_name() {
+        let tmp_path = dst.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
     let ext = dst
         .extension()
         .map_or(String::new(), |e| e.to_string_lossy().to_lowercase());

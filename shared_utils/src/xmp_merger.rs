@@ -586,6 +586,12 @@ impl XmpMerger {
         args.push("-FileModifyDate<FileModifyDate".to_string());
         args.push(crate::safe_path_arg(media_path).as_ref().to_string());
 
+        // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
+        if let Some(name) = media_path.file_name() {
+            let tmp_path = media_path.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+
         let output = Command::new("exiftool")
             .args(&args)
             .output()

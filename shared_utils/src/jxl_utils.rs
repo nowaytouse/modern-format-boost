@@ -48,11 +48,6 @@ pub fn convert_to_temp_png(
     label: &str,
 ) -> std::io::Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
     use console::style;
-    eprintln!(
-        "   {} {}",
-        style("🔧 PRE-PROCESSING:").cyan().bold(),
-        style(label).dim()
-    );
 
     let temp_png_file = tempfile::Builder::new().suffix(".png").tempfile()?;
     let temp_png = temp_png_file.path().to_path_buf();
@@ -73,21 +68,19 @@ pub fn convert_to_temp_png(
     match cmd.output() {
         Ok(output) if output.status.success() && temp_png.exists() => {
             eprintln!(
-                "   {} {}",
-                style("✅").green(),
-                style(format!("{} pre-processing successful", tool)).green()
+                "   {} {} {}",
+                style("🔧 PRE-PROCESSING:").cyan().bold(),
+                style(label).dim(),
+                style("→ ✅ done").green()
             );
             Ok((temp_png, Some(temp_png_file)))
         }
         _ => {
             eprintln!(
-                "   {} {}",
-                style("⚠️").yellow(),
-                style(format!(
-                    "{} pre-processing failed, trying direct cjxl",
-                    tool
-                ))
-                .dim()
+                "   {} {} {}",
+                style("🔧 PRE-PROCESSING:").cyan().bold(),
+                style(label).dim(),
+                style("→ ⚠️ failed, trying direct cjxl").yellow()
             );
             Ok((input.to_path_buf(), None))
         }
