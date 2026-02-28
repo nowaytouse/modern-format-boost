@@ -119,10 +119,12 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
 
 /// Write a line to the log file (no-op if no log file is configured).
 /// Does NOT write to stderr — use log_eprintln! or verbose_eprintln! for dual output.
+/// Flushes after each write so log output is immediate (no loss on crash/kill).
 pub fn write_to_log(line: &str) {
     if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
         if let Some(ref mut w) = *guard {
             let _ = writeln!(w, "{}", line);
+            let _ = w.flush();
         }
     }
 }
@@ -133,7 +135,6 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
     if has_log_file() {
         let line = format!("❌ Conversion failed {}: {}", path.display(), error);
         write_to_log(&line);
-        flush_log_file();
     }
 }
 
@@ -382,7 +383,6 @@ pub fn xmp_merge_failure(msg: &str) {
         format!("⚠️  XMP merge failed: {}", msg)
     );
     write_to_log(&line);
-    flush_log_file();
     emit_stderr(&line);
 }
 
