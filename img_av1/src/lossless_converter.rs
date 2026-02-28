@@ -123,6 +123,36 @@ pub fn convert_to_jxl(
     }
 }
 
+/// True when cjxl failed with "JPEG bitstream reconstruction data could not be created" / "allow_jpeg_reconstruction".
+fn is_jpeg_reconstruction_cjxl_error(stderr: &str) -> bool {
+    stderr.contains("allow_jpeg_reconstruction")
+        || stderr.contains("bitstream reconstruction data could not be created")
+        || stderr.contains("too much tail data")
+}
+
+fn run_cjxl_jpeg_transcode(
+    input: &Path,
+    temp_output: &Path,
+    options: &ConvertOptions,
+    allow_jpeg_reconstruction: Option<u8>,
+) -> std::io::Result<std::process::Output> {
+    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
+    let mut cmd = Command::new("cjxl");
+    cmd.arg("--lossless_jpeg=1")
+        .arg("-j")
+        .arg(max_threads.to_string());
+    if let Some(v) = allow_jpeg_reconstruction {
+        cmd.arg("--allow_jpeg_reconstruction").arg(v.to_string());
+    }
+    if options.apple_compat {
+        cmd.arg("--compress_boxes=0");
+    }
+    cmd.arg("--")
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(temp_output).as_ref());
+    cmd.output()
+}
+
 pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
@@ -141,56 +171,96 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
-    let mut cmd = Command::new("cjxl");
-    cmd.arg("--lossless_jpeg=1")
-        .arg("-j")
-        .arg(max_threads.to_string());
+    let result = run_cjxl_jpeg_transcode(input, &temp_output, options, None);
 
-    if options.apple_compat {
-        cmd.arg("--compress_boxes=0");
-    }
-
-    cmd.arg("--")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
-
-    let result = cmd.output();
-
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = verify_jxl_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
-                return Err(e);
-            }
-
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-
-            finalize_conversion(
-                input,
-                &output,
-                input_size,
-                "JPEG lossless transcode",
-                None,
-                options,
-            )
-            .map_err(ImgQualityError::IoError)
+    let output_cmd = match result {
+        Ok(out) => out,
+        Err(e) => {
+            return Err(ImgQualityError::ToolNotFound(format!("cjxl not found: {}", e)));
         }
-        Ok(output_cmd) => {
+    };
+
+    if output_cmd.status.success() {
+        if let Err(e) = verify_jxl_health(&temp_output) {
             let _ = fs::remove_file(&temp_output);
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            Err(ImgQualityError::ConversionError(format!(
-                "cjxl JPEG transcode failed: {}",
-                stderr
-            )))
+            return Err(e);
         }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "cjxl not found: {}",
-            e
-        ))),
+        if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            return Ok(ConversionResult::skipped_exists(input, &output));
+        }
+        return finalize_conversion(
+            input,
+            &output,
+            input_size,
+            "JPEG lossless transcode",
+            None,
+            options,
+        )
+        .map_err(ImgQualityError::IoError);
     }
+
+    let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+    let _ = fs::remove_file(&temp_output);
+
+    if is_jpeg_reconstruction_cjxl_error(&stderr) {
+        // 1) Fix: strip trailing data after JPEG EOI so cjxl can use bitstream reconstruction
+        let (source_to_use, _guard): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
+            match shared_utils::jxl_utils::strip_jpeg_tail_to_temp(input) {
+                Ok(Some((cleaned, guard))) => (cleaned, Some(guard)),
+                _ => (input.to_path_buf(), None),
+            };
+
+        // 2) Retry with original cjxl flags (no --allow_jpeg_reconstruction 0) on fixed or original
+        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, None);
+        if let Ok(out) = retry_original {
+            if out.status.success() {
+                if let Err(e) = verify_jxl_health(&temp_output) {
+                    let _ = fs::remove_file(&temp_output);
+                    return Err(e);
+                }
+                if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                    return Ok(ConversionResult::skipped_exists(input, &output));
+                }
+                let label = if source_to_use != input {
+                    "JPEG lossless transcode (sanitized tail)"
+                } else {
+                    "JPEG lossless transcode"
+                };
+                return finalize_conversion(input, &output, input_size, label, None, options)
+                    .map_err(ImgQualityError::IoError);
+            }
+        }
+        let _ = fs::remove_file(&temp_output);
+
+        // 3) Fallback: --allow_jpeg_reconstruction 0
+        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, Some(0));
+        if let Ok(out) = retry_no_recon {
+            if out.status.success() {
+                if let Err(e) = verify_jxl_health(&temp_output) {
+                    let _ = fs::remove_file(&temp_output);
+                    return Err(e);
+                }
+                if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                    return Ok(ConversionResult::skipped_exists(input, &output));
+                }
+                return finalize_conversion(
+                    input,
+                    &output,
+                    input_size,
+                    "JPEG lossless transcode (--allow_jpeg_reconstruction 0)",
+                    None,
+                    options,
+                )
+                .map_err(ImgQualityError::IoError);
+            }
+        }
+        let _ = fs::remove_file(&temp_output);
+    }
+
+    Err(ImgQualityError::ConversionError(format!(
+        "cjxl JPEG transcode failed: {}",
+        stderr
+    )))
 }
 
 pub fn convert_to_avif(

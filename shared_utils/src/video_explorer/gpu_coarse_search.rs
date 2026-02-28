@@ -1741,6 +1741,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     for d in &enhanced.details {
         crate::verbose_eprintln!("      {}", d);
     }
+    let quality_passed = quality_passed && enhanced.passed();
 
     let total_file_pct = if input_size == 0 {
         0.0

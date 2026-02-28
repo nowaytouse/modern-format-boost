@@ -328,6 +328,31 @@ fn copy_dir_xattrs(src: &Path, dst: &Path) {
     }
 }
 
+/// Fallback: try exiv2 to merge XMP into the destination (exiv2 -i expects sidecar named <stem>.xmp beside image).
+/// Returns true if exiv2 merge succeeded. No fake success; only when exiv2 actually succeeds do we return true.
+fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
+    let Some(parent) = dst.parent() else {
+        return false;
+    };
+    let stem = dst.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+    let sidecar_for_exiv2 = parent.join(format!("{}.xmp", stem));
+    if sidecar_for_exiv2 == *xmp_path {
+        return false;
+    }
+    if std::fs::copy(xmp_path, &sidecar_for_exiv2).is_err() {
+        return false;
+    }
+    let out = std::process::Command::new("exiv2")
+        .args(["-i", crate::safe_path_arg(dst).as_ref()])
+        .output();
+    let ok = out
+        .as_ref()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    let _ = std::fs::remove_file(&sidecar_for_exiv2);
+    ok
+}
+
 fn merge_xmp_sidecar(src: &Path, dst: &Path) {
     let xmp_path = find_xmp_sidecar(src);
 
@@ -351,7 +376,21 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
                 crate::progress_mode::xmp_merge_success();
             }
             Err(e) => {
-                crate::progress_mode::xmp_merge_failure(&e.to_string());
+                let err_str = e.to_string();
+                crate::progress_mode::xmp_merge_failure(&err_str);
+                let fallback_ok = try_merge_xmp_exiv2(&xmp, dst);
+                if fallback_ok {
+                    crate::progress_mode::xmp_merge_success();
+                    if crate::progress_mode::has_log_file() {
+                        crate::progress_mode::write_to_log(
+                            "   → Fallback: exiv2 merge succeeded (ExifTool had failed).",
+                        );
+                    }
+                } else if crate::progress_mode::has_log_file() {
+                    crate::progress_mode::write_to_log(
+                        "   → Fallback: exiv2 merge failed or exiv2 not available; no fake success.",
+                    );
+                }
             }
         }
     }
