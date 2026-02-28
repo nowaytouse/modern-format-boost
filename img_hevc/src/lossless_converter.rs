@@ -102,24 +102,7 @@ pub fn convert_to_jxl(
                 || stderr.contains("pixel data")
                 || stderr.contains("Error while decoding")
             {
-                use console::style;
-                eprintln!(
-                    "   {} {}",
-                    style("⚠️  CJXL ENCODING FAILED:").yellow().bold(),
-                    stderr.lines().next().unwrap_or("Unknown error")
-                );
-                eprintln!(
-                    "   {} {}",
-                    style("🔄 FALLBACK:").cyan(),
-                    style("Using FFmpeg → CJXL pipeline (more reliable for large images)").dim()
-                );
-                eprintln!(
-                    "   📋 Reason: Image format/size incompatible with installed CJXL version (metadata will be preserved)"
-                );
-
                 use std::process::Stdio;
-
-                eprintln!("   🔄 Pipeline: FFmpeg → cjxl (streaming, no temp files)");
 
                 let ffmpeg_result = Command::new("ffmpeg")
                     .arg("-threads")
@@ -192,23 +175,26 @@ pub fn convert_to_jxl(
                                     let ffmpeg_ok = match ffmpeg_status {
                                         Ok(status) if status.success() => true,
                                         Ok(status) => {
-                                            eprintln!(
+                                            let line = format!(
                                                 "   ❌ FFmpeg failed with exit code: {:?}",
                                                 status.code()
                                             );
+                                            shared_utils::progress_mode::emit_stderr(&line);
                                             if !ffmpeg_stderr_str.is_empty() {
-                                                eprintln!(
+                                                let line2 = format!(
                                                     "      Error: {}",
                                                     ffmpeg_stderr_str
                                                         .lines()
                                                         .next()
                                                         .unwrap_or("Unknown")
                                                 );
+                                                shared_utils::progress_mode::emit_stderr(&line2);
                                             }
                                             false
                                         }
                                         Err(e) => {
-                                            eprintln!("   ❌ Failed to wait for FFmpeg: {}", e);
+                                            let line = format!("   ❌ Failed to wait for FFmpeg: {}", e);
+                                            shared_utils::progress_mode::emit_stderr(&line);
                                             false
                                         }
                                     };
@@ -216,43 +202,46 @@ pub fn convert_to_jxl(
                                     let cjxl_ok = match cjxl_status {
                                         Ok(status) if status.success() => true,
                                         Ok(status) => {
-                                            eprintln!(
+                                            let line = format!(
                                                 "   ❌ cjxl failed with exit code: {:?}",
                                                 status.code()
                                             );
+                                            shared_utils::progress_mode::emit_stderr(&line);
                                             if !cjxl_stderr_str.is_empty() {
-                                                eprintln!(
+                                                let line2 = format!(
                                                     "      Error: {}",
                                                     cjxl_stderr_str
                                                         .lines()
                                                         .next()
                                                         .unwrap_or("Unknown")
                                                 );
+                                                shared_utils::progress_mode::emit_stderr(&line2);
                                             }
                                             false
                                         }
                                         Err(e) => {
-                                            eprintln!("   ❌ Failed to wait for cjxl: {}", e);
+                                            let line = format!("   ❌ Failed to wait for cjxl: {}", e);
+                                            shared_utils::progress_mode::emit_stderr(&line);
                                             false
                                         }
                                     };
 
                                     if ffmpeg_ok && cjxl_ok {
-                                        eprintln!("   🎉 FALLBACK SUCCESS: FFmpeg pipeline completed successfully");
+                                        shared_utils::progress_mode::fallback_success();
                                         Ok(std::process::Output {
                                             status: std::process::ExitStatus::default(),
                                             stdout: Vec::new(),
                                             stderr: Vec::new(),
                                         })
                                     } else {
-                                        eprintln!(
+                                        let line = format!(
                                             "   ❌ FFmpeg pipeline failed for file: {} (ffmpeg: {}, cjxl: {})",
                                             input.display(),
                                             if ffmpeg_ok { "✓" } else { "✗" },
                                             if cjxl_ok { "✓" } else { "✗" }
                                         );
-
-                                        eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                                        shared_utils::progress_mode::emit_stderr(&line);
+                                        shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
                                         try_imagemagick_fallback(
                                             input,
                                             &temp_output,
@@ -262,25 +251,25 @@ pub fn convert_to_jxl(
                                     }
                                 }
                                 Err(e) => {
-                                    eprintln!("   ❌ Failed to start cjxl process: {}", e);
+                                    let line = format!("   ❌ Failed to start cjxl process: {}", e);
+                                    shared_utils::progress_mode::emit_stderr(&line);
                                     let _ = ffmpeg_proc.kill();
-                                    eprintln!(
-                                        "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline..."
-                                    );
+                                    shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
                                     try_imagemagick_fallback(input, &temp_output, distance, max_threads)
                                 }
                             }
                         } else {
-                            eprintln!("   ❌ Failed to capture FFmpeg stdout");
+                            shared_utils::progress_mode::emit_stderr("   ❌ Failed to capture FFmpeg stdout");
                             let _ = ffmpeg_proc.kill();
-                            eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                            shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
                             try_imagemagick_fallback(input, &temp_output, distance, max_threads)
                         }
                     }
                     Err(e) => {
-                        eprintln!("   ❌ FFmpeg not available or failed to start: {}", e);
-                        eprintln!("      💡 Install: brew install ffmpeg");
-                        eprintln!("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
+                        let line = format!("   ❌ FFmpeg not available or failed to start: {}", e);
+                        shared_utils::progress_mode::emit_stderr(&line);
+                        shared_utils::progress_mode::emit_stderr("      💡 Install: brew install ffmpeg");
+                        shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
                         try_imagemagick_fallback(input, &temp_output, distance, max_threads)
                     }
                 }
@@ -479,19 +468,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         || stderr.contains("Corrupt JPEG")
         || stderr.contains("Premature end")
     {
-        use console::style;
-        eprintln!(
-            "   {} {}",
-            style("⚠️  JPEG TRANSCODE FAILED:").yellow().bold(),
-            style("Detected corrupted/truncated JPEG structure").yellow()
-        );
-        eprintln!(
-            "   {} {}",
-            style("🔄 FALLBACK:").cyan(),
-            style("Using ImageMagick → cjxl pipeline to sanitize and re-encode").dim()
-        );
-
-        match try_imagemagick_fallback(input, &temp_output, 0.0, max_threads) {
+        match shared_utils::jxl_utils::try_imagemagick_fallback(input, &temp_output, 0.0, max_threads) {
             Ok(_) => commit_jpeg_to_jxl_success(
                 input,
                 &temp_output,
