@@ -99,7 +99,19 @@ init_log() {
 save_log() {
     [[ -z "$LOG_FILE" ]] && return
     [[ ! -f "$LOG_FILE" ]] && return
-    
+
+    # Append full Rust run log (img_hevc + vid_hevc write_to_log content) so session log has complete output
+    if [[ -n "$VERBOSE_LOG_FILE" && -f "$VERBOSE_LOG_FILE" ]]; then
+        {
+            echo ""
+            echo "========================================"
+            echo "📋 Full run log (img_hevc / vid_hevc internal log)"
+            echo "========================================"
+            cat "$VERBOSE_LOG_FILE"
+            echo ""
+        } >> "$LOG_FILE"
+    fi
+
     # Append statistics footer to log
     {
         echo ""
