@@ -17,27 +17,70 @@ fi
 
 # 如果有参数（拖拽模式），直接传递给处理脚本
 if [[ $# -gt 0 ]]; then
-    # 在新终端窗口中运行，这样用户可以看到进度
+    # 在新窗口运行处理器；关闭「后面的」窗口（系统为运行本脚本打开的空终端），只保留工作窗口
     osascript <<EOF
 tell application "Terminal"
-    activate
     do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$1'; echo '按任意键关闭...'; read -n 1"
+    activate
+    try
+        if (count windows) > 1 then close (back window)
+    end try
 end tell
 EOF
 else
-    # 双击模式：显示文件夹选择对话框，确认后再运行，避免误操作
-    SELECTED_DIR=$(osascript -e 'POSIX path of (choose folder with prompt "选择要处理的文件夹：")')
-    
-    if [[ -n "$SELECTED_DIR" ]]; then
-        SELECTED_DIR="${SELECTED_DIR%/}"
-        # 安全确认：显示将处理的路径，仅当用户点击「开始优化」才执行（取消则退出）
-        if osascript -e "display dialog \"将优化以下文件夹：\n\n$SELECTED_DIR\" with title \"Modern Format Boost\" buttons {\"取消\", \"开始优化\"} default button 2 cancel button 1 with icon caution" 2>/dev/null; then
-            osascript <<EOF
+    # 双击模式：文件夹选择带 30 分钟超时，超时则关闭选择页并退出
+    TIMEOUT_SEC=1800
+    TMPOUT=$(mktemp 2>/dev/null || echo "/tmp/mfb_choose_$$.txt")
+    osascript -e 'POSIX path of (choose folder with prompt "选择要处理的文件夹：（30 分钟无操作将自动关闭）")' > "$TMPOUT" 2>/dev/null &
+    OPID=$!
+    for ((i = 0; i < TIMEOUT_SEC; i++)); do
+        if ! kill -0 "$OPID" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    if kill -0 "$OPID" 2>/dev/null; then
+        kill "$OPID" 2>/dev/null
+        wait "$OPID" 2>/dev/null
+        rm -f "$TMPOUT"
+        osascript -e 'display alert "已超时" message "选择文件夹已取消（超过 30 分钟无操作）。" as critical'
+        exit 0
+    fi
+    SELECTED_DIR=$(cat "$TMPOUT" 2>/dev/null)
+    rm -f "$TMPOUT"
+    if [[ -z "$SELECTED_DIR" ]]; then
+        exit 0
+    fi
+    SELECTED_DIR="${SELECTED_DIR%/}"
+
+    # 安全确认：显示将处理的路径，同样 30 分钟超时；仅当用户点击「开始优化」才执行
+    TMPCONF=$(mktemp 2>/dev/null || echo "/tmp/mfb_confirm_$$.txt")
+    osascript -e "display dialog \"将优化以下文件夹：\n\n$SELECTED_DIR\" with title \"Modern Format Boost\" buttons {\"取消\", \"开始优化\"} default button 2 cancel button 1 with icon caution" > "$TMPCONF" 2>/dev/null &
+    CPID=$!
+    for ((j = 0; j < TIMEOUT_SEC; j++)); do
+        if ! kill -0 "$CPID" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+    done
+    if kill -0 "$CPID" 2>/dev/null; then
+        kill "$CPID" 2>/dev/null
+        wait "$CPID" 2>/dev/null
+        rm -f "$TMPCONF"
+        osascript -e 'display alert "已超时" message "确认对话框已关闭（超过 30 分钟无操作）。" as critical'
+        exit 0
+    fi
+    CONFRES=$(cat "$TMPCONF" 2>/dev/null)
+    rm -f "$TMPCONF"
+    if [[ "$CONFRES" == *"开始优化"* ]]; then
+        osascript <<EOF
 tell application "Terminal"
-    activate
     do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
+    activate
+    try
+        if (count windows) > 1 then close (back window)
+    end try
 end tell
 EOF
-        fi
     fi
 fi
