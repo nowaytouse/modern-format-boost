@@ -425,10 +425,14 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 "Output discarded (quality below threshold)".to_string(),
                             )
                         } else {
-                            warn!("   ⚠️  Quality validation FAILED: unknown reason");
+                            let reason = explore_result
+                                .enhanced_verify_fail_reason
+                                .as_deref()
+                                .unwrap_or("unknown reason");
+                            warn!("   ⚠️  Quality validation FAILED: {}", reason);
                             (
-                                "Quality validation failed: unknown reason".to_string(),
-                                "Skipped: quality validation failed".to_string(),
+                                format!("Quality validation failed: {}", reason),
+                                format!("Skipped: {}", reason),
                                 "Original file PROTECTED (quality/size check failed)".to_string(),
                                 "Output discarded (quality/size check failed)".to_string(),
                             )

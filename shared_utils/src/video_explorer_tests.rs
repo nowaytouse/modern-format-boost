@@ -118,6 +118,52 @@ mod video_encoder_tests {
 }
 
 #[cfg(test)]
+mod quality_check_line_regression_tests {
+    use super::super::video_explorer::{ExploreResult, gpu_coarse_search};
+
+    /// Regression: when enhanced verification fails, log line must show the real reason, not "total file not smaller".
+    #[test]
+    fn test_quality_check_line_shows_enhanced_fail_reason_not_total_file() {
+        let result = ExploreResult {
+            ms_ssim_passed: Some(true),
+            quality_passed: false,
+            enhanced_verify_fail_reason: Some(
+                "Duration mismatch (input vs output beyond tolerance)".to_string(),
+            ),
+            ..Default::default()
+        };
+        let line = gpu_coarse_search::format_quality_check_line(&result, false);
+        assert!(
+            line.contains("enhanced verification failed"),
+            "expected 'enhanced verification failed' in line: {}",
+            line
+        );
+        assert!(
+            line.contains("Duration mismatch"),
+            "expected 'Duration mismatch' in line: {}",
+            line
+        );
+        assert!(
+            !line.contains("total file not smaller"),
+            "must not show misleading 'total file not smaller' when reason is enhanced: {}",
+            line
+        );
+    }
+
+    #[test]
+    fn test_quality_check_line_no_reason_falls_back_to_total_file() {
+        let result = ExploreResult {
+            ms_ssim_passed: Some(true),
+            quality_passed: false,
+            enhanced_verify_fail_reason: None,
+            ..Default::default()
+        };
+        let line = gpu_coarse_search::format_quality_check_line(&result, false);
+        assert!(line.contains("total file not smaller"), "{}", line);
+    }
+}
+
+#[cfg(test)]
 mod explore_result_tests {
     use super::super::video_explorer::*;
 

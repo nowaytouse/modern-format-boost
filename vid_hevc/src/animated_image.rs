@@ -479,8 +479,12 @@ pub fn convert_to_hevc_mp4_matched(
                 "Output discarded (quality below threshold)".to_string(),
             )
         } else {
-            tracing::warn!(input = %input.display(), "Quality validation failed: unknown reason");
-            eprintln!("   ⚠️  Quality validation FAILED: unknown reason");
+            let reason = explore_result
+                .enhanced_verify_fail_reason
+                .as_deref()
+                .unwrap_or("unknown reason");
+            tracing::warn!(input = %input.display(), reason, "Quality validation failed");
+            eprintln!("   ⚠️  Quality validation FAILED: {}", reason);
             (
                 "Original file PROTECTED (quality/size check failed)".to_string(),
                 "Output discarded (quality/size check failed)".to_string(),

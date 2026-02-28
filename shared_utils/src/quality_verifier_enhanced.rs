@@ -272,4 +272,28 @@ mod tests {
         };
         assert!(!r3.passed());
     }
+
+    /// Regression: use only temp copies (no original folder). When input/output are not valid video, probe fails and enhanced_verify_fail_reason is set.
+    #[test]
+    fn test_verify_after_encode_with_temp_copies_probe_fails() {
+        let dir = std::env::temp_dir();
+        let input_copy = dir.join("enhanced_verify_test_input_copy");
+        let output_copy = dir.join("enhanced_verify_test_output_copy");
+        let minimal: [u8; 64] = [0u8; 64];
+        std::fs::write(&input_copy, &minimal).unwrap();
+        std::fs::write(&output_copy, &minimal).unwrap();
+        let result = verify_after_encode(
+            &input_copy,
+            &output_copy,
+            &VerifyOptions::strict_video(),
+        );
+        let _ = std::fs::remove_file(&input_copy);
+        let _ = std::fs::remove_file(&output_copy);
+        assert!(!result.passed(), "non-video files should fail strict verification");
+        assert!(
+            result.message.contains("Probe") || result.message.contains("probe"),
+            "expected probe-related message, got: {}",
+            result.message
+        );
+    }
 }
