@@ -68,10 +68,6 @@ enum Commands {
         no_allow_size_tolerance: bool,
         #[arg(short, long)]
         verbose: bool,
-
-        /// Write full verbose log to this file (regardless of --verbose flag).
-        #[arg(long, value_name = "PATH")]
-        log_file: Option<PathBuf>,
     },
 
     Simple {
@@ -144,7 +140,6 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
-            log_file,
         } => {
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
@@ -185,13 +180,9 @@ fn main() -> anyhow::Result<()> {
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            if let Some(ref lf) = log_file {
-                if let Err(e) = shared_utils::progress_mode::set_log_file(lf) {
-                    eprintln!("⚠️  Could not open log file {}: {}", lf.display(), e);
-                }
-            }
+            // Run 时自动创建并写入 ./logs/vid_hevc_run_<timestamp>.log，无需任何 flag
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_hevc") {
-                eprintln!("⚠️  Could not open default run log file: {}", e);
+                eprintln!("⚠️  Could not open run log file: {}", e);
             }
             info!("🎬 Run Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");

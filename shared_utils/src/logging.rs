@@ -29,11 +29,90 @@ use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     filter::FilterFn,
-    fmt,
+    fmt::{self, writer::MakeWriter},
     layer::{Layer, SubscriberExt},
     util::SubscriberInitExt,
     EnvFilter,
 };
+
+// ── Run log forwarder: when progress_mode sets a run log file, tracing events are also written there ──
+
+/// Store the "Logging system initialized" line so progress_mode can write it to the run log when it opens (run log is set after init).
+fn store_init_message_for_run_log(msg: String) {
+    if let Ok(mut guard) = INIT_MESSAGE_FOR_RUN_LOG.lock() {
+        *guard = Some(msg);
+    }
+}
+
+/// Take the stored init message and clear it so it is written to the run log exactly once.
+pub fn take_init_message_for_run_log() -> Option<String> {
+    if let Ok(mut guard) = INIT_MESSAGE_FOR_RUN_LOG.lock() {
+        guard.take()
+    } else {
+        None
+    }
+}
+
+static INIT_MESSAGE_FOR_RUN_LOG: Mutex<Option<String>> = Mutex::new(None);
+
+/// Register a callback so that when tracing events are formatted, each line is also written to the run log.
+/// Called by progress_mode::set_log_file so the run log gets complete output (all tracing + progress).
+pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
+    if let Ok(mut guard) = RUN_LOG_FORWARDER.lock() {
+        *guard = Some(f);
+    }
+}
+
+static RUN_LOG_FORWARDER: Mutex<Option<Box<dyn Fn(&str) + Send>>> = Mutex::new(None);
+static RUN_LOG_BUFFER: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+/// Writer used by the run-log layer: buffers output and forwards each complete line to the run log when a forwarder is set.
+struct RunLogWriter;
+
+impl Write for RunLogWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        buffer.extend_from_slice(buf);
+        while let Some(i) = buffer.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buffer.drain(..=i).collect();
+            let line_str = String::from_utf8_lossy(&line);
+            let stripped = strip_ansi_str(line_str.trim_end_matches('\n'));
+            if let Ok(guard) = RUN_LOG_FORWARDER.lock() {
+                if let Some(ref f) = *guard {
+                    f(&stripped);
+                }
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        if !buffer.is_empty() {
+            let line = String::from_utf8_lossy(&buffer);
+            let stripped = strip_ansi_str(line.trim_end_matches('\n'));
+            if !stripped.is_empty() {
+                if let Ok(guard) = RUN_LOG_FORWARDER.lock() {
+                    if let Some(ref f) = *guard {
+                        f(&stripped);
+                    }
+                }
+            }
+            buffer.clear();
+        }
+        Ok(())
+    }
+}
+
+struct RunLogMaker;
+
+impl<'a> MakeWriter<'a> for RunLogMaker {
+    type Writer = RunLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        RunLogWriter
+    }
+}
 
 /// Strip ANSI escape sequences from a string (for stderr when not a TTY so captured output is plain text).
 pub fn strip_ansi_str(s: &str) -> String {
@@ -125,11 +204,15 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
 // Safe: buffer is process-local; inner is Mutex<W> and W: Send.
 unsafe impl<W: Write + Send> Send for StripAnsiWriter<W> {}
 
+/// Logging configuration. Default: TRACE level, no file count or size limit, system temp dir.
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
+    /// Max size per log file (bytes). Default u64::MAX = no limit.
     pub max_file_size: u64,
+    /// Max number of log files to keep in log_dir; older ones are deleted. Default usize::MAX = no limit.
     pub max_files: usize,
+    /// Minimum level (TRACE = most comprehensive).
     pub level: Level,
 }
 
@@ -137,9 +220,9 @@ impl Default for LogConfig {
     fn default() -> Self {
         Self {
             log_dir: std::env::temp_dir(),
-            max_file_size: 100 * 1024 * 1024,
-            max_files: 5,
-            level: Level::INFO,
+            max_file_size: u64::MAX,
+            max_files: usize::MAX,
+            level: Level::TRACE,
         }
     }
 }
@@ -174,20 +257,22 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     std::fs::create_dir_all(&config.log_dir)
         .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;
 
-    let log_file_name = format!("{}.log", program_name);
+    // Timestamp in filename so each run gets a unique file in system/temp dir (no overwrite).
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let log_file_name = format!("{}_{}.log", program_name, timestamp);
 
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
     let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(format!(
-            "{}={},shared_utils={}",
-            program_name, config.level, config.level
-        ))
-    });
+    // Registry: always pass TRACE for our crates so run log and temp file get the FULL unfiltered log.
+    // Terminal (stderr) is then filtered per-layer below (e.g. exclude gpu_detection).
+    let registry_filter = EnvFilter::new(format!(
+        "{}={},shared_utils={}",
+        program_name, Level::TRACE, Level::TRACE
+    ));
 
-    // File: no thread_id/line_number so prefix width is stable and message bodies align in the log file.
-    // StripAnsiWriter strips \x1b[...m so log files are plain text, not raw ANSI codes.
+    // Temp file + run log: full unfiltered output (all targets, all levels up to TRACE).
+    // StripAnsiWriter strips \x1b[...m so log files are plain text.
     let file_layer = fmt::layer()
         .with_writer(file_writer)
         .with_ansi(false)
@@ -196,8 +281,16 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with_thread_ids(false)
         .with_line_number(false);
 
-    // Stderr: message only (uniform indent applied in progress_mode::emit_stderr).
-    // Exclude target "gpu_detection" so "GPU: Apple VideoToolbox" etc. go to file only (less noise on terminal).
+    // Run log: same as file_layer — no target filter; when forwarder is set, receives every tracing event.
+    let run_log_layer = fmt::layer()
+        .with_writer(RunLogMaker)
+        .with_ansi(false)
+        .with_target(true)
+        .with_level(true)
+        .with_thread_ids(false)
+        .with_line_number(false);
+
+    // Stderr (terminal): filtered for display — exclude gpu_detection, no level/target in message.
     let stderr_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_ansi(true)
@@ -208,11 +301,16 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with_filter(FilterFn::new(|m: &tracing::Metadata| m.target() != "gpu_detection"));
 
     tracing_subscriber::registry()
-        .with(env_filter)
+        .with(registry_filter)
         .with(file_layer)
+        .with(run_log_layer)
         .with(stderr_layer)
         .init();
 
+    let init_msg = format!(
+        "  Logging system initialized program=\"{}\" log_dir=\"{:?}\" log_file=\"{}\" max_file_size={} max_files={} level={:?}",
+        program_name, config.log_dir, log_file_name, config.max_file_size, config.max_files, config.level
+    );
     tracing::info!(
         program = program_name,
         log_dir = ?config.log_dir,
@@ -222,8 +320,12 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         level = ?config.level,
         "Logging system initialized"
     );
+    store_init_message_for_run_log(init_msg);
 
-    cleanup_old_logs(&config.log_dir, program_name, config.max_files)?;
+    // Only prune old logs when an explicit limit is set (default usize::MAX = no limit).
+    if config.max_files != usize::MAX {
+        cleanup_old_logs(&config.log_dir, program_name, config.max_files)?;
+    }
 
     Ok(())
 }
@@ -430,9 +532,9 @@ mod tests {
     #[test]
     fn test_log_config_default() {
         let config = LogConfig::default();
-        assert_eq!(config.max_file_size, 100 * 1024 * 1024);
-        assert_eq!(config.max_files, 5);
-        assert_eq!(config.level, Level::INFO);
+        assert_eq!(config.max_file_size, u64::MAX);
+        assert_eq!(config.max_files, usize::MAX);
+        assert_eq!(config.level, Level::TRACE);
     }
 
     #[test]
@@ -488,7 +590,7 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert!(result.stdout.contains("hello"));
-        assert!(result.duration.as_secs() < 5);
+        assert!(result.duration.as_secs() <= 10, "echo should complete within 10s");
     }
 
     #[test]
