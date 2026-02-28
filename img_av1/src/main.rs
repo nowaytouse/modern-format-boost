@@ -1,13 +1,11 @@
-use clap::{Parser, Subcommand, ValueEnum};
-use img_av1::{analyze_image, get_recommendation};
+use clap::{Parser, Subcommand};
+use img_av1::analyze_image;
 use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use rayon::prelude::*;
-use serde_json::json;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
-use walkdir::WalkDir;
 
 use img_av1::conversion_api::ConversionOutput;
 
@@ -41,20 +39,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Analyze {
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
-        #[arg(short, long, default_value_t = true)]
-        recursive: bool,
-
-        #[arg(short, long, value_enum, default_value = "human")]
-        output: OutputFormat,
-
-        #[arg(short = 'R', long)]
-        recommend: bool,
-    },
-
     #[command(name = "run")]
     Run {
         #[arg(short, long)]
@@ -138,12 +122,6 @@ enum Commands {
     },
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum OutputFormat {
-    Human,
-    Json,
-}
-
 fn main() -> anyhow::Result<()> {
     let _ =
         shared_utils::logging::init_logging("img_av1", shared_utils::logging::LogConfig::default());
@@ -151,22 +129,6 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Analyze {
-            input,
-            recursive,
-            output,
-            recommend,
-        } => {
-            if input.is_file() {
-                analyze_single_file(&input, output, recommend)?;
-            } else if input.is_dir() {
-                analyze_directory(&input, recursive, output, recommend)?;
-            } else {
-                eprintln!("❌ Error: Input path does not exist: {}", input.display());
-                std::process::exit(1);
-            }
-        }
-
         Commands::Run {
             input,
             output,
@@ -321,108 +283,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn analyze_single_file(
-    path: &Path,
-    output_format: OutputFormat,
-    recommend: bool,
-) -> anyhow::Result<()> {
-    let analysis = analyze_image(path)?;
-
-    if output_format == OutputFormat::Json {
-        let mut result = serde_json::to_value(&analysis)?;
-
-        if recommend {
-            let recommendation = get_recommendation(&analysis);
-            result["recommendation"] = serde_json::to_value(&recommendation)?;
-        }
-
-        println!("{}", serde_json::to_string_pretty(&result)?);
-    } else {
-        print_analysis_human(&analysis);
-
-        if recommend {
-            let recommendation = get_recommendation(&analysis);
-            print_recommendation_human(&recommendation);
-        }
-    }
-
-    Ok(())
-}
-
-fn analyze_directory(
-    path: &PathBuf,
-    recursive: bool,
-    output_format: OutputFormat,
-    recommend: bool,
-) -> anyhow::Result<()> {
-    let walker = if recursive {
-        WalkDir::new(path).follow_links(true)
-    } else {
-        WalkDir::new(path).max_depth(1)
-    };
-
-    let mut results = Vec::new();
-    let mut count = 0;
-
-    for entry in walker {
-        let entry = entry?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-        if let Some(ext) = path.extension() {
-            if shared_utils::IMAGE_EXTENSIONS_ANALYZE
-                .contains(&ext.to_str().unwrap_or("").to_lowercase().as_str())
-            {
-                if let Err(e) = shared_utils::common_utils::validate_file_integrity(path) {
-                    eprintln!("⚠️  Skipping invalid file {}: {}", path.display(), e);
-                    continue;
-                }
-
-                match analyze_image(path) {
-                    Ok(analysis) => {
-                        count += 1;
-                        if output_format == OutputFormat::Json {
-                            let mut result = serde_json::to_value(&analysis)?;
-                            if recommend {
-                                let recommendation = get_recommendation(&analysis);
-                                result["recommendation"] = serde_json::to_value(&recommendation)?;
-                            }
-                            results.push(result);
-                        } else {
-                            println!("\n{}", "=".repeat(80));
-                            print_analysis_human(&analysis);
-                            if recommend {
-                                let recommendation = get_recommendation(&analysis);
-                                print_recommendation_human(&recommendation);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("⚠️  Failed to analyze {}: {}", path.display(), e);
-                    }
-                }
-            }
-        }
-    }
-
-    if output_format == OutputFormat::Json {
-        println!(
-            "{}",
-            json!({
-                "total": count,
-                "results": results
-            })
-        );
-    } else {
-        println!("\n{}", "=".repeat(80));
-        println!("✅ Analysis complete: {} files processed", count);
-    }
-
-    Ok(())
-}
-
 fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
@@ -507,6 +367,7 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
     }
 }
 
+#[allow(dead_code)]
 fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
     println!("\n📊 Image Quality Analysis Report");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
@@ -610,6 +471,7 @@ fn print_analysis_human(analysis: &img_av1::ImageAnalysis) {
     }
 }
 
+#[allow(dead_code)]
 fn print_recommendation_human(rec: &img_av1::UpgradeRecommendation) {
     println!("\n💡 JXL Format Recommendation");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
