@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+**Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme). 0.8.8 is the first release under the new scheme.
+
+## [0.8.8] - 2026-02-28
+
+### Version & Docs
+- **Version numbering**: Switched from 8.x to **0.8.x**. Current release is **0.8.8**.
+- **Documentation**: README badge, RELEASE_NOTES, and CHANGELOG updated to 0.8.8.
+
+### Quality & Logging
+- **Enhanced verification failure reason**: When quality/size would pass but enhanced verification (duration match, output probe) fails, the failure reason is now surfaced in logs and UI instead of "unknown reason" or "total file not smaller". Added `ExploreResult.enhanced_verify_fail_reason` and use it in conversion_api and animated_image.
+- **Log level effectiveness**: Log level (TRACE/DEBUG/INFO/WARN/ERROR) now applies to direct run-log writes via `write_to_log_at_level` and `should_log(level)`. Removed `--log-file`; run logs are auto-created with timestamped names under `./logs/`.
+- **Regression tests**: Added tests using temp copies only (no original folder): `test_verify_after_encode_with_temp_copies_probe_fails`, and quality_check_line tests ensuring enhanced failure reason is shown.
+
+### Fixes
+- **QualityCheck message**: When enhanced verification fails, log line now shows "QualityCheck: FAILED (quality met but enhanced verification failed: &lt;reason&gt;)" instead of the misleading "total file not smaller".
+- **Pipe handling**: No pipe-related errors in current logs; existing FFmpeg/x265/cjxl pipe drain and Broken pipe handling confirmed.
+
+---
+
 ## [8.7.0] - 2026-02-27
 
 ### 🔧 Critical Bug Fixes

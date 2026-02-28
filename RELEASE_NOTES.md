@@ -1,7 +1,9 @@
 # Release Notes (for GitHub Release page)
 
-**Version:** 8.7.0
-**Date:** 2026-02-27
+**Version:** 0.8.8  
+**Date:** 2026-02-28  
+
+Version numbering is now **0.8.x** (replacing the previous 8.x scheme). This release is 0.8.8.
 
 ---
 
