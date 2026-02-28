@@ -669,10 +669,11 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
 fn try_imagemagick_identify(path: &Path) -> Option<f32> {
     if let Some((duration_secs, frame_count)) = get_animation_duration_and_frames_imagemagick(path)
     {
-        eprintln!(
+        let msg = format!(
             "📊 ImageMagick: animation detected ({} frames, {:.2}s)",
             frame_count, duration_secs
         );
+        crate::progress_mode::emit_stderr(&msg);
         return Some(duration_secs as f32);
     }
     None

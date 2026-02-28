@@ -336,7 +336,7 @@ process_images() {
     local args=(run --recursive)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    [[ -n "$VERBOSE_LOG_FILE" ]] && args+=(--log-file "$VERBOSE_LOG_FILE")
+    # 日志自动写入 ./logs/img_hevc_run_<timestamp>.log，无需传 --log-file
 
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
@@ -369,15 +369,15 @@ process_videos() {
     [[ -n "${NO_ALLOW_SIZE_TOLERANCE:-}" ]] && args+=(--no-allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    [[ -n "$VERBOSE_LOG_FILE" ]] && args+=(--log-file "$VERBOSE_LOG_FILE")
-    
+    # 日志自动写入 ./logs/vid_hevc_run_<timestamp>.log，无需传 --log-file
+
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
     else
         # 相邻目录模式：必须先传目录，再传 --output
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
-    
+
     # Execution: capture for stats, show on tty, AND append full output to session log (so errors e.g. Broken pipe are recorded)
     local output
     if [[ -n "$LOG_FILE" ]]; then
