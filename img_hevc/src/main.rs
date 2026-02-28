@@ -93,10 +93,6 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
-        /// Write full verbose log to this file (regardless of --verbose flag).
-        #[arg(long, value_name = "PATH")]
-        log_file: Option<PathBuf>,
-
         /// Resume from last run: skip files already in progress file (default).
         #[arg(long, default_value_t = true)]
         resume: bool,
@@ -170,7 +166,6 @@ fn main() -> anyhow::Result<()> {
             no_allow_size_tolerance,
             verbose,
             base_dir,
-            log_file,
             resume: resume_flag,
             no_resume,
         } => {
@@ -192,38 +187,33 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            if lossless {
-                eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-                eprintln!("   Smart quality matching: DISABLED");
-            } else if verbose {
-                eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
-                eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
-            }
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            if let Some(ref lf) = log_file {
-                if let Err(e) = shared_utils::progress_mode::set_log_file(lf) {
-                    eprintln!("⚠️  Could not open log file {}: {}", lf.display(), e);
-                }
-            }
-            // Run 时若未指定 --log-file，自动写入当前目录的 img_hevc_run.log（质量/进度始终有据可查）
+            // Run 时最先创建 run log，后续所有带 emoji 的输出都会写入该文件
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_hevc") {
-                eprintln!("⚠️  Could not open default log file: {}", e);
+                eprintln!("⚠️  Could not open run log file: {}", e);
+            }
+            if lossless {
+                shared_utils::progress_mode::emit_stderr("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
+                shared_utils::progress_mode::emit_stderr("   Smart quality matching: DISABLED");
+            } else if verbose {
+                shared_utils::progress_mode::emit_stderr(&format!("🎬 {} (for animated→video)", flag_mode.description_en()));
+                shared_utils::progress_mode::emit_stderr("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             if apple_compat {
-                eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
+                shared_utils::progress_mode::emit_stderr("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if in_place {
-                eprintln!(
-                    "🔄 In-place mode: ENABLED (original files will be deleted after conversion)"
+                shared_utils::progress_mode::emit_stderr(
+                    "🔄 In-place mode: ENABLED (original files will be deleted after conversion)",
                 );
             }
             if ultimate {
-                eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::progress_mode::emit_stderr("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if !allow_size_tolerance {
-                eprintln!(
-                    "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)"
+                shared_utils::progress_mode::emit_stderr(
+                    "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)",
                 );
             }
             let config = AutoConvertConfig {
@@ -260,26 +250,30 @@ fn main() -> anyhow::Result<()> {
                 if resume {
                     if let Err(e) = shared_utils::load_processed_list(&progress_path) {
                         if config.verbose {
-                            eprintln!("⚠️  Could not load progress file: {}", e);
+                            shared_utils::progress_mode::emit_stderr(&format!("⚠️  Could not load progress file: {}", e));
                         }
                     } else if config.verbose && progress_path.exists() {
-                        println!("📂 Resume: loading progress from {}", progress_path.display());
+                        let msg = format!("📂 Resume: loading progress from {}", progress_path.display());
+                        shared_utils::progress_mode::emit_stderr(&msg);
+                        println!("{}", msg);
                     }
                 } else {
                     shared_utils::clear_processed_list();
                     let _ = std::fs::remove_file(&progress_path);
                     if config.verbose {
-                        println!("📂 Fresh run: previous progress cleared");
+                        let msg = "📂 Fresh run: previous progress cleared";
+                        shared_utils::progress_mode::emit_stderr(msg);
+                        println!("{}", msg);
                     }
                 }
                 auto_convert_directory(&input, &config, recursive)?;
                 if let Err(e) = shared_utils::save_processed_list(&progress_path) {
                     if config.verbose {
-                        eprintln!("⚠️  Could not save progress file: {}", e);
+                        shared_utils::progress_mode::emit_stderr(&format!("⚠️  Could not save progress file: {}", e));
                     }
                 }
             } else {
-                eprintln!("❌ Error: Input path does not exist: {}", input.display());
+                shared_utils::progress_mode::emit_stderr(&format!("❌ Error: Input path does not exist: {}", input.display()));
                 std::process::exit(1);
             }
         }
@@ -1096,11 +1090,17 @@ fn auto_convert_directory(
             }
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
             pb.set_position(current as u64);
-            pb.set_message(
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
+            let msg = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            pb.set_message(msg.clone());
+            shared_utils::progress_mode::write_progress_line_to_run_log(
+                start_time.elapsed().as_secs(),
+                current as u64,
+                total as u64,
+                &msg,
             );
         });
     });
