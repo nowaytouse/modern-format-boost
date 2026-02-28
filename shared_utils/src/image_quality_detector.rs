@@ -20,7 +20,8 @@
 
 #![allow(deprecated)] // internal use of deprecated RoutingDecision / analyze_image_quality; deprecation applies to external callers
 
-use crate::progress_mode::{has_log_file, write_to_log};
+use crate::progress_mode::{has_log_file, write_to_log_at_level};
+use tracing::Level;
 use image::{open, GenericImageView};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -680,28 +681,37 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
     if !has_log_file() {
         return;
     }
-    write_to_log(&format!("[Image quality] {}", input_path.display()));
-    write_to_log(&format!(
-        "  size={}x{} format={} file_size={}",
-        analysis.width, analysis.height, analysis.format, analysis.file_size
-    ));
-    write_to_log(&format!(
-        "  content_type={:?} complexity={:.4} edge_density={:.4} compression_potential={:.4}",
-        analysis.content_type,
-        analysis.complexity,
-        analysis.edge_density,
-        analysis.compression_potential
-    ));
-    write_to_log(&format!(
-        "  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}",
-        analysis.color_diversity,
-        analysis.texture_variance,
-        analysis.noise_level,
-        analysis.sharpness,
-        analysis.contrast,
-        analysis.confidence
-    ));
-    write_to_log("");
+    write_to_log_at_level(Level::DEBUG, &format!("[Image quality] {}", input_path.display()));
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  size={}x{} format={} file_size={}",
+            analysis.width, analysis.height, analysis.format, analysis.file_size
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  content_type={:?} complexity={:.4} edge_density={:.4} compression_potential={:.4}",
+            analysis.content_type,
+            analysis.complexity,
+            analysis.edge_density,
+            analysis.compression_potential
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}",
+            analysis.color_diversity,
+            analysis.texture_variance,
+            analysis.noise_level,
+            analysis.sharpness,
+            analysis.contrast,
+            analysis.confidence
+        ),
+    );
+    write_to_log_at_level(Level::DEBUG, "");
 }
 
 #[cfg(test)]
