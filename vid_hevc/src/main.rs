@@ -190,6 +190,9 @@ fn main() -> anyhow::Result<()> {
                     eprintln!("⚠️  Could not open log file {}: {}", lf.display(), e);
                 }
             }
+            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_hevc") {
+                eprintln!("⚠️  Could not open default run log file: {}", e);
+            }
             info!("🎬 Run Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");
             if match_quality {
