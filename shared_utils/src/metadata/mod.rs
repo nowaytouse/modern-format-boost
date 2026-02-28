@@ -382,12 +382,14 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
                 if fallback_ok {
                     crate::progress_mode::xmp_merge_success();
                     if crate::progress_mode::has_log_file() {
-                        crate::progress_mode::write_to_log(
+                        crate::progress_mode::write_to_log_at_level(
+                            tracing::Level::INFO,
                             "   → Fallback: exiv2 merge succeeded (ExifTool had failed).",
                         );
                     }
                 } else if crate::progress_mode::has_log_file() {
-                    crate::progress_mode::write_to_log(
+                    crate::progress_mode::write_to_log_at_level(
+                        tracing::Level::INFO,
                         "   → Fallback: exiv2 merge failed or exiv2 not available; no fake success.",
                     );
                 }

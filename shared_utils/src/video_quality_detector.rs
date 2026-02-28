@@ -14,7 +14,8 @@
 //! This module provides the detection layer, while quality_matcher
 //! provides the CRF calculation layer.
 
-use crate::progress_mode::write_to_log;
+use crate::progress_mode::write_to_log_at_level;
+use tracing::Level;
 use crate::quality_matcher::{
     parse_source_codec, should_skip_video_codec, ContentType, QualityAnalysis, SourceCodec,
     VideoAnalysisBuilder,
@@ -333,41 +334,56 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
     if !crate::progress_mode::has_log_file() {
         return;
     }
-    write_to_log(&format!("[Media info] {}", input_path.display()));
-    write_to_log(&format!(
-        "  codec={} type={:?} modern={}",
-        analysis.codec, analysis.codec_type, analysis.is_modern_codec
-    ));
-    write_to_log(&format!(
-        "  size={}x{} fps={:.2} duration={:.2}s frames={}",
-        analysis.width,
-        analysis.height,
-        analysis.fps,
-        analysis.duration_secs,
-        analysis.frame_count
-    ));
-    write_to_log(&format!(
-        "  bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={}",
-        analysis.total_bitrate,
-        analysis.video_bitrate,
-        analysis.bpp,
-        analysis.bit_depth
-    ));
-    write_to_log(&format!(
-        "  pix_fmt={} chroma={:?} has_b_frames={}",
-        analysis.pix_fmt, analysis.chroma, analysis.has_b_frames
-    ));
-    write_to_log(&format!(
-        "  content_type={:?} compression={:?} quality_score={} estimated_crf={}",
-        analysis.content_type,
-        analysis.compression_type,
-        analysis.quality_score,
-        analysis.estimated_crf
-    ));
+    write_to_log_at_level(Level::DEBUG, &format!("[Media info] {}", input_path.display()));
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  codec={} type={:?} modern={}",
+            analysis.codec, analysis.codec_type, analysis.is_modern_codec
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  size={}x{} fps={:.2} duration={:.2}s frames={}",
+            analysis.width,
+            analysis.height,
+            analysis.fps,
+            analysis.duration_secs,
+            analysis.frame_count
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={}",
+            analysis.total_bitrate,
+            analysis.video_bitrate,
+            analysis.bpp,
+            analysis.bit_depth
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  pix_fmt={} chroma={:?} has_b_frames={}",
+            analysis.pix_fmt, analysis.chroma, analysis.has_b_frames
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  content_type={:?} compression={:?} quality_score={} estimated_crf={}",
+            analysis.content_type,
+            analysis.compression_type,
+            analysis.quality_score,
+            analysis.estimated_crf
+        ),
+    );
     if analysis.is_hdr {
-        write_to_log("  HDR: true");
+        write_to_log_at_level(Level::DEBUG, "  HDR: true");
     }
-    write_to_log("");
+    write_to_log_at_level(Level::DEBUG, "");
 }
 
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {

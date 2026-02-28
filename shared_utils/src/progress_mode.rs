@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use tracing;
+use tracing::Level;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -149,12 +150,13 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
 
 /// Write a session header line to the run log so the file clearly records that full output is being captured.
 /// Call after set_log_file (or from set_default_run_log_file). If init_logging already emitted a line, it is written here so the run log has it too.
+/// Respects log level (INFO): only written when level is INFO or more verbose.
 pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path::Path) {
     if !has_log_file() {
         return;
     }
     if let Some(ref init_line) = crate::logging::take_init_message_for_run_log() {
-        write_to_log(init_line);
+        write_to_log_at_level(Level::INFO, init_line);
     }
     let line = format!(
         "{} Run log attached program=\"{}\" run_log=\"{}\" (all stderr and tracing written here)",
@@ -162,11 +164,12 @@ pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path
         program_name,
         run_log_path.display()
     );
-    write_to_log(&line);
+    write_to_log_at_level(Level::INFO, &line);
 }
 
 /// Write one progress line to the run log so the log has the same "Running: HH:MM:SS  N/total  message" as the terminal.
 /// Call whenever the progress bar is updated (e.g. after set_position/set_message) so the run log is complete.
+/// Respects log level (DEBUG): only written when level is DEBUG or TRACE.
 pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u64, message: &str) {
     if !has_log_file() {
         return;
@@ -178,7 +181,7 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
         "  Running: {:02}:{:02}:{:02}  {}/{}  {}",
         h, m, s, current, total, message
     );
-    write_to_log(&line);
+    write_to_log_at_level(Level::DEBUG, &line);
 }
 
 /// Write a line to the log file (no-op if no log file is configured).
@@ -193,26 +196,35 @@ pub fn write_to_log(line: &str) {
     }
 }
 
+/// Write a line to the run log only when the configured log level allows this level (so level has real effect).
+/// Use for status/info (Level::Info), progress (Level::Debug), verbose (Level::Trace). Errors use write_to_log.
+pub fn write_to_log_at_level(level: Level, line: &str) {
+    if crate::logging::should_log(level) {
+        write_to_log(line);
+    }
+}
+
 /// Write conversion failure to the run log file immediately (so failures are in the log, not only stderr).
 /// Call this whenever a single-file conversion returns Err, so the log file has the full error for later inspection.
+/// Uses Level::Error so it is always written when level is WARN or ERROR (and any level includes errors).
 pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
     if has_log_file() {
         let line = format!("❌ Conversion failed {}: {}", path.display(), error);
-        write_to_log(&line);
+        write_to_log_at_level(Level::ERROR, &line);
     }
 }
 
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 
-/// Emit a line to stderr via tracing (and to run log when configured).
-/// When a run log file is set, also writes the line there so the log has full TRACE-level detail.
+/// Emit a line to stderr via tracing (and to run log when level allows).
+/// Run log only gets the line when configured level includes INFO (so level has real effect).
 /// Applies a uniform 2-space indent so multi-line blocks (e.g. precheck report) stay aligned.
 /// When stderr is not a TTY (e.g. redirect/script), ANSI is stripped so output is plain text.
 #[inline]
 pub fn emit_stderr(line: &str) {
     if has_log_file() {
-        write_to_log(line);
+        write_to_log_at_level(Level::INFO, line);
     }
     use std::borrow::Cow;
     use std::io::IsTerminal;
@@ -308,13 +320,13 @@ pub fn is_verbose_mode() -> bool {
 }
 
 /// Print to stderr only when verbose mode is enabled.
-/// When a run log file is configured, always writes there (TRACE-level full detail in log).
+/// Run log gets the line only when level allows (DEBUG: written at DEBUG/TRACE).
 /// When set via set_log_context(), the line is prefixed with [prefix] for concurrent file processing.
 #[macro_export]
 macro_rules! verbose_eprintln {
     () => {{
         if $crate::progress_mode::has_log_file() && !$crate::progress_mode::is_verbose_mode() {
-            $crate::progress_mode::write_to_log("");
+            $crate::progress_mode::write_to_log_at_level(tracing::Level::DEBUG, "");
         }
         if $crate::progress_mode::is_verbose_mode() {
             $crate::progress_mode::emit_stderr("");
@@ -325,7 +337,7 @@ macro_rules! verbose_eprintln {
             let _msg = format!($($arg)*);
             let _line = $crate::progress_mode::format_log_line(&_msg);
             if $crate::progress_mode::has_log_file() && !$crate::progress_mode::is_verbose_mode() {
-                $crate::progress_mode::write_to_log(&_line);
+                $crate::progress_mode::write_to_log_at_level(tracing::Level::DEBUG, &_line);
             } else if $crate::progress_mode::is_verbose_mode() {
                 $crate::progress_mode::emit_stderr(&_line);
             }
