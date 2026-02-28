@@ -127,6 +127,15 @@ pub fn write_to_log(line: &str) {
     }
 }
 
+/// Write conversion failure to the run log file immediately (so failures are in the log, not only stderr).
+/// Call this whenever a single-file conversion returns Err, so the log file has the full error for later inspection.
+pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
+    if has_log_file() {
+        let line = format!("❌ Conversion failed {}: {}", path.display(), error);
+        write_to_log(&line);
+    }
+}
+
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 

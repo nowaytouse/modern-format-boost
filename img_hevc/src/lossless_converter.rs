@@ -327,6 +327,61 @@ pub fn convert_to_jxl(
     }
 }
 
+/// True when cjxl failed with "JPEG bitstream reconstruction data could not be created" / "allow_jpeg_reconstruction".
+fn is_jpeg_reconstruction_cjxl_error(stderr: &str) -> bool {
+    stderr.contains("allow_jpeg_reconstruction")
+        || stderr.contains("bitstream reconstruction data could not be created")
+        || stderr.contains("too much tail data")
+}
+
+fn run_cjxl_jpeg_transcode(
+    input: &Path,
+    temp_output: &Path,
+    options: &ConvertOptions,
+    max_threads: usize,
+    allow_jpeg_reconstruction: Option<u8>,
+) -> std::io::Result<std::process::Output> {
+    let mut cmd = Command::new("cjxl");
+    cmd.arg("--lossless_jpeg=1")
+        .arg("-j")
+        .arg(max_threads.to_string());
+    if let Some(v) = allow_jpeg_reconstruction {
+        cmd.arg("--allow_jpeg_reconstruction").arg(v.to_string());
+    }
+    if options.apple_compat {
+        cmd.arg("--compress_boxes=0");
+    }
+    cmd.arg("--")
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(temp_output).as_ref());
+    cmd.output()
+}
+
+fn commit_jpeg_to_jxl_success(
+    input: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    options: &ConvertOptions,
+    label: &str,
+) -> Result<ConversionResult> {
+    if let Err(e) = verify_jxl_health(temp_output) {
+        let _ = fs::remove_file(temp_output);
+        return Err(e);
+    }
+    if !shared_utils::conversion::commit_temp_to_output(temp_output, output, options.force)? {
+        return Ok(ConversionResult::skipped_exists(input, output));
+    }
+    let output_size = fs::metadata(output).map(|m| m.len()).unwrap_or(0);
+    if let Some(skipped) =
+        check_size_tolerance(input, output, input_size, output_size, options, label)
+    {
+        return Ok(skipped);
+    }
+    finalize_conversion(input, output, input_size, label, None, options)
+        .map_err(ImgQualityError::IoError)
+}
+
 pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
@@ -340,106 +395,121 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-
     let max_threads = shared_utils::thread_manager::get_optimal_threads();
-    let mut cmd = Command::new("cjxl");
-    cmd.arg("--lossless_jpeg=1")
-        .arg("-j")
-        .arg(max_threads.to_string());
 
-    if options.apple_compat {
-        cmd.arg("--compress_boxes=0");
+    let result = run_cjxl_jpeg_transcode(input, &temp_output, options, max_threads, None);
+
+    let output_cmd = match result {
+        Ok(out) => out,
+        Err(e) => {
+            return Err(ImgQualityError::ToolNotFound(format!("cjxl not found: {}", e)));
+        }
+    };
+
+    if output_cmd.status.success() {
+        return commit_jpeg_to_jxl_success(
+            input,
+            &temp_output,
+            &output,
+            input_size,
+            options,
+            "JPEG lossless transcode",
+        );
     }
 
-    cmd.arg("--")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
+    let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+    let _ = fs::remove_file(&temp_output);
 
-    let result = cmd.output();
+    if is_jpeg_reconstruction_cjxl_error(&stderr) {
+        // 1) Fix: strip trailing data after JPEG EOI so cjxl can use bitstream reconstruction
+        let (source_to_use, _guard): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
+            match shared_utils::jxl_utils::strip_jpeg_tail_to_temp(input) {
+                Ok(Some((cleaned, guard))) => {
+                    if options.verbose {
+                        eprintln!("   🔧 Stripped JPEG tail; retrying with original cjxl flags");
+                    }
+                    (cleaned, Some(guard))
+                }
+                _ => (input.to_path_buf(), None),
+            };
 
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = verify_jxl_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
-                return Err(e);
+        // 2) Retry with original cjxl flags (no --allow_jpeg_reconstruction 0) on fixed or original
+        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, None);
+        if let Ok(out) = retry_original {
+            if out.status.success() {
+                let label = if source_to_use != input {
+                    "JPEG lossless transcode (sanitized tail)"
+                } else {
+                    "JPEG lossless transcode"
+                };
+                return commit_jpeg_to_jxl_success(
+                    input,
+                    &temp_output,
+                    &output,
+                    input_size,
+                    options,
+                    label,
+                );
             }
+        }
+        let _ = fs::remove_file(&temp_output);
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
+        // 3) Fallback: --allow_jpeg_reconstruction 0 (no bitstream reconstruction, often larger)
+        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, Some(0));
+        if let Ok(out) = retry_no_recon {
+            if out.status.success() {
+                return commit_jpeg_to_jxl_success(
+                    input,
+                    &temp_output,
+                    &output,
+                    input_size,
+                    options,
+                    "JPEG lossless transcode (--allow_jpeg_reconstruction 0)",
+                );
             }
+        }
+        let _ = fs::remove_file(&temp_output);
+        return Err(ImgQualityError::ConversionError(format!(
+            "cjxl JPEG transcode failed (fix + retry and --allow_jpeg_reconstruction 0 both failed): {}",
+            stderr
+        )));
+    }
 
-            let output_size = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "JPEG lossless transcode")
-            {
-                return Ok(skipped);
-            }
+    if stderr.contains("Error while decoding")
+        || stderr.contains("Corrupt JPEG")
+        || stderr.contains("Premature end")
+    {
+        use console::style;
+        eprintln!(
+            "   {} {}",
+            style("⚠️  JPEG TRANSCODE FAILED:").yellow().bold(),
+            style("Detected corrupted/truncated JPEG structure").yellow()
+        );
+        eprintln!(
+            "   {} {}",
+            style("🔄 FALLBACK:").cyan(),
+            style("Using ImageMagick → cjxl pipeline to sanitize and re-encode").dim()
+        );
 
-            finalize_conversion(
+        match try_imagemagick_fallback(input, &temp_output, 0.0, max_threads) {
+            Ok(_) => commit_jpeg_to_jxl_success(
                 input,
+                &temp_output,
                 &output,
                 input_size,
-                "JPEG lossless transcode",
-                None,
                 options,
-            )
-            .map_err(ImgQualityError::IoError)
+                "JPEG (Sanitized) -> JXL",
+            ),
+            Err(e) => Err(ImgQualityError::ConversionError(format!(
+                "Fallback failed after JPEG corruption: {}",
+                e
+            ))),
         }
-        Ok(output_cmd) => {
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if stderr.contains("Error while decoding")
-                || stderr.contains("Corrupt JPEG")
-                || stderr.contains("Premature end")
-            {
-                use console::style;
-                eprintln!(
-                    "   {} {}",
-                    style("⚠️  JPEG TRANSCODE FAILED:").yellow().bold(),
-                    style("Detected corrupted/truncated JPEG structure").yellow()
-                );
-                eprintln!(
-                    "   {} {}",
-                    style("🔄 FALLBACK:").cyan(),
-                    style("Using ImageMagick → cjxl pipeline to sanitize and re-encode").dim()
-                );
-
-                match try_imagemagick_fallback(input, &temp_output, 0.0, max_threads) {
-                    Ok(_) => {
-                        if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                            return Ok(ConversionResult::skipped_exists(input, &output));
-                        }
-                        let output_size = fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-                        if let Some(skipped) =
-                            check_size_tolerance(input, &output, input_size, output_size, options, "JPEG (Sanitized) -> JXL")
-                        {
-                            return Ok(skipped);
-                        }
-                        finalize_conversion(
-                            input,
-                            &output,
-                            input_size,
-                            "JPEG (Sanitized) -> JXL",
-                            None,
-                            options,
-                        )
-                        .map_err(ImgQualityError::IoError)
-                    }
-                    Err(e) => Err(ImgQualityError::ConversionError(format!(
-                        "Fallback failed after JPEG corruption: {}",
-                        e
-                    ))),
-                }
-            } else {
-                Err(ImgQualityError::ConversionError(format!(
-                    "cjxl JPEG transcode failed: {}",
-                    stderr
-                )))
-            }
-        }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "cjxl not found: {}",
-            e
-        ))),
+    } else {
+        Err(ImgQualityError::ConversionError(format!(
+            "cjxl JPEG transcode failed: {}",
+            stderr
+        )))
     }
 }
 

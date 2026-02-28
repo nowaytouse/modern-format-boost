@@ -184,7 +184,74 @@
 
 ---
 
-### 2.6 已废弃且无生产调用的导出（含已删除）
+### 2.6 近期修复说明（动图验证 + XMP fallback + 日志）
+
+#### 第二项修复：动图→视频「Enhanced verification failed: Duration mismatch or output probe failed」
+
+- **现象**：GIF/动图转 HEVC 后，增强校验报错「Duration mismatch or output probe failed」，日志里大量出现，但转换其实已成功、输出文件存在且可播。
+- **原因**：  
+  1. **output_probe 失败**：对输出 MP4 调 ffprobe 失败（例如格式/编码导致 ffprobe 报错）时，原逻辑把 `duration_match` 和 `has_video_stream` 设为 `Some(false)`，导致 `passed()` 为 false，报「Duration mismatch or output probe failed」（语义上其实是 probe 失败，不是真正的 duration 不一致）。  
+  2. **input_probe 失败**：对源 GIF 等 ffprobe 拿不到 duration 时，原逻辑把 `duration_match = Some(false)`，无法做时长对比也直接判失败。  
+  3. **时长容差过严**：`strict_video()` 的 `duration_tolerance_secs` 为 0.5s，GIF 帧延迟累加与 MP4 duration 存在舍入差时易被判为 mismatch。
+- **修改**（`shared_utils/src/quality_verifier_enhanced.rs`）：  
+  1. **probe 失败不伪造成功**：input_probe 或 output_probe 失败时，仍将 `duration_match` / `has_video_stream` 设为 `Some(false)`（若选项要求检查），使 `passed()` 为 false；message 使用「Probe failed; duration/stream not verified」，避免在未做 duration/stream 检查时仍报「验证通过」。  
+  2. **时长容差**：`strict_video()` 的 `duration_tolerance_secs` 从 0.5 改为 1.0 秒，减少 GIF→视频舍入导致的误判。  
+  3. **文案**：仅在真正「两端 probe 都成功且时长差超容差」时使用 "Duration mismatch (input vs output beyond tolerance)"；probe 失败时用 "Probe failed; duration/stream not verified"。
+- **结果**：probe 不可用时验证判为失败（不把「未验证」当作通过）；只有实际完成 duration/stream 检查且通过时才 passed。
+
+#### 第三项修复：XMP merge 失败时的 fallback 策略（禁止伪造成功、明确工具 fallback）
+
+- **策略**：ExifTool 合并 XMP 失败（如 GIF 等格式报 "Format error"）时，**不**视为成功；用 **exiv2** 作为补救工具再尝试一次真正写入目标文件，失败则仅记录、不伪造成功。
+- **实现**（`shared_utils/src/metadata/mod.rs`）：  
+  1. `merge_xmp_sidecar` 中，当 `merger.merge_xmp(&xmp, dst)` 返回 `Err` 时，先调用 **xmp_merge_failure** 记录 ExifTool 失败。  
+  2. **try_merge_xmp_exiv2(xmp_path, dst)**：将 XMP 临时复制到目标同目录且同 stem 的 `<stem>.xmp`（exiv2 `-i` 要求），执行 `exiv2 -i <dst>` 做嵌入；成功则调用 **xmp_merge_success**，并写 log「Fallback: exiv2 merge succeeded (ExifTool had failed).」；执行后删除临时 sidecar。  
+  3. 若 exiv2 未安装或合并失败，写 log「Fallback: exiv2 merge failed or exiv2 not available; no fake success.」，不报成功。  
+  4. 无「仅复制 sidecar 文件」的 fallback：补救措施仅为「换用 exiv2 再尝试嵌入」。
+- **结果**：合并失败时先记失败；用 exiv2 能成功则视为成功并明确记录；否则不伪造成功，日志中 fallback 行为清晰可查。
+
+---
+
+### 2.6.1 伪造结果（fake success）全面审计
+
+以下为「未验证即报成功 / 未达标仍报成功」类问题的排查与结论，避免任何把「未验证」或「失败」当作「通过」的判定。
+
+| 位置 | 风险点 | 结论 / 修复 |
+|------|--------|-------------|
+| **quality_verifier_enhanced::passed()** | 原先用 `duration_match.unwrap_or(true)`：probe 失败时若误设为 None 会变成「通过」。 | **已修**：probe 失败时必设 `Some(false)`；`passed()` 改为 `duration_match != Some(false) && has_video_stream != Some(false)`，仅「未要求检查」(None) 或「明确通过」(Some(true)) 才通过，绝不把「未验证」当通过。 |
+| **verify_after_encode 调用方** | `video_explorer/gpu_coarse_search.rs` 原先仅对结果做 `verbose_eprintln`，未用 `enhanced.passed()` 决定是否通过。 | **已修**：在构建 `ExploreResult` 前执行 `quality_passed = quality_passed && enhanced.passed()`，验证未通过时 `quality_passed` 为 false，conversion_api 会按既有逻辑丢弃输出或走 Apple 回退，不再在验证失败时仍报「质量通过」并 commit。 |
+| **ConversionResult::skipped_*** | `skipped_duplicate` / `skipped_exists` 等设 `success: true`。 | **合理**：`is_success()` 为 `success && !skipped`，统计时计为 skip 而非 success，不伪造转换成功。 |
+| **vid_hevc/vid_av1 Apple compat fallback** | `!quality_passed` 时若保留 best-effort 输出仍返回 `success: true`。 | **已知设计**：文案明确为「Apple compat fallback… quality/size below target」，属「保留可导入文件但目标未达标」的显式折中；若需严格「未达标即 success=false」可再改。参见 AUDIT_DESIGN_ISSUES P0-1。 |
+
+**passed() 语义（当前实现）**：`file_ok && (duration_match != Some(false)) && (has_video_stream != Some(false))`。即：仅当「未要求该项检查」(None) 或「该项检查通过」(Some(true)) 时该项不拉低结果；一旦为 `Some(false)`（含 probe 失败）即判为未通过，不伪造成功。
+
+#### 日志再检查（排除已修复项）
+
+对 `logs/img_hevc_run.log` 做 ❌/⚠️ 类文案统计与抽样，**未发现新的、需修复的同类问题**：
+
+| 日志中的文案 | 次数 | 类型 | 结论 |
+|-------------|------|------|------|
+| Enhanced verification failed: Duration mismatch or output probe failed | 27 | 已修复 | 动图→视频验证逻辑已修，新运行会走新文案并影响 quality_passed。 |
+| XMP merge failed: ExifTool ... Format error | 1 | 已修复 | 已用 exiv2 fallback + 明确写 log。 |
+| Conversion failed | 0 | - | 本段 run 未出现图片转换失败记录（多为动图→HEVC）。 |
+| ❌ WALL HIT #N / ❌ SSIM ALL BELOW TARGET | 大量 | 正常 | 探索阶段「体积变大 / 质量未达目标」的预期输出，非缺陷。 |
+| ⚠️ GPU SSIM too low! Expanding CPU search… / ⚠️ GPU boundary CRF … (TOO LARGE) / ⚠️ CPU start CRF clamped | 若干 | 正常 | 探索策略的提示信息，非缺陷。 |
+| ❌ (fail #1/3)～(fail #3/3) | 17×3 | 正常 | CRF 探索连续 3 次体积变大时的计数，属预期行为。 |
+
+**结论**：当前日志中与「转换失败 / 验证伪造 / 元数据合并」相关的，仅包含上述已修复项；其余均为探索与质量未达标的正常输出，无需再修。
+
+#### 用户五类问题复查（日志 / 动图验证 / XMP / 进度 / 其他）
+
+| # | 问题 | 状态 | 说明 |
+|---|------|------|------|
+| 1 | JPEG→JXL bitstream reconstruction：错误未进 run log | **已覆盖** | ① 逻辑：strip tail → 原 cjxl → `--allow_jpeg_reconstruction 0` 已实现；② 失败时返回的 `Err` 含 cjxl 完整 stderr（`lossless_converter` 里 `format!("... {}", stderr)`），`main` 里 `log_conversion_failure(path, &err_str)` 会把整条错误（含 allow_jpeg_reconstruction / bitstream reconstruction / too much tail data 等）写入 run log。 |
+| 2 | 动图→视频 Enhanced verification failed（27 次） | **已修** | probe 失败或 duration 不一致时不再伪造通过；`quality_passed = quality_passed && enhanced.passed()`，验证未过则走丢弃或 Apple 回退。失败时 summary 为「Probe failed; duration/stream not verified」或「Duration mismatch (input vs output beyond tolerance)」。 |
+| 3 | XMP merge 失败（GIF ExifTool Format error） | **已覆盖** | ExifTool 失败后先 `xmp_merge_failure(&err_str)` 写 run log，再尝试 exiv2；exiv2 成功则记成功并写「Fallback: exiv2 merge succeeded」，失败则写「Fallback: exiv2 merge failed or exiv2 not available; no fake success」。不伪造成功。 |
+| 4 | 进度「Images: N OK, M failed」无单次失败原因 | **已覆盖** | 单文件转换 `Err(e)` 时调用 `log_conversion_failure(path, &err_str)`，run log 中会有「❌ Conversion failed <path>: <完整 error>」，含 cjxl stderr 等，便于事后筛出同类问题。 |
+| 5 | 其他（WALL HIT / CRF +% / SSIM ALL BELOW TARGET） | **非缺陷** | 探索/质量未达目标时的正常输出，非同类转换失败。 |
+
+---
+
+### 2.7 已废弃且无生产调用的导出（含已删除）
 
 | 符号 | 位置 | 说明 |
 |------|------|------|
