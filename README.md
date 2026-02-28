@@ -91,20 +91,16 @@ For advanced users:
 高级用户模式：
 
 ```bash
-# Image: analyze or run (HEVC path → JXL/HEIC)
-./target/release/img-hevc analyze /path/to/img
+# Image (HEVC path → JXL/HEIC)
 ./target/release/img-hevc run /path/to/photos --output /path/to/out
 
-# Image: analyze or run (AV1 path → JXL/AVIF)
-./target/release/img-av1 analyze /path/to/img
+# Image (AV1 path → JXL/AVIF)
 ./target/release/img-av1 run /path/to/photos --output /path/to/out
 
-# Video: analyze or run (HEVC)
-./target/release/vid-hevc analyze /path/to/video
+# Video (HEVC)
 ./target/release/vid-hevc run /path/to/videos --output /path/to/out
 
-# Video: analyze or run (AV1)
-./target/release/vid-av1 analyze /path/to/video
+# Video (AV1)
 ./target/release/vid-av1 run /path/to/videos --output /path/to/out
 ```
 
@@ -125,15 +121,15 @@ For advanced users:
 ## 📐 Processing Flow / 处理流程
 
 **English:**  
-There are **four binaries**: `img_hevc`, `img_av1`, `vid_hevc`, `vid_av1`. Each supports **analyze** (inspect only) and **run** (convert).  
-- **Images:** `analyze` → single file or directory; `run` → per-file: detect format → choose target (JXL/AVIF/HEIC, or skip) → convert (lossless or quality-matched). Animated images (e.g. GIF ≥3s) can go to HEVC/AV1 MP4.  
-- **Videos:** `analyze` → detect codec/resolution; `run` → per-file: detect → strategy (skip / HEVC or AV1) → encode (optionally with SSIM exploration to match quality).  
+There are **four binaries**: `img_hevc`, `img_av1`, `vid_hevc`, `vid_av1`. Each supports **run** (convert).  
+- **Images:** `run` → per-file: detect format → choose target (JXL/AVIF/HEIC, or skip) → convert (lossless or quality-matched). Animated images (e.g. GIF ≥3s) can go to HEVC/AV1 MP4.  
+- **Videos:** `run` → per-file: detect → strategy (skip / HEVC or AV1) → encode (optionally with SSIM exploration to match quality).  
 **Simple** (vid_hevc / vid_av1): one file, fixed CRF. **Strategy**: print recommendation only.
 
 **中文：**  
-共 **四个二进制**：`img_hevc`、`img_av1`、`vid_hevc`、`vid_av1`。均支持 **analyze**（仅分析）与 **run**（转换）。  
-- **图片**：analyze 单文件或目录；run 对每个文件检测格式 → 选择目标（JXL/AVIF/HEIC 或跳过）→ 执行转换（无损或质量匹配）。动图（如 GIF ≥3s）可转为 HEVC/AV1 MP4。  
-- **视频**：analyze 检测编码/分辨率；run 对每个文件检测 → 策略（跳过或转 HEVC/AV1）→ 编码（可选 SSIM 探索以匹配画质）。  
+共 **四个二进制**：`img_hevc`、`img_av1`、`vid_hevc`、`vid_av1`。均支持 **run**（转换）。  
+- **图片**：run 对每个文件检测格式 → 选择目标（JXL/AVIF/HEIC 或跳过）→ 执行转换（无损或质量匹配）。动图（如 GIF ≥3s）可转为 HEVC/AV1 MP4。  
+- **视频**：run 对每个文件检测 → 策略（跳过或转 HEVC/AV1）→ 编码（可选 SSIM 探索以匹配画质）。  
 **Simple**（vid_hevc / vid_av1）：单文件固定 CRF。**Strategy**：仅打印推荐策略。
 
 ---
@@ -165,30 +161,6 @@ cargo clippy         # 代码质量与潜在问题检查
 ```
 
 Release 构建已启用 LTO 与单 codegen-unit，以最大化运行效率。
-
----
-
-## 📋 更新日志 / Changelog
-
-### v8.6.0 (2026-02-24)
-- **全面审计 (Audit)**: 安全性修复，消除流分析、GPU搜索、图像压缩中的潜在除零错误
-- **健壮性 (Robustness)**: GPU 并发数与 VAAPI 路径可配置 (`MODERN_FORMAT_BOOST_GPU_CONCURRENCY`)
-- **日志 (Logging)**: 日志格式统一与去色处理，提升多线程并行时的可读性
-- **管道 (Pipeline)**: 优化 `x265`/`ffmpeg` 管道错误处理，避免死锁
-- **策略 (Strategy)**: "Ultimate mode" 域墙阈值优化 (15-20次零增益尝试)
-
-### v8.5.0 (2026-02-23)
-- **日志与并发**: 多文件并行时每行带 `[文件名]` 前缀，XMP 用 `[XMP]`；固定宽度缩进对齐；UTF-8 安全截断（CJK 文件名不再 panic）
-- **时长检测**: ffprobe 无法给出 WebP/GIF 时长时，使用 ImageMagick `identify` 回退，动图可正常转 HEVC
-- **GIF 质量**: 支持对 GIF 做 SSIM 验证（格式归一化 + 透明叠黑底与编码一致）；验证跳过时显示 N/A 而非 FAILED
-
-### v8.4.0
-- **代码现代化**: 移除 `lazy_static` 和 `num_cpus` 外部依赖，改用标准库 `LazyLock` 和 `available_parallelism()`
-- **安全性修复**: 修复 5 处除零漏洞（PSNR 插值、质量评分、ETA 计算等）
-- **健壮性提升**: 所有 Mutex 操作改用 poison-recovery 模式，防止线程 panic 导致死锁
-- **代码去重**: 提取 `finalize_conversion()` 等共享辅助函数，消除两个图像转换器中 ~760 行重复代码
-- **版本统一**: 全部 crate 统一使用 workspace 版本继承 (`version.workspace = true`)
-- **日志优化**: stderr 输出层移除冗余时间戳和级别前缀，更简洁
 
 ---
 
