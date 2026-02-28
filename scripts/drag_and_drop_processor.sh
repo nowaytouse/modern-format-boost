@@ -170,6 +170,7 @@ check_tools() {
     # Ensure build is up-to-date
     "$SCRIPT_DIR/smart_build.sh" || {
         echo -e "${RED}❌ Build failed. Please check the logs.${RESET}"
+        drain_stdin
         read -rsp "Press any key to exit..." -n1
         exit 1
     }
@@ -182,6 +183,7 @@ get_target_directory() {
         echo -e "${CYAN}📂 Waiting for input...${RESET}"
         echo -e "${DIM}   Please drag and drop a folder here, then press Enter.${RESET}"
         echo -ne "   ${BOLD}> ${RESET}"
+        drain_stdin
         read -r TARGET_DIR
         # Clean path input
         TARGET_DIR="${TARGET_DIR%\"}"
@@ -210,13 +212,20 @@ safety_check() {
     esac
 }
 
+# Drain any pending stdin so keystrokes from a previous phase (e.g. Building/Configuration) do not trigger mode selection.
+drain_stdin() {
+    while read -rsn1 -t 0.01 _ 2>/dev/null; do :; done
+}
+
 # 🎮 Interactive Menu
 select_mode() {
+    drain_stdin
     SELECTED=0
     hide_cursor
 
-    local options=("🚀 In-Place Optimization" "📂 Output to Adjacent Folder" "🩹 Fix iCloud Import Errors")
-    local descriptions=("Replaces original files. Saves disk space." "Safe mode. Keeps originals untouched." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.")
+    # Order: Adjacent first (safest default), then In-Place, then iCloud fix
+    local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors")
+    local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.")
     
     while true; do
         clear_screen
@@ -257,13 +266,6 @@ select_mode() {
     show_cursor
     
     if [[ $SELECTED -eq 0 ]]; then
-        OUTPUT_MODE="inplace"
-        echo -e "\n${YELLOW}⚠️  IN-PLACE MODE SELECTED${RESET}"
-        echo -e "${DIM}   Original files will be replaced after successful conversion.${RESET}"
-        echo -ne "   ${BOLD}Are you sure? (y/N): ${RESET}"
-        read -r confirm
-        [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
-    elif [[ $SELECTED -eq 1 ]]; then
         OUTPUT_MODE="adjacent"
         local base_name=$(basename "$TARGET_DIR")
         OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_optimized"
@@ -274,6 +276,14 @@ select_mode() {
         # Create output structure
         echo -e "   ${DIM}Creating directory structure...${RESET}"
         create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
+    elif [[ $SELECTED -eq 1 ]]; then
+        OUTPUT_MODE="inplace"
+        echo -e "\n${YELLOW}⚠️  IN-PLACE MODE SELECTED${RESET}"
+        echo -e "${DIM}   Original files will be replaced after successful conversion.${RESET}"
+        echo -ne "   ${BOLD}Are you sure? (y/N): ${RESET}"
+        drain_stdin
+        read -r confirm
+        [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
     else
         OUTPUT_MODE="brotli_fix_only"
         echo -e "\n${MAGENTA}🩹 ICLOUD IMPORT FIX MODE${RESET}"
@@ -483,6 +493,7 @@ show_summary() {
     
     echo ""
     echo -e "${DIM}Press any key to exit...${RESET}"
+    drain_stdin
     read -rsn1
     
     # 📝 Save session log
