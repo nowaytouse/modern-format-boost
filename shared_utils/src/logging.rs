@@ -24,7 +24,7 @@
 use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
@@ -34,6 +34,19 @@ use tracing_subscriber::{
     util::SubscriberInitExt,
     EnvFilter,
 };
+
+// ── Current log level: so progress_mode direct writes respect the same level as the tracing filter ──
+/// Cached level from init_logging; used by progress_mode::write_to_log_at_level so direct run-log writes respect the level.
+static CURRENT_LOG_LEVEL: OnceLock<Level> = OnceLock::new();
+
+/// Returns true if an event at this level should be logged. Uses tracing order: TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
+/// So config INFO passes INFO, WARN, ERROR; config TRACE passes all.
+pub fn should_log(level: Level) -> bool {
+    match CURRENT_LOG_LEVEL.get() {
+        Some(&current) => level <= current,
+        None => true, // init not called yet, log everything
+    }
+}
 
 // ── Run log forwarder: when progress_mode sets a run log file, tracing events are also written there ──
 
@@ -254,6 +267,7 @@ impl LogConfig {
 }
 
 pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
+    let _ = CURRENT_LOG_LEVEL.set(config.level);
     std::fs::create_dir_all(&config.log_dir)
         .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;
 
@@ -264,14 +278,15 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
     let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
 
-    // Registry: always pass TRACE for our crates so run log and temp file get the FULL unfiltered log.
-    // Terminal (stderr) is then filtered per-layer below (e.g. exclude gpu_detection).
-    let registry_filter = EnvFilter::new(format!(
-        "{}={},shared_utils={}",
-        program_name, Level::TRACE, Level::TRACE
-    ));
+    // Registry: config.level has real effect (TRACE = all; INFO = info+; etc.). RUST_LOG overrides when set.
+    let registry_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!(
+            "{}={},shared_utils={}",
+            program_name, config.level, config.level
+        ))
+    });
 
-    // Temp file + run log: full unfiltered output (all targets, all levels up to TRACE).
+    // Temp file + run log: all events that pass the registry filter (level and targets).
     // StripAnsiWriter strips \x1b[...m so log files are plain text.
     let file_layer = fmt::layer()
         .with_writer(file_writer)
