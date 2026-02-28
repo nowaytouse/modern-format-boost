@@ -103,8 +103,9 @@ pub fn has_log_file() -> bool {
 }
 
 /// If no log file is configured, open a default run log under `./logs/`
-/// (e.g. `./logs/img_hevc_run.log`). That directory is gitignored. Call at Run startup
-/// so quality and progress are always written without requiring `--log-file`.
+/// with a timestamp in the filename so each run gets a unique file
+/// (e.g. `./logs/img_hevc_run_2026-02-28_14-30-00.log`). That directory is gitignored.
+/// Call at Run startup so quality and progress are always written without requiring `--log-file`.
 pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
     if has_log_file() {
         return Ok(());
@@ -113,7 +114,8 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join("logs");
     let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join(format!("{}_run.log", binary_name));
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let path = dir.join(format!("{}_run_{}.log", binary_name, timestamp));
     set_log_file(&path)
 }
 
