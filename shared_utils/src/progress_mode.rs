@@ -133,6 +133,7 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
     if has_log_file() {
         let line = format!("❌ Conversion failed {}: {}", path.display(), error);
         write_to_log(&line);
+        flush_log_file();
     }
 }
 
@@ -381,6 +382,7 @@ pub fn xmp_merge_failure(msg: &str) {
         format!("⚠️  XMP merge failed: {}", msg)
     );
     write_to_log(&line);
+    flush_log_file();
     emit_stderr(&line);
 }
 
