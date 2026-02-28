@@ -21,9 +21,6 @@ if [[ $# -gt 0 ]]; then
 tell application "Terminal"
     do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$1'; echo '按任意键关闭...'; read -n 1"
     activate
-    try
-        if (count windows) > 1 then close (back window)
-    end try
 end tell
 EOF
     ) &
@@ -80,9 +77,6 @@ else
 tell application "Terminal"
     do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
     activate
-    try
-        if (count windows) > 1 then close (back window)
-    end try
 end tell
 EOF
         ) &
