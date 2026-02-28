@@ -34,6 +34,15 @@ Unlike simple converters, it features a robust **"Self-Healing" engine** specifi
 | **GIF / 动态图片** | 任意 (时长≥4.5s) | **MP4** | **智能 SSIM 裁判** 寻找视觉无损平衡点 |
 | **损坏/有毒元数据** | 任意状态 | **Repair** | **元数据全量重构** + 结构修复 (Fix for Apple) |
 
+### 视频策略表 / Video Strategy Table
+
+| 原始编码 / Source Codec | 质量类型 / Type | 目标 / Target | 核心逻辑 / Core Logic |
+| :--- | :--- | :--- | :--- |
+| **H.264 / AVC / MPEG** | 有损 / Lossy | **HEVC** 或 **AV1** MP4 | **SSIM 探索** 匹配画质 + 压缩率，CRF 自动寻优 |
+| **FFV1 / 无损 / HuffYUV / UTVideo** | 无损 / Lossless | **HEVC** 或 **AV1** 无损 (MKV/MP4) | 数学无损编码，节省空间 |
+| **ProRes / DNxHD** | 视觉无损 / Visually lossless | **HEVC** 或 **AV1** MP4 | 高码率源 → 高 CRF 策略，保持视觉无损 |
+| **H.265 / HEVC / AV1 / VP9 / VVC / AV2** | 已现代 / Modern | **跳过 / SKIP** | **防止重复编码**；Apple 兼容模式下仅跳过 HEVC，将 AV1/VP9 等转为 HEVC |
+
 ---
 
 ## ✨ 核心特性 / Key Features
