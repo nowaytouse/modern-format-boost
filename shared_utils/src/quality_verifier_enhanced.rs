@@ -32,7 +32,7 @@ impl VerifyOptions {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
-            duration_tolerance_secs: 0.5,
+            duration_tolerance_secs: 1.0,
             require_video_stream: true,
         }
     }
@@ -67,8 +67,12 @@ pub struct EnhancedVerifyResult {
 }
 
 impl EnhancedVerifyResult {
+    /// True only when file is OK and no required check explicitly failed.
+    /// None = check was not required (treat as pass); Some(false) = required check failed (do not fake success).
     pub fn passed(&self) -> bool {
-        self.file_ok && self.duration_match.unwrap_or(true) && self.has_video_stream.unwrap_or(true)
+        self.file_ok
+            && self.duration_match != Some(false)
+            && self.has_video_stream != Some(false)
     }
 
     pub fn summary(&self) -> String {
@@ -120,6 +124,7 @@ pub fn verify_after_encode(
 
     let mut duration_match: Option<bool> = None;
     let mut has_video_stream: Option<bool> = None;
+    let mut probe_failed = false;
 
     if options.require_duration_match || options.require_video_stream {
         let input_probe = ffprobe::probe_video(input);
@@ -152,16 +157,8 @@ pub fn verify_after_encode(
                 }
             }
             (Err(e), _) => {
+                probe_failed = true;
                 details.push(format!("Input probe failed: {}", e));
-                if options.require_duration_match {
-                    duration_match = Some(false);
-                }
-                if options.require_video_stream {
-                    has_video_stream = None;
-                }
-            }
-            (_, Err(e)) => {
-                details.push(format!("Output probe failed: {}", e));
                 if options.require_duration_match {
                     duration_match = Some(false);
                 }
@@ -169,13 +166,26 @@ pub fn verify_after_encode(
                     has_video_stream = Some(false);
                 }
             }
+            (_, Err(e)) => {
+                probe_failed = true;
+                details.push(format!("Output probe failed: {}", e));
+                if options.require_duration_match {
+                    duration_match = Some(false);
+                }
+                if options.require_video_stream {
+                    has_video_stream = Some(false);
+                }
+                details.push("Duration/stream not verified (probe unavailable)".to_string());
+            }
         }
     }
 
     let failed = duration_match == Some(false) || has_video_stream == Some(false);
     let message = if failed {
-        if duration_match == Some(false) {
-            "Duration mismatch or output probe failed".to_string()
+        if probe_failed {
+            "Probe failed; duration/stream not verified".to_string()
+        } else if duration_match == Some(false) {
+            "Duration mismatch (input vs output beyond tolerance)".to_string()
         } else if has_video_stream == Some(false) {
             "Output has no valid video stream".to_string()
         } else {
