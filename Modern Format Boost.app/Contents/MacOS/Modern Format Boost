@@ -1,86 +1,116 @@
-#!/bin/bash
-# Modern Format Boost - macOS App Wrapper
-# 
-# 这个脚本是 macOS 应用包的入口点
-# 支持拖拽文件夹到应用图标上，或双击应用选择文件夹
+#!/usr/bin/osascript
+---- Modern Format Boost - macOS App (AppleScript 入口，避免双击时多开空终端)
+---- 支持：拖拽文件夹到图标 / 双击后选择文件夹（30 分钟超时）
 
-# 获取应用包路径
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PROJECT_ROOT="$(dirname "$APP_DIR")"
-PROCESSOR_SCRIPT="$PROJECT_ROOT/scripts/drag_and_drop_processor.sh"
+on run argv
+	set projectRoot to my getProjectRoot()
+	if projectRoot is "" then return
+	set processorScript to projectRoot & "/scripts/drag_and_drop_processor.sh"
+	if not (my fileExists(processorScript)) then
+		display alert "错误" message "找不到处理脚本，请确保完整安装了 Modern Format Boost。" as critical
+		return
+	end if
 
-# 检查处理脚本是否存在
-if [[ ! -f "$PROCESSOR_SCRIPT" ]]; then
-    osascript -e 'display alert "错误" message "找不到处理脚本，请确保完整安装了 Modern Format Boost。" as critical'
-    exit 1
-fi
+	if (count of argv) > 0 then
+		-- 拖拽模式：直接传路径
+		set folderPath to item 1 of argv
+		my runProcessorInTerminal(projectRoot, processorScript, folderPath)
+	else
+		-- 双击模式：选择文件夹（带 30 分钟超时）
+		set folderPath to my chooseFolderWithTimeout(1800)
+		if folderPath is "" then return
+		-- 确认
+		set confirmed to my confirmFolderWithTimeout(folderPath, 1800)
+		if confirmed then
+			my runProcessorInTerminal(projectRoot, processorScript, folderPath)
+		end if
+	end if
+end run
 
-# 如果有参数（拖拽模式），直接传递给处理脚本
-if [[ $# -gt 0 ]]; then
-    # 在新窗口运行处理器；关闭「后面的」窗口（系统为运行本脚本打开的空终端），只保留工作窗口
-    osascript <<EOF
-tell application "Terminal"
-    do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$1'; echo '按任意键关闭...'; read -n 1"
-    activate
-    try
-        if (count windows) > 1 then close (back window)
-    end try
-end tell
-EOF
-else
-    # 双击模式：文件夹选择带 30 分钟超时，超时则关闭选择页并退出
-    TIMEOUT_SEC=1800
-    TMPOUT=$(mktemp 2>/dev/null || echo "/tmp/mfb_choose_$$.txt")
-    osascript -e 'POSIX path of (choose folder with prompt "选择要处理的文件夹：（30 分钟无操作将自动关闭）")' > "$TMPOUT" 2>/dev/null &
-    OPID=$!
-    for ((i = 0; i < TIMEOUT_SEC; i++)); do
-        if ! kill -0 "$OPID" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-    if kill -0 "$OPID" 2>/dev/null; then
-        kill "$OPID" 2>/dev/null
-        wait "$OPID" 2>/dev/null
-        rm -f "$TMPOUT"
-        osascript -e 'display alert "已超时" message "选择文件夹已取消（超过 30 分钟无操作）。" as critical'
-        exit 0
-    fi
-    SELECTED_DIR=$(cat "$TMPOUT" 2>/dev/null)
-    rm -f "$TMPOUT"
-    if [[ -z "$SELECTED_DIR" ]]; then
-        exit 0
-    fi
-    SELECTED_DIR="${SELECTED_DIR%/}"
+on getProjectRoot()
+	try
+		set mePath to path to me
+		set mePosix to POSIX path of mePath
+		return do shell script "dirname $(dirname $(dirname " & quoted form of mePosix & "))"
+	on error
+		return ""
+	end try
+end getProjectRoot
 
-    # 安全确认：显示将处理的路径，同样 30 分钟超时；仅当用户点击「开始优化」才执行
-    TMPCONF=$(mktemp 2>/dev/null || echo "/tmp/mfb_confirm_$$.txt")
-    osascript -e "display dialog \"将优化以下文件夹：\n\n$SELECTED_DIR\" with title \"Modern Format Boost\" buttons {\"取消\", \"开始优化\"} default button 2 cancel button 1 with icon caution" > "$TMPCONF" 2>/dev/null &
-    CPID=$!
-    for ((j = 0; j < TIMEOUT_SEC; j++)); do
-        if ! kill -0 "$CPID" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-    if kill -0 "$CPID" 2>/dev/null; then
-        kill "$CPID" 2>/dev/null
-        wait "$CPID" 2>/dev/null
-        rm -f "$TMPCONF"
-        osascript -e 'display alert "已超时" message "确认对话框已关闭（超过 30 分钟无操作）。" as critical'
-        exit 0
-    fi
-    CONFRES=$(cat "$TMPCONF" 2>/dev/null)
-    rm -f "$TMPCONF"
-    if [[ "$CONFRES" == *"开始优化"* ]]; then
-        osascript <<EOF
-tell application "Terminal"
-    do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
-    activate
-    try
-        if (count windows) > 1 then close (back window)
-    end try
-end tell
-EOF
-    fi
-fi
+on fileExists(posixPath)
+	try
+		do shell script "test -f " & quoted form of posixPath & " && echo 1"
+		return true
+	on error
+		return false
+	end try
+end fileExists
+
+on chooseFolderWithTimeout(timeoutSec)
+	try
+		set tmpFile to do shell script "mktemp 2>/dev/null || echo '/tmp/mfb_choose_'$$'.txt'"
+		do shell script "osascript -e 'POSIX path of (choose folder with prompt \"选择要处理的文件夹：（30 分钟无操作将自动关闭）\")' > " & quoted form of tmpFile & " 2>/dev/null & echo $!"
+		set opid to result
+		repeat with i from 1 to timeoutSec
+			try
+				do shell script "kill -0 " & opid & " 2>/dev/null"
+			on error
+				exit repeat
+			end try
+			delay 1
+		end repeat
+		try
+			do shell script "kill -0 " & opid & " 2>/dev/null"
+			do shell script "kill " & opid & " 2>/dev/null"
+			do shell script "rm -f " & quoted form of tmpFile
+			display alert "已超时" message "选择文件夹已取消（超过 30 分钟无操作）。" as critical
+			return ""
+		end try
+		set folderPath to do shell script "cat " & quoted form of tmpFile
+		do shell script "rm -f " & quoted form of tmpFile
+		return folderPath
+	on error
+		return ""
+	end try
+end chooseFolderWithTimeout
+
+on confirmFolderWithTimeout(folderPath, timeoutSec)
+	try
+		set tmpFile to do shell script "mktemp 2>/dev/null || echo '/tmp/mfb_confirm_'$$'.txt'"
+		set pathFile to do shell script "mktemp 2>/dev/null || echo '/tmp/mfb_path_'$$'.txt'"
+		do shell script "echo " & quoted form of folderPath & " > " & quoted form of pathFile
+		do shell script "osascript -e 'set p to do shell script \"cat " & quoted form of pathFile & "\"' -e 'display dialog \"将优化以下文件夹：\n\n\" & p with title \"Modern Format Boost\" buttons {\"取消\", \"开始优化\"} default button 2 cancel button 1 with icon caution' > " & quoted form of tmpFile & " 2>/dev/null & echo $!"
+		set cpid to result
+		repeat with j from 1 to timeoutSec
+			try
+				do shell script "kill -0 " & cpid & " 2>/dev/null"
+			on error
+				exit repeat
+			end try
+			delay 1
+		end repeat
+		try
+			do shell script "kill -0 " & cpid & " 2>/dev/null"
+			do shell script "kill " & cpid & " 2>/dev/null"
+			do shell script "rm -f " & quoted form of tmpFile & " " & quoted form of pathFile
+			display alert "已超时" message "确认对话框已关闭（超过 30 分钟无操作）。" as critical
+			return false
+		end try
+		set res to do shell script "cat " & quoted form of tmpFile
+		do shell script "rm -f " & quoted form of tmpFile & " " & quoted form of pathFile
+		return res contains "开始优化"
+	on error
+		return false
+	end try
+end confirmFolderWithTimeout
+
+on runProcessorInTerminal(projectRoot, processorScript, folderPath)
+	set safeRoot to quoted form of projectRoot
+	set safeScript to quoted form of processorScript
+	set safeFolder to quoted form of folderPath
+	set cmd to "cd " & safeRoot & " && " & safeScript & " " & safeFolder
+	tell application "Terminal"
+		do script cmd
+		activate
+	end tell
+end runProcessorInTerminal
