@@ -341,6 +341,8 @@ pub struct ExploreResult {
     pub ms_ssim_score: Option<f64>,
     pub iterations: u32,
     pub quality_passed: bool,
+    /// When quality/size would pass but enhanced verification (duration/stream) failed; used for accurate failure messaging.
+    pub enhanced_verify_fail_reason: Option<String>,
     pub log: Vec<String>,
     pub confidence: f64,
     pub confidence_detail: ConfidenceBreakdown,
@@ -363,6 +365,7 @@ impl Default for ExploreResult {
             ms_ssim_score: None,
             iterations: 0,
             quality_passed: false,
+            enhanced_verify_fail_reason: None,
             log: Vec::new(),
             confidence: 0.0,
             confidence_detail: ConfidenceBreakdown::default(),
