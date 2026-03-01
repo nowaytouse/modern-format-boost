@@ -377,7 +377,17 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
             }
             Err(e) => {
                 let err_str = e.to_string();
-                crate::progress_mode::xmp_merge_failure(&err_str);
+                let format_unsupported = err_str
+                    .to_lowercase()
+                    .contains("format error in file");
+                if format_unsupported {
+                    let line = crate::progress_mode::format_status_line(
+                        "   ⚠️  XMP merge skipped (ExifTool does not support writing to this file format)",
+                    );
+                    crate::progress_mode::emit_stderr(&line);
+                } else {
+                    crate::progress_mode::xmp_merge_failure(&err_str);
+                }
                 let fallback_ok = try_merge_xmp_exiv2(&xmp, dst);
                 if fallback_ok {
                     crate::progress_mode::xmp_merge_success();
@@ -387,7 +397,7 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
                             "   → Fallback: exiv2 merge succeeded (ExifTool had failed).",
                         );
                     }
-                } else if crate::progress_mode::has_log_file() {
+                } else if crate::progress_mode::has_log_file() && !format_unsupported {
                     crate::progress_mode::write_to_log_at_level(
                         tracing::Level::INFO,
                         "   → Fallback: exiv2 merge failed or exiv2 not available; no fake success.",
