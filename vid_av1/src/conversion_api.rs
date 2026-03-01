@@ -366,28 +366,48 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         verify_result.video_size_change_percent()
     );
 
-    let can_compress = if config.allow_size_tolerance {
-        verify_result.video_compression_ratio < 1.01
+    let video_smaller = verify_result.video_compressed;
+    let total_file_compressed = actual_output_size < detection.file_size;
+    let total_size_ratio = if detection.file_size > 0 {
+        actual_output_size as f64 / detection.file_size as f64
     } else {
-        verify_result.video_compressed
+        1.0
+    };
+    let total_within_tolerance = if config.allow_size_tolerance {
+        total_size_ratio < 1.01
+    } else {
+        total_file_compressed
     };
 
-    if config.require_compression && !can_compress {
-        warn!("   ⚠️  COMPRESSION FAILED (pure video stream comparison):");
+    if config.require_compression && !total_within_tolerance {
+        warn!("   ⚠️  COMPRESSION FAILED (total file comparison):");
         warn!(
-            "   ⚠️  Video stream: {} bytes >= {} bytes",
-            output_stream_info.video_stream_size, input_stream_info.video_stream_size
+            "   ⚠️  Total file: {} → {} ({:+.1}%)",
+            shared_utils::format_bytes(input_stream_info.total_file_size),
+            shared_utils::format_bytes(output_stream_info.total_file_size),
+            verify_result.total_size_change_percent()
         );
-        if verify_result.is_container_overhead_issue() {
-            warn!("   ⚠️  Note: Container overhead caused total file to be larger");
+        if video_smaller {
+            warn!(
+                "   ⚠️  Note: video stream compressed ({:+.1}%) but container/metadata overhead erased the gain",
+                verify_result.video_size_change_percent()
+            );
+        } else {
+            warn!(
+                "   ⚠️  Video stream not compressed ({:+.1}%)",
+                verify_result.video_size_change_percent()
+            );
         }
         warn!("   🛡️  Original file PROTECTED");
 
-        // Only keep best-effort output when source is Apple-incompatible (AV1/VP9/VVC/AV2).
+        // Only keep best-effort output when source is Apple-incompatible (AV1/VP9/VVC/AV2),
+        // and only when total file behavior is acceptable.
         if config.apple_compat
             && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
+            && (total_file_compressed
+                || (config.allow_size_tolerance && total_size_ratio < 1.01))
         {
-            warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (video stream not smaller)");
+            warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (total file not smaller enough)");
             warn!(
                 "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is AV1 and importable",
                 final_crf, attempts
@@ -405,10 +425,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 },
                 input_size: detection.file_size,
                 output_size: actual_output_size,
-                size_ratio: actual_output_size as f64 / detection.file_size as f64,
+                size_ratio: total_size_ratio,
                 success: true,
                 message: format!(
-                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); compression check failed — file is AV1 and importable",
+                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); compression check failed — total file not smaller enough, but file is AV1 and importable",
                     final_crf, attempts
                 ),
                 final_crf,
@@ -418,7 +438,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
         if output_path.exists() {
             let _ = std::fs::remove_file(&output_path);
-            info!("   🗑️  Output deleted (cannot compress)");
+            info!("   🗑️  Output deleted (cannot compress by total file size)");
         }
         let _ = shared_utils::copy_on_skip_or_fail(
             input,
@@ -432,8 +452,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: format!(
-                    "Compression failed: video stream {} >= {}",
-                    output_stream_info.video_stream_size, input_stream_info.video_stream_size
+                    "Compression failed: total file {} → {} (video stream {} → {})",
+                    shared_utils::format_bytes(input_stream_info.total_file_size),
+                    shared_utils::format_bytes(output_stream_info.total_file_size),
+                    shared_utils::format_bytes(input_stream_info.video_stream_size),
+                    shared_utils::format_bytes(output_stream_info.video_stream_size),
                 ),
                 command: String::new(),
                 preserve_audio: detection.has_audio,
@@ -445,9 +468,9 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             size_ratio: 1.0,
             success: false,
             message: format!(
-                "Skipped: video stream {} >= {} (container overhead: {})",
-                output_stream_info.video_stream_size,
-                input_stream_info.video_stream_size,
+                "Skipped: total file not smaller (video stream {} → {}, container overhead: {})",
+                shared_utils::format_bytes(input_stream_info.video_stream_size),
+                shared_utils::format_bytes(output_stream_info.video_stream_size),
                 output_stream_info.container_overhead
             ),
             final_crf,
@@ -465,7 +488,6 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             "   ⚠️  Cause: Container overhead (+{} bytes)",
             verify_result.container_overhead_diff
         );
-        info!("   ✅ Keeping output (video stream is smaller)");
     }
 
     let size_ratio = actual_output_size as f64 / detection.file_size as f64;
