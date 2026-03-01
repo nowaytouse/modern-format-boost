@@ -2,9 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-**Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme). 0.8.8 is the first release under the new scheme.
+**Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [Unreleased] - nightly
+## [Unreleased]
+
+## [0.8.9] - 2026-03-01
 
 ### Image conversion fixes
 - **apple_compat flag in ImageMagick fallback paths**: Fixed missing `apple_compat` flag in all ImageMagick→cjxl fallback call sites:
@@ -21,6 +23,9 @@ All notable changes to this project will be documented in this file.
   - Retry with 8-bit simplified stream for confirmed 8-bit sources (no quality loss)
   - For 16-bit sources, retry with ICC normalization to sRGB (no depth downgrade)
   - Affects files like IMG_8321.JPG, IMG_6171.jpeg where magick succeeds but cjxl fails
+
+### Documentation
+- **Changelog consolidation**: Merged all changelog files (CHANGES_SUMMARY.md, RELEASE_NOTES.md, release_v0.8.8_notes.md) into CHANGELOG.md to avoid scattered documentation
 
 ## [0.8.8] - 2026-02-28
 
