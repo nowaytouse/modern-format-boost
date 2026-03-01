@@ -229,10 +229,11 @@ fn encode_to_hevc(
 
     let ffmpeg_stderr_thread = ffmpeg_child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stderr);
-            let mut output = String::new();
-            for line in reader.lines().map_while(Result::ok) {
+            use std::io::{BufRead, BufReader, Read};
+            let reader = BufReader::new(stderr.take(10 * 1024 * 1024)); // Max 10MB
+            let mut output = String::with_capacity(1024 * 1024); // 1MB initial
+            for line in reader.lines().take(100_000).map_while(Result::ok) {
+                // Max 100k lines
                 output.push_str(&line);
                 output.push('\n');
             }
@@ -242,10 +243,11 @@ fn encode_to_hevc(
 
     let x265_stderr_thread = x265_child.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stderr);
-            let mut output = String::new();
-            for line in reader.lines().map_while(Result::ok) {
+            use std::io::{BufRead, BufReader, Read};
+            let reader = BufReader::new(stderr.take(10 * 1024 * 1024)); // Max 10MB
+            let mut output = String::with_capacity(1024 * 1024); // 1MB initial
+            for line in reader.lines().take(100_000).map_while(Result::ok) {
+                // Max 100k lines
                 output.push_str(&line);
                 output.push('\n');
             }

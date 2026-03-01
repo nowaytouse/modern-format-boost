@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod constants;
 pub mod formats;
 pub mod heic_analysis;
 pub mod jpeg_analysis;
@@ -10,6 +11,7 @@ pub mod conversion_api;
 pub mod detection_api;
 
 pub use analyzer::{analyze_image, ImageAnalysis};
+pub use constants::*;
 pub use heic_analysis::HeicAnalysis;
 pub use jpeg_analysis::JpegQualityAnalysis;
 pub use lossless_converter::{

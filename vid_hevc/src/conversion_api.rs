@@ -100,6 +100,11 @@ pub fn determine_strategy_with_apple_compat(
 }
 
 pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
+    // Validate input file (check symlinks, file type, readability)
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(VidQualityError::ConversionError(e));
+    }
+
     let detection = detect_video(input)?;
 
     let output_dir = output_dir
@@ -164,6 +169,11 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 }
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
+    // Validate input file (check symlinks, file type, readability)
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(VidQualityError::ConversionError(e));
+    }
+
     let _label = input
         .file_name()
         .unwrap_or_default()
@@ -484,7 +494,9 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         });
                     }
 
-                    let _ = std::fs::remove_file(&temp_path);
+                    if let Err(e) = std::fs::remove_file(&temp_path) {
+                        warn!("Failed to clean up temp file {}: {}", temp_path.display(), e);
+                    }
                     info!("   🗑️  {}", delete_msg);
 
                     let _ = shared_utils::copy_on_skip_or_fail(
