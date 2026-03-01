@@ -66,6 +66,7 @@ fn finalize_with_size_check(
 /// * `input` - Path to the input image file
 /// * `options` - Conversion options (force, delete_original, output_dir, etc.)
 /// * `distance` - JXL quality distance (0.0 = lossless, higher = more lossy)
+/// * `hdr_info` - Optional HDR metadata for preserving color information
 ///
 /// # Returns
 /// * `Ok(ConversionResult)` - Conversion result with file sizes and status
@@ -75,6 +76,7 @@ fn finalize_with_size_check(
 /// - Validates input file (checks symlinks, file type, readability)
 /// - Skips small PNG files (< 500KB) to avoid overhead
 /// - Uses cjxl for encoding, with FFmpeg → ImageMagick fallback on failure
+/// - Preserves HDR metadata via --cicp parameter when hdr_info is provided
 /// - Verifies JXL health after encoding
 /// - Checks size tolerance and compress mode requirements
 ///
@@ -85,13 +87,14 @@ fn finalize_with_size_check(
 ///
 /// let input = Path::new("input.png");
 /// let options = ConvertOptions::default();
-/// let result = convert_to_jxl(input, &options, 1.0)?;
+/// let result = convert_to_jxl(input, &options, 1.0, None)?;
 /// # Ok::<(), img_hevc::ImgQualityError>(())
 /// ```
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
     distance: f32,
+    hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<ConversionResult> {
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
@@ -131,7 +134,7 @@ pub fn convert_to_jxl(
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
+    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, hdr_info)?;
 
     // Cache thread count calculation (avoid repeated calls)
     let max_threads = if options.child_threads > 0 {
@@ -147,6 +150,16 @@ pub fn convert_to_jxl(
         .arg("7")
         .arg("-j")
         .arg(max_threads.to_string());
+
+    // Add HDR metadata via CICP if available
+    if let Some(hdr) = hdr_info {
+        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
+            cmd.arg(format!("--cicp={}", cicp));
+            if options.verbose {
+                eprintln!("   🌈 HDR detected: applying CICP {}", cicp);
+            }
+        }
+    }
 
     if options.apple_compat {
         cmd.arg("--compress_boxes=0");
@@ -418,6 +431,7 @@ fn run_cjxl_jpeg_transcode(
     options: &ConvertOptions,
     max_threads: usize,
     allow_jpeg_reconstruction: Option<u8>,
+    hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> std::io::Result<std::process::Output> {
     let mut cmd = Command::new("cjxl");
     cmd.arg("--lossless_jpeg=1")
@@ -426,6 +440,14 @@ fn run_cjxl_jpeg_transcode(
     if let Some(v) = allow_jpeg_reconstruction {
         cmd.arg("--allow_jpeg_reconstruction").arg(v.to_string());
     }
+
+    // Add HDR metadata via CICP if available (for wide-gamut JPEG)
+    if let Some(hdr) = hdr_info {
+        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
+            cmd.arg(format!("--cicp={}", cicp));
+        }
+    }
+
     if options.apple_compat {
         cmd.arg("--compress_boxes=0");
     }
@@ -481,7 +503,11 @@ fn commit_jpeg_to_jxl_success(
 /// 2. Strip JPEG tail → retry
 /// 3. Use --allow_jpeg_reconstruction=0
 /// 4. ImageMagick sanitization (for corrupt JPEGs)
-pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+pub fn convert_jpeg_to_jxl(
+    input: &Path,
+    options: &ConvertOptions,
+    hdr_info: Option<&shared_utils::ColorInfo>,
+) -> Result<ConversionResult> {
     // Validate input file
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
@@ -501,7 +527,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
     let max_threads = shared_utils::thread_manager::get_optimal_threads();
 
-    let result = run_cjxl_jpeg_transcode(input, &temp_output, options, max_threads, None);
+    let result = run_cjxl_jpeg_transcode(input, &temp_output, options, max_threads, None, hdr_info);
 
     let output_cmd = match result {
         Ok(out) => out,
@@ -538,7 +564,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             };
 
         // 2) Retry with original cjxl flags (no --allow_jpeg_reconstruction 0) on fixed or original
-        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, None);
+        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, None, hdr_info);
         if let Ok(out) = retry_original {
             if out.status.success() {
                 let label = if source_to_use != input {
@@ -559,7 +585,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         let _ = fs::remove_file(&temp_output);
 
         // 3) Fallback: --allow_jpeg_reconstruction 0 (no bitstream reconstruction, often larger)
-        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, Some(0));
+        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, Some(0), hdr_info);
         if let Ok(out) = retry_no_recon {
             if out.status.success() {
                 return commit_jpeg_to_jxl_success(
@@ -1007,7 +1033,37 @@ fn convert_to_temp_png(
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
+    hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
+    // Check if we need HDR decoding first
+    if shared_utils::needs_hdr_decode(hdr_info) {
+        use console::style;
+        eprintln!(
+            "   {} {}",
+            style("🌈 HDR DECODING:").cyan().bold(),
+            style("Using FFmpeg to preserve high bit-depth").cyan()
+        );
+
+        match shared_utils::decode_hdr_image_to_png16(input, hdr_info.unwrap()) {
+            Ok((png16_path, temp_file)) => {
+                eprintln!(
+                    "   {} {}",
+                    style("✅").green(),
+                    style("HDR decode successful (16-bit PNG)").green().bold()
+                );
+                return Ok((png16_path, Some(temp_file)));
+            }
+            Err(e) => {
+                eprintln!(
+                    "   {} HDR decode failed: {}, falling back to standard decode",
+                    style("⚠️").yellow(),
+                    e
+                );
+                // Fall through to standard decoding
+            }
+        }
+    }
+
     let detected_ext = shared_utils::common_utils::detect_real_extension(input);
     let literal_ext = input
         .extension()

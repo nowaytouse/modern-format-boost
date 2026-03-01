@@ -53,6 +53,8 @@ pub mod system_memory;
 pub mod app_error;
 pub mod ffprobe_json;
 pub mod file_copier;
+pub mod hdr_decode;
+pub mod hdr_utils;
 pub mod pure_media_verifier;
 pub mod quality_verifier_enhanced;
 pub mod smart_file_copier;
@@ -249,6 +251,13 @@ pub use crf_constants::{
 };
 
 pub use ffprobe_json::{extract_color_info as ffprobe_extract_color_info, ColorInfo};
+
+pub use hdr_decode::{decode_hdr_image_to_png16, needs_hdr_decode};
+
+pub use hdr_utils::{
+    color_info_to_cicp, color_info_to_ffmpeg_args, color_info_to_x265_hdr_params,
+    get_hdr_pix_fmt, should_use_hdr_decode,
+};
 
 pub use stream_size::{
     extract_stream_sizes, get_container_overhead_percent, ExtractionMethod, StreamSizeInfo,

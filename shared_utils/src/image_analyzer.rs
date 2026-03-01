@@ -1,3 +1,4 @@
+use crate::ffprobe_json::ColorInfo;
 use crate::image_heic_analysis::{analyze_heic_file, is_heic_file, HeicAnalysis};
 use crate::image_jpeg_analysis::{analyze_jpeg_file, JpegQualityAnalysis};
 use crate::img_errors::{ImgQualityError, Result};
@@ -52,6 +53,9 @@ pub struct ImageAnalysis {
     pub psnr: Option<f64>,
     pub ssim: Option<f64>,
     pub metadata: HashMap<String, String>,
+
+    /// HDR metadata extracted from image (bit depth, color transfer, primaries, mastering display)
+    pub hdr_info: Option<ColorInfo>,
 }
 
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
@@ -205,6 +209,9 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         None
     };
 
+    // Extract HDR metadata using ffprobe
+    let hdr_info = extract_hdr_info(path);
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: format_str,
@@ -224,6 +231,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         psnr,
         ssim,
         metadata,
+        hdr_info,
     })
 }
 
@@ -275,6 +283,9 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     let metadata = extract_metadata(path).unwrap_or_default();
 
+    // Extract HDR metadata using ffprobe
+    let hdr_info = extract_hdr_info(path);
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "HEIC".to_string(),
@@ -294,6 +305,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         psnr: None,
         ssim: None,
         metadata,
+        hdr_info,
     })
 }
 
@@ -804,6 +816,9 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     .map(|c| c == crate::image_detection::CompressionType::Lossless)
     .unwrap_or_else(|_| pixel_fallback_lossless(path));
 
+    // Extract HDR metadata using ffprobe
+    let hdr_info = extract_hdr_info(path);
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "JXL".to_string(),
@@ -831,6 +846,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         psnr: None,
         ssim: None,
         metadata,
+        hdr_info,
     })
 }
 
@@ -864,6 +880,9 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         Err(_) => pixel_fallback_lossless(path),
     };
 
+    // Extract HDR metadata using ffprobe
+    let hdr_info = extract_hdr_info(path);
+
     let metadata = extract_metadata(path).unwrap_or_default();
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
@@ -892,6 +911,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         psnr: None,
         ssim: None,
         metadata,
+        hdr_info,
     })
 }
 
@@ -950,6 +970,22 @@ fn extract_metadata(path: &Path) -> Result<HashMap<String, String>> {
     }
 
     Ok(metadata)
+}
+
+/// Extract HDR metadata from image using ffprobe.
+/// Returns None if ffprobe fails or image is SDR.
+fn extract_hdr_info(path: &Path) -> Option<ColorInfo> {
+    let color_info = crate::ffprobe_json::extract_color_info(path);
+
+    // Only return HDR info if it's actually HDR or has meaningful metadata
+    if color_info.is_hdr()
+        || color_info.bit_depth.map_or(false, |d| d > 8)
+        || color_info.color_primaries.as_deref() == Some("bt2020")
+    {
+        Some(color_info)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
