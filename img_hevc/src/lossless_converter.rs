@@ -3,10 +3,11 @@
 //! Provides conversion API for verified lossless/lossy images.
 //! Uses shared_utils for common functionality (anti-duplicate, ConversionResult, etc.)
 //!
-//! **Compress 判断统一**: 所有图片转换在编码成功、取得 output_size 后，在 finalize 前均调用
-//! `check_size_tolerance`；当 `options.compress` 为 true 时，仅当 output < input 才接受，
-//! 否则跳过并保留原文件。覆盖路径：convert_to_jxl、convert_jpeg_to_jxl（含 fallback）、
-//! convert_to_avif、convert_to_avif_lossless、convert_to_jxl_matched。
+//! **Unified Compress Check**: All image conversions call `check_size_tolerance` after
+//! successful encoding and obtaining output_size, before finalization. When `options.compress`
+//! is true, only accept when output < input, otherwise skip and keep original file.
+//! Covered paths: convert_to_jxl, convert_jpeg_to_jxl (including fallback),
+//! convert_to_avif, convert_to_avif_lossless, convert_to_jxl_matched.
 
 use crate::{ImgQualityError, Result};
 use std::fs;
@@ -29,11 +30,74 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
     .unwrap_or_default()
 }
 
+/// Finalize conversion with size check and metadata preservation.
+/// Common pattern: commit temp → check size → finalize.
+/// Returns ConversionResult on success or error.
+fn finalize_with_size_check(
+    input: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    output_size: u64,
+    options: &ConvertOptions,
+    format_label: &str,
+    extra_info: Option<String>,
+) -> Result<ConversionResult> {
+    // Commit temp file to final output
+    if !shared_utils::conversion::commit_temp_to_output(temp_output, output, options.force)? {
+        return Ok(ConversionResult::skipped_exists(input, output));
+    }
+
+    // Check size tolerance (compress mode, oversized check)
+    if let Some(skipped) =
+        check_size_tolerance(input, output, input_size, output_size, options, format_label)
+    {
+        return Ok(skipped);
+    }
+
+    // Finalize with metadata preservation
+    finalize_conversion(input, output, input_size, format_label, extra_info.as_deref(), options)
+        .map_err(ImgQualityError::IoError)
+}
+
+/// Convert an image to JXL format with specified quality distance.
+///
+/// # Arguments
+/// * `input` - Path to the input image file
+/// * `options` - Conversion options (force, delete_original, output_dir, etc.)
+/// * `distance` - JXL quality distance (0.0 = lossless, higher = more lossy)
+///
+/// # Returns
+/// * `Ok(ConversionResult)` - Conversion result with file sizes and status
+/// * `Err(ImgQualityError)` - Conversion failed
+///
+/// # Behavior
+/// - Validates input file (checks symlinks, file type, readability)
+/// - Skips small PNG files (< 500KB) to avoid overhead
+/// - Uses cjxl for encoding, with FFmpeg → ImageMagick fallback on failure
+/// - Verifies JXL health after encoding
+/// - Checks size tolerance and compress mode requirements
+///
+/// # Example
+/// ```no_run
+/// use img_hevc::{convert_to_jxl, ConvertOptions};
+/// use std::path::Path;
+///
+/// let input = Path::new("input.png");
+/// let options = ConvertOptions::default();
+/// let result = convert_to_jxl(input, &options, 1.0)?;
+/// # Ok::<(), img_hevc::ImgQualityError>(())
+/// ```
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
     distance: f32,
 ) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
@@ -41,7 +105,7 @@ pub fn convert_to_jxl(
     let input_size = fs::metadata(input)?.len();
 
     if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png" && input_size < 500 * 1024 {
+        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
             if options.verbose {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
@@ -69,6 +133,7 @@ pub fn convert_to_jxl(
 
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
 
+    // Cache thread count calculation (avoid repeated calls)
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
@@ -90,6 +155,13 @@ pub fn convert_to_jxl(
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
         .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
+
+    if options.verbose {
+        eprintln!("   🔧 Executing: cjxl -d {:.2} -e 7 -j {} {} {}",
+            distance, max_threads,
+            actual_input.display(),
+            temp_output.display());
+    }
 
     let result = cmd.output();
 
@@ -146,18 +218,20 @@ pub fn convert_to_jxl(
                                         ffmpeg_proc.stderr.take().map(|stderr| {
                                             std::thread::spawn(move || {
                                                 use std::io::Read;
-                                                let mut buf = String::new();
-                                                let mut reader = stderr;
-                                                let _ = reader.read_to_string(&mut buf);
+                                                let mut buf = String::with_capacity(crate::constants::STDERR_BUFFER_INITIAL);
+                                                let reader = stderr;
+                                                let _ = reader.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
                                                 buf
                                             })
                                         });
 
                                     // Drain cjxl stderr in background so cjxl does not block when pipe buffer fills.
-                                    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|mut stderr| {
+                                    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|stderr| {
                                         std::thread::spawn(move || {
-                                            let mut buf = String::new();
-                                            let _ = std::io::Read::read_to_string(&mut stderr, &mut buf);
+                                            use std::io::Read;
+                                            let mut buf = String::with_capacity(crate::constants::STDERR_BUFFER_INITIAL);
+                                            let reader = stderr;
+                                            let _ = reader.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
                                             buf
                                         })
                                     });
@@ -165,12 +239,26 @@ pub fn convert_to_jxl(
                                     let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
 
-                                    let ffmpeg_stderr_str = ffmpeg_stderr_thread
-                                        .and_then(|h| h.join().ok())
-                                        .unwrap_or_default();
-                                    let cjxl_stderr_str = cjxl_stderr_thread
-                                        .and_then(|h| h.join().ok())
-                                        .unwrap_or_default();
+                                    let ffmpeg_stderr_str = match ffmpeg_stderr_thread {
+                                        Some(handle) => match handle.join() {
+                                            Ok(s) => s,
+                                            Err(_) => {
+                                                shared_utils::progress_mode::emit_stderr("   ⚠️ FFmpeg stderr thread panicked");
+                                                String::new()
+                                            }
+                                        },
+                                        None => String::new(),
+                                    };
+                                    let cjxl_stderr_str = match cjxl_stderr_thread {
+                                        Some(handle) => match handle.join() {
+                                            Ok(s) => s,
+                                            Err(_) => {
+                                                shared_utils::progress_mode::emit_stderr("   ⚠️ cjxl stderr thread panicked");
+                                                String::new()
+                                            }
+                                        },
+                                        None => String::new(),
+                                    };
 
                                     let ffmpeg_ok = match ffmpeg_status {
                                         Ok(status) if status.success() => true,
@@ -290,30 +378,32 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
-            {
-                return Ok(skipped);
-            }
-
-            finalize_conversion(input, &output, input_size, "JXL", None, options)
-                .map_err(ImgQualityError::IoError)
+            finalize_with_size_check(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                output_size,
+                options,
+                "JXL",
+                None,
+            )
         }
         Ok(output_cmd) => {
+            let _ = fs::remove_file(&temp_output);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "cjxl failed: {}",
                 stderr
             )))
         }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "cjxl not found: {}",
-            e
-        ))),
+        Err(e) => {
+            let _ = fs::remove_file(&temp_output);
+            Err(ImgQualityError::ToolNotFound(format!(
+                "cjxl not found: {}",
+                e
+            )))
+        }
     }
 }
 
@@ -359,20 +449,46 @@ fn commit_jpeg_to_jxl_success(
         let _ = fs::remove_file(temp_output);
         return Err(e);
     }
-    if !shared_utils::conversion::commit_temp_to_output(temp_output, output, options.force)? {
-        return Ok(ConversionResult::skipped_exists(input, output));
-    }
-    let output_size = fs::metadata(output).map(|m| m.len()).unwrap_or(0);
-    if let Some(skipped) =
-        check_size_tolerance(input, output, input_size, output_size, options, label)
-    {
-        return Ok(skipped);
-    }
-    finalize_conversion(input, output, input_size, label, None, options)
-        .map_err(ImgQualityError::IoError)
+    let output_size = fs::metadata(temp_output).map(|m| m.len()).unwrap_or(0);
+    finalize_with_size_check(
+        input,
+        temp_output,
+        output,
+        input_size,
+        output_size,
+        options,
+        label,
+        None,
+    )
 }
 
+/// Convert a JPEG image to JXL format using lossless JPEG transcoding.
+///
+/// # Arguments
+/// * `input` - Path to the input JPEG file
+/// * `options` - Conversion options
+///
+/// # Returns
+/// * `Ok(ConversionResult)` - Conversion result
+/// * `Err(ImgQualityError)` - Conversion failed
+///
+/// # Behavior
+/// - Uses `cjxl --lossless_jpeg=1` for bitstream reconstruction
+/// - On reconstruction failure: strips JPEG tail and retries
+/// - On corruption: uses ImageMagick fallback to sanitize
+/// - Verifies JXL health and checks size tolerance
+///
+/// # Fallback Chain
+/// 1. Primary: cjxl with lossless JPEG mode
+/// 2. Strip JPEG tail → retry
+/// 3. Use --allow_jpeg_reconstruction=0
+/// 4. ImageMagick sanitization (for corrupt JPEGs)
 pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
@@ -504,11 +620,31 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 }
 
+/// Convert an image to AVIF format with specified quality.
+///
+/// # Arguments
+/// * `input` - Path to the input image file
+/// * `quality` - AVIF quality (0-100, None = 85)
+/// * `options` - Conversion options
+///
+/// # Returns
+/// * `Ok(ConversionResult)` - Conversion result
+/// * `Err(ImgQualityError)` - Conversion failed
+///
+/// # Behavior
+/// - Uses avifenc with speed 4 and all threads
+/// - Verifies AVIF health after encoding
+/// - Checks size tolerance and compress mode
 pub fn convert_to_avif(
     input: &Path,
     quality: Option<u8>,
     options: &ConvertOptions,
 ) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
@@ -544,16 +680,16 @@ pub fn convert_to_avif(
                     "AVIF health check failed: {}", e
                 )));
             }
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "AVIF")
-            {
-                return Ok(skipped);
-            }
-            finalize_conversion(input, &output, input_size, "AVIF", None, options)
-                .map_err(ImgQualityError::IoError)
+            finalize_with_size_check(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                output_size,
+                options,
+                "AVIF",
+                None,
+            )
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&temp_output);
@@ -563,10 +699,13 @@ pub fn convert_to_avif(
                 stderr
             )))
         }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "avifenc not found: {}",
-            e
-        ))),
+        Err(e) => {
+            let _ = fs::remove_file(&temp_output);
+            Err(ImgQualityError::ToolNotFound(format!(
+                "avifenc not found: {}",
+                e
+            )))
+        }
     }
 }
 
@@ -579,6 +718,11 @@ pub fn convert_to_avif_lossless(
     input: &Path,
     options: &ConvertOptions,
 ) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     if options.verbose {
         eprintln!("⚠️  Mathematical lossless AVIF encoding - this will be SLOW!");
     }
@@ -616,16 +760,16 @@ pub fn convert_to_avif_lossless(
                     "Lossless AVIF health check failed: {}", e
                 )));
             }
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "Lossless AVIF")
-            {
-                return Ok(skipped);
-            }
-            finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
-                .map_err(ImgQualityError::IoError)
+            finalize_with_size_check(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                output_size,
+                options,
+                "Lossless AVIF",
+                None,
+            )
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&temp_output);
@@ -635,10 +779,13 @@ pub fn convert_to_avif_lossless(
                 stderr
             )))
         }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "avifenc not found: {}",
-            e
-        ))),
+        Err(e) => {
+            let _ = fs::remove_file(&temp_output);
+            Err(ImgQualityError::ToolNotFound(format!(
+                "avifenc not found: {}",
+                e
+            )))
+        }
     }
 }
 
@@ -647,6 +794,11 @@ pub fn convert_to_hevc_mp4_matched(
     options: &ConvertOptions,
     analysis: &crate::ImageAnalysis,
 ) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
     let initial_crf = calculate_matched_crf_for_animation_hevc(analysis, input_size);
     vid_hevc::animated_image::convert_to_hevc_mp4_matched(
@@ -731,6 +883,11 @@ pub fn convert_to_jxl_matched(
     options: &ConvertOptions,
     analysis: &crate::ImageAnalysis,
 ) -> Result<ConversionResult> {
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
@@ -787,26 +944,17 @@ pub fn convert_to_jxl_matched(
                 return Err(e);
             }
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "Quality-matched JXL")
-            {
-                return Ok(skipped);
-            }
-
             let extra = format!("d={:.2}", distance);
-            finalize_conversion(
+            finalize_with_size_check(
                 input,
+                &temp_output,
                 &output,
                 input_size,
-                "Quality-matched JXL",
-                Some(&extra),
+                output_size,
                 options,
+                "Quality-matched JXL",
+                Some(extra),
             )
-            .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&temp_output);
@@ -1059,18 +1207,24 @@ fn get_output_path(
     extension: &str,
     options: &ConvertOptions,
 ) -> Result<std::path::PathBuf> {
-    if let Some(ref base) = options.base_dir {
+    let output = if let Some(ref base) = options.base_dir {
         shared_utils::conversion::determine_output_path_with_base(
             input,
             base,
             extension,
             &options.output_dir,
         )
-        .map_err(ImgQualityError::ConversionError)
+        .map_err(ImgQualityError::ConversionError)?
     } else {
         shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
-            .map_err(ImgQualityError::ConversionError)
-    }
+            .map_err(ImgQualityError::ConversionError)?
+    };
+
+    // Validate output path (check path traversal, symlinks)
+    shared_utils::conversion::validate_output_path(&output, options.base_dir.as_deref())
+        .map_err(ImgQualityError::ConversionError)?;
+
+    Ok(output)
 }
 
 pub fn convert_to_gif_apple_compat(

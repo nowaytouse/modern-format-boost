@@ -343,6 +343,8 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
     }
 }
 
+/// Print image analysis in human-readable format.
+/// Currently unused but kept for potential future CLI output mode.
 #[allow(dead_code)]
 fn print_analysis_human(analysis: &img_hevc::ImageAnalysis) {
     println!("\n📊 Image Quality Analysis Report");
@@ -894,11 +896,22 @@ fn auto_convert_directory(
     let max_threads = pool_size;
     let child_threads = thread_config.child_threads;
 
-    let pool = rayon::ThreadPoolBuilder::new()
+    let pool = match rayon::ThreadPoolBuilder::new()
         .num_threads(max_threads)
         .build()
-        .or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(2).build())
-        .map_err(|e| anyhow::anyhow!("Failed to create thread pool: {}", e))?;
+    {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "⚠️  Failed to create {} thread pool: {}, falling back to 2 threads",
+                max_threads, e
+            );
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .map_err(|e| anyhow::anyhow!("Failed to create fallback thread pool: {}", e))?
+        }
+    };
 
     if config.verbose {
         println!(

@@ -1053,3 +1053,112 @@ mod tests {
         );
     }
 }
+
+/// Validate input file for conversion.
+/// Checks:
+/// - File exists and is a regular file (not directory or special file)
+/// - File is not a symbolic link (security risk)
+/// - File is readable
+///
+/// Returns Ok(()) if valid, Err with descriptive message otherwise.
+pub fn validate_input_file(input: &Path) -> Result<(), String> {
+    // Check if path exists
+    if !input.exists() {
+        return Err(format!("Input file does not exist: {}", input.display()));
+    }
+
+    // Check if it's a symbolic link (security risk)
+    if input.is_symlink() {
+        return Err(format!(
+            "Symbolic links are not supported for security reasons: {}",
+            input.display()
+        ));
+    }
+
+    // Check if it's a regular file
+    if !input.is_file() {
+        return Err(format!(
+            "Input is not a regular file (may be a directory or special file): {}",
+            input.display()
+        ));
+    }
+
+    // Check if file is readable by attempting to open it
+    if let Err(e) = fs::File::open(input) {
+        return Err(format!(
+            "Cannot read input file {}: {}",
+            input.display(),
+            e
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate output path for conversion.
+/// Checks:
+/// - Parent directory exists or can be created
+/// - If base_dir is provided, output is within base_dir (prevent path traversal)
+/// - Output is not a symbolic link
+///
+/// Returns Ok(()) if valid, Err with descriptive message otherwise.
+pub fn validate_output_path(
+    output: &Path,
+    base_dir: Option<&Path>,
+) -> Result<(), String> {
+    // Check if output is a symbolic link
+    if output.exists() && output.is_symlink() {
+        return Err(format!(
+            "Output path is a symbolic link, refusing to overwrite: {}",
+            output.display()
+        ));
+    }
+
+    // Verify output is within base_dir if provided (prevent path traversal)
+    if let Some(base) = base_dir {
+        let base_canonical = base.canonicalize().map_err(|e| {
+            format!(
+                "Cannot canonicalize base directory {}: {}",
+                base.display(),
+                e
+            )
+        })?;
+
+        let output_canonical = if output.exists() {
+            output.canonicalize().map_err(|e| {
+                format!(
+                    "Cannot canonicalize output path {}: {}",
+                    output.display(),
+                    e
+                )
+            })?
+        } else {
+            // For non-existent files, canonicalize parent and append filename
+            let parent = output.parent().ok_or_else(|| {
+                format!("Output path has no parent: {}", output.display())
+            })?;
+            let parent_canonical = parent.canonicalize().map_err(|e| {
+                format!(
+                    "Cannot canonicalize output parent directory {}: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+            parent_canonical.join(
+                output
+                    .file_name()
+                    .ok_or_else(|| format!("Output path has no filename: {}", output.display()))?,
+            )
+        };
+
+        if !output_canonical.starts_with(&base_canonical) {
+            return Err(format!(
+                "Security: Output path {} is outside base directory {}",
+                output.display(),
+                base.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
