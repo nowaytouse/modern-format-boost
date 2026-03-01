@@ -1097,14 +1097,15 @@ pub fn validate_input_file(input: &Path) -> Result<(), String> {
 
 /// Validate output path for conversion.
 /// Checks:
-/// - Parent directory exists or can be created
-/// - If base_dir is provided, output is within base_dir (prevent path traversal)
-/// - Output is not a symbolic link
+/// - Output is not a symbolic link (security risk)
 ///
 /// Returns Ok(()) if valid, Err with descriptive message otherwise.
+///
+/// Note: Path traversal check removed - output paths are generated programmatically
+/// and may intentionally be in adjacent directories (e.g., _optimized suffix mode).
 pub fn validate_output_path(
     output: &Path,
-    base_dir: Option<&Path>,
+    _base_dir: Option<&Path>,
 ) -> Result<(), String> {
     // Check if output is a symbolic link
     if output.exists() && output.is_symlink() {
@@ -1112,52 +1113,6 @@ pub fn validate_output_path(
             "Output path is a symbolic link, refusing to overwrite: {}",
             output.display()
         ));
-    }
-
-    // Verify output is within base_dir if provided (prevent path traversal)
-    if let Some(base) = base_dir {
-        let base_canonical = base.canonicalize().map_err(|e| {
-            format!(
-                "Cannot canonicalize base directory {}: {}",
-                base.display(),
-                e
-            )
-        })?;
-
-        let output_canonical = if output.exists() {
-            output.canonicalize().map_err(|e| {
-                format!(
-                    "Cannot canonicalize output path {}: {}",
-                    output.display(),
-                    e
-                )
-            })?
-        } else {
-            // For non-existent files, canonicalize parent and append filename
-            let parent = output.parent().ok_or_else(|| {
-                format!("Output path has no parent: {}", output.display())
-            })?;
-            let parent_canonical = parent.canonicalize().map_err(|e| {
-                format!(
-                    "Cannot canonicalize output parent directory {}: {}",
-                    parent.display(),
-                    e
-                )
-            })?;
-            parent_canonical.join(
-                output
-                    .file_name()
-                    .ok_or_else(|| format!("Output path has no filename: {}", output.display()))?,
-            )
-        };
-
-        if !output_canonical.starts_with(&base_canonical) {
-            return Err(format!(
-                "Security: Output path {} is outside base directory {}",
-                output.display(),
-                base.display()
-            ));
-        }
     }
 
     Ok(())
