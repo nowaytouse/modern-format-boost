@@ -265,6 +265,41 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     shared_utils::progress_mode::set_log_context(&_label);
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
+    // Skip Live Photos in Apple compat mode
+    if config.apple_compat && shared_utils::is_live_photo(input) {
+        info!("🎬 Auto Mode: {} → SKIP (Live Photo)", input.display());
+        info!("   Reason: Live Photo detected in Apple compat mode");
+
+        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+
+        let _ = shared_utils::copy_on_skip_or_fail(
+            input,
+            config.output_dir.as_deref(),
+            config.base_dir.as_deref(),
+            false,
+        );
+
+        return Ok(ConversionOutput {
+            input_path: input.display().to_string(),
+            output_path: "".to_string(),
+            strategy: ConversionStrategy {
+                target: TargetVideoFormat::Skip,
+                reason: "Live Photo detected in Apple compat mode".to_string(),
+                command: "".to_string(),
+                preserve_audio: false,
+                crf: 0.0,
+                lossless: false,
+            },
+            input_size: file_size,
+            output_size: 0,
+            size_ratio: 0.0,
+            success: true,
+            message: "Skipped Live Photo in Apple compat mode".to_string(),
+            final_crf: 0.0,
+            exploration_attempts: 0,
+        });
+    }
+
     let detection = detect_video(input)?;
 
     // Warn about dynamic HDR metadata that will be stripped during re-encode
