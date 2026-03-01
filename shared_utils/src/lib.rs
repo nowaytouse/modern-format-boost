@@ -109,6 +109,7 @@ pub mod image_jpeg_analysis;
 pub mod image_metrics;
 pub mod image_recommender;
 pub mod img_errors;
+pub mod live_photo;
 
 pub use batch::*;
 pub use codecs::*;
@@ -284,6 +285,8 @@ pub use file_copier::{
 pub use smart_file_copier::{
     copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure,
 };
+
+pub use live_photo::is_live_photo;
 
 pub use file_sorter::{
     sort_by_name, sort_by_size_ascending, sort_by_size_descending, FileInfo, FileSorter,
