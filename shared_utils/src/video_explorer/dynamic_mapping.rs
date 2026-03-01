@@ -263,6 +263,7 @@ pub fn quick_calibrate(
                 threads: max_threads,
                 container: "mp4".to_string(),
                 preserve_audio: true,
+                ..Default::default()
             };
 
             let temp_input_file = tempfile::Builder::new()

@@ -50,6 +50,7 @@ pub struct FFprobeResult {
     pub pix_fmt: String,
     pub color_space: Option<String>,
     pub color_transfer: Option<String>,
+    pub color_primaries: Option<String>,
     pub bit_depth: u8,
     pub has_audio: bool,
     pub audio_codec: Option<String>,
@@ -61,6 +62,18 @@ pub struct FFprobeResult {
     pub has_b_frames: bool,
     pub video_bit_rate: Option<u64>,
     pub refs: Option<u32>,
+    /// HDR10 mastering display metadata (e.g. "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,500)")
+    pub mastering_display: Option<String>,
+    /// HDR10 content light level metadata (e.g. "MaxCLL=1000,MaxFALL=400")
+    pub max_cll: Option<String>,
+    /// True when content uses Dolby Vision (side data detected)
+    pub is_dolby_vision: bool,
+    /// True when content uses HDR10+ dynamic metadata (SMPTE ST 2094-40)
+    pub is_hdr10_plus: bool,
+    /// True when at least one subtitle stream is present
+    pub has_subtitles: bool,
+    /// Codec name of the first subtitle stream (e.g. "srt", "ass", "mov_text", "hdmv_pga_subtitle")
+    pub subtitle_codec: Option<String>,
 }
 
 pub fn is_ffprobe_available() -> bool {
@@ -97,6 +110,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
             "json",
             "-show_format",
             "-show_streams",
+            "-show_frames",
+            "-read_intervals",
+            "%+#5",
             "--",
         ])
         .arg(path_arg.as_ref())
@@ -169,10 +185,20 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .unwrap_or("unknown")
         .to_string();
-    let color_space = video_stream["color_space"].as_str().map(|s| s.to_string());
-    let color_transfer = video_stream["color_transfer"]
-        .as_str()
-        .map(|s| s.to_string());
+    let color_space = video_stream["color_space"].as_str().and_then(|s| {
+        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+    });
+    let color_transfer = video_stream["color_transfer"].as_str().and_then(|s| {
+        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+    });
+    let color_primaries = video_stream["color_primaries"].as_str().and_then(|s| {
+        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+    });
+
+    // Parse HDR side data: Dolby Vision, HDR10+, mastering display, CLL
+    // We scan all objects across streams and frames for side_data entries
+    let (is_dolby_vision, is_hdr10_plus, mastering_display, max_cll) =
+        extract_hdr_side_data(&json);
 
     let bit_depth = detect_bit_depth(&pix_fmt);
 
@@ -203,6 +229,14 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .and_then(|s| s["channels"].as_u64())
         .map(|c| c as u32);
 
+    let subtitle_stream = streams
+        .iter()
+        .find(|s| s["codec_type"].as_str() == Some("subtitle"));
+    let has_subtitles = subtitle_stream.is_some();
+    let subtitle_codec = subtitle_stream
+        .and_then(|s| s["codec_name"].as_str())
+        .map(|s| s.to_string());
+
     Ok(FFprobeResult {
         format_name,
         duration,
@@ -217,6 +251,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         pix_fmt,
         color_space,
         color_transfer,
+        color_primaries,
         bit_depth,
         has_audio,
         audio_codec,
@@ -228,7 +263,156 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         has_b_frames,
         video_bit_rate,
         refs,
+        mastering_display,
+        max_cll,
+        is_dolby_vision,
+        is_hdr10_plus,
+        has_subtitles,
+        subtitle_codec,
     })
+}
+
+/// Recursively scan all `side_data` arrays in a ffprobe JSON value to detect:
+/// - Dolby Vision RPU (side_data_type contains "Dolby Vision")
+/// - HDR10+ dynamic metadata (SMPTE ST 2094-40)
+/// - Mastering display colour volume (HDR10 static metadata)
+/// - Content light level (MaxCLL / MaxFALL)
+///
+/// Returns `(is_dolby_vision, is_hdr10_plus, mastering_display, max_cll)`.
+fn extract_hdr_side_data(
+    json: &serde_json::Value,
+) -> (bool, bool, Option<String>, Option<String>) {
+    let mut is_dolby_vision = false;
+    let mut is_hdr10_plus = false;
+    let mut mastering_display: Option<String> = None;
+    let mut max_cll: Option<String> = None;
+
+    // Collect all side_data arrays from streams and frames
+    let mut side_data_entries: Vec<&serde_json::Value> = Vec::new();
+
+    // From streams
+    if let Some(streams) = json["streams"].as_array() {
+        for stream in streams {
+            if let Some(sda) = stream["side_data_list"].as_array() {
+                side_data_entries.extend(sda.iter());
+            }
+        }
+    }
+
+    // From frames (we requested %+#5 — first 5 frames)
+    if let Some(frames) = json["frames"].as_array() {
+        for frame in frames {
+            if let Some(sda) = frame["side_data_list"].as_array() {
+                side_data_entries.extend(sda.iter());
+            }
+        }
+    }
+
+    for sd in &side_data_entries {
+        let sd_type = sd["side_data_type"].as_str().unwrap_or("").to_lowercase();
+
+        if sd_type.contains("dolby vision") || sd_type.contains("dovi") {
+            is_dolby_vision = true;
+        }
+
+        if sd_type.contains("hdr dynamic") || sd_type.contains("st2094") || sd_type.contains("hdr10+") {
+            is_hdr10_plus = true;
+        }
+
+        // Mastering display: parse colour primaries + luminance into ffmpeg format
+        if sd_type.contains("mastering display") {
+            if let Some(md_str) = build_mastering_display_string(sd) {
+                mastering_display = Some(md_str);
+            }
+        }
+
+        // Content light level
+        if sd_type.contains("content light level") {
+            if let Some(cll_str) = build_max_cll_string(sd) {
+                max_cll = Some(cll_str);
+            }
+        }
+    }
+
+    (is_dolby_vision, is_hdr10_plus, mastering_display, max_cll)
+}
+
+/// Convert a rational string like "13250/50000" to a u64 numerator (for ffmpeg master-display format).
+/// ffmpeg expects values multiplied by 50000 for chromaticity coordinates.
+fn parse_rational_to_50k(s: &str) -> Option<u64> {
+    if let Some((num, den)) = s.split_once('/') {
+        let n: f64 = num.trim().parse().ok()?;
+        let d: f64 = den.trim().parse().ok()?;
+        if d == 0.0 { return None; }
+        // Normalise to denominator 50000
+        Some(((n / d) * 50000.0).round() as u64)
+    } else {
+        // plain float
+        let v: f64 = s.trim().parse().ok()?;
+        // Already normalised value (some ffprobe versions give 0.265 style)
+        if v <= 1.0 {
+            Some((v * 50000.0).round() as u64)
+        } else {
+            // raw integer-style already in 50k units
+            Some(v.round() as u64)
+        }
+    }
+}
+
+/// Convert a rational luminance string to 10000-unit integer (cd/m² × 10000).
+fn parse_luminance_to_10k(s: &str) -> Option<u64> {
+    if let Some((num, den)) = s.split_once('/') {
+        let n: f64 = num.trim().parse().ok()?;
+        let d: f64 = den.trim().parse().ok()?;
+        if d == 0.0 { return None; }
+        Some(((n / d) * 10000.0).round() as u64)
+    } else {
+        let v: f64 = s.trim().parse().ok()?;
+        if v <= 10000.0 {
+            Some((v * 10000.0).round() as u64)
+        } else {
+            Some(v.round() as u64)
+        }
+    }
+}
+
+/// Build the ffmpeg `-master_display` string from a mastering_display side_data object.
+/// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
+fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
+    let get_coord = |field: &str| -> Option<u64> {
+        sd[field].as_str().and_then(parse_rational_to_50k)
+            .or_else(|| sd[field].as_f64().map(|v| (v * 50000.0).round() as u64))
+    };
+    let get_lum = |field: &str| -> Option<u64> {
+        sd[field].as_str().and_then(parse_luminance_to_10k)
+            .or_else(|| sd[field].as_f64().map(|v| (v * 10000.0).round() as u64))
+    };
+
+    let gx = get_coord("green_x")?;
+    let gy = get_coord("green_y")?;
+    let bx = get_coord("blue_x")?;
+    let by_ = get_coord("blue_y")?;
+    let rx = get_coord("red_x")?;
+    let ry = get_coord("red_y")?;
+    let wx = get_coord("white_point_x")?;
+    let wy = get_coord("white_point_y")?;
+    let lmax = get_lum("max_luminance")?;
+    let lmin = get_lum("min_luminance")?;
+
+    Some(format!(
+        "G({gx},{gy})B({bx},{by_})R({rx},{ry})WP({wx},{wy})L({lmax},{lmin})"
+    ))
+}
+
+/// Build the ffmpeg `-cll` string: "MaxCLL,MaxFALL"
+fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
+    let max_content = sd["max_content"]
+        .as_u64()
+        .or_else(|| sd["MaxCLL"].as_u64())?;
+    let max_average = sd["max_average"]
+        .as_u64()
+        .or_else(|| sd["MaxFALL"].as_u64())?;
+    Some(format!("{},{}", max_content, max_average))
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {

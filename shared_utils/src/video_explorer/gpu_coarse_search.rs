@@ -9,6 +9,61 @@ use super::dynamic_mapping;
 use super::precheck;
 use super::*;
 
+/// Build the colour/HDR FFmpeg arguments from an FFprobeResult.
+/// These arguments must be appended to every final HEVC/AV1/H.264 encode so that
+/// colour metadata (primaries, TRC, matrix, mastering display, CLL) is preserved.
+fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some(ref cp) = probe.color_primaries {
+        if !cp.is_empty() && cp != "unknown" {
+            args.push("-color_primaries".to_string());
+            args.push(cp.clone());
+        }
+    }
+    if let Some(ref trc) = probe.color_transfer {
+        if !trc.is_empty() && trc != "unknown" {
+            args.push("-color_trc".to_string());
+            args.push(trc.clone());
+        }
+    }
+    if let Some(ref cs) = probe.color_space {
+        // Normalise bt2020ncl/bt2020nc_l variants that ffprobe sometimes emits
+        let normalised = match cs.as_str() {
+            "bt2020ncl" | "bt2020_ncl" => "bt2020nc",
+            "bt2020cl"  | "bt2020_cl"  => "bt2020c",
+            other => other,
+        };
+        if !normalised.is_empty() && normalised != "unknown" {
+            args.push("-colorspace".to_string());
+            args.push(normalised.to_string());
+        }
+    }
+    if let Some(ref md) = probe.mastering_display {
+        if !md.is_empty() {
+            args.push("-master_display".to_string());
+            args.push(md.clone());
+        }
+    }
+    if let Some(ref cll) = probe.max_cll {
+        if !cll.is_empty() {
+            args.push("-max_cll".to_string());
+            args.push(cll.clone());
+        }
+    }
+    args
+}
+
+/// Return the correct pixel format for encoding: yuv420p10le for 10-bit HDR content,
+/// yuv420p for 8-bit SDR. Preserving the bit depth is essential for HDR accuracy.
+fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
+    if probe.bit_depth >= 10 {
+        "yuv420p10le"
+    } else {
+        "yuv420p"
+    }
+}
+
 /// Percentage change from input stream size (avoids div-by-zero / inf when input is 0).
 #[inline]
 fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
@@ -833,14 +888,29 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-progress").arg("pipe:1");
 
         cmd.arg("-i")
-            .arg(crate::safe_path_arg(input).as_ref())
-            .arg("-c:v")
+            .arg(crate::safe_path_arg(input).as_ref());
+
+        // Map all streams explicitly (video, audio, subtitles)
+        cmd.arg("-map").arg("0");
+
+        cmd.arg("-c:v")
             .arg(encoder.ffmpeg_name())
             .arg("-crf")
             .arg(format!("{:.1}", crf));
 
         for arg in encoder.extra_args(max_threads) {
             cmd.arg(arg);
+        }
+
+        // Preserve pixel format (critical for 10-bit HDR content)
+        if let Some(probe) = probe_info {
+            let pix_fmt = pick_pix_fmt(probe);
+            cmd.arg("-pix_fmt").arg(pix_fmt);
+
+            // Forward all HDR colour metadata (primaries, TRC, colorspace, mastering display, CLL)
+            for arg in build_color_args_from_probe(probe) {
+                cmd.arg(arg);
+            }
         }
 
         for arg in &vf_args {
@@ -863,6 +933,27 @@ fn cpu_fine_tune_from_gpu_boundary(
                 cmd.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
             }
         }
+
+        // Subtitle passthrough
+        if let Some(probe) = probe_info {
+            if probe.has_subtitles {
+                let out_ext = output
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let container = if out_ext == "mkv" { "mkv" } else { "mp4" };
+                let sub_args = crate::subtitle_args_for_container(
+                    true,
+                    probe.subtitle_codec.as_deref(),
+                    container,
+                );
+                for arg in sub_args {
+                    cmd.arg(arg);
+                }
+            }
+        }
+
         cmd.arg(crate::safe_path_arg(output).as_ref());
 
         cmd.stdout(Stdio::piped());

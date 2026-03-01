@@ -2181,12 +2181,31 @@ impl VideoExplorer {
 
         crate::log_eprintln!("      🖥️  CPU Encoding with x265 CLI (CRF {:.1})", crf);
 
+        // Probe HDR metadata so we can preserve bit depth, colour primaries, TRC,
+        // mastering display and CLL through the x265 encode.
+        let color_info = crate::ffprobe_json::extract_color_info(&self.input_path);
+
+        let pix_fmt = if color_info.bit_depth.unwrap_or(8) >= 10 {
+            "yuv420p10le".to_string()
+        } else {
+            "yuv420p".to_string()
+        };
+
         let config = X265Config {
             crf,
             preset: self.preset.x26x_name().to_string(),
             threads: self.max_threads,
             container: "mp4".to_string(),
             preserve_audio: true,
+            pix_fmt,
+            color_primaries: color_info.color_primaries,
+            color_trc: color_info.color_transfer,
+            colorspace: color_info.color_space,
+            mastering_display: color_info.mastering_display,
+            max_cll: color_info.max_cll,
+            audio_codec: None,
+            has_subtitles: false,
+            subtitle_codec: None,
         };
 
         encode_with_x265(&self.input_path, &self.output_path, &config, &self.vf_args)

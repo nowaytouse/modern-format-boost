@@ -15,6 +15,89 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
+/// Build the FFmpeg colour/HDR arguments that must be forwarded to every HEVC encode.
+///
+/// This preserves:
+/// - color_primaries (e.g. bt2020)
+/// - color_trc / color_transfer (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
+/// - colorspace (e.g. bt2020nc)
+/// - mastering_display (HDR10 static mastering display metadata)
+/// - max_cll (HDR10 content light level MaxCLL/MaxFALL)
+///
+/// Dolby Vision and HDR10+ cannot be remuxed losslessly through libx265, so they are preserved
+/// as HDR10 (their static layer) by forwarding all static metadata — the dynamic layer is
+/// stripped, which is unavoidable without specialised DV tooling.
+fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+
+    // -color_primaries
+    if let Some(ref cp) = detection.color_primaries {
+        if !cp.is_empty() && cp != "unknown" {
+            args.push("-color_primaries".to_string());
+            args.push(cp.clone());
+        }
+    }
+
+    // -color_trc (transfer characteristics)
+    if let Some(ref trc) = detection.color_transfer {
+        if !trc.is_empty() && trc != "unknown" {
+            args.push("-color_trc".to_string());
+            args.push(trc.clone());
+        }
+    }
+
+    // -colorspace (matrix coefficients)
+    // Derive from color_space field; normalise bt2020ncl → bt2020nc for ffmpeg
+    let cs_str = match &detection.color_space {
+        crate::detection_api::ColorSpace::BT2020 => Some("bt2020nc"),
+        crate::detection_api::ColorSpace::BT709  => Some("bt709"),
+        crate::detection_api::ColorSpace::Unknown(s) if !s.is_empty() && s != "unknown" => {
+            // pass raw string through
+            None // handled below separately to avoid lifetime issues
+        }
+        _ => None,
+    };
+    if let Some(cs) = cs_str {
+        args.push("-colorspace".to_string());
+        args.push(cs.to_string());
+    } else if let crate::detection_api::ColorSpace::Unknown(ref s) = detection.color_space {
+        if !s.is_empty() && s != "unknown" {
+            args.push("-colorspace".to_string());
+            args.push(s.clone());
+        }
+    }
+
+    // -master_display (HDR10 mastering display metadata)
+    if let Some(ref md) = detection.mastering_display {
+        if !md.is_empty() {
+            args.push("-master_display".to_string());
+            args.push(md.clone());
+        }
+    }
+
+    // -max_cll MaxCLL,MaxFALL (HDR10 content light level)
+    if let Some(ref cll) = detection.max_cll {
+        if !cll.is_empty() {
+            args.push("-max_cll".to_string());
+            args.push(cll.clone());
+        }
+    }
+
+    args
+}
+
+/// Return the correct pixel format for encoding:
+/// - If source is 10-bit (yuv420p10le, yuv422p10le, etc.) use yuv420p10le so that
+///   the HDR signal range / precision is preserved in the output stream.
+/// - Otherwise default to yuv420p (8-bit SDR).
+fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
+    if detection.bit_depth >= 10 {
+        "yuv420p10le"
+    } else {
+        "yuv420p"
+    }
+}
+
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, false)
 }
@@ -183,6 +266,16 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
     let detection = detect_video(input)?;
+
+    // Warn about dynamic HDR metadata that will be stripped during re-encode
+    if detection.is_dolby_vision {
+        warn!("Dolby Vision detected: dynamic DV metadata will be stripped to HDR10 static layer");
+        warn!("HDR10 mastering display + content light level are preserved");
+    }
+    if detection.is_hdr10_plus {
+        warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
+    }
+
     let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat);
 
     if strategy.target == TargetVideoFormat::Skip {
@@ -898,8 +991,28 @@ fn execute_hevc_conversion(
     crf: u8,
     max_threads: usize,
 ) -> Result<u64> {
-    let x265_params = format!("log-level=error:pools={}", max_threads);
+    // For HDR content (10-bit) we need additional x265 params to signal HDR correctly.
+    // hdr-opt=1 enables SEI HDR metadata writing; repeat-headers=1 ensures SPS/PPS on
+    // every keyframe so players always have the colour info available.
+    let is_hdr_content = detection.bit_depth >= 10
+        || detection.is_dolby_vision
+        || detection.is_hdr10_plus
+        || detection.mastering_display.is_some()
+        || matches!(
+            detection.color_transfer.as_deref(),
+            Some("smpte2084") | Some("arib-std-b67")
+        );
 
+    let x265_params = if is_hdr_content {
+        format!(
+            "log-level=error:pools={}:hdr-opt=1:repeat-headers=1",
+            max_threads
+        )
+    } else {
+        format!("log-level=error:pools={}", max_threads)
+    };
+
+    let pix_fmt = hdr_pix_fmt(detection);
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
     let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
@@ -918,26 +1031,37 @@ fn execute_hevc_conversion(
         crf.to_string(),
         "-preset".to_string(),
         "medium".to_string(),
+        "-pix_fmt".to_string(),
+        pix_fmt.to_string(),
         "-tag:v".to_string(),
         "hvc1".to_string(),
         "-x265-params".to_string(),
         x265_params,
     ];
 
+    // Append HDR colour metadata args (color_primaries, color_trc, colorspace,
+    // master_display, max_cll)
+    args.extend(build_hdr_ffmpeg_args(detection));
+
     for arg in &vf_args {
         args.push(arg.clone());
     }
 
     if detection.has_audio {
-        args.extend(vec![
-            "-c:a".to_string(),
-            "aac".to_string(),
-            "-b:a".to_string(),
-            "320k".to_string(),
-        ]);
+        args.extend(shared_utils::audio_args_for_container(
+            detection.audio_codec.as_deref(),
+            "mp4",
+        ));
     } else {
         args.push("-an".to_string());
     }
+
+    // Subtitles: copy when format is MP4-compatible
+    args.extend(shared_utils::subtitle_args_for_container(
+        detection.has_subtitles,
+        detection.subtitle_codec.as_deref(),
+        "mp4",
+    ));
 
     args.push(output_arg);
 
@@ -959,8 +1083,26 @@ fn execute_hevc_lossless(
 ) -> Result<u64> {
     warn!("⚠️  HEVC Lossless encoding - this will be slow and produce large files!");
 
-    let x265_params = format!("lossless=1:log-level=error:pools={}", max_threads);
+    let is_hdr_content = detection.bit_depth >= 10
+        || detection.is_dolby_vision
+        || detection.is_hdr10_plus
+        || detection.mastering_display.is_some()
+        || matches!(
+            detection.color_transfer.as_deref(),
+            Some("smpte2084") | Some("arib-std-b67")
+        );
 
+    // hdr-opt=1 + repeat-headers=1 ensure HDR SEI metadata is written into the bitstream.
+    let x265_params = if is_hdr_content {
+        format!(
+            "lossless=1:log-level=error:pools={}:hdr-opt=1:repeat-headers=1",
+            max_threads
+        )
+    } else {
+        format!("lossless=1:log-level=error:pools={}", max_threads)
+    };
+
+    let pix_fmt = hdr_pix_fmt(detection);
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
 
     let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
@@ -975,6 +1117,8 @@ fn execute_hevc_lossless(
         input_arg,
         "-c:v".to_string(),
         "libx265".to_string(),
+        "-pix_fmt".to_string(),
+        pix_fmt.to_string(),
         "-x265-params".to_string(),
         x265_params,
         "-preset".to_string(),
@@ -983,15 +1127,29 @@ fn execute_hevc_lossless(
         "hvc1".to_string(),
     ];
 
+    // Forward all HDR colour metadata
+    args.extend(build_hdr_ffmpeg_args(detection));
+
     for arg in &vf_args {
         args.push(arg.clone());
     }
 
     if detection.has_audio {
-        args.extend(vec!["-c:a".to_string(), "flac".to_string()]);
+        // MKV supports all codecs — always copy
+        args.extend(shared_utils::audio_args_for_container(
+            detection.audio_codec.as_deref(),
+            "mkv",
+        ));
     } else {
         args.push("-an".to_string());
     }
+
+    // Subtitles: MKV supports all subtitle formats — always copy
+    args.extend(shared_utils::subtitle_args_for_container(
+        detection.has_subtitles,
+        detection.subtitle_codec.as_deref(),
+        "mkv",
+    ));
 
     args.push(output_arg);
 
@@ -1052,6 +1210,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
 
         let strategy = determine_strategy(&detection);
@@ -1088,6 +1255,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
 
         let strategy = determine_strategy_with_apple_compat(&detection, true);
@@ -1129,6 +1305,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
 
         let normal = determine_strategy(&detection);
@@ -1172,6 +1357,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
 
         let normal = determine_strategy(&detection);
@@ -1218,6 +1412,15 @@ mod tests {
                 has_b_frames: true,
                 profile: None,
                 bits_per_pixel: 0.1,
+                color_primaries: None,
+                color_transfer: None,
+                mastering_display: None,
+                max_cll: None,
+                is_dolby_vision: false,
+                is_hdr10_plus: false,
+                has_subtitles: false,
+                subtitle_codec: None,
+                audio_channels: None,
             }
         };
 
@@ -1278,6 +1481,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1311,6 +1523,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.04,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(
@@ -1347,6 +1568,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let crf = calculate_matched_crf(&det);
         assert!(
@@ -1388,6 +1618,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.15,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let crf = calculate_matched_crf(&det);
         assert!(
@@ -1424,6 +1663,15 @@ mod tests {
             has_b_frames: false,
             profile: None,
             bits_per_pixel: 8.5,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(
@@ -1461,6 +1709,15 @@ mod tests {
             has_b_frames: false,
             profile: None,
             bits_per_pixel: 2.1,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1498,6 +1755,15 @@ mod tests {
             has_b_frames: true,
             profile: None,
             bits_per_pixel: 0.09,
+            color_primaries: None,
+            color_transfer: None,
+            mastering_display: None,
+            max_cll: None,
+            is_dolby_vision: false,
+            is_hdr10_plus: false,
+            has_subtitles: false,
+            subtitle_codec: None,
+            audio_channels: None,
         };
         let normal = determine_strategy(&det);
         assert_eq!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") skipped in normal mode");
