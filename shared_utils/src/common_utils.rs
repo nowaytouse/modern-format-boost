@@ -432,3 +432,9 @@ mod tests {
         assert!(stdout.contains("test"));
     }
 }
+
+/// Escape a path for safe display in error messages.
+/// Prevents ANSI escape code injection by escaping control characters.
+pub fn escape_path_for_display(path: &std::path::Path) -> String {
+    path.display().to_string().escape_default().to_string()
+}
