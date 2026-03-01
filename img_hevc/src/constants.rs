@@ -4,12 +4,13 @@
 /// PNG files smaller than this will be skipped to avoid overhead
 pub const SMALL_PNG_THRESHOLD_BYTES: u64 = 500 * 1024;
 
-/// Initial buffer size for stderr capture (1MB)
-pub const STDERR_BUFFER_INITIAL: usize = 1024 * 1024;
+/// Initial buffer size for stderr capture (64KB)
+/// Reduced from 1MB for better memory efficiency in low-memory scenarios
+pub const STDERR_BUFFER_INITIAL: usize = 64 * 1024;
 
-/// Maximum buffer size for stderr capture (10MB)
-/// Prevents memory overflow from long-running processes
-pub const STDERR_BUFFER_MAX: usize = 10 * 1024 * 1024;
+/// Maximum buffer size for stderr capture (1MB)
+/// Reduced from 10MB to prevent memory overflow in multi-instance scenarios
+pub const STDERR_BUFFER_MAX: usize = 1024 * 1024;
 
 /// Maximum number of stderr lines to capture
 /// Prevents memory overflow from verbose output

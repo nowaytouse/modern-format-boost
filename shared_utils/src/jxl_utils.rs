@@ -167,10 +167,12 @@ fn run_imagemagick_cjxl_pipeline(
     })?;
 
     // Drain ImageMagick stderr in background to avoid blocking when pipe buffer fills.
-    let magick_stderr_thread = magick_proc.stderr.take().map(|mut stderr| {
+    // Limit to 1MB to prevent memory issues in low-memory scenarios.
+    let magick_stderr_thread = magick_proc.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
+            use std::io::Read;
             let mut s = String::new();
-            let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
+            let _ = stderr.take(1024 * 1024).read_to_string(&mut s);
             s
         })
     });
@@ -200,10 +202,12 @@ fn run_imagemagick_cjxl_pipeline(
         })?;
 
     // Drain cjxl stderr in background so cjxl does not block when pipe buffer fills.
-    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|mut stderr| {
+    // Limit to 1MB to prevent memory issues in low-memory scenarios.
+    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|stderr| {
         std::thread::spawn(move || {
+            use std::io::Read;
             let mut s = String::new();
-            let _ = std::io::Read::read_to_string(&mut stderr, &mut s);
+            let _ = stderr.take(1024 * 1024).read_to_string(&mut s);
             s.trim().to_string()
         })
     });
