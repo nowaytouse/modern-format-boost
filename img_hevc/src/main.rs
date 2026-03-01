@@ -535,6 +535,21 @@ fn auto_convert_single_file(
 
     // Apple compat: HEIC/HEIF are already native — skip without running heavy analysis (avoids SecurityLimitExceeded etc.)
     if config.apple_compat && shared_utils::image_heic_analysis::is_heic_file(input) {
+        // Skip Live Photos in Apple compat mode
+        if shared_utils::is_live_photo(input) {
+            let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+            copy_original_if_adjacent_mode(input, config)?;
+            return Ok(ConversionOutput {
+                original_path: input.display().to_string(),
+                output_path: input.display().to_string(),
+                skipped: true,
+                message: "Live Photo detected, skipping in Apple compat mode".to_string(),
+                original_size: file_size,
+                output_size: None,
+                size_reduction: None,
+            });
+        }
+
         let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
