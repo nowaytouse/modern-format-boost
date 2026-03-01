@@ -27,6 +27,24 @@ pub struct X265Config {
     pub threads: usize,
     pub container: String,
     pub preserve_audio: bool,
+    /// Pixel format to use for the YUV pipe. Set to "yuv420p10le" for 10-bit HDR content.
+    pub pix_fmt: String,
+    /// HDR colour primaries (e.g. "bt2020")
+    pub color_primaries: Option<String>,
+    /// HDR transfer characteristics (e.g. "smpte2084", "arib-std-b67")
+    pub color_trc: Option<String>,
+    /// HDR matrix coefficients (e.g. "bt2020nc")
+    pub colorspace: Option<String>,
+    /// HDR10 mastering display metadata in ffmpeg format
+    pub mastering_display: Option<String>,
+    /// HDR10 content light level: "MaxCLL,MaxFALL"
+    pub max_cll: Option<String>,
+    /// Audio codec of the source (used to decide copy vs transcode in mux step)
+    pub audio_codec: Option<String>,
+    /// Whether the source has subtitle streams
+    pub has_subtitles: bool,
+    /// Codec name of the first subtitle stream
+    pub subtitle_codec: Option<String>,
 }
 
 impl Default for X265Config {
@@ -37,6 +55,15 @@ impl Default for X265Config {
             threads: crate::thread_manager::get_optimal_threads(),
             container: "mp4".to_string(),
             preserve_audio: true,
+            pix_fmt: "yuv420p".to_string(),
+            color_primaries: None,
+            color_trc: None,
+            colorspace: None,
+            mastering_display: None,
+            max_cll: None,
+            audio_codec: None,
+            has_subtitles: false,
+            subtitle_codec: None,
         }
     }
 }
@@ -182,15 +209,16 @@ fn encode_to_hevc(
 
     ffmpeg_cmd
         .arg("-pix_fmt")
-        .arg("yuv420p")
+        .arg(&config.pix_fmt)
         .arg("-")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     let ffmpeg_cmd_str = format!(
-        "ffmpeg -y -i {} -f yuv4mpegpipe {} -pix_fmt yuv420p -",
+        "ffmpeg -y -i {} -f yuv4mpegpipe {} -pix_fmt {} -",
         crate::safe_path_arg(input),
-        vf_args.join(" ")
+        vf_args.join(" "),
+        config.pix_fmt
     );
     info!(command = %ffmpeg_cmd_str, "Executing FFmpeg decode command");
 
@@ -208,7 +236,36 @@ fn encode_to_hevc(
         .arg("--pools")
         .arg(config.threads.to_string())
         .arg("--log-level")
-        .arg("error")
+        .arg("error");
+
+    // HDR-specific x265 options: enabled when the source is 10-bit or has explicit HDR metadata.
+    let is_hdr_content = config.pix_fmt.contains("10")
+        || config.mastering_display.is_some()
+        || config.max_cll.is_some()
+        || matches!(config.color_trc.as_deref(), Some("smpte2084") | Some("arib-std-b67"));
+    if is_hdr_content {
+        x265_cmd
+            .arg("--hdr10-opt")
+            .arg("--repeat-headers");
+
+        if let Some(ref cp) = config.color_primaries {
+            x265_cmd.arg("--colorprim").arg(cp);
+        }
+        if let Some(ref trc) = config.color_trc {
+            x265_cmd.arg("--transfer").arg(trc);
+        }
+        if let Some(ref cs) = config.colorspace {
+            x265_cmd.arg("--colormatrix").arg(cs);
+        }
+        if let Some(ref md) = config.mastering_display {
+            x265_cmd.arg("--master-display").arg(md);
+        }
+        if let Some(ref cll) = config.max_cll {
+            x265_cmd.arg("--max-cll").arg(cll);
+        }
+    }
+
+    x265_cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -369,16 +426,35 @@ fn mux_hevc_to_container(
     if config.preserve_audio {
         cmd.arg("-i")
             .arg(crate::safe_path_arg(original_input).as_ref());
-        cmd.arg("-map")
-            .arg("0:v:0")
-            .arg("-map")
-            .arg("1:a:0?")
-            .arg("-c:v")
-            .arg("copy")
-            .arg("-c:a")
-            .arg("aac")
-            .arg("-b:a")
-            .arg("256k");
+        // Map: video from HEVC bitstream (input 0), all audio + subtitle from original (input 1)
+        cmd.arg("-map").arg("0:v:0");
+        cmd.arg("-map").arg("1:a?");
+        cmd.arg("-c:v").arg("copy");
+
+        // Audio: copy when compatible, transcode only for incompatible codecs
+        let audio_args = crate::audio_args_for_container(
+            config.audio_codec.as_deref(),
+            &config.container,
+        );
+        for arg in &audio_args {
+            // Skip -an since we already have -map 1:a?
+            if arg != "-an" {
+                cmd.arg(arg);
+            }
+        }
+
+        // Subtitles: map and copy/transcode as appropriate for container
+        if config.has_subtitles {
+            cmd.arg("-map").arg("1:s?");
+            let sub_args = crate::subtitle_args_for_container(
+                true,
+                config.subtitle_codec.as_deref(),
+                &config.container,
+            );
+            for arg in sub_args {
+                cmd.arg(arg);
+            }
+        }
     } else {
         cmd.arg("-c:v").arg("copy").arg("-an");
     }
@@ -397,8 +473,9 @@ fn mux_hevc_to_container(
         hevc_file,
         if config.preserve_audio {
             format!(
-                "-i {:?} -map 0:v:0 -map 1:a:0? -c:a aac -b:a 256k",
-                original_input
+                "-i {:?} -map 0:v:0 -map 1:a? -c:a copy{}",
+                original_input,
+                if config.has_subtitles { " -map 1:s? -c:s copy" } else { "" }
             )
         } else {
             "-an".to_string()

@@ -170,6 +170,24 @@ pub struct VideoDetectionResult {
     pub has_b_frames: bool,
     pub video_bitrate: Option<u64>,
     pub bits_per_pixel: f64,
+    /// color_primaries from ffprobe (e.g. "bt2020", "bt709")
+    pub color_primaries: Option<String>,
+    /// color_transfer (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67", "bt709")
+    pub color_transfer: Option<String>,
+    /// HDR10 mastering display metadata in ffmpeg format
+    pub mastering_display: Option<String>,
+    /// HDR10 content light level: "MaxCLL,MaxFALL"
+    pub max_cll: Option<String>,
+    /// Dolby Vision detected in stream side data
+    pub is_dolby_vision: bool,
+    /// HDR10+ (SMPTE ST 2094-40) detected in stream side data
+    pub is_hdr10_plus: bool,
+    /// True when at least one subtitle stream is present
+    pub has_subtitles: bool,
+    /// Codec name of the first subtitle stream
+    pub subtitle_codec: Option<String>,
+    /// Number of audio channels (e.g. 2 for stereo, 6 for 5.1, 8 for 7.1/Atmos)
+    pub audio_channels: Option<u32>,
 }
 
 pub fn determine_compression_type(
@@ -285,5 +303,14 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         has_b_frames: probe.has_b_frames,
         video_bitrate: probe.video_bit_rate,
         bits_per_pixel,
+        color_primaries: probe.color_primaries,
+        color_transfer: probe.color_transfer,
+        mastering_display: probe.mastering_display,
+        max_cll: probe.max_cll,
+        is_dolby_vision: probe.is_dolby_vision,
+        is_hdr10_plus: probe.is_hdr10_plus,
+        has_subtitles: probe.has_subtitles,
+        subtitle_codec: probe.subtitle_codec,
+        audio_channels: probe.audio_channels,
     })
 }
