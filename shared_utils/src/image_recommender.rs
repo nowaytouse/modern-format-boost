@@ -74,6 +74,7 @@ mod tests {
             psnr: None,
             ssim: None,
             metadata: HashMap::new(),
+            hdr_info: None,
         };
 
         let rec = get_recommendation(&analysis);

@@ -1,7 +1,7 @@
 //! 🔥 v6.5: FFprobe JSON 解析模块
 //! 使用 serde_json 替代手动字符串解析
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command;
 use tracing::warn;
@@ -55,7 +55,7 @@ pub struct FfprobeOutput {
     pub frames: Vec<FfprobeFrame>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ColorInfo {
     pub color_space: Option<String>,
     pub color_transfer: Option<String>,
