@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme). 0.8.8 is the first release under the new scheme.
 
+## [Unreleased] - nightly
+
+### Image conversion fixes
+- **apple_compat flag in ImageMagick fallback paths**: Fixed missing `apple_compat` flag in all ImageMagick→cjxl fallback call sites:
+  - `shared_utils/src/jxl_utils.rs`: All 4 call sites now pass `options.apple_compat`
+  - `img_av1/src/lossless_converter.rs`: Pass `options.apple_compat`
+  - `img_hevc/src/lossless_converter.rs`: Pass `options.apple_compat`
+- **convert_jpeg_to_jxl fallback**: Added ImageMagick→cjxl fallback to the else branch when cjxl JPEG transcode fails (e.g., corrupt JPEG with "Getting pixel data failed" / "Failed to decode" errors)
+- **XMP/ExifTool format error handling**: When ExifTool reports "format error in file" (case-insensitive):
+  - Emit single skip line: "XMP merge skipped (ExifTool does not support writing to this file format)"
+  - Still fallback to exiv2; suppress duplicate "exiv2 not available" message
+  - Affects files like IMG_0004 (2).GIF that ExifTool cannot write to
+- **cjxl decode/pixel error retry**: Added depth parameter (8/16) to ImageMagick→cjxl pipeline:
+  - New `is_decode_or_pixel_cjxl_error()` detects cjxl stderr with "getting pixel data failed" / "failed to decode"
+  - Retry with 8-bit simplified stream for confirmed 8-bit sources (no quality loss)
+  - For 16-bit sources, retry with ICC normalization to sRGB (no depth downgrade)
+  - Affects files like IMG_8321.JPG, IMG_6171.jpeg where magick succeeds but cjxl fails
+
 ## [0.8.8] - 2026-02-28
 
 All changes below are since 8.7.0.
