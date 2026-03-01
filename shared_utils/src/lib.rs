@@ -96,6 +96,9 @@ pub mod conversion_types;
 
 pub mod video_detection;
 
+pub mod media_passthrough;
+pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
+
 pub mod image_analyzer;
 pub mod image_detection;
 pub mod image_formats;
