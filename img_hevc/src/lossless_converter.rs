@@ -218,9 +218,8 @@ pub fn convert_to_jxl(
                                         ffmpeg_proc.stderr.take().map(|stderr| {
                                             std::thread::spawn(move || {
                                                 use std::io::Read;
-                                                let mut buf = String::with_capacity(crate::constants::STDERR_BUFFER_INITIAL);
-                                                let reader = stderr;
-                                                let _ = reader.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
+                                                let mut buf = String::with_capacity(64 * 1024);
+                                                let _ = stderr.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
                                                 buf
                                             })
                                         });
@@ -229,9 +228,8 @@ pub fn convert_to_jxl(
                                     let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|stderr| {
                                         std::thread::spawn(move || {
                                             use std::io::Read;
-                                            let mut buf = String::with_capacity(crate::constants::STDERR_BUFFER_INITIAL);
-                                            let reader = stderr;
-                                            let _ = reader.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
+                                            let mut buf = String::with_capacity(64 * 1024);
+                                            let _ = stderr.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
                                             buf
                                         })
                                     });
