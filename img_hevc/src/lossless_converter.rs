@@ -247,6 +247,7 @@ pub fn convert_to_jxl(
                                             &temp_output,
                                             distance,
                                             max_threads,
+                                            options.apple_compat,
                                         )
                                     }
                                 }
@@ -255,14 +256,14 @@ pub fn convert_to_jxl(
                                     shared_utils::progress_mode::emit_stderr(&line);
                                     let _ = ffmpeg_proc.kill();
                                     shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                    try_imagemagick_fallback(input, &temp_output, distance, max_threads)
+                                    try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat)
                                 }
                             }
                         } else {
                             shared_utils::progress_mode::emit_stderr("   ❌ Failed to capture FFmpeg stdout");
                             let _ = ffmpeg_proc.kill();
                             shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                            try_imagemagick_fallback(input, &temp_output, distance, max_threads)
+                            try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat)
                         }
                     }
                     Err(e) => {
@@ -270,7 +271,7 @@ pub fn convert_to_jxl(
                         shared_utils::progress_mode::emit_stderr(&line);
                         shared_utils::progress_mode::emit_stderr("      💡 Install: brew install ffmpeg");
                         shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                        try_imagemagick_fallback(input, &temp_output, distance, max_threads)
+                        try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat)
                     }
                 }
             } else {
@@ -468,7 +469,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         || stderr.contains("Corrupt JPEG")
         || stderr.contains("Premature end")
     {
-        match shared_utils::jxl_utils::try_imagemagick_fallback(input, &temp_output, 0.0, max_threads) {
+        match shared_utils::jxl_utils::try_imagemagick_fallback(input, &temp_output, 0.0, max_threads, options.apple_compat) {
             Ok(_) => commit_jpeg_to_jxl_success(
                 input,
                 &temp_output,
@@ -483,10 +484,23 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             ))),
         }
     } else {
-        Err(ImgQualityError::ConversionError(format!(
-            "cjxl JPEG transcode failed: {}",
-            stderr
-        )))
+        shared_utils::progress_mode::emit_stderr(
+            "   🔄 JPEG transcode failed, trying ImageMagick pipeline...",
+        );
+        match shared_utils::jxl_utils::try_imagemagick_fallback(input, &temp_output, 0.0, max_threads, options.apple_compat) {
+            Ok(_) => commit_jpeg_to_jxl_success(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                options,
+                "JPEG -> JXL (ImageMagick fallback)",
+            ),
+            Err(_) => Err(ImgQualityError::ConversionError(format!(
+                "cjxl JPEG transcode failed: {}",
+                stderr
+            ))),
+        }
     }
 }
 
@@ -822,8 +836,9 @@ fn try_imagemagick_fallback(
     output: &Path,
     distance: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> std::result::Result<std::process::Output, std::io::Error> {
-    shared_utils::jxl_utils::try_imagemagick_fallback(input, output, distance, max_threads)
+    shared_utils::jxl_utils::try_imagemagick_fallback(input, output, distance, max_threads, apple_compat)
 }
 
 fn convert_to_temp_png(

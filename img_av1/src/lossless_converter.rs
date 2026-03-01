@@ -70,6 +70,7 @@ pub fn convert_to_jxl(
                     &temp_output,
                     distance,
                     max_threads,
+                    options.apple_compat,
                 ) {
                     Ok(out) => Ok(out),
                     Err(_) => cmd_result,

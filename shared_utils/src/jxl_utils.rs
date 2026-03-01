@@ -91,16 +91,48 @@ fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
         && (s.contains("getting pixel data failed") || s.contains("grayscale"))
 }
 
-/// One attempt of ImageMagick → cjxl pipeline. `strip` = true adds -strip (drops ICC/EXIF) for the grayscale+ICC workaround.
+/// True when cjxl failed with decode/pixel errors that may be helped by a simpler pipeline.
+fn is_decode_or_pixel_cjxl_error(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    s.contains("getting pixel data failed")
+        || s.contains("failed to decode")
+        || s.contains("decoding failed")
+        || s.contains("decode failed")
+}
+
+/// Read the bit depth from a PNG file's IHDR chunk (byte offset 24).
+/// Returns None if the file is not a valid PNG or cannot be read.
+fn get_png_bit_depth(path: &Path) -> Option<u8> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut buf = [0u8; 25];
+    f.read_exact(&mut buf).ok()?;
+    // PNG signature is 8 bytes; IHDR: 4 len + 4 type + 13 data bytes.
+    // Bit depth is the first byte of IHDR data, at offset 8+4+4+8 = 24.
+    if &buf[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    Some(buf[24])
+}
+
+/// One attempt of ImageMagick → cjxl pipeline.
+/// - `strip`: adds -strip (drops ICC/EXIF)
+/// - `depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
+/// - `normalize_icc`: replaces embedded ICC with standard sRGB without truncating bit depth
+/// - `apple_compat`: adds --compress_boxes=0 to cjxl for Apple device compatibility
 fn run_imagemagick_cjxl_pipeline(
     input: &Path,
     output: &Path,
     distance: f32,
     max_threads: usize,
     strip: bool,
+    depth: u8,
+    normalize_icc: bool,
+    apple_compat: bool,
 ) -> std::result::Result<std::process::Output, (bool, bool, String)> {
     use std::process::Stdio;
 
+    let depth_arg = if depth == 8 { "8" } else { "16" };
     let mut magick = Command::new("magick");
     magick
         .arg("--")
@@ -108,9 +140,17 @@ fn run_imagemagick_cjxl_pipeline(
     if strip {
         magick.arg("-strip");
     }
+    if normalize_icc {
+        magick
+            .arg("-define")
+            .arg("png:preserve-colormap=false")
+            .arg("-set")
+            .arg("colorspace")
+            .arg("sRGB");
+    }
     magick
         .arg("-depth")
-        .arg("16")
+        .arg(depth_arg)
         .arg("png:-")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -135,7 +175,8 @@ fn run_imagemagick_cjxl_pipeline(
         })
     });
 
-    let mut cjxl_proc = Command::new("cjxl")
+    let mut cjxl_cmd = Command::new("cjxl");
+    cjxl_cmd
         .arg("-")
         .arg(output)
         .arg("-d")
@@ -143,7 +184,11 @@ fn run_imagemagick_cjxl_pipeline(
         .arg("-e")
         .arg("7")
         .arg("-j")
-        .arg(max_threads.to_string())
+        .arg(max_threads.to_string());
+    if apple_compat {
+        cjxl_cmd.arg("--compress_boxes=0");
+    }
+    let mut cjxl_proc = cjxl_cmd
         .stdin(magick_stdout)
         .stderr(Stdio::piped())
         .spawn()
@@ -220,16 +265,25 @@ fn run_imagemagick_cjxl_pipeline(
 }
 
 /// ImageMagick → cjxl fallback pipeline for when direct cjxl encoding fails.
-/// Tries without -strip first (preserve metadata). Only if cjxl fails with the exact
-/// "grayscale PNG + ICC profile" error do we retry once with -strip.
+///
+/// Fallback priority:
+/// 1. No -strip, depth 16 (preserve metadata)
+/// 2a. grayscale+ICC error → -strip, depth 16
+///     └─ still fails + decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
+///     └─ still fails + 16-bit source → normalize ICC to sRGB, keep depth 16
+///        └─ still fails → error, refuse to downgrade
+/// 2b. decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
+/// 2b. decode/pixel error + 16-bit source → normalize ICC to sRGB, keep depth 16
+///     └─ still fails → error, refuse to silently downgrade
 pub fn try_imagemagick_fallback(
     input: &Path,
     output: &Path,
     distance: f32,
     max_threads: usize,
+    apple_compat: bool,
 ) -> std::result::Result<std::process::Output, std::io::Error> {
-    // First attempt: no -strip, preserve metadata
-    match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, false) {
+    // Attempt 1: no -strip, depth 16, preserve metadata
+    match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, false, 16, false, apple_compat) {
         Ok(out) => {
             crate::progress_mode::fallback_success();
             return Ok(out);
@@ -242,20 +296,18 @@ pub fn try_imagemagick_fallback(
                 if cjxl_ok { "✓" } else { "✗" }
             );
             crate::progress_mode::emit_stderr(&line);
-            // Retry with -strip only when cjxl failed and reason is grayscale+ICC.
-            // -strip only affects the intermediate PNG→JXL stream. The final JXL still receives
-            // full metadata from the original file in finalize_conversion (ExifTool -tagsfromfile
-            // from original → output), so EXIF/ICC/XMP/timestamps are preserved in the output.
+
             if magick_ok && !cjxl_ok && is_grayscale_icc_cjxl_error(&stderr) {
+                // Attempt 2: -strip, depth 16 (drop bad ICC, keep bit depth)
                 crate::progress_mode::emit_stderr(
-                    "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl); output will still get metadata from original in finalize step",
+                    "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl)",
                 );
-                match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true) {
+                match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true, 16, false, apple_compat) {
                     Ok(out) => {
                         crate::progress_mode::fallback_success();
                         return Ok(out);
                     }
-                    Err((m, c, _)) => {
+                    Err((m, c, stderr2)) => {
                         let line = format!(
                             "   ❌ ImageMagick retry failed for file: {} (magick: {}, cjxl: {})",
                             input.display(),
@@ -263,6 +315,71 @@ pub fn try_imagemagick_fallback(
                             if c { "✓" } else { "✗" }
                         );
                         crate::progress_mode::emit_stderr(&line);
+                        // Attempt 3: only for 8-bit sources (no quality loss)
+                        if m && !c && is_decode_or_pixel_cjxl_error(&stderr2) {
+                            let bit_depth = get_png_bit_depth(input).unwrap_or(16);
+                            if bit_depth <= 8 {
+                                crate::progress_mode::emit_stderr(
+                                    "   🔄 Retrying with -depth 8 -strip (8-bit source confirmed, no quality loss)",
+                                );
+                                if let Ok(out) = run_imagemagick_cjxl_pipeline(
+                                    input, output, distance, max_threads, true, 8, false, apple_compat,
+                                ) {
+                                    crate::progress_mode::fallback_success();
+                                    return Ok(out);
+                                }
+                            } else {
+                                // Attempt 4: normalize ICC to sRGB, preserve 16-bit depth
+                                crate::progress_mode::emit_stderr(
+                                    "   🔄 Retrying with ICC normalization to sRGB (16-bit source, no depth downgrade)",
+                                );
+                                match run_imagemagick_cjxl_pipeline(
+                                    input, output, distance, max_threads, false, 16, true, apple_compat,
+                                ) {
+                                    Ok(out) => {
+                                        crate::progress_mode::fallback_success();
+                                        return Ok(out);
+                                    }
+                                    Err(_) => {
+                                        crate::progress_mode::emit_stderr(
+                                            "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if magick_ok && !cjxl_ok && is_decode_or_pixel_cjxl_error(&stderr) {
+                let bit_depth = get_png_bit_depth(input).unwrap_or(16);
+                if bit_depth <= 8 {
+                    // Attempt 2: -strip -depth 8 for 8-bit sources (no quality loss)
+                    crate::progress_mode::emit_stderr(
+                        "   🔄 Retrying with -depth 8 -strip (8-bit source confirmed, no quality loss)",
+                    );
+                    if let Ok(out) = run_imagemagick_cjxl_pipeline(
+                        input, output, distance, max_threads, true, 8, false, apple_compat,
+                    ) {
+                        crate::progress_mode::fallback_success();
+                        return Ok(out);
+                    }
+                } else {
+                    // Attempt 2: normalize ICC to sRGB, preserve 16-bit depth
+                    crate::progress_mode::emit_stderr(
+                        "   🔄 Retrying with ICC normalization to sRGB (16-bit source, no depth downgrade)",
+                    );
+                    match run_imagemagick_cjxl_pipeline(
+                        input, output, distance, max_threads, false, 16, true, apple_compat,
+                    ) {
+                        Ok(out) => {
+                            crate::progress_mode::fallback_success();
+                            return Ok(out);
+                        }
+                        Err(_) => {
+                            crate::progress_mode::emit_stderr(
+                                "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
+                            );
+                        }
                     }
                 }
             }

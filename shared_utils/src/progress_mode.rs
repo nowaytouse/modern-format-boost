@@ -473,13 +473,14 @@ pub fn xmp_merge_success() {
     }
 }
 
+/// Format a status line with the standard [Info] tag padding (for run log alignment).
+pub fn format_status_line(msg: &str) -> String {
+    format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), msg)
+}
+
 /// Call on failed merge. Logs the error on its own line.
 pub fn xmp_merge_failure(msg: &str) {
-    let line = format!(
-        "{}{}",
-        pad_tag(RUN_LOG_STATUS_TAG),
-        format!("⚠️  XMP merge failed: {}", msg)
-    );
+    let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), format!("⚠️  XMP merge failed: {}", msg));
     emit_stderr(&line);
 }
 
