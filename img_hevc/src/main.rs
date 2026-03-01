@@ -648,6 +648,17 @@ fn auto_convert_single_file(
 
     // Dispatch order: (1) format filter already applied above (HEIC/HEIF Apple skip, JXL skip).
     // (2) Then by (format, is_lossless, is_animated): modern static → JXL or skip; JPEG → JXL; legacy lossless → JXL; animated → HEVC/GIF/skip; legacy lossy → JXL.
+
+    // Log HDR detection if present
+    if let Some(ref hdr) = analysis.hdr_info {
+        if hdr.is_hdr() {
+            let transfer = hdr.color_transfer.as_deref().unwrap_or("unknown");
+            let primaries = hdr.color_primaries.as_deref().unwrap_or("unknown");
+            let bit_depth = hdr.bit_depth.unwrap_or(8);
+            verbose_log!("🌈 HDR detected: {} {} {}-bit", primaries, transfer, bit_depth);
+        }
+    }
+
     let result = match (
         analysis.format.as_str(),
         analysis.is_lossless,
@@ -658,17 +669,17 @@ fn auto_convert_single_file(
         | ("HEIC", true, false)
         | ("HEIF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0)?
+            convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
         // Static modern lossy / JXL already handled by should_skip_image_format above.
 
         ("JPEG", _, false) => {
             verbose_log!("🔄 JPEG→JXL lossless transcode: {}", input.display());
-            convert_jpeg_to_jxl(input, &options)?
+            convert_jpeg_to_jxl(input, &options, analysis.hdr_info.as_ref())?
         }
         (_, true, false) => {
             verbose_log!("🔄 Legacy Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0)?
+            convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
         (format, is_lossless, true) => {
             let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
@@ -708,7 +719,7 @@ fn auto_convert_single_file(
                         input.display()
                     );
                     verbose_log!("🔄 Static GIF→JXL: {}", input.display());
-                    let conv_result = convert_to_jxl(input, &options, 0.0)?;
+                    let conv_result = convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?;
                     return Ok(convert_result_to_output(conv_result));
                 }
                 _ => {
@@ -811,7 +822,7 @@ fn auto_convert_single_file(
                 },
                 input.display()
             );
-            convert_to_jxl(input, &options, jxl_distance)?
+            convert_to_jxl(input, &options, jxl_distance, analysis.hdr_info.as_ref())?
         }
     };
 
