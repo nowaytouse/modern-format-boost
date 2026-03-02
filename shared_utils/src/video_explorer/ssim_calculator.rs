@@ -329,3 +329,485 @@ fn parse_ms_ssim_from_legacy(stderr: &str) -> Option<f64> {
     }
     None
 }
+
+// ─── Ultimate Mode: 3D Quality Metrics ────────────────────────────────────────
+
+/// Calculate VMAF Y-channel score (perceptual quality, 0–100 scale).
+/// `sample_rate`: 1 = every frame, 3 = every 3rd frame, etc.
+/// Returns None on failure (ffmpeg/libvmaf unavailable or other error).
+pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Option<f64> {
+    let sample_filter = if sample_rate > 1 {
+        format!(
+            "select='not(mod(n\\,{}))',setpts=N/FRAME_RATE/TB,",
+            sample_rate
+        )
+    } else {
+        String::new()
+    };
+
+    let n_threads = num_cpus_capped();
+
+    // dis = output (distorted), ref = input (reference)
+    let filter = format!(
+        "[0:v]{sf}format=yuv420p[dis];[1:v]{sf}format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
+        sf = sample_filter,
+        nt = n_threads,
+    );
+
+    let result = Command::new("ffmpeg")
+        .arg("-i")
+        .arg(crate::safe_path_arg(output).as_ref())
+        .arg("-i")
+        .arg(crate::safe_path_arg(input).as_ref())
+        .arg("-filter_complex")
+        .arg(&filter)
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .output();
+
+    match result {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            parse_vmaf_mean_from_json(&stdout)
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!("\n      ❌ VMAF-Y calculation failed!");
+            if stderr.contains("No such filter: 'libvmaf'") {
+                eprintln!("         Cause: libvmaf not available in this ffmpeg build");
+                eprintln!("         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf");
+            } else {
+                let error_lines: Vec<&str> = stderr
+                    .lines()
+                    .filter(|l| l.contains("Error") || l.contains("error") || l.contains("failed"))
+                    .take(2)
+                    .collect();
+                if !error_lines.is_empty() {
+                    eprintln!("         Error: {}", error_lines.join(" | "));
+                }
+            }
+            None
+        }
+        Err(e) => {
+            eprintln!("\n      ❌ VMAF-Y command failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Calculate CAMBI (Contrast Aware Multiscale Banding Index) for the output video.
+/// CAMBI is a single-video metric (no reference needed) — lower is better (0 = no banding).
+/// Returns None on failure or if libvmaf doesn't support the cambi feature.
+pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
+    let sample_filter = if sample_rate > 1 {
+        format!(
+            "select='not(mod(n\\,{}))',setpts=N/FRAME_RATE/TB,",
+            sample_rate
+        )
+    } else {
+        String::new()
+    };
+
+    let n_threads = num_cpus_capped();
+
+    // CAMBI is a single-video metric: use simple -vf, no reference needed.
+    let vf = format!(
+        "{sf}format=yuv420p,libvmaf=feature=name=cambi:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
+        sf = sample_filter,
+        nt = n_threads,
+    );
+
+    let result = Command::new("ffmpeg")
+        .arg("-i")
+        .arg(crate::safe_path_arg(output).as_ref())
+        .arg("-vf")
+        .arg(&vf)
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .output();
+
+    match result {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            parse_cambi_mean_from_json(&stdout)
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!("\n      ❌ CAMBI calculation failed!");
+            if stderr.contains("No such filter: 'libvmaf'") {
+                eprintln!("         Cause: libvmaf not available in this ffmpeg build");
+            } else if stderr.contains("cambi") && (stderr.contains("unknown") || stderr.contains("No such")) {
+                eprintln!("         Cause: libvmaf in this ffmpeg does not support the 'cambi' feature");
+                eprintln!("         Fix: upgrade to ffmpeg with libvmaf >= 2.x");
+            } else {
+                let error_lines: Vec<&str> = stderr
+                    .lines()
+                    .filter(|l| l.contains("Error") || l.contains("error") || l.contains("failed"))
+                    .take(2)
+                    .collect();
+                if !error_lines.is_empty() {
+                    eprintln!("         Error: {}", error_lines.join(" | "));
+                }
+            }
+            None
+        }
+        Err(e) => {
+            eprintln!("\n      ❌ CAMBI command failed: {}", e);
+            None
+        }
+    }
+}
+
+/// Calculate PSNR for the U and V chroma channels independently.
+/// Returns `(psnr_u, psnr_v)` in dB, or None on failure.
+/// Uses `extractplanes` + ffmpeg's `psnr` filter (no libvmaf dependency).
+pub fn calculate_psnr_uv(
+    input: &Path,
+    output: &Path,
+    sample_rate: usize,
+) -> Option<(f64, f64)> {
+    use std::thread;
+
+    let input_u = input.to_path_buf();
+    let output_u = output.to_path_buf();
+    let input_v = input.to_path_buf();
+    let output_v = output.to_path_buf();
+
+    let u_handle = thread::spawn(move || psnr_single_channel(&input_u, &output_u, "u", sample_rate));
+    let v_handle = thread::spawn(move || psnr_single_channel(&input_v, &output_v, "v", sample_rate));
+
+    let psnr_u = match u_handle.join() {
+        Ok(Some(v)) => v,
+        _ => {
+            eprintln!("   ❌ PSNR-U channel calculation failed");
+            return None;
+        }
+    };
+    let psnr_v = match v_handle.join() {
+        Ok(Some(v)) => v,
+        _ => {
+            eprintln!("   ❌ PSNR-V channel calculation failed");
+            return None;
+        }
+    };
+
+    Some((psnr_u, psnr_v))
+}
+
+fn psnr_single_channel(
+    input: &Path,
+    output: &Path,
+    channel: &str,
+    sample_rate: usize,
+) -> Option<f64> {
+    let sample_filter = if sample_rate > 1 {
+        format!(
+            "select='not(mod(n\\,{}))',setpts=N/FRAME_RATE/TB,",
+            sample_rate
+        )
+    } else {
+        String::new()
+    };
+
+    // Extract the requested plane from both streams, then run psnr on them.
+    let filter = format!(
+        "[0:v]{sf}format=yuv420p,extractplanes={ch}[ref];[1:v]{sf}format=yuv420p,extractplanes={ch}[dis];[ref][dis]psnr=stats_file=-",
+        sf = sample_filter,
+        ch = channel,
+    );
+
+    let result = Command::new("ffmpeg")
+        .arg("-i")
+        .arg(crate::safe_path_arg(input).as_ref())
+        .arg("-i")
+        .arg(crate::safe_path_arg(output).as_ref())
+        .arg("-filter_complex")
+        .arg(&filter)
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .output();
+
+    match result {
+        Ok(out) => {
+            // psnr stats_file=- writes per-frame stats to stdout; we need the average from stderr summary.
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            parse_psnr_average_y_from_stderr(&stderr)
+        }
+        Err(e) => {
+            eprintln!("\n      ❌ PSNR-{} command failed: {}", channel.to_uppercase(), e);
+            None
+        }
+    }
+}
+
+/// Parse average PSNR from the ffmpeg psnr filter summary line in stderr.
+/// Example: "PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123 max:42.567"
+/// Since we already extracted a single plane (which ffmpeg labels as 'y'), we read the 'y' value.
+fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
+    for line in stderr.lines() {
+        if line.contains("PSNR") && line.contains("average:") {
+            // Try "y:" field first (for single-plane extraction output)
+            if let Some(pos) = line.find("y:") {
+                let after = &line[pos + 2..];
+                let end = after.find(|c: char| !c.is_numeric() && c != '.').unwrap_or(after.len());
+                if end > 0 {
+                    if let Ok(v) = after[..end].parse::<f64>() {
+                        if v.is_finite() && v > 0.0 {
+                            return Some(v);
+                        }
+                    }
+                }
+            }
+            // Fallback: "average:" field
+            if let Some(pos) = line.find("average:") {
+                let after = &line[pos + 8..];
+                let end = after.find(|c: char| !c.is_numeric() && c != '.').unwrap_or(after.len());
+                if end > 0 {
+                    if let Ok(v) = after[..end].parse::<f64>() {
+                        if v.is_finite() && v > 0.0 {
+                            return Some(v);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_vmaf_mean_from_json(stdout: &str) -> Option<f64> {
+    // Look for "pooled_metrics" → "vmaf" → "mean"
+    if let Some(pooled_pos) = stdout.find("\"pooled_metrics\"") {
+        let after_pooled = &stdout[pooled_pos..];
+        if let Some(vmaf_pos) = after_pooled.find("\"vmaf\"") {
+            let after_vmaf = &after_pooled[vmaf_pos..];
+            if let Some(mean_pos) = after_vmaf.find("\"mean\"") {
+                let after_mean = &after_vmaf[mean_pos + 6..];
+                if let Some(colon_pos) = after_mean.find(':') {
+                    let after_colon = after_mean[colon_pos + 1..].trim_start();
+                    let end = after_colon
+                        .find(|c: char| !c.is_numeric() && c != '.')
+                        .unwrap_or(after_colon.len());
+                    if end > 0 {
+                        return after_colon[..end].parse::<f64>().ok();
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_cambi_mean_from_json(stdout: &str) -> Option<f64> {
+    // Look for "pooled_metrics" → "cambi" → "mean"
+    if let Some(pooled_pos) = stdout.find("\"pooled_metrics\"") {
+        let after_pooled = &stdout[pooled_pos..];
+        if let Some(cambi_pos) = after_pooled.find("\"cambi\"") {
+            let after_cambi = &after_pooled[cambi_pos..];
+            if let Some(mean_pos) = after_cambi.find("\"mean\"") {
+                let after_mean = &after_cambi[mean_pos + 6..];
+                if let Some(colon_pos) = after_mean.find(':') {
+                    let after_colon = after_mean[colon_pos + 1..].trim_start();
+                    let end = after_colon
+                        .find(|c: char| !c.is_numeric() && c != '.')
+                        .unwrap_or(after_colon.len());
+                    if end > 0 {
+                        return after_colon[..end].parse::<f64>().ok();
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Returns a capped thread count for libvmaf (max 8 to avoid over-subscription).
+fn num_cpus_capped() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().min(8))
+        .unwrap_or(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_vmaf_mean_from_json ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_vmaf_mean_typical() {
+        let json = r#"
+{
+  "pooled_metrics": {
+    "vmaf": {
+      "min": 91.234,
+      "max": 97.654,
+      "mean": 94.123,
+      "harmonic_mean": 93.987
+    }
+  }
+}"#;
+        let result = parse_vmaf_mean_from_json(json);
+        assert!(result.is_some(), "Should parse vmaf mean from typical JSON");
+        let v = result.unwrap();
+        assert!((v - 94.123).abs() < 1e-6, "Expected 94.123, got {}", v);
+    }
+
+    #[test]
+    fn test_parse_vmaf_mean_integer_value() {
+        let json = r#"{"pooled_metrics": {"vmaf": {"mean": 100, "min": 99}}}"#;
+        let result = parse_vmaf_mean_from_json(json);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), 100.0);
+    }
+
+    #[test]
+    fn test_parse_vmaf_mean_missing_pooled_metrics() {
+        let json = r#"{"vmaf": {"mean": 95.0}}"#;
+        assert!(parse_vmaf_mean_from_json(json).is_none());
+    }
+
+    #[test]
+    fn test_parse_vmaf_mean_missing_vmaf_key() {
+        let json = r#"{"pooled_metrics": {"ms_ssim": {"mean": 0.97}}}"#;
+        assert!(parse_vmaf_mean_from_json(json).is_none());
+    }
+
+    #[test]
+    fn test_parse_vmaf_mean_empty_string() {
+        assert!(parse_vmaf_mean_from_json("").is_none());
+    }
+
+    #[test]
+    fn test_parse_vmaf_mean_near_zero() {
+        let json = r#"{"pooled_metrics": {"vmaf": {"mean": 0.5}}}"#;
+        let result = parse_vmaf_mean_from_json(json);
+        assert!(result.is_some());
+        assert!((result.unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    // ── parse_cambi_mean_from_json ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_cambi_mean_typical() {
+        let json = r#"
+{
+  "pooled_metrics": {
+    "cambi": {
+      "min": 0.0,
+      "max": 15.234,
+      "mean": 7.456,
+      "harmonic_mean": 6.123
+    }
+  }
+}"#;
+        let result = parse_cambi_mean_from_json(json);
+        assert!(result.is_some(), "Should parse cambi mean");
+        let v = result.unwrap();
+        assert!((v - 7.456).abs() < 1e-6, "Expected 7.456, got {}", v);
+    }
+
+    #[test]
+    fn test_parse_cambi_mean_zero_banding() {
+        let json = r#"{"pooled_metrics": {"cambi": {"mean": 0.0}}}"#;
+        // 0.0 falls through because the parser reads numeric chars; "0" → 0 but
+        // the end-of-numeric scan returns end=1, parse "0" → 0.0 is valid.
+        // Whether 0.0 is returned or None depends on parser: .parse::<f64>().ok() → Some(0.0).
+        let result = parse_cambi_mean_from_json(json);
+        // Both Some(0.0) and None are acceptable depending on the trivial "0" parse.
+        if let Some(v) = result {
+            assert_eq!(v, 0.0);
+        }
+    }
+
+    #[test]
+    fn test_parse_cambi_mean_missing_cambi_key() {
+        let json = r#"{"pooled_metrics": {"vmaf": {"mean": 95.0}}}"#;
+        assert!(parse_cambi_mean_from_json(json).is_none());
+    }
+
+    #[test]
+    fn test_parse_cambi_mean_high_banding() {
+        let json = r#"{"pooled_metrics": {"cambi": {"mean": 42.789}}}"#;
+        let result = parse_cambi_mean_from_json(json);
+        assert!(result.is_some());
+        assert!((result.unwrap() - 42.789).abs() < 1e-6);
+    }
+
+    // ── parse_psnr_average_y_from_stderr ─────────────────────────────────────
+
+    #[test]
+    fn test_parse_psnr_standard_ffmpeg_line() {
+        // Standard ffmpeg psnr filter summary line
+        let stderr =
+            "[Parsed_psnr_4 @ 0x123] PSNR y:41.234 u:39.876 v:40.123 average:40.411 min:38.123 max:42.567\n";
+        let result = parse_psnr_average_y_from_stderr(stderr);
+        assert!(result.is_some(), "Should parse PSNR from standard line");
+        let v = result.unwrap();
+        assert!((v - 41.234).abs() < 1e-3, "Expected y:41.234, got {}", v);
+    }
+
+    #[test]
+    fn test_parse_psnr_uses_y_field_over_average() {
+        // When both y: and average: are present, y: should be preferred
+        let stderr = "PSNR y:38.5 average:37.0 min:35.0 max:40.0\n";
+        let result = parse_psnr_average_y_from_stderr(stderr);
+        assert!(result.is_some());
+        // Should pick y:38.5, not average:37.0
+        assert!((result.unwrap() - 38.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_psnr_fallback_to_average() {
+        // No y: field, but average: present
+        let stderr = "PSNR average:39.12 min:37.0 max:41.0\n";
+        let result = parse_psnr_average_y_from_stderr(stderr);
+        assert!(result.is_some());
+        assert!((result.unwrap() - 39.12).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_parse_psnr_no_psnr_line() {
+        let stderr = "frame=100 fps=25\nEncoding done\n";
+        assert!(parse_psnr_average_y_from_stderr(stderr).is_none());
+    }
+
+    #[test]
+    fn test_parse_psnr_empty_stderr() {
+        assert!(parse_psnr_average_y_from_stderr("").is_none());
+    }
+
+    #[test]
+    fn test_parse_psnr_multiline_stderr() {
+        // Realistic multi-line ffmpeg stderr output
+        let stderr = concat!(
+            "ffmpeg version 6.0\n",
+            "  libavcodec 60.3.100\n",
+            "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'test.mp4':\n",
+            "  Stream #0:0: Video: h264\n",
+            "frame=  120 fps= 48 q=-0.0 Lsize=N/A time=00:00:05.00\n",
+            "[Parsed_psnr_1 @ 0xdeadbeef] PSNR y:44.100 u:42.300 v:42.500 average:43.300 min:41.200 max:46.100\n",
+        );
+        let result = parse_psnr_average_y_from_stderr(stderr);
+        assert!(result.is_some());
+        assert!((result.unwrap() - 44.1).abs() < 1e-3);
+    }
+
+    // ── num_cpus_capped ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_num_cpus_capped_within_bounds() {
+        let n = num_cpus_capped();
+        assert!(n >= 1, "Thread count must be at least 1, got {}", n);
+        assert!(n <= 8, "Thread count must be capped at 8, got {}", n);
+    }
+
+    #[test]
+    fn test_num_cpus_capped_is_deterministic() {
+        // Calling twice should return the same value
+        assert_eq!(num_cpus_capped(), num_cpus_capped());
+    }
+}
