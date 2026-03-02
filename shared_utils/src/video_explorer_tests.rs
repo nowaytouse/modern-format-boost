@@ -1542,3 +1542,265 @@ mod evaluation_consistency_tests {
         assert!(output_video < input_video, "视频流变小，应算压缩成功");
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ultimate Mode 3D Quality Gate Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ultimate_3d_quality_tests {
+    use super::super::video_explorer::*;
+
+    // Thresholds must match gpu_coarse_search.rs constants exactly.
+    const VMAF_Y_THRESHOLD: f64 = 93.0;
+    const CAMBI_MAX: f64        = 10.0;
+    const PSNR_UV_MIN: f64      = 38.0;
+
+    // ── ExploreResult new field defaults ─────────────────────────────────────
+
+    #[test]
+    fn test_explore_result_new_fields_default_to_none() {
+        let result = ExploreResult::default();
+        assert!(result.vmaf_y_score.is_none(),  "vmaf_y_score should default to None");
+        assert!(result.cambi_score.is_none(),   "cambi_score should default to None");
+        assert!(result.psnr_uv_score.is_none(), "psnr_uv_score should default to None");
+    }
+
+    #[test]
+    fn test_explore_result_can_set_vmaf_y_score() {
+        let result = ExploreResult {
+            vmaf_y_score: Some(95.4),
+            ..Default::default()
+        };
+        assert_eq!(result.vmaf_y_score, Some(95.4));
+        assert!(result.cambi_score.is_none());
+        assert!(result.psnr_uv_score.is_none());
+    }
+
+    #[test]
+    fn test_explore_result_can_set_cambi_score() {
+        let result = ExploreResult {
+            cambi_score: Some(3.2),
+            ..Default::default()
+        };
+        assert_eq!(result.cambi_score, Some(3.2));
+        assert!(result.vmaf_y_score.is_none());
+        assert!(result.psnr_uv_score.is_none());
+    }
+
+    #[test]
+    fn test_explore_result_can_set_psnr_uv_score() {
+        let result = ExploreResult {
+            psnr_uv_score: Some((40.1, 39.8)),
+            ..Default::default()
+        };
+        assert_eq!(result.psnr_uv_score, Some((40.1, 39.8)));
+        let (pu, pv) = result.psnr_uv_score.unwrap();
+        assert!((pu - 40.1).abs() < 1e-9);
+        assert!((pv - 39.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_explore_result_all_three_fields_set_together() {
+        let result = ExploreResult {
+            vmaf_y_score:  Some(94.5),
+            cambi_score:   Some(6.3),
+            psnr_uv_score: Some((40.2, 39.7)),
+            ms_ssim_passed: Some(true),
+            ms_ssim_score:  Some(94.5 / 100.0),
+            ..Default::default()
+        };
+        assert_eq!(result.vmaf_y_score,  Some(94.5));
+        assert_eq!(result.cambi_score,   Some(6.3));
+        assert_eq!(result.psnr_uv_score, Some((40.2, 39.7)));
+        assert_eq!(result.ms_ssim_passed, Some(true));
+    }
+
+    #[test]
+    fn test_explore_result_clone_preserves_new_fields() {
+        let original = ExploreResult {
+            vmaf_y_score:  Some(91.0),
+            cambi_score:   Some(12.5),
+            psnr_uv_score: Some((37.0, 36.5)),
+            ..Default::default()
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.vmaf_y_score,  original.vmaf_y_score);
+        assert_eq!(cloned.cambi_score,   original.cambi_score);
+        assert_eq!(cloned.psnr_uv_score, original.psnr_uv_score);
+    }
+
+    // ── 3D gate: threshold logic (pure computation, no ffmpeg) ───────────────
+
+    /// Simulates the three-way gate logic from gpu_coarse_search.rs.
+    fn gate_passes(vmaf_y: Option<f64>, cambi: Option<f64>, psnr_uv: Option<(f64, f64)>) -> bool {
+        let vmaf_ok   = vmaf_y.map(|v| v >= VMAF_Y_THRESHOLD).unwrap_or(false);
+        let cambi_ok  = cambi.map(|c| c <= CAMBI_MAX).unwrap_or(false);
+        let chroma_ok = psnr_uv.map(|(u, v)| u.min(v) >= PSNR_UV_MIN).unwrap_or(false);
+        vmaf_ok && cambi_ok && chroma_ok
+    }
+
+    #[test]
+    fn test_gate_all_pass_typical_good_encode() {
+        assert!(gate_passes(Some(95.0), Some(5.0), Some((41.0, 40.5))));
+    }
+
+    #[test]
+    fn test_gate_all_pass_exactly_at_thresholds() {
+        // Exact boundary values must pass (>=, <=)
+        assert!(gate_passes(
+            Some(VMAF_Y_THRESHOLD),
+            Some(CAMBI_MAX),
+            Some((PSNR_UV_MIN, PSNR_UV_MIN)),
+        ));
+    }
+
+    #[test]
+    fn test_gate_fail_vmaf_below_threshold() {
+        assert!(!gate_passes(Some(92.9), Some(5.0), Some((40.0, 40.0))));
+    }
+
+    #[test]
+    fn test_gate_fail_vmaf_just_below_threshold() {
+        let epsilon = 0.001;
+        assert!(!gate_passes(
+            Some(VMAF_Y_THRESHOLD - epsilon),
+            Some(CAMBI_MAX),
+            Some((PSNR_UV_MIN, PSNR_UV_MIN)),
+        ));
+    }
+
+    #[test]
+    fn test_gate_fail_cambi_above_threshold() {
+        assert!(!gate_passes(Some(95.0), Some(10.1), Some((40.0, 40.0))));
+    }
+
+    #[test]
+    fn test_gate_fail_cambi_just_above_threshold() {
+        let epsilon = 0.001;
+        assert!(!gate_passes(
+            Some(VMAF_Y_THRESHOLD),
+            Some(CAMBI_MAX + epsilon),
+            Some((PSNR_UV_MIN, PSNR_UV_MIN)),
+        ));
+    }
+
+    #[test]
+    fn test_gate_fail_psnr_uv_below_threshold_u_channel() {
+        // U channel below, V above
+        assert!(!gate_passes(Some(95.0), Some(5.0), Some((37.9, 40.0))));
+    }
+
+    #[test]
+    fn test_gate_fail_psnr_uv_below_threshold_v_channel() {
+        // U above, V below
+        assert!(!gate_passes(Some(95.0), Some(5.0), Some((40.0, 37.9))));
+    }
+
+    #[test]
+    fn test_gate_fail_psnr_uv_just_below_threshold() {
+        let epsilon = 0.001;
+        assert!(!gate_passes(
+            Some(VMAF_Y_THRESHOLD),
+            Some(CAMBI_MAX),
+            Some((PSNR_UV_MIN - epsilon, PSNR_UV_MIN)),
+        ));
+    }
+
+    #[test]
+    fn test_gate_fail_vmaf_none() {
+        // Any None metric should cause gate failure (strict mode)
+        assert!(!gate_passes(None, Some(5.0), Some((40.0, 40.0))));
+    }
+
+    #[test]
+    fn test_gate_fail_cambi_none() {
+        assert!(!gate_passes(Some(95.0), None, Some((40.0, 40.0))));
+    }
+
+    #[test]
+    fn test_gate_fail_psnr_uv_none() {
+        assert!(!gate_passes(Some(95.0), Some(5.0), None));
+    }
+
+    #[test]
+    fn test_gate_fail_all_none() {
+        assert!(!gate_passes(None, None, None));
+    }
+
+    #[test]
+    fn test_gate_fail_two_out_of_three_pass() {
+        // VMAF + CAMBI pass, PSNR-UV fails
+        assert!(!gate_passes(Some(95.0), Some(5.0), Some((35.0, 35.0))));
+        // VMAF + PSNR-UV pass, CAMBI fails
+        assert!(!gate_passes(Some(95.0), Some(20.0), Some((40.0, 40.0))));
+        // CAMBI + PSNR-UV pass, VMAF fails
+        assert!(!gate_passes(Some(85.0), Some(5.0), Some((40.0, 40.0))));
+    }
+
+    // ── Threshold constant sanity ─────────────────────────────────────────────
+
+    #[test]
+    fn test_vmaf_threshold_is_93() {
+        assert_eq!(VMAF_Y_THRESHOLD, 93.0, "VMAF-Y threshold should be 93.0 (plan spec)");
+    }
+
+    #[test]
+    fn test_cambi_max_is_10() {
+        assert_eq!(CAMBI_MAX, 10.0, "CAMBI max threshold should be 10.0 (plan spec)");
+    }
+
+    #[test]
+    fn test_psnr_uv_min_is_38() {
+        assert_eq!(PSNR_UV_MIN, 38.0, "PSNR-UV minimum threshold should be 38.0 dB (plan spec)");
+    }
+
+    #[test]
+    fn test_vmaf_is_0_to_100_scale() {
+        // VMAF scores are in 0–100 range; 93.0 should not be near 0–1 range
+        assert!(VMAF_Y_THRESHOLD > 1.0, "VMAF threshold must be on 0-100 scale, not 0-1");
+        assert!(VMAF_Y_THRESHOLD <= 100.0);
+    }
+
+    #[test]
+    fn test_psnr_uv_min_in_db_range() {
+        // Reasonable PSNR dB range is ~20–60 dB for typical video
+        assert!(PSNR_UV_MIN > 20.0, "PSNR-UV min should be > 20 dB (not dimensionless)");
+        assert!(PSNR_UV_MIN < 60.0, "PSNR-UV min should be < 60 dB (realistic threshold)");
+    }
+
+    // ── psnr_uv min-of-channels semantics ────────────────────────────────────
+
+    #[test]
+    fn test_psnr_uv_gate_uses_minimum_of_u_and_v() {
+        // If U is below threshold but V is above, gate should fail (min logic)
+        let psnr_uv = Some((37.0_f64, 42.0_f64));
+        let chroma_ok = psnr_uv.map(|(u, v)| u.min(v) >= PSNR_UV_MIN).unwrap_or(false);
+        assert!(!chroma_ok, "U=37.0 < 38.0 should fail even if V=42.0 passes");
+    }
+
+    #[test]
+    fn test_psnr_uv_gate_passes_when_both_above_threshold() {
+        let psnr_uv = Some((39.0_f64, 38.5_f64));
+        let chroma_ok = psnr_uv.map(|(u, v)| u.min(v) >= PSNR_UV_MIN).unwrap_or(false);
+        assert!(chroma_ok, "Both U=39.0 V=38.5 ≥ 38.0 should pass");
+    }
+
+    // ── ExploreResult ms_ssim_score as VMAF/100 representation ──────────────
+
+    #[test]
+    fn test_ms_ssim_score_stores_vmaf_normalized() {
+        // In ultimate mode, ms_ssim_score = vmaf_y / 100 for display compatibility
+        let vmaf_raw = 94.5_f64;
+        let result = ExploreResult {
+            vmaf_y_score:   Some(vmaf_raw),
+            ms_ssim_score:  Some(vmaf_raw / 100.0),
+            ms_ssim_passed: Some(true),
+            ..Default::default()
+        };
+        let stored = result.ms_ssim_score.unwrap();
+        assert!((stored - 0.945).abs() < 1e-9, "Normalized VMAF should be 0.945");
+        assert!(stored <= 1.0, "Normalized value should be ≤ 1.0");
+        assert!(stored >= 0.0, "Normalized value should be ≥ 0.0");
+    }
+}

@@ -502,145 +502,264 @@ pub fn explore_with_gpu_coarse_search(
         } else if should_run_vmaf {
             let threshold_min = ms_ssim_duration_threshold_secs / 60.0;
             crate::log_eprintln!(
-                "   ✅ Video within MS-SSIM limit (≤{:.0}min)",
+                "   ✅ Video within limit (≤{:.0}min)",
                 threshold_min
             );
-            crate::log_eprintln!("   Enabling fusion quality verification (MS-SSIM + SSIM)...");
 
-            let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
-            let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output, max_duration_min);
-            let ssim_all_result = calculate_ssim_all(input, output);
+            if ultimate_mode {
+                // ── Ultimate Mode: 3D Quality Gate ────────────────────────────
+                // Three independent dimensions must ALL pass:
+                //   1. VMAF-Y   ≥ 93.0   (perceptual quality, Netflix standard)
+                //   2. CAMBI    ≤ 10.0   (banding detection, lower = better)
+                //   3. PSNR-UV  ≥ 38.0 dB (chroma fidelity)
+                crate::log_eprintln!("   Enabling 3D quality verification (Ultimate Mode)...");
+                crate::log_eprintln!("   Running: VMAF-Y + CAMBI + PSNR-UV in parallel...");
 
-            crate::log_eprintln!("   ═══════════════════════════════════════════════════");
-            crate::log_eprintln!("   Quality Metrics:");
-            let ssim_str = result
-                .ssim
-                .map(|s| format!("{:.6}", s))
-                .unwrap_or_else(|| "N/A".to_string());
-            crate::log_eprintln!("      SSIM (explore): {}", ssim_str);
+                // Determine sample rate from duration (mirrors calculate_ms_ssim_yuv logic)
+                // Note: probe_result is already &FFprobeResult here (shadowed by the if-let above)
+                let duration_min = probe_result.duration / 60.0;
+                let sample_rate: usize = if duration_min <= 1.0 { 1 } else { 3 };
 
-            let quality_target = result.actual_min_ssim.max(0.90);
+                use std::thread;
+                let input_vmaf = input.to_path_buf();
+                let output_vmaf = output.to_path_buf();
+                let output_cambi = output.to_path_buf();
+                let input_psnr = input.to_path_buf();
+                let output_psnr = output.to_path_buf();
 
-            const MS_SSIM_WEIGHT: f64 = 0.6;
-            const SSIM_ALL_WEIGHT: f64 = 0.4;
+                let vmaf_handle = thread::spawn(move || {
+                    super::ssim_calculator::calculate_vmaf_y(&input_vmaf, &output_vmaf, sample_rate)
+                });
+                let cambi_handle = thread::spawn(move || {
+                    super::ssim_calculator::calculate_cambi(&output_cambi, sample_rate)
+                });
+                let psnr_handle = thread::spawn(move || {
+                    super::ssim_calculator::calculate_psnr_uv(&input_psnr, &output_psnr, sample_rate)
+                });
 
-            let mut final_score: Option<f64> = None;
-            let mut ms_ssim_avg: Option<f64> = None;
-            let mut ssim_all_val: Option<f64> = None;
+                let vmaf_y = vmaf_handle.join().unwrap_or(None);
+                let cambi   = cambi_handle.join().unwrap_or(None);
+                let psnr_uv = psnr_handle.join().unwrap_or(None);
 
-            if let Some((y, u, v, avg)) = ms_ssim_yuv_result {
-                crate::log_eprintln!("      MS-SSIM Y/U/V: {:.4}/{:.4}/{:.4}", y, u, v);
-                crate::log_eprintln!("      MS-SSIM (3-ch avg): {:.4}", avg);
-                ms_ssim_avg = Some(avg);
+                // Thresholds
+                const VMAF_Y_THRESHOLD: f64 = 93.0;
+                const CAMBI_MAX: f64        = 10.0;
+                const PSNR_UV_MIN: f64      = 38.0;
 
-                let chroma_loss = (y - u).max(y - v);
-                if chroma_loss > 0.02 {
-                    crate::log_eprintln!(
-                        "      ⚠️  MS-SSIM CHROMA DIFF: Y-U={:.4}, Y-V={:.4}",
-                        y - u,
-                        y - v
-                    );
+                let vmaf_ok   = vmaf_y.map(|v| v >= VMAF_Y_THRESHOLD).unwrap_or(false);
+                let cambi_ok  = cambi.map(|c| c <= CAMBI_MAX).unwrap_or(false);
+                let chroma_ok = psnr_uv.map(|(u, v)| u.min(v) >= PSNR_UV_MIN).unwrap_or(false);
+
+                crate::log_eprintln!("   ═══════════════════════════════════════════════════");
+                crate::log_eprintln!("   Quality Metrics (Ultimate Mode - 3D Judgment):");
+
+                match vmaf_y {
+                    Some(v) => crate::log_eprintln!(
+                        "      VMAF-Y:   {:6.2}  ≥ {:.1}  {}",
+                        v, VMAF_Y_THRESHOLD,
+                        if vmaf_ok { "✅" } else { "❌" }
+                    ),
+                    None => crate::log_eprintln!(
+                        "      VMAF-Y:   N/A  (calculation failed) ❌"
+                    ),
                 }
-            }
 
-            if let Some((y, u, v, all)) = ssim_all_result {
-                crate::log_eprintln!(
-                    "      SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}",
-                    y,
-                    u,
-                    v,
-                    all
-                );
-                ssim_all_val = Some(all);
-
-                let chroma_loss = (y - u).max(y - v);
-                if chroma_loss > 0.02 {
-                    crate::log_eprintln!(
-                        "      ⚠️  SSIM CHROMA LOSS: Y-U={:.4}, Y-V={:.4}",
-                        y - u,
-                        y - v
-                    );
+                match cambi {
+                    Some(c) => crate::log_eprintln!(
+                        "      CAMBI:    {:6.2}  ≤ {:.1}  {}  (lower=better)",
+                        c, CAMBI_MAX,
+                        if cambi_ok { "✅" } else { "❌" }
+                    ),
+                    None => crate::log_eprintln!(
+                        "      CAMBI:    N/A  (calculation failed) ❌"
+                    ),
                 }
-            }
 
-            crate::log_eprintln!("   ───────────────────────────────────────────────────");
-            if let (Some(ms), Some(ss)) = (ms_ssim_avg, ssim_all_val) {
-                let fusion = MS_SSIM_WEIGHT * ms + SSIM_ALL_WEIGHT * ss;
-                final_score = Some(fusion);
-                crate::log_eprintln!("   FUSION SCORE: {:.4}", fusion);
-                crate::log_eprintln!(
-                    "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
-                    MS_SSIM_WEIGHT,
-                    SSIM_ALL_WEIGHT
-                );
-                crate::log_eprintln!(
-                    "      = {:.1}×{:.4} + {:.1}×{:.4}",
-                    MS_SSIM_WEIGHT,
-                    ms,
-                    SSIM_ALL_WEIGHT,
-                    ss
-                );
-            } else if let Some(ms) = ms_ssim_avg {
-                final_score = Some(ms);
-                crate::log_eprintln!("   SCORE (MS-SSIM only): {:.4}", ms);
-                crate::log_eprintln!("      ⚠️  SSIM All unavailable, using MS-SSIM alone");
-            } else if let Some(ss) = ssim_all_val {
-                final_score = Some(ss);
-                crate::log_eprintln!("   SCORE (SSIM All only): {:.4}", ss);
-                crate::log_eprintln!("      ⚠️  MS-SSIM unavailable, using SSIM All alone");
-            }
+                match psnr_uv {
+                    Some((pu, pv)) => crate::log_eprintln!(
+                        "      PSNR-UV:  U={:.2} V={:.2} dB  ≥ {:.1} dB  {}",
+                        pu, pv, PSNR_UV_MIN,
+                        if chroma_ok { "✅" } else { "❌" }
+                    ),
+                    None => crate::log_eprintln!(
+                        "      PSNR-UV:  N/A  (calculation failed) ❌"
+                    ),
+                }
 
-            if let Some(score) = final_score {
-                let quality_grade = if score >= 0.98 {
-                    "Excellent"
-                } else if score >= 0.95 {
-                    "Very Good"
-                } else if score >= quality_target {
-                    "Good (meets target)"
-                } else if score >= 0.85 {
-                    "Below Target"
+                crate::log_eprintln!("   ───────────────────────────────────────────────────");
+
+                let all_passed = vmaf_ok && cambi_ok && chroma_ok;
+
+                if all_passed {
+                    crate::log_eprintln!("   ✅ 3D QUALITY GATE: ALL PASSED");
+                    result.ms_ssim_passed = Some(true);
+                    // Store a representative score (VMAF-Y) for log/report
+                    result.ms_ssim_score = vmaf_y.map(|v| v / 100.0);
+                    result.vmaf_y_score  = vmaf_y;
+                    result.cambi_score   = cambi;
+                    result.psnr_uv_score = psnr_uv;
                 } else {
-                    "FAILED"
-                };
-                crate::log_eprintln!(
-                    "      Grade: {} (target: ≥{:.2})",
-                    quality_grade,
-                    quality_target
-                );
-
-                if score < quality_target {
-                    crate::log_eprintln!(
-                        "   ❌ FUSION SCORE BELOW TARGET! {:.4} < {:.2}",
-                        score,
-                        quality_target
-                    );
-                    crate::log_eprintln!("      ⚠️  Quality does not meet threshold!");
+                    crate::log_eprintln!("   ❌ 3D QUALITY GATE: FAILED");
+                    if !vmaf_ok {
+                        let v_str = vmaf_y.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "N/A".to_string());
+                        crate::log_eprintln!("      ❌ VMAF-Y {} < {:.1} (perceptual quality too low)", v_str, VMAF_Y_THRESHOLD);
+                    }
+                    if !cambi_ok {
+                        let c_str = cambi.map(|c| format!("{:.2}", c)).unwrap_or_else(|| "N/A".to_string());
+                        crate::log_eprintln!("      ❌ CAMBI {} > {:.1} (banding detected)", c_str, CAMBI_MAX);
+                    }
+                    if !chroma_ok {
+                        let uv_str = psnr_uv
+                            .map(|(u, v)| format!("min={:.2}", u.min(v)))
+                            .unwrap_or_else(|| "N/A".to_string());
+                        crate::log_eprintln!("      ❌ PSNR-UV {} dB < {:.1} dB (chroma quality too low)", uv_str, PSNR_UV_MIN);
+                    }
                     crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
                     result.ms_ssim_passed = Some(false);
-                    result.ms_ssim_score = Some(score);
-                } else {
-                    crate::log_eprintln!(
-                        "   ✅ FUSION SCORE TARGET MET: {:.4} ≥ {:.2}",
-                        score,
-                        quality_target
-                    );
-                    result.ms_ssim_passed = Some(true);
-                    result.ms_ssim_score = Some(score);
+                    result.ms_ssim_score = vmaf_y.map(|v| v / 100.0);
+                    result.vmaf_y_score  = vmaf_y;
+                    result.cambi_score   = cambi;
+                    result.psnr_uv_score = psnr_uv;
                 }
             } else {
-                let err_lines = [
-                    "   ════════════════════════════════════════════════════",
-                    "   ❌ ERROR: Fusion verification incomplete (MS-SSIM + SSIM All failed).",
-                    "   ❌ Refusing to mark as passed — no fallback to single-channel or explore SSIM.",
-                    "   ❌ Possible causes: libvmaf unavailable, pixel format, or resolution mismatch.",
-                    "   ════════════════════════════════════════════════════",
-                ];
-                for line in &err_lines {
-                    crate::log_eprintln!("{}", line);
-                    result.log.push((*line).to_string());
+                // ── Normal Mode: Fusion (MS-SSIM + SSIM-All) ─────────────────
+                crate::log_eprintln!("   Enabling fusion quality verification (MS-SSIM + SSIM)...");
+
+                let max_duration_min = ms_ssim_duration_threshold_secs / 60.0;
+                let ms_ssim_yuv_result = calculate_ms_ssim_yuv(input, output, max_duration_min);
+                let ssim_all_result = calculate_ssim_all(input, output);
+
+                crate::log_eprintln!("   ═══════════════════════════════════════════════════");
+                crate::log_eprintln!("   Quality Metrics:");
+                let ssim_str = result
+                    .ssim
+                    .map(|s| format!("{:.6}", s))
+                    .unwrap_or_else(|| "N/A".to_string());
+                crate::log_eprintln!("      SSIM (explore): {}", ssim_str);
+
+                let quality_target = result.actual_min_ssim.max(0.90);
+
+                const MS_SSIM_WEIGHT: f64 = 0.6;
+                const SSIM_ALL_WEIGHT: f64 = 0.4;
+
+                let mut final_score: Option<f64> = None;
+                let mut ms_ssim_avg: Option<f64> = None;
+                let mut ssim_all_val: Option<f64> = None;
+
+                if let Some((y, u, v, avg)) = ms_ssim_yuv_result {
+                    crate::log_eprintln!("      MS-SSIM Y/U/V: {:.4}/{:.4}/{:.4}", y, u, v);
+                    crate::log_eprintln!("      MS-SSIM (3-ch avg): {:.4}", avg);
+                    ms_ssim_avg = Some(avg);
+
+                    let chroma_loss = (y - u).max(y - v);
+                    if chroma_loss > 0.02 {
+                        crate::log_eprintln!(
+                            "      ⚠️  MS-SSIM CHROMA DIFF: Y-U={:.4}, Y-V={:.4}",
+                            y - u,
+                            y - v
+                        );
+                    }
                 }
-                result.ms_ssim_passed = Some(false);
-                result.ms_ssim_score = None;
+
+                if let Some((y, u, v, all)) = ssim_all_result {
+                    crate::log_eprintln!(
+                        "      SSIM Y/U/V/All: {:.4}/{:.4}/{:.4}/{:.4}",
+                        y,
+                        u,
+                        v,
+                        all
+                    );
+                    ssim_all_val = Some(all);
+
+                    let chroma_loss = (y - u).max(y - v);
+                    if chroma_loss > 0.02 {
+                        crate::log_eprintln!(
+                            "      ⚠️  SSIM CHROMA LOSS: Y-U={:.4}, Y-V={:.4}",
+                            y - u,
+                            y - v
+                        );
+                    }
+                }
+
+                crate::log_eprintln!("   ───────────────────────────────────────────────────");
+                if let (Some(ms), Some(ss)) = (ms_ssim_avg, ssim_all_val) {
+                    let fusion = MS_SSIM_WEIGHT * ms + SSIM_ALL_WEIGHT * ss;
+                    final_score = Some(fusion);
+                    crate::log_eprintln!("   FUSION SCORE: {:.4}", fusion);
+                    crate::log_eprintln!(
+                        "      Formula: {:.1}×MS-SSIM + {:.1}×SSIM_All",
+                        MS_SSIM_WEIGHT,
+                        SSIM_ALL_WEIGHT
+                    );
+                    crate::log_eprintln!(
+                        "      = {:.1}×{:.4} + {:.1}×{:.4}",
+                        MS_SSIM_WEIGHT,
+                        ms,
+                        SSIM_ALL_WEIGHT,
+                        ss
+                    );
+                } else if let Some(ms) = ms_ssim_avg {
+                    final_score = Some(ms);
+                    crate::log_eprintln!("   SCORE (MS-SSIM only): {:.4}", ms);
+                    crate::log_eprintln!("      ⚠️  SSIM All unavailable, using MS-SSIM alone");
+                } else if let Some(ss) = ssim_all_val {
+                    final_score = Some(ss);
+                    crate::log_eprintln!("   SCORE (SSIM All only): {:.4}", ss);
+                    crate::log_eprintln!("      ⚠️  MS-SSIM unavailable, using SSIM All alone");
+                }
+
+                if let Some(score) = final_score {
+                    let quality_grade = if score >= 0.98 {
+                        "Excellent"
+                    } else if score >= 0.95 {
+                        "Very Good"
+                    } else if score >= quality_target {
+                        "Good (meets target)"
+                    } else if score >= 0.85 {
+                        "Below Target"
+                    } else {
+                        "FAILED"
+                    };
+                    crate::log_eprintln!(
+                        "      Grade: {} (target: ≥{:.2})",
+                        quality_grade,
+                        quality_target
+                    );
+
+                    if score < quality_target {
+                        crate::log_eprintln!(
+                            "   ❌ FUSION SCORE BELOW TARGET! {:.4} < {:.2}",
+                            score,
+                            quality_target
+                        );
+                        crate::log_eprintln!("      ⚠️  Quality does not meet threshold!");
+                        crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
+                        result.ms_ssim_passed = Some(false);
+                        result.ms_ssim_score = Some(score);
+                    } else {
+                        crate::log_eprintln!(
+                            "   ✅ FUSION SCORE TARGET MET: {:.4} ≥ {:.2}",
+                            score,
+                            quality_target
+                        );
+                        result.ms_ssim_passed = Some(true);
+                        result.ms_ssim_score = Some(score);
+                    }
+                } else {
+                    let err_lines = [
+                        "   ════════════════════════════════════════════════════",
+                        "   ❌ ERROR: Fusion verification incomplete (MS-SSIM + SSIM All failed).",
+                        "   ❌ Refusing to mark as passed — no fallback to single-channel or explore SSIM.",
+                        "   ❌ Possible causes: libvmaf unavailable, pixel format, or resolution mismatch.",
+                        "   ════════════════════════════════════════════════════",
+                    ];
+                    for line in &err_lines {
+                        crate::log_eprintln!("{}", line);
+                        result.log.push((*line).to_string());
+                    }
+                    result.ms_ssim_passed = Some(false);
+                    result.ms_ssim_score = None;
+                }
             }
         } else {
             crate::log_eprintln!(
@@ -1906,6 +2025,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         input_video_stream_size: input_stream_info.video_stream_size,
         output_video_stream_size: output_stream_info.video_stream_size,
         container_overhead: output_stream_info.container_overhead,
+        vmaf_y_score: None,
+        cambi_score: None,
+        psnr_uv_score: None,
     })
 }
 
