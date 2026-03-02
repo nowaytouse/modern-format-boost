@@ -1962,10 +1962,27 @@ fn cpu_fine_tune_from_gpu_boundary(
         video_stream_pct
     );
 
+    // Detect animated image formats (GIF, WebP, AVIF) and use relaxed duration tolerance
+    let is_animated_image = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| {
+            let ext = e.to_lowercase();
+            matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif")
+        })
+        .unwrap_or(false);
+
+    let verify_options = if is_animated_image {
+        crate::verbose_eprintln!("   🎞️  Animated image detected, using relaxed duration tolerance");
+        crate::quality_verifier_enhanced::VerifyOptions::relaxed_animated_image()
+    } else {
+        crate::quality_verifier_enhanced::VerifyOptions::strict_video()
+    };
+
     let enhanced = crate::quality_verifier_enhanced::verify_after_encode(
         input,
         output,
-        &crate::quality_verifier_enhanced::VerifyOptions::strict_video(),
+        &verify_options,
     );
     crate::verbose_eprintln!("   {}", enhanced.summary());
     for d in &enhanced.details {
