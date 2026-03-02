@@ -82,7 +82,7 @@ The video pipeline solves the bitrate/quality convex optimization problem using 
 brew install jpeg-xl ffmpeg imagemagick exiftool
 
 # 2. Clone Repository
-git clone https://github.com/user/modern_format_boost.git
+git clone https://github.com/nowaytouse/modern-format-boost.git
 cd modern_format_boost
 
 # 3. Compile (Release Profile with LTO)
@@ -194,7 +194,7 @@ Fixes corrupted headers and timestamps without re-encoding.
 brew install jpeg-xl ffmpeg imagemagick exiftool
 
 # 2. 克隆仓库
-git clone https://github.com/user/modern_format_boost.git
+git clone https://github.com/nowaytouse/modern-format-boost.git
 cd modern_format_boost
 
 # 3. 编译 (Release Profile with LTO)
