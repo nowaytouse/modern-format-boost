@@ -277,13 +277,12 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(
+            if options.should_delete_original() {
+                let _ = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
                     shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                ).is_ok()
-            {
+                );
             }
 
             let reduction_pct = reduction * 100.0;
@@ -590,13 +589,13 @@ pub fn convert_to_hevc_mp4_matched(
     shared_utils::copy_metadata(input, &output);
     mark_as_processed(input);
 
-    if options.should_delete_original()
-        && shared_utils::conversion::safe_delete_original(
-                    input,
-                    &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                ).is_ok()
-    {}
+    if options.should_delete_original() {
+        let _ = shared_utils::conversion::safe_delete_original(
+            input,
+            &output,
+            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+        );
+    }
 
     let reduction_pct = -explore_result.size_change_pct;
     let explored_msg = if (explore_result.optimal_crf - initial_crf).abs() > 0.1 {
@@ -693,13 +692,12 @@ pub fn convert_to_hevc_mkv_lossless(
             shared_utils::copy_metadata(input, &output);
             mark_as_processed(input);
 
-            if options.should_delete_original()
-                && shared_utils::conversion::safe_delete_original(
+            if options.should_delete_original() {
+                let _ = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
                     shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                ).is_ok()
-            {
+                );
             }
 
             let reduction_pct = reduction * 100.0;
