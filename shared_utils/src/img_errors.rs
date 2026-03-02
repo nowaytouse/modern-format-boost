@@ -29,6 +29,9 @@ pub enum ImgQualityError {
 
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    #[error("Skip file: {0}")]
+    SkipFile(String),
 }
 
 pub type Result<T> = std::result::Result<T, ImgQualityError>;

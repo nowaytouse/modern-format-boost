@@ -236,9 +236,19 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 }
 
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
-    let (width, height, has_alpha, color_depth, is_lossless, codec, features) =
+    let (width, height, has_alpha, color_depth, is_lossless, codec, features, heic_analysis_opt) =
         match analyze_heic_file(path) {
             Ok((img, heic_analysis)) => {
+                // Skip HEIC files with HDR or Dolby Vision
+                if heic_analysis.is_hdr || heic_analysis.is_dolby_vision {
+                    let reason = if heic_analysis.is_dolby_vision {
+                        "HEIC with Dolby Vision - skipping to preserve HDR metadata"
+                    } else {
+                        "HEIC with HDR - skipping to preserve HDR metadata"
+                    };
+                    return Err(ImgQualityError::SkipFile(reason.to_string()));
+                }
+
                 let (w, h) = img.dimensions();
                 let feats = calculate_image_features(&img, file_size);
                 let is_lossless = crate::image_detection::detect_compression(
@@ -253,8 +263,9 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                     heic_analysis.has_alpha,
                     heic_analysis.bit_depth,
                     is_lossless,
-                    heic_analysis.codec,
+                    heic_analysis.codec.clone(),
                     feats,
+                    Some(heic_analysis),
                 )
             }
             Err(e) => {
@@ -270,6 +281,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                     false,
                     "unknown".to_string(),
                     ImageFeatures::default(),
+                    None,
                 )
             }
         };
@@ -299,7 +311,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         duration_secs: None,
         is_lossless,
         jpeg_analysis: None,
-        heic_analysis: None,
+        heic_analysis: heic_analysis_opt,
         features,
         jxl_indicator,
         psnr: None,
