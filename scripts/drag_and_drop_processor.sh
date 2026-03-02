@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
 # Modern Format Boost - Drag & Drop Processor v7.0
 # 
-# 🔥 v7.0: UI/UX Optimization
-#          - Premium visual design
-#          - Improved progress indicators
-#          - Clearer status messaging
-# 🔥 v6.9.13: No-Omission Design
-#            - Supports all formats (converts supported, copies unsupported)
-#            - XMP sidecar merging
-#            - Guaranteed full output
-# 
 # Usage: Drag folder onto this script or double-click to select
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-# Tool Paths (🔥 v6.9.15: 修正为正确的 target/release 路径)
+# Tool Paths
 IMGQUALITY_HEVC="$PROJECT_ROOT/target/release/img-hevc"
 VIDQUALITY_HEVC="$PROJECT_ROOT/target/release/vid-hevc"
 
@@ -25,20 +16,14 @@ OUTPUT_MODE="inplace"
 OUTPUT_DIR=""
 SELECTED=0
 ULTIMATE_MODE=true
-VERBOSE_MODE=false  # 🔥 默认静默模式
+VERBOSE_MODE=false
 
 # 🛠️  Helper Functions
 
-# Hide cursor
 hide_cursor() { printf '\033[?25l'; }
-# Show cursor
 show_cursor() { printf '\033[?25h'; }
-
-# Clear screen
 clear_screen() { printf '\033[2J\033[H'; }
 
-# Spinner + elapsed time at bottom (shows program is running, not frozen).
-# Writes to /dev/tty only so the session log file stays clean (no spinner lines).
 SPINNER_PID=""
 ELAPSED_START=0
 _tty() { [[ -c /dev/tty ]] && printf '\r   %s Running: %s   ' "$1" "$2" > /dev/tty 2>/dev/null; }
@@ -63,12 +48,10 @@ start_elapsed_spinner() {
         done
     ) 2>/dev/null &
     SPINNER_PID=$!
-    # Disown so shell does not report "Killed: 9" to stderr when we later kill the spinner (avoids log noise).
     disown "$SPINNER_PID" 2>/dev/null || true
 }
 stop_elapsed_spinner() {
     [[ -z "$SPINNER_PID" ]] && return
-    # Suppress any "Killed: 9" or wait job-report to stderr so it does not appear in session log.
     ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
     SPINNER_PID=""
     now=$(date +%s)
@@ -81,13 +64,11 @@ stop_elapsed_spinner() {
     [[ -c /dev/tty ]] && printf '\r   ✅ Total time: %s    \n' "$elapsed_str" > /dev/tty 2>/dev/null
 }
 
-# 📝 Log directory and file
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE=""
-VERBOSE_LOG_FILE=""   # full verbose log written by the Rust binary
+VERBOSE_LOG_FILE=""
 SESSION_START_TIME=""
 
-# Initialize log file
 init_log() {
     SESSION_START_TIME=$(date +"%Y-%m-%d_%H-%M-%S")
     mkdir -p "$LOG_DIR"
@@ -95,24 +76,21 @@ init_log() {
     VERBOSE_LOG_FILE="$LOG_DIR/verbose_${SESSION_START_TIME}.log"
 }
 
-# Save log to file (called automatically at exit)
 save_log() {
     [[ -z "$LOG_FILE" ]] && return
     [[ ! -f "$LOG_FILE" ]] && return
 
-    # Append full Rust run log (img_hevc + vid_hevc write_to_log content) so session log has complete output
     if [[ -n "$VERBOSE_LOG_FILE" && -f "$VERBOSE_LOG_FILE" ]]; then
         {
             echo ""
             echo "========================================"
-            echo "📋 Full run log (img_hevc / vid_hevc internal log)"
+            echo "📋 Full internal tool log"
             echo "========================================"
             cat "$VERBOSE_LOG_FILE"
             echo ""
         } >> "$LOG_FILE"
     fi
 
-    # Append statistics footer to log
     {
         echo ""
         echo "========================================"
@@ -139,10 +117,8 @@ save_log() {
     } >> "$LOG_FILE"
     
     echo -e "   ${DIM}📝 Session log:  $LOG_FILE${RESET}"
-    [[ -f "$VERBOSE_LOG_FILE" ]] && echo -e "   ${DIM}📋 Verbose log:  $VERBOSE_LOG_FILE${RESET}"
 }
 
-# Draw a centered header
 draw_header() {
     local width=70
     local title="🚀 MODERN FORMAT BOOST v7.0"
@@ -158,16 +134,13 @@ draw_header() {
     echo ""
 }
 
-# Draw a section separator
 draw_separator() {
     local title="$1"
     echo -e "${DIM}── ${BOLD}${WHITE}${title}${RESET} ${DIM}$(printf '─%.0s' {1..50})${RESET}"
     echo ""
 }
 
-# 🚀 Check Tools
 check_tools() {
-    # Ensure build is up-to-date
     "$SCRIPT_DIR/smart_build.sh" || {
         echo -e "${RED}❌ Build failed. Please check the logs.${RESET}"
         drain_stdin
@@ -176,7 +149,6 @@ check_tools() {
     }
 }
 
-# 📂 Get Target Directory
 get_target_directory() {
     if [[ -z "$TARGET_DIR" ]]; then
         draw_header
@@ -185,7 +157,6 @@ get_target_directory() {
         echo -ne "   ${BOLD}> ${RESET}"
         drain_stdin
         read -r TARGET_DIR
-        # Clean path input
         TARGET_DIR="${TARGET_DIR%\"}"
         TARGET_DIR="${TARGET_DIR#\"}"
         TARGET_DIR="${TARGET_DIR%\'}"
@@ -201,7 +172,6 @@ get_target_directory() {
     fi
 }
 
-# 🛡️  Safety Checks
 safety_check() {
     case "$TARGET_DIR" in
         "/"|"/System"*|"/usr"*|"/bin"*|"/sbin"*|"$HOME"|"$HOME/Desktop"|"$HOME/Documents")
@@ -212,18 +182,15 @@ safety_check() {
     esac
 }
 
-# Drain any pending stdin so keystrokes from a previous phase (e.g. Building/Configuration) do not trigger mode selection.
 drain_stdin() {
     while read -rsn1 -t 0.01 _ 2>/dev/null; do :; done
 }
 
-# 🎮 Interactive Menu
 select_mode() {
     drain_stdin
     SELECTED=0
     hide_cursor
 
-    # Order: Adjacent first (safest default), then In-Place, then iCloud fix
     local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors")
     local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.")
     
@@ -246,16 +213,15 @@ select_mode() {
         
         echo -e "${DIM}(Use ↑/↓ to navigate, Enter to select, q to quit)${RESET}"
         
-        # Read input
         read -rsn1 key
         if [[ "$key" == $'\x1b' ]]; then
             read -rsn2 key
-            if [[ "$key" == "[A" ]]; then # Up
+            if [[ "$key" == "[A" ]]; then
                 SELECTED=$(( (SELECTED - 1 + 3) % 3 ))
-            elif [[ "$key" == "[B" ]]; then # Down
+            elif [[ "$key" == "[B" ]]; then
                 SELECTED=$(( (SELECTED + 1) % 3 ))
             fi
-        elif [[ "$key" == "" ]]; then # Enter
+        elif [[ "$key" == "" ]]; then
             break
         elif [[ "$key" == "q" ]]; then
             show_cursor
@@ -272,8 +238,6 @@ select_mode() {
         
         echo -e "\n${GREEN}✅ ADJACENT MODE SELECTED${RESET}"
         echo -e "   Output: ${DIM}$OUTPUT_DIR${RESET}"
-        
-        # Create output structure
         echo -e "   ${DIM}Creating directory structure...${RESET}"
         create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
     elif [[ $SELECTED -eq 1 ]]; then
@@ -293,13 +257,10 @@ select_mode() {
     fi
 }
 
-# 🛠️  Utils
 create_directory_structure() {
     local src="$1"
     local dest="$2"
     mkdir -p "$dest"
-    
-    # 🔥 v7.4.9: 立即复制根目录时间戳
     touch -r "$src" "$dest"
     
     find "$src" -type d -print0 | while IFS= read -r -d '' dir; do
@@ -307,13 +268,11 @@ create_directory_structure() {
         rel="${rel#/}"
         if [[ -n "$rel" ]]; then
             mkdir -p "$dest/$rel"
-            # 🔥 v7.4.9: 立即复制子目录时间戳
             touch -r "$dir" "$dest/$rel"
         fi
     done
 }
 
-# 📊 Stats
 count_files() {
     draw_separator "Scanning Content"
     printf "${DIM}   Analyzing directory structure...${RESET}\n"
@@ -330,32 +289,21 @@ count_files() {
     echo -e "   📋 Metadata:    ${BOLD}${DIM}$XMP_COUNT${RESET}"
     echo -e "   📦 Others:      ${BOLD}${DIM}$OTHER_COUNT${RESET} (Copy only)"
     echo ""
-    
-    if [[ $((IMG_COUNT + VID_COUNT)) -eq 0 ]]; then
-        echo -e "${YELLOW}⚠️  No convertable media found. Only copying logic will apply.${RESET}"
-    fi
 }
 
-# 🖼️  Process Images
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
-
     draw_separator "Processing Images ($IMG_COUNT)"
-
-    # 默认即推荐组合；仅传 run 与路径，与视频处理一致
     local args=(run --recursive)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    # 日志自动写入 ./logs/img_hevc_run_<timestamp>.log，无需传 --log-file
 
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
     else
-        # 相邻目录模式：必须先传目录，再传 --output
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Execution: capture for stats, show on tty, AND append full output to session log (so errors e.g. Broken pipe are recorded)
     local output
     if [[ -n "$LOG_FILE" ]]; then
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty | tee -a "$LOG_FILE")
@@ -366,29 +314,19 @@ process_images() {
     echo ""
 }
 
-# 🎬 Process Videos
 process_videos() {
     [[ $VID_COUNT -eq 0 ]] && return 0
-    
     draw_separator "Processing Videos ($VID_COUNT)"
-    
-    # 默认即推荐参数组合（explore + match-quality + compress + apple-compat + recursive + allow-size-tolerance）
-    # 仅需传 run 与路径；递归强制开启。关闭项可组合：环境变量或在此追加 --no-apple-compat、--no-allow-size-tolerance
     local args=(run --recursive)
-    [[ -n "${NO_APPLE_COMPAT:-}" ]] && args+=(--no-apple-compat)
-    [[ -n "${NO_ALLOW_SIZE_TOLERANCE:-}" ]] && args+=(--no-allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
-    # 日志自动写入 ./logs/vid_hevc_run_<timestamp>.log，无需传 --log-file
 
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
         args+=(--in-place "$TARGET_DIR")
     else
-        # 相邻目录模式：必须先传目录，再传 --output
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Execution: capture for stats, show on tty, AND append full output to session log (so errors e.g. Broken pipe are recorded)
     local output
     if [[ -n "$LOG_FILE" ]]; then
         output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/tty | tee -a "$LOG_FILE")
@@ -399,7 +337,6 @@ process_videos() {
     echo ""
 }
 
-# 📊 Merged Statistics Variables
 IMG_SUCCEEDED=0
 IMG_SKIPPED=0
 IMG_FAILED=0
@@ -407,12 +344,9 @@ VID_SUCCEEDED=0
 VID_SKIPPED=0
 VID_FAILED=0
 
-# 📊 Parse tool output for statistics
 parse_tool_stats() {
     local output="$1"
-    local tool_type="$2"  # "img" or "vid"
-    
-    # Parse "Succeeded: X" pattern
+    local tool_type="$2"
     local succeeded=$(echo "$output" | grep -oE 'Succeeded:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
     local skipped=$(echo "$output" | grep -oE 'Skipped:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
     local failed=$(echo "$output" | grep -oE 'Failed:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
@@ -428,54 +362,23 @@ parse_tool_stats() {
     fi
 }
 
-# 🔥 v8.2: Unified Repair for Apple Photos (replaces standalone JXL fixer)
-repair_apple_photos_compat() {
-    local target_path="$TARGET_DIR"
-    [[ "$OUTPUT_MODE" == "adjacent" ]] && target_path="$OUTPUT_DIR"
-
-    # Only run if there are potential files to repair (JXL, WebP, JPEG)
-    local repair_candidate_count=$(find "$target_path" -type f \( -iname "*.jxl" -o -iname "*.webp" -o -iname "*.jpg" -o -iname "*.jpeg" \) 2>/dev/null | wc -l | tr -d ' ')
-    [[ $repair_candidate_count -eq 0 ]] && return 0
-
-    draw_separator "Apple Photos Compatibility Repair"
-    echo -e "   ${CYAN}🔍 Repairing $repair_candidate_count files for Apple Photos compatibility...${RESET}"
-    echo ""
-
-    # Call the unified repair script
-    if [[ -f "$SCRIPT_DIR/repair_apple_photos.sh" ]]; then
-        zsh "$SCRIPT_DIR/repair_apple_photos.sh" "$target_path"
-    else
-        echo -e "   ${RED}⚠️ Repair script not found: repair_apple_photos.sh${RESET}"
-    fi
-    echo ""
-}
-
-# 🎉 Final Summary
 show_summary() {
     draw_separator "Task Completed"
-    
-    # Calculate totals
     local total_succeeded=$((IMG_SUCCEEDED + VID_SUCCEEDED))
     local total_skipped=$((IMG_SKIPPED + VID_SKIPPED))
     local total_failed=$((IMG_FAILED + VID_FAILED))
     local total_processed=$((total_succeeded + total_skipped + total_failed))
     
     echo -e "   ${GREEN}✅ Optimization Finished Successfully${RESET}"
-    echo -e "   ${DIM}All files have been processed without omission.${RESET}"
     echo ""
-    
-    # Merged Statistics Report
     echo -e "   ${BOLD}📊 Merged Statistics Report${RESET}"
     echo -e "   ${DIM}───────────────────────────────────${RESET}"
-    
     if [[ $IMG_COUNT -gt 0 ]]; then
         echo -e "   ${CYAN}🖼️  Images:${RESET} ${GREEN}$IMG_SUCCEEDED${RESET} succeeded, ${YELLOW}$IMG_SKIPPED${RESET} skipped, ${RED}$IMG_FAILED${RESET} failed"
     fi
-    
     if [[ $VID_COUNT -gt 0 ]]; then
         echo -e "   ${MAGENTA}🎬 Videos:${RESET} ${GREEN}$VID_SUCCEEDED${RESET} succeeded, ${YELLOW}$VID_SKIPPED${RESET} skipped, ${RED}$VID_FAILED${RESET} failed"
     fi
-    
     echo -e "   ${DIM}───────────────────────────────────${RESET}"
     echo -e "   ${WHITE}📦 Total:${RESET}  ${GREEN}$total_succeeded${RESET} succeeded, ${YELLOW}$total_skipped${RESET} skipped, ${RED}$total_failed${RESET} failed"
     
@@ -483,28 +386,20 @@ show_summary() {
         local success_rate=$(( (total_succeeded * 100) / total_processed ))
         echo -e "   ${WHITE}📈 Success Rate:${RESET} ${GREEN}${success_rate}%${RESET}"
     fi
-    
     echo ""
-    
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         echo -e "   ${BLUE}📂 Output: $OUTPUT_DIR${RESET}"
         open "$OUTPUT_DIR" 2>/dev/null
     fi
-    
     echo ""
     echo -e "${DIM}Press any key to exit...${RESET}"
     drain_stdin
     read -rsn1
-    
-    # 📝 Save session log
     save_log
 }
 
-# Main Execution Flow
 _main() {
     clear_screen
-
-    # Argument Parsing
     for arg in "$@"; do
         if [[ "$arg" == "--ultimate" ]]; then
             ULTIMATE_MODE=true
@@ -517,22 +412,18 @@ _main() {
 
     check_tools
     get_target_directory
-
-    # 🔥 显示配置信息
     echo ""
     echo -e "${CYAN}📋 Configuration:${RESET}"
     echo -e "   ${DIM}Target: ${RESET}${BOLD}$TARGET_DIR${RESET}"
     [[ "$ULTIMATE_MODE" == true ]] && echo -e "   ${MAGENTA}🔥 Ultimate Mode: ${RESET}${GREEN}ENABLED${RESET}"
-    [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}" || echo -e "   ${DIM}💬 Verbose: DISABLED (use --verbose for details)${RESET}"
+    [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}"
     echo ""
 
     safety_check
     select_mode
 
-    # 🩹 Brotli EXIF Fix Only Mode - Skip normal processing
     if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
         "$SCRIPT_DIR/repair_apple_photos.sh" "$TARGET_DIR"
-
         echo ""
         echo -e "${GREEN}✅ Brotli EXIF Fix Completed${RESET}"
         echo ""
@@ -542,42 +433,21 @@ _main() {
     fi
 
     count_files
-    
-    # Logic
-    # Note: Modern tools (v6.9.13+) handle recursion and structure internally/robustly
-    # We delegate the heavy lifting to them for progress bars and logic
-    
     if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
         start_elapsed_spinner
     fi
-    
     if [[ $IMG_COUNT -gt 0 ]]; then
         process_images
     fi
-    
     if [[ $VID_COUNT -gt 0 ]]; then
         process_videos
     fi
-
-    # Stop spinner before non-media copy/repair so this phase shows clear messages (no "Running" overwrite)
     if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
         stop_elapsed_spinner
     fi
-
-    # Handle "Others" copying if in adjacent mode (Tools handle media, but what about others?)
-    # Wait, the tool handles image formats. 
-    # v6.9.13 says "Process all files". 
-    # Does the tool copy non-media files? 
-    # img-hevc/vid-hevc usually only touch their extensions.
-    # We should perform a manual copy pass for non-media files if in adjacent mode.
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
-        draw_separator "Copying Non-Media Files"
-        echo -ne "   ${DIM}Syncing other files...${RESET}"
-        
-        # Rsync is best for this - exclude media extensions we processed
-        # Calculate exclusions
-        # 🔥 Fixed case sensitivity issues by using bracket patterns
+        draw_separator "Syncing Non-Media Files"
         local excludes=(
             --exclude="*.[jJ][pP][gG]" --exclude="*.[jJ][pP][eE][gG]" --exclude="*.[pP][nN][gG]" --exclude="*.[wW][eE][bB][pP]"
             --exclude="*.[hH][eE][iI][cC]" --exclude="*.[hH][eE][iI][fF]" --exclude="*.[aA][vV][iI][fF]" --exclude="*.[gG][iI][fF]"
@@ -587,46 +457,26 @@ _main() {
             --exclude="*.[wW][eE][bB][mM]" --exclude="*.[mM]4[vV]" --exclude="*.[wW][mM][vV]" --exclude="*.[fF][lL][vV]"
             --exclude="*.[xX][mM][pP]"
         )
-        
-        # Try to use brew rsync if available
         RSYNC_CMD="rsync"
-        if [ -x "/opt/homebrew/opt/rsync/bin/rsync" ]; then
-            RSYNC_CMD="/opt/homebrew/opt/rsync/bin/rsync"
-        elif [ -x "/usr/local/opt/rsync/bin/rsync" ]; then
-            RSYNC_CMD="/usr/local/opt/rsync/bin/rsync"
-        fi
-
+        if [ -x "/opt/homebrew/opt/rsync/bin/rsync" ]; then RSYNC_CMD="/opt/homebrew/opt/rsync/bin/rsync"; fi
         "$RSYNC_CMD" -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
-        echo -e "\r   ${GREEN}✅ Non-media files synced.${RESET}         "
-        echo ""
-    fi
-
-    # Apple Photos compatibility repair: not run automatically to avoid touching normal files.
-    # Users can run manually if needed: ./scripts/repair_apple_photos.sh "/path/to/folder"
-
-    # 🔥 v8.2.5: 后处理（JXL fix / rsync）会更新时间戳，统一用 shared_utils 逻辑恢复（脚本只调用）
-    if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
+        echo -e "   ${GREEN}✅ Non-media files synced.${RESET}"
         "$IMGQUALITY_HEVC" restore-timestamps "$TARGET_DIR" "$OUTPUT_DIR" 2>/dev/null && echo -e "   ${GREEN}✅ Timestamps restored.${RESET}" || true
     fi
 
     show_summary
 }
 
-# 🔥 v7.0.1: Internal worker for script logging compatibility
 if [[ "$1" == "--internal-worker" ]]; then
     shift
-    # 💡 Variables are already initialized globally in the script
     _main "$@"
     exit $?
 fi
 
-# Wrapper function with full session logging.
-# Use tee (not script) so spinner output (written to /dev/tty) is not captured in the log file.
 main() {
     init_log
     export LOG_FILE
     export VERBOSE_LOG_FILE
-
     ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | tee "$LOG_FILE"
     exit "${PIPESTATUS[0]:-$?}"
 }
