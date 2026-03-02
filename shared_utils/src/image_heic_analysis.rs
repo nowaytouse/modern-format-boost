@@ -16,6 +16,8 @@ pub struct HeicAnalysis {
     pub has_alpha: bool,
     pub has_auxiliary: bool,
     pub image_count: usize,
+    pub is_hdr: bool,
+    pub is_dolby_vision: bool,
 }
 
 pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
@@ -51,6 +53,9 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
 
     let has_auxiliary = handle.number_of_depth_images() > 0;
 
+    // Detect HDR and Dolby Vision
+    let (is_hdr, is_dolby_vision) = detect_heic_hdr_dv(path);
+
     let decoded_image = lib_heif
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode HEIC: {}", e)))?;
@@ -73,6 +78,8 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
         has_alpha,
         has_auxiliary,
         image_count,
+        is_hdr,
+        is_dolby_vision,
     };
 
     Ok((img, analysis))
@@ -103,6 +110,94 @@ pub fn is_heic_file(path: &Path) -> bool {
     }
 
     false
+}
+
+/// Detect HDR and Dolby Vision in HEIC files by reading raw file bytes
+/// Returns (is_hdr, is_dolby_vision)
+fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
+    use std::fs::File;
+    use std::io::Read;
+
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (false, false),
+    };
+
+    // Read first 64KB for box scanning
+    let mut buffer = vec![0u8; 65536];
+    let bytes_read = file.read(&mut buffer).unwrap_or(0);
+    if bytes_read < 12 {
+        return (false, false);
+    }
+    buffer.truncate(bytes_read);
+
+    let mut is_hdr = false;
+    let mut is_dolby_vision = false;
+
+    // Scan for HEVC configuration boxes (hvcC) and color info (colr, nclx)
+    let mut pos = 0;
+    while pos + 8 <= buffer.len() {
+        if pos + 4 > buffer.len() {
+            break;
+        }
+
+        let box_size = u32::from_be_bytes([
+            buffer[pos],
+            buffer[pos + 1],
+            buffer[pos + 2],
+            buffer[pos + 3],
+        ]) as usize;
+
+        if box_size < 8 || pos + box_size > buffer.len() {
+            pos += 1;
+            continue;
+        }
+
+        let box_type = &buffer[pos + 4..pos + 8];
+
+        // Check for hvcC (HEVC configuration)
+        if box_type == b"hvcC" && pos + 23 <= buffer.len() {
+            // Check for HDR transfer characteristics in hvcC
+            // Byte 22+ contains VPS/SPS/PPS NAL units
+            if pos + 30 < buffer.len() {
+                // Look for transfer_characteristics indicating HDR
+                // PQ (SMPTE 2084) = 16, HLG = 18
+                for i in pos + 22..std::cmp::min(pos + box_size, buffer.len() - 1) {
+                    if buffer[i] == 16 || buffer[i] == 18 {
+                        is_hdr = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Check for Dolby Vision configuration (dvcC or dvvC)
+        if (box_type == b"dvcC" || box_type == b"dvvC") && box_size >= 24 {
+            is_dolby_vision = true;
+            is_hdr = true; // Dolby Vision implies HDR
+        }
+
+        // Check for colr/nclx boxes with HDR color space
+        if box_type == b"colr" && box_size >= 18 {
+            if pos + 12 < buffer.len() {
+                let color_type = &buffer[pos + 8..pos + 12];
+                if color_type == b"nclx" && pos + 18 <= buffer.len() {
+                    // Check color primaries (BT.2020 = 9)
+                    let primaries = u16::from_be_bytes([buffer[pos + 12], buffer[pos + 13]]);
+                    // Check transfer characteristics (PQ = 16, HLG = 18)
+                    let transfer = u16::from_be_bytes([buffer[pos + 14], buffer[pos + 15]]);
+
+                    if primaries == 9 && (transfer == 16 || transfer == 18) {
+                        is_hdr = true;
+                    }
+                }
+            }
+        }
+
+        pos += box_size;
+    }
+
+    (is_hdr, is_dolby_vision)
 }
 
 #[cfg(test)]
