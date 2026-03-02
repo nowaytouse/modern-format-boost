@@ -1,23 +1,19 @@
 # 🚀 Modern Format Boost
 
-<div align="center">
+[![Version](https://img.shields.io/badge/version-0.8.9-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
+[![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)](https://github.com/nowaytouse/modern-format-boost)
+[![GitHub Stars](https://img.shields.io/github/stars/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/network/members)
 
-![Version](https://img.shields.io/badge/version-0.8.9-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
-![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)
+**The Ultimate Media Optimizer & Repair Tool for the Apple Ecosystem. 专为苹果生态打造的终极媒体优化与修复工具。**
 
-**The Ultimate Media Optimizer & Repair Tool for the Apple Ecosystem.**
-**专为苹果生态打造的终极媒体优化与修复工具。**
-
-[English](#english) | [中文文档](#cn)
-
-</div>
+[English](#english-section) | [中文文档](#chinese-section)
 
 ---
 
-<a id="english"></a>
-##  English
+<a id="english-section"></a>
 
 ### 📖 Introduction
 
@@ -128,8 +124,7 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 ---
 
-<a id="cn"></a>
-##  中文文档
+<a id="chinese-section"></a>
 
 ### 📖 简介
 
