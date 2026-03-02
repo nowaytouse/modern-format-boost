@@ -1,0 +1,29 @@
+# Rust
+target/
+Cargo.lock
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Session / drag-and-drop logs and default run logs
+logs/
+*_run.log
+
+# Local test data (user-specific paths)
+# /path/to/local/test/data
+.claude/

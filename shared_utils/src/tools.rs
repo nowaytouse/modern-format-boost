@@ -99,6 +99,12 @@ pub fn check_video_tools() -> Vec<ToolCheck> {
             version: get_tool_version("exiftool"),
             install_hint: "brew install exiftool",
         },
+        ToolCheck {
+            name: "dovi_tool",
+            available: check_tool("dovi_tool"),
+            version: get_tool_version("dovi_tool"),
+            install_hint: "cargo install dovi_tool",
+        },
     ]
 }
 

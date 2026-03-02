@@ -180,6 +180,10 @@ pub struct VideoDetectionResult {
     pub max_cll: Option<String>,
     /// Dolby Vision detected in stream side data
     pub is_dolby_vision: bool,
+    /// Dolby Vision profile number (5, 7, 8, etc.) — None if not DV
+    pub dv_profile: Option<u8>,
+    /// Dolby Vision BL signal compatibility ID (used to determine cross-compat)
+    pub dv_bl_signal_compatibility_id: Option<u8>,
     /// HDR10+ (SMPTE ST 2094-40) detected in stream side data
     pub is_hdr10_plus: bool,
     /// True when at least one subtitle stream is present
@@ -308,6 +312,8 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         mastering_display: probe.mastering_display,
         max_cll: probe.max_cll,
         is_dolby_vision: probe.is_dolby_vision,
+        dv_profile: probe.dv_profile,
+        dv_bl_signal_compatibility_id: probe.dv_bl_signal_compatibility_id,
         is_hdr10_plus: probe.is_hdr10_plus,
         has_subtitles: probe.has_subtitles,
         subtitle_codec: probe.subtitle_codec,
