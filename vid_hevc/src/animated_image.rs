@@ -88,6 +88,30 @@ fn skipped_output_exists(input: &Path, output: &Path, input_size: u64) -> Conver
     }
 }
 
+/// For GIF inputs: return true when the multi-dimensional meme-score indicates this GIF should be
+/// kept as-is rather than converted to a video container.
+///
+/// Uses ffprobe to gather resolution / fps / frame-count / duration, then applies the weighted
+/// scoring from `shared_utils::gif_meme_score`.  A score ≥ 0.50 → keep as GIF.
+/// Returns false for all non-GIF paths so the caller proceeds with normal conversion.
+fn is_gif_meme(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    if ext != "gif" {
+        return false;
+    }
+    let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if let Ok(probe) = shared_utils::probe_video(path) {
+        if let Some(meta) = shared_utils::gif_meta_from_probe(&probe, file_size) {
+            return shared_utils::should_keep_as_gif(&meta);
+        }
+    }
+    false
+}
+
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
 /// Callers should skip video conversion and treat as static image (e.g. route to JXL in img_hevc).
 fn is_static_animated_image(path: &Path) -> bool {
@@ -141,6 +165,24 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         copy_original_on_skip(input, options);
         mark_as_processed(input);
         return Ok(skipped_static_animated(input, input_size));
+    }
+
+    // GIF multi-dimensional meme-score: if the GIF looks like a meme/sticker, keep it as-is.
+    if is_gif_meme(input) {
+        let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            skipped: true,
+            skip_reason: Some("gif_meme".to_string()),
+        });
     }
 
     const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
@@ -303,6 +345,25 @@ pub fn convert_to_hevc_mp4_matched(
         mark_as_processed(input);
         return Ok(skipped_static_animated(input, input_size));
     }
+
+    // GIF multi-dimensional meme-score: if the GIF looks like a meme/sticker, keep it as-is.
+    if is_gif_meme(input) {
+        let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            skipped: true,
+            skip_reason: Some("gif_meme".to_string()),
+        });
+    }
+
     const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(input) {
         if let Some(d) = analysis.duration_secs {

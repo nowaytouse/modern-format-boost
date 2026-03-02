@@ -110,6 +110,8 @@ pub mod image_metrics;
 pub mod image_recommender;
 pub mod img_errors;
 pub mod live_photo;
+pub mod gif_meme_score;
+pub use gif_meme_score::{gif_meta_from_probe, should_keep_as_gif, GifMeta, MemeScore};
 
 pub use batch::*;
 pub use codecs::*;
