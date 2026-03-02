@@ -1,10 +1,10 @@
 #!/bin/zsh
 # Apple Photos Compatibility & Repair Tool (Unified)
-# 苹果相册兼容性修复工具 (原地处理 + 隐藏备份模式)
+# In-place repair + Hidden backup mode
 #
 # Merges functionality from:
-# 1. repair_apple_photos.sh (Extension fixing, EOI repair)
-# 2. fix_brotli_exif.sh (Brotli fix, hidden backups, in-place edit)
+# 1. Extension fixing, EOI repair
+# 2. Brotli fix, hidden backups, in-place edit
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ source "$SCRIPT_DIR/common.sh"
 TARGET_DIR="${1:-.}"
 BACKUP_DIR="$TARGET_DIR/.apple_photos_repair_backups"
 
-# Ensure we have required tools
+# Ensure required tools are installed
 if ! command -v exiftool &> /dev/null; then
     echo "❌ Error: exiftool is required. Please install it (brew install exiftool)."
     exit 1
@@ -24,7 +24,7 @@ fi
 echo "╔════════════════════════════════════════════════════════════════╗"
 echo "║          Apple Photos Ultimate Repair Tool 🍎                  ║"
 echo "║          (In-Place Fix + Safe Hidden Backup)                   ║"
-echo "╚════════════════════════════════════════════════════════════════╝"
+╚════════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Target: $TARGET_DIR"
 echo "Backup: $BACKUP_DIR"
@@ -43,7 +43,6 @@ echo "🔍 Scanning and repairing files..."
 echo ""
 
 # Find all files, excluding backup dir and hidden files
-# Using process substitution to keep variables in scope
 while IFS= read -r file; do
     # Skip if file is in backup dir
     if [[ "$file" == *"$BACKUP_DIR"* ]]; then continue; fi
@@ -54,7 +53,6 @@ while IFS= read -r file; do
     filename=$(basename "$file")
     
     # Calculate relative directory path from TARGET_DIR
-    # Use realpath to ensure we get correct relative path
     abs_file=$(realpath "$file")
     abs_target=$(realpath "$TARGET_DIR")
     rel_path="${abs_file#$abs_target/}"
@@ -66,7 +64,6 @@ while IFS= read -r file; do
     ext=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
     
     # Get real format via magic bytes
-    # -s -S -FileTypeExtension outputs just the extension (e.g. "jpg")
     real_ext=$(exiftool -s -S -FileTypeExtension "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
     
     if [[ -z "$real_ext" ]]; then continue; fi
@@ -91,13 +88,11 @@ while IFS= read -r file; do
 
     # Check 2: Metadata Corruption / "Nuclear Rebuild" Candidates
     if [[ "$real_ext" == "jxl" || "$real_ext" == "webp" || "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]]; then
-        # 🔥 v8.2: Always enable metadata rebuild for these formats.
-        # "Nuclear Rebuild" means we sanitize everything to ensure Apple Photos compatibility,
-        # even if the file looks "valid" to ExifTool.
+        # v8.2: Always enable metadata rebuild for these formats to ensure compatibility.
         check_meta=1
         needs_repair=1
         
-        # Check for specific structural issues to trigger pre-emptive heavy repair (magick)
+        # Check for specific structural issues
         warnings=$(exiftool -validate -warning "$file" 2>&1 || true)
         if echo "$warnings" | grep -q -E "JPEG EOI marker not found|JPEG format error|Corrupted Brotli"; then
              reason+="[Structure/Format Error] "
@@ -115,7 +110,6 @@ while IFS= read -r file; do
         echo "   Reason: $reason"
         
         # Prepare Backup Path
-        # Structure: BACKUP_DIR/rel_dir/filename
         if [[ "$rel_dir" == "." ]]; then
             backup_subdir="$BACKUP_DIR"
         else
@@ -128,7 +122,7 @@ while IFS= read -r file; do
         # Copy to backup (preserving attributes)
         cp -p "$file" "$backup_file"
         
-        # Save original timestamps from the file itself
+        # Save original timestamps
         mtime=$(stat -f%m "$file")
         btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
 
@@ -139,7 +133,6 @@ while IFS= read -r file; do
             new_filename="${filename%.*}.$real_ext"
             new_file_path="$(dirname "$file")/$new_filename"
             
-            # Rename the file
             mv "$file" "$new_file_path"
             current_file="$new_file_path"
             
@@ -149,8 +142,6 @@ while IFS= read -r file; do
 
         # Step B: Nuclear Metadata Rebuild
         if [[ $check_meta -eq 1 ]]; then
-             # Attempt to fix structure first using ImageMagick if EOI missing or format error
-             # (Only if it's a JPEG)
              if [[ "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]]; then
                  if echo "$warnings" | grep -q -E "JPEG EOI marker not found|JPEG format error"; then
                      if command -v magick &> /dev/null; then
@@ -161,23 +152,15 @@ while IFS= read -r file; do
              fi
              
              # ExifTool Rebuild
-             # -all= : Delete all tags
-             # -tagsfromfile @ -all:all : Restore standard tags from source
-             # -unsafe : Restore unsafe tags (needed for some formats)
-             # -icc_profile : Keep color profile
-             # -overwrite_original : In-place
-             
              if exiftool -quiet -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$current_file" 2>/dev/null; then
                  echo "   ✨ Metadata Rebuilt"
                  fixed_meta=$((fixed_meta + 1))
              else
-                 # Fallback: ExifTool failed. It might be severe structural damage.
-                 # If it's a JPEG, try ImageMagick (if we haven't already, or even if we have) to force rewrite
+                 # Fallback
                  if [[ "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]] && command -v magick &> /dev/null; then
                       echo "   ⚠️ ExifTool failed. Attempting forced structural repair with ImageMagick..."
                       magick "$current_file" "$current_file" 2>/dev/null || true
                       
-                      # Retry ExifTool
                       if exiftool -quiet -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$current_file" 2>/dev/null; then
                           echo "   ✨ Metadata Rebuilt (after structural repair)"
                           fixed_meta=$((fixed_meta + 1))
@@ -193,13 +176,11 @@ while IFS= read -r file; do
         fi
         
         # Step C: Restore Timestamps & Attributes
-        # 1. Restore xattrs from backup
         for attr in com.apple.metadata:kMDItemWhereFroms com.apple.metadata:_kMDItemUserTags com.apple.FinderInfo com.apple.metadata:kMDItemDateAdded; do
             val=$(xattr -px "$attr" "$backup_file" 2>/dev/null || echo "")
             [[ -n "$val" ]] && xattr -wx "$attr" "$val" "$current_file" 2>/dev/null || true
         done
         
-        # 2. Restore file times
         touch -mt "$(date -r "$mtime" +%Y%m%d%H%M.%S)" "$current_file" 2>/dev/null || true
         [[ "$btime" != "0" ]] && SetFile -d "$(date -r "$btime" +%m/%d/%Y\ %H:%M:%S)" "$current_file" 2>/dev/null || true
         
