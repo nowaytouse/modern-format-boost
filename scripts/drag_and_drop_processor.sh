@@ -1,4 +1,4 @@
-#!/opt/homebrew/bin/bash
+#!/usr/bin/env bash
 # Modern Format Boost - Drag & Drop Processor v7.0
 # 
 # 🔥 v7.0: UI/UX Optimization
