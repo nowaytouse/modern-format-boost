@@ -1,19 +1,19 @@
-# 🚀 Modern Format Boost
+# 🚀 Modern Format Boost [![GitHub Stars](https://img.shields.io/github/stars/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/stargazers) [![GitHub Forks](https://img.shields.io/github/forks/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/network/members)
 
 [![Version](https://img.shields.io/badge/version-0.8.9-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
 [![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)](https://github.com/nowaytouse/modern-format-boost)
-[![GitHub Stars](https://img.shields.io/github/stars/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/network/members)
+[![Repo Size](https://img.shields.io/github/repo-size/nowaytouse/modern-format-boost.svg)](https://github.com/nowaytouse/modern-format-boost)
+[![Last Commit](https://img.shields.io/github/last-commit/nowaytouse/modern-format-boost.svg)](https://github.com/nowaytouse/modern-format-boost/commits/main)
 
 **The Ultimate Media Optimizer & Repair Tool for the Apple Ecosystem. 专为苹果生态打造的终极媒体优化与修复工具。**
 
-[English](#english-section) | [中文文档](#chinese-section)
+[English](#introduction-en) | [中文文档](#introduction-cn)
 
 ---
 
-<a id="english-section"></a>
+<a id="introduction-en"></a>
 
 ### 📖 Introduction
 
@@ -124,7 +124,7 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 ---
 
-<a id="chinese-section"></a>
+<a id="introduction-cn"></a>
 
 ### 📖 简介
 
@@ -178,7 +178,7 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 #### ⚡ 智能转换策略
 *   **魔法字节嗅探**: 完全绕过文件扩展名。通过缓冲读取文件头的前 16 个字节（文件签名）来识别真实的 MIME 类型，自动修正伪装成 `jpg` 的 `png` 文件。
-*   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients` 标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
+*   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients`标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
 
 ### 🛠️ 安装
 
