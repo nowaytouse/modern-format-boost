@@ -21,6 +21,12 @@
 
 Unlike simple wrapper scripts, this tool implements a **cybernetic feedback loop** that analyzes content complexity, optimizes encoding parameters in real-time, and verifies integrity using industrial metrics (SSIM/MS-SSIM).
 
+> [!IMPORTANT]
+> **Disclaimer & Current Status:**
+> 1. **Tool Maturity**: The HEVC-based tools (`img-hevc`, `vid-hevc`) are significantly more mature and stable than the AV1 variants (`img-av1`, `vid-av1`).
+> 2. **Testing Scope**: While the engine has been validated against tens of thousands of files through rigorous debugging and iterative patching, the test dataset is restricted to the author's local environment.
+> 3. **Platform Support**: This project is currently optimized and verified for **macOS only**.
+
 ### ⚙️ How It Works (Technical Architecture)
 
 #### 1. Image Modernization Engine (`img-hevc`)
@@ -132,6 +138,12 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 与简单的脚本包装器不同，本工具实现了一个**控制论反馈回路 (Cybernetic Feedback Loop)**：实时分析内容复杂度，动态调整编码参数，并使用工业级指标（SSIM/MS-SSIM）验证输出完整性。
 
+> [!IMPORTANT]
+> **免责声明与现状：**
+> 1. **工具成熟度**：基于 HEVC 的工具（`img-hevc`、`vid-hevc`）的完成度与稳定性显著领先于 AV1 变体工具（`img-av1`、`vid-av1`）。
+> 2. **测试范围**：尽管程序已通过数万份文件的严苛测试，并经历了反复的修复与 Debug，但目前的测试数据集仅限于作者本机环境。
+> 3. **平台支持**：本项目目前仅在 **macOS** 系统上经过完整验证与优化。
+
 ### ⚙️ 工作原理 (技术架构)
 
 #### 1. 图像现代化管线 (`img-hevc`)
@@ -178,7 +190,7 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 #### ⚡ 智能转换策略
 *   **魔法字节嗅探**: 完全绕过文件扩展名。通过缓冲读取文件头的前 16 个字节（文件签名）来识别真实的 MIME 类型，自动修正伪装成 `jpg` 的 `png` 文件。
-*   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients`标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
+*   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients` 标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
 
 ### 🛠️ 安装
 
