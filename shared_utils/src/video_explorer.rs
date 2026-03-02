@@ -350,6 +350,12 @@ pub struct ExploreResult {
     pub input_video_stream_size: u64,
     pub output_video_stream_size: u64,
     pub container_overhead: u64,
+    /// Ultimate mode 3D quality gate: VMAF Y-channel score (0–100).
+    pub vmaf_y_score: Option<f64>,
+    /// Ultimate mode 3D quality gate: CAMBI banding score (lower = better).
+    pub cambi_score: Option<f64>,
+    /// Ultimate mode 3D quality gate: (PSNR_U, PSNR_V) in dB.
+    pub psnr_uv_score: Option<(f64, f64)>,
 }
 
 impl Default for ExploreResult {
@@ -373,6 +379,9 @@ impl Default for ExploreResult {
             input_video_stream_size: 0,
             output_video_stream_size: 0,
             container_overhead: 0,
+            vmaf_y_score: None,
+            cambi_score: None,
+            psnr_uv_score: None,
         }
     }
 }
