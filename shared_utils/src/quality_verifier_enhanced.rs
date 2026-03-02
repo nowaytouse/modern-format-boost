@@ -37,6 +37,17 @@ impl VerifyOptions {
         }
     }
 
+    /// Relaxed verification for animated images (GIF, WebP, AVIF) with variable frame delays.
+    /// Uses a larger duration tolerance to accommodate frame timing variations during conversion.
+    pub fn relaxed_animated_image() -> Self {
+        Self {
+            min_file_size: DEFAULT_MIN_FILE_SIZE,
+            require_duration_match: true,
+            duration_tolerance_secs: 3.0, // More tolerant for GIF variable frame delays
+            require_video_stream: true,
+        }
+    }
+
     pub fn minimal() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
