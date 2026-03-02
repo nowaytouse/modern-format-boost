@@ -12,6 +12,7 @@ use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -96,6 +97,86 @@ fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     } else {
         "yuv420p"
     }
+}
+
+/// Result of attempting to prepare DV RPU data for x265 injection.
+struct DvRpuResult {
+    /// Path to the RPU .bin file for --dolby-vision-rpu
+    rpu_path: PathBuf,
+    /// x265 dolby-vision-profile string (e.g. "8.1")
+    profile_str: String,
+    /// Temp directory that must be kept alive until encode completes
+    _temp_dir: tempfile::TempDir,
+}
+
+/// Attempt to extract Dolby Vision RPU data for injection into x265.
+/// Returns `None` if:
+/// - Content is not Dolby Vision
+/// - `dovi_tool` is not installed
+/// - Any extraction step fails (graceful fallback to HDR10)
+fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
+    if !detection.is_dolby_vision {
+        return None;
+    }
+
+    if !shared_utils::is_dovi_tool_available() {
+        warn!("dovi_tool not found — Dolby Vision RPU cannot be preserved, falling back to HDR10");
+        warn!("Install with: cargo install dovi_tool");
+        return None;
+    }
+
+    let temp_dir = match tempfile::TempDir::new() {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("Failed to create temp dir for DV RPU extraction: {}", e);
+            return None;
+        }
+    };
+
+    let input_path = Path::new(&detection.file_path);
+
+    // Step 1: Extract raw HEVC Annex-B bitstream
+    let raw_hevc = match shared_utils::extract_hevc_bitstream(input_path, temp_dir.path()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("DV RPU extraction: bitstream extraction failed: {}", e);
+            warn!("Falling back to HDR10 static layer");
+            return None;
+        }
+    };
+
+    // Step 2: Extract RPU (and convert Profile 7 → 8.1 if needed)
+    let rpu_path = match shared_utils::extract_dv_rpu(&raw_hevc, temp_dir.path(), detection.dv_profile) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("DV RPU extraction failed: {}", e);
+            warn!("Falling back to HDR10 static layer");
+            return None;
+        }
+    };
+
+    // Step 3: Determine x265 profile string
+    let profile_str = match shared_utils::dv_x265_profile_string(
+        detection.dv_profile,
+        detection.dv_bl_signal_compatibility_id,
+    ) {
+        Some(s) => s,
+        None => {
+            warn!(
+                "Unsupported DV profile {:?} for x265 — falling back to HDR10",
+                detection.dv_profile
+            );
+            return None;
+        }
+    };
+
+    info!("Dolby Vision RPU extracted — profile {} will be preserved in x265 output", profile_str);
+
+    Some(DvRpuResult {
+        rpu_path,
+        profile_str,
+        _temp_dir: temp_dir,
+    })
 }
 
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
@@ -304,8 +385,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
     // Warn about dynamic HDR metadata that will be stripped during re-encode
     if detection.is_dolby_vision {
-        warn!("Dolby Vision detected: dynamic DV metadata will be stripped to HDR10 static layer");
-        warn!("HDR10 mastering display + content light level are preserved");
+        if shared_utils::is_dovi_tool_available() {
+            info!("Dolby Vision detected: RPU will be preserved via dovi_tool");
+        } else {
+            warn!("Dolby Vision detected: dovi_tool not found, falling back to HDR10 static layer");
+            warn!("Install dovi_tool to preserve DV metadata: cargo install dovi_tool");
+        }
     }
     if detection.is_hdr10_plus {
         warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
@@ -1026,6 +1111,9 @@ fn execute_hevc_conversion(
     crf: u8,
     max_threads: usize,
 ) -> Result<u64> {
+    // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
+    let dv_rpu = prepare_dv_rpu(detection);
+
     // For HDR content (10-bit) we need additional x265 params to signal HDR correctly.
     // hdr-opt=1 enables SEI HDR metadata writing; repeat-headers=1 ensures SPS/PPS on
     // every keyframe so players always have the colour info available.
@@ -1038,7 +1126,7 @@ fn execute_hevc_conversion(
             Some("smpte2084") | Some("arib-std-b67")
         );
 
-    let x265_params = if is_hdr_content {
+    let mut x265_params = if is_hdr_content {
         format!(
             "log-level=error:pools={}:hdr-opt=1:repeat-headers=1",
             max_threads
@@ -1046,6 +1134,15 @@ fn execute_hevc_conversion(
     } else {
         format!("log-level=error:pools={}", max_threads)
     };
+
+    // Inject DV RPU path and profile into x265 params when available
+    if let Some(ref dv) = dv_rpu {
+        x265_params.push_str(&format!(
+            ":dolby-vision-rpu={}:dolby-vision-profile={}",
+            dv.rpu_path.display(),
+            dv.profile_str
+        ));
+    }
 
     let pix_fmt = hdr_pix_fmt(detection);
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -1118,6 +1215,9 @@ fn execute_hevc_lossless(
 ) -> Result<u64> {
     warn!("⚠️  HEVC Lossless encoding - this will be slow and produce large files!");
 
+    // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
+    let dv_rpu = prepare_dv_rpu(detection);
+
     let is_hdr_content = detection.bit_depth >= 10
         || detection.is_dolby_vision
         || detection.is_hdr10_plus
@@ -1128,7 +1228,7 @@ fn execute_hevc_lossless(
         );
 
     // hdr-opt=1 + repeat-headers=1 ensure HDR SEI metadata is written into the bitstream.
-    let x265_params = if is_hdr_content {
+    let mut x265_params = if is_hdr_content {
         format!(
             "lossless=1:log-level=error:pools={}:hdr-opt=1:repeat-headers=1",
             max_threads
@@ -1136,6 +1236,15 @@ fn execute_hevc_lossless(
     } else {
         format!("lossless=1:log-level=error:pools={}", max_threads)
     };
+
+    // Inject DV RPU path and profile into x265 params when available
+    if let Some(ref dv) = dv_rpu {
+        x265_params.push_str(&format!(
+            ":dolby-vision-rpu={}:dolby-vision-profile={}",
+            dv.rpu_path.display(),
+            dv.profile_str
+        ));
+    }
 
     let pix_fmt = hdr_pix_fmt(detection);
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
@@ -1250,6 +1359,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1295,6 +1406,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1345,6 +1458,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1397,6 +1512,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1452,6 +1569,8 @@ mod tests {
                 mastering_display: None,
                 max_cll: None,
                 is_dolby_vision: false,
+                dv_profile: None,
+                dv_bl_signal_compatibility_id: None,
                 is_hdr10_plus: false,
                 has_subtitles: false,
                 subtitle_codec: None,
@@ -1521,6 +1640,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1563,6 +1684,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1608,6 +1731,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1658,6 +1783,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1703,6 +1830,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1749,6 +1878,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
@@ -1795,6 +1926,8 @@ mod tests {
             mastering_display: None,
             max_cll: None,
             is_dolby_vision: false,
+            dv_profile: None,
+            dv_bl_signal_compatibility_id: None,
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,

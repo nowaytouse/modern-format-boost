@@ -68,6 +68,10 @@ pub struct FFprobeResult {
     pub max_cll: Option<String>,
     /// True when content uses Dolby Vision (side data detected)
     pub is_dolby_vision: bool,
+    /// Dolby Vision profile number (5, 7, 8, etc.) — None if not DV
+    pub dv_profile: Option<u8>,
+    /// Dolby Vision BL signal compatibility ID (used to determine cross-compat)
+    pub dv_bl_signal_compatibility_id: Option<u8>,
     /// True when content uses HDR10+ dynamic metadata (SMPTE ST 2094-40)
     pub is_hdr10_plus: bool,
     /// True when at least one subtitle stream is present
@@ -197,8 +201,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
     // Parse HDR side data: Dolby Vision, HDR10+, mastering display, CLL
     // We scan all objects across streams and frames for side_data entries
-    let (is_dolby_vision, is_hdr10_plus, mastering_display, max_cll) =
-        extract_hdr_side_data(&json);
+    let hdr = extract_hdr_side_data(&json);
 
     let bit_depth = detect_bit_depth(&pix_fmt);
 
@@ -263,10 +266,12 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         has_b_frames,
         video_bit_rate,
         refs,
-        mastering_display,
-        max_cll,
-        is_dolby_vision,
-        is_hdr10_plus,
+        mastering_display: hdr.mastering_display,
+        max_cll: hdr.max_cll,
+        is_dolby_vision: hdr.is_dolby_vision,
+        dv_profile: hdr.dv_profile,
+        dv_bl_signal_compatibility_id: hdr.dv_bl_signal_compatibility_id,
+        is_hdr10_plus: hdr.is_hdr10_plus,
         has_subtitles,
         subtitle_codec,
     })
@@ -278,14 +283,26 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 /// - Mastering display colour volume (HDR10 static metadata)
 /// - Content light level (MaxCLL / MaxFALL)
 ///
-/// Returns `(is_dolby_vision, is_hdr10_plus, mastering_display, max_cll)`.
-fn extract_hdr_side_data(
-    json: &serde_json::Value,
-) -> (bool, bool, Option<String>, Option<String>) {
-    let mut is_dolby_vision = false;
-    let mut is_hdr10_plus = false;
-    let mut mastering_display: Option<String> = None;
-    let mut max_cll: Option<String> = None;
+/// Parsed HDR side data from ffprobe JSON.
+struct HdrSideData {
+    is_dolby_vision: bool,
+    is_hdr10_plus: bool,
+    mastering_display: Option<String>,
+    max_cll: Option<String>,
+    dv_profile: Option<u8>,
+    dv_bl_signal_compatibility_id: Option<u8>,
+}
+
+/// Returns parsed HDR side data including DV profile information.
+fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
+    let mut result = HdrSideData {
+        is_dolby_vision: false,
+        is_hdr10_plus: false,
+        mastering_display: None,
+        max_cll: None,
+        dv_profile: None,
+        dv_bl_signal_compatibility_id: None,
+    };
 
     // Collect all side_data arrays from streams and frames
     let mut side_data_entries: Vec<&serde_json::Value> = Vec::new();
@@ -312,29 +329,37 @@ fn extract_hdr_side_data(
         let sd_type = sd["side_data_type"].as_str().unwrap_or("").to_lowercase();
 
         if sd_type.contains("dolby vision") || sd_type.contains("dovi") {
-            is_dolby_vision = true;
+            result.is_dolby_vision = true;
+
+            // Parse DOVI configuration record fields
+            if let Some(profile) = sd["dv_profile"].as_u64() {
+                result.dv_profile = Some(profile as u8);
+            }
+            if let Some(compat_id) = sd["dv_bl_signal_compatibility_id"].as_u64() {
+                result.dv_bl_signal_compatibility_id = Some(compat_id as u8);
+            }
         }
 
         if sd_type.contains("hdr dynamic") || sd_type.contains("st2094") || sd_type.contains("hdr10+") {
-            is_hdr10_plus = true;
+            result.is_hdr10_plus = true;
         }
 
         // Mastering display: parse colour primaries + luminance into ffmpeg format
         if sd_type.contains("mastering display") {
             if let Some(md_str) = build_mastering_display_string(sd) {
-                mastering_display = Some(md_str);
+                result.mastering_display = Some(md_str);
             }
         }
 
         // Content light level
         if sd_type.contains("content light level") {
             if let Some(cll_str) = build_max_cll_string(sd) {
-                max_cll = Some(cll_str);
+                result.max_cll = Some(cll_str);
             }
         }
     }
 
-    (is_dolby_vision, is_hdr10_plus, mastering_display, max_cll)
+    result
 }
 
 /// Convert a rational string like "13250/50000" to a u64 numerator (for ffmpeg master-display format).
