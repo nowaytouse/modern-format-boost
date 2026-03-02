@@ -7,9 +7,9 @@
 //! "convert to video (HEVC)".
 //!
 //! Dimensions (inspired by the meme-score reference):
-//!   - sharpness   (0.40): Low-variance / blurry frames → meme-like.  Computed
-//!                         from per-pixel size (bytes / pixel) as a proxy when
-//!                         no decoded frame is available.
+//!   - sharpness   (0.40): Low-variance / blurry frames → meme-like.
+//!     Computed from per-pixel size (bytes / pixel) as a proxy when
+//!     no decoded frame is available.
 //!   - resolution  (0.20): Small canvas → meme-like (≤200² ≈ 1.0, ≥1080p ≈ 0.0).
 //!   - duration    (0.18): Short loop → meme-like (≤1 s ≈ 1.0, ≥10 s ≈ 0.0).
 //!   - fps         (0.08): Low frame rate → meme-like (≤6 fps ≈ 1.0, ≥30 fps ≈ 0.0).
