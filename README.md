@@ -10,7 +10,7 @@
 **The Ultimate Media Optimizer & Repair Tool for the Apple Ecosystem.**
 **专为苹果生态打造的终极媒体优化与修复工具。**
 
-[ English](#-english) | [ 中文文档](#-中文文档)
+[English](#english) | [中文文档](#cn)
 
 </div>
 
