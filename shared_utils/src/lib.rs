@@ -257,7 +257,8 @@ pub use hdr_decode::{decode_hdr_image_to_png16, needs_hdr_decode};
 
 pub use hdr_utils::{
     color_info_to_cicp, color_info_to_ffmpeg_args, color_info_to_x265_hdr_params,
-    get_hdr_pix_fmt, should_use_hdr_decode,
+    dv_x265_profile_string, extract_dv_rpu, extract_hevc_bitstream, get_hdr_pix_fmt,
+    is_dovi_tool_available, should_use_hdr_decode,
 };
 
 pub use stream_size::{

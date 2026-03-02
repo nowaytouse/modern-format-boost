@@ -6,6 +6,8 @@
 //! - Color space and transfer function conversions
 
 use crate::ffprobe_json::ColorInfo;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Convert ColorInfo to CICP string for JXL encoding.
 /// CICP format: --cicp=<primaries>-<transfer>-<matrix>
@@ -163,6 +165,104 @@ pub fn get_hdr_pix_fmt(info: &ColorInfo) -> &'static str {
         "rgb48le" // 16-bit RGB (3 channels × 16-bit)
     } else {
         "rgb24" // 8-bit RGB
+    }
+}
+
+/// Check if `dovi_tool` binary is available on PATH.
+pub fn is_dovi_tool_available() -> bool {
+    Command::new("dovi_tool")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Extract raw HEVC Annex-B bitstream from a container using ffmpeg.
+/// Returns the path to the raw `.hevc` file inside `temp_dir`.
+pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
+    let raw_hevc = temp_dir.join("raw.hevc");
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(input)
+        .args([
+            "-c:v", "copy",
+            "-bsf:v", "hevc_mp4toannexb",
+            "-an", "-sn",
+        ])
+        .arg(&raw_hevc)
+        .output()
+        .map_err(|e| format!("failed to run ffmpeg for bitstream extraction: {}", e))?;
+
+    if !status.status.success() {
+        let stderr = String::from_utf8_lossy(&status.stderr);
+        return Err(format!("ffmpeg bitstream extraction failed: {}", stderr));
+    }
+    Ok(raw_hevc)
+}
+
+/// Extract Dolby Vision RPU from a raw HEVC Annex-B bitstream using `dovi_tool`.
+/// For Profile 7 sources, converts to Profile 8.1 (cross-compatible) automatically.
+/// Returns the path to the `.bin` RPU file.
+pub fn extract_dv_rpu(
+    raw_hevc: &Path,
+    temp_dir: &Path,
+    dv_profile: Option<u8>,
+) -> Result<PathBuf, String> {
+    let rpu_path = temp_dir.join("rpu.bin");
+
+    let mut cmd = Command::new("dovi_tool");
+    cmd.arg("extract-rpu")
+        .arg("-i")
+        .arg(raw_hevc)
+        .arg("-o")
+        .arg(&rpu_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run dovi_tool extract-rpu: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("dovi_tool extract-rpu failed: {}", stderr));
+    }
+
+    // Profile 7 → convert to 8.1 for x265 cross-compatibility
+    if dv_profile == Some(7) {
+        let converted_rpu = temp_dir.join("rpu_p81.bin");
+        let conv_output = Command::new("dovi_tool")
+            .arg("convert")
+            .arg("--discard")
+            .arg("-i")
+            .arg(&rpu_path)
+            .arg("-o")
+            .arg(&converted_rpu)
+            .output()
+            .map_err(|e| format!("failed to run dovi_tool convert: {}", e))?;
+
+        if !conv_output.status.success() {
+            let stderr = String::from_utf8_lossy(&conv_output.stderr);
+            return Err(format!("dovi_tool convert (profile 7→8.1) failed: {}", stderr));
+        }
+        return Ok(converted_rpu);
+    }
+
+    Ok(rpu_path)
+}
+
+/// Map DV profile + compatibility ID to the x265 `dolby-vision-profile` string.
+/// Returns the numeric profile string that x265 expects (e.g. "8.1", "5.0").
+pub fn dv_x265_profile_string(dv_profile: Option<u8>, compat_id: Option<u8>) -> Option<String> {
+    match dv_profile {
+        Some(5) => Some("5.0".to_string()),
+        Some(7) => {
+            // Profile 7 gets converted to 8.1 by extract_dv_rpu
+            Some("8.1".to_string())
+        }
+        Some(8) => {
+            let sub = compat_id.unwrap_or(1);
+            Some(format!("8.{}", sub))
+        }
+        _ => None,
     }
 }
 
