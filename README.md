@@ -1,175 +1,242 @@
 # 🚀 Modern Format Boost
 
+<div align="center">
+
 ![Version](https://img.shields.io/badge/version-0.8.9-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
+![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)
 
 **The Ultimate Media Optimizer & Repair Tool for the Apple Ecosystem.**
 **专为苹果生态打造的终极媒体优化与修复工具。**
 
----
+[🇺🇸 English](#-english) | [🇨🇳 中文文档](#-中文文档)
 
-## 📖 简介 / Introduction
-
-**Modern Format Boost** is a professional-grade media optimization suite designed to modernize your photo and video library. It losslessly converts legacy formats (JPEG, PNG, GIF, AVC) to modern, high-efficiency standards (JXL, AVIF, HEVC), saving 30-80% storage space without losing a single pixel of quality.
-
-**Modern Format Boost** 是一套专业级的媒体优化套件，旨在将您的照片和视频库现代化。它能将过时的格式（JPEG, PNG, GIF, AVC）无损转换为现代高效标准（JXL, AVIF, HEVC），在不损失任何画质的前提下节省 30-80% 的存储空间。
-
-Unlike simple converters, it features a robust **"Self-Healing" engine** specifically engineered to fix files that Apple Photos refuses to import ("Unknown Error"). It handles corrupted headers, mismatched extensions, and toxic metadata automatically.
-
-与简单的转换器不同，它内置了强大的**“自愈”引擎**，专门用于修复 Apple 照片无法导入（报“未知错误”）的文件。它能自动处理损坏的文件头、扩展名不匹配以及有毒的元数据。
+</div>
 
 ---
 
-## 🏗️ 智能处理策略 / Smart Processing Strategy
+<a id="english"></a>
+## 🇺🇸 English
 
-程序基于 **“信息无损优先”** 和 **“避免二代损耗”** 原则，根据文件状态自动选择最优路径：
+### 📖 Introduction
 
-| 原始状态 / Original State | 质量类型 / Type | 目标格式 / Target | 核心逻辑 / Core Logic |
-| :--- | :--- | :--- | :--- |
-| **PNG / TIFF / BMP** | 无损 / Lossless | **JXL** | 100% 数学无损压缩 (Saving 20-40%) |
-| **JPEG** | 有损 / Lossy | **JXL** | **DCT 系数保留转码** (Zero quality loss!) |
-| **WebP / AVIF** | 无损 / Lossless | **JXL** | 跨格式无损迁移，更佳的归档效率 |
-| **WebP / AVIF / HEIC** | 有损 / Lossy | **跳过 / SKIP** | **防止二代损耗** (Avoid generation loss) |
-| **GIF / 动态图片** | 任意 (时长≥4.5s) | **MP4** | **智能 SSIM 裁判** 寻找视觉无损平衡点 |
-| **损坏/有毒元数据** | 任意状态 | **Repair** | **元数据全量重构** + 结构修复 (Fix for Apple) |
+**Modern Format Boost** is a high-performance, concurrent media optimization engine written in **Rust**. It is designed to modernize legacy archives (JPEG/H.264) into next-generation formats (JXL/HEVC) while strictly adhering to **mathematical lossless** standards for images and **perceptual fidelity** for videos.
 
-### 视频策略表 / Video Strategy Table
+Unlike simple wrapper scripts, this tool implements a **cybernetic feedback loop** that analyzes content complexity, optimizes encoding parameters in real-time, and verifies integrity using industrial metrics (SSIM/MS-SSIM).
 
-| 原始编码 / Source Codec | 质量类型 / Type | 目标 / Target | 核心逻辑 / Core Logic |
-| :--- | :--- | :--- | :--- |
-| **H.264 / AVC / MPEG** | 有损 / Lossy | **HEVC** 或 **AV1** MP4 | **SSIM 探索** 匹配画质 + 压缩率，CRF 自动寻优 |
-| **FFV1 / 无损 / HuffYUV / UTVideo** | 无损 / Lossless | **HEVC** 或 **AV1** 无损 (MKV/MP4) | 数学无损编码，节省空间 |
-| **ProRes / DNxHD** | 视觉无损 / Visually lossless | **HEVC** 或 **AV1** MP4 | 高码率源 → 高 CRF 策略，保持视觉无损 |
-| **H.265 / HEVC / AV1 / VP9 / VVC / AV2** | 已现代 / Modern | **跳过 / SKIP** | **防止重复编码**；Apple 兼容模式下仅跳过 HEVC，将 AV1/VP9 等转为 HEVC |
+### ⚙️ How It Works (Technical Architecture)
 
----
+#### 1. Image Modernization Engine (`img-hevc`)
+The image pipeline operates as a **Format-Aware Routing State Machine**. It inspects the binary signature (magic bytes) and metadata of every file to determine the optimal transformation path.
 
-## ✨ 核心特性 / Key Features
+**Decision Matrix & Conversion Strategy:**
 
-### 🍎 Apple Ecosystem Perfected / 完美适配苹果生态
-*   **"Unknown Error" Killer**: Automatically detects and fixes files that crash Apple Photos (e.g., WebP files renamed as .jpeg).
-    *   **“未知错误”终结者**：自动检测并修复导致苹果相册崩溃的文件（例如被重命名为 .jpeg 的 WebP 文件）。
-*   **Nuclear Metadata Rebuild**: Strips "toxic" non-standard EXIF tags left by third-party editors (Meitu, etc.) while preserving all valid data (GPS, Date, Captions).
-    *   **元数据核弹级重构**：剔除第三方编辑器（如美图秀秀）留下的非标准“有毒”标签，同时完美保留所有有效数据（GPS、日期、说明）。
-*   **Directory Timestamp Guard**: Preserves creation/modification dates for **folders** as well as files, keeping your timeline intact.
-    *   **文件夹时间守护**：不仅保留文件的时间，还完美还原**文件夹**的创建/修改日期，确保相册时间线不乱。
+| Input Category | Condition / State | Operation | Target Format | Technical Principle |
+| :--- | :--- | :--- | :--- | :--- |
+| **JPEG** | Legacy Lossy | **Reconstruction** | **JXL** (Lossless) | **DCT Transcoding**. Parses raw DCT coefficients and maps them directly to JXL's `varDCT`. **Reversible & Bit-exact.** |
+| **PNG / TIFF** | Lossless | **Entropic Coding** | **JXL** (Lossless) | **Modular Mode**. Utilizes Delta Palettes, Squeeze (Haar transform), and MA-trees. ~40% density improvement. |
+| **WebP / AVIF** | Lossy | **Hard Skip** | *(Original)* | **Signal Preservation**. Re-quantizing artifacts (cascade compression) mathematically destroys SNR. Preserved as-is. |
+| **HEIC / HEIF** | Any | **Passthrough** | *(Original)* | **Zero-Copy**. Native format for Apple ecosystem. No processing required. |
+| **Live Photos** | HEIC + MOV Pair | **Atomic Skip** | *(Original)* | **Asset Integrity**. Identified via heuristic graph analysis. Locked to preserve the UUID linkage for "Live" playback. |
+| **GIF** | Duration < 4.5s | **Restoration** | **GIF** | **Bayer Dithering**. Re-encodes with optimized global palettes for maximum compatibility. |
+| **GIF** | Duration ≥ 4.5s | **Temporal Compress** | **HEVC** (Video) | **Inter-frame Prediction**. Transforms redundant bitmap frames into P/B vectors, reducing size by 90%+. |
 
-### ⚡ Smart Conversion / 智能转换
-*   **Lossless JXL**: Converts JPEG/PNG/GIF to JPEG XL (JXL) with mathematically lossless recompression.
-    *   **无损 JXL**：将 JPEG/PNG/GIF 转换为 JPEG XL (JXL)，实现数学上的无损压缩。
-*   **Smart Fallback**: If `cjxl` fails (due to corruption), the tool automatically switches to `magick` or `ffmpeg` pipelines to sanitize the file and try again.
-    *   **智能回退**：如果 `cjxl` 转换失败（因文件损坏），工具会自动切换到 `magick` 或 `ffmpeg` 管道清洗文件并重试。
-*   **Magic Bytes Detection**: Ignores file extensions. It reads the binary header to determine the *real* format (e.g., detecting a PNG disguised as a JPG).
-    *   **魔法字节检测**：不信任文件扩展名。它读取二进制文件头来确定*真实*格式（例如检测伪装成 JPG 的 PNG）。
+#### 2. Video Optimization Engine (`vid-hevc`)
+The video pipeline solves the bitrate/quality convex optimization problem using a **Three-Phase Saturation Search**:
 
----
+*   **Phase I: Hardware Spectrum Scan**
+    *   Utilizes ASICs (Apple VideoToolbox, NVENC) to perform a binary search across the CRF spectrum, identifying the "Quality Knee" (diminishing returns point).
+*   **Phase II: Psychovisual Fine-Tuning**
+    *   Performs a localized, high-precision search around the knee point using software encoders (x265/SVT-AV1) with psychovisual tuning (AQ-mode, psy-rd).
+*   **Phase III: Fusion Verification**
+    *   Validates output using a weighted fusion of **MS-SSIM** and **SSIM-All**. Candidates below the adaptive threshold (0.95-0.98) are automatically rejected.
 
-## 🛠️ 安装 / Installation
+**Video Processing Strategy:**
 
-### Prerequisites / 前置要求
-You need `brew` installed on macOS.
-您需要在 macOS 上安装 `brew`。
+| Input Codec | Condition | Operation | Target Format | Technical Principle |
+| :--- | :--- | :--- | :--- | :--- |
+| **H.264 / AVC** | Legacy Lossy | **Transcode** | **HEVC** (H.265) | **Smart CRF**. Analyzes spatial/temporal complexity to target a specific SSIM. |
+| **ProRes / DNx** | Visually Lossless | **Transcode** | **HEVC** (H.265) | **High-Fidelity Mode**. Uses 10-bit color depth to preserve dynamic range. |
+| **Raw / FFV1** | Lossless | **Transcode** | **HEVC** (Lossless) | **Lossless Mode**. Enabled via `-x265-params lossless=1` (MKV container). |
+| **HEVC / AV1** | Modern | **Skip** | *(Original)* | **Efficiency Check**. Already highly compressed; re-encoding yields negative returns. |
+| **AV1 / VP9** | Modern (Non-Apple) | **Compat Convert** | **HEVC** (H.265) | **Apple Compat Mode**. Only triggered with `--apple-compat` flag for playback support. |
+
+### ✨ Core Features
+
+#### 🍎 Apple Ecosystem Perfected
+*   **"Unknown Error" Killer**: Heuristically detects file corruption patterns (e.g., mismatched containers, truncated headers) that crash Apple Photos/iCloud and patches them in-place.
+*   **Nuclear Metadata Rebuild**: Parses XMP/EXIF/IPTC data, strips non-standard "toxic" tags (common in files from social media apps), and reconstructs a clean, standard-compliant metadata block.
+*   **Directory Timestamp Guard**: Caches `atime`/`mtime` of the entire directory tree before processing and restores them with nanosecond precision post-processing.
+
+#### ⚡ Smart Conversion Strategy
+*   **Magic Bytes Sniffing**: Bypasses file extensions entirely. Uses a buffered reader to inspect the first 16 bytes (file signature) to identify the true MIME type, correcting `png` files masked as `jpg`.
+*   **HDR Pipeline**: Fully color-managed workflow. Detects Transfer Characteristics (PQ/HLG) and Color Primaries (BT.2020/P3). Passes `color_primaries`, `transfer_characteristics`, and `matrix_coefficients` flags to the encoder to prevent "washed out" HDR conversions.
+
+### 🛠️ Installation
+
+**Prerequisites**: macOS/Linux with `brew` installed.
 
 ```bash
-# 1. Install dependencies
+# 1. Install Runtime Dependencies
 brew install jpeg-xl ffmpeg imagemagick exiftool
 
-# 2. Clone the repository
+# 2. Clone Repository
 git clone https://github.com/user/modern_format_boost.git
 cd modern_format_boost
 
-# 3. Build the project
+# 3. Compile (Release Profile with LTO)
 ./scripts/smart_build.sh
 ```
 
----
+### 🚀 Usage
 
-## 🚀 使用方法 / Usage
-
-### Drag & Drop (Recommended) / 拖拽使用（推荐）
-Simply drag your folder onto the start script:
-只需将您的文件夹拖到启动脚本上：
-
+#### 1. Drag & Drop (Recommended)
+Simply drag your folder onto the start script to process everything automatically:
 ```bash
 ./scripts/drag_and_drop_processor.sh /path/to/your/photos
 ```
 
-### CLI Mode / 命令行模式
-For advanced users:
-高级用户模式：
-
+#### 2. CLI Mode (Advanced)
+**Images:**
 ```bash
-# Image (HEVC path → JXL/HEIC)
+# Standard Run (Heuristics + Apple Compat)
 ./target/release/img-hevc run /path/to/photos --output /path/to/out
 
-# Image (AV1 path → JXL/AVIF)
-./target/release/img-av1 run /path/to/photos --output /path/to/out
+# Force "Apple Compatibility" (Ensure everything plays on iPhone)
+./target/release/img-hevc run /path/to/photos --apple-compat
 
-# Video (HEVC)
+# Resume interrupted run (uses .mfb_processed state file)
+./target/release/img-hevc run /path/to/photos --resume
+```
+
+**Videos:**
+```bash
+# Standard Run (Auto GPU Detect, Smart Matching)
 ./target/release/vid-hevc run /path/to/videos --output /path/to/out
 
-# Video (AV1)
-./target/release/vid-av1 run /path/to/videos --output /path/to/out
+# Ultimate Mode (3-Phase Saturation Search)
+./target/release/vid-hevc run /path/to/videos --ultimate
 ```
 
-### 断点续传 / Resume
-
-图像 Run（目录）支持断点续传：进度写入 `输出目录/.mfb_processed`（未指定 `--output` 时用输入目录）。再次运行会跳过已处理文件。
-
-- **默认**：`--resume`（从上次进度继续）
-- **重新开始**：`--no-resume`（忽略进度文件，处理全部文件）
-
-```bash
-./target/release/img-hevc run /path/to/photos --output /path/to/out   # 续传
-./target/release/img-hevc run /path/to/photos --no-resume             # 重新开始
-```
-
----
-
-## 📐 Processing Flow / 处理流程
-
-**English:**  
-There are **four binaries**: `img_hevc`, `img_av1`, `vid_hevc`, `vid_av1`. Each supports **run** (convert).  
-- **Images:** `run` → per-file: detect format → choose target (JXL/AVIF/HEIC, or skip) → convert (lossless or quality-matched). Animated images (e.g. GIF ≥3s) can go to HEVC/AV1 MP4.  
-- **Videos:** `run` → per-file: detect → strategy (skip / HEVC or AV1) → encode (optionally with SSIM exploration to match quality).  
-**Simple** (vid_hevc / vid_av1): one file, fixed CRF. **Strategy**: print recommendation only.
-
-**中文：**  
-共 **四个二进制**：`img_hevc`、`img_av1`、`vid_hevc`、`vid_av1`。均支持 **run**（转换）。  
-- **图片**：run 对每个文件检测格式 → 选择目标（JXL/AVIF/HEIC 或跳过）→ 执行转换（无损或质量匹配）。动图（如 GIF ≥3s）可转为 HEVC/AV1 MP4。  
-- **视频**：run 对每个文件检测 → 策略（跳过或转 HEVC/AV1）→ 编码（可选 SSIM 探索以匹配画质）。  
-**Simple**（vid_hevc / vid_av1）：单文件固定 CRF。**Strategy**：仅打印推荐策略。
-
----
-
-## 🚑 故障排除 / Troubleshooting
-
-### "Unknown Error" in Apple Photos / 苹果相册“未知错误”
-If you have files that refuse to import, use the dedicated repair tool:
-如果您有无法导入的文件，请使用专用修复工具：
+#### 3. Repair Tool ("Unknown Error")
+Fixes corrupted headers and timestamps without re-encoding.
 
 ```bash
 ./scripts/repair_apple_photos.sh "/path/to/bad/files"
 ```
-**This script will / 该脚本将：**
-1.  Scan for extension mismatches (Real WebP vs Fake JPEG). / 扫描扩展名不匹配。
-2.  Fix corrupted JPEG headers. / 修复损坏的 JPEG 文件头。
-3.  Rebuild metadata from scratch. / 重构元数据。
-4.  Restore original timestamps. / 恢复原始时间戳。
 
 ---
 
-## 🔧 Development / 开发
+<a id="cn"></a>
+## 🇨🇳 中文文档
+
+### 📖 简介
+
+**Modern Format Boost** 是一个用 **Rust** 编写的高性能、高并发媒体优化引擎。它旨在将陈旧的媒体归档（JPEG/H.264）现代化为下一代格式（JXL/HEVC），同时严格遵守图像的**数学无损**标准和视频的**感知保真度**标准。
+
+与简单的脚本包装器不同，本工具实现了一个**控制论反馈回路 (Cybernetic Feedback Loop)**：实时分析内容复杂度，动态调整编码参数，并使用工业级指标（SSIM/MS-SSIM）验证输出完整性。
+
+### ⚙️ 工作原理 (技术架构)
+
+#### 1. 图像现代化管线 (`img-hevc`)
+图像引擎作为一个**格式感知路由状态机 (Format-Aware Routing State Machine)** 运行。它通过检查每个文件的二进制签名（魔术字节）和元数据来确定最佳的转换路径。
+
+**决策矩阵与转换策略：**
+
+| 输入类别 | 状态 / 条件 | 操作 | 目标格式 | 技术原理 |
+| :--- | :--- | :--- | :--- | :--- |
+| **JPEG** | 陈旧有损 | **重构 (Reconstruction)** | **JXL** (无损) | **DCT 转码**。直接解析原始 DCT 系数并映射到 JXL 的 `varDCT` 结构。**可逆且比特级精确。** |
+| **PNG / TIFF** | 无损 | **熵编码 (Entropic Coding)** | **JXL** (无损) | **Modular 模式**。利用增量调色板 (Delta Palette)、Squeeze (Haar 变换) 和 MA 树。密度提升 ~40%。 |
+| **WebP / AVIF** | 有损 | **硬跳过 (Hard Skip)** | *(原格式)* | **信号保护**。对伪影进行重量化（级联压缩）在数学上必然导致信噪比 (SNR) 破坏。按原样保留。 |
+| **HEIC / HEIF** | 任意 | **透传 (Passthrough)** | *(原格式)* | **零拷贝**。Apple 生态原生格式，无需处理。 |
+| **Live Photo** | HEIC + MOV 配对 | **原子跳过 (Atomic Skip)** | *(原格式)* | **资产完整性**。通过启发式图谱分析识别。锁定文件对以保护 "Live" 播放所需的 UUID 链路。 |
+| **GIF** | 时长 < 4.5s | **修复 (Restoration)** | **GIF** | **Bayer 抖动**。使用优化的全局调色板重编码，以实现最大兼容性。 |
+| **GIF** | 时长 ≥ 4.5s | **时域压缩 (Temporal Compress)** | **HEVC** (视频) | **帧间预测**。将冗余的位图帧转换为 P/B 向量，体积通常减少 90% 以上。 |
+
+#### 2. 视频优化管线 (`vid-hevc`)
+视频引擎通过**三阶段饱和搜索算法**来求解码率/画质的凸优化问题：
+
+*   **阶段 I：硬件频谱扫描**
+    *   利用 ASIC (Apple VideoToolbox, NVENC) 在 CRF 频谱上执行二分搜索，识别“画质拐点”(收益递减点)。
+*   **阶段 II：心理视觉精细调优**
+    *   在拐点附近使用软件编码器 (x265/SVT-AV1) 进行局部高精度搜索，应用心理视觉调优 (AQ-mode, Psy-rd)。
+*   **阶段 III：Fusion 融合验证**
+    *   使用 **MS-SSIM** 和 **SSIM-All** 的加权融合评分严格验证输出。评分低于自适应阈值 (0.95-0.98) 的候选者将被自动拒绝。
+
+**视频处理策略：**
+
+| 输入编码 | 条件 | 操作 | 目标格式 | 技术原理 |
+| :--- | :--- | :--- | :--- | :--- |
+| **H.264 / AVC** | 陈旧有损 | **转码 (Transcode)** | **HEVC** (H.265) | **Smart CRF**。分析空间/时间复杂度以定位特定的 SSIM 目标。 |
+| **ProRes / DNx** | 视觉无损 | **转码 (Transcode)** | **HEVC** (H.265) | **高保真模式**。使用 10-bit 色深以保留动态范围。 |
+| **Raw / FFV1** | 无损 | **转码 (Transcode)** | **HEVC** (无损) | **无损模式**。通过 `-x265-params lossless=1` 启用 (MKV 容器)。 |
+| **HEVC / AV1** | 现代 | **跳过 (Skip)** | *(原格式)* | **效率检查**。已处于高压缩率状态；重编码会导致负收益。 |
+| **AV1 / VP9** | 现代 (非 Apple) | **兼容转换 (Compat Convert)** | **HEVC** (H.265) | **Apple 兼容模式**。仅在启用 `--apple-compat` 标志时触发，以支持播放。 |
+
+### ✨ 核心特性
+
+#### 🍎 完美适配苹果生态
+*   **“未知错误”终结者**：启发式检测导致 Apple Photos/iCloud 崩溃的文件损坏模式（如容器不匹配、截断的头文件）并进行原地修补。
+*   **元数据核弹级重构**：解析 XMP/EXIF/IPTC 数据，剥离非标准的“有毒”标签（常见于社交媒体应用生成的图片），并重构干净、符合标准的元数据块。
+*   **文件夹时间守护**：在处理前缓存整个目录树的 `atime`/`mtime`，并在处理后以纳秒级精度还原，确保相册的时间线视图丝毫不差。
+
+#### ⚡ 智能转换策略
+*   **魔法字节嗅探**: 完全绕过文件扩展名。通过缓冲读取文件头的前 16 个字节（文件签名）来识别真实的 MIME 类型，自动修正伪装成 `jpg` 的 `png` 文件。
+*   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients` 标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
+
+### 🛠️ 安装
+
+**前置要求**: macOS/Linux 系统，并已安装 `brew`。
 
 ```bash
-cargo build          # Debug 构建
-cargo build --release
-cargo test           # 运行测试
-cargo clippy         # 代码质量与潜在问题检查
+# 1. 安装运行时依赖
+brew install jpeg-xl ffmpeg imagemagick exiftool
+
+# 2. 克隆仓库
+git clone https://github.com/user/modern_format_boost.git
+cd modern_format_boost
+
+# 3. 编译 (Release Profile with LTO)
+./scripts/smart_build.sh
 ```
 
-Release 构建已启用 LTO 与单 codegen-unit，以最大化运行效率。
+### 🚀 使用方法
+
+#### 1. 拖拽使用（推荐）
+只需将您的文件夹拖到启动脚本上，即可全自动处理：
+```bash
+./scripts/drag_and_drop_processor.sh /path/to/your/photos
+```
+
+#### 2. 命令行模式（高级）
+**图片处理:**
+```bash
+# 标准运行 (启发式策略 + 苹果兼容)
+./target/release/img-hevc run /path/to/photos --output /path/to/out
+
+# 强制“苹果兼容模式” (确保所有文件能在 iPhone 上播放)
+./target/release/img-hevc run /path/to/photos --apple-compat
+
+# 断点续传 (使用 .mfb_processed 状态文件)
+./target/release/img-hevc run /path/to/photos --resume
+```
+
+**视频处理:**
+```bash
+# 标准运行 (自动 GPU 检测，智能匹配)
+./target/release/vid-hevc run /path/to/videos --output /path/to/out
+
+# 极致探索模式 (三阶段饱和搜索)
+./target/release/vid-hevc run /path/to/videos --ultimate
+```
+
+#### 3. 修复工具 ("未知错误")
+修复损坏的文件头和时间戳，无需重新编码。
+
+```bash
+./scripts/repair_apple_photos.sh "/path/to/bad/files"
+```
 
 ---
 
