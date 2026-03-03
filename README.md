@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost [![GitHub Stars](https://img.shields.io/github/stars/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/stargazers) [![GitHub Forks](https://img.shields.io/github/forks/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/network/members)
 
-[![Version](https://img.shields.io/badge/version-0.8.9-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
+[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
 [![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)](https://github.com/nowaytouse/modern-format-boost)
@@ -42,8 +42,8 @@ The image pipeline operates as a **Format-Aware Routing State Machine**. It insp
 | **WebP / AVIF** | Lossy | **Hard Skip** | *(Original)* | **Signal Preservation**. Re-quantizing artifacts (cascade compression) mathematically destroys SNR. Preserved as-is. |
 | **HEIC / HEIF** | Any | **Passthrough** | *(Original)* | **Zero-Copy**. Native format for Apple ecosystem. No processing required. |
 | **Live Photos** | HEIC + MOV Pair | **Atomic Skip** | *(Original)* | **Asset Integrity**. Identified via heuristic graph analysis. Locked to preserve the UUID linkage for "Live" playback. |
-| **GIF** | Duration < 4.5s | **Restoration** | **GIF** | **Bayer Dithering**. Re-encodes with optimized global palettes for maximum compatibility. |
-| **GIF** | Duration ≥ 4.5s | **Temporal Compress** | **HEVC** (Video) | **Inter-frame Prediction**. Transforms redundant bitmap frames into P/B vectors, reducing size by 90%+. |
+| **GIF** | Meme-like (Simple/Short) | **Restoration** | **GIF** | **Meme-Score (Intelligence)**. Multi-factor analysis (sharpness, resolution, duration, FPS, BPP) to identify memes. Re-encodes with optimized palettes. |
+| **GIF** | Video-like (Complex/Long) | **Temporal Compress** | **HEVC** (Video) | **Inter-frame Prediction**. Transforms redundant bitmap frames into P/B vectors, reducing size by 90%+. |
 
 #### 2. Video Optimization Engine (`vid-hevc`)
 The video pipeline solves the bitrate/quality convex optimization problem using a **Three-Phase Saturation Search**:
@@ -160,8 +160,8 @@ Fixes corrupted headers and timestamps without re-encoding.
 | **WebP / AVIF** | 有损 | **硬跳过 (Hard Skip)** | *(原格式)* | **信号保护**。对伪影进行重量化（级联压缩）在数学上必然导致信噪比 (SNR) 破坏。按原样保留。 |
 | **HEIC / HEIF** | 任意 | **透传 (Passthrough)** | *(原格式)* | **零拷贝**。Apple 生态原生格式，无需处理。 |
 | **Live Photo** | HEIC + MOV 配对 | **原子跳过 (Atomic Skip)** | *(原格式)* | **资产完整性**。通过启发式图谱分析识别。锁定文件对以保护 "Live" 播放所需的 UUID 链路。 |
-| **GIF** | 时长 < 4.5s | **修复 (Restoration)** | **GIF** | **Bayer 抖动**。使用优化的全局调色板重编码，以实现最大兼容性。 |
-| **GIF** | 时长 ≥ 4.5s | **时域压缩 (Temporal Compress)** | **HEVC** (视频) | **帧间预测**。将冗余的位图帧转换为 P/B 向量，体积通常减少 90% 以上。 |
+| **GIF** | 表情包类 (简单/短促) | **修复 (Restoration)** | **GIF** | **Meme-Score 智能判定**。综合分析清晰度、分辨率、时长、帧率和体积密度以识别表情包。使用优化调色板重编码。 |
+| **GIF** | 视频类 (复杂/长篇) | **时域压缩 (Temporal Compress)** | **HEVC** (视频) | **帧间预测**。将冗余的位图帧转换为 P/B 向量，体积通常减少 90% 以上。 |
 
 #### 2. 视频优化管线 (`vid-hevc`)
 视频引擎通过**三阶段饱和搜索算法**来求解码率/画质的凸优化问题：
