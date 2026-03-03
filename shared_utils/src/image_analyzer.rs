@@ -743,7 +743,10 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
             let compression = detect_compression(&detected_format, path)?;
             Ok(compression == CompressionType::Lossless)
         }
-        ImageFormat::Gif => Ok(true),
+        // GIF uses palette quantization — inherently lossy like pngquant.
+        // Returning false routes static GIF to the lossy JXL path (d=1.0) in main.rs.
+        // Animated GIF still goes through the is_animated branch regardless of this value.
+        ImageFormat::Gif => Ok(false),
         ImageFormat::Tiff => {
             let compression = detect_compression(&DetectedFormat::TIFF, path)?;
             Ok(compression == CompressionType::Lossless)

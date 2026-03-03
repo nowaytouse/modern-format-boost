@@ -734,9 +734,9 @@ fn auto_convert_single_file(
                         input.display()
                     ));
                     shared_utils::progress_mode::emit_stderr(&format!(
-                        "🔄 Static GIF→JXL: {}", input.display()
+                        "🔄 Static GIF→JXL (Lossy d=1.0): {}", input.display()
                     ));
-                    let conv_result = convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?;
+                    let conv_result = convert_to_jxl(input, &options, 1.0, analysis.hdr_info.as_ref())?;
                     return Ok(convert_result_to_output(conv_result));
                 }
                 _ => {
@@ -835,12 +835,14 @@ fn auto_convert_single_file(
         }
         (_, false, false) => {
             // Modern lossy static already skipped above; only legacy lossy reach here.
-            // Lossy PNG (TinyPNG/pngquant): try lossy JXL at distance 1.0 — still far
-            // better quality than the already-quantized source, and size protection will
-            // skip if output is larger than input.
-            let is_lossy_png = analysis.format.to_uppercase() == "PNG";
+            // Palette-quantized sources (lossy PNG / static GIF): try JXL d=1.0.
+            // Size protection will skip automatically if output is larger.
+            let is_palette_quantized = matches!(
+                analysis.format.to_uppercase().as_str(),
+                "PNG" | "GIF"
+            );
             #[allow(deprecated)]
-            let jxl_distance = if is_lossy_png {
+            let jxl_distance = if is_palette_quantized {
                 1.0
             } else {
                 match &pixel_analysis {
@@ -853,7 +855,11 @@ fn auto_convert_single_file(
             };
             verbose_log!(
                 "🔄 {} Lossy→JXL ({}): {}",
-                if is_lossy_png { "Quantized PNG" } else { "Legacy" },
+                match analysis.format.to_uppercase().as_str() {
+                    "PNG" => "Quantized PNG",
+                    "GIF" => "Static GIF",
+                    _ => "Legacy",
+                },
                 if jxl_distance == 0.0 { "Lossless" } else if jxl_distance <= 0.1 { "Quality 100" } else { "Lossy d=1.0" },
                 input.display()
             );
