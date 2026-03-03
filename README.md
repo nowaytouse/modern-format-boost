@@ -37,7 +37,8 @@ The image pipeline operates as a **Format-Aware Routing State Machine**. It insp
 | Input Category | Condition / State | Operation | Target Format | Technical Principle |
 | :--- | :--- | :--- | :--- | :--- |
 | **JPEG** | Legacy Lossy | **Reconstruction** | **JXL** (Lossless) | **DCT Transcoding**. Parses raw DCT coefficients and maps them directly to JXL's `varDCT`. **Reversible & Bit-exact.** |
-| **PNG / TIFF** | Lossless | **Entropic Coding** | **JXL** (Lossless) | **Modular Mode**. Utilizes Delta Palettes, Squeeze (Haar transform), and MA-trees. ~40% density improvement. |
+| **PNG / TIFF** | Lossless (truecolor/16-bit) | **Entropic Coding** | **JXL** (Lossless) | **Modular Mode**. Utilizes Delta Palettes, Squeeze (Haar transform), and MA-trees. ~40% density improvement. |
+| **PNG** | Lossy (palette-quantized, e.g. TinyPNG/pngquant) | **Lossy Transcode** | **JXL** (d=1.0) | **Multi-factor quantization detection** (palette structure, tRNS, tool signatures, dithering, entropy). Attempts lossy JXL; skipped automatically if output is larger. |
 | **WebP / AVIF** | Lossy | **Hard Skip** | *(Original)* | **Signal Preservation**. Re-quantizing artifacts (cascade compression) mathematically destroys SNR. Preserved as-is. |
 | **HEIC / HEIF** | Any | **Passthrough** | *(Original)* | **Zero-Copy**. Native format for Apple ecosystem. No processing required. |
 | **Live Photos** | HEIC + MOV Pair | **Atomic Skip** | *(Original)* | **Asset Integrity**. Identified via heuristic graph analysis. Locked to preserve the UUID linkage for "Live" playback. |
@@ -154,7 +155,8 @@ Fixes corrupted headers and timestamps without re-encoding.
 | 输入类别 | 状态 / 条件 | 操作 | 目标格式 | 技术原理 |
 | :--- | :--- | :--- | :--- | :--- |
 | **JPEG** | 陈旧有损 | **重构 (Reconstruction)** | **JXL** (无损) | **DCT 转码**。直接解析原始 DCT 系数并映射到 JXL 的 `varDCT` 结构。**可逆且比特级精确。** |
-| **PNG / TIFF** | 无损 | **熵编码 (Entropic Coding)** | **JXL** (无损) | **Modular 模式**。利用增量调色板 (Delta Palette)、Squeeze (Haar 变换) 和 MA 树。密度提升 ~40%。 |
+| **PNG / TIFF** | 无损（真彩色/16-bit）| **熵编码 (Entropic Coding)** | **JXL** (无损) | **Modular 模式**。利用增量调色板 (Delta Palette)、Squeeze (Haar 变换) 和 MA 树。密度提升 ~40%。 |
+| **PNG** | 有损（调色板量化，如 TinyPNG/pngquant）| **有损转码 (Lossy Transcode)** | **JXL** (d=1.0) | **多因子量化检测**（调色板结构、tRNS、工具签名、抖动、熵分析）。尝试有损 JXL；若输出更大则自动跳过保护。 |
 | **WebP / AVIF** | 有损 | **硬跳过 (Hard Skip)** | *(原格式)* | **信号保护**。对伪影进行重量化（级联压缩）在数学上必然导致信噪比 (SNR) 破坏。按原样保留。 |
 | **HEIC / HEIF** | 任意 | **透传 (Passthrough)** | *(原格式)* | **零拷贝**。Apple 生态原生格式，无需处理。 |
 | **Live Photo** | HEIC + MOV 配对 | **原子跳过 (Atomic Skip)** | *(原格式)* | **资产完整性**。通过启发式图谱分析识别。锁定文件对以保护 "Live" 播放所需的 UUID 链路。 |
