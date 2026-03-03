@@ -132,7 +132,7 @@ fn run_imagemagick_cjxl_pipeline(
     depth: u8,
     normalize_icc: bool,
     apple_compat: bool,
-) -> std::result::Result<std::process::Output, (bool, bool, String)> {
+) -> std::result::Result<(), (bool, bool, String)> {
     use std::process::Stdio;
 
     let depth_arg = if depth == 8 { "8" } else { "16" };
@@ -261,11 +261,7 @@ fn run_imagemagick_cjxl_pipeline(
     };
 
     if magick_ok && cjxl_ok {
-        Ok(std::process::Output {
-            status: std::process::ExitStatus::default(),
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-        })
+        Ok(())
     } else {
         Err((magick_ok, cjxl_ok, cjxl_stderr))
     }
@@ -288,12 +284,12 @@ pub fn try_imagemagick_fallback(
     distance: f32,
     max_threads: usize,
     apple_compat: bool,
-) -> std::result::Result<std::process::Output, std::io::Error> {
+) -> std::result::Result<(), std::io::Error> {
     // Attempt 1: no -strip, depth 16, preserve metadata
     match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, false, 16, false, apple_compat) {
-        Ok(out) => {
+        Ok(()) => {
             crate::progress_mode::fallback_success();
-            return Ok(out);
+            return Ok(());
         }
         Err((magick_ok, cjxl_ok, stderr)) => {
             let line = format!(
@@ -310,9 +306,9 @@ pub fn try_imagemagick_fallback(
                     "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl)",
                 );
                 match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true, 16, false, apple_compat) {
-                    Ok(out) => {
+                    Ok(()) => {
                         crate::progress_mode::fallback_success();
-                        return Ok(out);
+                        return Ok(());
                     }
                     Err((m, c, stderr2)) => {
                         let line = format!(
@@ -329,30 +325,26 @@ pub fn try_imagemagick_fallback(
                                 crate::progress_mode::emit_stderr(
                                     "   🔄 Retrying with -depth 8 -strip (8-bit source confirmed, no quality loss)",
                                 );
-                                if let Ok(out) = run_imagemagick_cjxl_pipeline(
+                                if run_imagemagick_cjxl_pipeline(
                                     input, output, distance, max_threads, true, 8, false, apple_compat,
-                                ) {
+                                ).is_ok() {
                                     crate::progress_mode::fallback_success();
-                                    return Ok(out);
+                                    return Ok(());
                                 }
                             } else {
                                 // Attempt 4: normalize ICC to sRGB, preserve 16-bit depth
                                 crate::progress_mode::emit_stderr(
                                     "   🔄 Retrying with ICC normalization to sRGB (16-bit source, no depth downgrade)",
                                 );
-                                match run_imagemagick_cjxl_pipeline(
+                                if run_imagemagick_cjxl_pipeline(
                                     input, output, distance, max_threads, false, 16, true, apple_compat,
-                                ) {
-                                    Ok(out) => {
-                                        crate::progress_mode::fallback_success();
-                                        return Ok(out);
-                                    }
-                                    Err(_) => {
-                                        crate::progress_mode::emit_stderr(
-                                            "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
-                                        );
-                                    }
+                                ).is_ok() {
+                                    crate::progress_mode::fallback_success();
+                                    return Ok(());
                                 }
+                                crate::progress_mode::emit_stderr(
+                                    "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
+                                );
                             }
                         }
                     }
@@ -364,30 +356,26 @@ pub fn try_imagemagick_fallback(
                     crate::progress_mode::emit_stderr(
                         "   🔄 Retrying with -depth 8 -strip (8-bit source confirmed, no quality loss)",
                     );
-                    if let Ok(out) = run_imagemagick_cjxl_pipeline(
+                    if run_imagemagick_cjxl_pipeline(
                         input, output, distance, max_threads, true, 8, false, apple_compat,
-                    ) {
+                    ).is_ok() {
                         crate::progress_mode::fallback_success();
-                        return Ok(out);
+                        return Ok(());
                     }
                 } else {
                     // Attempt 2: normalize ICC to sRGB, preserve 16-bit depth
                     crate::progress_mode::emit_stderr(
                         "   🔄 Retrying with ICC normalization to sRGB (16-bit source, no depth downgrade)",
                     );
-                    match run_imagemagick_cjxl_pipeline(
+                    if run_imagemagick_cjxl_pipeline(
                         input, output, distance, max_threads, false, 16, true, apple_compat,
-                    ) {
-                        Ok(out) => {
-                            crate::progress_mode::fallback_success();
-                            return Ok(out);
-                        }
-                        Err(_) => {
-                            crate::progress_mode::emit_stderr(
-                                "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
-                            );
-                        }
+                    ).is_ok() {
+                        crate::progress_mode::fallback_success();
+                        return Ok(());
                     }
+                    crate::progress_mode::emit_stderr(
+                        "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
+                    );
                 }
             }
         }
