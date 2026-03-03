@@ -65,16 +65,29 @@ pub fn convert_to_jxl(
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             if stderr.contains("Getting pixel data failed") || stderr.contains("Failed to decode") {
-                match shared_utils::jxl_utils::try_imagemagick_fallback(
+                if shared_utils::jxl_utils::try_imagemagick_fallback(
                     input,
                     &temp_output,
                     distance,
                     max_threads,
                     options.apple_compat,
-                ) {
-                    Ok(out) => Ok(out),
-                    Err(_) => cmd_result,
+                ).is_ok() {
+                    // ImageMagick fallback succeeded — finalize directly
+                    let output_size = fs::metadata(&temp_output)?.len();
+                    if let Err(e) = verify_jxl_health(&temp_output) {
+                        let _ = fs::remove_file(&temp_output);
+                        return Err(e);
+                    }
+                    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                        return Ok(ConversionResult::skipped_exists(input, &output));
+                    }
+                    if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
+                        return Ok(skipped);
+                    }
+                    return finalize_conversion(input, &output, input_size, "JXL", Some("(imagemagick fallback)"), options)
+                        .map_err(ImgQualityError::IoError);
                 }
+                cmd_result
             } else {
                 cmd_result
             }
