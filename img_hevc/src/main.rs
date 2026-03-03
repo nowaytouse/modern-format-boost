@@ -729,11 +729,13 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 Some(0.0) => {
-                    verbose_log!(
+                    shared_utils::progress_mode::emit_stderr(&format!(
                         "⏭️ Detected static GIF (1 frame), treating as static image: {}",
                         input.display()
-                    );
-                    verbose_log!("🔄 Static GIF→JXL: {}", input.display());
+                    ));
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🔄 Static GIF→JXL: {}", input.display()
+                    ));
                     let conv_result = convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?;
                     return Ok(convert_result_to_output(conv_result));
                 }
@@ -766,7 +768,7 @@ fn auto_convert_single_file(
             const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
             if config.apple_compat && is_modern_animated && !is_apple_native {
                 if duration >= MIN_DURATION || is_high_quality {
-                    verbose_log!(
+                    shared_utils::progress_mode::emit_stderr(&format!(
                         "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s, {}): {}",
                         format,
                         duration,
@@ -776,41 +778,59 @@ fn auto_convert_single_file(
                             "Long Animation"
                         },
                         input.display()
-                    );
+                    ));
                     convert_to_hevc_mp4_matched(input, &options, &analysis)?
                 } else {
-                    verbose_log!(
+                    shared_utils::progress_mode::emit_stderr(&format!(
                         "🍎 Animated {}→GIF (Apple Compat, {:.1}s < {:.1}s, Bayer 256 colors): {}",
                         format,
                         duration,
                         MIN_DURATION,
                         input.display()
-                    );
+                    ));
                     convert_to_gif_apple_compat(input, &options, None)?
                 }
-            } else if duration < MIN_DURATION {
-                verbose_log!(
-                    "⏭️ Skipping short animation ({:.1}s < {:.1}s): {}",
-                    duration,
-                    MIN_DURATION,
-                    input.display()
-                );
-                copy_original_if_adjacent_mode(input, config)?;
-                return Ok(make_skipped("Skipping short animation"));
-            } else if config.lossless {
-                verbose_log!(
-                    "🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}",
-                    duration,
-                    input.display()
-                );
-                convert_to_hevc_mkv_lossless(input, &options)?
             } else {
-                verbose_log!(
-                    "🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}",
-                    duration,
-                    input.display()
-                );
-                convert_to_hevc_mp4_matched(input, &options, &analysis)?
+                // Use meme-score to decide keep-as-GIF vs convert-to-video
+                let probe = shared_utils::probe_video(input).ok();
+                let meme_keep = if let Some(ref p) = probe {
+                    if let Some(meta) = shared_utils::gif_meta_from_probe(p, analysis.file_size) {
+                        shared_utils::should_keep_as_gif(&meta)
+                    } else {
+                        // Cannot build GifMeta (no dimensions) → keep as GIF
+                        shared_utils::progress_mode::emit_stderr(&format!(
+                            "   🎞️  GIF probe failed (no dimensions), keeping as GIF: {}",
+                            input.display()
+                        ));
+                        true
+                    }
+                } else {
+                    // ffprobe failed → keep as GIF
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "   🎞️  GIF probe unavailable, keeping as GIF: {}",
+                        input.display()
+                    ));
+                    true
+                };
+
+                if meme_keep {
+                    copy_original_if_adjacent_mode(input, config)?;
+                    return Ok(make_skipped("GIF meme-score: keep as GIF"));
+                } else if config.lossless {
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}",
+                        duration,
+                        input.display()
+                    ));
+                    convert_to_hevc_mkv_lossless(input, &options)?
+                } else {
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}",
+                        duration,
+                        input.display()
+                    ));
+                    convert_to_hevc_mp4_matched(input, &options, &analysis)?
+                }
             }
         }
         (_, false, false) => {
