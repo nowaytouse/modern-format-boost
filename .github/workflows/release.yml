@@ -1,0 +1,90 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }} (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: linux-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: macos-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: macos-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libheif-dev libjxl-dev pkg-config clang
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          brew install libheif jpeg-xl
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          vcpkg install libheif:x64-windows
+          vcpkg install libjxl:x64-windows
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+
+      - name: Build release
+        shell: bash
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p vid-hevc -p vid-av1 -p img-hevc -p img-av1
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          EXT=""
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then EXT=".exe"; fi
+          cp target/${{ matrix.target }}/release/vid-hevc$EXT dist/
+          cp target/${{ matrix.target }}/release/vid-av1$EXT dist/
+          cp target/${{ matrix.target }}/release/img-hevc$EXT dist/
+          cp target/${{ matrix.target }}/release/img-av1$EXT dist/
+          cp scripts/drag_and_drop_processor.sh dist/ || true
+          
+          cd dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a ../ModernFormatBoost-${{ matrix.artifact_name }}.zip *
+          else
+            zip -r ../ModernFormatBoost-${{ matrix.artifact_name }}.zip *
+          fi
+
+      - name: Upload binaries to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ModernFormatBoost-${{ matrix.artifact_name }}.zip
+          asset_name: ModernFormatBoost-${{ matrix.artifact_name }}.zip
+          tag: ${{ github.ref }}
+          overwrite: true
