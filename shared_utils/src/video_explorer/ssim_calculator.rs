@@ -400,29 +400,32 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 /// CAMBI is a single-video metric (no reference needed) — lower is better (0 = no banding).
 /// Returns None on failure or if libvmaf doesn't support the cambi feature.
 pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
-    let sample_filter = if sample_rate > 1 {
-        format!(
-            "select='not(mod(n\\,{}))',setpts=N/FRAME_RATE/TB,",
-            sample_rate
-        )
-    } else {
-        String::new()
-    };
-
     let n_threads = num_cpus_capped();
 
-    // CAMBI is a single-video metric: use simple -vf, no reference needed.
-    let vf = format!(
-        "{sf}format=yuv420p,libvmaf=feature=name=cambi:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
-        sf = sample_filter,
+    let log_file = tempfile::Builder::new()
+        .suffix(".json")
+        .tempfile()
+        .ok()?;
+    let log_path = log_file.path().to_path_buf();
+
+    // libvmaf filter requires TWO inputs (main + reference).
+    // For CAMBI (no-reference metric), we feed the same video as both inputs.
+    // Use n_subsample for speed (skips frames inside libvmaf, faster than
+    // select filter which still decodes every frame).
+    let filter_complex = format!(
+        "[0:v]format=yuv420p[ref];[1:v]format=yuv420p[dist];[dist][ref]libvmaf=feature=name=cambi:n_threads={nt}:n_subsample={ns}:log_fmt=json:log_path={lp}",
         nt = n_threads,
+        ns = sample_rate.max(1),
+        lp = log_path.display(),
     );
 
     let result = Command::new("ffmpeg")
         .arg("-i")
         .arg(crate::safe_path_arg(output).as_ref())
-        .arg("-vf")
-        .arg(&vf)
+        .arg("-i")
+        .arg(crate::safe_path_arg(output).as_ref())
+        .arg("-filter_complex")
+        .arg(&filter_complex)
         .arg("-f")
         .arg("null")
         .arg("-")
@@ -430,8 +433,9 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
 
     match result {
         Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            parse_cambi_mean_from_json(&stdout)
+            // Read JSON from the temp log file
+            let json = std::fs::read_to_string(&log_path).ok()?;
+            parse_cambi_mean_from_json(&json)
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
