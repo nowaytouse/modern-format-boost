@@ -510,7 +510,7 @@ pub fn explore_with_gpu_coarse_search(
                 // ── Ultimate Mode: 3D Quality Gate ────────────────────────────
                 // Three independent dimensions must ALL pass:
                 //   1. VMAF-Y   ≥ 93.0   (perceptual quality, Netflix standard)
-                //   2. CAMBI    ≤ 10.0   (banding detection, lower = better)
+                //   2. CAMBI    ≤ 5.0    (banding detection, lower = better, Netflix standard)
                 //   3. PSNR-UV  ≥ 38.0 dB (chroma fidelity)
                 crate::log_eprintln!("   Enabling 3D quality verification (Ultimate Mode)...");
                 crate::log_eprintln!("   Running: VMAF-Y + CAMBI + PSNR-UV in parallel...");
@@ -543,7 +543,7 @@ pub fn explore_with_gpu_coarse_search(
 
                 // Thresholds
                 const VMAF_Y_THRESHOLD: f64 = 93.0;
-                const CAMBI_MAX: f64        = 10.0;
+                const CAMBI_MAX: f64        = 5.0;
                 const PSNR_UV_MIN: f64      = 38.0;
 
                 let vmaf_ok   = vmaf_y.map(|v| v >= VMAF_Y_THRESHOLD).unwrap_or(false);
