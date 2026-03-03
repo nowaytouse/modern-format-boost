@@ -60,6 +60,28 @@ fn finalize_with_size_check(
         .map_err(ImgQualityError::IoError)
 }
 
+/// Finalize a JXL produced by a fallback pipeline (ffmpeg or imagemagick).
+/// Verifies health, then delegates to `finalize_with_size_check`.
+fn finalize_fallback_jxl(
+    input: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    options: &ConvertOptions,
+    label: &str,
+) -> Result<ConversionResult> {
+    let output_size = fs::metadata(temp_output)?.len();
+    if let Err(e) = verify_jxl_health(temp_output) {
+        let _ = fs::remove_file(temp_output);
+        return Err(e);
+    }
+    finalize_with_size_check(
+        input, temp_output, output,
+        input_size, output_size, options, "JXL",
+        Some(label.to_string()),
+    )
+}
+
 /// Convert an image to JXL format with specified quality distance.
 ///
 /// # Arguments
@@ -327,11 +349,17 @@ pub fn convert_to_jxl(
 
                                     if ffmpeg_ok && cjxl_ok {
                                         shared_utils::progress_mode::fallback_success();
-                                        Ok(std::process::Output {
-                                            status: std::process::ExitStatus::default(),
-                                            stdout: Vec::new(),
-                                            stderr: Vec::new(),
-                                        })
+                                        // Early-return: finalize directly instead of faking an Output
+                                        let output_size = fs::metadata(&temp_output)?.len();
+                                        if let Err(e) = verify_jxl_health(&temp_output) {
+                                            let _ = fs::remove_file(&temp_output);
+                                            return Err(e);
+                                        }
+                                        return finalize_with_size_check(
+                                            input, &temp_output, &output,
+                                            input_size, output_size, options, "JXL",
+                                            Some("(ffmpeg fallback)".to_string()),
+                                        );
                                     } else {
                                         let line = format!(
                                             "   ❌ FFmpeg pipeline failed for file: {} (ffmpeg: {}, cjxl: {})",
@@ -341,13 +369,16 @@ pub fn convert_to_jxl(
                                         );
                                         shared_utils::progress_mode::emit_stderr(&line);
                                         shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                        try_imagemagick_fallback(
+                                        if try_imagemagick_fallback(
                                             input,
                                             &temp_output,
                                             distance,
                                             max_threads,
                                             options.apple_compat,
-                                        )
+                                        ).is_ok() {
+                                            return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                                        }
+                                        result
                                     }
                                 }
                                 Err(e) => {
@@ -355,14 +386,20 @@ pub fn convert_to_jxl(
                                     shared_utils::progress_mode::emit_stderr(&line);
                                     let _ = ffmpeg_proc.kill();
                                     shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                    try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat)
+                                    if try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat).is_ok() {
+                                        return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                                    }
+                                    result
                                 }
                             }
                         } else {
                             shared_utils::progress_mode::emit_stderr("   ❌ Failed to capture FFmpeg stdout");
                             let _ = ffmpeg_proc.kill();
                             shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                            try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat)
+                            if try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat).is_ok() {
+                                return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                            }
+                            result
                         }
                     }
                     Err(e) => {
@@ -370,7 +407,10 @@ pub fn convert_to_jxl(
                         shared_utils::progress_mode::emit_stderr(&line);
                         shared_utils::progress_mode::emit_stderr("      💡 Install: brew install ffmpeg");
                         shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                        try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat)
+                        if try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat).is_ok() {
+                            return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                        }
+                        result
                     }
                 }
             } else {
@@ -1009,7 +1049,7 @@ fn try_imagemagick_fallback(
     distance: f32,
     max_threads: usize,
     apple_compat: bool,
-) -> std::result::Result<std::process::Output, std::io::Error> {
+) -> std::result::Result<(), std::io::Error> {
     shared_utils::jxl_utils::try_imagemagick_fallback(input, output, distance, max_threads, apple_compat)
 }
 

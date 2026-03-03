@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-03-04
+
+### Code Quality
+- **Removed fabricated `ExitStatus::default()` in fallback pipelines**: The FFmpeg→cjxl and ImageMagick→cjxl fallback pipelines previously constructed a fake `std::process::Output { status: ExitStatus::default() }` to signal success — semantically incorrect and fragile. Refactored all fallback paths to early-return with proper `ConversionResult` via `finalize_with_size_check` / `finalize_fallback_jxl`, eliminating fake process output entirely.
+  - Affected files: `img_hevc/src/lossless_converter.rs`, `img_av1/src/lossless_converter.rs`, `shared_utils/src/jxl_utils.rs`
+  - `run_imagemagick_cjxl_pipeline` now returns `Result<(), ...>` instead of `Result<Output, ...>`
+  - `try_imagemagick_fallback` now returns `io::Result<()>` instead of `io::Result<Output>`
+
 ## [0.9.1] - 2026-03-04
 
 ### Image Conversion & ICC Profiles
