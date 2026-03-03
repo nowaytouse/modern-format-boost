@@ -6,6 +6,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-03-04
+
+### Image Conversion & ICC Profiles
+- **Fixed Grayscale PNG + RGB ICC incompatibility**: Resolved an issue where `cjxl` failed on certain grayscale images containing RGB ICC profiles (e.g., `IMG_8321.JPG`).
+  - **Improved Detection**: Refined `is_grayscale_icc_cjxl_error()` logic in `shared_utils` to accurately identify this specific failure mode.
+  - **Automatic Recovery**: The ImageMagick fallback pipeline now correctly triggers a `-strip` retry when this error is detected, removing the problematic ICC profile while preserving 16-bit depth for 16-bit sources.
+- **Enhanced ImageMagick Fallback Pipeline**: Refined the 4-stage retry mechanism:
+  1. Default: 16-bit, preserve metadata.
+  2. Grayscale ICC error: 16-bit + `-strip`.
+  3. 8-bit source failure: 8-bit + `-strip`.
+  4. 16-bit source failure: 16-bit + ICC normalization to sRGB.
+
+### Video Quality Metrics
+- **Quality Metric Diagnostics**: Verified that certain log warnings (CAMBI calculation "failures" or MS-SSIM targets not met) are expected behaviors for specific video content rather than functional bugs.
+
+### Documentation
+- **Consolidated error fix summary**: Merged `ERROR_FIX_SUMMARY.md` into `CHANGELOG.md`.
+
 ## [0.9.0] - 2026-03-03
 
 ### Critical Bug Fixes
