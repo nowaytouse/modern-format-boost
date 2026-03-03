@@ -6,6 +6,47 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-03-03
+
+### Critical Bug Fixes
+- **CAMBI calculation completely broken**: Fixed libvmaf filter invocation that caused all Ultimate Mode videos to be rejected
+  - Root cause: libvmaf filter requires TWO inputs (main + reference), but code used single input with `-vf`
+  - Error: "Error opening output files: Invalid argument" on every CAMBI calculation
+  - Impact: 3D quality gate always failed → all Ultimate Mode videos silently discarded
+  - Fix: Use `-filter_complex` with same video as both inputs for no-reference CAMBI metric
+  - Performance: Use `n_subsample` parameter for faster sampling (skip frames inside libvmaf)
+  - Threshold: Tightened CAMBI threshold from 10.0 → 5.0 (Netflix official standard)
+
+### Quality Gate Improvements
+- **3D Quality Gate (Ultimate Mode)**: Now fully functional with three independent metrics
+  - VMAF-Y ≥ 93.0 (perceptual quality, Netflix standard)
+  - CAMBI ≤ 5.0 (banding detection, lower = better, Netflix standard)
+  - PSNR-UV ≥ 38.0 dB (chroma fidelity)
+  - All three must pass for video to be accepted
+
+### GIF Processing Enhancements
+- **GIF meme detection**: Multi-dimensional scoring system to identify meme GIFs
+  - Five-layer edge-case suppression strategy
+  - Prevents accidental conversion of meme GIFs to video format
+  - Preserves GIF format for content that should remain as GIF
+- **GIF duration tolerance**: Relaxed duration validation for animated images
+  - GIF/WebP/AVIF/HEIC: 3.0 second tolerance (was 1.0s)
+  - Accounts for variable frame delay in GIF format
+  - Prevents false rejections due to frame timing differences
+
+### HEIC HDR/Dolby Vision Support
+- **HDR detection**: Automatic detection and preservation of HDR content
+  - Scans ISO BMFF box structure (hvcC, dvcC, dvvC, colr/nclx)
+  - Detects PQ (SMPTE 2084), HLG (Hybrid Log-Gamma), BT.2020 color space
+  - Automatically skips conversion to preserve HDR metadata
+- **Dolby Vision detection**: Identifies and protects Dolby Vision content
+  - Detects dvcC and dvvC boxes in HEIC files
+  - Prevents quality loss from HDR → SDR conversion
+
+### Documentation
+- **Consolidated documentation**: Merged GIF_DURATION_FIX.md, HEIC_HDR_UPDATE.md, UPDATE_SUMMARY.md into CHANGELOG.md
+- **Removed redundant files**: Cleaned up scattered documentation files
+
 ## [0.8.9] - 2026-03-01
 
 ### Image conversion fixes
