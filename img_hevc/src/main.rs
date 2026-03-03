@@ -159,7 +159,7 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::progress_mode::emit_stderr("   Smart quality matching: DISABLED");
             } else if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!("🎬 {} (for animated→video)", flag_mode.description_en()));
-                shared_utils::progress_mode::emit_stderr("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
+                shared_utils::progress_mode::emit_stderr("📷 Static images: JPEG→JXL lossless; lossless PNG→JXL; lossy PNG (TinyPNG/pngquant) → skip");
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
