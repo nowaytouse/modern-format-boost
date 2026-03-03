@@ -10,27 +10,32 @@ permissions:
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }} (${{ matrix.target }})
+    name: Build ${{ matrix.artifact_name }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x86_64
+
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: macos-arm64
-          - os: macos-13
+
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: macos-x64
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: windows-x64
+            optional: true
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
@@ -38,55 +43,166 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install dependencies (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libheif-dev libjxl-dev pkg-config clang
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
 
-      - name: Install dependencies (macOS)
-        if: startsWith(matrix.os, 'macos')
+      # ── Linux ──────────────────────────────────────────────────────────────
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
-          brew install libheif jpeg-xl
+          sudo apt-get update -qq
+          # Install build tools and dav1d
+          sudo apt-get install -y pkg-config clang cmake nasm ninja-build \
+            libdav1d-dev libde265-dev libx265-dev libaom-dev \
+            libturbojpeg0-dev libpng-dev
+
+          # libheif-rs 2.7 requires libheif >= 1.21; Ubuntu 22.04 only ships 1.12.
+          # Build libheif 1.21.x from source.
+          LIBHEIF_VERSION=1.21.0
+          cd /tmp
+          curl -fsSL "https://github.com/strukturag/libheif/releases/download/v${LIBHEIF_VERSION}/libheif-${LIBHEIF_VERSION}.tar.gz" \
+            -o libheif.tar.gz
+          tar xzf libheif.tar.gz
+          cd "libheif-${LIBHEIF_VERSION}"
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DWITH_EXAMPLES=OFF \
+            -DWITH_TESTING=OFF
+          cmake --build build --parallel
+          sudo cmake --install build
+          sudo ldconfig
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+
+      # ── macOS ──────────────────────────────────────────────────────────────
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libheif dav1d jpeg-xl pkg-config
+          # Export pkg-config paths for cross-compilation (x86_64 on arm64 host)
+          echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/opt/dav1d/lib/pkgconfig:$(brew --prefix)/opt/jpeg-xl/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      # macOS cross-compile: build x86_64 on arm64 runner
+      - name: Set up macOS cross-compile env (x86_64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          # Homebrew on macOS-latest (arm64) installs to /opt/homebrew.
+          # pkg-config can still find arm64 libs; Cargo will cross-compile the
+          # Rust code to x86_64, but the native deps (libheif, dav1d) are arm64.
+          # We use the host (arm64) libs for linking since macOS universal dylibs
+          # cover both arches for most brew bottles.
+          echo "CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER=clang" >> "$GITHUB_ENV"
+          # Allow pkg-config to find system libs when cross-compiling
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
+
+      # ── Windows ────────────────────────────────────────────────────────────
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\packages
+          key: vcpkg-x64-windows-libheif-libjxl-${{ hashFiles('.github/workflows/release.yml') }}
 
       - name: Install dependencies (Windows)
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          vcpkg install libheif:x64-windows
-          vcpkg install libjxl:x64-windows
-          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          $env:VCPKG_BINARY_SOURCES = "clear;files,$env:VCPKG_INSTALLATION_ROOT\packages,readwrite"
+          vcpkg install libheif:x64-windows-static libjxl:x64-windows-static `
+            dav1d:x64-windows-static --recurse
+          $root = $env:VCPKG_INSTALLATION_ROOT
+          echo "VCPKG_ROOT=$root" >> $env:GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$root\installed\x64-windows-static\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "VCPKGRS_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=0" >> $env:GITHUB_ENV
 
-      - name: Build release
+      # ── Build ──────────────────────────────────────────────────────────────
+      - name: Build release binaries
         shell: bash
         run: |
-          cargo build --release --target ${{ matrix.target }} -p vid-hevc -p vid-av1 -p img-hevc -p img-av1
+          cargo build --release --target ${{ matrix.target }} \
+            -p vid-hevc -p vid-av1 -p img-hevc -p img-av1
 
-      - name: Prepare artifacts
+      # ── Package ────────────────────────────────────────────────────────────
+      - name: Package artifacts
         shell: bash
         run: |
+          TAG="${GITHUB_REF_NAME}"
+          ARCHIVE="ModernFormatBoost-${TAG}-${{ matrix.artifact_name }}.zip"
           mkdir -p dist
           EXT=""
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then EXT=".exe"; fi
-          cp target/${{ matrix.target }}/release/vid-hevc$EXT dist/
-          cp target/${{ matrix.target }}/release/vid-av1$EXT dist/
-          cp target/${{ matrix.target }}/release/img-hevc$EXT dist/
-          cp target/${{ matrix.target }}/release/img-av1$EXT dist/
-          cp -r scripts dist/
-          cp README.md dist/ || true
-          cp LICENSE dist/ || true
-          
-          cd dist
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            7z a ../ModernFormatBoost-${{ matrix.artifact_name }}.zip *
-          else
-            zip -r ../ModernFormatBoost-${{ matrix.artifact_name }}.zip *
-          fi
+          [[ "${{ matrix.os }}" == windows-* ]] && EXT=".exe"
 
-      - name: Upload binaries to release
-        uses: svenstaro/upload-release-action@v2
+          for bin in vid-hevc vid-av1 img-hevc img-av1; do
+            cp "target/${{ matrix.target }}/release/${bin}${EXT}" dist/
+          done
+          cp -r scripts dist/
+          cp README.md dist/ 2>/dev/null || true
+          cp LICENSE   dist/ 2>/dev/null || true
+
+          cd dist
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            7z a "../${ARCHIVE}" .
+          else
+            zip -r "../${ARCHIVE}" .
+          fi
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Upload artifact (inter-job)
+        uses: actions/upload-artifact@v4
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: ModernFormatBoost-${{ matrix.artifact_name }}.zip
-          asset_name: ModernFormatBoost-${{ matrix.artifact_name }}.zip
-          tag: ${{ github.ref }}
-          overwrite: true
+          name: ${{ matrix.artifact_name }}
+          path: ModernFormatBoost-*-${{ matrix.artifact_name }}.zip
+          if-no-files-found: error
+
+  # ── Create / update GitHub Release ─────────────────────────────────────────
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    # Run even if some optional platform jobs failed
+    if: always() && !cancelled()
+    steps:
+      - name: Checkout (for CHANGELOG)
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -lh release-assets/
+
+      - name: Extract version changelog
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          # Extract section for this version from CHANGELOG.md (between ## headers)
+          NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null | head -80)
+          if [ -z "$NOTES" ]; then
+            NOTES="See commit history for changes in ${TAG}."
+          fi
+          # Write to file to avoid multiline env var issues
+          printf '%s\n' "$NOTES" > /tmp/release_notes.md
+
+      - name: Create / update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: /tmp/release_notes.md
+          files: release-assets/*.zip
+          fail_on_unmatched_files: false
+          token: ${{ secrets.GITHUB_TOKEN }}
