@@ -483,6 +483,15 @@ fn format_to_string(format: &ImageFormat) -> String {
         ImageFormat::WebP => "WebP".to_string(),
         ImageFormat::Tiff => "TIFF".to_string(),
         ImageFormat::Avif => "AVIF".to_string(),
+        ImageFormat::Bmp => "BMP".to_string(),
+        ImageFormat::Ico => "ICO".to_string(),
+        ImageFormat::Pnm => "PNM".to_string(),
+        ImageFormat::Tga => "TGA".to_string(),
+        ImageFormat::Hdr => "HDR".to_string(),
+        ImageFormat::Farbfeld => "Farbfeld".to_string(),
+        ImageFormat::OpenExr => "OpenEXR".to_string(),
+        ImageFormat::Dds => "DDS".to_string(),
+        ImageFormat::Qoi => "QOI".to_string(),
         _ => format!("{:?}", format),
     }
 }
@@ -757,6 +766,18 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
             let compression = detect_compression(&DetectedFormat::AVIF, path)?;
             Ok(compression == CompressionType::Lossless)
         }
+        // BMP, ICO, Pnm, Tga, Hdr, Farbfeld, OpenExr are all uncompressed/lossless pixel formats.
+        // DDS/Qoi can be either; treat conservatively as lossless to avoid lossy re-encoding.
+        ImageFormat::Bmp
+        | ImageFormat::Ico
+        | ImageFormat::Pnm
+        | ImageFormat::Tga
+        | ImageFormat::Hdr
+        | ImageFormat::Farbfeld
+        | ImageFormat::OpenExr
+        | ImageFormat::Dds
+        | ImageFormat::Qoi => Ok(true),
+        // Any unknown future format: be conservative — don't assume lossless.
         _ => Ok(false),
     }
 }
