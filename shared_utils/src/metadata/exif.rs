@@ -155,6 +155,30 @@ fn preserve_internal_metadata_fallback(
     result
 }
 
+/// Extract a meaningful error message from an ExifTool output.
+/// ExifTool with `-q` writes errors to stdout (not stderr); stderr is often empty on failure.
+/// Returns Some(msg) only when there is a real actionable error (not just warnings or empty output).
+fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Collect non-Warning lines from both streams
+    let error_lines: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|l| {
+            let l = l.trim();
+            !l.is_empty() && !l.starts_with("Warning") && !l.starts_with("  ") && l.contains("Error")
+        })
+        .collect();
+
+    if error_lines.is_empty() {
+        None
+    } else {
+        Some(error_lines.join("; "))
+    }
+}
+
 fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
         static WARNED: OnceLock<()> = OnceLock::new();
@@ -253,26 +277,23 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         "⚠️  [Structural Repair] magick failed：{}",
                         String::from_utf8_lossy(&out.stderr)
                     );
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if !stderr.contains("Warning") {
-                        return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
+                    if let Some(msg) = exiftool_error_message(&output) {
+                        return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
                     }
                 }
             }
             Err(e) => {
                 eprintln!("⚠️  [Structural Repair] magick unavailable：{}", e);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                if !stderr.contains("Warning") {
-                    return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
+                if let Some(msg) = exiftool_error_message(&output) {
+                    return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
                 }
             }
         }
     }
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("Warning") {
-            return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
+        if let Some(msg) = exiftool_error_message(&output) {
+            return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
         }
     }
 
