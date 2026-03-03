@@ -131,6 +131,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Install pkg-config (needed by dav1d-sys, libheif-sys build scripts)
+          choco install pkgconfiglite --yes --no-progress
+
           $env:VCPKG_BINARY_SOURCES = "clear;files,$env:VCPKG_INSTALLATION_ROOT\packages,readwrite"
           vcpkg install libheif:x64-windows-static dav1d:x64-windows-static libjxl:x64-windows-static --recurse
           $root = $env:VCPKG_INSTALLATION_ROOT
