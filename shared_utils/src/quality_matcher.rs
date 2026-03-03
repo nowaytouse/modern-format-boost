@@ -1483,13 +1483,9 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
             SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::Heic | SourceCodec::JpegXl
         );
 
-    // Lossy PNG (palette-quantized, e.g. TinyPNG/pngquant) should be skipped to avoid
-    // further generational quality loss — same policy as lossy WebP/AVIF/HEIC.
-    let is_lossy_png = !is_lossless && matches!(codec, SourceCodec::Png);
-
     let is_jxl = matches!(codec, SourceCodec::JpegXl);
 
-    let should_skip = is_modern_lossy || is_lossy_png || is_jxl;
+    let should_skip = is_modern_lossy || is_jxl;
 
     let reason = if should_skip {
         let codec_name = match codec {
@@ -1497,7 +1493,6 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
             SourceCodec::Avif => "lossy AVIF",
             SourceCodec::Heic => "lossy HEIC/HEIF",
             SourceCodec::JpegXl => "JPEG XL (already optimal)",
-            SourceCodec::Png => "palette-quantized PNG (TinyPNG/pngquant)",
             _ => "modern lossy format",
         };
         format!(
