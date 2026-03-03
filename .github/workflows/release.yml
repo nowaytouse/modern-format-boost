@@ -71,7 +71,9 @@ jobs:
           cp target/${{ matrix.target }}/release/vid-av1$EXT dist/
           cp target/${{ matrix.target }}/release/img-hevc$EXT dist/
           cp target/${{ matrix.target }}/release/img-av1$EXT dist/
-          cp scripts/drag_and_drop_processor.sh dist/ || true
+          cp -r scripts dist/
+          cp README.md dist/ || true
+          cp LICENSE dist/ || true
           
           cd dist
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
