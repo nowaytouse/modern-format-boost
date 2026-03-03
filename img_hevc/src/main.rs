@@ -159,7 +159,7 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::progress_mode::emit_stderr("   Smart quality matching: DISABLED");
             } else if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!("🎬 {} (for animated→video)", flag_mode.description_en()));
-                shared_utils::progress_mode::emit_stderr("📷 Static images: JPEG→JXL lossless; lossless PNG→JXL; lossy PNG (TinyPNG/pngquant) → skip");
+                shared_utils::progress_mode::emit_stderr("📷 Static images: JPEG→JXL lossless; lossless PNG→JXL lossless; lossy PNG (TinyPNG/pngquant)→JXL d=1.0");
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
@@ -835,26 +835,26 @@ fn auto_convert_single_file(
         }
         (_, false, false) => {
             // Modern lossy static already skipped above; only legacy lossy reach here.
-            // 路由：像素级建议无损则用 0.0，否则 0.1
+            // Lossy PNG (TinyPNG/pngquant): try lossy JXL at distance 1.0 — still far
+            // better quality than the already-quantized source, and size protection will
+            // skip if output is larger than input.
+            let is_lossy_png = analysis.format.to_uppercase() == "PNG";
             #[allow(deprecated)]
-            let jxl_distance = match &pixel_analysis {
-                Some(q) => {
-                    let rd = &q.routing_decision;
-                    if rd.use_lossless {
-                        0.0
-                    } else {
-                        0.1
+            let jxl_distance = if is_lossy_png {
+                1.0
+            } else {
+                match &pixel_analysis {
+                    Some(q) => {
+                        let rd = &q.routing_decision;
+                        if rd.use_lossless { 0.0 } else { 0.1 }
                     }
+                    None => 0.1,
                 }
-                None => 0.1,
             };
             verbose_log!(
-                "🔄 Legacy Lossy→JXL ({}): {}",
-                if jxl_distance == 0.0 {
-                    "Lossless"
-                } else {
-                    "Quality 100"
-                },
+                "🔄 {} Lossy→JXL ({}): {}",
+                if is_lossy_png { "Quantized PNG" } else { "Legacy" },
+                if jxl_distance == 0.0 { "Lossless" } else if jxl_distance <= 0.1 { "Quality 100" } else { "Lossy d=1.0" },
                 input.display()
             );
             convert_to_jxl(input, &options, jxl_distance, analysis.hdr_info.as_ref())?
