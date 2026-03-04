@@ -152,12 +152,13 @@ pub fn execute_conversion(
     let input_path = Path::new(&detection.file_path);
 
     if strategy.target == TargetFormat::NoConversion {
-        let _ = shared_utils::copy_on_skip_or_fail(
+        shared_utils::copy_on_skip_or_fail(
             input_path,
             config.output_dir.as_deref(),
             config.base_dir.as_deref(),
             false,
-        );
+        )
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
@@ -250,12 +251,13 @@ pub fn execute_conversion(
         let out_size = output_size.unwrap_or(0);
         if out_size >= detection.file_size {
             let _ = std::fs::remove_file(&output_path);
-            let _ = shared_utils::copy_on_skip_or_fail(
+            shared_utils::copy_on_skip_or_fail(
                 input_path,
                 config.output_dir.as_deref(),
                 config.base_dir.as_deref(),
                 false,
-            );
+            )
+            .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
             return Ok(ConversionOutput {
                 original_path: detection.file_path.clone(),
                 output_path: input_path.display().to_string(),

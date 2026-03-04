@@ -353,12 +353,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
         let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
 
-        let _ = shared_utils::copy_on_skip_or_fail(
+        shared_utils::copy_on_skip_or_fail(
             input,
             config.output_dir.as_deref(),
             config.base_dir.as_deref(),
             false,
-        );
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -402,12 +403,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         info!("🎬 Auto Mode: {} → SKIP", input.display());
         info!("   Reason: {}", strategy.reason);
 
-        let _ = shared_utils::copy_on_skip_or_fail(
+        shared_utils::copy_on_skip_or_fail(
             input,
             config.output_dir.as_deref(),
             config.base_dir.as_deref(),
             false,
-        );
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -677,11 +679,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             explore_result.optimal_crf,
                             explore_result.iterations
                         );
-                        let _ = shared_utils::conversion::commit_temp_to_output(
+                        shared_utils::conversion::commit_temp_to_output(
                             &temp_path,
                             &output_path,
                             config.force,
-                        );
+                        )?;
                         return Ok(ConversionOutput {
                             input_path: input.display().to_string(),
                             output_path: output_path.display().to_string(),
@@ -712,12 +714,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     }
                     info!("   🗑️  {}", delete_msg);
 
-                    let _ = shared_utils::copy_on_skip_or_fail(
+                    shared_utils::copy_on_skip_or_fail(
                         input,
                         config.output_dir.as_deref(),
                         config.base_dir.as_deref(),
                         false,
-                    );
+                    )
+                    .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
                     return Ok(ConversionOutput {
                         input_path: input.display().to_string(),
@@ -818,12 +821,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 info!("   🗑️  Low MS-SSIM output deleted");
             }
 
-            let _ = shared_utils::copy_on_skip_or_fail(
+            shared_utils::copy_on_skip_or_fail(
                 input,
                 config.output_dir.as_deref(),
                 config.base_dir.as_deref(),
                 false,
-            );
+            )
+            .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
             return Ok(ConversionOutput {
                 input_path: input.display().to_string(),
@@ -960,12 +964,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             info!("   🗑️  Output deleted (cannot compress by total file size)");
         }
 
-        let _ = shared_utils::copy_on_skip_or_fail(
+        shared_utils::copy_on_skip_or_fail(
             input,
             config.output_dir.as_deref(),
             config.base_dir.as_deref(),
             false,
-        );
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
