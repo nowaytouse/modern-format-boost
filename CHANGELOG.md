@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.9-1] - 2026-03-05
+
+### Bug Fixes
+
+#### Animated WebP→GIF: ffmpeg fallback to ImageMagick
+- **Fixed animated WebP producing no output in apple_compat GIF route**: ffmpeg 8.x does not support animated WebP (ANIM/ANMF chunks) — palette generation silently failed, causing the second ffmpeg pass to error on a missing palette file, and the entire conversion to propagate an error with no output file.
+  - **Root cause**: `convert_to_gif_apple_compat()` in `vid_hevc/src/animated_image.rs` only used ffmpeg two-pass palette approach with no fallback for formats ffmpeg cannot decode.
+  - **Fix**: When ffmpeg palette generation fails or the palette file is not created, fall back to `magick`/`convert` (ImageMagick) with `-coalesce -layers optimize`. ImageMagick handles animated WebP correctly.
+  - **Impact**: Animated WebP files in apple_compat mode now correctly produce GIF output instead of erroring out silently.
+
+#### Animated routing: unified meme-score strategy
+- **Removed hardcoded 4.5s duration threshold** from apple_compat animated routing. The old logic used `duration >= 4.5s || resolution >= 720p` to decide HEVC vs GIF. Both apple_compat and non-compat branches now use the meme-score multi-dimensional heuristic (duration, resolution, fps, aspect, bytes/pixel) for consistent decisions.
+- **Removed redundant internal short-animation skip** in `convert_to_hevc_mp4_matched()` and `convert_to_gif_apple_compat()` — these were double-checking duration after meme-score already made the decision, and were harmful in apple_compat mode (would copy non-playable originals).
+
 ## [0.9.9] - 2026-03-05
 
 ### Bug Fixes

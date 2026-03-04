@@ -781,42 +781,93 @@ pub fn convert_to_gif_apple_compat(
         path: &palette_path,
     };
 
-    let palette_result = Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg("-vf")
-        .arg(format!(
-            "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
-            fps_val, width, height
-        ))
-        .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
-        .output();
+    // Try ffmpeg two-pass palette approach first; fall back to ImageMagick if
+    // ffmpeg cannot decode the source (e.g. animated WebP with ANIM/ANMF chunks
+    // that some ffmpeg builds do not support).
+    let ffmpeg_palette_ok = {
+        let palette_result = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-i")
+            .arg(shared_utils::safe_path_arg(input).as_ref())
+            .arg("-vf")
+            .arg(format!(
+                "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
+                fps_val, width, height
+            ))
+            .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
+            .output();
+        match palette_result {
+            Err(_) => false,
+            Ok(o) => o.status.success() && palette_path.exists(),
+        }
+    };
 
-    if let Err(e) = palette_result {
-        return Err(VidQualityError::ConversionError(format!(
-            "ffmpeg not found: {}",
-            e
-        )));
+    let ffmpeg_gif_ok = if ffmpeg_palette_ok {
+        let result = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-i")
+            .arg(shared_utils::safe_path_arg(input).as_ref())
+            .arg("-i")
+            .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
+            .arg("-lavfi")
+            .arg(format!(
+                "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                fps_val, width, height
+            ))
+            .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
+            .output();
+        match result {
+            Ok(o) if o.status.success() => true,
+            _ => {
+                let _ = fs::remove_file(&temp_output);
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    if !ffmpeg_gif_ok {
+        // ffmpeg could not decode this format (e.g. animated WebP) — fall back to ImageMagick.
+        let _ = fs::remove_file(&temp_output);
+        eprintln!("   ⚠️  ffmpeg GIF encode failed, trying ImageMagick fallback...");
+        let magick_result = Command::new("magick")
+            .arg(shared_utils::safe_path_arg(input).as_ref())
+            .arg("-coalesce")
+            .arg("-layers")
+            .arg("optimize")
+            .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
+            .output()
+            .or_else(|_| {
+                Command::new("convert")
+                    .arg(shared_utils::safe_path_arg(input).as_ref())
+                    .arg("-coalesce")
+                    .arg("-layers")
+                    .arg("optimize")
+                    .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
+                    .output()
+            });
+        match magick_result {
+            Ok(o) if o.status.success() => {}
+            Ok(o) => {
+                let _ = fs::remove_file(&temp_output);
+                return Err(VidQualityError::ConversionError(format!(
+                    "ffmpeg GIF conversion failed and ImageMagick fallback also failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                )));
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&temp_output);
+                return Err(VidQualityError::ConversionError(format!(
+                    "ffmpeg GIF conversion failed and ImageMagick not found: {}",
+                    e
+                )));
+            }
+        }
     }
 
-    let result = Command::new("ffmpeg")
-        .arg("-y")
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
-        .arg("-lavfi")
-        .arg(format!(
-            "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-            fps_val, width, height
-        ))
-        .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-        .output();
-
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&temp_output)?.len();
+    {
+        let output_size = fs::metadata(&temp_output)?.len();
             if output_size == 0 {
                 let _ = fs::remove_file(&temp_output);
                 return Err(VidQualityError::ConversionError(
@@ -923,21 +974,5 @@ pub fn convert_to_gif_apple_compat(
                 skipped: false,
                 skip_reason: None,
             })
-        }
-        Ok(output_cmd) => {
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            let _ = fs::remove_file(&temp_output);
-            Err(VidQualityError::ConversionError(format!(
-                "ffmpeg GIF conversion failed: {}",
-                stderr
-            )))
-        }
-        Err(e) => {
-            let _ = fs::remove_file(&temp_output);
-            Err(VidQualityError::ConversionError(format!(
-                "ffmpeg not found: {}",
-                e
-            )))
-        }
     }
 }
