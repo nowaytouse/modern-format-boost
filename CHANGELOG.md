@@ -38,6 +38,14 @@ All notable changes to this project will be documented in this file.
 
 - **Fixed `--lossless_jpeg=0` applied to non-JPEG inputs**: `convert_to_jxl_matched()` in both img_hevc and img_av1 unconditionally passed `--lossless_jpeg=0` when `distance > 0`, even for PNG/WebP/TIFF inputs. Now only applied when `input_format` is JPEG.
 
+#### Apple Compat Size/Quality Guard Bypass
+- **Fixed apple_compat mode copying non-playable original on size guard trigger**: In `vid_hevc/src/animated_image.rs`, the `convert_to_hevc_mp4_matched()` size guard (output > input) would fall back to copying the original file in apple_compat mode. However, the original (e.g. animated AVIF) is not playable on Apple devices. A larger HEVC file is always preferable to a non-playable original.
+  - **Fix**: Added `size_guard_active = !options.apple_compat` so the size guard is bypassed entirely in apple_compat mode.
+- **Fixed quality check gate blocking apple_compat HEVC output**: A second guard (`quality_passed=false` when video stream couldn't be compressed below input size) was also discarding the HEVC file and copying the original. Same apple_compat override applied.
+  - **Fix**: Added `quality_or_compat_ok = quality_passed || (apple_compat && SSIM ≥ 0.90)` to allow high-quality HEVC output regardless of file size when in apple_compat mode.
+- **Fixed same size guard in `convert_to_gif_apple_compat()`**: GIF path had an identical size guard that would copy non-playable original; same fix applied.
+- **Impact**: Animated AVIF (and other non-Apple-native animated formats) in apple_compat mode now always produce a playable HEVC MP4 or GIF output, even if larger than the original.
+
 ## [0.9.8] - 2026-03-04
 
 ### Bug Fixes

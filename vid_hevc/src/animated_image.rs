@@ -457,7 +457,12 @@ pub fn convert_to_hevc_mp4_matched(
     };
     let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
-    if explore_result.output_size > max_allowed_size {
+    // apple_compat mode: compatibility takes priority over file size.
+    // The whole point is to make the output playable on Apple devices — keeping a
+    // non-playable original is worse than a slightly larger HEVC file.
+    let size_guard_active = !options.apple_compat;
+
+    if size_guard_active && explore_result.output_size > max_allowed_size {
         let size_increase_pct =
             ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         if let Err(e) = fs::remove_file(&temp_output) {
@@ -495,7 +500,13 @@ pub fn convert_to_hevc_mp4_matched(
         });
     }
 
-    if !explore_result.quality_passed {
+    // apple_compat: if quality_passed=false only because the file couldn't be compressed
+    // (not because of actual quality degradation), still accept the HEVC output.
+    // A larger-but-playable HEVC is always better than a non-playable original (e.g. AVIF).
+    let quality_or_compat_ok = explore_result.quality_passed
+        || (options.apple_compat && explore_result.ssim.map_or(false, |s| s >= 0.90));
+
+    if !quality_or_compat_ok {
         let actual_ssim = explore_result.ssim.unwrap_or(0.0);
         let threshold = explore_result.actual_min_ssim;
 
@@ -883,7 +894,11 @@ pub fn convert_to_gif_apple_compat(
             };
             let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
-            if output_size > max_allowed_size {
+            // apple_compat: compatibility takes priority — a playable GIF is always
+            // better than a non-playable original (e.g. animated AVIF).
+            let size_guard_active = !options.apple_compat;
+
+            if size_guard_active && output_size > max_allowed_size {
                 let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
                 if let Err(e) = fs::remove_file(&temp_output) {
                     eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
