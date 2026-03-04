@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use img_hevc::lossless_converter::{convert_to_gif_apple_compat, is_high_quality_animated};
+use img_hevc::lossless_converter::convert_to_gif_apple_compat;
 use img_hevc::analyze_image;
 use img_hevc::{
     calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
@@ -10,9 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-fn convert_to_gif_apple_compat_check_quality(width: u32, height: u32) -> bool {
-    is_high_quality_animated(width, height)
-}
 
 #[derive(Parser)]
 #[command(name = "imgquality")]
@@ -762,63 +759,46 @@ fn auto_convert_single_file(
                 }
             };
 
-            let is_high_quality = if let Ok((w, h)) = shared_utils::probe_video(input)
-                .map(|p| (p.width, p.height))
-                .or_else(|_| image::image_dimensions(input).map_err(|_| ()))
-            {
-                convert_to_gif_apple_compat_check_quality(w, h)
-            } else {
-                false
-            };
-
-            const MIN_DURATION: f32 = shared_utils::image_analyzer::ANIMATED_MIN_DURATION_FOR_VIDEO_SECS;
-            if config.apple_compat && is_modern_animated && !is_apple_native {
-                if duration >= MIN_DURATION || is_high_quality {
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s, {}): {}",
-                        format,
-                        duration,
-                        if is_high_quality {
-                            "High Quality"
-                        } else {
-                            "Long Animation"
-                        },
-                        input.display()
-                    ));
-                    convert_to_hevc_mp4_matched(input, &options, &analysis)?
+            // Use meme-score to decide HEVC vs GIF for all animated routes
+            // (apple_compat and non-compat unified under the same strategy).
+            let probe = shared_utils::probe_video(input).ok();
+            let meme_keep = if let Some(ref p) = probe {
+                if let Some(meta) = shared_utils::gif_meta_from_probe(p, analysis.file_size) {
+                    shared_utils::should_keep_as_gif(&meta)
                 } else {
+                    // Cannot build GifMeta (no dimensions) → keep as GIF
                     shared_utils::progress_mode::emit_stderr(&format!(
-                        "🍎 Animated {}→GIF (Apple Compat, {:.1}s < {:.1}s, Bayer 256 colors): {}",
-                        format,
-                        duration,
-                        MIN_DURATION,
-                        input.display()
-                    ));
-                    convert_to_gif_apple_compat(input, &options, None)?
-                }
-            } else {
-                // Use meme-score to decide keep-as-GIF vs convert-to-video
-                let probe = shared_utils::probe_video(input).ok();
-                let meme_keep = if let Some(ref p) = probe {
-                    if let Some(meta) = shared_utils::gif_meta_from_probe(p, analysis.file_size) {
-                        shared_utils::should_keep_as_gif(&meta)
-                    } else {
-                        // Cannot build GifMeta (no dimensions) → keep as GIF
-                        shared_utils::progress_mode::emit_stderr(&format!(
-                            "   🎞️  GIF probe failed (no dimensions), keeping as GIF: {}",
-                            input.display()
-                        ));
-                        true
-                    }
-                } else {
-                    // ffprobe failed → keep as GIF
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "   🎞️  GIF probe unavailable, keeping as GIF: {}",
+                        "   🎞️  GIF probe failed (no dimensions), keeping as GIF: {}",
                         input.display()
                     ));
                     true
-                };
+                }
+            } else {
+                // ffprobe failed → keep as GIF
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "   🎞️  GIF probe unavailable, keeping as GIF: {}",
+                    input.display()
+                ));
+                true
+            };
 
+            if config.apple_compat && is_modern_animated && !is_apple_native {
+                if meme_keep {
+                    // meme-score says keep: GIF is the correct Apple-compat output
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
+                        format, input.display()
+                    ));
+                    convert_to_gif_apple_compat(input, &options, None)?
+                } else {
+                    // meme-score says convert: HEVC MP4 is the correct Apple-compat output
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s): {}",
+                        format, duration, input.display()
+                    ));
+                    convert_to_hevc_mp4_matched(input, &options, &analysis)?
+                }
+            } else {
                 if meme_keep {
                     copy_original_if_adjacent_mode(input, config)?;
                     return Ok(make_skipped("GIF meme-score: keep as GIF"));
