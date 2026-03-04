@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-03-05
+
+### Bug Fixes
+
+#### Animated Modern Format Detection — Comprehensive Fix
+- **Fixed animated AVIF passthrough bug**: Animated AVIF files (ISOBMFF major_brand `avis` or compatible_brand `msf1`) were incorrectly treated as static images, causing them to be copied to the output directory unchanged instead of being routed through the Apple Compat conversion pipeline (HEVC MP4 / GIF).
+  - **Root cause (2 layers)**:
+    1. `detect_animation()` in `image_detection.rs` had no AVIF branch — the `_ => Ok((false, 1, None))` fallback silently returned non-animated.
+    2. `analyze_avif_image()` in `image_analyzer.rs` hardcoded `is_animated: false`, so even if detection were fixed, the analysis result would still report static.
+  - **Fix**: Added `DetectedFormat::AVIF` branch to `detect_animation()` using the new `is_isobmff_animated_sequence()` helper (reads ftyp box major_brand + compatible_brands for `avis`/`msf1`). Updated `analyze_avif_image()` to call `detect_animation()` and set `is_animated`/`duration_secs` correctly.
+  - **Impact**: Animated AVIF in Apple Compat mode now correctly routes to HEVC MP4 (long/high-res) or GIF (short/low-res) instead of being silently passed through.
+
+- **Fixed animated JXL never detected**: `analyze_jxl_image()` hardcoded `is_animated: false` and `detect_animation()` had no JXL branch.
+  - **Fix**: Added `DetectedFormat::JXL` branch to `detect_animation()` using `is_jxl_animated_via_ffprobe()` (checks ffprobe duration > 0, falls back to jxlinfo "animation" keyword). Updated `analyze_jxl_image()` to call `detect_animation()`.
+  - **Impact**: Animated JXL files now correctly enter the animated conversion pipeline instead of being treated as static JXL (which would skip them entirely as "already optimal").
+
+- **Fixed HEIC/HEIF animation metadata always false**: `analyze_heic_image()` hardcoded `is_animated: false`. While this doesn't affect routing (HEIC/HEIF are intercepted by `is_apple_native` guard), it caused incorrect metadata in analysis results.
+  - **Fix**: Added `is_isobmff_animated_sequence()` call to set correct `is_animated` and `duration_secs`.
+  - **Impact**: Metadata correctness for downstream consumers; no routing behavior change.
+
+- Affected tools: **img-hevc**, **img-av1** (both share `shared_utils` analysis layer)
+
 ## [0.9.8] - 2026-03-04
 
 ### Bug Fixes
