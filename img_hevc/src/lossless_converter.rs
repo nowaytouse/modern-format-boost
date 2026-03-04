@@ -234,7 +234,7 @@ pub fn convert_to_jxl(
                             cmd.arg("-")
                                 .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
                                 .arg("-d")
-                                .arg(format!("{:.1}", distance))
+                                .arg(format!("{:.2}", distance))
                                 .arg("-e")
                                 .arg("7")
                                 .arg("-j")
@@ -989,8 +989,15 @@ pub fn convert_to_jxl_matched(
         cmd.arg("--compress_boxes=0");
     }
 
+    // Only disable lossless JPEG mode when input is actually JPEG and we want lossy encoding.
+    // For non-JPEG inputs this flag is a no-op, but omitting it keeps the command clean.
     if distance > 0.0 {
-        cmd.arg("--lossless_jpeg=0");
+        let is_jpeg = options.input_format.as_deref()
+            .map(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"))
+            .unwrap_or(false);
+        if is_jpeg {
+            cmd.arg("--lossless_jpeg=0");
+        }
     }
 
     cmd.arg("--")

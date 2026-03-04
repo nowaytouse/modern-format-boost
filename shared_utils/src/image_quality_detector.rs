@@ -566,17 +566,19 @@ fn make_routing_decision(
     source_format: &str,
     content_type: ImageContentType,
     has_alpha: bool,
-    _is_animated: bool,
+    is_animated: bool,
     compression_potential: f64,
     _file_size: u64,
     _pixels: u64,
 ) -> RoutingDecision {
     let format_lower = source_format.to_lowercase();
 
+    // Animated modern formats should NOT be skipped here — they need to flow through
+    // the animated routing pipeline (HEVC MP4 / GIF / AV1 MP4).
     let modern_lossy = ["avif", "jxl", "heic", "heif"];
     let is_modern_lossy = modern_lossy.iter().any(|f| format_lower.contains(f));
 
-    if is_modern_lossy {
+    if is_modern_lossy && !is_animated {
         return RoutingDecision {
             primary_format: source_format.to_string(),
             alternatives: vec![],
