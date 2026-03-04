@@ -140,12 +140,14 @@ pub fn execute_conversion(
 
     if strategy.target == TargetFormat::NoConversion {
         if let Some(ref out_dir) = config.output_dir {
-            let _ = shared_utils::copy_on_skip_or_fail(
+            shared_utils::copy_on_skip_or_fail(
                 input_path,
                 Some(out_dir),
                 config.base_dir.as_deref(),
                 false,
-            );
+            ).map_err(|e| ImgQualityError::ConversionError(
+                format!("Failed to copy skipped file: {}", e),
+            ))?;
         }
 
         return Ok(ConversionOutput {
@@ -235,12 +237,14 @@ pub fn execute_conversion(
 
             // Copy original to output directory if specified
             if let Some(ref out_dir) = config.output_dir {
-                let _ = shared_utils::copy_on_skip_or_fail(
+                shared_utils::copy_on_skip_or_fail(
                     input_path,
                     Some(out_dir),
                     config.base_dir.as_deref(),
                     false,
-                );
+                ).map_err(|e| ImgQualityError::ConversionError(
+                    format!("Failed to copy original after compress skip: {}", e),
+                ))?;
             }
 
             return Ok(ConversionOutput {

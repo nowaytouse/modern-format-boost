@@ -28,6 +28,16 @@ All notable changes to this project will be documented in this file.
 
 - Affected tools: **img-hevc**, **img-av1** (both share `shared_utils` analysis layer)
 
+#### Deep Audit Fixes
+- **Fixed `make_routing_decision()` ignoring `is_animated` parameter**: The `_is_animated` parameter was unused (prefixed underscore), causing animated modern lossy formats (AVIF/JXL/HEIC/HEIF) to return `should_skip: true` even when animated. Now correctly allows animated modern formats to pass through to the animated conversion pipeline.
+  - **File**: `shared_utils/src/image_quality_detector.rs`
+
+- **Fixed img_av1 `copy_on_skip_or_fail` error swallowing**: Two paths in `img_av1/src/conversion_api.rs` (NoConversion skip + compress-mode rejection) used `let _ =` to discard copy errors, silently losing files. Now properly propagates errors. (img_hevc was already fixed in v0.9.8.)
+
+- **Fixed JXL distance format precision loss in fallback path**: `img_hevc/src/lossless_converter.rs` FFmpeg→cjxl fallback pipeline used `{:.1}` (1 decimal) for distance while the primary path used `{:.2}` (2 decimals), causing precision loss (e.g. `d=0.85` → `d=0.9`). Now consistent `{:.2}` everywhere.
+
+- **Fixed `--lossless_jpeg=0` applied to non-JPEG inputs**: `convert_to_jxl_matched()` in both img_hevc and img_av1 unconditionally passed `--lossless_jpeg=0` when `distance > 0`, even for PNG/WebP/TIFF inputs. Now only applied when `input_format` is JPEG.
+
 ## [0.9.8] - 2026-03-04
 
 ### Bug Fixes
