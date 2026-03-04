@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.9.9] - 2026-03-04
+## [0.9.8] - 2026-03-04
 
 ### Bug Fixes
 
@@ -25,9 +25,14 @@ All notable changes to this project will be documented in this file.
 
 - **Propagate `commit_temp_to_output` errors**: Apple compatibility fallback path in `vid_hevc` now propagates temp-to-output commit failures with `?` instead of `let _ =`
 
----
+#### Apple Photos Library Protection
+- **Added Apple Photos library detection**: Prevents direct file manipulation inside `.photoslibrary` / `.photolibrary` packages
+  - Checks at entry points before any processing (img_hevc, img_av1, vid_hevc, vid_av1)
+  - Clear error message with guidance to export photos first
+  - Includes unit tests for detection logic
+  - **Impact**: Prevents accidental corruption of Photos database and data loss
 
-## [0.9.8] - 2026-03-04
+---
 
 ### Code Quality
 - **Removed fabricated `ExitStatus::default()` in fallback pipelines**: The FFmpeg→cjxl and ImageMagick→cjxl fallback pipelines previously constructed a fake `std::process::Output { status: ExitStatus::default() }` to signal success — semantically incorrect and fragile. Refactored all fallback paths to early-return with proper `ConversionResult` via `finalize_with_size_check` / `finalize_fallback_jxl`, eliminating fake process output entirely.
