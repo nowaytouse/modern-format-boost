@@ -95,6 +95,50 @@ pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+/// Check if a path is inside an Apple Photos library package
+///
+/// Apple Photos libraries are special package directories (*.photoslibrary) that contain
+/// a complex internal structure managed by Photos.app. Direct manipulation of files
+/// inside these packages can corrupt the library database and cause data loss.
+///
+/// This function checks if the given path is:
+/// 1. Inside a directory ending with .photoslibrary
+/// 2. Inside a directory ending with .photolibrary (older format)
+///
+/// Returns an error if the path is inside a Photos library.
+pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    // Check each component of the path
+    for ancestor in canonical.ancestors() {
+        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".photoslibrary") || name.ends_with(".photolibrary") {
+                return Err(format!(
+                    "🚨 APPLE PHOTOS LIBRARY DETECTED!\n\
+                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+                     ❌ Target path '{}' is inside an Apple Photos library:\n\
+                     ❌ '{}'\n\
+                     \n\
+                     ⚠️  Direct manipulation of files inside Photos libraries can:\n\
+                     ⚠️  • Corrupt the Photos database\n\
+                     ⚠️  • Break photo organization and metadata\n\
+                     ⚠️  • Cause permanent data loss\n\
+                     \n\
+                     💡 To process photos from your Photos library:\n\
+                     💡 1. Export photos from Photos.app to a separate folder\n\
+                     💡 2. Run this tool on the exported folder\n\
+                     💡 3. Import the converted photos back into Photos if needed\n\
+                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    path.display(),
+                    ancestor.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +161,26 @@ mod tests {
         assert!(check_extension_whitelist(Path::new("test.png"), whitelist));
         assert!(check_extension_whitelist(Path::new("test.PNG"), whitelist));
         assert!(!check_extension_whitelist(Path::new("test.exe"), whitelist));
+    }
+
+    #[test]
+    fn test_apple_photos_library_detection() {
+        // Test .photoslibrary detection
+        assert!(check_apple_photos_library(Path::new(
+            "/Users/test/Pictures/My Library.photoslibrary/Masters/2024/01/01/IMG_1234.jpg"
+        ))
+        .is_err());
+
+        // Test .photolibrary detection (older format)
+        assert!(check_apple_photos_library(Path::new(
+            "/Users/test/Pictures/My Library.photolibrary/Masters/2024/01/01/IMG_1234.jpg"
+        ))
+        .is_err());
+
+        // Test safe paths
+        assert!(check_apple_photos_library(Path::new("/Users/test/Pictures/Exports/IMG_1234.jpg"))
+            .is_ok());
+        assert!(check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
+            .is_ok());
     }
 }

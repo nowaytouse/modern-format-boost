@@ -522,6 +522,12 @@ fn auto_convert_single_file(
         convert_to_jxl, ConvertOptions,
     };
 
+    // Check for Apple Photos library before processing
+    if let Err(e) = shared_utils::check_apple_photos_library(input) {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+
     let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
     let input = fixed_input.as_path();
 
@@ -883,6 +889,12 @@ fn auto_convert_directory(
     config: &AutoConvertConfig,
     recursive: bool,
 ) -> anyhow::Result<()> {
+    // Check for Apple Photos library before any processing
+    if let Err(e) = shared_utils::check_apple_photos_library(input) {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+
     if config.delete_original || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
             eprintln!("{}", e);
