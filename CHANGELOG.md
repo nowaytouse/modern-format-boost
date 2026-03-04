@@ -6,6 +6,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.9-2] - 2026-03-05
+
+### Changes
+
+#### GIF conversion: ImageMagick-first strategy
+- **GIF encoding now tries ImageMagick first**, then falls back to ffmpeg two-pass palette. This eliminates the "⚠️ ffmpeg GIF encode failed" log noise and correctly handles animated WebP (ANIM/ANMF) which ffmpeg 8.x cannot decode.
+
+#### Fail-safe: all animated conversion failures copy original file
+- **`convert_to_hevc_mp4`**: ffmpeg encode failure or invalid output → copy original instead of returning `Err`.
+- **`convert_to_hevc_mkv_lossless`**: same fail-safe applied.
+- **`convert_to_hevc_mp4_matched`**: `quality_or_compat_ok=false` path now calls `mark_as_processed` to avoid re-processing.
+- **`convert_to_gif_apple_compat`**: both-encoders-failed path copies original. Invalid output (empty/unreadable) also copies original instead of returning `Err`.
+- No conversion failure can result in a missing output file — data is always preserved.
+
 ## [0.9.9-1] - 2026-03-05
 
 ### Bug Fixes

@@ -226,18 +226,24 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
-            let output_size = fs::metadata(&temp_output)?.len();
-            if output_size == 0 {
+            let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
+            if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
                 let _ = fs::remove_file(&temp_output);
-                return Err(VidQualityError::ConversionError(
-                    "HEVC output file is empty (encoding may have failed)".to_string(),
-                ));
-            }
-            if get_input_dimensions(&temp_output).is_err() {
-                let _ = fs::remove_file(&temp_output);
-                return Err(VidQualityError::ConversionError(
-                    "HEVC output file is not readable (invalid or corrupted)".to_string(),
-                ));
+                tracing::warn!(input = %input.display(), "HEVC output invalid (empty or unreadable); copying original");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size: sz,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "HEVC output invalid; original copied".to_string(),
+                    skipped: true,
+                    skip_reason: Some("hevc_invalid_output".to_string()),
+                });
             }
 
             if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
@@ -285,17 +291,39 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             let _ = fs::remove_file(&temp_output);
-            Err(VidQualityError::ConversionError(format!(
-                "ffmpeg failed: {}",
-                stderr
-            )))
+            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg HEVC encode failed; copying original");
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+            Ok(ConversionResult {
+                success: false,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size: sz,
+                output_size: None,
+                size_reduction: None,
+                message: format!("HEVC encode failed; original copied (ffmpeg: {})", stderr.lines().last().unwrap_or("")),
+                skipped: true,
+                skip_reason: Some("hevc_encode_failed".to_string()),
+            })
         }
         Err(e) => {
             let _ = fs::remove_file(&temp_output);
-            Err(VidQualityError::ConversionError(format!(
-                "ffmpeg not found: {}",
-                e
-            )))
+            tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found; copying original");
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+            Ok(ConversionResult {
+                success: false,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size: sz,
+                output_size: None,
+                size_reduction: None,
+                message: format!("HEVC encode failed (ffmpeg not found: {}); original copied", e),
+                skipped: true,
+                skip_reason: Some("hevc_encode_failed".to_string()),
+            })
         }
     }
 }
@@ -520,6 +548,7 @@ pub fn convert_to_hevc_mp4_matched(
             options.base_dir.as_deref(),
             false,
         );
+        mark_as_processed(input);
 
         return Ok(ConversionResult {
             success: false,
@@ -677,17 +706,39 @@ pub fn convert_to_hevc_mkv_lossless(
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             let _ = fs::remove_file(&temp_output);
-            Err(VidQualityError::ConversionError(format!(
-                "ffmpeg lossless failed: {}",
-                stderr
-            )))
+            tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg lossless HEVC failed; copying original");
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+            Ok(ConversionResult {
+                success: false,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size: sz,
+                output_size: None,
+                size_reduction: None,
+                message: format!("Lossless HEVC failed; original copied ({})", stderr.lines().last().unwrap_or("")),
+                skipped: true,
+                skip_reason: Some("hevc_lossless_failed".to_string()),
+            })
         }
         Err(e) => {
             let _ = fs::remove_file(&temp_output);
-            Err(VidQualityError::ConversionError(format!(
-                "ffmpeg not found: {}",
-                e
-            )))
+            tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found for lossless HEVC; copying original");
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            let sz = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+            Ok(ConversionResult {
+                success: false,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size: sz,
+                output_size: None,
+                size_reduction: None,
+                message: format!("Lossless HEVC failed (ffmpeg not found: {}); original copied", e),
+                skipped: true,
+                skip_reason: Some("hevc_lossless_failed".to_string()),
+            })
         }
     }
 }
@@ -781,57 +832,10 @@ pub fn convert_to_gif_apple_compat(
         path: &palette_path,
     };
 
-    // Try ffmpeg two-pass palette approach first; fall back to ImageMagick if
-    // ffmpeg cannot decode the source (e.g. animated WebP with ANIM/ANMF chunks
-    // that some ffmpeg builds do not support).
-    let ffmpeg_palette_ok = {
-        let palette_result = Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-i")
-            .arg(shared_utils::safe_path_arg(input).as_ref())
-            .arg("-vf")
-            .arg(format!(
-                "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
-                fps_val, width, height
-            ))
-            .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
-            .output();
-        match palette_result {
-            Err(_) => false,
-            Ok(o) => o.status.success() && palette_path.exists(),
-        }
-    };
-
-    let ffmpeg_gif_ok = if ffmpeg_palette_ok {
-        let result = Command::new("ffmpeg")
-            .arg("-y")
-            .arg("-i")
-            .arg(shared_utils::safe_path_arg(input).as_ref())
-            .arg("-i")
-            .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
-            .arg("-lavfi")
-            .arg(format!(
-                "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-                fps_val, width, height
-            ))
-            .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-            .output();
-        match result {
-            Ok(o) if o.status.success() => true,
-            _ => {
-                let _ = fs::remove_file(&temp_output);
-                false
-            }
-        }
-    } else {
-        false
-    };
-
-    if !ffmpeg_gif_ok {
-        // ffmpeg could not decode this format (e.g. animated WebP) — fall back to ImageMagick.
-        let _ = fs::remove_file(&temp_output);
-        eprintln!("   ⚠️  ffmpeg GIF encode failed, trying ImageMagick fallback...");
-        let magick_result = Command::new("magick")
+    // ImageMagick first — it handles all animated formats including WebP ANIM/ANMF
+    // which ffmpeg 8.x cannot decode. ffmpeg two-pass palette is the fallback.
+    let magick_ok = {
+        let res = Command::new("magick")
             .arg(shared_utils::safe_path_arg(input).as_ref())
             .arg("-coalesce")
             .arg("-layers")
@@ -847,39 +851,91 @@ pub fn convert_to_gif_apple_compat(
                     .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
                     .output()
             });
-        match magick_result {
-            Ok(o) if o.status.success() => {}
-            Ok(o) => {
-                let _ = fs::remove_file(&temp_output);
-                return Err(VidQualityError::ConversionError(format!(
-                    "ffmpeg GIF conversion failed and ImageMagick fallback also failed: {}",
-                    String::from_utf8_lossy(&o.stderr)
-                )));
+        matches!(res, Ok(o) if o.status.success() && temp_output.exists())
+    };
+
+    if !magick_ok {
+        let _ = fs::remove_file(&temp_output);
+        // ImageMagick unavailable or failed — try ffmpeg two-pass palette approach.
+        let ffmpeg_palette_ok = {
+            let res = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg("-vf")
+                .arg(format!(
+                    "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
+                    fps_val, width, height
+                ))
+                .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
+                .output();
+            matches!(res, Ok(o) if o.status.success() && palette_path.exists())
+        };
+
+        let ffmpeg_gif_ok = if ffmpeg_palette_ok {
+            let res = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg("-i")
+                .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
+                .arg("-lavfi")
+                .arg(format!(
+                    "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
+                    fps_val, width, height
+                ))
+                .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
+                .output();
+            match res {
+                Ok(o) if o.status.success() => true,
+                _ => { let _ = fs::remove_file(&temp_output); false }
             }
-            Err(e) => {
-                let _ = fs::remove_file(&temp_output);
-                return Err(VidQualityError::ConversionError(format!(
-                    "ffmpeg GIF conversion failed and ImageMagick not found: {}",
-                    e
-                )));
-            }
+        } else {
+            false
+        };
+
+        if !ffmpeg_gif_ok {
+            // Both encoders failed — copy original so data is not lost.
+            let _ = fs::remove_file(&temp_output);
+            tracing::warn!(input = %input.display(), "GIF conversion failed (ImageMagick + ffmpeg both failed); copying original");
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            let input_size_fb = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+            return Ok(ConversionResult {
+                success: false,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size: input_size_fb,
+                output_size: None,
+                size_reduction: None,
+                message: "GIF conversion failed (ImageMagick + ffmpeg both unavailable); original copied".to_string(),
+                skipped: true,
+                skip_reason: Some("gif_encode_failed".to_string()),
+            });
         }
     }
 
     {
-        let output_size = fs::metadata(&temp_output)?.len();
-            if output_size == 0 {
-                let _ = fs::remove_file(&temp_output);
-                return Err(VidQualityError::ConversionError(
-                    "GIF output file is empty (encoding may have failed)".to_string(),
-                ));
-            }
-            if get_input_dimensions(&temp_output).is_err() {
-                let _ = fs::remove_file(&temp_output);
-                return Err(VidQualityError::ConversionError(
-                    "GIF output file is not readable (invalid or corrupted)".to_string(),
-                ));
-            }
+        let output_size = fs::metadata(&temp_output)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
+            let _ = fs::remove_file(&temp_output);
+            tracing::warn!(input = %input.display(), "GIF output invalid (empty or unreadable); copying original");
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            return Ok(ConversionResult {
+                success: false,
+                input_path: input.display().to_string(),
+                output_path: None,
+                input_size,
+                output_size: None,
+                size_reduction: None,
+                message: "GIF output invalid; original copied".to_string(),
+                skipped: true,
+                skip_reason: Some("gif_invalid_output".to_string()),
+            });
+        }
             let reduction = 1.0 - (output_size as f64 / input_size as f64);
 
             let tolerance_ratio = if options.allow_size_tolerance {
