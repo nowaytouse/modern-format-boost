@@ -93,6 +93,11 @@ where
     let input = &config.input;
     let recursive = config.recursive;
 
+    // Check for Apple Photos library before processing
+    if let Err(e) = crate::safety::check_apple_photos_library(input) {
+        anyhow::bail!("{}", e);
+    }
+
     let files = crate::collect_files_small_first(input, SUPPORTED_VIDEO_EXTENSIONS, recursive);
 
     if files.is_empty() {
@@ -236,6 +241,11 @@ where
     F: Fn(&Path) -> Result<R>,
     R: CliProcessingResult,
 {
+    // Check for Apple Photos library before processing
+    if let Err(e) = crate::safety::check_apple_photos_library(&config.input) {
+        anyhow::bail!("{}", e);
+    }
+
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
     let fixed_input = fix_extension_if_mismatch(&config.input)?;
     let input = fixed_input.as_path();
