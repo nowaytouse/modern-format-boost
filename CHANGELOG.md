@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.9] - 2026-03-04
+
+### Bug Fixes
+
+#### Linux ACL Preservation
+- **Fixed `dst` parameter never used bug**: The `preserve_linux_attributes()` function previously used `setfacl --restore=-` which restored ACL to the **source file itself**, completely ignoring the `dst` parameter.
+  - **Root cause**: Piped `setfacl --restore=-` reads ACL from stdin but applies to the file specified, which was missing
+  - **Fix**: Parse ACL output and apply each entry individually using `setfacl -m <entry> <dst>`
+  - **Impact**: Linux file permissions and ACLs now correctly propagate to converted output files
+
+#### Error Propagation
+- **Propagate `copy_on_skip_or_fail` errors**: Multiple conversion paths previously swallowed errors with `let _ =`:
+  - `img_hevc/src/conversion_api.rs`: 2 skip/compress paths
+  - `vid_hevc/src/conversion_api.rs`: 6 paths (5 skip/compress + 1 temp commit)
+  - **Behavior change**: Failures now throw `ImgQualityError::ConversionError` or `VidQualityError::GeneralError` instead of silently returning success
+  - **Impact**: Conversion failures are now properly reported to users instead of fabricating successful results
+
+- **Propagate `commit_temp_to_output` errors**: Apple compatibility fallback path in `vid_hevc` now propagates temp-to-output commit failures with `?` instead of `let _ =`
+
+---
+
 ## [0.9.8] - 2026-03-04
 
 ### Code Quality
