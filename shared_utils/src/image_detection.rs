@@ -414,8 +414,128 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             let (is_animated, frame_count) = parse_apng_frames(&data);
             Ok((is_animated, frame_count, None))
         }
+        DetectedFormat::AVIF => {
+            // Detect animated AVIF by checking ftyp major_brand / compatible_brands for
+            // sequence brand "avis" or "msf1".
+            // Note: HEIC/HEIF are Apple-native formats handled by is_apple_native routing;
+            // they are always skipped in apple_compat mode without needing animation detection.
+            // The is_isobmff_animated_sequence helper is available for future correctness
+            // validation of HEIC/HEIF if needed.
+            let is_animated = is_isobmff_animated_sequence(path);
+            if is_animated {
+                Ok((true, 0, None))
+            } else {
+                Ok((false, 1, None))
+            }
+        }
+        DetectedFormat::JXL => {
+            // JXL animation: use ffprobe to detect duration > 0 (JXL container stores
+            // animation frames natively; there's no magic-byte shortcut like ISOBMFF brands).
+            let is_animated = is_jxl_animated_via_ffprobe(path);
+            if is_animated {
+                Ok((true, 0, None))
+            } else {
+                Ok((false, 1, None))
+            }
+        }
         _ => Ok((false, 1, None)),
     }
+}
+
+/// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
+/// Checks major_brand and compatible_brands for known sequence brand codes.
+pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
+    // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
+    const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let mut header = [0u8; 32];
+    if std::io::Read::read_exact(&mut file, &mut header).is_err() {
+        return false;
+    }
+
+    if header[4..8] != *b"ftyp" {
+        return false;
+    }
+
+    let major_brand = &header[8..12];
+    for seq_brand in SEQUENCE_BRANDS {
+        if major_brand == *seq_brand {
+            return true;
+        }
+    }
+
+    // Scan compatible_brands (each 4 bytes, starting at offset 16)
+    let ftyp_box_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+    if ftyp_box_size < 16 || ftyp_box_size > 4096 {
+        return false;
+    }
+    let compat_size = ftyp_box_size - 16;
+    if compat_size == 0 {
+        return false;
+    }
+
+    let mut compat_data = vec![0u8; compat_size];
+    if std::io::Read::read_exact(&mut file, &mut compat_data).is_err() {
+        return false;
+    }
+
+    for cb in compat_data.chunks_exact(4) {
+        for seq_brand in SEQUENCE_BRANDS {
+            if cb == *seq_brand {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Returns true if the JXL file contains animation.
+/// JXL stores animation natively in its container; we use ffprobe to check duration > 0.
+/// Falls back to jxlinfo "animation" keyword detection if ffprobe is unavailable.
+fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
+    use std::process::Command;
+
+    // Try ffprobe first: animated JXL will have duration > 0
+    if let Ok(output) = Command::new("ffprobe")
+        .args([
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+        ])
+        .arg(crate::safe_path_arg(path).as_ref())
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse duration from JSON: {"format": {"duration": "1.234"}}
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                if let Some(dur_str) = json["format"]["duration"].as_str() {
+                    if let Ok(dur) = dur_str.parse::<f64>() {
+                        return dur > 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: jxlinfo prints "animation" for animated JXL
+    if let Ok(output) = Command::new("jxlinfo")
+        .arg(crate::safe_path_arg(path).as_ref())
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            return stdout.contains("animation");
+        }
+    }
+
+    false
 }
 
 pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<CompressionType> {
