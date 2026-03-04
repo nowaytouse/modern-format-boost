@@ -650,8 +650,14 @@ pub fn convert_to_jxl_matched(
         cmd.arg("--compress_boxes=0");
     }
 
+    // Only disable lossless JPEG mode when input is actually JPEG and we want lossy encoding.
     if distance > 0.0 {
-        cmd.arg("--lossless_jpeg=0");
+        let is_jpeg = options.input_format.as_deref()
+            .map(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"))
+            .unwrap_or(false);
+        if is_jpeg {
+            cmd.arg("--lossless_jpeg=0");
+        }
     }
 
     cmd.arg("--")
