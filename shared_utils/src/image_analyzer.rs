@@ -298,6 +298,16 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
+    // HEIC/HEIF animation detection for metadata correctness.
+    // Routing-wise, HEIC/HEIF is intercepted by is_apple_native before this matters,
+    // but correct is_animated ensures downstream consumers get truthful metadata.
+    let is_animated = crate::image_detection::is_isobmff_animated_sequence(path);
+    let duration_secs = if is_animated {
+        get_animation_duration(path)
+    } else {
+        None
+    };
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "HEIC".to_string(),
@@ -307,8 +317,8 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         color_depth,
         color_space: "sRGB".to_string(),
         has_alpha,
-        is_animated: false,
-        duration_secs: None,
+        is_animated,
+        duration_secs,
         is_lossless,
         jpeg_analysis: None,
         heic_analysis: heic_analysis_opt,
@@ -816,6 +826,7 @@ fn is_jxl_file(path: &Path) -> bool {
 }
 
 fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+    use crate::image_detection::{detect_animation, DetectedFormat};
     use std::process::Command;
 
     let (width, height, has_alpha, color_depth) = if which::which("jxlinfo").is_ok() {
@@ -855,6 +866,15 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
+    // Detect animation via ffprobe/jxlinfo
+    let (is_animated, _frame_count, _fps) = detect_animation(path, &DetectedFormat::JXL)
+        .unwrap_or((false, 1, None));
+    let duration_secs = if is_animated {
+        get_animation_duration(path)
+    } else {
+        None
+    };
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: "JXL".to_string(),
@@ -864,8 +884,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         color_depth,
         color_space: "sRGB".to_string(),
         has_alpha,
-        is_animated: false,
-        duration_secs: None,
+        is_animated,
+        duration_secs,
         is_lossless,
         jpeg_analysis: None,
         heic_analysis: None,
@@ -887,7 +907,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 }
 
 fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
-    use crate::image_detection::{detect_compression, CompressionType, DetectedFormat};
+    use crate::image_detection::{detect_animation, detect_compression, CompressionType, DetectedFormat};
 
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
     // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
@@ -919,6 +939,15 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
+    // Detect animation via ISOBMFF ftyp brand (avis/msf1)
+    let (is_animated, _frame_count, _fps) = detect_animation(path, &DetectedFormat::AVIF)
+        .unwrap_or((false, 1, None));
+    let duration_secs = if is_animated {
+        get_animation_duration(path)
+    } else {
+        None
+    };
+
     let metadata = extract_metadata(path).unwrap_or_default();
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
@@ -929,8 +958,8 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         color_depth,
         color_space: "sRGB".to_string(),
         has_alpha,
-        is_animated: false,
-        duration_secs: None,
+        is_animated,
+        duration_secs,
         is_lossless,
         jpeg_analysis: None,
         heic_analysis: None,
