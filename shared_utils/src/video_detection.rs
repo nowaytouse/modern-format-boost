@@ -192,6 +192,8 @@ pub struct VideoDetectionResult {
     pub subtitle_codec: Option<String>,
     /// Number of audio channels (e.g. 2 for stereo, 6 for 5.1, 8 for 7.1/Atmos)
     pub audio_channels: Option<u32>,
+    /// Variable frame rate (VFR) detected - common in iPhone slow-motion videos
+    pub is_variable_frame_rate: bool,
 }
 
 pub fn determine_compression_type(
@@ -318,5 +320,6 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         has_subtitles: probe.has_subtitles,
         subtitle_codec: probe.subtitle_codec,
         audio_channels: probe.audio_channels,
+        is_variable_frame_rate: probe.is_variable_frame_rate,
     })
 }

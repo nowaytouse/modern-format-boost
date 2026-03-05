@@ -6,6 +6,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Apple Compatibility Enhancements
+
+#### Variable Frame Rate (VFR) preservation for iPhone slow-motion videos
+- **Added VFR detection and preservation**: iPhone slow-motion videos use variable frame rate (VFR) to achieve the slow-motion effect. Without proper handling, ffmpeg converts VFR to constant frame rate (CFR), losing the slow-motion timing.
+  - **Detection**: Added `is_variable_frame_rate` field to `FFprobeResult` and `VideoDetectionResult`. VFR is detected by comparing `r_frame_rate` and `avg_frame_rate` from ffprobe (>1% difference indicates VFR).
+  - **Preservation**: When VFR is detected, video conversion automatically adds `-vsync vfr` to ffmpeg arguments, preserving the variable frame rate in the output.
+  - **Impact**: iPhone slow-motion videos now maintain their slow-motion effect after HEVC conversion.
+
+#### AAE file handling for Apple Photos editing metadata
+- **Added AAE file detection and handling**: AAE (Apple Adjustment Envelope) files store photo editing metadata from iPhone/Photos.app. When source images are converted to modern formats, AAE files become orphaned and lose their association.
+  - **Function**: Added `handle_aae_file()` in `shared_utils/src/conversion.rs` to detect and handle AAE files (case-insensitive .aae/.AAE).
+  - **Apple Compat mode**: AAE files are migrated to the output directory alongside converted images, preserving editing metadata.
+  - **Non-compat mode**: Orphaned AAE files are deleted to avoid clutter.
+  - **Impact**: Photo editing metadata is preserved in Apple Compat workflows, preventing loss of editing history.
+
 ## [0.9.9-2] - 2026-03-05
 
 ### Changes
