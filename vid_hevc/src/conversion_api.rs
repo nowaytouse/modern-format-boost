@@ -1375,6 +1375,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
 
         let strategy = determine_strategy(&detection);
@@ -1422,6 +1423,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
 
         let strategy = determine_strategy_with_apple_compat(&detection, true);
@@ -1474,6 +1476,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
 
         let normal = determine_strategy(&detection);
@@ -1528,6 +1531,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
 
         let normal = determine_strategy(&detection);
@@ -1585,6 +1589,7 @@ mod tests {
                 has_subtitles: false,
                 subtitle_codec: None,
                 audio_channels: None,
+            is_variable_frame_rate: false,
             }
         };
 
@@ -1656,6 +1661,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1700,6 +1706,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(
@@ -1747,6 +1754,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let crf = calculate_matched_crf(&det);
         assert!(
@@ -1799,6 +1807,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let crf = calculate_matched_crf(&det);
         assert!(
@@ -1846,6 +1855,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(
@@ -1894,6 +1904,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1942,6 +1953,7 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             audio_channels: None,
+            is_variable_frame_rate: false,
         };
         let normal = determine_strategy(&det);
         assert_eq!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") skipped in normal mode");
