@@ -78,6 +78,8 @@ pub struct FFprobeResult {
     pub has_subtitles: bool,
     /// Codec name of the first subtitle stream (e.g. "srt", "ass", "mov_text", "hdmv_pga_subtitle")
     pub subtitle_codec: Option<String>,
+    /// Variable frame rate detected (r_frame_rate != avg_frame_rate)
+    pub is_variable_frame_rate: bool,
 }
 
 pub fn is_ffprobe_available() -> bool {
@@ -179,6 +181,15 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let height = video_stream["height"].as_u64().unwrap_or(0) as u32;
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"));
+    let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"));
+
+    // Detect VFR: if r_frame_rate and avg_frame_rate differ significantly (>1% difference)
+    let is_variable_frame_rate = if frame_rate > 0.0 && avg_frame_rate > 0.0 {
+        let diff_ratio = (frame_rate - avg_frame_rate).abs() / frame_rate;
+        diff_ratio > 0.01
+    } else {
+        false
+    };
 
     let frame_count = video_stream["nb_frames"]
         .as_str()
@@ -274,6 +285,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         is_hdr10_plus: hdr.is_hdr10_plus,
         has_subtitles,
         subtitle_codec,
+        is_variable_frame_rate,
     })
 }
 
