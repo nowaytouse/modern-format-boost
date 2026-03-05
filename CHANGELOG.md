@@ -8,11 +8,14 @@ All notable changes to this project will be documented in this file.
 
 ### Apple Compatibility Enhancements
 
-#### Variable Frame Rate (VFR) preservation for iPhone slow-motion videos
-- **Added VFR detection and preservation**: iPhone slow-motion videos use variable frame rate (VFR) to achieve the slow-motion effect. Without proper handling, ffmpeg converts VFR to constant frame rate (CFR), losing the slow-motion timing.
-  - **Detection**: Added `is_variable_frame_rate` field to `FFprobeResult` and `VideoDetectionResult`. VFR is detected by comparing `r_frame_rate` and `avg_frame_rate` from ffprobe (>1% difference indicates VFR).
+#### Improved Variable Frame Rate (VFR) detection for iPhone slow-motion videos
+- **Enhanced VFR detection algorithm**: iPhone slow-motion videos use variable frame rate (VFR) to achieve the slow-motion effect. Without proper handling, ffmpeg converts VFR to constant frame rate (CFR), losing the slow-motion timing.
+  - **Increased threshold from 1% to 2%**: Reduces false positives from minor frame rate variations.
+  - **Edit list detection**: Checks for slow-motion indicators including presence of timecode tags and non-zero start_time (common in slow-mo videos).
+  - **Slow-motion specific logic**: For MOV/MP4 files with edit lists, uses `codec_time_base` instead of just comparing `r_frame_rate` and `avg_frame_rate`, providing more accurate detection since slow-mo videos often have different codec timing.
+  - **Format-aware detection**: Applies different logic based on container format (MOV/MP4 vs others).
   - **Preservation**: When VFR is detected, video conversion automatically adds `-vsync vfr` to ffmpeg arguments, preserving the variable frame rate in the output.
-  - **Impact**: iPhone slow-motion videos now maintain their slow-motion effect after HEVC conversion.
+  - **Impact**: The new approach is more precise and less likely to misidentify regular videos as VFR, while properly detecting actual variable frame rate content including slow-motion recordings.
 
 #### AAE file handling for Apple Photos editing metadata
 - **Added AAE file detection and handling**: AAE (Apple Adjustment Envelope) files store photo editing metadata from iPhone/Photos.app. When source images are converted to modern formats, AAE files become orphaned and lose their association.

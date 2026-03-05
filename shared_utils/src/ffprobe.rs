@@ -86,6 +86,39 @@ pub fn is_ffprobe_available() -> bool {
     Command::new("ffprobe").arg("-version").output().is_ok()
 }
 
+/// Enhanced VFR detection with slow-motion video handling
+fn detect_vfr_enhanced(
+    video_stream: &serde_json::Value,
+    r_frame_rate: f64,
+    avg_frame_rate: f64,
+    format_name: &str,
+) -> bool {
+    if r_frame_rate <= 0.0 || avg_frame_rate <= 0.0 {
+        return false;
+    }
+
+    // Check for edit list presence (key indicator of slow-motion)
+    let has_edit_list = video_stream["tags"]["timecode"].is_string()
+        || video_stream["start_time"].as_str().and_then(|s| s.parse::<f64>().ok())
+            .map(|t| t.abs() > 0.001)
+            .unwrap_or(false);
+
+    // For MOV/MP4 with edit lists, use codec_time_base for precision
+    if (format_name.contains("mov") || format_name.contains("mp4")) && has_edit_list {
+        if let Some(time_base_str) = video_stream["codec_time_base"].as_str() {
+            let codec_fps = parse_frame_rate(time_base_str);
+            if codec_fps > 0.0 {
+                let diff = (r_frame_rate - codec_fps).abs() / r_frame_rate;
+                return diff > 0.02; // 2% threshold for slow-mo
+            }
+        }
+    }
+
+    // Standard VFR detection with higher precision threshold
+    let diff_ratio = (r_frame_rate - avg_frame_rate).abs() / r_frame_rate;
+    diff_ratio > 0.02 // Increased from 1% to 2% to reduce false positives
+}
+
 pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     if !is_ffprobe_available() {
         return Err(FFprobeError::ToolNotFound(
@@ -183,13 +216,13 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"));
     let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"));
 
-    // Detect VFR: if r_frame_rate and avg_frame_rate differ significantly (>1% difference)
-    let is_variable_frame_rate = if frame_rate > 0.0 && avg_frame_rate > 0.0 {
-        let diff_ratio = (frame_rate - avg_frame_rate).abs() / frame_rate;
-        diff_ratio > 0.01
-    } else {
-        false
-    };
+    // Enhanced VFR detection with slow-motion handling
+    let is_variable_frame_rate = detect_vfr_enhanced(
+        video_stream,
+        frame_rate,
+        avg_frame_rate,
+        &format_name,
+    );
 
     let frame_count = video_stream["nb_frames"]
         .as_str()
