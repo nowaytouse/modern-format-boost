@@ -97,26 +97,22 @@ fn detect_vfr_enhanced(
         return false;
     }
 
-    // Check for edit list presence (key indicator of slow-motion)
-    let has_edit_list = video_stream["tags"]["timecode"].is_string()
-        || video_stream["start_time"].as_str().and_then(|s| s.parse::<f64>().ok())
-            .map(|t| t.abs() > 0.001)
-            .unwrap_or(false);
+    // Slow-motion detection (separate logic for reliability)
+    if (format_name.contains("mov") || format_name.contains("mp4")) && avg_frame_rate >= 60.0 {
+        // Check for Apple's slow-mo tag (most reliable indicator)
+        if video_stream["tags"]["com.apple.quicktime.fullframerate"].is_string() {
+            return true;
+        }
 
-    // For MOV/MP4 with edit lists, use codec_time_base for precision
-    if (format_name.contains("mov") || format_name.contains("mp4")) && has_edit_list {
-        if let Some(time_base_str) = video_stream["codec_time_base"].as_str() {
-            let codec_fps = parse_frame_rate(time_base_str);
-            if codec_fps > 0.0 {
-                let diff = (r_frame_rate - codec_fps).abs() / r_frame_rate;
-                return diff > 0.02; // 2% threshold for slow-mo
-            }
+        // Check for significant frame rate ratio (recording vs playback)
+        if r_frame_rate / avg_frame_rate > 2.0 {
+            return true;
         }
     }
 
-    // Standard VFR detection with higher precision threshold
+    // Standard VFR detection with 2% threshold
     let diff_ratio = (r_frame_rate - avg_frame_rate).abs() / r_frame_rate;
-    diff_ratio > 0.02 // Increased from 1% to 2% to reduce false positives
+    diff_ratio > 0.02
 }
 
 pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
