@@ -1117,3 +1117,41 @@ pub fn validate_output_path(
 
     Ok(())
 }
+
+/// Handle Apple AAE (Apple Adjustment Envelope) files.
+/// AAE files store photo editing metadata from iPhone/Photos.app.
+/// When the source image is converted, the AAE becomes orphaned.
+///
+/// - In apple_compat mode: migrate AAE to output directory
+/// - Otherwise: delete orphaned AAE file
+pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
+    let aae_path = input.with_extension("AAE");
+    let aae_path_lower = input.with_extension("aae");
+
+    let existing_aae = if aae_path.exists() {
+        Some(aae_path)
+    } else if aae_path_lower.exists() {
+        Some(aae_path_lower)
+    } else {
+        None
+    };
+
+    if let Some(aae) = existing_aae {
+        if apple_compat {
+            // Migrate AAE to output directory
+            if let Some(output_dir) = output.parent() {
+                if let Some(filename) = aae.file_name() {
+                    let target_aae = output_dir.join(filename);
+                    if let Err(e) = fs::copy(&aae, &target_aae) {
+                        eprintln!("⚠️  Failed to migrate AAE file: {}", e);
+                    }
+                }
+            }
+        } else {
+            // Delete orphaned AAE file
+            if let Err(e) = fs::remove_file(&aae) {
+                eprintln!("⚠️  Failed to delete orphaned AAE file: {}", e);
+            }
+        }
+    }
+}

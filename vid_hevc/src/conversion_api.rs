@@ -1176,6 +1176,11 @@ fn execute_hevc_conversion(
         x265_params,
     ];
 
+    // Preserve variable frame rate (VFR) for iPhone slow-motion videos
+    if detection.is_variable_frame_rate {
+        args.extend(["-vsync".to_string(), "vfr".to_string()]);
+    }
+
     // Append HDR colour metadata args (color_primaries, color_trc, colorspace,
     // master_display, max_cll)
     args.extend(build_hdr_ffmpeg_args(detection));
