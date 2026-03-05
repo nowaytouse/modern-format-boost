@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [Unreleased]
+## [0.9.9-3] - 2026-03-05
 
 ### Apple Compatibility Enhancements
 
@@ -23,6 +23,8 @@ All notable changes to this project will be documented in this file.
   - **Apple Compat mode**: AAE files are migrated to the output directory alongside converted images, preserving editing metadata.
   - **Non-compat mode**: Orphaned AAE files are deleted to avoid clutter.
   - **Impact**: Photo editing metadata is preserved in Apple Compat workflows, preventing loss of editing history.
+
+## [Unreleased]
 
 ## [0.9.9-2] - 2026-03-05
 
