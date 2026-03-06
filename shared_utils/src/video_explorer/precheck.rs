@@ -128,7 +128,7 @@ fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,duration,nb_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample",
+            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample",
             "-show_entries",
             "format=duration",
             "-of",
@@ -148,24 +148,44 @@ fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
     Ok(json)
 }
 
-fn parse_fps_from_stream(stream: &serde_json::Value) -> f64 {
-    stream["r_frame_rate"]
-        .as_str()
-        .and_then(|s| {
-            let parts: Vec<&str> = s.split('/').collect();
-            if parts.len() == 2 {
-                let num: f64 = parts[0].parse().ok()?;
-                let den: f64 = parts[1].parse().ok()?;
-                if den > 0.0 {
-                    Some(num / den)
-                } else {
-                    None
-                }
+/// Parse rational "num/den" or plain number from JSON.
+fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
+    value.as_str().and_then(|s| {
+        let parts: Vec<&str> = s.split('/').collect();
+        if parts.len() == 2 {
+            let num: f64 = parts[0].parse().ok()?;
+            let den: f64 = parts[1].parse().ok()?;
+            if den > 0.0 {
+                Some(num / den)
             } else {
-                s.parse().ok()
+                None
             }
-        })
-        .unwrap_or(30.0)
+        } else {
+            s.parse().ok()
+        }
+    })
+}
+
+/// Prefer avg_frame_rate (actual frames per second); fallback to r_frame_rate.
+/// r_frame_rate can be the time_base reciprocal (e.g. 90000) rather than real FPS — callers
+/// should use fps_sanitise_for_validation when fps may be time_base.
+fn parse_fps_from_stream(stream: &serde_json::Value) -> f64 {
+    let avg = parse_rational_fps(&stream["avg_frame_rate"])
+        .filter(|&v| v > 0.0 && v.is_finite() && v <= FPS_THRESHOLD_INVALID);
+    let r_fps = parse_rational_fps(&stream["r_frame_rate"])
+        .filter(|&v| v > 0.0 && v.is_finite());
+    avg.or(r_fps).unwrap_or(30.0)
+}
+
+/// If fps looks like time_base (e.g. 90000) rather than real FPS, derive from frame_count/duration.
+fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: u64) -> f64 {
+    if fps > FPS_THRESHOLD_INVALID && frame_count > 0 && duration >= 0.001 {
+        let inferred = frame_count as f64 / duration;
+        if inferred > 0.0 && inferred <= FPS_THRESHOLD_INVALID {
+            return inferred;
+        }
+    }
+    fps
 }
 
 fn parse_duration_from_precheck_json(
@@ -244,6 +264,7 @@ fn bpp_from_precheck_json(
         .unwrap_or(0);
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(json, fps, frame_count_raw, input)?;
+    let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
     let frame_count = if frame_count_raw == 0 && duration > 0.0 {
         (duration * fps) as u64
     } else {
@@ -276,7 +297,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=r_frame_rate,duration,nb_frames",
+            "stream=r_frame_rate,avg_frame_rate,duration,nb_frames",
             "-show_entries",
             "format=duration",
             "-of",
@@ -295,24 +316,8 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     let json: serde_json::Value =
         serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
-    let fps: f64 = json["streams"]
-        .get(0)
-        .and_then(|s| s["r_frame_rate"].as_str())
-        .and_then(|s| {
-            let parts: Vec<&str> = s.split('/').collect();
-            if parts.len() == 2 {
-                let num: f64 = parts[0].parse().ok()?;
-                let den: f64 = parts[1].parse().ok()?;
-                if den > 0.0 {
-                    Some(num / den)
-                } else {
-                    None
-                }
-            } else {
-                s.parse().ok()
-            }
-        })
-        .unwrap_or(30.0);
+    let stream = json["streams"].get(0).context("No video stream")?;
+    let fps: f64 = parse_fps_from_stream(stream);
 
     let frame_count: u64 = json["streams"]
         .get(0)
@@ -327,6 +332,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         .filter(|&d: &f64| d > 0.0 && !d.is_nan());
 
     if let Some(duration) = stream_duration {
+        let fps = fps_sanitise_for_validation(fps, duration, frame_count);
         return Ok((duration, fps, frame_count, "stream.duration"));
     }
 
@@ -338,11 +344,12 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
 
     if let Some(duration) = format_duration {
         info!(duration_secs = %duration, "DURATION RECOVERED via format.duration");
+        let fps = fps_sanitise_for_validation(fps, duration, frame_count);
         return Ok((duration, fps, frame_count, "format.duration"));
     }
 
     warn!("DURATION: format.duration failed, trying frame_count/fps");
-    if frame_count > 0 && fps > 0.0 && !fps.is_nan() {
+    if frame_count > 0 && fps > 0.0 && !fps.is_nan() && fps <= FPS_THRESHOLD_INVALID {
         let duration = frame_count as f64 / fps;
         if duration > 0.0 {
             info!(duration_secs = %duration, frames = frame_count, fps = %fps, "DURATION RECOVERED via frame_count/fps");
@@ -402,6 +409,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
 
     let (duration, fps, frame_count_raw) =
         parse_duration_from_precheck_json(&json, fps, frame_count_raw, input)?;
+    let fps = fps_sanitise_for_validation(fps, duration, frame_count_raw);
     let frame_count = if frame_count_raw == 0 && duration > 0.0 {
         (duration * fps) as u64
     } else {

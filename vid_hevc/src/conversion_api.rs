@@ -297,6 +297,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     .child_threads;
 
     let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     let output_size = execute_hevc_conversion(&detection, &temp_path, 18, max_threads)?;
 
     if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, true)
@@ -483,6 +484,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     }
 
     let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
+    let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     info!(
         "🎬 Auto Mode: {} → {}",
         input.display(),
