@@ -517,6 +517,24 @@ pub fn post_conversion_actions(
 
 // --- Atomic output (TOCTOU mitigation) ---
 
+/// Guard that removes the temp file on drop if it still exists (e.g. conversion failed before commit).
+/// Hold this for the lifetime of conversion; after successful `commit_temp_to_output` the file is gone so drop is a no-op.
+pub struct TempOutputGuard(PathBuf);
+
+impl TempOutputGuard {
+    pub fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+}
+
+impl Drop for TempOutputGuard {
+    fn drop(&mut self) {
+        if self.0.exists() {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+}
+
 /// Returns a path for temporary output in the same directory as `output`, so that
 /// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
 /// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so FFmpeg and other
