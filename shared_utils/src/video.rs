@@ -21,12 +21,31 @@ pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
     (corrected_width, corrected_height, needs_correction)
 }
 
+/// Even dimensions by padding (no pixel loss). For odd width/height, pad to next even.
+pub fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
+    let w = width + (width % 2);
+    let h = height + (height % 2);
+    let needs = w != width || h != height;
+    (w, h, needs)
+}
+
 pub fn get_dimension_correction_filter(width: u32, height: u32) -> Option<String> {
     let (corrected_width, corrected_height, needs_correction) =
         ensure_even_dimensions(width, height);
 
     if needs_correction {
         Some(format!("crop={}:{}:0:0", corrected_width, corrected_height))
+    } else {
+        None
+    }
+}
+
+/// Pad to even dimensions (preserves full frame; use when encoder requires even size).
+/// FFmpeg: pad=width:height:0:0 with width/height rounded up to even.
+pub fn get_dimension_pad_even_filter(width: u32, height: u32) -> Option<String> {
+    let (padded_w, padded_h, needs) = ensure_even_dimensions_pad(width, height);
+    if needs {
+        Some(format!("pad={}:{}:0:0", padded_w, padded_h))
     } else {
         None
     }
@@ -42,7 +61,10 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
         filters.push("format=rgba,premultiply=inplace=1,format=rgb24".to_string());
     }
 
-    if let Some(crop_filter) = get_dimension_correction_filter(width, height) {
+    // Prefer pad over crop so we never lose pixels (e.g. x265 "picture height multiple of chroma").
+    if let Some(pad_filter) = get_dimension_pad_even_filter(width, height) {
+        filters.push(pad_filter);
+    } else if let Some(crop_filter) = get_dimension_correction_filter(width, height) {
         filters.push(crop_filter);
     }
 
@@ -113,6 +135,27 @@ mod tests {
     }
 
     #[test]
+    fn test_ensure_even_dimensions_pad() {
+        let (w, h, needs) = ensure_even_dimensions_pad(1920, 1080);
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
+        assert!(!needs);
+        let (w2, h2, needs2) = ensure_even_dimensions_pad(1921, 1081);
+        assert_eq!(w2, 1922);
+        assert_eq!(h2, 1082);
+        assert!(needs2);
+    }
+
+    #[test]
+    fn test_get_dimension_pad_even_filter() {
+        assert!(get_dimension_pad_even_filter(1920, 1080).is_none());
+        assert_eq!(
+            get_dimension_pad_even_filter(1921, 1081),
+            Some("pad=1922:1082:0:0".to_string())
+        );
+    }
+
+    #[test]
     fn test_build_video_filter_chain_simple() {
         let chain = build_video_filter_chain(1920, 1080, false);
         assert_eq!(chain, "format=yuv420p");
@@ -121,7 +164,7 @@ mod tests {
     #[test]
     fn test_build_video_filter_chain_with_correction() {
         let chain = build_video_filter_chain(1921, 1081, false);
-        assert_eq!(chain, "crop=1920:1080:0:0,format=yuv420p");
+        assert_eq!(chain, "pad=1922:1082:0:0,format=yuv420p");
     }
 
     #[test]
@@ -138,7 +181,7 @@ mod tests {
         let chain = build_video_filter_chain(1921, 1081, true);
         assert_eq!(
             chain,
-            "format=rgba,premultiply=inplace=1,format=rgb24,crop=1920:1080:0:0,format=yuv420p"
+            "format=rgba,premultiply=inplace=1,format=rgb24,pad=1922:1082:0:0,format=yuv420p"
         );
     }
 
