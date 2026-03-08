@@ -763,7 +763,7 @@ fn auto_convert_single_file(
             // (apple_compat and non-compat unified under the same strategy).
             let probe = shared_utils::probe_video(input).ok();
             let meme_keep = if let Some(ref p) = probe {
-                if let Some(meta) = shared_utils::gif_meta_from_probe(p, analysis.file_size) {
+                if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input) {
                     shared_utils::should_keep_as_gif(&meta)
                 } else {
                     // Cannot build GifMeta (no dimensions) → keep as GIF
