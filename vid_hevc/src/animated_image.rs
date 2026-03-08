@@ -186,6 +186,13 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 
     let input_size = fs::metadata(input)?.len();
+    
+    let input_ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    
     let ext = if options.apple_compat { "mov" } else { "mp4" };
     let output = get_output_path(input, ext, options)?;
 
@@ -195,14 +202,81 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let (width, height) = get_input_dimensions(input)?;
+    // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
+    // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
+    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+        if input_ext == "jxl" {
+            if options.verbose {
+                eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
+            }
+            
+            // Check if djxl is available
+            if which::which("djxl").is_err() {
+                tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: djxl not found (required for animated JXL)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("djxl_not_found".to_string()),
+                });
+            }
+            
+            // Create temporary APNG file
+            let temp_apng = tempfile::Builder::new()
+                .suffix(".apng")
+                .tempfile()
+                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            
+            // Convert JXL to APNG using djxl
+            let djxl_result = Command::new("djxl")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                .output();
+            
+            match djxl_result {
+                Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                    if options.verbose {
+                        eprintln!("   ✅ JXL → APNG conversion successful");
+                    }
+                    (temp_apng_path, Some(temp_apng))
+                }
+                _ => {
+                    tracing::warn!(input = %input.display(), "djxl conversion failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: "JXL → APNG conversion failed (djxl error)".to_string(),
+                        skipped: true,
+                        skip_reason: Some("djxl_failed".to_string()),
+                    });
+                }
+            }
+        } else {
+            (input.to_path_buf(), None)
+        };
+
+    let (width, height) = get_input_dimensions(&actual_input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
     let max_threads = get_max_threads(options);
     let x265_params = format!("log-level=error:pools={}", max_threads);
     
     // Probe to get stream index for multi-stream files (animated AVIF/HEIC/WebP)
-    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
+    let stream_idx = if let Ok(probe) = shared_utils::probe_video(&actual_input) {
         probe.stream_index
     } else {
         0 // Default to first stream
@@ -213,7 +287,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         .arg("-threads")
         .arg(max_threads.to_string())
         .arg("-i")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
         .arg("-map")
         .arg(format!("0:{}", stream_idx))  // Select the correct stream
         // NO -r parameter: preserve original frame rate
@@ -234,6 +308,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
     cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
     let result = cmd.output();
+
+    // Clean up temporary APNG file if it was created
+    drop(temp_apng_file);
 
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
@@ -821,10 +898,77 @@ pub fn convert_to_gif_apple_compat(
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let (width, height) = get_input_dimensions(input)?;
+    // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
+    // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
+    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+        if input_ext == "jxl" {
+            if options.verbose {
+                eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
+            }
+            
+            // Check if djxl is available
+            if which::which("djxl").is_err() {
+                tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: djxl not found (required for animated JXL)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("djxl_not_found".to_string()),
+                });
+            }
+            
+            // Create temporary APNG file
+            let temp_apng = tempfile::Builder::new()
+                .suffix(".apng")
+                .tempfile()
+                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            
+            // Convert JXL to APNG using djxl
+            let djxl_result = Command::new("djxl")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                .output();
+            
+            match djxl_result {
+                Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                    if options.verbose {
+                        eprintln!("   ✅ JXL → APNG conversion successful");
+                    }
+                    (temp_apng_path, Some(temp_apng))
+                }
+                _ => {
+                    tracing::warn!(input = %input.display(), "djxl conversion failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: "JXL → APNG conversion failed (djxl error)".to_string(),
+                        skipped: true,
+                        skip_reason: Some("djxl_failed".to_string()),
+                    });
+                }
+            }
+        } else {
+            (input.to_path_buf(), None)
+        };
+
+    let (width, height) = get_input_dimensions(&actual_input)?;
     
     // Probe to get stream index for multi-stream files
-    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
+    let stream_idx = if let Ok(probe) = shared_utils::probe_video(&actual_input) {
         probe.stream_index
     } else {
         0
@@ -833,7 +977,7 @@ pub fn convert_to_gif_apple_compat(
     // Check if file has multiple video streams
     let has_multiple_streams = if let Ok(output) = std::process::Command::new("ffprobe")
         .args(["-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0"])
-        .arg(input)
+        .arg(&actual_input)
         .output()
     {
         String::from_utf8_lossy(&output.stdout).lines().count() > 1
@@ -843,6 +987,7 @@ pub fn convert_to_gif_apple_compat(
 
     // Use FFmpeg high-quality single-pass palette method for all formats
     // This ensures consistent quality across all animated formats (AVIF/WebP/JXL/HEIC/etc)
+    // Note: JXL is pre-converted to APNG above due to FFmpeg's incomplete jpegxl_anim decoder
     let ffmpeg_ok = {
         let filter = if has_multiple_streams {
             // Multi-stream: specify stream in filter
@@ -861,13 +1006,16 @@ pub fn convert_to_gif_apple_compat(
         let res = Command::new("ffmpeg")
             .arg("-y")
             .arg("-i")
-            .arg(shared_utils::safe_path_arg(input).as_ref())
+            .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
             .arg("-filter_complex")
             .arg(&filter)
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
             .output();
         matches!(res, Ok(o) if o.status.success() && temp_output.exists())
     };
+
+    // Clean up temporary APNG file if it was created
+    drop(temp_apng_file);
 
     if !ffmpeg_ok {
         // FFmpeg conversion failed — copy original so data is not lost

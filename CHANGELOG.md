@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.5] - 2026-03-09
+
+### Fixed
+- **Animated JXL support**: Fixed critical bug where animated JXL files could not be processed
+  - **Root cause**: FFmpeg's `jpegxl_anim` decoder is incomplete and cannot properly decode animated JXL
+  - **Fix**: 
+    - Added automatic JXL → APNG pre-conversion using `djxl` before FFmpeg processing
+    - Duration detection now works for animated JXL (converts to APNG, counts frames)
+    - Both GIF and MOV/MP4 conversion routes now support animated JXL
+  - **Impact**: Animated JXL files can now be converted to GIF or HEVC video formats
+  - **Requirement**: `djxl` tool must be installed (part of libjxl package)
+
+- **Static JXL detection**: Fixed bug where static JXL images were incorrectly identified as animated
+  - **Root cause**: FFmpeg reports all JXL files as `jpegxl_anim` codec, even static ones
+  - **Fix**: Modified `is_jxl_animated_via_ffprobe()` to convert to APNG and count frames
+  - **Impact**: Static JXL images are now correctly skipped (already optimal format)
+
+### Added
+- **Static JXL skip logic**: Static JXL images are now explicitly skipped in img-hevc
+  - Prevents unnecessary re-encoding of already optimal format
+  - Original files are copied to output directory to ensure no data loss
+  - Clear messaging: "Source is static JPEG XL (already optimal)"
+
+### Technical Details
+- Modified `convert_to_gif_apple_compat()` and `convert_to_hevc_mp4()` to detect JXL format
+- Added `try_jxl_via_apng()` function for duration detection via temporary APNG conversion
+- Modified `is_jxl_animated_via_ffprobe()` to use djxl+ffprobe for accurate animation detection
+- JXL files are automatically converted to APNG intermediate format before FFmpeg processing
+- Temporary APNG files are automatically cleaned up after processing
+
 ## [0.10.4] - 2026-03-09
 
 ### Changed
