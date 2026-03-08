@@ -570,6 +570,23 @@ fn auto_convert_single_file(
 
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
     if !analysis.is_animated {
+        // Always skip static JXL (already optimal format)
+        if analysis.format.to_uppercase() == "JXL" {
+            if config.verbose {
+                println!("⏭️ Source is static JPEG XL (already optimal) - skipping to avoid generational loss: {}", input.display());
+            }
+            copy_original_if_adjacent_mode(input, config)?;
+            return Ok(ConversionOutput {
+                original_path: input.display().to_string(),
+                output_path: input.display().to_string(),
+                skipped: true,
+                message: "Source is static JPEG XL (already optimal) - skipping to avoid generational loss".to_string(),
+                original_size: analysis.file_size,
+                output_size: None,
+                size_reduction: None,
+            });
+        }
+        
         let skip = shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
         if skip.should_skip {
             if config.verbose {
