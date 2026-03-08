@@ -789,7 +789,7 @@ fn auto_convert_single_file(
                         "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
                         format, input.display()
                     ));
-                    convert_to_gif_apple_compat(input, &options, None)?
+                    convert_to_gif_apple_compat(input, &options)?
                 } else {
                     // meme-score says convert: HEVC MP4 is the correct Apple-compat output
                     shared_utils::progress_mode::emit_stderr(&format!(

@@ -1330,9 +1330,8 @@ fn get_output_path(
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,
-    fps: Option<f32>,
 ) -> Result<ConversionResult> {
-    vid_hevc::animated_image::convert_to_gif_apple_compat(input, options, fps)
+    vid_hevc::animated_image::convert_to_gif_apple_compat(input, options)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
