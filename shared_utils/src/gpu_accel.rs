@@ -354,7 +354,7 @@ impl Default for GpuAccel {
 
 impl GpuAccel {
     pub fn detect() -> &'static GpuAccel {
-        GPU_ACCEL.get_or_init(|| Self::detect_internal())
+        GPU_ACCEL.get_or_init(Self::detect_internal)
     }
 
     pub fn detect_fresh() -> GpuAccel {

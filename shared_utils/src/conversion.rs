@@ -573,7 +573,7 @@ pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io
     #[cfg(unix)]
     {
         fs::rename(temp, output)?;
-        return Ok(true);
+        Ok(true)
     }
     #[cfg(not(unix))]
     {
@@ -735,6 +735,108 @@ pub fn check_size_tolerance(
     }
 
     None
+}
+
+/// Validate input file for conversion.
+/// Checks:
+/// - File exists and is a regular file (not directory or special file)
+/// - File is not a symbolic link (security risk)
+/// - File is readable
+///
+/// Returns Ok(()) if valid, Err with descriptive message otherwise.
+pub fn validate_input_file(input: &Path) -> Result<(), String> {
+    // Check if path exists
+    if !input.exists() {
+        return Err(format!("Input file does not exist: {}", input.display()));
+    }
+
+    // Check if it's a symbolic link (security risk)
+    if input.is_symlink() {
+        return Err(format!(
+            "Symbolic links are not supported for security reasons: {}",
+            input.display()
+        ));
+    }
+
+    // Check if it's a regular file
+    if !input.is_file() {
+        return Err(format!(
+            "Input is not a regular file (may be a directory or special file): {}",
+            input.display()
+        ));
+    }
+
+    // Check if file is readable by attempting to open it
+    if let Err(e) = fs::File::open(input) {
+        return Err(format!(
+            "Cannot read input file {}: {}",
+            input.display(),
+            e
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate output path for conversion.
+/// Checks:
+/// - Output is not a symbolic link (security risk)
+///
+/// Returns Ok(()) if valid, Err with descriptive message otherwise.
+///
+/// Note: Path traversal check removed - output paths are generated programmatically
+/// and may intentionally be in adjacent directories (e.g., _optimized suffix mode).
+pub fn validate_output_path(
+    output: &Path,
+    _base_dir: Option<&Path>,
+) -> Result<(), String> {
+    // Check if output is a symbolic link
+    if output.exists() && output.is_symlink() {
+        return Err(format!(
+            "Output path is a symbolic link, refusing to overwrite: {}",
+            output.display()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Handle Apple AAE (Apple Adjustment Envelope) files.
+/// AAE files store photo editing metadata from iPhone/Photos.app.
+/// When the source image is converted, the AAE becomes orphaned.
+///
+/// - In apple_compat mode: migrate AAE to output directory
+/// - Otherwise: delete orphaned AAE file
+pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
+    let aae_path = input.with_extension("AAE");
+    let aae_path_lower = input.with_extension("aae");
+
+    let existing_aae = if aae_path.exists() {
+        Some(aae_path)
+    } else if aae_path_lower.exists() {
+        Some(aae_path_lower)
+    } else {
+        None
+    };
+
+    if let Some(aae) = existing_aae {
+        if apple_compat {
+            // Migrate AAE to output directory
+            if let Some(output_dir) = output.parent() {
+                if let Some(filename) = aae.file_name() {
+                    let target_aae = output_dir.join(filename);
+                    if let Err(e) = fs::copy(&aae, &target_aae) {
+                        eprintln!("⚠️  Failed to migrate AAE file: {}", e);
+                    }
+                }
+            }
+        } else {
+            // Delete orphaned AAE file
+            if let Err(e) = fs::remove_file(&aae) {
+                eprintln!("⚠️  Failed to delete orphaned AAE file: {}", e);
+            }
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -1069,107 +1171,5 @@ mod tests {
             opts.explore_mode(),
             crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression,
         );
-    }
-}
-
-/// Validate input file for conversion.
-/// Checks:
-/// - File exists and is a regular file (not directory or special file)
-/// - File is not a symbolic link (security risk)
-/// - File is readable
-///
-/// Returns Ok(()) if valid, Err with descriptive message otherwise.
-pub fn validate_input_file(input: &Path) -> Result<(), String> {
-    // Check if path exists
-    if !input.exists() {
-        return Err(format!("Input file does not exist: {}", input.display()));
-    }
-
-    // Check if it's a symbolic link (security risk)
-    if input.is_symlink() {
-        return Err(format!(
-            "Symbolic links are not supported for security reasons: {}",
-            input.display()
-        ));
-    }
-
-    // Check if it's a regular file
-    if !input.is_file() {
-        return Err(format!(
-            "Input is not a regular file (may be a directory or special file): {}",
-            input.display()
-        ));
-    }
-
-    // Check if file is readable by attempting to open it
-    if let Err(e) = fs::File::open(input) {
-        return Err(format!(
-            "Cannot read input file {}: {}",
-            input.display(),
-            e
-        ));
-    }
-
-    Ok(())
-}
-
-/// Validate output path for conversion.
-/// Checks:
-/// - Output is not a symbolic link (security risk)
-///
-/// Returns Ok(()) if valid, Err with descriptive message otherwise.
-///
-/// Note: Path traversal check removed - output paths are generated programmatically
-/// and may intentionally be in adjacent directories (e.g., _optimized suffix mode).
-pub fn validate_output_path(
-    output: &Path,
-    _base_dir: Option<&Path>,
-) -> Result<(), String> {
-    // Check if output is a symbolic link
-    if output.exists() && output.is_symlink() {
-        return Err(format!(
-            "Output path is a symbolic link, refusing to overwrite: {}",
-            output.display()
-        ));
-    }
-
-    Ok(())
-}
-
-/// Handle Apple AAE (Apple Adjustment Envelope) files.
-/// AAE files store photo editing metadata from iPhone/Photos.app.
-/// When the source image is converted, the AAE becomes orphaned.
-///
-/// - In apple_compat mode: migrate AAE to output directory
-/// - Otherwise: delete orphaned AAE file
-pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
-    let aae_path = input.with_extension("AAE");
-    let aae_path_lower = input.with_extension("aae");
-
-    let existing_aae = if aae_path.exists() {
-        Some(aae_path)
-    } else if aae_path_lower.exists() {
-        Some(aae_path_lower)
-    } else {
-        None
-    };
-
-    if let Some(aae) = existing_aae {
-        if apple_compat {
-            // Migrate AAE to output directory
-            if let Some(output_dir) = output.parent() {
-                if let Some(filename) = aae.file_name() {
-                    let target_aae = output_dir.join(filename);
-                    if let Err(e) = fs::copy(&aae, &target_aae) {
-                        eprintln!("⚠️  Failed to migrate AAE file: {}", e);
-                    }
-                }
-            }
-        } else {
-            // Delete orphaned AAE file
-            if let Err(e) = fs::remove_file(&aae) {
-                eprintln!("⚠️  Failed to delete orphaned AAE file: {}", e);
-            }
-        }
     }
 }

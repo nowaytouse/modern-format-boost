@@ -52,7 +52,7 @@ pub fn decode_hdr_image_to_png16(
     let temp_png = tempfile::Builder::new()
         .suffix(".png")
         .tempfile()
-        .map_err(|e| ImgQualityError::IoError(e))?;
+        .map_err(ImgQualityError::IoError)?;
     let temp_path = temp_png.path().to_path_buf();
 
     let pix_fmt = get_hdr_pix_fmt(hdr_info);
@@ -89,7 +89,7 @@ pub fn decode_hdr_image_to_png16(
     }
 
     let file_size = std::fs::metadata(&temp_path)
-        .map_err(|e| ImgQualityError::IoError(e))?
+        .map_err(ImgQualityError::IoError)?
         .len();
     if file_size == 0 {
         return Err(ImgQualityError::ConversionError(
@@ -103,7 +103,7 @@ pub fn decode_hdr_image_to_png16(
 /// Check if an image should use HDR decoding path based on analysis.
 /// Returns true if the image has HDR metadata or high bit depth.
 pub fn needs_hdr_decode(hdr_info: Option<&ColorInfo>) -> bool {
-    hdr_info.map_or(false, should_use_hdr_decode)
+    hdr_info.is_some_and(should_use_hdr_decode)
 }
 
 #[cfg(test)]

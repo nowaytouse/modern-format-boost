@@ -894,6 +894,7 @@ pub fn explore_with_gpu_coarse_search(
 }
 
 #[allow(unused_assignments)]
+#[allow(clippy::too_many_arguments)]
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
     output: &Path,

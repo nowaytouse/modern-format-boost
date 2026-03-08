@@ -292,6 +292,12 @@ pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyho
     Ok(())
 }
 
+/// Escape a path for safe display in error messages.
+/// Prevents ANSI escape code injection by escaping control characters.
+pub fn escape_path_for_display(path: &std::path::Path) -> String {
+    path.display().to_string().escape_default().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,10 +437,4 @@ mod tests {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("test"));
     }
-}
-
-/// Escape a path for safe display in error messages.
-/// Prevents ANSI escape code injection by escaping control characters.
-pub fn escape_path_for_display(path: &std::path::Path) -> String {
-    path.display().to_string().escape_default().to_string()
 }

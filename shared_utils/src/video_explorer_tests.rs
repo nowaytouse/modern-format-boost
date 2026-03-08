@@ -1758,15 +1758,15 @@ mod ultimate_3d_quality_tests {
     #[test]
     fn test_vmaf_is_0_to_100_scale() {
         // VMAF scores are in 0–100 range; 93.0 should not be near 0–1 range
-        assert!(VMAF_Y_THRESHOLD > 1.0, "VMAF threshold must be on 0-100 scale, not 0-1");
-        assert!(VMAF_Y_THRESHOLD <= 100.0);
+        const { assert!(VMAF_Y_THRESHOLD > 1.0, "VMAF threshold must be on 0-100 scale, not 0-1") };
+        const { assert!(VMAF_Y_THRESHOLD <= 100.0) };
     }
 
     #[test]
     fn test_psnr_uv_min_in_db_range() {
         // Reasonable PSNR dB range is ~20–60 dB for typical video
-        assert!(PSNR_UV_MIN > 20.0, "PSNR-UV min should be > 20 dB (not dimensionless)");
-        assert!(PSNR_UV_MIN < 60.0, "PSNR-UV min should be < 60 dB (realistic threshold)");
+        const { assert!(PSNR_UV_MIN > 20.0, "PSNR-UV min should be > 20 dB (not dimensionless)") };
+        const { assert!(PSNR_UV_MIN < 60.0, "PSNR-UV min should be < 60 dB (realistic threshold)") };
     }
 
     // ── psnr_uv min-of-channels semantics ────────────────────────────────────

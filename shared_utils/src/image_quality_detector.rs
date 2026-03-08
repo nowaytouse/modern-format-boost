@@ -10,6 +10,7 @@
 //! - **complexity**, **edge_density**, **color_diversity**, **texture_variance**
 //! - **noise_level**, **sharpness**, **contrast**
 //! - **compression_potential**, **confidence**
+//!
 //! Use these for quality analysis, tuning, or future quality gates; do not use `routing_decision`
 //! or this module's output for main-path format routing.
 //!
@@ -671,10 +672,7 @@ pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalys
         .extension()
         .map(|e| e.to_string_lossy().to_uppercase())
         .unwrap_or_else(|| "unknown".to_string());
-    match analyze_image_quality(width, height, rgba.as_raw(), file_size, &format, 1) {
-        Ok(a) => Some(a),
-        Err(_) => None,
-    }
+    analyze_image_quality(width, height, rgba.as_raw(), file_size, &format, 1).ok()
 }
 
 /// Format [ImageQualityAnalysis] as multi-line media info. **Log file only** — does not write to

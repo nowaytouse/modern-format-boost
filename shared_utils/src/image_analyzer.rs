@@ -1044,7 +1044,7 @@ fn extract_hdr_info(path: &Path) -> Option<ColorInfo> {
 
     // Only return HDR info if it's actually HDR or has meaningful metadata
     if color_info.is_hdr()
-        || color_info.bit_depth.map_or(false, |d| d > 8)
+        || color_info.bit_depth.is_some_and(|d| d > 8)
         || color_info.color_primaries.as_deref() == Some("bt2020")
     {
         Some(color_info)

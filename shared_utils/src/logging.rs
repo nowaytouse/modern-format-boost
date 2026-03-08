@@ -84,7 +84,7 @@ struct RunLogWriter;
 
 impl Write for RunLogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::other(e.to_string()))?;
         buffer.extend_from_slice(buf);
         while let Some(i) = buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buffer.drain(..=i).collect();
@@ -100,7 +100,7 @@ impl Write for RunLogWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::other(e.to_string()))?;
         if !buffer.is_empty() {
             let line = String::from_utf8_lossy(&buffer);
             let stripped = strip_ansi_str(line.trim_end_matches('\n'));
@@ -187,7 +187,7 @@ impl<W: Write + Send> StripAnsiWriter<W> {
         }
         let stripped = strip_ansi_bytes(&self.buffer);
         self.buffer.clear();
-        let mut w = self.inner.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
         w.write_all(&stripped)?;
         Ok(())
     }
@@ -200,7 +200,7 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
         while let Some(i) = self.buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = self.buffer.drain(..=i).collect();
             let stripped = strip_ansi_bytes(&line);
-            let mut w = self.inner.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
             w.write_all(&stripped)?;
         }
         Ok(buf.len())
@@ -208,7 +208,7 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.flush_buffer()?;
-        let mut w = self.inner.lock().map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
         w.flush()?;
         Ok(())
     }

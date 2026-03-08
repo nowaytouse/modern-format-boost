@@ -270,14 +270,15 @@ fn run_imagemagick_cjxl_pipeline(
 /// ImageMagick → cjxl fallback pipeline for when direct cjxl encoding fails.
 ///
 /// Fallback priority:
-/// 1. No -strip, depth 16 (preserve metadata)
-/// 2a. grayscale+ICC error → -strip, depth 16
-///     └─ still fails + decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
-///     └─ still fails + 16-bit source → normalize ICC to sRGB, keep depth 16
-///        └─ still fails → error, refuse to downgrade
-/// 2b. decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
-/// 2b. decode/pixel error + 16-bit source → normalize ICC to sRGB, keep depth 16
-///     └─ still fails → error, refuse to silently downgrade
+///
+/// - No -strip, depth 16 (preserve metadata)
+/// - grayscale+ICC error → -strip, depth 16
+///   - still fails + decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
+///   - still fails + 16-bit source → normalize ICC to sRGB, keep depth 16
+///     - still fails → error, refuse to downgrade
+/// - decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
+/// - decode/pixel error + 16-bit source → normalize ICC to sRGB, keep depth 16
+///   - still fails → error, refuse to silently downgrade
 pub fn try_imagemagick_fallback(
     input: &Path,
     output: &Path,
@@ -398,7 +399,7 @@ pub fn strip_jpeg_tail_to_temp(path: &Path) -> std::io::Result<Option<(std::path
         .enumerate()
         .filter(|(_, w)| w[0] == 0xFF && w[1] == 0xD9)
         .map(|(i, _)| i + 1)
-        .last();
+        .next_back();
     let end = match last_eoi {
         Some(e) if e < data.len() => e,
         _ => return Ok(None),
