@@ -15,39 +15,39 @@ license = "MIT"
 authors = ["Modern Format Boost Contributors"]
 
 [workspace.dependencies]
-anyhow = "1.0"
-thiserror = "2.0"
+anyhow = { git = "https://github.com/dtolnay/anyhow.git" }
+thiserror = { git = "https://github.com/dtolnay/thiserror.git" }
 
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
-tracing-appender = "0.2"
+tracing = { git = "https://github.com/tokio-rs/tracing.git" }
+tracing-subscriber = { git = "https://github.com/tokio-rs/tracing.git", features = ["fmt", "env-filter", "json"] }
+tracing-appender = { git = "https://github.com/tokio-rs/tracing.git" }
 
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { git = "https://github.com/clap-rs/clap.git", features = ["derive", "cargo"] }
 
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { git = "https://github.com/serde-rs/serde.git", features = ["derive"] }
+serde_json = { git = "https://github.com/serde-rs/json.git" }
 
 rayon = "1.11"
 
-indicatif = { version = "0.18", features = ["rayon"] }
+indicatif = { git = "https://github.com/console-rs/indicatif.git", features = ["rayon"] }
 
-walkdir = "2.5"
-filetime = "0.2"
-libc = "0.2"
-xattr = "1.6"
+walkdir = { git = "https://github.com/BurntSushi/walkdir.git" }
+filetime = { git = "https://github.com/alexcrichton/filetime.git" }
+libc = { git = "https://github.com/rust-lang/libc.git" }
+xattr = { git = "https://github.com/Stebalien/xattr.git" }
 
-which = "8.0"
-log = "0.4"
+which = { git = "https://github.com/harryfei/which-rs.git" }
+log = { git = "https://github.com/rust-lang/log.git" }
 
-console = "0.16"
-chrono = { version = "0.4", features = ["serde"] }
+console = { git = "https://github.com/console-rs/console.git" }
+chrono = { git = "https://github.com/chronotope/chrono.git", features = ["serde"] }
 
-image = { version = "0.25", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
-libheif-rs = "2.7"
+image = { git = "https://github.com/image-rs/image.git", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
+libheif-rs = { git = "https://github.com/Cykooz/libheif-rs.git" }
 
-tempfile = "3.26"
-proptest = "1.10"
-flate2 = "1.1"
+tempfile = { git = "https://github.com/Stebalien/tempfile.git" }
+proptest = { git = "https://github.com/proptest-rs/proptest.git" }
+flate2 = { git = "https://github.com/rust-lang/flate2-rs.git" }
 
 shared_utils = { path = "shared_utils" }
 
