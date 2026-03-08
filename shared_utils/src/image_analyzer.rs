@@ -704,11 +704,9 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     }
     
     // Fallback: try ffprobe methods
-    let duration = try_ffprobe_json(temp_apng_path)
-        .or_else(|| try_ffprobe_default(temp_apng_path));
-    
     // temp_apng will be automatically cleaned up when dropped
-    duration
+    try_ffprobe_json(temp_apng_path)
+        .or_else(|| try_ffprobe_default(temp_apng_path))
 }
 
 fn try_ffprobe_json(path: &Path) -> Option<f32> {
