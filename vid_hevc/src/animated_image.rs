@@ -437,11 +437,20 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     let max_threads = get_max_threads(options);
     let x265_params = format!("log-level=error:pools={}", max_threads);
     
-    // Probe to get stream index for multi-stream files (animated AVIF/HEIC/WebP)
-    let stream_idx = if let Ok(probe) = shared_utils::probe_video(&actual_input) {
+    // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
+    // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
+    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
         probe.stream_index
     } else {
         0 // Default to first stream
+    };
+    
+    // For APNG (converted from JXL/WebP), stream_idx should be 0 since APNG is single-stream
+    // For AVIF/HEIC with multiple streams, use the stream_idx from probe
+    let effective_stream_idx = if input_ext == "jxl" || input_ext == "webp" {
+        0 // APNG is always single-stream
+    } else {
+        stream_idx
     };
     
     let mut cmd = Command::new("ffmpeg");
@@ -451,7 +460,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         .arg("-i")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
         .arg("-map")
-        .arg(format!("0:{}", stream_idx))  // Select the correct stream
+        .arg(format!("0:{}", effective_stream_idx))  // Select the correct stream
         // NO -r parameter: preserve original frame rate
         .arg("-c:v")
         .arg("libx265")
@@ -739,7 +748,75 @@ pub fn convert_to_hevc_mp4_matched(
             (input.to_path_buf(), None)
         };
 
-    let (width, height) = get_input_dimensions(&actual_input)?;
+    // For multi-stream AVIF/HEIC, convert the correct stream to APNG
+    // This ensures explore functions work with the correct stream
+    let (final_input, temp_stream_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+        if (input_ext == "avif" || input_ext == "heic" || input_ext == "heif") && temp_apng_file.is_none() {
+            if let Ok(probe) = shared_utils::probe_video(input) {
+                // Check if there are multiple video streams
+                let stream_count_output = Command::new("ffprobe")
+                    .args(["-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0"])
+                    .arg(shared_utils::safe_path_arg(input).as_ref())
+                    .output();
+                
+                let has_multiple_streams = stream_count_output
+                    .map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
+                    .unwrap_or(false);
+                
+                if has_multiple_streams && probe.stream_index > 0 {
+                    if options.verbose {
+                        eprintln!("   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)", 
+                            input_ext.to_uppercase(), probe.stream_index, probe.frame_count);
+                    }
+                    
+                    // Create temporary APNG file
+                    let temp_stream = tempfile::Builder::new()
+                        .suffix(".apng")
+                        .tempfile()
+                        .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                    let temp_stream_path = temp_stream.path().to_path_buf();
+                    
+                    // Convert the correct stream to APNG using FFmpeg
+                    let extract_result = Command::new("ffmpeg")
+                        .arg("-y")
+                        .arg("-i")
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg("-map")
+                        .arg(format!("0:{}", probe.stream_index))
+                        .arg("-c:v")
+                        .arg("apng")
+                        .arg("-f")
+                        .arg("apng")
+                        .arg("-plays")
+                        .arg("0")
+                        .arg(shared_utils::safe_path_arg(&temp_stream_path).as_ref())
+                        .output();
+                    
+                    match extract_result {
+                        Ok(output) if output.status.success() && temp_stream_path.exists() => {
+                            if options.verbose {
+                                eprintln!("   ✅ Stream → APNG conversion successful");
+                            }
+                            (temp_stream_path, Some(temp_stream))
+                        }
+                        _ => {
+                            if options.verbose {
+                                eprintln!("   ⚠️  Stream conversion failed, using original file");
+                            }
+                            (actual_input, None)
+                        }
+                    }
+                } else {
+                    (actual_input, None)
+                }
+            } else {
+                (actual_input, None)
+            }
+        } else {
+            (actual_input, None)
+        };
+
+    let (width, height) = get_input_dimensions(&final_input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
 
     let flag_mode = options
@@ -766,7 +843,7 @@ pub fn convert_to_hevc_mp4_matched(
 
     let explore_result = if flag_mode.is_ultimate() {
         shared_utils::explore_hevc_with_gpu_coarse_ultimate(
-            &actual_input,
+            &final_input,
             &temp_output,
             vf_args,
             initial_crf,
@@ -775,7 +852,7 @@ pub fn convert_to_hevc_mp4_matched(
         )
     } else {
         shared_utils::explore_hevc_with_gpu_coarse(
-            &actual_input,
+            &final_input,
             &temp_output,
             vf_args,
             initial_crf,
@@ -784,8 +861,9 @@ pub fn convert_to_hevc_mp4_matched(
     }
     .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
-    // Clean up temporary APNG file if it was created
+    // Clean up temporary files
     drop(temp_apng_file);
+    drop(temp_stream_file);
 
     for log in &explore_result.log {
         eprintln!("{}", log);
@@ -1300,11 +1378,20 @@ pub fn convert_to_gif_apple_compat(
 
     let (width, height) = get_input_dimensions(&actual_input)?;
     
-    // Probe to get stream index for multi-stream files
-    let stream_idx = if let Ok(probe) = shared_utils::probe_video(&actual_input) {
+    // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
+    // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
+    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
         probe.stream_index
     } else {
         0
+    };
+    
+    // For APNG (converted from JXL/WebP), stream_idx should be 0 since APNG is single-stream
+    // For AVIF/HEIC with multiple streams, use the stream_idx from probe
+    let effective_stream_idx = if input_ext == "jxl" || input_ext == "webp" {
+        0 // APNG is always single-stream
+    } else {
+        stream_idx
     };
     
     // Check if file has multiple video streams
@@ -1326,7 +1413,7 @@ pub fn convert_to_gif_apple_compat(
             // Multi-stream: specify stream in filter
             format!(
                 "[0:{}]scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
-                stream_idx, width, height
+                effective_stream_idx, width, height
             )
         } else {
             // Single-stream: simple filter
