@@ -251,6 +251,17 @@ cd modern_format_boost
 
 ## 📜 License
 
-MIT License. See [LICENSE](LICENSE) for details.
+The entire code in this repository is licensed under the [MIT](LICENSE_MIT) license.
 
-For information on third-party library licenses used in this project, see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+For a detailed overview of all licenses, including assets and runtime dependencies, see [NOTICE.md](NOTICE.md).
+
+Third-party library licenses used in this project are documented in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+---
+
+## 🤝 Thanks
+
+Special thanks to:
+*   [FFmpeg](https://ffmpeg.org/) for the powerful video processing engine.
+*   [ExifTool](https://exiftool.org/) for the most comprehensive metadata management.
+*   All contributors who help make Modern Format Boost faster and safer.
