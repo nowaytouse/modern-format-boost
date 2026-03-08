@@ -568,6 +568,19 @@ pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
 }
 
 fn get_animation_duration(path: &Path) -> Option<f32> {
+    // Special handling for JXL: FFmpeg's jpegxl_anim decoder is incomplete
+    // Convert to temporary APNG first, then probe duration
+    if path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .as_deref()
+        == Some("jxl")
+    {
+        if let Some(duration) = try_jxl_via_apng(path) {
+            return Some(duration);
+        }
+    }
+
     if let Some(duration) = try_ffprobe_json(path) {
         return Some(duration);
     }
@@ -612,6 +625,90 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
     }
 
     None
+}
+
+fn try_jxl_via_apng(path: &Path) -> Option<f32> {
+    use std::process::Command;
+    
+    // Check if djxl is available
+    if which::which("djxl").is_err() {
+        eprintln!("⚠️  djxl not found; cannot process animated JXL");
+        return None;
+    }
+    
+    // Create temporary APNG file
+    let temp_apng = tempfile::Builder::new()
+        .suffix(".apng")
+        .tempfile()
+        .ok()?;
+    let temp_apng_path = temp_apng.path();
+    
+    // Convert JXL to APNG using djxl
+    let djxl_result = Command::new("djxl")
+        .arg(crate::safe_path_arg(path).as_ref())
+        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+        .output()
+        .ok()?;
+    
+    if !djxl_result.status.success() || !temp_apng_path.exists() {
+        eprintln!("⚠️  djxl conversion failed for JXL");
+        return None;
+    }
+    
+    eprintln!("🔧 JXL detected, converted to temporary APNG for duration detection");
+    
+    // APNG doesn't have duration in format metadata, we need to calculate from frames and fps
+    // Use ffprobe with -count_frames to get nb_read_frames
+    let probe_output = Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-count_frames",
+            "-show_entries", "stream=nb_read_frames,r_frame_rate",
+            "-of", "json"
+        ])
+        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+        .output()
+        .ok()?;
+    
+    if probe_output.status.success() {
+        let json_str = String::from_utf8_lossy(&probe_output.stdout);
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+            if let Some(stream) = json["streams"].as_array().and_then(|s| s.first()) {
+                let nb_frames = stream["nb_read_frames"]
+                    .as_str()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+                
+                let r_frame_rate = stream["r_frame_rate"]
+                    .as_str()
+                    .unwrap_or("0/1");
+                
+                // Parse frame rate (format: "num/den")
+                let fps = if let Some((num, den)) = r_frame_rate.split_once('/') {
+                    let num: f32 = num.parse().unwrap_or(0.0);
+                    let den: f32 = den.parse().unwrap_or(1.0);
+                    if den > 0.0 { num / den } else { 0.0 }
+                } else {
+                    0.0
+                };
+                
+                if nb_frames > 0 && fps > 0.0 {
+                    let duration = nb_frames as f32 / fps;
+                    eprintln!("📊 JXL animation: {} frames @ {:.2} fps = {:.2}s", 
+                        nb_frames, fps, duration);
+                    return Some(duration);
+                }
+            }
+        }
+    }
+    
+    // Fallback: try ffprobe methods
+    let duration = try_ffprobe_json(temp_apng_path)
+        .or_else(|| try_ffprobe_default(temp_apng_path));
+    
+    // temp_apng will be automatically cleaned up when dropped
+    duration
 }
 
 fn try_ffprobe_json(path: &Path) -> Option<f32> {

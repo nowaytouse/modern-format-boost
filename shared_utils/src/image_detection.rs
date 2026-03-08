@@ -501,40 +501,71 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
 fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     use std::process::Command;
 
-    // Try ffprobe first: animated JXL will have duration > 0
+    // FFmpeg's jpegxl_anim decoder is incomplete and cannot properly detect JXL animation.
+    // We need to convert to APNG first, then check frame count.
+    
+    // Check if djxl is available
+    if which::which("djxl").is_err() {
+        // Fallback: try jxlinfo
+        if let Ok(output) = Command::new("jxlinfo")
+            .arg(crate::safe_path_arg(path).as_ref())
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                return stdout.contains("animation");
+            }
+        }
+        return false;
+    }
+    
+    // Create temporary APNG file
+    let temp_apng = match tempfile::Builder::new()
+        .suffix(".apng")
+        .tempfile()
+    {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let temp_apng_path = temp_apng.path();
+    
+    // Convert JXL to APNG using djxl
+    let djxl_result = Command::new("djxl")
+        .arg(crate::safe_path_arg(path).as_ref())
+        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
+        .output();
+    
+    if djxl_result.is_err() || !temp_apng_path.exists() {
+        return false;
+    }
+    
+    // Check frame count using ffprobe with -count_frames
     if let Ok(output) = Command::new("ffprobe")
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-count_frames",
+            "-show_entries", "stream=nb_read_frames",
+            "-of", "json"
         ])
-        .arg(crate::safe_path_arg(path).as_ref())
+        .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output()
     {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            // Parse duration from JSON: {"format": {"duration": "1.234"}}
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                if let Some(dur_str) = json["format"]["duration"].as_str() {
-                    if let Ok(dur) = dur_str.parse::<f64>() {
-                        return dur > 0.0;
+                if let Some(stream) = json["streams"].as_array().and_then(|s| s.first()) {
+                    if let Some(nb_frames_str) = stream["nb_read_frames"].as_str() {
+                        if let Ok(nb_frames) = nb_frames_str.parse::<u32>() {
+                            return nb_frames > 1;
+                        }
                     }
                 }
             }
         }
     }
-
-    // Fallback: jxlinfo prints "animation" for animated JXL
-    if let Ok(output) = Command::new("jxlinfo")
-        .arg(crate::safe_path_arg(path).as_ref())
-        .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
-            return stdout.contains("animation");
-        }
-    }
-
+    
+    // temp_apng will be automatically cleaned up when dropped
     false
 }
 
