@@ -114,10 +114,10 @@ fn score_filename(name: Option<&str>) -> f64 {
         let mut prev_is_cjk = false;
         
         for ch in part.chars() {
-            let is_cjk = ch >= '\u{4E00}' && ch <= '\u{9FFF}'  // CJK Unified Ideographs
-                || ch >= '\u{3040}' && ch <= '\u{309F}'        // Hiragana
-                || ch >= '\u{30A0}' && ch <= '\u{30FF}'        // Katakana
-                || ch >= '\u{AC00}' && ch <= '\u{D7AF}';       // Hangul
+            let is_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&ch)  // CJK Unified Ideographs
+                || ('\u{3040}'..='\u{309F}').contains(&ch)        // Hiragana
+                || ('\u{30A0}'..='\u{30FF}').contains(&ch)        // Katakana
+                || ('\u{AC00}'..='\u{D7AF}').contains(&ch);       // Hangul
             
             if is_cjk {
                 // Each CJK character can be a word
