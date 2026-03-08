@@ -74,6 +74,10 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
 
+        /// Force video conversion: skip meme-score check, always convert animated images to video (MOV/MP4)
+        #[arg(long)]
+        force_video: bool,
+
         /// Resume from last run: skip files already in progress file (default).
         #[arg(long, default_value_t = true)]
         resume: bool,
@@ -124,6 +128,7 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
+            force_video,
             base_dir,
             resume: resume_flag,
             no_resume,
@@ -161,6 +166,10 @@ fn main() -> anyhow::Result<()> {
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
+            }
+            if force_video {
+                shared_utils::progress_mode::emit_stderr("🎬 Force Video: ENABLED (skip meme-score, always convert to video)");
+                std::env::set_var("MODERN_FORMAT_BOOST_FORCE_VIDEO", "1");
             }
             if in_place {
                 shared_utils::progress_mode::emit_stderr(
@@ -778,8 +787,13 @@ fn auto_convert_single_file(
 
             // Use meme-score to decide HEVC vs GIF for all animated routes
             // (apple_compat and non-compat unified under the same strategy).
+            // Can be overridden with --force-video flag
+            let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
             let probe = shared_utils::probe_video(input).ok();
-            let meme_keep = if let Some(ref p) = probe {
+            let meme_keep = if force_video {
+                // Force video mode: always convert to video, skip meme-score
+                false
+            } else if let Some(ref p) = probe {
                 if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input) {
                     shared_utils::should_keep_as_gif(&meta)
                 } else {
