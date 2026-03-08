@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.7] - 2026-03-09
+
+### Fixed
+- **WebP frame extraction and timing**: Complete rewrite of WebP → video conversion pipeline
+  - **Root cause**: ImageMagick's WebP → APNG conversion was unreliable (frame duplication, incorrect timing)
+  - **Fix**: Implemented proper WebP frame extraction using `webpmux` tool
+    1. Use `webpmux -info` to get accurate frame count and duration from WebP metadata
+    2. Use `webpmux -get frame N` to extract each frame as WebP
+    3. Convert each WebP frame to PNG using FFmpeg
+    4. Create APNG from PNG sequence with correct frame rate using FFmpeg
+  - **Impact**: WebP files now convert with exact frame count and timing (e.g., 3 frames @ 100ms/frame = 0.3s, not 9 frames @ 40ms/frame = 0.36s)
+  - **Requirement**: `webpmux` tool must be installed (part of libwebp package)
+  - **Files modified**: `vid_hevc/src/animated_image.rs` (all three conversion functions)
+
+- **APNG duration detection**: Fixed ffprobe inability to read APNG duration metadata
+  - **Root cause**: APNG format doesn't store duration in container metadata, requires frame counting
+  - **Fix**: Added `-count_frames` parameter to ffprobe and use `nb_read_frames` for frame count
+  - **Impact**: APNG files (including temporary APNG from WebP) now have correct duration detection
+  - **Files modified**: `shared_utils/src/video_explorer/precheck.rs`
+
+### Technical Details
+- `extract_webp_to_apng()` function now:
+  - Parses WebP metadata using `webpmux -info` for accurate frame count and duration
+  - Extracts each frame as WebP (not PNG) using `webpmux -get frame N`
+  - Converts WebP frames to PNG using FFmpeg (handles WebP decoding properly)
+  - Creates APNG using FFmpeg with `apng` codec (not `png` codec) and `-r` parameter for frame rate
+- `run_precheck_ffprobe()` now includes `-count_frames` and `nb_read_frames` in show_entries
+- `parse_duration_from_precheck_json()` now falls back to `nb_read_frames` when `nb_frames` is 0
+- Temporary WebP frames and PNG frames are automatically cleaned up via `tempfile::TempDir`
+
+### Testing
+- Verified 3-frame WebP (100ms/frame) converts to:
+  - GIF: 3 frames, 0.3s duration, 10fps ✅
+  - MOV: 3 frames, 0.3s duration, 10fps, HEVC codec ✅
+- No frame duplication or timing errors
+
 ## [0.10.6] - 2026-03-09
 
 ### Fixed
