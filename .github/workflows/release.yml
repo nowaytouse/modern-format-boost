@@ -204,11 +204,20 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null | head -80)
-          if [ -z "$NOTES" ]; then
-            NOTES="See commit history for changes in ${TAG}."
+          
+          # Try to use RELEASE_NOTES file first
+          if [ -f "RELEASE_NOTES_${TAG}.md" ]; then
+            echo "Using RELEASE_NOTES_${TAG}.md"
+            cp "RELEASE_NOTES_${TAG}.md" /tmp/release_notes.md
+          else
+            # Fallback to extracting from CHANGELOG.md
+            echo "Extracting from CHANGELOG.md for version ${VERSION}"
+            NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null | head -80)
+            if [ -z "$NOTES" ]; then
+              NOTES="See commit history for changes in ${TAG}."
+            fi
+            printf '%s\n' "$NOTES" > /tmp/release_notes.md
           fi
-          printf '%s\n' "$NOTES" > /tmp/release_notes.md
 
       - name: Create / update GitHub Release
         uses: softprops/action-gh-release@v2
