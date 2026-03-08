@@ -251,4 +251,6 @@ cd modern_format_boost
 
 ## 📜 License
 
-MIT License. See `LICENSE` for details.
+MIT License. See [LICENSE](LICENSE) for details.
+
+For information on third-party library licenses used in this project, see [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
