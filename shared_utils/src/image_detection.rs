@@ -471,7 +471,7 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
 
     // Scan compatible_brands (each 4 bytes, starting at offset 16)
     let ftyp_box_size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
-    if ftyp_box_size < 16 || ftyp_box_size > 4096 {
+    if !(16..=4096).contains(&ftyp_box_size) {
         return false;
     }
     let compat_size = ftyp_box_size - 16;
@@ -773,8 +773,8 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
             // which directly measures how evenly palette entries are used.
             // Quantized images tend to have uneven usage (few dominant colors),
             // while natural palette art uses entries more uniformly.
-            let (entropy, max_entropy, entropy_ratio) = if png_info.palette_size.is_some() {
-                let pe = calculate_palette_index_entropy(&img, png_info.palette_size.unwrap());
+            let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
+                let pe = calculate_palette_index_entropy(&img, p_size);
                 (pe.0, pe.1, pe.2)
             } else {
                 // Fallback to RGB channel entropy
@@ -1094,10 +1094,11 @@ fn detect_quantization_tool_signature(data: &[u8]) -> Option<String> {
                     // Decompress value: skip keyword\0 + method byte (1)
                     if null_pos + 2 < payload.len() {
                         let compressed = &payload[null_pos + 2..];
-                        if let Ok(decompressed) =
-                            flate2::read::ZlibDecoder::new(compressed)
-                                .bytes()
-                                .collect::<std::result::Result<Vec<u8>, _>>()
+                        use std::io::Read;
+                        let mut decompressed = Vec::new();
+                        if flate2::read::ZlibDecoder::new(compressed)
+                            .read_to_end(&mut decompressed)
+                            .is_ok()
                         {
                             let text = String::from_utf8_lossy(&decompressed);
                             if let Some(tool) = match_signatures(&text) {
@@ -1493,7 +1494,7 @@ fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
     // bit_depth applies per sample; for sub-byte depths (1, 2, 4) pixels are packed
     let total_bits = info.width as u64 * info.height as u64 * bits_per_sample * info.bit_depth as u64;
     // Round up to bytes
-    (total_bits + 7) / 8
+    total_bits.div_ceil(8)
 }
 
 pub fn calculate_entropy(img: &DynamicImage) -> f64 {
@@ -1715,97 +1716,6 @@ fn estimate_webp_quality(path: &Path) -> Result<u8> {
     }
 
     Err(ImgQualityError::AnalysisError("No VP8 chunk found".to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
-
-    #[test]
-    fn test_detect_png_format() {
-        let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        let mut data = png_magic.to_vec();
-        data.extend_from_slice(&[0u8; 24]);
-        file.write_all(&data).expect("写入失败");
-
-        let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "PNG 格式检测应该成功");
-        assert_eq!(result.unwrap(), DetectedFormat::PNG, "应该检测为 PNG 格式");
-    }
-
-    #[test]
-    fn test_detect_jpeg_format() {
-        let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        let mut data = jpeg_magic.to_vec();
-        data.extend_from_slice(&[0u8; 28]);
-        file.write_all(&data).expect("写入失败");
-
-        let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "JPEG 格式检测应该成功");
-        assert_eq!(
-            result.unwrap(),
-            DetectedFormat::JPEG,
-            "应该检测为 JPEG 格式"
-        );
-    }
-
-    #[test]
-    fn test_detect_gif_format() {
-        let gif_magic: &[u8] = b"GIF89a";
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        let mut data = gif_magic.to_vec();
-        data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).expect("写入失败");
-
-        let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "GIF 格式检测应该成功");
-        assert_eq!(result.unwrap(), DetectedFormat::GIF, "应该检测为 GIF 格式");
-    }
-
-    #[test]
-    fn test_detect_webp_format() {
-        let mut webp_data = b"RIFF".to_vec();
-        webp_data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-        webp_data.extend_from_slice(b"WEBP");
-        webp_data.extend_from_slice(&[0u8; 20]);
-
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(&webp_data).expect("写入失败");
-
-        let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "WebP 格式检测应该成功");
-        assert_eq!(
-            result.unwrap(),
-            DetectedFormat::WebP,
-            "应该检测为 WebP 格式"
-        );
-    }
-
-    #[test]
-    fn test_detect_unknown_format() {
-        let random_data: &[u8] = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        let mut data = random_data.to_vec();
-        data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).expect("写入失败");
-
-        let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "未知格式检测应该成功（返回 Unknown）");
-        match result.unwrap() {
-            DetectedFormat::Unknown(_) => (),
-            other => panic!("应该检测为 Unknown 格式，实际为 {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_detect_nonexistent_file() {
-        let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
-        assert!(result.is_err(), "不存在的文件应该返回错误");
-    }
 }
 
 /// Parse APNG (Animated PNG) frame count from PNG data
@@ -2320,13 +2230,8 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     )))
 }
 
-/// Detect JXL (JPEG XL) lossless encoding
-///
-/// JXL can use modular mode (lossless) or VarDCT mode (lossy).
-/// - Container: look for "jbrd" box (JPEG bitstream reconstruction = lossless recompression).
-/// - Naked codestream: look for "jbrd" in raw bytes (e.g. container-style fragment) or treat as lossy (conservative).
 
-/// Detect ICO compression by inspecting embedded image entries.
+///   Detect ICO compression by inspecting embedded image entries.
 ///
 /// ICO directory: header[6] + entries[16 each]. Each entry has an offset to image data.
 /// If image data starts with PNG magic → recursively check PNG quantization.
@@ -2888,14 +2793,13 @@ fn detect_jxl_compression(path: &Path) -> Result<CompressionType> {
     // Only check jbrd as a proper BMFF box in container mode.
     // Naked codestream (FF 0A) has no BMFF structure — scanning raw bytes for "jbrd"
     // would be a false-positive collision risk, so skip directly to xyb_encoded parsing.
-    if !is_naked {
-        if find_any_box_recursive(&data, b"jbrd") {
+    if !is_naked
+        && find_any_box_recursive(&data, b"jbrd") {
             if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
                 eprintln!("   📊 JXL: jbrd box in container — lossless");
             }
             return Ok(CompressionType::Lossless);
         }
-    }
 
     // Dimension 2-4: Parse codestream header for xyb_encoded
     let codestream: Option<&[u8]> = if is_naked {
@@ -3066,4 +2970,95 @@ fn find_box_data<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_detect_png_format() {
+        let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = png_magic.to_vec();
+        data.extend_from_slice(&[0u8; 24]);
+        file.write_all(&data).expect("写入失败");
+
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "PNG 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::PNG, "应该检测为 PNG 格式");
+    }
+
+    #[test]
+    fn test_detect_jpeg_format() {
+        let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = jpeg_magic.to_vec();
+        data.extend_from_slice(&[0u8; 28]);
+        file.write_all(&data).expect("写入失败");
+
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "JPEG 格式检测应该成功");
+        assert_eq!(
+            result.unwrap(),
+            DetectedFormat::JPEG,
+            "应该检测为 JPEG 格式"
+        );
+    }
+
+    #[test]
+    fn test_detect_gif_format() {
+        let gif_magic: &[u8] = b"GIF89a";
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = gif_magic.to_vec();
+        data.extend_from_slice(&[0u8; 26]);
+        file.write_all(&data).expect("写入失败");
+
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "GIF 格式检测应该成功");
+        assert_eq!(result.unwrap(), DetectedFormat::GIF, "应该检测为 GIF 格式");
+    }
+
+    #[test]
+    fn test_detect_webp_format() {
+        let mut webp_data = b"RIFF".to_vec();
+        webp_data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+        webp_data.extend_from_slice(b"WEBP");
+        webp_data.extend_from_slice(&[0u8; 20]);
+
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        file.write_all(&webp_data).expect("写入失败");
+
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "WebP 格式检测应该成功");
+        assert_eq!(
+            result.unwrap(),
+            DetectedFormat::WebP,
+            "应该检测为 WebP 格式"
+        );
+    }
+
+    #[test]
+    fn test_detect_unknown_format() {
+        let random_data: &[u8] = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05];
+        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut data = random_data.to_vec();
+        data.extend_from_slice(&[0u8; 26]);
+        file.write_all(&data).expect("写入失败");
+
+        let result = detect_format_from_bytes(file.path());
+        assert!(result.is_ok(), "未知格式检测应该成功（返回 Unknown）");
+        match result.unwrap() {
+            DetectedFormat::Unknown(_) => (),
+            other => panic!("应该检测为 Unknown 格式，实际为 {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_detect_nonexistent_file() {
+        let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
+        assert!(result.is_err(), "不存在的文件应该返回错误");
+    }
 }

@@ -106,15 +106,9 @@ impl ChromaSubsampling {
         let fmt = pix_fmt.to_lowercase();
         if fmt.contains("444") {
             ChromaSubsampling::Yuv444
-        } else if fmt.contains("422") {
+        } else if fmt.contains("422") || fmt.contains("411") {
             ChromaSubsampling::Yuv422
-        } else if fmt.contains("411") {
-            ChromaSubsampling::Yuv422
-        } else if fmt.contains("410") {
-            ChromaSubsampling::Yuv420
-        } else if fmt.contains("420") || fmt.contains("nv12") {
-            ChromaSubsampling::Yuv420
-        } else if fmt.starts_with("yuv") {
+        } else if fmt.contains("420") || fmt.contains("nv12") || fmt.starts_with("yuv") || fmt.contains("410") {
             ChromaSubsampling::Yuv420
         } else if fmt.contains("rgb") || fmt.contains("gbr") || fmt.contains("bgr") {
             ChromaSubsampling::Rgb
@@ -440,11 +434,11 @@ fn estimate_content_type(
     }
 
     let is_1080_or_720 = (width == 1920 && height == 1080) || (width == 1280 && height == 720);
-    if fps >= 50.0 && is_1080_or_720 && bpp >= 0.08 && bpp <= 0.5 {
+    if fps >= 50.0 && is_1080_or_720 && (0.08..=0.5).contains(&bpp) {
         return VideoContentType::Gaming;
     }
 
-    if bpp >= 0.05 && bpp <= 0.6 && codec_type != VideoCodecType::Intermediate {
+    if (0.05..=0.6).contains(&bpp) && codec_type != VideoCodecType::Intermediate {
         return VideoContentType::LiveAction;
     }
 

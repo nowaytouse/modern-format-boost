@@ -35,8 +35,8 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB {
-                        if i + 5 < buffer.len() {
+                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB
+                        && i + 5 < buffer.len() {
                             let q_value = buffer[i + 5] as u32;
                             return match q_value {
                                 0..=2 => 98,
@@ -48,7 +48,6 @@ pub mod jpeg {
                                 _ => 50,
                             };
                         }
-                    }
                 }
             }
         }

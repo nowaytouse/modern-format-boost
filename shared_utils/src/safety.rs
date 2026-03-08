@@ -50,8 +50,8 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
 
     if components.len() <= 3 {
         let path_str = canonical.to_string_lossy();
-        if path_str.starts_with("/Users/") || path_str.starts_with("/home/") {
-            if components.len() <= 3 {
+        if (path_str.starts_with("/Users/") || path_str.starts_with("/home/"))
+            && components.len() <= 3 {
                 return Err(format!(
                     "🚨 DANGEROUS OPERATION BLOCKED!\n\
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
@@ -63,7 +63,6 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
                     path.display()
                 ));
             }
-        }
     }
 
     Ok(())

@@ -96,8 +96,8 @@ pub fn is_heic_file(path: &Path) -> bool {
     if let Ok(mut file) = std::fs::File::open(path) {
         use std::io::Read;
         let mut buffer = [0u8; 12];
-        if file.read_exact(&mut buffer).is_ok() {
-            if &buffer[4..8] == b"ftyp" {
+        if file.read_exact(&mut buffer).is_ok()
+            && &buffer[4..8] == b"ftyp" {
                 let brand = &buffer[8..12];
                 if matches!(
                     brand,
@@ -106,7 +106,6 @@ pub fn is_heic_file(path: &Path) -> bool {
                     return true;
                 }
             }
-        }
     }
 
     false
@@ -162,8 +161,8 @@ fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
             if pos + 30 < buffer.len() {
                 // Look for transfer_characteristics indicating HDR
                 // PQ (SMPTE 2084) = 16, HLG = 18
-                for i in pos + 22..std::cmp::min(pos + box_size, buffer.len() - 1) {
-                    if buffer[i] == 16 || buffer[i] == 18 {
+                for &b in buffer.iter().take(std::cmp::min(pos + box_size, buffer.len() - 1)).skip(pos + 22) {
+                    if b == 16 || b == 18 {
                         is_hdr = true;
                         break;
                     }
@@ -178,8 +177,8 @@ fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
         }
 
         // Check for colr/nclx boxes with HDR color space
-        if box_type == b"colr" && box_size >= 18 {
-            if pos + 12 < buffer.len() {
+        if box_type == b"colr" && box_size >= 18
+            && pos + 12 < buffer.len() {
                 let color_type = &buffer[pos + 8..pos + 12];
                 if color_type == b"nclx" && pos + 18 <= buffer.len() {
                     // Check color primaries (BT.2020 = 9)
@@ -192,7 +191,6 @@ fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
                     }
                 }
             }
-        }
 
         pos += box_size;
     }

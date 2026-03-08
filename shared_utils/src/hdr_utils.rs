@@ -155,7 +155,7 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
 
 /// Check if an image should use HDR decoding path (10-bit or higher).
 pub fn should_use_hdr_decode(info: &ColorInfo) -> bool {
-    info.is_hdr() || info.bit_depth.map_or(false, |d| d > 8)
+    info.is_hdr() || info.bit_depth.is_some_and(|d| d > 8)
 }
 
 /// Get recommended pixel format for HDR content.

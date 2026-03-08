@@ -59,7 +59,7 @@ pub struct CliRunnerConfig {
 /// Resolve base_dir for video `run` command. Shared by vid_hevc and vid_av1 to reduce duplication.
 /// Returns: explicit override, or when recursive and input is a dir then input, else parent of input.
 pub fn resolve_video_run_base_dir(
-    input: &PathBuf,
+    input: &Path,
     recursive: bool,
     base_dir_override: Option<PathBuf>,
 ) -> Option<PathBuf> {
@@ -67,7 +67,7 @@ pub fn resolve_video_run_base_dir(
         return Some(explicit);
     }
     if recursive && input.is_dir() {
-        Some(input.clone())
+        Some(input.to_path_buf())
     } else {
         input.parent().map(std::path::Path::to_path_buf)
     }

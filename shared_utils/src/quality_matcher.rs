@@ -964,12 +964,11 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     }
 
     if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs) {
-        if fps > 0.0 && duration > 0.0 {
-            if (1.0..=240.0).contains(&fps) {
+        if fps > 0.0 && duration > 0.0
+            && (1.0..=240.0).contains(&fps) {
                 score += 2.0;
                 max_score += 2.0;
             }
-        }
     }
 
     if let Some(video_bitrate) = analysis.video_bitrate {

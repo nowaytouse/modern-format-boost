@@ -286,7 +286,7 @@ mod tests {
         let mut header = [0u8; 32];
         header[4..8].copy_from_slice(b"ftyp");
         header[8..12].copy_from_slice(b"isom");
-        fs::write(&wrong_ext, &header).unwrap();
+        fs::write(&wrong_ext, header).unwrap();
 
         let fixed = fix_extension_if_mismatch(&wrong_ext).unwrap();
         assert_eq!(fixed.extension().and_then(|e| e.to_str()), Some("mp4"));
