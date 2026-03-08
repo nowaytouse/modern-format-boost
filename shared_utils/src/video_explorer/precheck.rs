@@ -769,7 +769,7 @@ pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
         }
 
         ProcessingRecommendation::NotRecommended { codec, reason } => {
-            warn!(codec = %codec, reason = %reason, "WARNING: already modern codec (continuing anyway)");
+            info!(codec = %codec, reason = %reason, "already modern codec (continuing anyway)");
         }
 
         ProcessingRecommendation::StronglyRecommended { codec, reason } => {
