@@ -204,6 +204,8 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
+    // Special handling for animated WebP: FFmpeg's WebP decoder is unreliable for animated WebP.
+    // We must use ImageMagick to convert to APNG first.
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
         if input_ext == "jxl" {
             if options.verbose {
@@ -262,6 +264,72 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                         message: "JXL → APNG conversion failed (djxl error)".to_string(),
                         skipped: true,
                         skip_reason: Some("djxl_failed".to_string()),
+                    });
+                }
+            }
+        } else if input_ext == "webp" {
+            if options.verbose {
+                eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
+            }
+            
+            // Check if ImageMagick is available
+            if which::which("magick").is_err() && which::which("convert").is_err() {
+                tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("imagemagick_not_found".to_string()),
+                });
+            }
+            
+            // Create temporary APNG file
+            let temp_apng = tempfile::Builder::new()
+                .suffix(".apng")
+                .tempfile()
+                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            
+            // Convert WebP to APNG using ImageMagick
+            let magick_result = Command::new("magick")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                .output()
+                .or_else(|_| {
+                    Command::new("convert")
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                        .output()
+                });
+            
+            match magick_result {
+                Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                    if options.verbose {
+                        eprintln!("   ✅ WebP → APNG conversion successful");
+                    }
+                    (temp_apng_path, Some(temp_apng))
+                }
+                _ => {
+                    tracing::warn!(input = %input.display(), "ImageMagick WebP conversion failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: "WebP → APNG conversion failed (ImageMagick error)".to_string(),
+                        skipped: true,
+                        skip_reason: Some("webp_conversion_failed".to_string()),
                     });
                 }
             }
@@ -452,6 +520,13 @@ pub fn convert_to_hevc_mp4_matched(
     }
 
     let input_size = fs::metadata(input)?.len();
+    
+    let input_ext = input
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+    
     let ext = if options.apple_compat { "mov" } else { "mp4" };
     let output = get_output_path(input, ext, options)?;
 
@@ -461,7 +536,125 @@ pub fn convert_to_hevc_mp4_matched(
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let (width, height) = get_input_dimensions(input)?;
+    // Special handling for animated JXL/WebP: pre-convert to APNG
+    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+        if input_ext == "jxl" {
+            if options.verbose {
+                eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
+            }
+            if which::which("djxl").is_err() {
+                tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: djxl not found (required for animated JXL)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("djxl_not_found".to_string()),
+                });
+            }
+            let temp_apng = tempfile::Builder::new()
+                .suffix(".apng")
+                .tempfile()
+                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let djxl_result = Command::new("djxl")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                .output();
+            match djxl_result {
+                Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                    if options.verbose {
+                        eprintln!("   ✅ JXL → APNG conversion successful");
+                    }
+                    (temp_apng_path, Some(temp_apng))
+                }
+                _ => {
+                    tracing::warn!(input = %input.display(), "djxl conversion failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: "JXL → APNG conversion failed (djxl error)".to_string(),
+                        skipped: true,
+                        skip_reason: Some("djxl_failed".to_string()),
+                    });
+                }
+            }
+        } else if input_ext == "webp" {
+            if options.verbose {
+                eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
+            }
+            if which::which("magick").is_err() && which::which("convert").is_err() {
+                tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("imagemagick_not_found".to_string()),
+                });
+            }
+            let temp_apng = tempfile::Builder::new()
+                .suffix(".apng")
+                .tempfile()
+                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            let magick_result = Command::new("magick")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                .output()
+                .or_else(|_| {
+                    Command::new("convert")
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                        .output()
+                });
+            match magick_result {
+                Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                    if options.verbose {
+                        eprintln!("   ✅ WebP → APNG conversion successful");
+                    }
+                    (temp_apng_path, Some(temp_apng))
+                }
+                _ => {
+                    tracing::warn!(input = %input.display(), "ImageMagick WebP conversion failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: "WebP → APNG conversion failed (ImageMagick error)".to_string(),
+                        skipped: true,
+                        skip_reason: Some("webp_conversion_failed".to_string()),
+                    });
+                }
+            }
+        } else {
+            (input.to_path_buf(), None)
+        };
+
+    let (width, height) = get_input_dimensions(&actual_input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, has_alpha);
 
     let flag_mode = options
@@ -488,7 +681,7 @@ pub fn convert_to_hevc_mp4_matched(
 
     let explore_result = if flag_mode.is_ultimate() {
         shared_utils::explore_hevc_with_gpu_coarse_ultimate(
-            input,
+            &actual_input,
             &temp_output,
             vf_args,
             initial_crf,
@@ -497,7 +690,7 @@ pub fn convert_to_hevc_mp4_matched(
         )
     } else {
         shared_utils::explore_hevc_with_gpu_coarse(
-            input,
+            &actual_input,
             &temp_output,
             vf_args,
             initial_crf,
@@ -505,6 +698,9 @@ pub fn convert_to_hevc_mp4_matched(
         )
     }
     .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+
+    // Clean up temporary APNG file if it was created
+    drop(temp_apng_file);
 
     for log in &explore_result.log {
         eprintln!("{}", log);
@@ -900,6 +1096,8 @@ pub fn convert_to_gif_apple_compat(
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
+    // Special handling for animated WebP: FFmpeg's WebP decoder is unreliable for animated WebP.
+    // We must use ImageMagick to convert to APNG first.
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
         if input_ext == "jxl" {
             if options.verbose {
@@ -958,6 +1156,72 @@ pub fn convert_to_gif_apple_compat(
                         message: "JXL → APNG conversion failed (djxl error)".to_string(),
                         skipped: true,
                         skip_reason: Some("djxl_failed".to_string()),
+                    });
+                }
+            }
+        } else if input_ext == "webp" {
+            if options.verbose {
+                eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
+            }
+            
+            // Check if ImageMagick is available
+            if which::which("magick").is_err() && which::which("convert").is_err() {
+                tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("imagemagick_not_found".to_string()),
+                });
+            }
+            
+            // Create temporary APNG file
+            let temp_apng = tempfile::Builder::new()
+                .suffix(".apng")
+                .tempfile()
+                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+            let temp_apng_path = temp_apng.path().to_path_buf();
+            
+            // Convert WebP to APNG using ImageMagick
+            let magick_result = Command::new("magick")
+                .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                .output()
+                .or_else(|_| {
+                    Command::new("convert")
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                        .output()
+                });
+            
+            match magick_result {
+                Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                    if options.verbose {
+                        eprintln!("   ✅ WebP → APNG conversion successful");
+                    }
+                    (temp_apng_path, Some(temp_apng))
+                }
+                _ => {
+                    tracing::warn!(input = %input.display(), "ImageMagick WebP conversion failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: "WebP → APNG conversion failed (ImageMagick error)".to_string(),
+                        skipped: true,
+                        skip_reason: Some("webp_conversion_failed".to_string()),
                     });
                 }
             }

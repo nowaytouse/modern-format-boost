@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.6] - 2026-03-09
+
+### Fixed
+- **AVIF GBR colorspace bug**: Fixed critical bug where AVIF files with GBR colorspace caused HEVC conversion to fail
+  - **Root cause**: FFmpeg error "Error setting option colorspace to value gbr" - HEVC doesn't support RGB/GBR colorspace
+  - **Fix**: Skip RGB/GBR colorspace parameters in FFmpeg commands; conversion to YUV420p happens in filter chain
+  - **Impact**: AVIF files with GBR colorspace can now be converted to HEVC video formats
+  - **Files modified**: `shared_utils/src/video_explorer/gpu_coarse_search.rs`, `vid_hevc/src/conversion_api.rs`
+
+- **WebP dimension detection**: Fixed bug where animated WebP files showed 0x0 dimensions
+  - **Root cause**: FFmpeg's ffprobe returns 0x0 for animated WebP files
+  - **Fix**: Added fallback to image crate and ImageMagick when ffprobe returns 0x0
+  - **Impact**: Animated WebP files no longer fail with "Resolution too small" error
+  - **File modified**: `shared_utils/src/video_explorer/precheck.rs`
+
+- **WebP decoder reliability**: Added workaround for FFmpeg's unreliable WebP decoder
+  - **Root cause**: FFmpeg's WebP decoder fails with "Invalid data found when processing input" for some animated WebP files
+  - **Fix**: Pre-convert WebP → APNG using ImageMagick before FFmpeg processing (similar to JXL handling)
+  - **Impact**: Animated WebP files can now be reliably converted to GIF or HEVC video formats
+  - **Requirement**: ImageMagick must be installed
+  - **Files modified**: `vid_hevc/src/animated_image.rs` (both `convert_to_hevc_mp4` and `convert_to_hevc_mp4_matched`)
+
+### Added
+- **Force video mode**: Added `--force-video` flag and `MODERN_FORMAT_BOOST_FORCE_VIDEO` environment variable
+  - Skips meme-score check and forces all animated images to be converted to video (MOV/MP4)
+  - Useful for advanced users who want consistent video output regardless of meme-score
+  - Environment variable approach allows integration with external scripts
+
+### Technical Details
+- RGB/GBR colorspace is now filtered out in `build_color_args_from_probe()` and color metadata building
+- WebP pre-processing uses ImageMagick to convert to APNG intermediate format
+- Temporary APNG files are automatically cleaned up after processing
+- Dimension fallback chain: ffprobe → image crate → ImageMagick
+
 ## [0.10.5] - 2026-03-09
 
 ### Fixed
