@@ -127,8 +127,9 @@ fn run_precheck_ffprobe(input: &Path) -> Result<serde_json::Value> {
             "error",
             "-select_streams",
             "v:0",
+            "-count_frames",  // Add -count_frames to get nb_read_frames for formats like APNG
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample",
+            "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration,nb_frames,nb_read_frames,bit_rate,color_space,color_transfer,pix_fmt,bits_per_raw_sample",
             "-show_entries",
             "format=duration",
             "-of",
@@ -191,10 +192,22 @@ fn fps_sanitise_for_validation(fps: f64, duration: f64, frame_count: u64) -> f64
 fn parse_duration_from_precheck_json(
     json: &serde_json::Value,
     fps: f64,
-    frame_count: u64,
+    mut frame_count: u64,
     input: &Path,
 ) -> Result<(f64, f64, u64)> {
     let stream = json["streams"].get(0);
+    
+    // If frame_count is 0, try to get nb_read_frames (for formats like APNG that need -count_frames)
+    if frame_count == 0 {
+        if let Some(nb_read_frames) = stream
+            .and_then(|s| s["nb_read_frames"].as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            frame_count = nb_read_frames;
+            info!(nb_read_frames = frame_count, "Using nb_read_frames for frame count");
+        }
+    }
+    
     let stream_duration: Option<f64> = stream
         .and_then(|s| s["duration"].as_str())
         .and_then(|s| s.parse().ok())

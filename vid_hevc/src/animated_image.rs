@@ -15,6 +15,116 @@ use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
 
+/// Extract frames from animated WebP using webpmux and create APNG with correct timing
+fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
+    // Create temporary directory for frames
+    let temp_dir = tempfile::Builder::new()
+        .prefix("webp_frames_")
+        .tempdir()
+        .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp dir: {}", e)))?;
+    let temp_dir_path = temp_dir.path();
+    
+    // Get WebP info to determine frame count and duration
+    let webpmux_info = Command::new("webpmux")
+        .arg("-info")
+        .arg(shared_utils::safe_path_arg(input).as_ref())
+        .output()
+        .map_err(|e| VidQualityError::ConversionError(format!("webpmux not found: {}", e)))?;
+    
+    if !webpmux_info.status.success() {
+        return Err(VidQualityError::ConversionError("webpmux -info failed".to_string()));
+    }
+    
+    let info_str = String::from_utf8_lossy(&webpmux_info.stdout);
+    
+    // Parse frame count and duration
+    let frame_count = info_str.lines()
+        .find(|l| l.contains("Number of frames:"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .ok_or_else(|| VidQualityError::ConversionError("Failed to parse frame count".to_string()))?;
+    
+    // Parse duration from first frame (assuming all frames have same duration)
+    let frame_duration_ms = info_str.lines()
+        .skip_while(|l| !l.contains("duration"))
+        .nth(0)
+        .and_then(|l| {
+            l.split_whitespace()
+                .find_map(|s| s.parse::<u32>().ok())
+        })
+        .unwrap_or(100); // Default to 100ms if parsing fails
+    
+    let fps = 1000.0 / frame_duration_ms as f64;
+    
+    if verbose {
+        eprintln!("   📊 WebP: {} frames, {}ms/frame, {:.2}fps", frame_count, frame_duration_ms, fps);
+    }
+    
+    // Extract each frame using webpmux and convert to PNG
+    for i in 1..=frame_count {
+        let frame_webp_path = temp_dir_path.join(format!("frame_{:04}.webp", i));
+        let frame_png_path = temp_dir_path.join(format!("frame_{:04}.png", i));
+        
+        // Extract frame as WebP
+        let extract_result = Command::new("webpmux")
+            .arg("-get")
+            .arg("frame")
+            .arg(i.to_string())
+            .arg(shared_utils::safe_path_arg(input).as_ref())
+            .arg("-o")
+            .arg(&frame_webp_path)
+            .output()
+            .map_err(|e| VidQualityError::ConversionError(format!("webpmux extract failed: {}", e)))?;
+        
+        if !extract_result.status.success() {
+            return Err(VidQualityError::ConversionError(format!("Failed to extract frame {}", i)));
+        }
+        
+        // Convert WebP frame to PNG using FFmpeg
+        let convert_result = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-i")
+            .arg(&frame_webp_path)
+            .arg(&frame_png_path)
+            .output()
+            .map_err(|e| VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {}", e)))?;
+        
+        if !convert_result.status.success() {
+            let stderr = String::from_utf8_lossy(&convert_result.stderr);
+            return Err(VidQualityError::ConversionError(format!("Failed to convert frame {} to PNG: {}", i, stderr)));
+        }
+    }
+    
+    // Create APNG from PNG sequence using FFmpeg
+    let pattern = temp_dir_path.join("frame_%04d.png");
+    let ffmpeg_result = Command::new("ffmpeg")
+        .arg("-y")
+        .arg("-r")  // Use -r for input frame rate
+        .arg(fps.to_string())
+        .arg("-i")
+        .arg(&pattern)
+        .arg("-c:v")
+        .arg("apng")  // Use apng codec, not png
+        .arg("-f")
+        .arg("apng")
+        .arg("-plays")
+        .arg("0") // Loop forever
+        .arg(shared_utils::safe_path_arg(output_apng).as_ref())
+        .output()
+        .map_err(|e| VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {}", e)))?;
+    
+    if !ffmpeg_result.status.success() {
+        let stderr = String::from_utf8_lossy(&ffmpeg_result.stderr);
+        return Err(VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {}", stderr)));
+    }
+    
+    if verbose {
+        eprintln!("   ✅ WebP → APNG conversion successful ({} frames, {:.2}fps)", frame_count, fps);
+    }
+    
+    Ok(())
+}
+
 fn get_output_path(
     input: &Path,
     extension: &str,
@@ -205,7 +315,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
     // Special handling for animated WebP: FFmpeg's WebP decoder is unreliable for animated WebP.
-    // We must use ImageMagick to convert to APNG first.
+    // We must use webpmux to extract frames and create APNG with correct timing.
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
         if input_ext == "jxl" {
             if options.verbose {
@@ -269,12 +379,12 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             }
         } else if input_ext == "webp" {
             if options.verbose {
-                eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
+                eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
             
-            // Check if ImageMagick is available
-            if which::which("magick").is_err() && which::which("convert").is_err() {
-                tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
+            // Check if webpmux is available
+            if which::which("webpmux").is_err() {
+                tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
@@ -284,9 +394,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                     input_size,
                     output_size: None,
                     size_reduction: None,
-                    message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
+                    message: "Skipped: webpmux not found (required for animated WebP)".to_string(),
                     skipped: true,
-                    skip_reason: Some("imagemagick_not_found".to_string()),
+                    skip_reason: Some("webpmux_not_found".to_string()),
                 });
             }
             
@@ -297,27 +407,11 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                 .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
             let temp_apng_path = temp_apng.path().to_path_buf();
             
-            // Convert WebP to APNG using ImageMagick
-            let magick_result = Command::new("magick")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                .output()
-                .or_else(|_| {
-                    Command::new("convert")
-                        .arg(shared_utils::safe_path_arg(input).as_ref())
-                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                        .output()
-                });
-            
-            match magick_result {
-                Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                    if options.verbose {
-                        eprintln!("   ✅ WebP → APNG conversion successful");
-                    }
-                    (temp_apng_path, Some(temp_apng))
-                }
-                _ => {
-                    tracing::warn!(input = %input.display(), "ImageMagick WebP conversion failed");
+            // Extract WebP frames and create APNG with correct timing
+            match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
+                Ok(_) => (temp_apng_path, Some(temp_apng)),
+                Err(e) => {
+                    tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
@@ -327,9 +421,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                         input_size,
                         output_size: None,
                         size_reduction: None,
-                        message: "WebP → APNG conversion failed (ImageMagick error)".to_string(),
+                        message: format!("WebP extraction failed: {}", e),
                         skipped: true,
-                        skip_reason: Some("webp_conversion_failed".to_string()),
+                        skip_reason: Some("webp_extraction_failed".to_string()),
                     });
                 }
             }
@@ -593,7 +687,25 @@ pub fn convert_to_hevc_mp4_matched(
             }
         } else if input_ext == "webp" {
             if options.verbose {
-                eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
+                eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
+            }
+            
+            // Check if webpmux is available
+            if which::which("webpmux").is_err() {
+                tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
+                copy_original_on_skip(input, options);
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: webpmux not found (required for animated WebP)".to_string(),
+                    skipped: true,
+                    skip_reason: Some("webpmux_not_found".to_string()),
+                });
             }
             
             // Create temporary APNG file
@@ -603,89 +715,24 @@ pub fn convert_to_hevc_mp4_matched(
                 .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
             let temp_apng_path = temp_apng.path().to_path_buf();
             
-            // First, try to get WebP info to determine frame rate
-            let webp_probe = shared_utils::probe_video(input).ok();
-            let fps = webp_probe.as_ref().and_then(|p| {
-                if p.frame_rate > 0.0 { Some(p.frame_rate) } else { None }
-            }).unwrap_or(10.0); // Default to 10fps if unknown
-            
-            // Use ffmpeg to convert WebP to APNG with proper frame rate
-            // This preserves timing information better than ImageMagick
-            let ffmpeg_result = Command::new("ffmpeg")
-                .arg("-y")
-                .arg("-i")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-c:v")
-                .arg("apng")
-                .arg("-r")
-                .arg(fps.to_string())
-                .arg("-plays")
-                .arg("0") // Loop forever
-                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                .output();
-            
-            match ffmpeg_result {
-                Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                    if options.verbose {
-                        eprintln!("   ✅ WebP → APNG conversion successful ({}fps)", fps);
-                    }
-                    (temp_apng_path, Some(temp_apng))
-                }
-                _ => {
-                    // Fallback to ImageMagick if ffmpeg fails
-                    if options.verbose {
-                        eprintln!("   ⚠️  FFmpeg conversion failed, trying ImageMagick fallback");
-                    }
-                    if which::which("magick").is_err() && which::which("convert").is_err() {
-                        tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
-                        copy_original_on_skip(input, options);
-                        mark_as_processed(input);
-                        return Ok(ConversionResult {
-                            success: false,
-                            input_path: input.display().to_string(),
-                            output_path: None,
-                            input_size,
-                            output_size: None,
-                            size_reduction: None,
-                            message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
-                            skipped: true,
-                            skip_reason: Some("imagemagick_not_found".to_string()),
-                        });
-                    }
-                    let magick_result = Command::new("magick")
-                        .arg(shared_utils::safe_path_arg(input).as_ref())
-                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                        .output()
-                        .or_else(|_| {
-                            Command::new("convert")
-                                .arg(shared_utils::safe_path_arg(input).as_ref())
-                                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                                .output()
-                        });
-                    match magick_result {
-                        Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                            if options.verbose {
-                                eprintln!("   ✅ WebP → APNG conversion successful (ImageMagick fallback)");
-                            }
-                            (temp_apng_path, Some(temp_apng))
-                        }
-                        _ => {
-                            tracing::warn!(input = %input.display(), "WebP conversion failed");
-                            copy_original_on_skip(input, options);
-                            mark_as_processed(input);
-                            return Ok(ConversionResult {
-                                success: false,
-                                input_path: input.display().to_string(),
-                                output_path: None,
-                                input_size,
-                                output_size: None,
-                                size_reduction: None,
-                                message: "WebP → APNG conversion failed".to_string(),
-                                skipped: true,
-                                skip_reason: Some("webp_conversion_failed".to_string()),
-                            });
-                        }
-                    }
+            // Extract WebP frames and create APNG with correct timing
+            match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
+                Ok(_) => (temp_apng_path, Some(temp_apng)),
+                Err(e) => {
+                    tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
+                    copy_original_on_skip(input, options);
+                    mark_as_processed(input);
+                    return Ok(ConversionResult {
+                        success: false,
+                        input_path: input.display().to_string(),
+                        output_path: None,
+                        input_size,
+                        output_size: None,
+                        size_reduction: None,
+                        message: format!("WebP extraction failed: {}", e),
+                        skipped: true,
+                        skip_reason: Some("webp_extraction_failed".to_string()),
+                    });
                 }
             }
         } else {
@@ -1135,7 +1182,7 @@ pub fn convert_to_gif_apple_compat(
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
     // Special handling for animated WebP: FFmpeg's WebP decoder is unreliable for animated WebP.
-    // We must use ImageMagick to convert to APNG first.
+    // We must use webpmux to extract frames and create APNG with correct timing.
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
         if input_ext == "jxl" {
             if options.verbose {
@@ -1199,12 +1246,12 @@ pub fn convert_to_gif_apple_compat(
             }
         } else if input_ext == "webp" {
             if options.verbose {
-                eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
+                eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
             
-            // Check if ImageMagick is available
-            if which::which("magick").is_err() && which::which("convert").is_err() {
-                tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
+            // Check if webpmux is available
+            if which::which("webpmux").is_err() {
+                tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
                 return Ok(ConversionResult {
@@ -1214,9 +1261,9 @@ pub fn convert_to_gif_apple_compat(
                     input_size,
                     output_size: None,
                     size_reduction: None,
-                    message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
+                    message: "Skipped: webpmux not found (required for animated WebP)".to_string(),
                     skipped: true,
-                    skip_reason: Some("imagemagick_not_found".to_string()),
+                    skip_reason: Some("webpmux_not_found".to_string()),
                 });
             }
             
@@ -1227,27 +1274,11 @@ pub fn convert_to_gif_apple_compat(
                 .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
             let temp_apng_path = temp_apng.path().to_path_buf();
             
-            // Convert WebP to APNG using ImageMagick
-            let magick_result = Command::new("magick")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                .output()
-                .or_else(|_| {
-                    Command::new("convert")
-                        .arg(shared_utils::safe_path_arg(input).as_ref())
-                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                        .output()
-                });
-            
-            match magick_result {
-                Ok(output) if output.status.success() && temp_apng_path.exists() => {
-                    if options.verbose {
-                        eprintln!("   ✅ WebP → APNG conversion successful");
-                    }
-                    (temp_apng_path, Some(temp_apng))
-                }
-                _ => {
-                    tracing::warn!(input = %input.display(), "ImageMagick WebP conversion failed");
+            // Extract WebP frames and create APNG with correct timing
+            match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
+                Ok(_) => (temp_apng_path, Some(temp_apng)),
+                Err(e) => {
+                    tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
                     copy_original_on_skip(input, options);
                     mark_as_processed(input);
                     return Ok(ConversionResult {
@@ -1257,9 +1288,9 @@ pub fn convert_to_gif_apple_compat(
                         input_size,
                         output_size: None,
                         size_reduction: None,
-                        message: "WebP → APNG conversion failed (ImageMagick error)".to_string(),
+                        message: format!("WebP extraction failed: {}", e),
                         skipped: true,
-                        skip_reason: Some("webp_conversion_failed".to_string()),
+                        skip_reason: Some("webp_extraction_failed".to_string()),
                     });
                 }
             }
