@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.1] - 2026-03-09
+
+### Fixed
+- **FFmpeg libx265 error for animated image containers**: Fixed "Not yet implemented in FFmpeg, patches welcome" error when processing animated AVIF/HEIC/GIF/WebP files. Image containers now use `-map 0:v` (video only) and `-an` (no audio) flags instead of `-map 0` (all streams).
+  - **Root cause**: FFmpeg's libx265 encoder failed when trying to map non-existent audio streams from image containers.
+  - **Fix**: Added `is_image_container()` detection function and conditional stream mapping in `gpu_coarse_search.rs`.
+  - **Impact**: Animated image containers now convert successfully to HEVC without crashes.
+
+- **Audio demux from image containers in x265 mux**: Fixed x265 encoder attempting to demux audio from image containers (AVIF/HEIC/GIF/WebP) during the mux step, causing unnecessary warnings and potential failures.
+
+- **Temporary file cleanup**: Improved cleanup of temporary files during video processing to prevent disk space issues.
+
+- **FPS precheck accuracy**: Enhanced frame rate detection accuracy in precheck phase.
+
+- **Resolution correction**: Fixed resolution detection and correction in video processing pipeline.
+
+- **Precheck warning level**: Downgraded NotRecommended precheck messages from `warn` to `info` level to reduce log noise for expected cases.
+
+### Changed
+- **Image container handling**: Image formats (AVIF/HEIC/GIF/WebP/PNG/JPG/JPEG/BMP/TIFF) now have explicit audio-free processing path in FFmpeg commands.
+- **FFmpeg command generation**: Improved logic to distinguish between image containers and video files for more appropriate encoding parameters.
+
+### Code Quality
+- **Clippy warnings**: Resolved all clippy warnings for improved code quality and maintainability.
+
+### Documentation
+- **MIT License**: Added MIT license file to the repository.
+- **Third-party licenses**: Added comprehensive third-party license information and acknowledgements.
+- **Acknowledgements cleanup**: Removed incorrect Czkawka acknowledgements.
+
+### Dependencies
+- **Dependency updates**: Updated all dependencies to latest versions, including incompatible version upgrades where necessary.
+
 ## [0.9.9-3] - 2026-03-05
 
 ### Apple Compatibility Enhancements
