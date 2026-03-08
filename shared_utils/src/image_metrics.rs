@@ -212,15 +212,15 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     let mut ms_ssim = 1.0;
     let mut used_weight_sum = 0.0;
 
-    for i in 0..scales {
+    for (i, &weight) in weights.iter().enumerate().take(scales) {
         let (w, h) = orig.dimensions();
         if w < WINDOW_SIZE as u32 || h < WINDOW_SIZE as u32 {
             break;
         }
 
         if let Some(ssim) = calculate_ssim(&orig, &conv) {
-            used_weight_sum += weights[i];
-            ms_ssim *= ssim.powf(weights[i]);
+            used_weight_sum += weight;
+            ms_ssim *= ssim.powf(weight);
         }
 
         if i < scales - 1 {

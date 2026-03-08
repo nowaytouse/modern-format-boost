@@ -819,8 +819,8 @@ fn prepare_input_for_cjxl(
         .unwrap_or_default();
 
     let ext = if let Some(real) = detected_ext {
-        if !literal_ext.is_empty() && real != literal_ext {
-            if !((real == "jpg" && literal_ext == "jpeg")
+        if !literal_ext.is_empty() && real != literal_ext
+            && !((real == "jpg" && literal_ext == "jpeg")
                 || (real == "jpeg" && literal_ext == "jpg"))
             {
                 eprintln!(
@@ -829,7 +829,6 @@ fn prepare_input_for_cjxl(
                     real
                 );
             }
-        }
         real.to_string()
     } else if let Some(ref format) = options.input_format {
         format.to_lowercase()

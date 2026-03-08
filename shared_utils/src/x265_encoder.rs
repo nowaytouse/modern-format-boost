@@ -325,7 +325,7 @@ fn encode_to_hevc(
         // Join pipe-copy thread first so we see BrokenPipe before process exit codes.
         let copy_result: Result<Result<u64, std::io::Error>, _> = transfer_thread.join();
         let pipe_io_error = copy_result.as_ref().ok().and_then(|r| r.as_ref().err());
-        let is_broken_pipe = pipe_io_error.map_or(false, |e| {
+        let is_broken_pipe = pipe_io_error.is_some_and(|e| {
             use std::io::ErrorKind;
             matches!(e.kind(), ErrorKind::BrokenPipe | ErrorKind::ConnectionReset)
         });

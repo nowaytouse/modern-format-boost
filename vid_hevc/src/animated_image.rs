@@ -476,7 +476,7 @@ pub fn convert_to_hevc_mp4_matched(
     // (not because of actual quality degradation), still accept the HEVC output.
     // A larger-but-playable HEVC is always better than a non-playable original (e.g. AVIF).
     let quality_or_compat_ok = explore_result.quality_passed
-        || (options.apple_compat && explore_result.ssim.map_or(false, |s| s >= 0.90));
+        || (options.apple_compat && explore_result.ssim.is_some_and(|s| s >= 0.90));
 
     if !quality_or_compat_ok {
         let actual_ssim = explore_result.ssim.unwrap_or(0.0);

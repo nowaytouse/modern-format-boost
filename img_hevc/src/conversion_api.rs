@@ -529,7 +529,7 @@ fn convert_to_hevc_mp4(
     }
 
     // Check if output is readable
-    if let Err(_) = shared_utils::conversion::get_input_dimensions(output) {
+    if shared_utils::conversion::get_input_dimensions(output).is_err() {
         let _ = std::fs::remove_file(output);
         return Err(ImgQualityError::ConversionError(
             "HEVC output file is not readable (invalid or corrupted)".to_string(),

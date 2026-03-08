@@ -592,7 +592,7 @@ mod tests {
         assert!(strategy
             .command
             .as_ref()
-            .map_or(false, |c| c.contains("--lossless_jpeg=1")));
+            .is_some_and(|c| c.contains("--lossless_jpeg=1")));
     }
 
     #[test]

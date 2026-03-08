@@ -16,7 +16,7 @@ use std::sync::Mutex;
 // output from multiple files can be attributed correctly.
 
 thread_local! {
-    static LOG_PREFIX: RefCell<String> = RefCell::new(String::new());
+    static LOG_PREFIX: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
@@ -120,7 +120,7 @@ pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
     if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
         *guard = Some(BufWriter::with_capacity(64 * 1024, file));
     }
-    crate::logging::register_run_log_forwarder(Box::new(|s| write_to_log(s)));
+    crate::logging::register_run_log_forwarder(Box::new(write_to_log));
     Ok(())
 }
 
@@ -252,11 +252,11 @@ pub fn flush_log_file() {
 /// Print a milestone progress line every N events (avoids \r interleaving in concurrent output).
 fn xmp_milestone_interval(count: u64) -> bool {
     if count <= 10 {
-        count % 5 == 0
+        count.is_multiple_of(5)
     } else if count <= 100 {
-        count % 20 == 0
+        count.is_multiple_of(20)
     } else {
-        count % 100 == 0
+        count.is_multiple_of(100)
     }
 }
 
@@ -265,11 +265,11 @@ fn image_milestone_interval(total_processed: u64) -> bool {
         return false;
     }
     if total_processed <= 100 {
-        total_processed % 50 == 0
+        total_processed.is_multiple_of(50)
     } else if total_processed <= 1000 {
-        total_processed % 200 == 0
+        total_processed.is_multiple_of(200)
     } else {
-        total_processed % 500 == 0
+        total_processed.is_multiple_of(500)
     }
 }
 
@@ -480,7 +480,7 @@ pub fn format_status_line(msg: &str) -> String {
 
 /// Call on failed merge. Logs the error on its own line.
 pub fn xmp_merge_failure(msg: &str) {
-    let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), format!("⚠️  XMP merge failed: {}", msg));
+    let line = format!("{}⚠️  XMP merge failed: {}", pad_tag(RUN_LOG_STATUS_TAG), msg);
     emit_stderr(&line);
 }
 

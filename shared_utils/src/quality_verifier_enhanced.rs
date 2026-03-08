@@ -291,8 +291,8 @@ mod tests {
         let input_copy = dir.join("enhanced_verify_test_input_copy");
         let output_copy = dir.join("enhanced_verify_test_output_copy");
         let minimal: [u8; 64] = [0u8; 64];
-        std::fs::write(&input_copy, &minimal).unwrap();
-        std::fs::write(&output_copy, &minimal).unwrap();
+        std::fs::write(&input_copy, minimal).unwrap();
+        std::fs::write(&output_copy, minimal).unwrap();
         let result = verify_after_encode(
             &input_copy,
             &output_copy,
