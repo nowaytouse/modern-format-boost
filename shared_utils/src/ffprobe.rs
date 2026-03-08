@@ -208,6 +208,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     }
     
     // Select stream with most frames (for animated images) or first stream (for regular videos)
+    // Use the actual stream index from the JSON, not the enumerate index
     let (stream_index, video_stream) = if video_streams.len() > 1 {
         video_streams
             .iter()
@@ -217,10 +218,14 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
                     .and_then(|n| n.parse::<u64>().ok())
                     .unwrap_or(0)
             })
-            .map(|(idx, s)| (*idx, *s))
+            .map(|(_, s)| {
+                let actual_index = s["index"].as_u64().unwrap_or(0) as usize;
+                (actual_index, *s)
+            })
             .unwrap()
     } else {
-        video_streams[0]
+        let actual_index = video_streams[0].1["index"].as_u64().unwrap_or(0) as usize;
+        (actual_index, video_streams[0].1)
     };
 
     let video_codec = video_stream["codec_name"]

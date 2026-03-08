@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.8] - 2026-03-09
+
+### Fixed
+- **Multi-stream AVIF/HEIC stream selection bug**: Fixed critical bug where multi-stream animated files selected wrong stream
+  - **Root cause**: `probe_video()` returned enumerate index instead of actual stream index from JSON
+  - **Impact**: Animated AVIF/HEIC files with multiple streams (thumbnail + animation) only converted first frame instead of all frames
+  - **Fix**: 
+    - Modified `probe_video()` to use actual stream `index` field from ffprobe JSON
+    - Added multi-stream detection in `convert_to_hevc_mp4_matched()`
+    - Convert multi-stream AVIF/HEIC to APNG before processing (preserves all frames)
+  - **Testing**: Verified 3-frame AVIF (GBR and YUV) converts correctly to MOV (3 frames, 0.3s, 10fps)
+  - **Files modified**: `shared_utils/src/ffprobe.rs`, `vid_hevc/src/animated_image.rs`
+
+### Technical Details
+- `probe_video()` now correctly extracts `stream["index"]` from JSON instead of using enumerate index
+- For multi-stream AVIF/HEIC in `convert_to_hevc_mp4_matched()`:
+  - Detect multiple video streams using ffprobe
+  - Convert correct stream (with most frames) to APNG using FFmpeg
+  - Process APNG through explore functions (ensures correct frame count)
+- APNG duration detection now works via `-count_frames` and `nb_read_frames` fallback
+- Temporary APNG files are automatically cleaned up
+
+### Testing Results
+- ✅ AVIF GBR (3 frames) → MOV: 3 frames, 0.3s, 10fps, HEVC, YUV420p
+- ✅ AVIF GBR (3 frames) → GIF: 3 frames, 0.3s, 10fps
+- ✅ AVIF YUV (3 frames) → MOV: 3 frames, 0.3s, 10fps, HEVC, YUV420p
+- ✅ WebP (3 frames) → MOV: 3 frames, 0.3s, 10fps, HEVC
+- ✅ WebP (3 frames) → GIF: 3 frames, 0.3s, 10fps
+
 ## [0.10.7] - 2026-03-09
 
 ### Fixed
