@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.4] - 2026-03-09
+
+### Changed
+- **Unified GIF conversion pipeline**: Removed ImageMagick fallback, now all formats use FFmpeg high-quality single-pass method
+  - **Rationale**: Quality testing showed ImageMagick and FFmpeg both achieve 256 colors; FFmpeg is simpler and supports multi-stream files
+  - **Method**: Single-pass `split+palettegen(256)+paletteuse(bayer)` for all animated formats (AVIF/WebP/JXL/HEIC/etc)
+  - **Impact**: Consistent quality across all formats, simplified codebase, better multi-stream support
+
+### Removed
+- **ImageMagick dependency**: Completely removed ImageMagick fallback for GIF conversion
+  - **Reason**: No quality advantage over FFmpeg, adds complexity, doesn't support multi-stream files
+  - **Fallback behavior**: If FFmpeg fails, copy original file and mark as failed (no silent quality degradation)
+
+### Technical Debt Cleanup
+- Removed unnecessary ImageMagick code paths
+- Simplified GIF conversion logic to single high-quality method
+- All formats now use consistent color preservation approach
+
 ## [0.10.3] - 2026-03-09
 
 ### Fixed
