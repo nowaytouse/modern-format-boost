@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.2] - 2026-03-09
+
+### Fixed
+- **Animated AVIF/WebP to MOV conversion frame loss**: Fixed critical bug where animated images (AVIF, WebP, HEIC) converted to HEVC MOV/MP4 would only contain 1 frame instead of all frames. FFmpeg now explicitly receives `-r <fps>` parameter to preserve all frames during conversion.
+  - **Root cause**: FFmpeg defaulted to extracting only the first frame when no frame rate was specified for animated image inputs.
+  - **Fix**: Added frame rate probing before conversion and explicit `-r` flag in FFmpeg command.
+  - **Impact**: Animated images now convert correctly with all frames preserved.
+
+### Improved
+- **Meme-score system enhancements**: Improved GIF meme detection algorithm for more reliable identification of memes/stickers vs video clips:
+  - **Tightened confidence intervals**: Reduced gray zone from 0.35-0.65 to 0.40-0.60 for more decisive classification
+  - **Increased sharpness weight**: Boosted from 0.40 to 0.45 to better detect simple-palette memes
+  - **Adjusted dimension weights**: Rebalanced resolution (0.18), duration (0.20), aspect ratio (0.12), and fps (0.05) for better meme detection
+  - **Result**: More accurate meme identification while maintaining conservative defaults
+
+### Documentation
+- **Meme-score algorithm**: Updated documentation to reflect new confidence thresholds and weight distribution
+
 ## [0.10.1] - 2026-03-09
 
 ### Fixed
