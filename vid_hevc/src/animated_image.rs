@@ -841,199 +841,168 @@ pub fn convert_to_gif_apple_compat(
         false
     };
 
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-
-    // For multi-stream files (animated AVIF/HEIC), use FFmpeg directly with stream selection
-    // ImageMagick cannot select specific streams and will only process the first one
-    // For single-stream files, try ImageMagick first (better for WebP ANIM/ANMF)
-    let magick_ok = if has_multiple_streams {
-        false // Skip ImageMagick for multi-stream files
-    } else {
-        // ImageMagick first — it handles WebP ANIM/ANMF which ffmpeg 8.x cannot decode
-        let res = Command::new("magick")
+    // Use FFmpeg high-quality single-pass palette method for all formats
+    // This ensures consistent quality across all animated formats (AVIF/WebP/JXL/HEIC/etc)
+    let ffmpeg_ok = {
+        let filter = if has_multiple_streams {
+            // Multi-stream: specify stream in filter
+            format!(
+                "[0:{}]scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
+                stream_idx, width, height
+            )
+        } else {
+            // Single-stream: simple filter
+            format!(
+                "scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
+                width, height
+            )
+        };
+        
+        let res = Command::new("ffmpeg")
+            .arg("-y")
+            .arg("-i")
             .arg(shared_utils::safe_path_arg(input).as_ref())
-            .arg("-coalesce")
-            .arg("-layers")
-            .arg("optimize")
+            .arg("-filter_complex")
+            .arg(&filter)
             .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-            .output()
-            .or_else(|_| {
-                Command::new("convert")
-                    .arg(shared_utils::safe_path_arg(input).as_ref())
-                    .arg("-coalesce")
-                    .arg("-layers")
-                    .arg("optimize")
-                    .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-                    .output()
-            });
+            .output();
         matches!(res, Ok(o) if o.status.success() && temp_output.exists())
     };
 
-    if !magick_ok {
+    if !ffmpeg_ok {
+        // FFmpeg conversion failed — copy original so data is not lost
         let _ = fs::remove_file(&temp_output);
-        // Use FFmpeg with high-quality palette method (reference: animate-avif doc)
-        // Single-pass with split + palettegen + paletteuse for best quality
-        let ffmpeg_ok = {
-            let filter = if has_multiple_streams {
-                // Multi-stream: specify stream in filter
-                format!(
-                    "[0:{}]scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
-                    stream_idx, width, height
-                )
-            } else {
-                // Single-stream: simple filter
-                format!(
-                    "scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
-                    width, height
-                )
-            };
-            
-            let res = Command::new("ffmpeg")
-                .arg("-y")
-                .arg("-i")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-filter_complex")
-                .arg(&filter)
-                .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
-                .output();
-            matches!(res, Ok(o) if o.status.success() && temp_output.exists())
-        };
-
-        if !ffmpeg_ok {
-            // Both encoders failed — copy original so data is not lost.
-            let _ = fs::remove_file(&temp_output);
-            tracing::warn!(input = %input.display(), "GIF conversion failed (ImageMagick + ffmpeg both failed); copying original");
-            copy_original_on_skip(input, options);
-            mark_as_processed(input);
-            let input_size_fb = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-            return Ok(ConversionResult {
-                success: false,
-                input_path: input.display().to_string(),
-                output_path: None,
-                input_size: input_size_fb,
-                output_size: None,
-                size_reduction: None,
-                message: "GIF conversion failed (ImageMagick + ffmpeg both unavailable); original copied".to_string(),
-                skipped: true,
-                skip_reason: Some("gif_encode_failed".to_string()),
-            });
-        }
+        tracing::warn!(input = %input.display(), "GIF conversion failed (FFmpeg unavailable or failed); copying original");
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        let input_size_fb = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+        return Ok(ConversionResult {
+            success: false,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size: input_size_fb,
+            output_size: None,
+            size_reduction: None,
+            message: "GIF conversion failed (FFmpeg unavailable or failed); original copied".to_string(),
+            skipped: true,
+            skip_reason: Some("gif_encode_failed".to_string()),
+        });
     }
 
-    {
-        let output_size = fs::metadata(&temp_output)
-            .map(|m| m.len())
-            .unwrap_or(0);
-        if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
-            let _ = fs::remove_file(&temp_output);
-            tracing::warn!(input = %input.display(), "GIF output invalid (empty or unreadable); copying original");
-            copy_original_on_skip(input, options);
-            mark_as_processed(input);
-            return Ok(ConversionResult {
-                success: false,
-                input_path: input.display().to_string(),
-                output_path: None,
-                input_size,
-                output_size: None,
-                size_reduction: None,
-                message: "GIF output invalid; original copied".to_string(),
-                skipped: true,
-                skip_reason: Some("gif_invalid_output".to_string()),
-            });
-        }
-            let reduction = 1.0 - (output_size as f64 / input_size as f64);
-
-            let tolerance_ratio = if options.allow_size_tolerance {
-                1.01
-            } else {
-                1.0
-            };
-            let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
-
-            // apple_compat: compatibility takes priority — a playable GIF is always
-            // better than a non-playable original (e.g. animated AVIF).
-            let size_guard_active = !options.apple_compat;
-
-            if size_guard_active && output_size > max_allowed_size {
-                let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
-                if let Err(e) = fs::remove_file(&temp_output) {
-                    eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
-                }
-                if options.allow_size_tolerance {
-                    eprintln!(
-                        "   ⏭️  Skipping: GIF output larger than input by {:.1}% (tolerance: 1.0%)",
-                        size_increase_pct
-                    );
-                } else {
-                    eprintln!(
-                        "   ⏭️  Skipping: GIF output larger than input by {:.1}% (strict mode: no tolerance)",
-                        size_increase_pct
-                    );
-                }
-                eprintln!(
-                    "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-                    input_size, output_size, size_increase_pct
-                );
-                copy_original_on_skip(input, options);
-                mark_as_processed(input);
-                return Ok(ConversionResult {
-                    success: true,
-                    input_path: input.display().to_string(),
-                    output_path: None,
-                    input_size,
-                    output_size: None,
-                    size_reduction: None,
-                    message: format!(
-                        "Skipped: GIF output larger than input by {:.1}% (tolerance exceeded)",
-                        size_increase_pct
-                    ),
-                    skipped: true,
-                    skip_reason: Some("size_increase_beyond_tolerance".to_string()),
-                });
-            }
-
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult {
-                    success: true,
-                    input_path: input.display().to_string(),
-                    output_path: Some(output.display().to_string()),
-                    input_size,
-                    output_size: Some(fs::metadata(&output)?.len()),
-                    size_reduction: None,
-                    message: "Skipped: Output already exists".to_string(),
-                    skipped: true,
-                    skip_reason: Some("exists".to_string()),
-                });
-            }
-
-            shared_utils::copy_metadata(input, &output);
-            mark_as_processed(input);
-
-            if options.should_delete_original() {
-                let _ = shared_utils::conversion::safe_delete_original(
-                    input,
-                    &output,
-                    shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                );
-            }
-
-            let reduction_pct = reduction * 100.0;
-            let message = if reduction >= 0.0 {
-                format!("GIF (Apple Compat): size reduced {:.1}%", reduction_pct)
-            } else {
-                format!("GIF (Apple Compat): size increased {:.1}%", -reduction_pct)
-            };
-
-            Ok(ConversionResult {
-                success: true,
-                input_path: input.display().to_string(),
-                output_path: Some(output.display().to_string()),
-                input_size,
-                output_size: Some(output_size),
-                size_reduction: Some(reduction_pct),
-                message,
-                skipped: false,
-                skip_reason: None,
-            })
+    // Validate output
+    let output_size = fs::metadata(&temp_output)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
+        let _ = fs::remove_file(&temp_output);
+        tracing::warn!(input = %input.display(), "GIF output invalid (empty or unreadable); copying original");
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(ConversionResult {
+            success: false,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: "GIF output invalid; original copied".to_string(),
+            skipped: true,
+            skip_reason: Some("gif_invalid_output".to_string()),
+        });
     }
+
+    let reduction = 1.0 - (output_size as f64 / input_size as f64);
+
+    let tolerance_ratio = if options.allow_size_tolerance {
+        1.01
+    } else {
+        1.0
+    };
+    let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
+
+    // apple_compat: compatibility takes priority — a playable GIF is always
+    // better than a non-playable original (e.g. animated AVIF).
+    let size_guard_active = !options.apple_compat;
+
+    if size_guard_active && output_size > max_allowed_size {
+        let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
+        if let Err(e) = fs::remove_file(&temp_output) {
+            eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
+        }
+        if options.allow_size_tolerance {
+            eprintln!(
+                "   ⏭️  Skipping: GIF output larger than input by {:.1}% (tolerance: 1.0%)",
+                size_increase_pct
+            );
+        } else {
+            eprintln!(
+                "   ⏭️  Skipping: GIF output larger than input by {:.1}% (strict mode: no tolerance)",
+                size_increase_pct
+            );
+        }
+        eprintln!(
+            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+            input_size, output_size, size_increase_pct
+        );
+        copy_original_on_skip(input, options);
+        mark_as_processed(input);
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: None,
+            input_size,
+            output_size: None,
+            size_reduction: None,
+            message: format!(
+                "Skipped: GIF output larger than input by {:.1}% (tolerance exceeded)",
+                size_increase_pct
+            ),
+            skipped: true,
+            skip_reason: Some("size_increase_beyond_tolerance".to_string()),
+        });
+    }
+
+    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+        return Ok(ConversionResult {
+            success: true,
+            input_path: input.display().to_string(),
+            output_path: Some(output.display().to_string()),
+            input_size,
+            output_size: Some(fs::metadata(&output)?.len()),
+            size_reduction: None,
+            message: "Skipped: Output already exists".to_string(),
+            skipped: true,
+            skip_reason: Some("exists".to_string()),
+        });
+    }
+
+    shared_utils::copy_metadata(input, &output);
+    mark_as_processed(input);
+
+    if options.should_delete_original() {
+        let _ = shared_utils::conversion::safe_delete_original(
+            input,
+            &output,
+            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+        );
+    }
+
+    let reduction_pct = reduction * 100.0;
+    let message = if reduction >= 0.0 {
+        format!("GIF (Apple Compat): size reduced {:.1}%", reduction_pct)
+    } else {
+        format!("GIF (Apple Compat): size increased {:.1}%", -reduction_pct)
+    };
+
+    Ok(ConversionResult {
+        success: true,
+        input_path: input.display().to_string(),
+        output_path: Some(output.display().to_string()),
+        input_size,
+        output_size: Some(output_size),
+        size_reduction: Some(reduction_pct),
+        message,
+        skipped: false,
+        skip_reason: None,
+    })
 }
