@@ -595,59 +595,97 @@ pub fn convert_to_hevc_mp4_matched(
             if options.verbose {
                 eprintln!("   🔧 Detected WebP format, pre-converting to APNG (FFmpeg's WebP decoder is unreliable)");
             }
-            if which::which("magick").is_err() && which::which("convert").is_err() {
-                tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
-                copy_original_on_skip(input, options);
-                mark_as_processed(input);
-                return Ok(ConversionResult {
-                    success: false,
-                    input_path: input.display().to_string(),
-                    output_path: None,
-                    input_size,
-                    output_size: None,
-                    size_reduction: None,
-                    message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
-                    skipped: true,
-                    skip_reason: Some("imagemagick_not_found".to_string()),
-                });
-            }
+            
+            // Create temporary APNG file
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            let magick_result = Command::new("magick")
+            
+            // First, try to get WebP info to determine frame rate
+            let webp_probe = shared_utils::probe_video(input).ok();
+            let fps = webp_probe.as_ref().and_then(|p| {
+                if p.frame_rate > 0.0 { Some(p.frame_rate) } else { None }
+            }).unwrap_or(10.0); // Default to 10fps if unknown
+            
+            // Use ffmpeg to convert WebP to APNG with proper frame rate
+            // This preserves timing information better than ImageMagick
+            let ffmpeg_result = Command::new("ffmpeg")
+                .arg("-y")
+                .arg("-i")
                 .arg(shared_utils::safe_path_arg(input).as_ref())
+                .arg("-c:v")
+                .arg("apng")
+                .arg("-r")
+                .arg(fps.to_string())
+                .arg("-plays")
+                .arg("0") // Loop forever
                 .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                .output()
-                .or_else(|_| {
-                    Command::new("convert")
-                        .arg(shared_utils::safe_path_arg(input).as_ref())
-                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
-                        .output()
-                });
-            match magick_result {
+                .output();
+            
+            match ffmpeg_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        eprintln!("   ✅ WebP → APNG conversion successful");
+                        eprintln!("   ✅ WebP → APNG conversion successful ({}fps)", fps);
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
                 _ => {
-                    tracing::warn!(input = %input.display(), "ImageMagick WebP conversion failed");
-                    copy_original_on_skip(input, options);
-                    mark_as_processed(input);
-                    return Ok(ConversionResult {
-                        success: false,
-                        input_path: input.display().to_string(),
-                        output_path: None,
-                        input_size,
-                        output_size: None,
-                        size_reduction: None,
-                        message: "WebP → APNG conversion failed (ImageMagick error)".to_string(),
-                        skipped: true,
-                        skip_reason: Some("webp_conversion_failed".to_string()),
-                    });
+                    // Fallback to ImageMagick if ffmpeg fails
+                    if options.verbose {
+                        eprintln!("   ⚠️  FFmpeg conversion failed, trying ImageMagick fallback");
+                    }
+                    if which::which("magick").is_err() && which::which("convert").is_err() {
+                        tracing::warn!(input = %input.display(), "ImageMagick not found; cannot process animated WebP");
+                        copy_original_on_skip(input, options);
+                        mark_as_processed(input);
+                        return Ok(ConversionResult {
+                            success: false,
+                            input_path: input.display().to_string(),
+                            output_path: None,
+                            input_size,
+                            output_size: None,
+                            size_reduction: None,
+                            message: "Skipped: ImageMagick not found (required for animated WebP)".to_string(),
+                            skipped: true,
+                            skip_reason: Some("imagemagick_not_found".to_string()),
+                        });
+                    }
+                    let magick_result = Command::new("magick")
+                        .arg(shared_utils::safe_path_arg(input).as_ref())
+                        .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                        .output()
+                        .or_else(|_| {
+                            Command::new("convert")
+                                .arg(shared_utils::safe_path_arg(input).as_ref())
+                                .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
+                                .output()
+                        });
+                    match magick_result {
+                        Ok(output) if output.status.success() && temp_apng_path.exists() => {
+                            if options.verbose {
+                                eprintln!("   ✅ WebP → APNG conversion successful (ImageMagick fallback)");
+                            }
+                            (temp_apng_path, Some(temp_apng))
+                        }
+                        _ => {
+                            tracing::warn!(input = %input.display(), "WebP conversion failed");
+                            copy_original_on_skip(input, options);
+                            mark_as_processed(input);
+                            return Ok(ConversionResult {
+                                success: false,
+                                input_path: input.display().to_string(),
+                                output_path: None,
+                                input_size,
+                                output_size: None,
+                                size_reduction: None,
+                                message: "WebP → APNG conversion failed".to_string(),
+                                skipped: true,
+                                skip_reason: Some("webp_conversion_failed".to_string()),
+                            });
+                        }
+                    }
                 }
             }
         } else {
