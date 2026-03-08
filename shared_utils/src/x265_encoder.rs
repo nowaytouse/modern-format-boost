@@ -410,6 +410,18 @@ fn encode_to_hevc(
     }
 }
 
+fn is_image_container(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "avif" | "heic" | "heif" | "gif" | "webp" | "png" | "jpg" | "jpeg" | "bmp" | "tiff"
+    )
+}
+
 fn mux_hevc_to_container(
     original_input: &Path,
     hevc_file: &Path,
@@ -418,12 +430,16 @@ fn mux_hevc_to_container(
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
 
+    // Image containers (AVIF, HEIC, GIF, WebP, …) cannot carry audio streams.
+    // Attempting to demux audio from them causes "Not yet implemented in FFmpeg".
+    let input_is_image = is_image_container(original_input);
+
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-i")
         .arg(crate::safe_path_arg(hevc_file).as_ref());
 
-    if config.preserve_audio {
+    if config.preserve_audio && !input_is_image {
         cmd.arg("-i")
             .arg(crate::safe_path_arg(original_input).as_ref());
         // Map: video from HEVC bitstream (input 0), all audio + subtitle from original (input 1)
@@ -456,6 +472,7 @@ fn mux_hevc_to_container(
             }
         }
     } else {
+        // No audio: either disabled or source is an image format with no audio streams.
         cmd.arg("-c:v").arg("copy").arg("-an");
     }
 
@@ -471,7 +488,7 @@ fn mux_hevc_to_container(
     let cmd_str = format!(
         "ffmpeg -y -i {:?} {} -c:v copy {} {:?}",
         hevc_file,
-        if config.preserve_audio {
+        if config.preserve_audio && !input_is_image {
             format!(
                 "-i {:?} -map 0:v:0 -map 1:a? -c:a copy{}",
                 original_input,
