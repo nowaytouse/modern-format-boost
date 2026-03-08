@@ -80,6 +80,8 @@ pub struct FFprobeResult {
     pub subtitle_codec: Option<String>,
     /// Variable frame rate detected (r_frame_rate != avg_frame_rate)
     pub is_variable_frame_rate: bool,
+    /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
+    pub stream_index: usize,
 }
 
 pub fn is_ffprobe_available() -> bool {
@@ -193,10 +195,33 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_array()
         .ok_or_else(|| FFprobeError::ParseError("No streams found".to_string()))?;
 
-    let video_stream = streams
+    // For animated images (AVIF/HEIC) with multiple video streams, select the one with most frames
+    // First stream is often a thumbnail/poster, second stream contains the actual animation
+    let video_streams: Vec<(usize, &serde_json::Value)> = streams
         .iter()
-        .find(|s| s["codec_type"].as_str() == Some("video"))
-        .ok_or_else(|| FFprobeError::ParseError("No video stream found".to_string()))?;
+        .enumerate()
+        .filter(|(_, s)| s["codec_type"].as_str() == Some("video"))
+        .collect();
+    
+    if video_streams.is_empty() {
+        return Err(FFprobeError::ParseError("No video stream found".to_string()));
+    }
+    
+    // Select stream with most frames (for animated images) or first stream (for regular videos)
+    let (stream_index, video_stream) = if video_streams.len() > 1 {
+        video_streams
+            .iter()
+            .max_by_key(|(_, s)| {
+                s["nb_frames"]
+                    .as_str()
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .unwrap_or(0)
+            })
+            .map(|(idx, s)| (*idx, *s))
+            .unwrap()
+    } else {
+        video_streams[0]
+    };
 
     let video_codec = video_stream["codec_name"]
         .as_str()
@@ -315,6 +340,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         has_subtitles,
         subtitle_codec,
         is_variable_frame_rate,
+        stream_index,
     })
 }
 

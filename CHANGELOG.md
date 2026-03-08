@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.3] - 2026-03-09
+
+### Fixed
+- **Multi-stream animated files frame loss**: Fixed critical bug where multi-stream animated files (AVIF, HEIC, WebP) would only convert the first frame instead of all frames
+  - **Root cause**: Files with multiple video streams (thumbnail + animation) defaulted to first stream (1 frame)
+  - **Fix**: 
+    - `probe_video` now selects stream with most frames
+    - Added `stream_index` field to track correct stream
+    - FFmpeg uses `-map 0:N` to select animation stream
+    - Multi-stream detection skips ImageMagick (doesn't support stream selection)
+  - **Impact**: All frames preserved in multi-stream animated files
+
+- **Frame rate preservation**: Removed `-r` parameter that was forcing output frame rate
+  - **Issue**: Previous fix incorrectly added `-r` flag which changed original frame rate
+  - **Fix**: FFmpeg automatically preserves original frame rate without explicit parameter
+  - **Impact**: Original frame rate maintained (e.g., 0.5 fps → 0.5 fps)
+
+### Improved
+- **GIF conversion quality**: Upgraded to single-pass high-quality palette method
+  - **Old method**: Two-pass with separate palette file (lower quality)
+  - **New method**: Single-pass `split+palettegen+paletteuse` (reference: animate-avif best practices)
+  - **Impact**: Better color preservation, no temporary palette files
+
+- **Multi-stream handling**: Enhanced detection and processing
+  - Automatic multi-stream detection via ffprobe
+  - ImageMagick fallback only for single-stream files
+  - FFmpeg `-filter_complex [0:N]...` for multi-stream GIF conversion
+
+### Dependencies
+- **Updated to GitHub stable versions**: anyhow, thiserror, clap, walkdir, filetime, xattr, which, log, chrono, image, libheif-rs, tempfile, proptest, flate2
+- **Kept crates.io**: serde/serde_json (version coupling), rayon (dependency tree), tracing (feature complexity), indicatif/console (tag mismatch)
+
 ## [0.10.2] - 2026-03-09
 
 ### Fixed

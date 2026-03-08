@@ -201,11 +201,11 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     let max_threads = get_max_threads(options);
     let x265_params = format!("log-level=error:pools={}", max_threads);
     
-    // Probe to get frame rate from animated image
-    let fps = if let Ok(probe) = shared_utils::probe_video(input) {
-        probe.frame_rate.max(1.0)
+    // Probe to get stream index for multi-stream files (animated AVIF/HEIC/WebP)
+    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
+        probe.stream_index
     } else {
-        10.0 // Default fallback for animated images
+        0 // Default to first stream
     };
     
     let mut cmd = Command::new("ffmpeg");
@@ -214,8 +214,9 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         .arg(max_threads.to_string())
         .arg("-i")
         .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg("-r")
-        .arg(fps.to_string())  // Explicitly set frame rate
+        .arg("-map")
+        .arg(format!("0:{}", stream_idx))  // Select the correct stream
+        // NO -r parameter: preserve original frame rate
         .arg("-c:v")
         .arg("libx265")
         .arg("-crf")
@@ -756,7 +757,6 @@ pub fn convert_to_hevc_mkv_lossless(
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,
-    fps: Option<f32>,
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
@@ -822,29 +822,34 @@ pub fn convert_to_gif_apple_compat(
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
     let (width, height) = get_input_dimensions(input)?;
-    let fps_val = fps.unwrap_or(10.0);
-
-    let palette_path = output.with_extension("palette.png");
-
-    struct PaletteGuard<'a> {
-        path: &'a Path,
-    }
-    impl<'a> Drop for PaletteGuard<'a> {
-        fn drop(&mut self) {
-            if self.path.exists() {
-                if let Err(e) = fs::remove_file(self.path) {
-                    eprintln!("⚠️ [cleanup] Failed to remove temp palette file: {}", e);
-                }
-            }
-        }
-    }
-    let _palette_guard = PaletteGuard {
-        path: &palette_path,
+    
+    // Probe to get stream index for multi-stream files
+    let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
+        probe.stream_index
+    } else {
+        0
+    };
+    
+    // Check if file has multiple video streams
+    let has_multiple_streams = if let Ok(output) = std::process::Command::new("ffprobe")
+        .args(["-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0"])
+        .arg(input)
+        .output()
+    {
+        String::from_utf8_lossy(&output.stdout).lines().count() > 1
+    } else {
+        false
     };
 
-    // ImageMagick first — it handles all animated formats including WebP ANIM/ANMF
-    // which ffmpeg 8.x cannot decode. ffmpeg two-pass palette is the fallback.
-    let magick_ok = {
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
+    // For multi-stream files (animated AVIF/HEIC), use FFmpeg directly with stream selection
+    // ImageMagick cannot select specific streams and will only process the first one
+    // For single-stream files, try ImageMagick first (better for WebP ANIM/ANMF)
+    let magick_ok = if has_multiple_streams {
+        false // Skip ImageMagick for multi-stream files
+    } else {
+        // ImageMagick first — it handles WebP ANIM/ANMF which ffmpeg 8.x cannot decode
         let res = Command::new("magick")
             .arg(shared_utils::safe_path_arg(input).as_ref())
             .arg("-coalesce")
@@ -866,45 +871,35 @@ pub fn convert_to_gif_apple_compat(
 
     if !magick_ok {
         let _ = fs::remove_file(&temp_output);
-        // ImageMagick unavailable or failed — try ffmpeg two-pass palette approach.
-        let ffmpeg_palette_ok = {
+        // Use FFmpeg with high-quality palette method (reference: animate-avif doc)
+        // Single-pass with split + palettegen + paletteuse for best quality
+        let ffmpeg_ok = {
+            let filter = if has_multiple_streams {
+                // Multi-stream: specify stream in filter
+                format!(
+                    "[0:{}]scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
+                    stream_idx, width, height
+                )
+            } else {
+                // Single-stream: simple filter
+                format!(
+                    "scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
+                    width, height
+                )
+            };
+            
             let res = Command::new("ffmpeg")
                 .arg("-y")
                 .arg("-i")
                 .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-vf")
-                .arg(format!(
-                    "fps={},scale={}:{}:flags=lanczos,palettegen=max_colors=256:stats_mode=diff",
-                    fps_val, width, height
-                ))
-                .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
-                .output();
-            matches!(res, Ok(o) if o.status.success() && palette_path.exists())
-        };
-
-        let ffmpeg_gif_ok = if ffmpeg_palette_ok {
-            let res = Command::new("ffmpeg")
-                .arg("-y")
-                .arg("-i")
-                .arg(shared_utils::safe_path_arg(input).as_ref())
-                .arg("-i")
-                .arg(shared_utils::safe_path_arg(&palette_path).as_ref())
-                .arg("-lavfi")
-                .arg(format!(
-                    "fps={},scale={}:{}:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-                    fps_val, width, height
-                ))
+                .arg("-filter_complex")
+                .arg(&filter)
                 .arg(shared_utils::safe_path_arg(&temp_output).as_ref())
                 .output();
-            match res {
-                Ok(o) if o.status.success() => true,
-                _ => { let _ = fs::remove_file(&temp_output); false }
-            }
-        } else {
-            false
+            matches!(res, Ok(o) if o.status.success() && temp_output.exists())
         };
 
-        if !ffmpeg_gif_ok {
+        if !ffmpeg_ok {
             // Both encoders failed — copy original so data is not lost.
             let _ = fs::remove_file(&temp_output);
             tracing::warn!(input = %input.display(), "GIF conversion failed (ImageMagick + ffmpeg both failed); copying original");
