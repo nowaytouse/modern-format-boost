@@ -893,6 +893,18 @@ pub fn explore_with_gpu_coarse_search(
     Ok(result)
 }
 
+fn is_image_container(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "avif" | "heic" | "heif" | "gif" | "webp" | "png" | "jpg" | "jpeg" | "bmp" | "tiff"
+    )
+}
+
 #[allow(unused_assignments)]
 #[allow(clippy::too_many_arguments)]
 fn cpu_fine_tune_from_gpu_boundary(
@@ -915,6 +927,11 @@ fn cpu_fine_tune_from_gpu_boundary(
     let input_size = fs::metadata(input)
         .context("Failed to read input file metadata")?
         .len();
+
+    // Image containers (AVIF, HEIC, GIF, WebP, …) have no audio streams.
+    // Mapping all streams (-map 0) causes FFmpeg libx265 to fail with
+    // "Not yet implemented in FFmpeg, patches welcome".
+    let input_is_image = is_image_container(input);
 
     let input_stream_info = crate::stream_size::extract_stream_sizes(input);
     let input_video_stream_size = input_stream_info.video_stream_size;
@@ -1010,8 +1027,14 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-i")
             .arg(crate::safe_path_arg(input).as_ref());
 
-        // Map all streams explicitly (video, audio, subtitles)
-        cmd.arg("-map").arg("0");
+        // Map streams: for image containers (AVIF/HEIC/GIF/WebP), only map video
+        // to avoid FFmpeg libx265 "Not yet implemented" error when handling
+        // non-existent audio streams.
+        if input_is_image {
+            cmd.arg("-map").arg("0:v");
+        } else {
+            cmd.arg("-map").arg("0");
+        }
 
         cmd.arg("-c:v")
             .arg(encoder.ffmpeg_name())
@@ -1039,18 +1062,22 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        match &audio_strategy {
-            AudioTranscodeStrategy::Copy => {
-                cmd.arg("-c:a").arg("copy");
-            }
-            AudioTranscodeStrategy::Alac => {
-                cmd.arg("-c:a").arg("alac");
-            }
-            AudioTranscodeStrategy::AacHigh => {
-                cmd.arg("-c:a").arg("aac").arg("-b:a").arg("256k");
-            }
-            AudioTranscodeStrategy::AacMedium => {
-                cmd.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
+        if input_is_image {
+             cmd.arg("-an");
+        } else {
+            match &audio_strategy {
+                AudioTranscodeStrategy::Copy => {
+                    cmd.arg("-c:a").arg("copy");
+                }
+                AudioTranscodeStrategy::Alac => {
+                    cmd.arg("-c:a").arg("alac");
+                }
+                AudioTranscodeStrategy::AacHigh => {
+                    cmd.arg("-c:a").arg("aac").arg("-b:a").arg("256k");
+                }
+                AudioTranscodeStrategy::AacMedium => {
+                    cmd.arg("-c:a").arg("aac").arg("-b:a").arg("192k");
+                }
             }
         }
 
