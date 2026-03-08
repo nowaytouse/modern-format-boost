@@ -46,8 +46,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     
     // Parse duration from first frame (assuming all frames have same duration)
     let frame_duration_ms = info_str.lines()
-        .skip_while(|l| !l.contains("duration"))
-        .nth(0)
+        .find(|l| l.contains("duration"))
         .and_then(|l| {
             l.split_whitespace()
                 .find_map(|s| s.parse::<u32>().ok())
