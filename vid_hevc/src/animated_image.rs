@@ -105,7 +105,7 @@ fn is_gif_meme(path: &Path) -> bool {
     }
     let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if let Ok(probe) = shared_utils::probe_video(path) {
-        if let Some(meta) = shared_utils::gif_meta_from_probe(&probe, file_size) {
+        if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path) {
             return shared_utils::should_keep_as_gif(&meta);
         }
     }
@@ -200,12 +200,22 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
 
     let max_threads = get_max_threads(options);
     let x265_params = format!("log-level=error:pools={}", max_threads);
+    
+    // Probe to get frame rate from animated image
+    let fps = if let Ok(probe) = shared_utils::probe_video(input) {
+        probe.frame_rate.max(1.0)
+    } else {
+        10.0 // Default fallback for animated images
+    };
+    
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-threads")
         .arg(max_threads.to_string())
         .arg("-i")
         .arg(shared_utils::safe_path_arg(input).as_ref())
+        .arg("-r")
+        .arg(fps.to_string())  // Explicitly set frame rate
         .arg("-c:v")
         .arg("libx265")
         .arg("-crf")
