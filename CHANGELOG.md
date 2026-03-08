@@ -21,10 +21,15 @@ All notable changes to this project will be documented in this file.
 
 - **WebP decoder reliability**: Added workaround for FFmpeg's unreliable WebP decoder
   - **Root cause**: FFmpeg's WebP decoder fails with "Invalid data found when processing input" for some animated WebP files
-  - **Fix**: Pre-convert WebP → APNG using ImageMagick before FFmpeg processing (similar to JXL handling)
+  - **Fix**: Pre-convert WebP → APNG using FFmpeg (primary) or ImageMagick (fallback) before processing
+  - **Method**: FFmpeg creates APNG with proper frame rate and duration metadata
   - **Impact**: Animated WebP files can now be reliably converted to GIF or HEVC video formats
-  - **Requirement**: ImageMagick must be installed
   - **Files modified**: `vid_hevc/src/animated_image.rs` (both `convert_to_hevc_mp4` and `convert_to_hevc_mp4_matched`)
+
+- **APNG duration detection**: Fixed bug where ImageMagick-created APNG files had no duration metadata
+  - **Root cause**: ImageMagick doesn't preserve timing information when converting to APNG
+  - **Fix**: Use FFmpeg as primary method for WebP → APNG conversion (preserves frame rate), with ImageMagick as fallback
+  - **Impact**: WebP → MOV/MP4 conversion now works correctly with proper duration
 
 ### Added
 - **Force video mode**: Added `--force-video` flag and `MODERN_FORMAT_BOOST_FORCE_VIDEO` environment variable
@@ -34,9 +39,16 @@ All notable changes to this project will be documented in this file.
 
 ### Technical Details
 - RGB/GBR colorspace is now filtered out in `build_color_args_from_probe()` and color metadata building
-- WebP pre-processing uses ImageMagick to convert to APNG intermediate format
+- WebP pre-processing uses FFmpeg (primary) to convert to APNG with proper timing metadata
+- ImageMagick is used as fallback if FFmpeg APNG encoding fails
 - Temporary APNG files are automatically cleaned up after processing
 - Dimension fallback chain: ffprobe → image crate → ImageMagick
+
+### Testing
+- Verified AVIF GBR → MOV conversion (no colorspace errors)
+- Verified WebP → MOV conversion (proper duration: 0.36s for 3 frames)
+- Verified WebP → GIF conversion (successful)
+- All test formats (WebP, AVIF GBR, AVIF YUV, GIF) convert successfully
 
 ## [0.10.5] - 2026-03-09
 
