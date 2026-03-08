@@ -34,7 +34,9 @@ fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<Str
             "bt2020cl"  | "bt2020_cl"  => "bt2020c",
             other => other,
         };
-        if !normalised.is_empty() && normalised != "unknown" {
+        // Skip RGB/GBR colorspace: HEVC doesn't support it, and we're converting to YUV in filter chain
+        let is_rgb_colorspace = normalised == "gbr" || normalised == "rgb" || normalised == "gbrp";
+        if !normalised.is_empty() && normalised != "unknown" && !is_rgb_colorspace {
             args.push("-colorspace".to_string());
             args.push(normalised.to_string());
         }

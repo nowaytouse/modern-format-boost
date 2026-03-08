@@ -49,6 +49,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
 
     // -colorspace (matrix coefficients)
     // Derive from color_space field; normalise bt2020ncl → bt2020nc for ffmpeg
+    // Skip RGB/GBR colorspace: HEVC doesn't support it, and we're converting to YUV in filter chain
     let cs_str = match &detection.color_space {
         crate::detection_api::ColorSpace::BT2020 => Some("bt2020nc"),
         crate::detection_api::ColorSpace::BT709  => Some("bt709"),
@@ -62,7 +63,8 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
         args.push("-colorspace".to_string());
         args.push(cs.to_string());
     } else if let crate::detection_api::ColorSpace::Unknown(ref s) = detection.color_space {
-        if !s.is_empty() && s != "unknown" {
+        let is_rgb_colorspace = s == "gbr" || s == "rgb" || s == "gbrp";
+        if !s.is_empty() && s != "unknown" && !is_rgb_colorspace {
             args.push("-colorspace".to_string());
             args.push(s.clone());
         }

@@ -400,6 +400,14 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         .and_then(|h| u32::try_from(h).ok())
         .context("Missing or invalid video height")?;
 
+    // Fallback for formats where ffprobe returns 0x0 (e.g., animated WebP)
+    let (width, height) = if width == 0 || height == 0 {
+        crate::conversion::get_input_dimensions(input)
+            .map_err(|e| anyhow::anyhow!("Failed to get dimensions via fallback: {}", e))?
+    } else {
+        (width, height)
+    };
+
     let fps = parse_fps_from_stream(stream);
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
