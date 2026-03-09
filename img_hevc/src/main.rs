@@ -889,8 +889,8 @@ fn auto_convert_single_file(
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
     } else {
-        // Always show success message (not just in verbose mode)
-        println!("✅ {}", output.message);
+        // Always show success message and log to file
+        log_eprintln!("✅ {}", output.message);
     }
 
     Ok(output)

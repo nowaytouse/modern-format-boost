@@ -80,6 +80,7 @@ pub mod heartbeat_manager;
 pub mod universal_heartbeat;
 
 pub mod logging;
+pub mod error_logging;
 
 pub mod common_utils;
 
