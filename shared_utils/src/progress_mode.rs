@@ -23,7 +23,8 @@ thread_local! {
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
 
-/// Format duration as elegant string like "1d 01:23:45.678" or "01:23:45.678" or "23:45.678" or "45.678s"
+/// Format duration as beautified string with proper spacing and units
+/// Examples: "1d 01h 00m 00s 000ms", "01h 00m 00s 000ms", "00m 00s 000ms", "00s 000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
     let days = total_millis / (86400 * 1000);
@@ -32,23 +33,21 @@ pub fn format_duration_compact(duration: Duration) -> String {
     let seconds = (total_millis % (60 * 1000)) / 1000;
     let millis = total_millis % 1000;
     
+    let mut parts = Vec::new();
+    
     if days > 0 {
-        // Format: 1d 01:23:45.678
-        format!("{}d {:02}:{:02}:{:02}.{:03}", 
-                days, hours, minutes, seconds, millis)
-    } else if hours > 0 {
-        // Format: 01:23:45.678
-        format!("{:02}:{:02}:{:02}.{:03}", 
-                hours, minutes, seconds, millis)
-    } else if minutes > 0 {
-        // Format: 23:45.678
-        format!("{:02}:{:02}.{:03}", 
-                minutes, seconds, millis)
-    } else {
-        // Format: 45.678s
-        format!("{:02}.{:03}s", 
-                seconds, millis)
+        parts.push(format!("{}d", days));
     }
+    if hours > 0 || days > 0 {
+        parts.push(format!("{:02}h", hours));
+    }
+    if minutes > 0 || hours > 0 || days > 0 {
+        parts.push(format!("{:02}m", minutes));
+    }
+    parts.push(format!("{:02}s", seconds));
+    parts.push(format!("{:03}ms", millis));
+    
+    parts.join(" ")
 }
 
 /// Width of the tag column so all message bodies align (e.g. [file.jpeg]).
