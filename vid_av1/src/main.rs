@@ -182,7 +182,7 @@ fn main() -> anyhow::Result<()> {
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if ultimate {
-                info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                info!("   � Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if cpu {
                 info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");

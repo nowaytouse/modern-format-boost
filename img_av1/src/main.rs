@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             if ultimate {
-                shared_utils::log_eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::log_eprintln!("� Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if !allow_size_tolerance {
                 shared_utils::log_eprintln!(
