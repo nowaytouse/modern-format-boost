@@ -1589,8 +1589,25 @@ fn cpu_fine_tune_from_gpu_boundary(
                 wall_hits += 1;
 
                 let total_file_diff = crate::format_size_diff(size as i64 - input_size as i64);
+                
+                // Calculate new_step first for phase_info
+                let curve_step = initial_step * DECAY_FACTOR.powi(wall_hits as i32);
+                let new_step = if curve_step < 1.0 {
+                    MIN_STEP
+                } else {
+                    curve_step
+                };
+                
+                let phase_info = if wall_hits == 1 {
+                    format!("decay ×{:.1}", DECAY_FACTOR)
+                } else if new_step <= MIN_STEP + 0.01 {
+                    format!("→ FINE TUNING")
+                } else {
+                    format!("decay {}×{:.1}^{}", DIM, DECAY_FACTOR, wall_hits)
+                };
+
                 crate::log_eprintln!(
-                    "   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} (total file {}{}{})",
+                    "   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} │ {}Backtrack: {:.2} → {:.2} ({}){} (total file {}{}{})",
                     BRIGHT_RED,
                     RESET,
                     CYAN,
@@ -1601,6 +1618,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                     RESET,
                     RED,
                     wall_hits,
+                    RESET,
+                    YELLOW,
+                    current_step,
+                    new_step,
+                    phase_info,
                     RESET,
                     RED,
                     total_file_diff,
@@ -1627,29 +1649,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                     break;
                 }
-
-                let curve_step = initial_step * DECAY_FACTOR.powi(wall_hits as i32);
-
-                let new_step = if curve_step < 1.0 {
-                    MIN_STEP
-                } else {
-                    curve_step
-                };
-
-                let phase_info = if new_step <= MIN_STEP + 0.01 {
-                    format!("{}→ FINE TUNING{}", BRIGHT_GREEN, RESET)
-                } else {
-                    format!("decay {}×{:.1}^{}{}", DIM, DECAY_FACTOR, wall_hits, RESET)
-                };
-
-                crate::log_eprintln!(
-                    "   {}Backtrack: step {:.2} → {:.2} ({}){}",
-                    YELLOW,
-                    current_step,
-                    new_step,
-                    phase_info,
-                    RESET
-                );
 
                 current_step = new_step;
                 test_crf = last_good_crf - current_step;
