@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.14] - 2026-03-10
+
+### Fixed
+- **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
+  - `shared_utils/src/conversion.rs` (4 occurrences)
+  - `img_hevc/src/conversion_api.rs` (2 occurrences)
+  - `img_av1/src/conversion_api.rs` (2 occurrences)
+  - `vid_hevc/src/animated_image.rs` (6 occurrences — HEVC, Lossless HEVC, GIF Apple Compat)
+  - Workspace now compiles with zero clippy warnings at `--release` profile
+
 ## [0.10.13] - 2026-03-10
 
 ### Changed

@@ -234,27 +234,23 @@ impl ConversionResult {
         let message = if reduction >= 0.0 {
             match extra_info {
                 Some(info) => format!(
-                    "{} ({}): size reduced {}",
-                    format_name, info,
-                    format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
+                    "{} ({}): size reduced \x1b[1;32m{:.1}%\x1b[0m",
+                    format_name, info, reduction_pct
                 ),
                 None => format!(
-                    "{} conversion successful: size reduced {}",
-                    format_name,
-                    format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
+                    "{} conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m",
+                    format_name, reduction_pct
                 ),
             }
         } else {
             match extra_info {
                 Some(info) => format!(
-                    "{} ({}): size increased {}",
-                    format_name, info,
-                    format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
+                    "{} ({}): size increased \x1b[1;33m{:.1}%\x1b[0m",
+                    format_name, info, -reduction_pct
                 ),
                 None => format!(
-                    "{} conversion successful: size increased {}",
-                    format_name,
-                    format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
+                    "{} conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
+                    format_name, -reduction_pct
                 ),
             }
         };
