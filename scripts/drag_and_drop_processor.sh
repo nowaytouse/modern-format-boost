@@ -37,10 +37,26 @@ start_elapsed_spinner() {
             now=$(date +%s)
             elapsed_sec=$(( now - start ))
             [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
-            h=$(( elapsed_sec / 3600 ))
-            m=$(( (elapsed_sec % 3600) / 60 ))
-            s=$(( elapsed_sec % 60 ))
-            elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
+            # Format duration using the same compact format as Rust code
+            if [[ $elapsed_sec -ge 86400 ]]; then
+                days=$(( elapsed_sec / 86400 ))
+                remaining=$(( elapsed_sec % 86400 ))
+                h=$(( remaining / 3600 ))
+                m=$(( (remaining % 3600) / 60 ))
+                s=$(( remaining % 60 ))
+                elapsed_str=$(printf '%02dD:%02dh:%02dm:%02ds' "$days" "$h" "$m" "$s")
+            elif [[ $elapsed_sec -ge 3600 ]]; then
+                h=$(( elapsed_sec / 3600 ))
+                m=$(( (elapsed_sec % 3600) / 60 ))
+                s=$(( elapsed_sec % 60 ))
+                elapsed_str=$(printf '%02dh:%02dm:%02ds' "$h" "$m" "$s")
+            elif [[ $elapsed_sec -ge 60 ]]; then
+                m=$(( elapsed_sec / 60 ))
+                s=$(( elapsed_sec % 60 ))
+                elapsed_str=$(printf '%02dm:%02ds' "$m" "$s")
+            else
+                elapsed_str=$(printf '%02ds' "$elapsed_sec")
+            fi
             case $(( idx % 4 )) in 0) sp='|';; 1) sp='/';; 2) sp='-';; *) sp='\';; esac
             _tty "$sp" "$elapsed_str"
             idx=$(( idx + 1 ))
@@ -53,15 +69,33 @@ start_elapsed_spinner() {
 stop_elapsed_spinner() {
     [[ -z "$SPINNER_PID" ]] && return
     ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
-    SPINNER_PID=""
-    now=$(date +%s)
-    elapsed_sec=$(( now - ELAPSED_START ))
+    local end
+    end=$(date +%s)
+    local elapsed_sec=$(( end - ELAPSED_START ))
     [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
-    h=$(( elapsed_sec / 3600 ))
-    m=$(( (elapsed_sec % 3600) / 60 ))
-    s=$(( elapsed_sec % 60 ))
-    elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
-    [[ -c /dev/tty ]] && printf '\r\033[2K   ✅ Total time: %s\n' "$elapsed_str" > /dev/tty 2>/dev/null
+    
+    # Format duration using the same compact format as Rust code
+    if [[ $elapsed_sec -ge 86400 ]]; then
+        days=$(( elapsed_sec / 86400 ))
+        remaining=$(( elapsed_sec % 86400 ))
+        h=$(( remaining / 3600 ))
+        m=$(( remaining % 3600 / 60 ))
+        s=$(( remaining % 60 ))
+        elapsed_str=$(printf '%02dD:%02dh:%02dm:%02ds' "$days" "$h" "$m" "$s")
+    elif [[ $elapsed_sec -ge 3600 ]]; then
+        h=$(( elapsed_sec / 3600 ))
+        m=$(( (elapsed_sec % 3600) / 60 ))
+        s=$(( elapsed_sec % 60 ))
+        elapsed_str=$(printf '%02dh:%02dm:%02ds' "$h" "$m" "$s")
+    elif [[ $elapsed_sec -ge 60 ]]; then
+        m=$(( elapsed_sec / 60 ))
+        s=$(( elapsed_sec % 60 ))
+        elapsed_str=$(printf '%02dm:%02ds' "$m" "$s")
+    else
+        elapsed_str=$(printf '%02ds' "$elapsed_sec")
+    fi
+    
+    [[ -c /dev/tty ]] && printf '\r\033[2K   Total time: %s\n' "$elapsed_str" > /dev/tty 2>/dev/null
 }
 
 LOG_DIR="$PROJECT_ROOT/logs"
