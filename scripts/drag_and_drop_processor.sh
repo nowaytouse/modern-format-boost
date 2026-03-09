@@ -215,7 +215,7 @@ draw_header() {
     echo -e "${BLUE}╭$(printf '─%.0s' {1..70})╮${RESET}"
     printf "${BLUE}│${RESET}${BG_HEADER}%*s${BOLD}${WHITE}%s${RESET}${BG_HEADER}%*s${RESET}${BLUE}│${RESET}\n" $padding "" "$title" $padding ""
     echo -e "${BLUE}│$(printf '─%.0s' {1..70})│${RESET}"
-    echo -e "${BLUE}│${RESET}  ${DIM}PREMIUM MEDIA OPTIMIZER${RESET}               ${BLUE}│${RESET}
+    echo -e "${BLUE}│${RESET}  ${DIM}PREMIUM MEDIA OPTIMIZER${RESET}               ${BLUE}│${RESET}"
     echo -e "${BLUE}│${RESET}  ${GREEN}●${RESET} ${DIM}No Data Loss${RESET}   ${GREEN}●${RESET} ${DIM}Smart Conversion${RESET}   ${GREEN}●${RESET} ${DIM}Auto-Repair${RESET}               ${BLUE}│${RESET}"
     echo -e "${BLUE}╰$(printf '─%.0s' {1..70})╯${RESET}"
     echo ""
@@ -488,7 +488,6 @@ show_summary() {
 }
 
 _main() {
-    clear_screen
     for arg in "$@"; do
         if [[ "$arg" == "--ultimate" ]]; then
             ULTIMATE_MODE=true
