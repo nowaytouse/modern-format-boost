@@ -168,7 +168,7 @@ fn main() -> anyhow::Result<()> {
                 info!("   📂 Recursive: ENABLED");
             }
             if ultimate {
-                info!("   🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                info!("   � Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if force_ms_ssim_long {
                 info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
