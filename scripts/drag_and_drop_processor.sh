@@ -402,16 +402,14 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Stop the spinner before the binary runs so its \r writes can't
-    # collide with the binary's stderr output on the same terminal line.
-    pause_spinner
-
     local output
     if [[ -n "$LOG_FILE" ]]; then
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
     else
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
     fi
+    # Clear the spinner line after binary finishes so it doesn't linger.
+    [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
     parse_tool_stats "$output" "img"
     echo ""
 }
@@ -428,10 +426,6 @@ process_videos() {
     else
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
-
-    # Stop the spinner before the binary runs so its \r writes can't
-    # collide with the binary's stderr output on the same terminal line.
-    pause_spinner
 
     local output
     if [[ -n "$LOG_FILE" ]]; then
