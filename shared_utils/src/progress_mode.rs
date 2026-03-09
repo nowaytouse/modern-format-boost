@@ -24,10 +24,12 @@ thread_local! {
 const LOG_PREFIX_MAX_LEN: usize = 28;
 
 /// Format duration as detailed string with gradual spacing strategy
-/// Examples: "01W: 01D: 01h:00m:00s:000ms" or "01D: 01h:00m:00s:000ms" or "01h:00m:00s:000ms" or "00m:00s:000ms" or "00s:000ms"
+/// Examples: "01Y: 01M: 01W: 01D: 01h:00m:00s:000ms" or "01M: 01W: 01D: 01h:00m:00s:000ms" or "01W: 01D: 01h:00m:00s:000ms" or "01D: 01h:00m:00s:000ms" or "01h:00m:00s:000ms" or "00m:00s:000ms" or "00s:000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
-    let weeks = total_millis / (7 * 86400 * 1000);
+    let years = total_millis / (365 * 86400 * 1000); // Approximate year as 365 days
+    let months = (total_millis % (365 * 86400 * 1000)) / (30 * 86400 * 1000); // Approximate month as 30 days
+    let weeks = (total_millis % (30 * 86400 * 1000)) / (7 * 86400 * 1000);
     let days = (total_millis % (7 * 86400 * 1000)) / (86400 * 1000);
     let hours = (total_millis % (86400 * 1000)) / (3600 * 1000);
     let minutes = (total_millis % (3600 * 1000)) / (60 * 1000);
@@ -36,25 +38,31 @@ pub fn format_duration_compact(duration: Duration) -> String {
     
     let mut parts = Vec::new();
     
-    if weeks > 0 {
+    if years > 0 {
+        parts.push(format!("{:02}Y", years));
+    }
+    if months > 0 || years > 0 {
+        parts.push(format!("{:02}M", months));
+    }
+    if weeks > 0 || months > 0 || years > 0 {
         parts.push(format!("{:02}W", weeks));
     }
-    if days > 0 || weeks > 0 {
+    if days > 0 || weeks > 0 || months > 0 || years > 0 {
         parts.push(format!("{:02}D", days));
     }
-    if hours > 0 || days > 0 || weeks > 0 {
+    if hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
         parts.push(format!("{:02}h", hours));
     }
-    if minutes > 0 || hours > 0 || days > 0 || weeks > 0 {
+    if minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
         parts.push(format!("{:02}m", minutes));
     }
     parts.push(format!("{:02}s", seconds));
     parts.push(format!("{:03}ms", millis));
     
-    // Gradual spacing: spaces only after long units (W, D, h)
-    if weeks > 0 || days > 0 || hours > 0 {
+    // Gradual spacing: spaces only after long units (Y, M, W, D, h)
+    if years > 0 || months > 0 || weeks > 0 || days > 0 || hours > 0 {
         // Find where long units end (before minutes)
-        let long_units_end = if weeks > 0 { 3 } else if days > 0 { 2 } else { 1 };
+        let long_units_end = if years > 0 { 5 } else if months > 0 { 4 } else if weeks > 0 { 3 } else if days > 0 { 2 } else { 1 };
         
         let mut result = String::new();
         for (i, part) in parts.iter().enumerate() {
