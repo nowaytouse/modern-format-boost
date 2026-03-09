@@ -142,7 +142,7 @@ fn main() -> anyhow::Result<()> {
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Run 时自动创建并写入 ./logs/vid_hevc_run_<timestamp>.log，无需任何 flag
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_hevc") {
-                eprintln!("⚠️  Could not open run log file: {}", e);
+                shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not open run log file").yellow(), e);
             }
             info!("🎬 Run Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");

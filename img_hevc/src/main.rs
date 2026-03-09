@@ -154,7 +154,7 @@ fn main() -> anyhow::Result<()> {
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Run 时最先创建 run log，后续所有带 emoji 的输出都会写入该文件
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_hevc") {
-                eprintln!("⚠️  Could not open run log file: {}", e);
+                shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not open run log file").yellow(), e);
             }
             if lossless {
                 shared_utils::progress_mode::emit_stderr("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
@@ -256,7 +256,7 @@ fn main() -> anyhow::Result<()> {
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
-                eprintln!("⚠️ restore-timestamps failed: {}", e);
+                shared_utils::log_eprintln!("⚠️ {}: {}", console::style("restore-timestamps failed").yellow(), e);
                 std::process::exit(1);
             }
         }
@@ -773,12 +773,13 @@ fn auto_convert_single_file(
                     if let Some(d) = retry {
                         d
                     } else {
-                        eprintln!(
-                            "⚠️  Cannot get animation duration, skipping conversion: {}",
+                        shared_utils::log_eprintln!(
+                            "⚠️  {}: {}",
+                            console::style("Cannot get animation duration, skipping conversion").yellow(),
                             input.display()
                         );
-                        eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                        eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
+                        shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                        shared_utils::log_eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
                         copy_original_if_adjacent_mode(input, config)?;
                         return Ok(make_skipped("Cannot get animation duration"));
                     }
@@ -890,7 +891,7 @@ fn auto_convert_single_file(
         verbose_log!("⏭️ {}", output.message);
     } else {
         // Always show success message and log to file
-        log_eprintln!("✅ {}", output.message);
+        shared_utils::log_eprintln!("✅ {}", output.message);
     }
 
     Ok(output)
@@ -978,9 +979,10 @@ fn auto_convert_directory(
     {
         Ok(p) => p,
         Err(e) => {
-            eprintln!(
-                "⚠️  Failed to create {} thread pool: {}, falling back to 2 threads",
-                max_threads, e
+            shared_utils::log_eprintln!(
+                "⚠️  {}: {}, falling back to 2 threads",
+                console::style(format!("Failed to create {} thread pool", max_threads)).yellow(),
+                e
             );
             rayon::ThreadPoolBuilder::new()
                 .num_threads(2)
@@ -990,7 +992,7 @@ fn auto_convert_directory(
     };
 
     if config.verbose {
-        println!(
+        shared_utils::log_eprintln!(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
             max_threads,
             child_threads,
@@ -999,7 +1001,7 @@ fn auto_convert_directory(
                 .unwrap_or(4)
         );
         if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {
-            println!("   💡 {}", hint);
+            shared_utils::log_eprintln!("   💡 {}", hint);
         }
     }
 
@@ -1024,7 +1026,7 @@ fn auto_convert_directory(
                         skipped.fetch_add(1, Ordering::Relaxed);
                     } else {
                         let err_str = e.to_string();
-                        eprintln!("❌ Conversion failed {}: {}", path.display(), e);
+                        shared_utils::log_auto_error!("Image conversion", "Failed {}: {}", path.display(), e);
                         shared_utils::progress_mode::log_conversion_failure(path, &err_str);
                         failed.fetch_add(1, Ordering::Relaxed);
                         shared_utils::progress_mode::image_processed_failure();

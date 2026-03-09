@@ -171,36 +171,36 @@ fn main() -> anyhow::Result<()> {
             };
 
             if lossless {
-                eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-                eprintln!("   Smart quality matching: DISABLED");
+                shared_utils::log_eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
+                shared_utils::log_eprintln!("   Smart quality matching: DISABLED");
             } else if verbose {
-                eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
-                eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
+                shared_utils::log_eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
+                shared_utils::log_eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Run 时自动写入当前目录的 img_av1_run.log（质量/进度始终有据可查）
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_av1") {
-                eprintln!("⚠️  Could not open default log file: {}", e);
+                shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not open default log file").yellow(), e);
             }
             if apple_compat {
-                eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
+                shared_utils::log_eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if in_place {
-                eprintln!(
+                shared_utils::log_eprintln!(
                     "🔄 In-place mode: ENABLED (original files will be deleted after conversion)"
                 );
             }
             if ultimate {
-                eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::log_eprintln!("🔥 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if !allow_size_tolerance {
-                eprintln!(
+                shared_utils::log_eprintln!(
                     "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)"
                 );
             }
             if cpu {
-                eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
+                shared_utils::log_eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
 
             let workload = if input.is_dir() {
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
                 if resume {
                     if let Err(e) = shared_utils::load_processed_list(&progress_path) {
                         if config.verbose {
-                            eprintln!("⚠️  Could not load progress file: {}", e);
+                            shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not load progress file").yellow(), e);
                         }
                     } else if config.verbose && progress_path.exists() {
                         println!("📂 Resume: loading progress from {}", progress_path.display());
@@ -255,11 +255,11 @@ fn main() -> anyhow::Result<()> {
                 auto_convert_directory(&input, &config)?;
                 if let Err(e) = shared_utils::save_processed_list(&progress_path) {
                     if config.verbose {
-                        eprintln!("⚠️  Could not save progress file: {}", e);
+                        shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not save progress file").yellow(), e);
                     }
                 }
             } else {
-                eprintln!("❌ Error: Input path does not exist: {}", input.display());
+                shared_utils::log_eprintln!("❌ {}: {}", console::style("Error: Input path does not exist").red().bold(), input.display());
                 std::process::exit(1);
             }
         }
@@ -274,7 +274,7 @@ fn main() -> anyhow::Result<()> {
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
-                eprintln!("⚠️ restore-timestamps failed: {}", e);
+                shared_utils::log_eprintln!("⚠️ {}: {}", console::style("restore-timestamps failed").yellow(), e);
                 std::process::exit(1);
             }
         }
@@ -662,12 +662,13 @@ fn auto_convert_single_file(
                     if let Some(d) = shared_utils::image_analyzer::get_animation_duration_for_path(input) {
                         d
                     } else {
-                        eprintln!(
-                            "⚠️  Cannot get animation duration, skipping conversion: {}",
+                        shared_utils::log_eprintln!(
+                            "⚠️  {}: {}",
+                            console::style("Cannot get animation duration, skipping conversion").yellow(),
                             input.display()
                         );
-                        eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                        eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
+                        shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                        shared_utils::log_eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
                         copy_original_if_adjacent_mode(input, config)?;
                         return Ok(make_skipped("Cannot get animation duration"));
                     }
@@ -706,11 +707,12 @@ fn auto_convert_single_file(
                     if let Some(d) = shared_utils::image_analyzer::get_animation_duration_for_path(input) {
                         d
                     } else {
-                        eprintln!(
-                            "⚠️  Cannot get animation duration, skipping conversion: {}",
+                        shared_utils::log_eprintln!(
+                            "⚠️  {}: {}",
+                            console::style("Cannot get animation duration, skipping conversion").yellow(),
                             input.display()
                         );
-                        eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
+                        shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
                         copy_original_if_adjacent_mode(input, config)?;
                         return Ok(make_skipped("Cannot get animation duration"));
                     }
@@ -789,7 +791,7 @@ fn auto_convert_single_file(
         verbose_log!("⏭️ {}", output.message);
     } else {
         // Always show success message and log to file
-        log_eprintln!("✅ {}", output.message);
+        shared_utils::log_eprintln!("✅ {}", output.message);
     }
 
     Ok(output)
@@ -904,7 +906,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
                         skipped.fetch_add(1, Ordering::Relaxed);
                     } else {
                         let err_str = e.to_string();
-                        eprintln!("❌ Conversion failed {}: {}", path.display(), e);
+                        shared_utils::log_auto_error!("Image conversion", "Failed {}: {}", path.display(), e);
                         shared_utils::progress_mode::log_conversion_failure(path, &err_str);
                         failed.fetch_add(1, Ordering::Relaxed);
                         shared_utils::progress_mode::image_processed_failure();
