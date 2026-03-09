@@ -154,7 +154,7 @@ where
                     batch_result.skip();
                 } else if result.is_success() {
                     info!(
-                        "✅ {} → {} ({})",
+                        "{} → {} ({}) ✅",
                         fixed.file_name().unwrap_or_default().to_string_lossy(),
                         result.output_path().unwrap_or("?"),
                         result.message()
@@ -164,7 +164,7 @@ where
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
                 } else {
                     info!(
-                        "❌ {} → FAILED ({})",
+                        "{} → FAILED ({}) ❌",
                         fixed.file_name().unwrap_or_default().to_string_lossy(),
                         result.message()
                     );
