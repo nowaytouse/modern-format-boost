@@ -17,9 +17,9 @@
 //! All size checks use `>=` for this; do not change to `>`.
 //!
 //! ## allow_size_tolerance (default true)
-//! When true: "oversized" threshold is `output > input * 1.01` (reject). Video path may treat
+//! When true: "oversized" threshold is `output size increase < 1MB` (accept). Video path may treat
 //! `video_compression_ratio < 1.01` as acceptable when require_compression is checked.
-//! Does **not** mean "accept up to 1% larger as success" for compress goal — compress still requires output < input.
+//! Does **not** mean "accept up to 1MB larger as success" for compress goal — compress still requires output < input.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
@@ -642,9 +642,10 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// Check if output exceeds size tolerance and clean up if so.
 ///
 /// **Two independent flags:**
-/// - `allow_size_tolerance` (1%): only affects the **oversized** threshold: when true,
-///   we treat output as "too big" only when `output > input * 1.01`; when false, when `output > input`.
-///   This does **not** mean "accept up to 1% larger as success".
+/// - `allow_size_tolerance` (KB-level): only affects the **oversized** threshold: when true,
+///   we treat output as "too big" only when size increase ≥ 1MB; when false, when `output > input`.
+///   This KB-level tolerance (< 1MB increase = acceptable) is fairer to all file sizes than percentage-based.
+///   Examples: 10KB→1000KB ✅ acceptable, 10KB→1025KB ❌ rejected, 10MB→11MB ❌ rejected
 /// - `compress`: when true, **success requires output < input** (strictly smaller).
 ///   **Canonical rule: only `output_size < input_size` is accept; any `output_size >= input_size` is reject.**
 ///   Equal or larger → skip (goal not achieved). All call sites use `>=`; do not change to `>`.
@@ -659,15 +660,20 @@ pub fn check_size_tolerance(
     options: &ConvertOptions,
     format_label: &str,
 ) -> Option<ConversionResult> {
-    let tolerance_ratio = if options.allow_size_tolerance {
-        1.01
+    // KB-level tolerance: allow size increase < 1MB (1024KB)
+    const TOLERANCE_BYTES: u64 = 1024 * 1024; // 1MB
+    
+    let max_allowed_size = if options.allow_size_tolerance {
+        input_size.saturating_add(TOLERANCE_BYTES - 1) // < 1MB means up to 1MB-1 byte
     } else {
-        1.0
+        input_size
     };
-    let max_allowed_size = (input_size as f64 * tolerance_ratio) as u64;
 
-    // Over tolerance: output larger than allowed (e.g. > input or > input*1.01)
+    // Over tolerance: output larger than allowed (e.g. > input or increase ≥ 1MB)
     if output_size > max_allowed_size {
+        let size_increase_bytes = output_size.saturating_sub(input_size);
+        let size_increase_kb = size_increase_bytes as f64 / 1024.0;
+        let size_increase_mb = size_increase_bytes as f64 / (1024.0 * 1024.0);
         let size_increase_pct = if input_size == 0 {
             0.0
         } else {
@@ -676,18 +682,31 @@ pub fn check_size_tolerance(
         
         // Always log deletion (not just in verbose mode)
         let mode = if options.allow_size_tolerance {
-            "tolerance: 1.0%"
+            "tolerance: KB-level (< 1MB increase)".to_string()
         } else {
-            "strict mode: no tolerance"
+            "strict mode: no tolerance".to_string()
         };
-        eprintln!(
-            "   🗑️  {} output deleted: larger than input by {:.1}% ({})",
-            format_label, size_increase_pct, mode
-        );
-        eprintln!(
-            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-            input_size, output_size, size_increase_pct
-        );
+        
+        // Display in KB or MB depending on size
+        if size_increase_mb >= 1.0 {
+            eprintln!(
+                "   🗑️  {} output deleted: larger than input by {:.2}MB / {:.1}% ({})",
+                format_label, size_increase_mb, size_increase_pct, mode
+            );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes (+{:.2}MB)",
+                input_size, output_size, size_increase_mb
+            );
+        } else {
+            eprintln!(
+                "   🗑️  {} output deleted: larger than input by {:.1}KB / {:.1}% ({})",
+                format_label, size_increase_kb, size_increase_pct, mode
+            );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes (+{:.1}KB)",
+                input_size, output_size, size_increase_kb
+            );
+        }
         
         if let Err(e) = fs::remove_file(output) {
             eprintln!("   ⚠️  Failed to remove oversized output: {}", e);
@@ -722,6 +741,13 @@ pub fn check_size_tolerance(
     // Compress mode: goal is strictly smaller; equal = not achieved
     if options.compress && output_size >= input_size {
         // Always log deletion (not just in verbose mode)
+        let size_change_bytes = if output_size >= input_size {
+            output_size - input_size
+        } else {
+            0
+        };
+        let size_change_kb = size_change_bytes as f64 / 1024.0;
+        let size_change_mb = size_change_bytes as f64 / (1024.0 * 1024.0);
         let change_pct = if input_size == 0 {
             0.0
         } else {
@@ -733,16 +759,29 @@ pub fn check_size_tolerance(
                 "   🗑️  {} output deleted: size unchanged (compression goal not achieved)",
                 format_label
             );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes",
+                input_size, output_size
+            );
+        } else if size_change_mb >= 1.0 {
+            eprintln!(
+                "   🗑️  {} output deleted: size increased by {:.2}MB / {:.1}% (compression goal not achieved)",
+                format_label, size_change_mb, change_pct
+            );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes (+{:.2}MB)",
+                input_size, output_size, size_change_mb
+            );
         } else {
             eprintln!(
-                "   🗑️  {} output deleted: size increased by {:.1}% (compression goal not achieved)",
-                format_label, change_pct
+                "   🗑️  {} output deleted: size increased by {:.1}KB / {:.1}% (compression goal not achieved)",
+                format_label, size_change_kb, change_pct
+            );
+            eprintln!(
+                "   📊 Size comparison: {} → {} bytes (+{:.1}KB)",
+                input_size, output_size, size_change_kb
             );
         }
-        eprintln!(
-            "   📊 Size comparison: {} → {} bytes",
-            input_size, output_size
-        );
         
         if let Err(e) = fs::remove_file(output) {
             eprintln!("   ⚠️  Failed to remove output: {}", e);
