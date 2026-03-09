@@ -29,12 +29,12 @@ All notable changes to this project will be documented in this file.
 - **Separator choice**: Used `│` (pipe) separators for clean visual division without overwhelming the display
 
 ### Fixed
-- **Terminal `Running: HH:MM:SS` line residue after batch processing**: After image/video processing finished, the bash spinner line (e.g. `   / Running: 44s`) was left visible on the terminal screen
-  - **Root cause**: The bash spinner writes to `/dev/tty` using `\r` (carriage return without line erase). After the binary finishes, nothing cleared that line, so it remained visible on screen
-  - **Fix**: After each binary completes, `\r\033[2K` (carriage return + erase entire line) is sent to `/dev/tty` to clean up the spinner line before continuing output
-  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through the normal stderr pipe (captured by the outer `tee "$LOG_FILE"`) instead of bypassing it via `/dev/tty` — this prevents the spinner's `\r` and binary output from colliding on the same `/dev/tty` line
-  - **Fix (Rust)**: In batch (quiet) mode, per-file `✅` success messages in `img_hevc` and `img_av1` now write only to the run log file, not terminal
-  - **Files modified**: `scripts/drag_and_drop_processor.sh`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+- **Terminal `Running: Xs` spinner line residue after batch processing**: The bash spinner line (e.g. `   / Running: 44s`) remained visible on the terminal screen after processing finished
+  - **Root cause**: The spinner writes to `/dev/tty` using `\r` (carriage return without line erase). After the binary finishes, nothing cleared that line, leaving it as residue on screen
+  - **Fix**: After each binary completes, `\r\033[2K` (carriage return + erase entire line) is sent to `/dev/tty` to clean up the spinner line. The spinner continues running during processing to show real-time elapsed time
+  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through normal stderr instead of directly to `/dev/tty`
+  - **Fix**: Refactored `stop_elapsed_spinner()` to use `pause_spinner()` helper for cleaner spinner cleanup at the end
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
   - `shared_utils/src/conversion.rs` (4 occurrences)
