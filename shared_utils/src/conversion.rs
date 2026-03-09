@@ -236,12 +236,12 @@ impl ConversionResult {
                 Some(info) => format!(
                     "{} ({}): size reduced {}",
                     format_name, info,
-                    console::style(format!("{:.1}%", reduction_pct)).green().bold()
+                    format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
                 ),
                 None => format!(
                     "{} conversion successful: size reduced {}",
                     format_name,
-                    console::style(format!("{:.1}%", reduction_pct)).green().bold()
+                    format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
                 ),
             }
         } else {
@@ -249,12 +249,12 @@ impl ConversionResult {
                 Some(info) => format!(
                     "{} ({}): size increased {}",
                     format_name, info,
-                    console::style(format!("{:.1}%", -reduction_pct)).yellow().bold()
+                    format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
                 ),
                 None => format!(
                     "{} conversion successful: size increased {}",
                     format_name,
-                    console::style(format!("{:.1}%", -reduction_pct)).yellow().bold()
+                    format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
                 ),
             }
         };
@@ -770,37 +770,37 @@ pub fn check_size_tolerance(
             crate::log_eprintln!(
                 "   🗑️  {} output deleted: {}",
                 format_label,
-                console::style("size unchanged (compression goal not achieved)").yellow().bold()
+                "\x1b[1;33msize unchanged (compression goal not achieved)\x1b[0m"
             );
             crate::log_eprintln!(
                 "   📊 Size: {} → {} bytes",
-                console::style(input_size).dim(),
-                console::style(output_size).dim()
+                format!("\x1b[2m{}\x1b[0m", input_size),
+                format!("\x1b[2m{}\x1b[0m", output_size)
             );
         } else if size_change_mb >= 1.0 {
             crate::log_eprintln!(
                 "   🗑️  {} output deleted: size increased by {} / {} (compression goal not achieved)",
                 format_label,
-                console::style(format!("{:.2}MB", size_change_mb)).yellow().bold(),
-                console::style(format!("{:.1}%", change_pct)).yellow()
+                format!("\x1b[1;33m{:.2}MB\x1b[0m", size_change_mb),
+                format!("\x1b[33m{:.1}%\x1b[0m", change_pct)
             );
             crate::log_eprintln!(
                 "   📊 Size: {} → {} (+{:.2}MB)",
-                console::style(format!("{} bytes", input_size)).dim(),
-                console::style(format!("{} bytes", output_size)).dim(),
+                format!("\x1b[2m{} bytes\x1b[0m", input_size),
+                format!("\x1b[2m{} bytes\x1b[0m", output_size),
                 size_change_mb
             );
         } else {
             crate::log_eprintln!(
                 "   🗑️  {} output deleted: size increased by {} / {} (compression goal not achieved)",
                 format_label,
-                console::style(format!("{:.1}KB", size_change_kb)).yellow().bold(),
-                console::style(format!("{:.1}%", change_pct)).yellow()
+                format!("\x1b[1;33m{:.1}KB\x1b[0m", size_change_kb),
+                format!("\x1b[33m{:.1}%\x1b[0m", change_pct)
             );
             crate::log_eprintln!(
                 "   📊 Size: {} → {} (+{:.1}KB)",
-                console::style(format!("{} bytes", input_size)).dim(),
-                console::style(format!("{} bytes", output_size)).dim(),
+                format!("\x1b[2m{} bytes\x1b[0m", input_size),
+                format!("\x1b[2m{} bytes\x1b[0m", output_size),
                 size_change_kb
             );
         }
@@ -817,7 +817,7 @@ pub fn check_size_tolerance(
             false,
         ) {
             Ok(Some(dest)) => {
-                crate::log_eprintln!("   📋 Original copied to: {}", console::style(dest.display()).dim());
+                crate::log_eprintln!("   📋 Original copied to: {}", format!("\x1b[2m{}\x1b[0m", dest.display()));
             }
             Ok(None) => {
                 // No output_dir specified, nothing to copy
