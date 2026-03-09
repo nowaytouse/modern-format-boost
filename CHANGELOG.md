@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.16] - 2026-03-10
+
+### Fixed
+- **Per-file success lines silent in batch mode**: `[filename] message ✅` lines were suppressed during parallel batch processing because `enable_quiet_mode()` routed them to the log file only, not the terminal
+  - **Root cause**: The `is_quiet_mode()` branch was originally added to prevent per-file lines from colliding with the indicatif progress bar. Since the progress bar was moved to the terminal title bar (OSC escape), there is no longer anything in the terminal content area to collide with
+  - **Fix**: Removed the quiet-mode branch in `img_hevc` and `img_av1` — always emit per-file result lines via `log_eprintln!` (→ `emit_stderr`) regardless of quiet mode
+  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
 ## [0.10.15] - 2026-03-10
 
 ### Fixed
