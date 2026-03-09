@@ -75,7 +75,7 @@ pub fn encode_with_x265(
     vf_args: &[String],
 ) -> Result<u64> {
     info!(
-        "🖥️ CPU encoding: CRF {:.1}, preset={}",
+        "🖥️ CPU encoding started: CRF {:.1}, preset={}",
         config.crf,
         config.preset
     );
@@ -97,12 +97,14 @@ pub fn encode_with_x265(
     let encode_result = encode_to_hevc(input, &hevc_file, config, vf_args)?;
 
     if !encode_result {
-        error!("x265 encoding failed");
+        error!("x265 encoding failed❌");
         bail!("x265 encoding failed");
     }
 
+    info!("Step 1/2: Video encoding completed✅");
     info!("Step 2/2: Audio & container muxing...");
     mux_hevc_to_container(input, &hevc_file, output, config)?;
+    info!("Step 2/2: Audio & container muxing completed✅");
 
     drop(hevc_temp);
 
