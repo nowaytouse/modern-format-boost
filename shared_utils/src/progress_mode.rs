@@ -23,8 +23,8 @@ thread_local! {
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
 
-/// Format duration as detailed string with gradual spacing strategy
-/// Examples: "01Y: 01M: 01W: 01D: 01h:00m:00s:000ms" or "01M: 01W: 01D: 01h:00m:00s:000ms" or "01W: 01D: 01h:00m:00s:000ms" or "01D: 01h:00m:00s:000ms" or "01h:00m:00s:000ms" or "00m:00s:000ms" or "00s:000ms"
+/// Format duration as detailed string with progressive spacing strategy
+/// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
     let years = total_millis / (365 * 86400 * 1000); // Approximate year as 365 days
@@ -59,24 +59,35 @@ pub fn format_duration_compact(duration: Duration) -> String {
     parts.push(format!("{:02}s", seconds));
     parts.push(format!("{:03}ms", millis));
     
-    // Gradual spacing: spaces only after long units (Y, M, W, D, h)
+    // Progressive spacing: more spaces for longer units, fewer for shorter units
     if years > 0 || months > 0 || weeks > 0 || days > 0 || hours > 0 {
-        // Find where long units end (before minutes)
-        let long_units_end = if years > 0 { 5 } else if months > 0 { 4 } else if weeks > 0 { 3 } else if days > 0 { 2 } else { 1 };
-        
         let mut result = String::new();
         for (i, part) in parts.iter().enumerate() {
             result.push_str(part);
-            if i < long_units_end {
-                result.push_str(": ");
+            
+            // Determine spacing based on unit position
+            let spacing = if i == 0 && years > 0 {
+                "   " // 3 spaces after years
+            } else if i == 1 && (months > 0 || years > 0) {
+                "   " // 3 spaces after months
+            } else if i == 2 && (weeks > 0 || months > 0 || years > 0) {
+                "   " // 3 spaces after weeks
+            } else if i == 3 && (days > 0 || weeks > 0 || months > 0 || years > 0) {
+                "   " // 3 spaces after days
+            } else if i == 4 && (hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0) {
+                "  "  // 2 spaces after hours
             } else if i < parts.len() - 1 {
-                result.push(':');
-            }
+                ""   // no spaces for minutes and seconds
+            } else {
+                ""   // last element
+            };
+            
+            result.push_str(spacing);
         }
         result
     } else {
         // No spaces for short durations (m, s, ms only)
-        parts.join(":")
+        parts.join("")
     }
 }
 
