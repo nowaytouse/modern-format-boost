@@ -133,7 +133,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     let output = Command::new("ffprobe")
         .args([
             "-v",
-            "quiet",
+            "error",
             "-print_format",
             "json",
             "-show_streams",
