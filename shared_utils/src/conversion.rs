@@ -641,14 +641,18 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 
 /// Check if output exceeds size tolerance and clean up if so.
 ///
-/// **Two independent flags:**
-/// - `allow_size_tolerance` (KB-level): only affects the **oversized** threshold: when true,
-///   we treat output as "too big" only when size increase ≥ 1MB; when false, when `output > input`.
+/// **Two independent but coordinated flags:**
+/// - `allow_size_tolerance` (KB-level): when true, allows size increase < 1MB; when false, requires `output <= input`.
 ///   This KB-level tolerance (< 1MB increase = acceptable) is fairer to all file sizes than percentage-based.
 ///   Examples: 10KB→1000KB ✅ acceptable, 10KB→1025KB ❌ rejected, 10MB→11MB ❌ rejected
-/// - `compress`: when true, **success requires output < input** (strictly smaller).
-///   **Canonical rule: only `output_size < input_size` is accept; any `output_size >= input_size` is reject.**
-///   Equal or larger → skip (goal not achieved). All call sites use `>=`; do not change to `>`.
+/// - `compress`: when true, **goal is to make output smaller than input**.
+///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < 1MB, still accepts.
+///   Only when increase ≥ 1MB (or tolerance disabled), compress mode rejects the output.
+///
+/// **Logic flow:**
+/// 1. Check oversized threshold (tolerance-based): if increase ≥ 1MB → reject
+/// 2. Check compress goal: if compress=true AND increase ≥ tolerance → reject
+/// 3. Otherwise: accept
 ///
 /// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
@@ -739,15 +743,19 @@ pub fn check_size_tolerance(
     }
 
     // Compress mode: goal is strictly smaller; equal = not achieved
+    // BUT: respect tolerance setting when enabled
     if options.compress && output_size >= input_size {
-        // Always log deletion (not just in verbose mode)
-        let size_change_bytes = if output_size >= input_size {
-            output_size - input_size
-        } else {
-            0
-        };
-        let size_change_kb = size_change_bytes as f64 / 1024.0;
-        let size_change_mb = size_change_bytes as f64 / (1024.0 * 1024.0);
+        let size_increase_bytes = output_size.saturating_sub(input_size);
+        
+        // If tolerance is enabled and increase is within tolerance (< 1MB), accept it
+        if options.allow_size_tolerance && size_increase_bytes < TOLERANCE_BYTES {
+            // Within tolerance, accept the output
+            return None;
+        }
+        
+        // Beyond tolerance or tolerance disabled: reject
+        let size_change_kb = size_increase_bytes as f64 / 1024.0;
+        let size_change_mb = size_increase_bytes as f64 / (1024.0 * 1024.0);
         let change_pct = if input_size == 0 {
             0.0
         } else {
