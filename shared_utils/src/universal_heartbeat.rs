@@ -80,6 +80,7 @@
 //! - 可以使用 `.force()` 强制显示，忽略进度条检测
 
 use chrono::{DateTime, FixedOffset, Utc};
+use crate::progress_mode::format_duration_compact;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -225,14 +226,7 @@ impl UniversalHeartbeat {
     }
 
     fn format_elapsed(duration: Duration) -> String {
-        let secs = duration.as_secs();
-        if secs < 60 {
-            format!("{}s", secs)
-        } else if secs < 3600 {
-            format!("{}m{:02}s", secs / 60, secs % 60)
-        } else {
-            format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
-        }
+        format_duration_compact(duration)
     }
 
     fn get_beijing_time() -> Result<String, Box<dyn std::error::Error>> {

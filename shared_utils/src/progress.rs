@@ -9,6 +9,7 @@
 //! Reference: media/CONTRIBUTING.md - Visual Progress Bar requirement
 
 use crate::modern_ui::progress_style;
+use crate::progress_mode::format_duration_compact;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{self, Write};
 use std::sync::{
@@ -104,7 +105,7 @@ impl CoarseProgressBar {
         };
 
         eprint!(
-            "\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {:.1}s • ETA: {}\x1b[0m",
+            "\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {} • ETA: {}\x1b[0m",
             color,
             self.prefix,
             progress_style::BAR_LEFT,
@@ -114,7 +115,7 @@ impl CoarseProgressBar {
             percent,
             current,
             total,
-            elapsed.as_secs_f64(),
+            format_duration_compact(elapsed),
             eta_str
         );
         let _ = io::stderr().flush();
@@ -132,13 +133,13 @@ impl CoarseProgressBar {
         let bar = "█".repeat(bar_width);
 
         eprint!(
-            "\r\x1b[K\x1b[32m{} {}\x1b[32m{}\x1b[32m▏ ✅ 100% • {}/{} • ⏱️ {:.1}s\x1b[0m\n",
+            "\r\x1b[K\x1b[32m{} {}\x1b[32m{}\x1b[32m▏ ✅ 100% • {}/{} • ⏱️ {}\x1b[0m\n",
             self.prefix,
             progress_style::BAR_LEFT,
             bar,
             total,
             total,
-            elapsed.as_secs_f64()
+            format_duration_compact(elapsed)
         );
 
         eprint!("\x1b[?25h");
@@ -784,9 +785,11 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     if crate::progress_mode::is_quiet_mode() {
         pb.set_draw_target(ProgressDrawTarget::hidden());
     } else {
+        // Use a custom template that doesn't include elapsed time
+        // We'll handle time formatting in the progress updates
         pb.set_style(
             ProgressStyle::default_bar()
-                .template(progress_style::BATCH_TEMPLATE)
+                .template("{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • {msg}")
                 .expect("Invalid progress bar template")
                 .progress_chars(progress_style::PROGRESS_CHARS)
                 .tick_chars(progress_style::SPINNER_CHARS),
