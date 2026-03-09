@@ -6,6 +6,28 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.14] - 2026-03-10
 
+### Changed
+- **Beautiful log output with refined emoji usage**: Multiple iterations of log formatting improvements for better aesthetics, clarity, and intent
+  - **Single-line format with visual separators**: Replaced multi-line cluttered logs with clean single-line format using `│` separators for better visual organization
+  - **Precise emoji control**: Implemented exactly 4 emojis per log section (1 left, 3 right maximum) with logical consistency
+    - Success: 1 `✅ QUALITY GATE` + 3 `✅` metrics = 4 emojis
+    - Failure: 1 `❌ QUALITY GATE` + 3 `❌` metrics = 4 emojis
+    - Partial failure: 1 `❌ QUALITY GATE` + mixed `✅❌` metrics = 2-4 emojis
+  - **Emoji positioning**: Moved primary emoji to QUALITY GATE position for meaningful quality validation indication
+  - **Logical emoji consistency**: ✅ for success/pass, ❌ for failure/fail - no contradictory emoji states
+
+### Improved
+- **Visual hierarchy and readability**: Enhanced log structure with clear indentation, proper spacing, and consistent formatting
+- **Information density**: Balanced between comprehensive detail and visual clarity - important information stands out without clutter
+- **Professional terminal display**: Optimized for terminal viewing with appropriate use of emojis, separators, and spacing
+- **Clear intent**: Log messages now clearly convey their purpose and status without ambiguity
+
+### Technical Details
+- **Files modified**: `shared_utils/src/video_explorer/gpu_coarse_search.rs`, `vid_hevc/src/conversion_api.rs`, `vid_hevc/src/animated_image.rs`, `vid_av1/src/conversion_api.rs`
+- **Log format evolution**: Progressed from multi-line → forced single-line → beautiful single-line → emoji-controlled → logically consistent
+- **Emoji strategy**: Balanced visual appeal with functional clarity, avoiding emoji abuse while maintaining important visual cues
+- **Separator choice**: Used `│` (pipe) separators for clean visual division without overwhelming the display
+
 ### Fixed
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
   - `shared_utils/src/conversion.rs` (4 occurrences)
