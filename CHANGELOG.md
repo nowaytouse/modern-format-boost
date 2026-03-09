@@ -6,7 +6,45 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.9] - 2026-03-09
 
+### Changed
+- **Size tolerance logic**: Changed from percentage-based (1%) to KB-level (< 1MB) tolerance
+  - **Rationale**: Percentage-based tolerance was unfair to small files (1% of 10KB = 100 bytes is too strict)
+  - **New behavior**: Accept output if size increase < 1MB, regardless of file size
+  - **Impact**: More reasonable tolerance for small files while maintaining strictness for large files
+  - **Display**: Size changes now shown in both KB/MB and percentage for better clarity
+
+- **Compress and tolerance coordination**: Compress mode now respects tolerance setting
+  - **Previous**: Compress always rejected output ≥ input (ignored tolerance completely)
+  - **Current**: Compress + tolerance enabled = accept if increase < 1MB
+  - **Behavior matrix**:
+    | compress | tolerance | increase | result |
+    |----------|-----------|----------|--------|
+    | true | true | < 1MB | ✅ accept |
+    | true | true | ≥ 1MB | ❌ reject |
+    | true | false | > 0 | ❌ reject |
+
 ### Fixed
+- **Comprehensive ImageMagick fallback logging**: Enhanced error handling and retry logic for JXL conversion fallback pipeline
+  - **Root cause**: ImageMagick fallback had silent failures and incomplete retry logic
+  - **Issues fixed**:
+    1. Attempt 2+ success/failure had no log output (silent execution)
+    2. `is_grayscale_icc_cjxl_error` too strict (required exact string match)
+    3. 8-bit source retry logic nested incorrectly
+    4. No final fallback for general failures
+  - **Improvements**:
+    - Added comprehensive logging for all attempts (1-4) with colored ✅/❌ status
+    - Enhanced `is_grayscale_icc_cjxl_error` with relaxed matching (libpng warning + grayscale + icc indicators)
+    - Restructured retry flow for better 8-bit vs 16-bit handling
+    - Added final fallback attempt with -strip for edge cases
+  - **Example output**:
+    ```
+    🔄 Attempt 1: Default (16-bit, preserve metadata)
+    ❌ Attempt 1 failed (magick: ✓, cjxl: ✗)
+    🔄 Attempt 2: Grayscale ICC fix (-strip, 16-bit)
+    ✅ Attempt 2 succeeded
+    ```
+  - **File modified**: `shared_utils/src/jxl_utils.rs`
+
 - **Fixed compress mode to respect tolerance setting**: Compress mode now honors `allow_size_tolerance` flag
   - **Root cause**: Compress mode always rejected output ≥ input, completely ignoring tolerance setting
   - **Impact**: Files with KB-level size increase (< 1MB) were incorrectly rejected even with tolerance enabled
