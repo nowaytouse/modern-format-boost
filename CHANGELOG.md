@@ -29,11 +29,10 @@ All notable changes to this project will be documented in this file.
 - **Separator choice**: Used `│` (pipe) separators for clean visual division without overwhelming the display
 
 ### Fixed
-- **Terminal `Running: Xs` spinner line residue after batch processing**: The bash spinner line (e.g. `   / Running: 44s`) remained visible on the terminal screen after processing finished
-  - **Root cause**: The spinner writes to `/dev/tty` using `\r` (carriage return without line erase). After the binary finishes, nothing cleared that line, leaving it as residue on screen
-  - **Fix**: After each binary completes, `\r\033[2K` (carriage return + erase entire line) is sent to `/dev/tty` to clean up the spinner line. The spinner continues running during processing to show real-time elapsed time
-  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through normal stderr instead of directly to `/dev/tty`
-  - **Fix**: Refactored `stop_elapsed_spinner()` to use `pause_spinner()` helper for cleaner spinner cleanup at the end
+- **Terminal `Running: Xs` spinner text fusing into binary output lines**: The bash spinner writes `\r Running: Xs` to `/dev/tty` every 0.15s while binaries write progress to stderr on the same terminal, producing fused lines like `   | Running: 04s     [file] ✓ CRF 28.3:` and leftover spinner text after processing
+  - **Root cause**: Spinner background process and binary both write to the same physical terminal concurrently — `\r` moves cursor to column 0 without erasing, so binary output appends directly after spinner text
+  - **Fix**: `pause_spinner` before each binary starts (kills spinner process, erases line with `\r\033[2K`), then `resume_spinner` after binary finishes (relaunches spinner from original `ELAPSED_START`). Spinner is visible between processing stages; zero collision during binary execution
+  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through stderr instead of directly to `/dev/tty`
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates

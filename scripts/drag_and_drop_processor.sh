@@ -27,8 +27,11 @@ clear_screen() { printf '\033[2J\033[H'; }
 SPINNER_PID=""
 ELAPSED_START=0
 _tty() { [[ -c /dev/tty ]] && printf '\r   %s Running: %s   ' "$1" "$2" > /dev/tty 2>/dev/null; }
-start_elapsed_spinner() {
-    ELAPSED_START=$(date +%s)
+_launch_spinner() {
+    # Launch spinner background process using current ELAPSED_START.
+    # Called by start_elapsed_spinner (initial) and resume_spinner (after pause).
+    [[ -n "$SPINNER_PID" ]] && return
+    [[ "$ELAPSED_START" -eq 0 ]] && return
     (
         local idx=0
         local sp
@@ -66,6 +69,10 @@ start_elapsed_spinner() {
     SPINNER_PID=$!
     disown "$SPINNER_PID" 2>/dev/null || true
 }
+start_elapsed_spinner() {
+    ELAPSED_START=$(date +%s)
+    _launch_spinner
+}
 pause_spinner() {
     # Kill the spinner background process and clear its line, but preserve
     # ELAPSED_START so total time can still be shown at the end.
@@ -74,6 +81,10 @@ pause_spinner() {
         SPINNER_PID=""
     fi
     [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
+}
+resume_spinner() {
+    # Restart spinner after a pause. Continues from original ELAPSED_START.
+    _launch_spinner
 }
 stop_elapsed_spinner() {
     pause_spinner
@@ -402,14 +413,14 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
+    pause_spinner
     local output
     if [[ -n "$LOG_FILE" ]]; then
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
     else
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
     fi
-    # Clear the spinner line after binary finishes so it doesn't linger.
-    [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
+    resume_spinner
     parse_tool_stats "$output" "img"
     echo ""
 }
@@ -427,14 +438,14 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
+    pause_spinner
     local output
     if [[ -n "$LOG_FILE" ]]; then
         output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
     else
         output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
     fi
-    # Clear the spinner line after binary finishes so it doesn't linger.
-    [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
+    resume_spinner
     parse_tool_stats "$output" "vid"
     echo ""
 }
