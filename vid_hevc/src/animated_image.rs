@@ -118,7 +118,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     }
     
     if verbose {
-        eprintln!("   ✅ WebP → APNG conversion successful ({} frames, {:.2}fps)", frame_count, fps);
+        shared_utils::progress_mode::emit_stderr(&format!("   ✅ WebP → APNG conversion successful ({} frames, {:.2}fps)", frame_count, fps));
     }
     
     Ok(())
@@ -355,7 +355,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        eprintln!("   ✅ JXL → APNG conversion successful");
+                        shared_utils::progress_mode::emit_stderr("   ✅ JXL → APNG conversion successful");
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
@@ -524,13 +524,13 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
                 format!(
-                    "HEVC conversion successful: size reduced {:.1}%",
-                    reduction_pct
+                    "HEVC conversion successful: size reduced {}",
+                    console::style(format!("{:.1}%", reduction_pct)).green().bold()
                 )
             } else {
                 format!(
-                    "HEVC conversion successful: size increased {:.1}%",
-                    -reduction_pct
+                    "HEVC conversion successful: size increased {}",
+                    console::style(format!("{:.1}%", -reduction_pct)).yellow().bold()
                 )
             };
 
@@ -672,7 +672,7 @@ pub fn convert_to_hevc_mp4_matched(
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        eprintln!("   ✅ JXL → APNG conversion successful");
+                        shared_utils::progress_mode::emit_stderr("   ✅ JXL → APNG conversion successful");
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
@@ -794,7 +794,7 @@ pub fn convert_to_hevc_mp4_matched(
                     match extract_result {
                         Ok(output) if output.status.success() && temp_stream_path.exists() => {
                             if options.verbose {
-                                eprintln!("   ✅ Stream → APNG conversion successful");
+                                shared_utils::progress_mode::emit_stderr("   ✅ Stream → APNG conversion successful");
                             }
                             (temp_stream_path, Some(temp_stream))
                         }
@@ -1132,9 +1132,9 @@ pub fn convert_to_hevc_mkv_lossless(
 
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
-                format!("Lossless HEVC: size reduced {:.1}%", reduction_pct)
+                format!("Lossless HEVC: size reduced {}", console::style(format!("{:.1}%", reduction_pct)).green().bold())
             } else {
-                format!("Lossless HEVC: size increased {:.1}%", -reduction_pct)
+                format!("Lossless HEVC: size increased {}", console::style(format!("{:.1}%", -reduction_pct)).yellow().bold())
             };
 
             Ok(ConversionResult {
@@ -1300,7 +1300,7 @@ pub fn convert_to_gif_apple_compat(
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        eprintln!("   ✅ JXL → APNG conversion successful");
+                        shared_utils::progress_mode::emit_stderr("   ✅ JXL → APNG conversion successful");
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
@@ -1556,9 +1556,9 @@ pub fn convert_to_gif_apple_compat(
 
     let reduction_pct = reduction * 100.0;
     let message = if reduction >= 0.0 {
-        format!("GIF (Apple Compat): size reduced {:.1}%", reduction_pct)
+        format!("GIF (Apple Compat): size reduced {}", console::style(format!("{:.1}%", reduction_pct)).green().bold())
     } else {
-        format!("GIF (Apple Compat): size increased {:.1}%", -reduction_pct)
+        format!("GIF (Apple Compat): size increased {}", console::style(format!("{:.1}%", -reduction_pct)).yellow().bold())
     };
 
     Ok(ConversionResult {

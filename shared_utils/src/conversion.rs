@@ -234,23 +234,27 @@ impl ConversionResult {
         let message = if reduction >= 0.0 {
             match extra_info {
                 Some(info) => format!(
-                    "{} ({}): size reduced {:.1}%",
-                    format_name, info, reduction_pct
+                    "{} ({}): size reduced {}",
+                    format_name, info,
+                    console::style(format!("{:.1}%", reduction_pct)).green().bold()
                 ),
                 None => format!(
-                    "{} conversion successful: size reduced {:.1}%",
-                    format_name, reduction_pct
+                    "{} conversion successful: size reduced {}",
+                    format_name,
+                    console::style(format!("{:.1}%", reduction_pct)).green().bold()
                 ),
             }
         } else {
             match extra_info {
                 Some(info) => format!(
-                    "{} ({}): size increased {:.1}%",
-                    format_name, info, -reduction_pct
+                    "{} ({}): size increased {}",
+                    format_name, info,
+                    console::style(format!("{:.1}%", -reduction_pct)).yellow().bold()
                 ),
                 None => format!(
-                    "{} conversion successful: size increased {:.1}%",
-                    format_name, -reduction_pct
+                    "{} conversion successful: size increased {}",
+                    format_name,
+                    console::style(format!("{:.1}%", -reduction_pct)).yellow().bold()
                 ),
             }
         };
@@ -763,38 +767,48 @@ pub fn check_size_tolerance(
         };
         
         if change_pct.abs() < 0.01 {
-            eprintln!(
-                "   🗑️  {} output deleted: size unchanged (compression goal not achieved)",
-                format_label
+            crate::log_eprintln!(
+                "   🗑️  {} output deleted: {}",
+                format_label,
+                console::style("size unchanged (compression goal not achieved)").yellow().bold()
             );
-            eprintln!(
-                "   📊 Size comparison: {} → {} bytes",
-                input_size, output_size
+            crate::log_eprintln!(
+                "   📊 Size: {} → {} bytes",
+                console::style(input_size).dim(),
+                console::style(output_size).dim()
             );
         } else if size_change_mb >= 1.0 {
-            eprintln!(
-                "   🗑️  {} output deleted: size increased by {:.2}MB / {:.1}% (compression goal not achieved)",
-                format_label, size_change_mb, change_pct
+            crate::log_eprintln!(
+                "   🗑️  {} output deleted: size increased by {} / {} (compression goal not achieved)",
+                format_label,
+                console::style(format!("{:.2}MB", size_change_mb)).yellow().bold(),
+                console::style(format!("{:.1}%", change_pct)).yellow()
             );
-            eprintln!(
-                "   📊 Size comparison: {} → {} bytes (+{:.2}MB)",
-                input_size, output_size, size_change_mb
+            crate::log_eprintln!(
+                "   📊 Size: {} → {} (+{:.2}MB)",
+                console::style(format!("{} bytes", input_size)).dim(),
+                console::style(format!("{} bytes", output_size)).dim(),
+                size_change_mb
             );
         } else {
-            eprintln!(
-                "   🗑️  {} output deleted: size increased by {:.1}KB / {:.1}% (compression goal not achieved)",
-                format_label, size_change_kb, change_pct
+            crate::log_eprintln!(
+                "   🗑️  {} output deleted: size increased by {} / {} (compression goal not achieved)",
+                format_label,
+                console::style(format!("{:.1}KB", size_change_kb)).yellow().bold(),
+                console::style(format!("{:.1}%", change_pct)).yellow()
             );
-            eprintln!(
-                "   📊 Size comparison: {} → {} bytes (+{:.1}KB)",
-                input_size, output_size, size_change_kb
+            crate::log_eprintln!(
+                "   📊 Size: {} → {} (+{:.1}KB)",
+                console::style(format!("{} bytes", input_size)).dim(),
+                console::style(format!("{} bytes", output_size)).dim(),
+                size_change_kb
             );
         }
-        
+
         if let Err(e) = fs::remove_file(output) {
-            eprintln!("   ⚠️  Failed to remove output: {}", e);
+            crate::log_upstream_error!("File cleanup", "Failed to remove output file: {}", e);
         }
-        
+
         // Copy original to output directory
         match crate::copy_on_skip_or_fail(
             input,
@@ -803,13 +817,13 @@ pub fn check_size_tolerance(
             false,
         ) {
             Ok(Some(dest)) => {
-                eprintln!("   📋 Original copied to: {}", dest.display());
+                crate::log_eprintln!("   📋 Original copied to: {}", console::style(dest.display()).dim());
             }
             Ok(None) => {
                 // No output_dir specified, nothing to copy
             }
             Err(e) => {
-                eprintln!("   ⚠️  Failed to copy original: {}", e);
+                crate::log_upstream_error!("File copy", "Failed to copy original to output dir: {}", e);
             }
         }
         

@@ -291,14 +291,18 @@ pub fn execute_conversion(
         }
     }
 
+    let reduction = size_reduction.unwrap_or(0.0);
+    let message = if reduction >= 0.0 {
+        format!("Conversion successful: size reduced {}", console::style(format!("{:.1}%", reduction)).green().bold())
+    } else {
+        format!("Conversion successful: size increased {}", console::style(format!("{:.1}%", -reduction)).yellow().bold())
+    };
+
     Ok(ConversionOutput {
         original_path: detection.file_path.clone(),
         output_path: output_path.display().to_string(),
         skipped: false,
-        message: format!(
-            "Conversion successful: size reduced {:.1}%",
-            size_reduction.unwrap_or(0.0)
-        ),
+        message,
         original_size: detection.file_size,
         output_size,
         size_reduction,
