@@ -26,43 +26,52 @@ clear_screen() { printf '\033[2J\033[H'; }
 
 SPINNER_PID=""
 ELAPSED_START=0
-# Write spinner to terminal TITLE BAR (OSC escape), not content area.
+
+# Format seconds matching Rust format_duration_compact() style (without ms).
+# Bash only has second precision, so ms is omitted.
+# Short: 45s | Medium: 05m00s | Long: 01h  00m00s
+# Day+: 01D   01h  00m00s | Week+: 01W   01D   01h  00m00s
+_fmt_elapsed() {
+    local t=$1
+    [[ "$t" -lt 0 ]] && t=0
+    local Y M W D h m s
+    Y=$(( t / (365*86400) )); t=$(( t % (365*86400) ))
+    M=$(( t / (30*86400) ));  t=$(( t % (30*86400) ))
+    W=$(( t / (7*86400) ));   t=$(( t % (7*86400) ))
+    D=$(( t / 86400 ));       t=$(( t % 86400 ))
+    h=$(( t / 3600 ));        t=$(( t % 3600 ))
+    m=$(( t / 60 ));          s=$(( t % 60 ))
+
+    if [[ $Y -gt 0 ]]; then
+        printf '%02dY   %02dM   %02dW   %02dD   %02dh  %02dm%02ds' "$Y" "$M" "$W" "$D" "$h" "$m" "$s"
+    elif [[ $M -gt 0 ]]; then
+        printf '%02dM   %02dW   %02dD   %02dh  %02dm%02ds' "$M" "$W" "$D" "$h" "$m" "$s"
+    elif [[ $W -gt 0 ]]; then
+        printf '%02dW   %02dD   %02dh  %02dm%02ds' "$W" "$D" "$h" "$m" "$s"
+    elif [[ $D -gt 0 ]]; then
+        printf '%02dD   %02dh  %02dm%02ds' "$D" "$h" "$m" "$s"
+    elif [[ $h -gt 0 ]]; then
+        printf '%02dh  %02dm%02ds' "$h" "$m" "$s"
+    elif [[ $m -gt 0 ]]; then
+        printf '%02dm%02ds' "$m" "$s"
+    else
+        printf '%02ds' "$s"
+    fi
+}
+
+# Write elapsed time to terminal TITLE BAR (OSC escape), not content area.
 # This completely avoids collision with binary output in the content area.
-_tty() { [[ -c /dev/tty ]] && printf '\033]0;⏱ %s\007' "$2" > /dev/tty 2>/dev/null; }
+# Pad with trailing spaces to overwrite any previous longer title content.
+_tty_title() { [[ -c /dev/tty ]] && printf '\033]0;⏱ %s                              \007' "$1" > /dev/tty 2>/dev/null; }
 start_elapsed_spinner() {
     ELAPSED_START=$(date +%s)
     [[ -n "$SPINNER_PID" ]] && return
     (
-        local idx=0
-        local sp
         local start=$ELAPSED_START
         while true; do
             now=$(date +%s)
             elapsed_sec=$(( now - start ))
-            [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
-            # Format duration using the same compact format as Rust code
-            if [[ $elapsed_sec -ge 86400 ]]; then
-                days=$(( elapsed_sec / 86400 ))
-                remaining=$(( elapsed_sec % 86400 ))
-                h=$(( remaining / 3600 ))
-                m=$(( (remaining % 3600) / 60 ))
-                s=$(( remaining % 60 ))
-                elapsed_str=$(printf '%02dD:%02dh:%02dm:%02ds' "$days" "$h" "$m" "$s")
-            elif [[ $elapsed_sec -ge 3600 ]]; then
-                h=$(( elapsed_sec / 3600 ))
-                m=$(( (elapsed_sec % 3600) / 60 ))
-                s=$(( elapsed_sec % 60 ))
-                elapsed_str=$(printf '%02dh:%02dm:%02ds' "$h" "$m" "$s")
-            elif [[ $elapsed_sec -ge 60 ]]; then
-                m=$(( elapsed_sec / 60 ))
-                s=$(( elapsed_sec % 60 ))
-                elapsed_str=$(printf '%02dm:%02ds' "$m" "$s")
-            else
-                elapsed_str=$(printf '%02ds' "$elapsed_sec")
-            fi
-            case $(( idx % 4 )) in 0) sp='|';; 1) sp='/';; 2) sp='-';; *) sp='\';; esac
-            _tty "$sp" "$elapsed_str"
-            idx=$(( idx + 1 ))
+            _tty_title "$(_fmt_elapsed "$elapsed_sec")"
             sleep 0.15
         done
     ) 2>/dev/null &
@@ -79,30 +88,11 @@ stop_elapsed_spinner() {
     end=$(date +%s)
     local elapsed_sec=$(( end - ELAPSED_START ))
     [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
+    local elapsed_str
+    elapsed_str=$(_fmt_elapsed "$elapsed_sec")
 
-    # Format duration using the same compact format as Rust code
-    if [[ $elapsed_sec -ge 86400 ]]; then
-        days=$(( elapsed_sec / 86400 ))
-        remaining=$(( elapsed_sec % 86400 ))
-        h=$(( remaining / 3600 ))
-        m=$(( remaining % 3600 / 60 ))
-        s=$(( remaining % 60 ))
-        elapsed_str=$(printf '%02dD:%02dh:%02dm:%02ds' "$days" "$h" "$m" "$s")
-    elif [[ $elapsed_sec -ge 3600 ]]; then
-        h=$(( elapsed_sec / 3600 ))
-        m=$(( (elapsed_sec % 3600) / 60 ))
-        s=$(( elapsed_sec % 60 ))
-        elapsed_str=$(printf '%02dh:%02dm:%02ds' "$h" "$m" "$s")
-    elif [[ $elapsed_sec -ge 60 ]]; then
-        m=$(( elapsed_sec / 60 ))
-        s=$(( elapsed_sec % 60 ))
-        elapsed_str=$(printf '%02dm:%02ds' "$m" "$s")
-    else
-        elapsed_str=$(printf '%02ds' "$elapsed_sec")
-    fi
-
-    # Print total time to terminal content, and restore title
     echo "   Total time: $elapsed_str"
+    # Clear title bar
     [[ -c /dev/tty ]] && printf '\033]0;\007' > /dev/tty 2>/dev/null
 }
 
