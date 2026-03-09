@@ -174,7 +174,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let output = match Command::new("ffprobe")
         .args([
             "-v",
-            "quiet",
+            "error",  // Use "error" instead of "quiet" to capture stderr for fallback detection
             "-print_format",
             "json",
             "-show_streams",
@@ -189,9 +189,40 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         .output()
     {
         Ok(o) if o.status.success() => o,
-        Ok(_) => {
-            warn!(input = %input_str, "FFPROBE FAILED: non-zero exit");
-            return ColorInfo::default();
+        Ok(o) => {
+            // Check if failure is due to image2 demuxer pattern matching (e.g., filenames with [])
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if stderr.contains("Could find no file with path") && stderr.contains("and index in the range") {
+                // Retry with -pattern_type none to disable sequence pattern matching
+                match Command::new("ffprobe")
+                    .args([
+                        "-v",
+                        "error",
+                        "-pattern_type",
+                        "none",
+                        "-print_format",
+                        "json",
+                        "-show_streams",
+                        "-show_frames",
+                        "-read_intervals",
+                        "%+#5",
+                        "-select_streams",
+                        "v:0",
+                        "--",
+                    ])
+                    .arg(crate::safe_path_arg(input).as_ref())
+                    .output()
+                {
+                    Ok(retry_o) if retry_o.status.success() => retry_o,
+                    _ => {
+                        warn!(input = %input_str, "FFPROBE FAILED: non-zero exit (pattern_type fallback also failed)");
+                        return ColorInfo::default();
+                    }
+                }
+            } else {
+                warn!(input = %input_str, "FFPROBE FAILED: non-zero exit");
+                return ColorInfo::default();
+            }
         }
         Err(e) => {
             warn!(error = %e, input = %input_str, "FFPROBE ERROR");

@@ -7,6 +7,25 @@ All notable changes to this project will be documented in this file.
 ## [0.10.9] - 2026-03-09
 
 ### Fixed
+- **FFprobe image2 demuxer pattern matching issue**: Fixed critical bug where image files with `[` `]` in filenames failed to process
+  - **Root cause**: FFprobe's image2 demuxer interprets `[` `]` as sequence patterns (e.g., `image[001-100].jpg`)
+  - **Example**: File `FB55N[I_R{KE)K}I141L%8V.jpeg` would fail with "Could find no file with path ... and index in the range 0-4"
+  - **Fix**: Added automatic fallback with `-pattern_type none` when image2 demuxer pattern error is detected
+  - **Impact**: All image files with special characters in names can now be processed correctly
+  - **File modified**: `shared_utils/src/ffprobe_json.rs`
+
+- **Silent ffprobe errors**: Fixed bug where ffprobe errors were silently suppressed due to `-v quiet` flag
+  - **Root cause**: Using `-v quiet` prevented stderr capture, making fallback detection impossible
+  - **Fix**: Changed all ffprobe calls to use `-v error` to capture error messages for proper fallback handling
+  - **Impact**: Better error diagnostics and proper fallback behavior
+  - **Files modified**: `shared_utils/src/ffprobe_json.rs`, `shared_utils/src/image_analyzer.rs`
+
+- **Missing success output**: Fixed bug where successful conversions showed no output unless `--verbose` flag was used
+  - **Root cause**: Success messages were wrapped in `verbose_log!` macro
+  - **Fix**: Always display success messages with ✅ emoji, regardless of verbose mode
+  - **Impact**: Users now see clear feedback when conversions succeed
+  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
 - **Misleading quality check log messages**: Fixed logical paradox in quality verification messages
   - **Root cause**: In Ultimate Mode, `ms_ssim_score` stores VMAF-Y (0-1 scale), not MS-SSIM score
   - **Example**: Log showed "MS-SSIM TARGET FAILED: 0.9939 < 0.90" which is mathematically false
