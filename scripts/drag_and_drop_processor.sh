@@ -393,15 +393,14 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Capture output silently; spinner shows elapsed time on /dev/tty.
-    # Full detail goes to the binary's own run log (logs/img_hevc_run_*.log).
     local output
-    output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1)
-    # Also append captured output to the drag-drop log file if configured.
-    [[ -n "$LOG_FILE" ]] && echo "$output" >> "$LOG_FILE"
-    # Clear spinner line, then print only the summary box to the terminal.
+    if [[ -n "$LOG_FILE" ]]; then
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
+    else
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
+    fi
+    # Clear the spinner line after binary finishes so it doesn't linger.
     [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
-    echo "$output" | grep -E '^[[:space:]]*(╔|║|╠|╚|✅ Directory|✅ Built)'
     parse_tool_stats "$output" "img"
     echo ""
 }
@@ -419,15 +418,14 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Capture output silently; spinner shows elapsed time on /dev/tty.
-    # Full detail goes to the binary's own run log (logs/vid_hevc_run_*.log).
     local output
-    output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1)
-    # Also append captured output to the drag-drop log file if configured.
-    [[ -n "$LOG_FILE" ]] && echo "$output" >> "$LOG_FILE"
-    # Clear spinner line, then print only the summary box to the terminal.
+    if [[ -n "$LOG_FILE" ]]; then
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
+    else
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
+    fi
+    # Clear the spinner line after binary finishes so it doesn't linger.
     [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
-    echo "$output" | grep -E '^[[:space:]]*(╔|║|╠|╚|✅ Directory|✅ Built)'
     parse_tool_stats "$output" "vid"
     echo ""
 }
