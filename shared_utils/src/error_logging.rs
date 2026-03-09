@@ -3,8 +3,6 @@
 //! Provides color-coded, severity-classified error output so rare and critical bugs
 //! are immediately visible in both terminal and file logs.
 
-use console::style;
-
 /// Error severity levels for enhanced visibility
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorSeverity {
@@ -38,12 +36,12 @@ impl ErrorSeverity {
     /// Colored label for terminal output
     pub fn label_colored(&self) -> String {
         match self {
-            Self::Critical      => format!("{}", style("🚨 CRITICAL").red().bold()),
-            Self::Rare          => format!("{}", style("⚠️  RARE ERROR").yellow().bold()),
-            Self::MetadataLoss  => format!("{}", style("📋 METADATA LOSS").magenta().bold()),
-            Self::PipelineBroken => format!("{}", style("🔧 PIPELINE BROKEN").cyan().bold()),
-            Self::UpstreamError => format!("{}", style("🔺 UPSTREAM ERROR").yellow()),
-            Self::Standard      => format!("{}", style("❌ ERROR").red()),
+            Self::Critical      => "\x1b[1;31m🚨 CRITICAL\x1b[0m".to_string(),
+            Self::Rare          => "\x1b[1;33m⚠️  RARE ERROR\x1b[0m".to_string(),
+            Self::MetadataLoss  => "\x1b[1;35m📋 METADATA LOSS\x1b[0m".to_string(),
+            Self::PipelineBroken => "\x1b[1;36m🔧 PIPELINE BROKEN\x1b[0m".to_string(),
+            Self::UpstreamError => "\x1b[33m🔺 UPSTREAM ERROR\x1b[0m".to_string(),
+            Self::Standard      => "\x1b[31m❌ ERROR\x1b[0m".to_string(),
         }
     }
 }
@@ -54,8 +52,8 @@ impl ErrorSeverity {
 /// File:     `  [CRITICAL] <context>: <detail>`
 pub fn log_enhanced_error(severity: ErrorSeverity, context: &str, detail: &str) {
     // Terminal: colored, indented
-    let colored = format!("  {}  {}: {}", severity.label_colored(),
-        style(context).bold(), detail);
+    let colored = format!("  {}  \x1b[1m{}\x1b[0m: {}", severity.label_colored(),
+        context, detail);
     crate::progress_mode::emit_stderr(&colored);
 
     // File log: plain text with label

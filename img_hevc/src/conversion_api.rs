@@ -293,9 +293,9 @@ pub fn execute_conversion(
 
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!("Conversion successful: size reduced {}", console::style(format!("{:.1}%", reduction)).green().bold())
+        format!("Conversion successful: size reduced {}", format!("\x1b[1;32m{:.1}%\x1b[0m", reduction))
     } else {
-        format!("Conversion successful: size increased {}", console::style(format!("{:.1}%", -reduction)).yellow().bold())
+        format!("Conversion successful: size increased {}", format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction))
     };
 
     Ok(ConversionOutput {

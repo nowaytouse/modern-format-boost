@@ -152,9 +152,9 @@ fn main() -> anyhow::Result<()> {
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            // Run 时最先创建 run log，后续所有带 emoji 的输出都会写入该文件
+            // Create run log first; all subsequent output is captured here
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_hevc") {
-                shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not open run log file").yellow(), e);
+                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
             }
             if lossless {
                 shared_utils::progress_mode::emit_stderr("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
@@ -256,7 +256,7 @@ fn main() -> anyhow::Result<()> {
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
-                shared_utils::log_eprintln!("⚠️ {}: {}", console::style("restore-timestamps failed").yellow(), e);
+                shared_utils::log_eprintln!("⚠️ {}: {}", "\x1b[33mrestore-timestamps failed\x1b[0m", e);
                 std::process::exit(1);
             }
         }
@@ -775,7 +775,7 @@ fn auto_convert_single_file(
                     } else {
                         shared_utils::log_eprintln!(
                             "⚠️  {}: {}",
-                            console::style("Cannot get animation duration, skipping conversion").yellow(),
+                            "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
                             input.display()
                         );
                         shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
@@ -981,7 +981,7 @@ fn auto_convert_directory(
         Err(e) => {
             shared_utils::log_eprintln!(
                 "⚠️  {}: {}, falling back to 2 threads",
-                console::style(format!("Failed to create {} thread pool", max_threads)).yellow(),
+                format!("\x1b[33mFailed to create {} thread pool\x1b[0m", max_threads),
                 e
             );
             rayon::ThreadPoolBuilder::new()
