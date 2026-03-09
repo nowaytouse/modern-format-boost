@@ -7,6 +7,15 @@ All notable changes to this project will be documented in this file.
 ## [0.10.9] - 2026-03-09
 
 ### Fixed
+- **Fixed compress mode to respect tolerance setting**: Compress mode now honors `allow_size_tolerance` flag
+  - **Root cause**: Compress mode always rejected output ≥ input, completely ignoring tolerance setting
+  - **Impact**: Files with KB-level size increase (< 1MB) were incorrectly rejected even with tolerance enabled
+  - **Example**: 238KB → 420KB (+177KB) was rejected, but should be accepted (< 1MB tolerance)
+  - **New behavior**: 
+    - `compress=true` + `tolerance=true`: accept if increase < 1MB ✅
+    - `compress=true` + `tolerance=false`: reject if output ≥ input ❌
+  - **File modified**: `shared_utils/src/conversion.rs`
+
 - **Changed size tolerance from percentage to KB-level**: Fixed logic bug where percentage-based tolerance was unfair to small files
   - **Root cause**: 1% tolerance meant 100 bytes for 10KB files (too strict) but 100KB for 10MB files (reasonable)
   - **New logic**: KB-level tolerance - accept if size increase < 1MB (regardless of file size)
