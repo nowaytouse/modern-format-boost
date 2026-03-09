@@ -941,16 +941,18 @@ pub fn convert_to_hevc_mp4_matched(
             };
             tracing::warn!(input = %input.display(), "Video stream compression failed: {:.1}KB → {:.1}KB", input_stream_kb, output_stream_kb);
             eprintln!(
-                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%) | File may already be highly optimized",
+                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
                 input_stream_kb, output_stream_kb, stream_change_pct
             );
+            eprintln!("   ⚠️  File may already be highly optimized");
             (
                 "Original file PROTECTED (output did not compress)".to_string(),
                 "Output discarded (video stream larger than original)".to_string(),
             )
         } else if explore_result.ssim.is_none() {
             tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
-            eprintln!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality | This may indicate codec compatibility issues");
+            eprintln!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality");
+            eprintln!("   ⚠️  This may indicate codec compatibility issues");
             (
                 "Original file PROTECTED (SSIM not available)".to_string(),
                 "Output discarded (SSIM calculation failed)".to_string(),
@@ -977,11 +979,8 @@ pub fn convert_to_hevc_mp4_matched(
                 "Output discarded (quality/size check failed)".to_string(),
             )
         };
-        eprintln!("   ⚠️  {} | 🛡️  {} | 🗑️  {}", 
-            if !video_stream_compressed { "VIDEO STREAM COMPRESSION FAILED" } 
-            else if explore_result.ssim.is_none() { "SSIM CALCULATION FAILED" }
-            else { "QUALITY VALIDATION FAILED" },
-            protect_msg, delete_msg);
+        eprintln!("   🛡️  {}", protect_msg);
+        eprintln!("   🗑️  {}", delete_msg);
 
         let _ = shared_utils::copy_on_skip_or_fail(
             input,

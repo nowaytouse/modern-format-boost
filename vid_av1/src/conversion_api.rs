@@ -396,10 +396,11 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             );
         } else {
             warn!(
-                "   ⚠️  Video stream not compressed ({:+.1}%) | 🛡️  Original file PROTECTED",
+                "   ⚠️  Video stream not compressed ({:+.1}%)",
                 verify_result.video_size_change_percent()
             );
         }
+        warn!("   🛡️  Original file PROTECTED");
 
         // Only keep best-effort output when source is Apple-incompatible (AV1/VP9/VVC/AV2),
         // and only when total file behavior is acceptable.
