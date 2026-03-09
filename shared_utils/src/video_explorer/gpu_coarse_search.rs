@@ -601,7 +601,7 @@ pub fn explore_with_gpu_coarse_search(
                     result.cambi_score   = cambi;
                     result.psnr_uv_score = psnr_uv;
                 } else {
-                    crate::log_eprintln!("   ✅ QUALITY GATE: FAILED");
+                    crate::log_eprintln!("   ❌ QUALITY GATE: FAILED");
                     if !vmaf_ok {
                         let v_str = vmaf_y.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "N/A".to_string());
                         crate::log_eprintln!("      FAILED VMAF-Y {} < {:.1} (perceptual quality too low)", v_str, VMAF_Y_THRESHOLD);
