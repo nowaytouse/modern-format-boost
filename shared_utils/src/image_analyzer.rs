@@ -714,7 +714,7 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
     use std::process::Command;
 
     let output = Command::new("ffprobe")
-        .args(["-v", "quiet", "-print_format", "json", "-show_format", "--"])
+        .args(["-v", "error", "-print_format", "json", "-show_format", "--"])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
