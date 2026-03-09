@@ -34,16 +34,26 @@ The image pipeline operates as a **Format-Aware Routing State Machine**. It insp
 
 **Decision Matrix & Conversion Strategy:**
 
-| Input Category | Condition / State | Operation | Target Format | Technical Principle |
-| :--- | :--- | :--- | :--- | :--- |
-| **JPEG** | Legacy Lossy | **Reconstruction** | **JXL** (Lossless) | **DCT Transcoding**. Parses raw DCT coefficients and maps them directly to JXL's `varDCT`. **Reversible & Bit-exact.** |
-| **PNG / TIFF** | Lossless (truecolor/16-bit) | **Entropic Coding** | **JXL** (Lossless) | **Modular Mode**. Utilizes Delta Palettes, Squeeze (Haar transform), and MA-trees. ~40% density improvement. |
-| **PNG** | Lossy (palette-quantized, e.g. TinyPNG/pngquant) | **Lossy Transcode** | **JXL** (d=1.0) | **Multi-factor quantization detection** (palette structure, tRNS, tool signatures, dithering, entropy). Attempts lossy JXL; skipped automatically if output is larger. |
-| **WebP / AVIF** | Lossy | **Hard Skip** | *(Original)* | **Signal Preservation**. Re-quantizing artifacts (cascade compression) mathematically destroys SNR. Preserved as-is. |
-| **HEIC / HEIF** | Any | **Passthrough** | *(Original)* | **Zero-Copy**. Native format for Apple ecosystem. No processing required. |
-| **Live Photos** | HEIC + MOV Pair | **Atomic Skip** | *(Original)* | **Asset Integrity**. Identified via heuristic graph analysis. Locked to preserve the UUID linkage for "Live" playback. |
-| **GIF** | Meme-like (Simple/Short) | **Skip / Preserve** | *(Original)* | **Meme-Score (Intelligence)**. High-confidence memes are preserved as-is to maintain loop integrity and prevent overhead. |
-| **GIF** | Video-like (Complex/Long) | **Convert** | **HEVC** (Video) | **Temporal Compress**. Transforms redundant bitmap frames into P/B vectors, reducing size by 90%+. |
+| Input Format | Variants & Detection | Compression | Operation | Target Format | Container | Apple Compat | Technical Principle |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **JPEG** | All variants | Lossy (always) | **Reconstruction** | **JXL** (Lossless) | .jxl | Same | **DCT Transcoding**. Parses raw DCT coefficients and maps them directly to JXL's `varDCT`. **Reversible & Bit-exact.** |
+| **PNG** | Truecolor/16-bit | Lossless | **Entropic Coding** | **JXL** (Lossless) | .jxl | Same | **Modular Mode**. Utilizes Delta Palettes, Squeeze (Haar transform), and MA-trees. ~40% density improvement. |
+| **PNG** | Indexed/Palette | Lossy (quantized) | **Lossy Transcode** | **JXL** (d=1.0) | .jxl | Same | **Multi-factor detection** (palette structure, tRNS, tool signatures, dithering, entropy). Auto-skip if output larger. |
+| **WebP** | VP8L chunk | Lossless | **Entropic Coding** | **JXL** (Lossless) | .jxl | Same | **Lossless extraction**. VP8L→JXL modular mode with full quality preservation. |
+| **WebP** | VP8 chunk | Lossy | **Hard Skip** | *(Original)* | .webp | Same | **Signal Preservation**. Re-quantizing artifacts mathematically destroys SNR. |
+| **WebP** | ANIM chunks | Animated | **Convert** | **HEVC/AV1** (Video) | .mp4 | Same | **Temporal Compress**. ANMF frames→P/B vectors, 90%+ size reduction. |
+| **AVIF** | 4:2:0/4:2:2 chroma | Lossy | **Hard Skip** | *(Original)* | .avif | Same | **Signal Preservation**. AVIF already modern; re-encoding unnecessary. |
+| **AVIF** | 4:4:4 + high bit depth | Lossless | **Entropic Coding** | **JXL** (Lossless) | .jxl | Same | **Lossless extraction**. AVIF→JXL modular mode for archival. |
+| **HEIC/HEIF** | All variants | Any | **Passthrough** | *(Original)* | .heic/.heif | Same | **Zero-Copy**. Native Apple ecosystem format. |
+| **Live Photos** | HEIC+MOV pair | Any | **Atomic Skip** | *(Original)* | .heic+.mov | Same | **Asset Integrity**. UUID linkage preservation for "Live" playback. |
+| **GIF** | Static/1-frame | Any | **Skip** | *(Original)* | .gif | Same | **Meme-Score Intelligence**. Preserves loop integrity. |
+| **GIF** | ≤10 frames/short | Animated | **Skip** | *(Original)* | .gif | Same | **Meme-Score Intelligence**. Low overhead preservation. |
+| **GIF** | >10 frames/complex | Animated | **Convert** | **HEVC/AV1** (Video) | .mp4 | Same | **Temporal Compress**. Bitmap frames→P/B vectors, 90%+ reduction. |
+| **TIFF** | Compression tag 1/2/5/277 | Lossless | **Entropic Coding** | **JXL** (Lossless) | .jxl | Same | **Lossless extraction**. TIFF→JXL modular mode. |
+| **TIFF** | Compression tag 6/7 | Lossy | **Lossy Transcode** | **JXL** (d=1.0) | .jxl | Same | **JPEG-in-TIFF handling**. Extract JPEG→JXL reconstruction. |
+| **BMP/ICO/TGA/PSD/DDS** | All variants | Assumed Lossless | **Entropic Coding** | **JXL** (Lossless) | .jxl | Same | **Universal lossless**. Standard JXL modular conversion. |
+| **EXR** | Compression NONE/RLE/ZIPS | Lossless | **Entropic Coding** | **JXL** (Lossless) | .jxl | Same | **HDR preservation**. EXR→JXL with full dynamic range. |
+| **EXR** | Compression PXR24/B44 | Lossy | **Lossy Transcode** | **JXL** (d=1.0) | .jxl | Same | **HDR lossy handling**. Preserve as much quality as possible. |
 
 #### 2. Video Optimization Engine (`vid-hevc`)
 The video pipeline solves the bitrate/quality convex optimization problem using a **Three-Phase Saturation Search**:
@@ -57,13 +67,36 @@ The video pipeline solves the bitrate/quality convex optimization problem using 
 
 **Video Processing Strategy:**
 
-| Input Codec | Condition | Operation | Target Format | Technical Principle |
+| Input Codec | Category | Bit Depth | Container | Operation | Target Format | Output Container | Apple Compat | Technical Principle |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **H.264/AVC** | Delivery | 8-bit | Any | **Transcode** | **HEVC** | .mp4 | Same | **Smart CRF**. Spatial/temporal complexity analysis → SSIM-targeted CRF 18-20. |
+| **H.264/AVC** | Delivery | 10-bit | Any | **Transcode** | **HEVC** | .mp4 | Same | **High-Fidelity**. 10-bit preservation with CRF 18. |
+| **ProRes 422/444** | Production | 10-bit | .mov | **Transcode** | **HEVC** | .mp4 | Same | **Production Mode**. 10-bit HEVC with CRF 18, preserves dynamic range. |
+| **DNxHD/DNxHR** | Production | 8/10-bit | .mxf | **Transcode** | **HEVC** | .mp4 | Same | **Broadcast Mode**. Avid DNx→HEVC with quality matching. |
+| **FFV1** | Archival | Any | .avi/.mkv | **Transcode** | **HEVC** (Lossless) | .mkv | Same | **Lossless Mode**. `-x265-params lossless=1` for bit-exact preservation. |
+| **HuffYUV/UTVideo** | Archival | Any | .avi | **Transcode** | **HEVC** (Lossless) | .mkv | Same | **Lossless Mode**. Professional archival codecs→HEVC lossless. |
+| **Raw Video** | Archival | Any | .avi | **Transcode** | **HEVC** (Lossless) | .mkv | Same | **Lossless Mode**. Uncompressed→HEVC lossless for storage efficiency. |
+| **HEVC/H.265** | Delivery | 8/10-bit | Any | **Skip** | *(Original)* | *(Original)* | Skip | **Efficiency Check**. Already modern; re-encoding yields negative returns. |
+| **AV1** | Delivery | 8/10-bit | .mp4/.webm | **Skip** | *(Original)* | *(Original)* | Convert | **Efficiency Check**. Skip normally, convert for Apple compatibility. |
+| **VP9** | Delivery | 8/10-bit | .webm | **Skip** | *(Original)* | *(Original)* | Convert | **Google Codec**. Skip normally, convert for Apple compatibility. |
+| **VVC/H.266** | Delivery | 8/10-bit | Any | **Skip** | *(Original)* | *(Original)* | Convert | **Next-Gen**. Skip normally, convert for Apple compatibility. |
+| **AV2** | Delivery | 8/10-bit | Any | **Skip** | *(Original)* | *(Original)* | Convert | **Future Codec**. Skip normally, convert for Apple compatibility. |
+| **MPEG-4/DivX/Xvid** | Delivery | 8-bit | .avi/.mp4 | **Transcode** | **HEVC** | .mp4 | Same | **Legacy Upgrade**. Old MPEG codecs→modern HEVC with quality matching. |
+| **MPEG-2/MPEG-1** | Delivery | 8-bit | .mpg/.mpeg/.ts | **Transcode** | **HEVC** | .mp4 | Same | **Broadcast Upgrade**. DVD/TV formats→HEVC with significant compression. |
+| **WMV/VC-1** | Delivery | 8-bit | .wmv/.asf | **Transcode** | **HEVC** | .mp4 | Same | **Microsoft Legacy**. WMV→HEVC for modern compatibility. |
+| **VP8** | Delivery | 8-bit | .webm/.mkv | **Transcode** | **HEVC** | .mp4 | Same | **Legacy Google**. VP8→HEVC for better compression. |
+
+#### AV1 Variant Processing (`img-av1`, `vid-av1`)
+
+| Input Format | Operation | Target Format | Container | Technical Principle |
 | :--- | :--- | :--- | :--- | :--- |
-| **H.264 / AVC** | Legacy Lossy | **Transcode** | **HEVC** (H.265) | **Smart CRF**. Analyzes spatial/temporal complexity to target a specific SSIM. |
-| **ProRes / DNx** | Visually Lossless | **Transcode** | **HEVC** (H.265) | **High-Fidelity Mode**. Uses 10-bit color depth to preserve dynamic range. |
-| **Raw / FFV1** | Lossless | **Transcode** | **HEVC** (Lossless) | **Lossless Mode**. Enabled via `-x265-params lossless=1` (MKV container). |
-| **HEVC / AV1** | Modern | **Skip** | *(Original)* | **Efficiency Check**. Already highly compressed; re-encoding yields negative returns. |
-| **AV1 / VP9** | Modern (Non-Apple) | **Compat Convert** | **HEVC** (H.265) | **Apple Compat Mode**. Only triggered with `--apple-compat` flag for playback support. |
+| **JPEG** | **Reconstruction** | **JXL** (Lossless) | .jxl | **DCT Transcoding**. Same as HEVC variant, bit-exact preservation. |
+| **Lossless Images** | **Entropic Coding** | **JXL** (Lossless) | .jxl | **Modular Mode**. Enhanced efficiency with CJXL effort 7. |
+| **Animated Lossless** | **Convert** | **AV1** (Video) | .mp4 | **SVT-AV1 CRF 0**. LibSVT-AV1 with preset 6 for maximum quality. |
+| **Animated Lossy** | **Convert** | **AV1** (Video) | .mp4 | **Quality Match**. SVT-AV1 with matched quality to source. |
+| **Static Lossy** | **Convert** | **AVIF** | .avif | **AVIF Encoding**. avifenc with quality matching. |
+| **Lossless Videos** | **Transcode** | **AV1** (Lossless) | .mp4 | **SVT-AV1 Lossless**. CRF 0 with high-efficiency preset. |
+| **Lossy Videos** | **Transcode** | **AV1** | .mp4 | **SVT-AV1 Standard**. CRF-based quality matching. |
 
 ### ✨ Core Features
 
@@ -80,6 +113,58 @@ The video pipeline solves the bitrate/quality convex optimization problem using 
 #### 📊 Diagnostic & Logging
 *   **Intelligent Log Fusion**: When running via the macOS App, multiple log streams (drag-and-drop script, image engine, video engine) are automatically fused into a single `merged_*.log` file for easier troubleshooting.
 *   **Nanosecond Precision**: Directory timestamps (`atime`/`mtime`) are cached before processing and restored with nanosecond precision post-processing.
+
+#### 🌐 Container Decision Matrix
+
+| Content Type | Primary Container | Alternative | Apple Compat | Technical Rationale |
+| :--- | :--- | :--- | :--- | :--- |
+| **HEVC Lossless** | .mkv | .mp4 | .mp4 | MKV supports lossless mode; MP4 for Apple devices |
+| **HEVC Lossy** | .mp4 | .mkv | .mp4 | MP4 has widest device support |
+| **AV1 Video** | .mp4 | .webm | .mp4 | MP4 for Apple compatibility; WebM for web |
+| **JXL Images** | .jxl | - | .jxl | Universal next-gen format |
+| **AVIF Images** | .avif | - | .avif | Modern but limited Apple support |
+| **Original Skip** | *(Original)* | - | *(Original)* | Preserve container for compatibility |
+
+#### 🎨 HDR & Color Management Pipeline
+
+| HDR Type | Detection | Preservation | Output Handling | Apple Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| **HDR10** | master_display + max_cll | Full metadata | HEVC 10-bit | Native Apple support |
+| **HLG** | transfer=arib-std-b67 | Color space | HEVC 10-bit | BBC standard, Apple compatible |
+| **PQ** | transfer=smpte2084 | EOTF | HEVC 10-bit | Dolby-compatible |
+| **Dolby Vision** | is_dolby_vision flag | Static layer only | HDR10 fallback | Dynamic layer stripped |
+| **Wide Color Gamut** | primaries=bt2020/p3 | Color primaries | Preserved | P3 native to Apple |
+
+#### 🍎 Apple Ecosystem Optimization
+
+| Feature | Normal Mode | Apple Compat Mode | Implementation |
+| :--- | :--- | :--- | :--- |
+| **HEVC Content** | Skip | Skip | Already optimal for Apple |
+| **AV1/VP9/VVC** | Skip | **Convert to HEVC** | `--apple-compat` flag enables |
+| **Container Choice** | Optimal | MP4 preferred | MP4 has best Apple support |
+| **Color Space** | Preserve | P3/BT2020 priority | Apple display optimization |
+| **Audio Tracks** | Preserve | AAC/AC3 only | Remove unsupported codecs |
+| **Metadata** | Clean | Apple-specific | Remove toxic tags, add Apple keys |
+
+#### ⚡ Advanced Processing Modes
+
+| Mode | Purpose | Behavior | Performance Impact |
+| :--- | :--- | :--- | :--- |
+| **Ultimate Mode** | Maximum quality | 3-Phase saturation search | Very high CPU usage |
+| **Size Exploration** | Ensure compression | Try higher CRF if output larger | Moderate overhead |
+| **Match Quality** | Perceptual equivalence | SSIM-targeted encoding | Balanced approach |
+| **Lossless Mode** | Archival preservation | Bit-exact encoding | Larger files, perfect quality |
+| **Tolerance Mode** | Practical compression | Allow 1MB size increase | Better compression ratios |
+
+#### 🔧 Quality Matching Algorithms
+
+| Source Analysis | Target CRF (HEVC) | Target CRF (AV1) | Method |
+| :--- | :--- | :--- | :--- |
+| **High Quality (>90)** | 18-20 | 0-15 | Preserve high fidelity |
+| **Medium Quality (70-90)** | 20-24 | 15-25 | Balance compression/quality |
+| **Low Quality (<70)** | 24-28 | 25-35 | Aggressive compression |
+| **Animated Content** | 18-22 | 0-20 | Preserve motion quality |
+| **Screen Capture** | 20-24 | 15-25 | Optimize for text/clarity |
 
 ### 🛠️ Installation
 
@@ -147,6 +232,31 @@ Fixes corrupted headers and timestamps without re-encoding.
 ./scripts/repair_apple_photos.sh "/path/to/bad/files"
 ```
 
+#### 🛠️ Troubleshooting Edge Cases
+
+| Issue | Cause | Solution | Prevention |
+| :--- | :--- | :--- | :--- |
+| **JXL conversion fails** | Grayscale ICC conflict | Use ImageMagick fallback | Check ICC profiles first |
+| **HEVC output larger** | High complexity source | Enable size exploration | Use ultimate mode |
+| **AV1 playback issues** | Device incompatibility | Use Apple compat mode | Convert to HEVC |
+| **HDR looks washed out** | Missing metadata | Check color flags | Preserve HDR metadata |
+| **GIF conversion fails** | Complex animation | Keep original GIF | Use frame threshold |
+| **Audio lost in video** | Unsupported codec | Re-encode audio | Use AAC/AC3 |
+| **Live Photos broken** | UUID mismatch | Atomic skip processing | Process pairs together |
+| **Metadata corruption** | Social media tags | Nuclear metadata rebuild | Clean metadata first |
+| **Permission errors** | System files | Check file permissions | Run with appropriate access |
+
+#### 📊 Performance Benchmarks
+
+| Source Type | Target Format | Size Reduction | Quality Preservation | Processing Speed |
+| :--- | :--- | :--- | :--- | :--- |
+| **JPEG → JXL** | Lossless | 15-30% | Bit-exact | Fast |
+| **PNG → JXL** | Lossless | 40-60% | Bit-exact | Medium |
+| **H.264 → HEVC** | CRF 20 | 30-50% | SSIM >0.95 | Medium |
+| **ProRes → HEVC** | 10-bit | 50-70% | Visually lossless | Slow |
+| **GIF → HEVC** | Video | 80-95% | Motion preserved | Fast |
+| **AV1 → HEVC** | Apple compat | Variable | Perceptual | Medium |
+
 ---
 
 <a id="introduction-cn"></a>
@@ -170,16 +280,26 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 **决策矩阵与转换策略：**
 
-| 输入类别 | 状态 / 条件 | 操作 | 目标格式 | 技术原理 |
-| :--- | :--- | :--- | :--- | :--- |
-| **JPEG** | 陈旧有损 | **重构 (Reconstruction)** | **JXL** (无损) | **DCT 转码**。直接解析原始 DCT 系数并映射到 JXL 的 `varDCT` 结构。**可逆且比特级精确。** |
-| **PNG / TIFF** | 无损（真彩色/16-bit）| **熵编码 (Entropic Coding)** | **JXL** (无损) | **Modular 模式**。利用增量调色板 (Delta Palette)、Squeeze (Haar 变换) 和 MA 树。密度提升 ~40%。 |
-| **PNG** | 有损（调色板量化，如 TinyPNG/pngquant）| **有损转码 (Lossy Transcode)** | **JXL** (d=1.0) | **多因子量化检测**（调色板结构、tRNS、工具签名、抖动、熵分析）。尝试有损 JXL；若输出更大则自动跳过保护。 |
-| **WebP / AVIF** | 有损 | **硬跳过 (Hard Skip)** | *(原格式)* | **信号保护**。对伪影进行重量化（级联压缩）在数学上必然导致信噪比 (SNR) 破坏。按原样保留。 |
-| **HEIC / HEIF** | 任意 | **透传 (Passthrough)** | *(原格式)* | **零拷贝**。Apple 生态原生格式，无需处理。 |
-| **Live Photo** | HEIC + MOV 配对 | **原子跳过 (Atomic Skip)** | *(原格式)* | **资产完整性**。通过启发式图谱分析识别。锁定文件对以保护 "Live" 播放所需的 UUID 链路。 |
-| **GIF** | 表情包类 (简单/短促) | **跳过 / 保留** | *(原格式)* | **Meme-Score 智能判定**。高置信度表情包将按原样保留，以维持循环完整性并防止无谓开销。 |
-| **GIF** | 视频类 (复杂/长篇) | **转换 (Convert)** | **HEVC** (视频) | **时域压缩**。将冗余的位图帧转换为 P/B 向量，体积通常减少 90% 以上。 |
+| 输入格式 | 变体与检测 | 压缩类型 | 操作 | 目标格式 | 容器 | Apple 兼容 | 技术原理 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **JPEG** | 所有变体 | 有损（总是）| **重构** | **JXL** (无损) | .jxl | 相同 | **DCT 转码**。直接解析原始 DCT 系数并映射到 JXL 的 `varDCT`。**可逆且比特级精确。** |
+| **PNG** | 真彩色/16-bit | 无损 | **熵编码** | **JXL** (无损) | .jxl | 相同 | **Modular 模式**。利用增量调色板、Squeeze (Haar 变换) 和 MA 树。密度提升 ~40%。 |
+| **PNG** | 索引/调色板 | 有损（量化）| **有损转码** | **JXL** (d=1.0) | .jxl | 相同 | **多因子检测**（调色板结构、tRNS、工具签名、抖动、熵分析）。输出更大时自动跳过。 |
+| **WebP** | VP8L 块 | 无损 | **熵编码** | **JXL** (无损) | .jxl | 相同 | **无损提取**。VP8L→JXL modular 模式，完全质量保持。 |
+| **WebP** | VP8 块 | 有损 | **硬跳过** | *(原格式)* | .webp | 相同 | **信号保护**。对伪影进行重量化在数学上必然导致信噪比破坏。 |
+| **WebP** | ANIM 块 | 动画 | **转换** | **HEVC/AV1** (视频) | .mp4 | 相同 | **时域压缩**。ANMF 帧→P/B 向量，体积减少 90%+。 |
+| **AVIF** | 4:2:0/4:2:2 色度 | 有损 | **硬跳过** | *(原格式)* | .avif | 相同 | **信号保护**。AVIF 已是现代格式；重新编码不必要。 |
+| **AVIF** | 4:4:4 + 高位深 | 无损 | **熵编码** | **JXL** (无损) | .jxl | 相同 | **无损提取**。AVIF→JXL modular 模式用于归档。 |
+| **HEIC/HEIF** | 所有变体 | 任意 | **透传** | *(原格式)* | .heic/.heif | 相同 | **零拷贝**。Apple 生态原生格式。 |
+| **Live Photos** | HEIC+MOV 对 | 任意 | **原子跳过** | *(原格式)* | .heic+.mov | 相同 | **资产完整性**。UUID 链路保护用于 "Live" 播放。 |
+| **GIF** | 静态/1帧 | 任意 | **跳过** | *(原格式)* | .gif | 相同 | **Meme-Score 智能**。保持循环完整性。 |
+| **GIF** | ≤10 帧/短小 | 动画 | **跳过** | *(原格式)* | .gif | 相同 | **Meme-Score 智能**。低开销保护。 |
+| **GIF** | >10 帧/复杂 | 动画 | **转换** | **HEVC/AV1** (视频) | .mp4 | 相同 | **时域压缩**。位图帧→P/B 向量，体积减少 90%+。 |
+| **TIFF** | 压缩标签 1/2/5/277 | 无损 | **熵编码** | **JXL** (无损) | .jxl | 相同 | **无损提取**。TIFF→JXL modular 模式。 |
+| **TIFF** | 压缩标签 6/7 | 有损 | **有损转码** | **JXL** (d=1.0) | .jxl | 相同 | **JPEG-in-TIFF 处理**。提取 JPEG→JXL 重构。 |
+| **BMP/ICO/TGA/PSD/DDS** | 所有变体 | 假设无损 | **熵编码** | **JXL** (无损) | .jxl | 相同 | **通用无损**。标准 JXL modular 转换。 |
+| **EXR** | 压缩 NONE/RLE/ZIPS | 无损 | **熵编码** | **JXL** (无损) | .jxl | 相同 | **HDR 保护**。EXR→JXL 保持全动态范围。 |
+| **EXR** | 压缩 PXR24/B44 | 有损 | **有损转码** | **JXL** (d=1.0) | .jxl | 相同 | **HDR 有损处理**。尽可能保持质量。 |
 
 #### 2. 视频优化管线 (`vid-hevc`)
 视频引擎通过**三阶段饱和搜索算法**来求解码率/画质的凸优化问题：
@@ -193,13 +313,36 @@ Fixes corrupted headers and timestamps without re-encoding.
 
 **视频处理策略：**
 
-| 输入编码 | 条件 | 操作 | 目标格式 | 技术原理 |
+| 输入编码 | 类别 | 位深 | 容器 | 操作 | 目标格式 | 输出容器 | Apple 兼容 | 技术原理 |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **H.264/AVC** | 交付 | 8-bit | 任意 | **转码** | **HEVC** | .mp4 | 相同 | **Smart CRF**。空间/时间复杂度分析 → SSIM 目标 CRF 18-20。 |
+| **H.264/AVC** | 交付 | 10-bit | 任意 | **转码** | **HEVC** | .mp4 | 相同 | **高保真**。10-bit 保持，CRF 18。 |
+| **ProRes 422/444** | 制作 | 10-bit | .mov | **转码** | **HEVC** | .mp4 | 相同 | **制作模式**。10-bit HEVC，CRF 18，保持动态范围。 |
+| **DNxHD/DNxHR** | 制作 | 8/10-bit | .mxf | **转码** | **HEVC** | .mp4 | 相同 | **广播模式**。Avid DNx→HEVC 质量匹配。 |
+| **FFV1** | 归档 | 任意 | .avi/.mkv | **转码** | **HEVC** (无损) | .mkv | 相同 | **无损模式**。`-x265-params lossless=1` 比特精确保持。 |
+| **HuffYUV/UTVideo** | 归档 | 任意 | .avi | **转码** | **HEVC** (无损) | .mkv | 相同 | **无损模式**。专业归档编码→HEVC 无损。 |
+| **Raw Video** | 归档 | 任意 | .avi | **转码** | **HEVC** (无损) | .mkv | 相同 | **无损模式**。未压缩→HEVC 无损提高存储效率。 |
+| **HEVC/H.265** | 交付 | 8/10-bit | 任意 | **跳过** | *(原格式)* | *(原格式)* | 跳过 | **效率检查**。已是现代格式；重新编码导致负收益。 |
+| **AV1** | 交付 | 8/10-bit | .mp4/.webm | **跳过** | *(原格式)* | *(原格式)* | 转换 | **效率检查**。通常跳过，Apple 兼容时转换。 |
+| **VP9** | 交付 | 8/10-bit | .webm | **跳过** | *(原格式)* | *(原格式)* | 转换 | **Google 编码**。通常跳过，Apple 兼容时转换。 |
+| **VVC/H.266** | 交付 | 8/10-bit | 任意 | **跳过** | *(原格式)* | *(原格式)* | 转换 | **下一代**。通常跳过，Apple 兼容时转换。 |
+| **AV2** | 交付 | 8/10-bit | 任意 | **跳过** | *(原格式)* | *(原格式)* | 转换 | **未来编码**。通常跳过，Apple 兼容时转换。 |
+| **MPEG-4/DivX/Xvid** | 交付 | 8-bit | .avi/.mp4 | **转码** | **HEVC** | .mp4 | 相同 | **传统升级**。旧 MPEG 编码→现代 HEVC 质量匹配。 |
+| **MPEG-2/MPEG-1** | 交付 | 8-bit | .mpg/.mpeg/.ts | **转码** | **HEVC** | .mp4 | 相同 | **广播升级**。DVD/TV 格式→HEVC 显著压缩。 |
+| **WMV/VC-1** | 交付 | 8-bit | .wmv/.asf | **转码** | **HEVC** | .mp4 | 相同 | **微软传统**。WMV→HEVC 现代兼容性。 |
+| **VP8** | 交付 | 8-bit | .webm/.mkv | **转码** | **HEVC** | .mp4 | 相同 | **传统 Google**。VP8→HEVC 更好压缩。 |
+
+#### AV1 变体处理 (`img-av1`, `vid-av1`)
+
+| 输入格式 | 操作 | 目标格式 | 容器 | 技术原理 |
 | :--- | :--- | :--- | :--- | :--- |
-| **H.264 / AVC** | 陈旧有损 | **转码 (Transcode)** | **HEVC** (H.265) | **Smart CRF**。分析空间/时间复杂度以定位特定的 SSIM 目标。 |
-| **ProRes / DNx** | 视觉无损 | **转码 (Transcode)** | **HEVC** (H.265) | **高保真模式**。使用 10-bit 色深以保留动态范围。 |
-| **Raw / FFV1** | 无损 | **转码 (Transcode)** | **HEVC** (无损) | **无损模式**。通过 `-x265-params lossless=1` 启用 (MKV 容器)。 |
-| **HEVC / AV1** | 现代 | **跳过 (Skip)** | *(原格式)* | **效率检查**。已处于高压缩率状态；重编码会导致负收益。 |
-| **AV1 / VP9** | 现代 (非 Apple) | **兼容转换 (Compat Convert)** | **HEVC** (H.265) | **Apple 兼容模式**。仅在启用 `--apple-compat` 标志时触发，以支持播放。 |
+| **JPEG** | **重构** | **JXL** (无损) | .jxl | **DCT 转码**。与 HEVC 变体相同，比特精确保持。 |
+| **无损图像** | **熵编码** | **JXL** (无损) | .jxl | **Modular 模式**。增强效率，CJXL effort 7。 |
+| **动画无损** | **转换** | **AV1** (视频) | .mp4 | **SVT-AV1 CRF 0**。LibSVT-AV1 preset 6 最大质量。 |
+| **动画有损** | **转换** | **AV1** (视频) | .mp4 | **质量匹配**。SVT-AV1 匹配源质量。 |
+| **静态有损** | **转换** | **AVIF** | .avif | **AVIF 编码**。avifenc 质量匹配。 |
+| **无损视频** | **转码** | **AV1** (无损) | .mp4 | **SVT-AV1 无损**。CRF 0 高效率 preset。 |
+| **有损视频** | **转码** | **AV1** | .mp4 | **SVT-AV1 标准**。基于 CRF 质量匹配。 |
 
 ### ✨ 核心特性
 
