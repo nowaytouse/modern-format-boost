@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost [![GitHub Stars](https://img.shields.io/github/stars/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/stargazers) [![GitHub Forks](https://img.shields.io/github/forks/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/network/members)
 
-[![Version](https://img.shields.io/badge/version-0.10.9-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
+[![Version](https://img.shields.io/badge/version-0.10.14-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
 [![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)](https://github.com/nowaytouse/modern-format-boost)
@@ -73,7 +73,7 @@ The video pipeline solves the bitrate/quality convex optimization problem using 
 *   **Directory Timestamp Guard**: Caches `atime`/`mtime` of the entire directory tree before processing and restores them with nanosecond precision post-processing.
 
 #### ⚡ Smart Conversion Strategy
-*   **Robust Fallback Pipeline (v0.10.9)**: If the primary JXL encoder (`cjxl`) fails, the engine automatically routes files through a multi-stage ImageMagick fallback pipeline, handling grayscale ICC conflicts and bit-depth issues to ensure maximum conversion success.
+*   **Robust Fallback Pipeline (v0.10.14)**: If the primary JXL encoder (`cjxl`) fails, the engine automatically routes files through a multi-stage ImageMagick fallback pipeline, handling grayscale ICC conflicts and bit-depth issues to ensure maximum conversion success.
 *   **Magic Bytes Sniffing**: Bypasses file extensions entirely. Uses a buffered reader to inspect the first 16 bytes (file signature) to identify the true MIME type, correcting `png` files masked as `jpg`.
 *   **HDR Pipeline**: Fully color-managed workflow. Detects Transfer Characteristics (PQ/HLG) and Color Primaries (BT.2020/P3). Passes `color_primaries`, `transfer_characteristics`, and `matrix_coefficients` flags to the encoder to prevent "washed out" HDR conversions.
 
@@ -209,7 +209,7 @@ Fixes corrupted headers and timestamps without re-encoding.
 *   **文件夹时间守护**：在处理前缓存整个目录树的 `atime`/`mtime`，并在处理后以纳秒级精度还原，确保相册的时间线视图丝毫不差。
 
 #### ⚡ 智能转换策略
-*   **鲁棒回退管线 (v0.10.9)**：当主要的 JXL 编码器 (`cjxl`) 失败时，引擎会自动通过多级 ImageMagick 回退管线处理文件，智能解决灰度 ICC 冲突和位深度问题，确保极高的转换成功率。
+*   **鲁棒回退管线 (v0.10.14)**：当主要的 JXL 编码器 (`cjxl`) 失败时，引擎会自动通过多级 ImageMagick 回退管线处理文件，智能解决灰度 ICC 冲突和位深度问题，确保极高的转换成功率。
 *   **魔法字节嗅探**: 完全绕过文件扩展名。通过缓冲读取文件头的前 16 个字节（文件签名）来识别真实的 MIME 类型，自动修正伪装成 `jpg` 的 `png` 文件。
 *   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients` 标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
 
