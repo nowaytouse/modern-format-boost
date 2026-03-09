@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.13] - 2026-03-10
+
+### Changed
+- **Statistics lines now use 📊 emoji instead of `[Info]` tag**: The `[Info]` prefix on periodic stats lines (e.g. `XMP merge: 253 OK   Images: 200 OK`) was misleading — it resembles a log severity level, but these lines are counters/statistics, not informational log messages. Replaced with a `📊` emoji for clarity
+- **Visual separation for statistics lines**: Periodic mid-run stats lines now have a leading blank line (`\n`) before them so they stand out clearly when interleaved with per-file progress output, avoiding the previous ugly inline merging
+
 ## [0.10.12] - 2026-03-10
 
 ### Fixed
