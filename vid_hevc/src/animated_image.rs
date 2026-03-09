@@ -524,13 +524,13 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
                 format!(
-                    "HEVC conversion successful: size reduced {}",
-                    format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
+                    "HEVC conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m",
+                    reduction_pct
                 )
             } else {
                 format!(
-                    "HEVC conversion successful: size increased {}",
-                    format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
+                    "HEVC conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
+                    -reduction_pct
                 )
             };
 
@@ -1132,9 +1132,9 @@ pub fn convert_to_hevc_mkv_lossless(
 
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
-                format!("Lossless HEVC: size reduced {}", format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct))
+                format!("Lossless HEVC: size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
             } else {
-                format!("Lossless HEVC: size increased {}", format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct))
+                format!("Lossless HEVC: size increased \x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
             };
 
             Ok(ConversionResult {
@@ -1556,9 +1556,9 @@ pub fn convert_to_gif_apple_compat(
 
     let reduction_pct = reduction * 100.0;
     let message = if reduction >= 0.0 {
-        format!("GIF (Apple Compat): size reduced {}", format!("\x1b[1;32m{:.1}%\x1b[0m", reduction_pct))
+        format!("GIF (Apple Compat): size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
     } else {
-        format!("GIF (Apple Compat): size increased {}", format!("\x1b[1;33m{:.1}%\x1b[0m", -reduction_pct))
+        format!("GIF (Apple Compat): size increased \x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
     };
 
     Ok(ConversionResult {
