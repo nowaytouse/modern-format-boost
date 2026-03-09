@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.15] - 2026-03-10
+
+### Fixed
+- **Script syntax error on double-click (line 301)**: `bash -n` revealed a missing closing quote on line 218 in `draw_header()` — `echo -e "..." ` was missing the trailing `"`, causing bash to continue parsing the string literal across subsequent lines until it hit the `(` at line 301 and reported `syntax error near unexpected token '('`
+  - **Root cause**: A single missing `"` at the end of an `echo -e` line in `draw_header()` caused bash to treat everything up to the next `"` (83 lines later) as a string continuation
+  - **Fix**: Added the missing closing `"` on line 218
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
+
+- **Inconsistent clear-screen behavior after build**: Script sometimes cleared a large block of build output before showing the mode-selection menu, sometimes didn't
+  - **Root cause**: `_main()` called `clear_screen` at the very start, before `check_tools` (which runs the build). When the build was cached/fast it produced no output and the clear was harmless; when the build printed compilation output, `clear_screen` ran first (clearing nothing visible yet), then build output filled the screen, and then `select_mode()` called `clear_screen` again — this second clear was the one users saw, making behavior appear inconsistent
+  - **Fix**: Removed the premature `clear_screen` at the top of `_main()`. `select_mode()` already clears the screen at the start of its menu loop, ensuring a consistent clean display every time
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
+
 ## [0.10.14] - 2026-03-10
 
 ### Changed
