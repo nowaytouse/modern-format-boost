@@ -23,7 +23,7 @@ thread_local! {
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
 
-/// Format duration as detailed string like "01D : 01h : 00m : 00s : 000ms" or "01h : 00m : 00s : 000ms" or "00m : 00s : 000ms" or "00s : 000ms"
+/// Format duration as detailed string like "01D: 01h: 00m: 00s: 000ms" or "01h: 00m: 00s: 000ms" or "00m: 00s: 000ms" or "00s: 000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
     let days = total_millis / (86400 * 1000);
@@ -46,7 +46,7 @@ pub fn format_duration_compact(duration: Duration) -> String {
     parts.push(format!("{:02}s", seconds));
     parts.push(format!("{:03}ms", millis));
     
-    parts.join(" : ")
+    parts.join(": ")
 }
 
 /// Width of the tag column so all message bodies align (e.g. [file.jpeg]).
