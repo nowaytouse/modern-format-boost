@@ -892,9 +892,9 @@ fn auto_convert_single_file(
     } else {
         // In batch (quiet) mode only write to log file; terminal shows the progress bar instead.
         if shared_utils::progress_mode::is_quiet_mode() {
-            shared_utils::progress_mode::write_to_log(&format!("✅ {}", output.message));
+            shared_utils::progress_mode::write_to_log(&format!("{} ✅", output.message));
         } else {
-            shared_utils::log_eprintln!("✅ {}", output.message);
+            shared_utils::log_eprintln!("{} ✅", output.message);
         }
     }
 
