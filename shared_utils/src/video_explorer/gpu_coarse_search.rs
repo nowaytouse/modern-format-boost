@@ -504,7 +504,7 @@ pub fn explore_with_gpu_coarse_search(
         } else if should_run_vmaf {
             let threshold_min = ms_ssim_duration_threshold_secs / 60.0;
             crate::log_eprintln!(
-                "   ✅ Video within limit (≤{:.0}min)",
+                "   Video within limit (≤{:.0}min)",
                 threshold_min
             );
 
@@ -553,38 +553,38 @@ pub fn explore_with_gpu_coarse_search(
                 let chroma_ok = psnr_uv.map(|(u, v)| u.min(v) >= PSNR_UV_MIN).unwrap_or(false);
 
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");
-                crate::log_eprintln!("   Quality Metrics (Ultimate Mode - 3D Judgment):");
+                crate::log_eprintln!("   Quality Metrics (Ultimate Mode):");
 
                 match vmaf_y {
                     Some(v) => crate::log_eprintln!(
-                        "      VMAF-Y:   {:6.2}  ≥ {:.1}  {}",
+                        "      VMAF-Y: {:6.2} ≥ {:.1} {}",
                         v, VMAF_Y_THRESHOLD,
-                        if vmaf_ok { "✅" } else { "❌" }
+                        if vmaf_ok { "" } else { "❌" }
                     ),
                     None => crate::log_eprintln!(
-                        "      VMAF-Y:   N/A  (calculation failed) ❌"
+                        "      VMAF-Y: N/A (calculation failed) ❌"
                     ),
                 }
 
                 match cambi {
                     Some(c) => crate::log_eprintln!(
-                        "      CAMBI:    {:6.2}  ≤ {:.1}  {}  (lower=better)",
+                        "      CAMBI:  {:6.2} ≤ {:.1} {} (lower=better)",
                         c, CAMBI_MAX,
-                        if cambi_ok { "✅" } else { "❌" }
+                        if cambi_ok { "" } else { "❌" }
                     ),
                     None => crate::log_eprintln!(
-                        "      CAMBI:    N/A  (calculation failed) ❌"
+                        "      CAMBI: N/A (calculation failed) ❌"
                     ),
                 }
 
                 match psnr_uv {
                     Some((pu, pv)) => crate::log_eprintln!(
-                        "      PSNR-UV:  U={:.2} V={:.2} dB  ≥ {:.1} dB  {}",
+                        "      PSNR-UV: {:.2}/{:.2} dB ≥ {:.1} dB {}",
                         pu, pv, PSNR_UV_MIN,
-                        if chroma_ok { "✅" } else { "❌" }
+                        if chroma_ok { "" } else { "❌" }
                     ),
                     None => crate::log_eprintln!(
-                        "      PSNR-UV:  N/A  (calculation failed) ❌"
+                        "      PSNR-UV: N/A (calculation failed) ❌"
                     ),
                 }
 
@@ -593,7 +593,7 @@ pub fn explore_with_gpu_coarse_search(
                 let all_passed = vmaf_ok && cambi_ok && chroma_ok;
 
                 if all_passed {
-                    crate::log_eprintln!("   ✅ 3D QUALITY GATE: ALL PASSED");
+                    crate::log_eprintln!("   ✅ QUALITY GATE: PASSED");
                     result.ms_ssim_passed = Some(true);
                     // Store a representative score (VMAF-Y) for log/report
                     result.ms_ssim_score = vmaf_y.map(|v| v / 100.0);
@@ -601,20 +601,20 @@ pub fn explore_with_gpu_coarse_search(
                     result.cambi_score   = cambi;
                     result.psnr_uv_score = psnr_uv;
                 } else {
-                    crate::log_eprintln!("   ❌ 3D QUALITY GATE: FAILED");
+                    crate::log_eprintln!("   ✅ QUALITY GATE: FAILED");
                     if !vmaf_ok {
                         let v_str = vmaf_y.map(|v| format!("{:.2}", v)).unwrap_or_else(|| "N/A".to_string());
-                        crate::log_eprintln!("      ❌ VMAF-Y {} < {:.1} (perceptual quality too low)", v_str, VMAF_Y_THRESHOLD);
+                        crate::log_eprintln!("      FAILED VMAF-Y {} < {:.1} (perceptual quality too low)", v_str, VMAF_Y_THRESHOLD);
                     }
                     if !cambi_ok {
                         let c_str = cambi.map(|c| format!("{:.2}", c)).unwrap_or_else(|| "N/A".to_string());
-                        crate::log_eprintln!("      ❌ CAMBI {} > {:.1} (banding detected)", c_str, CAMBI_MAX);
+                        crate::log_eprintln!("      FAILED CAMBI {} > {:.1} (banding detected)", c_str, CAMBI_MAX);
                     }
                     if !chroma_ok {
                         let uv_str = psnr_uv
                             .map(|(u, v)| format!("min={:.2}", u.min(v)))
                             .unwrap_or_else(|| "N/A".to_string());
-                        crate::log_eprintln!("      ❌ PSNR-UV {} dB < {:.1} dB (chroma quality too low)", uv_str, PSNR_UV_MIN);
+                        crate::log_eprintln!("      FAILED PSNR-UV {} dB < {:.1} dB (chroma quality too low)", uv_str, PSNR_UV_MIN);
                     }
                     crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
                     result.ms_ssim_passed = Some(false);
@@ -1962,7 +1962,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     crate::log_eprintln!();
     crate::log_eprintln!("═══════════════════════════════════════════════════════════");
     crate::log_eprintln!(
-        "✅ RESULT: CRF {:.1} • Size {:+.1}% • Iterations: {}",
+        "RESULT: CRF {:.1} │ Size {:+.1}% │ Iterations: {}",
         final_crf,
         size_change_pct,
         iterations
@@ -1970,9 +1970,9 @@ fn cpu_fine_tune_from_gpu_boundary(
     crate::log_eprintln!(
         "   Total file smaller than input: {}",
         if total_file_compressed {
-            "✅ YES"
+            "YES"
         } else {
-            "❌ NO"
+            "NO"
         }
     );
 
