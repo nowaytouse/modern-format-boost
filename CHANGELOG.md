@@ -7,6 +7,21 @@ All notable changes to this project will be documented in this file.
 ## [0.10.9] - 2026-03-09
 
 ### Fixed
+- **Enhanced size check logging and copy-on-fail feedback**: Improved visibility of file deletion and copy operations
+  - **Root cause**: When output files were deleted due to size increase, logs only appeared in `--verbose` mode
+  - **Impact**: Users couldn't see why conversions were skipped or where original files were copied
+  - **Fix**: 
+    - Always log file deletion with clear reason (not just in verbose mode)
+    - Show explicit "Original copied to: <path>" message when files are copied to output directory
+    - Display size comparison for all skip scenarios
+  - **Example output**:
+    ```
+    🗑️  JPEG (Sanitized) -> JXL output deleted: larger than input by 76.1% (tolerance: 1.0%)
+    📊 Size comparison: 238543 → 419973 bytes (+76.1%)
+    📋 Original copied to: /tmp/test_output/IMG_6171_副本.jpeg
+    ```
+  - **File modified**: `shared_utils/src/conversion.rs` (`check_size_tolerance` function)
+
 - **FFprobe image2 demuxer pattern matching issue**: Fixed critical bug where image files with `[` `]` in filenames failed to process
   - **Root cause**: FFprobe's image2 demuxer interprets `[` `]` as sequence patterns (e.g., `image[001-100].jpg`)
   - **Example**: File `FB55N[I_R{KE)K}I141L%8V.jpeg` would fail with "Could find no file with path ... and index in the range 0-4"

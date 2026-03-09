@@ -85,13 +85,21 @@ pub fn convert_to_temp_png(
 
 /// True when cjxl failed due to grayscale PNG + ICC profile (libpng: "RGB color space not permitted on grayscale").
 /// Only then do we retry with -strip to avoid metadata loss in the general case.
+/// Enhanced to catch more variants of the error message.
 fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
     let s = stderr.to_lowercase();
     // Match the specific pattern: ICC profile color space mismatch on grayscale PNG
     // Example: "libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG"
+    // Relaxed matching: check for libpng warning + grayscale + icc/color space issues
+    let has_libpng_warning = s.contains("libpng") && s.contains("warning");
+    let has_grayscale_issue = s.contains("grayscale");
+    let has_icc_issue = s.contains("iccp") || s.contains("icc") || s.contains("color space");
+    let has_pixel_failure = s.contains("getting pixel data failed") || s.contains("pixel data");
+    
+    // Either the specific error pattern OR a combination of indicators
     (s.contains("rgb color space not permitted on grayscale")
-        || (s.contains("iccp") && s.contains("grayscale") && s.contains("color space")))
-        && s.contains("getting pixel data failed")
+        || (has_libpng_warning && has_grayscale_issue && has_icc_issue))
+        && has_pixel_failure
 }
 
 /// True when cjxl failed with decode/pixel errors that may be helped by a simpler pipeline.
@@ -286,66 +294,83 @@ pub fn try_imagemagick_fallback(
     max_threads: usize,
     apple_compat: bool,
 ) -> std::result::Result<(), std::io::Error> {
+    use console::style;
+    
     // Attempt 1: no -strip, depth 16, preserve metadata
+    crate::progress_mode::emit_stderr(&format!("   🔄 Attempt 1: Default (16-bit, preserve metadata) - {}", input.display()));
     match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, false, 16, false, apple_compat) {
         Ok(()) => {
+            crate::progress_mode::emit_stderr(&format!("   {} Attempt 1 succeeded", style("✅").green()));
             crate::progress_mode::fallback_success();
             return Ok(());
         }
         Err((magick_ok, cjxl_ok, stderr)) => {
-            let line = format!(
-                "   ❌ ImageMagick pipeline failed for file: {} (magick: {}, cjxl: {})",
-                input.display(),
-                if magick_ok { "✓" } else { "✗" },
-                if cjxl_ok { "✓" } else { "✗" }
-            );
-            crate::progress_mode::emit_stderr(&line);
+            crate::progress_mode::emit_stderr(&format!(
+                "   {} Attempt 1 failed (magick: {}, cjxl: {})",
+                style("❌").red(),
+                if magick_ok { style("✓").green() } else { style("✗").red() },
+                if cjxl_ok { style("✓").green() } else { style("✗").red() }
+            ));
 
             if magick_ok && !cjxl_ok && is_grayscale_icc_cjxl_error(&stderr) {
                 // Attempt 2: -strip, depth 16 (drop bad ICC, keep bit depth)
                 crate::progress_mode::emit_stderr(
-                    "   🔄 Retrying with -strip (grayscale PNG + ICC incompatible with cjxl)",
+                    "   🔄 Attempt 2: Grayscale ICC fix (-strip, 16-bit)",
                 );
                 match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true, 16, false, apple_compat) {
                     Ok(()) => {
+                        crate::progress_mode::emit_stderr(&format!("   {} Attempt 2 succeeded", style("✅").green()));
                         crate::progress_mode::fallback_success();
                         return Ok(());
                     }
                     Err((m, c, stderr2)) => {
-                        let line = format!(
-                            "   ❌ ImageMagick retry failed for file: {} (magick: {}, cjxl: {})",
-                            input.display(),
-                            if m { "✓" } else { "✗" },
-                            if c { "✓" } else { "✗" }
-                        );
-                        crate::progress_mode::emit_stderr(&line);
-                        // Attempt 3: only for 8-bit sources (no quality loss)
+                        crate::progress_mode::emit_stderr(&format!(
+                            "   {} Attempt 2 failed (magick: {}, cjxl: {})",
+                            style("❌").red(),
+                            if m { style("✓").green() } else { style("✗").red() },
+                            if c { style("✓").green() } else { style("✗").red() }
+                        ));
+                        
+                        // Check if it's still a decode/pixel error and try 8-bit for 8-bit sources
                         if m && !c && is_decode_or_pixel_cjxl_error(&stderr2) {
                             let bit_depth = get_png_bit_depth(input).unwrap_or(16);
                             if bit_depth <= 8 {
+                                // Attempt 3: -depth 8 -strip for 8-bit sources (no quality loss)
                                 crate::progress_mode::emit_stderr(
-                                    "   🔄 Retrying with -depth 8 -strip (8-bit source confirmed, no quality loss)",
+                                    "   🔄 Attempt 3: 8-bit depth (-depth 8 -strip, 8-bit source confirmed)",
                                 );
-                                if run_imagemagick_cjxl_pipeline(
+                                match run_imagemagick_cjxl_pipeline(
                                     input, output, distance, max_threads, true, 8, false, apple_compat,
-                                ).is_ok() {
-                                    crate::progress_mode::fallback_success();
-                                    return Ok(());
+                                ) {
+                                    Ok(()) => {
+                                        crate::progress_mode::emit_stderr(&format!("   {} Attempt 3 succeeded", style("✅").green()));
+                                        crate::progress_mode::fallback_success();
+                                        return Ok(());
+                                    }
+                                    Err(_) => {
+                                        crate::progress_mode::emit_stderr(&format!("   {} Attempt 3 failed", style("❌").red()));
+                                    }
                                 }
                             } else {
-                                // Attempt 4: normalize ICC to sRGB, preserve 16-bit depth
+                                // Attempt 3: normalize ICC to sRGB, preserve 16-bit depth
                                 crate::progress_mode::emit_stderr(
-                                    "   🔄 Retrying with ICC normalization to sRGB (16-bit source, no depth downgrade)",
+                                    "   🔄 Attempt 3: ICC normalization (sRGB, 16-bit source)",
                                 );
-                                if run_imagemagick_cjxl_pipeline(
+                                match run_imagemagick_cjxl_pipeline(
                                     input, output, distance, max_threads, false, 16, true, apple_compat,
-                                ).is_ok() {
-                                    crate::progress_mode::fallback_success();
-                                    return Ok(());
+                                ) {
+                                    Ok(()) => {
+                                        crate::progress_mode::emit_stderr(&format!("   {} Attempt 3 succeeded", style("✅").green()));
+                                        crate::progress_mode::fallback_success();
+                                        return Ok(());
+                                    }
+                                    Err(_) => {
+                                        crate::progress_mode::emit_stderr(&format!("   {} Attempt 3 failed", style("❌").red()));
+                                        crate::progress_mode::emit_stderr(
+                                            "   ⚠️  16-bit source: refusing to downgrade to 8-bit",
+                                        );
+                                    }
                                 }
-                                crate::progress_mode::emit_stderr(
-                                    "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
-                                );
                             }
                         }
                     }
@@ -355,33 +380,63 @@ pub fn try_imagemagick_fallback(
                 if bit_depth <= 8 {
                     // Attempt 2: -strip -depth 8 for 8-bit sources (no quality loss)
                     crate::progress_mode::emit_stderr(
-                        "   🔄 Retrying with -depth 8 -strip (8-bit source confirmed, no quality loss)",
+                        "   🔄 Attempt 2: 8-bit depth (-depth 8 -strip, 8-bit source confirmed)",
                     );
-                    if run_imagemagick_cjxl_pipeline(
+                    match run_imagemagick_cjxl_pipeline(
                         input, output, distance, max_threads, true, 8, false, apple_compat,
-                    ).is_ok() {
-                        crate::progress_mode::fallback_success();
-                        return Ok(());
+                    ) {
+                        Ok(()) => {
+                            crate::progress_mode::emit_stderr(&format!("   {} Attempt 2 succeeded", style("✅").green()));
+                            crate::progress_mode::fallback_success();
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            crate::progress_mode::emit_stderr(&format!("   {} Attempt 2 failed", style("❌").red()));
+                        }
                     }
                 } else {
                     // Attempt 2: normalize ICC to sRGB, preserve 16-bit depth
                     crate::progress_mode::emit_stderr(
-                        "   🔄 Retrying with ICC normalization to sRGB (16-bit source, no depth downgrade)",
+                        "   🔄 Attempt 2: ICC normalization (sRGB, 16-bit source)",
                     );
-                    if run_imagemagick_cjxl_pipeline(
+                    match run_imagemagick_cjxl_pipeline(
                         input, output, distance, max_threads, false, 16, true, apple_compat,
-                    ).is_ok() {
+                    ) {
+                        Ok(()) => {
+                            crate::progress_mode::emit_stderr(&format!("   {} Attempt 2 succeeded", style("✅").green()));
+                            crate::progress_mode::fallback_success();
+                            return Ok(());
+                        }
+                        Err(_) => {
+                            crate::progress_mode::emit_stderr(&format!("   {} Attempt 2 failed", style("❌").red()));
+                            crate::progress_mode::emit_stderr(
+                                "   ⚠️  16-bit source: refusing to downgrade to 8-bit",
+                            );
+                        }
+                    }
+                }
+            }
+            
+            // Final fallback: if nothing worked and we haven't tried -strip yet, try it as last resort
+            if magick_ok && !cjxl_ok && !stderr.contains("-strip") {
+                crate::progress_mode::emit_stderr(
+                    "   🔄 Attempt (final): Last resort -strip",
+                );
+                match run_imagemagick_cjxl_pipeline(input, output, distance, max_threads, true, 16, false, apple_compat) {
+                    Ok(()) => {
+                        crate::progress_mode::emit_stderr(&format!("   {} Final attempt succeeded", style("✅").green()));
                         crate::progress_mode::fallback_success();
                         return Ok(());
                     }
-                    crate::progress_mode::emit_stderr(
-                        "   ⚠️ 16-bit source: ICC normalization failed, refusing to downgrade to 8-bit",
-                    );
+                    Err(_) => {
+                        crate::progress_mode::emit_stderr(&format!("   {} Final attempt failed", style("❌").red()));
+                    }
                 }
             }
         }
     }
 
+    crate::progress_mode::emit_stderr(&format!("   {} All ImageMagick fallback attempts exhausted", style("❌").red()));
     Err(std::io::Error::other(
         "ImageMagick fallback pipeline failed",
     ))
