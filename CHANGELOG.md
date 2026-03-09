@@ -7,6 +7,21 @@ All notable changes to this project will be documented in this file.
 ## [0.10.9] - 2026-03-09
 
 ### Fixed
+- **Misleading quality check log messages**: Fixed logical paradox in quality verification messages
+  - **Root cause**: In Ultimate Mode, `ms_ssim_score` stores VMAF-Y (0-1 scale), not MS-SSIM score
+  - **Example**: Log showed "MS-SSIM TARGET FAILED: 0.9939 < 0.90" which is mathematically false
+  - **Reality**: Quality gate can fail due to CAMBI (banding) or PSNR-UV (chroma) even with high VMAF (99.39%)
+  - **Fix**: Changed messages to generic "QUALITY TARGET FAILED (score: X.XXXX)" without misleading comparison
+  - **Impact**: Clear diagnostic messages that don't confuse users with apparent logical contradictions
+  - **File modified**: `vid_hevc/src/conversion_api.rs`
+
+- **Timestamp verification diagnostics**: Improved error handling for filesystem timestamp sync failures
+  - **Root cause**: macOS filesystem protection or network/cloud mounts can prevent timestamp modification
+  - **Example**: "⚠️ Failed to restore directory timestamps" appeared without context
+  - **Fix**: Added failure counters and summary message explaining possible causes
+  - **Impact**: Users now see clear message: "TIMESTAMP VERIFICATION: X/Y directories failed (possible filesystem protection or network mount)"
+  - **File modified**: `shared_utils/src/metadata/mod.rs`
+
 - **FFprobe failures on special characters in filenames**: Fixed critical bug where ffprobe failed on filenames containing `[`, `]`, `{`, `}`, `%` characters
   - **Root cause**: ffprobe interprets these characters as URL glob patterns or format specifiers, causing "non-zero exit" errors
   - **Example**: File `FB55N[I_R{KE)K}I141L%8V.jpeg` would fail with "FFPROBE FAILED: non-zero exit"
