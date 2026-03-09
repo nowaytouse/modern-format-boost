@@ -2456,6 +2456,7 @@ impl VideoExplorer {
             .arg("format=duration")
             .arg("-of")
             .arg("default=noprint_wrappers=1:nokey=1")
+            .arg("--")
             .arg(crate::safe_path_arg(&self.input_path).as_ref())
             .output()
             .ok()?;
