@@ -178,9 +178,9 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::log_eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            // Run 时自动写入当前目录的 img_av1_run.log（质量/进度始终有据可查）
+            // Create run log automatically; quality and progress are always recorded
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_av1") {
-                shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not open default log file").yellow(), e);
+                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open default log file\x1b[0m", e);
             }
             if apple_compat {
                 shared_utils::log_eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
                 if resume {
                     if let Err(e) = shared_utils::load_processed_list(&progress_path) {
                         if config.verbose {
-                            shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not load progress file").yellow(), e);
+                            shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not load progress file\x1b[0m", e);
                         }
                     } else if config.verbose && progress_path.exists() {
                         println!("📂 Resume: loading progress from {}", progress_path.display());
@@ -255,11 +255,11 @@ fn main() -> anyhow::Result<()> {
                 auto_convert_directory(&input, &config)?;
                 if let Err(e) = shared_utils::save_processed_list(&progress_path) {
                     if config.verbose {
-                        shared_utils::log_eprintln!("⚠️  {}: {}", console::style("Could not save progress file").yellow(), e);
+                        shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not save progress file\x1b[0m", e);
                     }
                 }
             } else {
-                shared_utils::log_eprintln!("❌ {}: {}", console::style("Error: Input path does not exist").red().bold(), input.display());
+                shared_utils::log_eprintln!("❌ {}: {}", "\x1b[1;31mError: Input path does not exist\x1b[0m", input.display());
                 std::process::exit(1);
             }
         }
@@ -274,7 +274,7 @@ fn main() -> anyhow::Result<()> {
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
-                shared_utils::log_eprintln!("⚠️ {}: {}", console::style("restore-timestamps failed").yellow(), e);
+                shared_utils::log_eprintln!("⚠️ {}: {}", "\x1b[33mrestore-timestamps failed\x1b[0m", e);
                 std::process::exit(1);
             }
         }
@@ -664,7 +664,7 @@ fn auto_convert_single_file(
                     } else {
                         shared_utils::log_eprintln!(
                             "⚠️  {}: {}",
-                            console::style("Cannot get animation duration, skipping conversion").yellow(),
+                            "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
                             input.display()
                         );
                         shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
@@ -709,7 +709,7 @@ fn auto_convert_single_file(
                     } else {
                         shared_utils::log_eprintln!(
                             "⚠️  {}: {}",
-                            console::style("Cannot get animation duration, skipping conversion").yellow(),
+                            "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
                             input.display()
                         );
                         shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");

@@ -186,11 +186,13 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
 
 /// Write a line to the log file (no-op if no log file is configured).
 /// Does NOT write to stderr — use log_eprintln! or verbose_eprintln! for dual output.
+/// Strips ANSI escape codes so file logs are plain text.
 /// Flushes after each write so log output is immediate (no loss on crash/kill).
 pub fn write_to_log(line: &str) {
+    let plain = crate::logging::strip_ansi_str(line);
     if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
         if let Some(ref mut w) = *guard {
-            let _ = writeln!(w, "{}", line);
+            let _ = writeln!(w, "{}", plain);
             let _ = w.flush();
         }
     }
@@ -223,21 +225,16 @@ const STDERR_INDENT: &str = "  ";
 /// When stderr is not a TTY (e.g. redirect/script), ANSI is stripped so output is plain text.
 #[inline]
 pub fn emit_stderr(line: &str) {
+    // File log always receives the original line; RunLogWriter strips ANSI on write.
     if has_log_file() {
         write_to_log(line);
     }
-    use std::borrow::Cow;
-    use std::io::IsTerminal;
-    let msg: Cow<str> = if std::io::stderr().is_terminal() {
-        Cow::Borrowed(line)
-    } else {
-        Cow::Owned(crate::logging::strip_ansi_str(line))
-    };
-    if msg.is_empty() {
-        tracing::info!("");
-    } else {
-        tracing::info!("{}{}", STDERR_INDENT, msg);
-    }
+    // Write directly to stderr with ANSI intact, bypassing tracing's TTY detection.
+    // When stderr is piped through `tee /dev/tty` (drag-and-drop script), the ANSI
+    // codes are forwarded to the real TTY by tee and rendered correctly.
+    // File log stripping is handled by RunLogWriter / StripAnsiWriter independently.
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{}{}", STDERR_INDENT, line);
 }
 
 /// Flush the log file buffer. Call at program exit.

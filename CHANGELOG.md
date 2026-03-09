@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.12] - 2026-03-10
+
+### Fixed
+- **Terminal colors not appearing when launched via drag-drop script or app**: Root cause was `console::style()` stripping ANSI codes when stderr is not a TTY (which is always the case when piped through `tee /dev/tty | tee -a logfile`)
+  - **Fix**: Replaced all `console::style(...)` color calls with raw ANSI escape codes (`\x1b[1;32m`, `\x1b[1;33m`, etc.) so color codes are embedded in the string unconditionally
+  - **Fix**: Rewrote `emit_stderr()` to use `writeln!(std::io::stderr(), ...)` directly instead of routing through `tracing::info!`, bypassing tracing-subscriber's own TTY detection which also stripped colors
+  - **Fix**: Added ANSI stripping in `write_to_log()` so file logs remain plain text even though the in-memory strings now carry raw escape codes
+  - **Result**: Colors now correctly flow through the `2>&1 | tee /dev/tty` pipe chain and appear in the terminal for all launch modes
+
+- **Removed stray Chinese comments in `img_hevc/src/main.rs` and `img_av1/src/main.rs`**: Two inline comments remained in Chinese after the English-only conversion; now removed
+
 ## [0.10.11] - 2026-03-09
 
 ### Changed
