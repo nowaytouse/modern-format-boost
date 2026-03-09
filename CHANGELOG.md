@@ -7,6 +7,17 @@ All notable changes to this project will be documented in this file.
 ## [0.10.9] - 2026-03-09
 
 ### Fixed
+- **Changed size tolerance from percentage to KB-level**: Fixed logic bug where percentage-based tolerance was unfair to small files
+  - **Root cause**: 1% tolerance meant 100 bytes for 10KB files (too strict) but 100KB for 10MB files (reasonable)
+  - **New logic**: KB-level tolerance - accept if size increase < 1MB (regardless of file size)
+  - **Examples**:
+    - 10KB → 1000KB (990KB increase) ✅ accepted
+    - 10KB → 1025KB (1015KB = 1MB+ increase) ❌ rejected
+    - 10MB → 11MB (1MB increase) ❌ rejected
+  - **Impact**: Fairer tolerance for all file sizes, especially small files
+  - **Display**: Size changes now shown in KB/MB units instead of just percentages
+  - **Files modified**: `shared_utils/src/conversion.rs`, `shared_utils/src/conversion_types.rs`
+
 - **Enhanced size check logging and copy-on-fail feedback**: Improved visibility of file deletion and copy operations
   - **Root cause**: When output files were deleted due to size increase, logs only appeared in `--verbose` mode
   - **Impact**: Users couldn't see why conversions were skipped or where original files were copied
