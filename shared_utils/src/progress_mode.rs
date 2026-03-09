@@ -10,6 +10,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
+use std::vec::Vec;
 
 // ── Per-thread log context (file name or ID) for concurrent processing ───────
 // When set, every log_eprintln! / verbose_eprintln! line is prefixed so interleaved
@@ -20,6 +22,30 @@ thread_local! {
 }
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
+
+/// Format duration as compact string like "1d2h3m4s" or "2h3m4s" or "3m4s" or "4s"
+pub fn format_duration_compact(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    let days = total_secs / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    
+    let mut parts = Vec::new();
+    
+    if days > 0 {
+        parts.push(format!("{}d", days));
+    }
+    if hours > 0 || days > 0 {
+        parts.push(format!("{}h", hours));
+    }
+    if minutes > 0 || hours > 0 || days > 0 {
+        parts.push(format!("{}m", minutes));
+    }
+    parts.push(format!("{}s", seconds));
+    
+    parts.join("")
+}
 
 /// Width of the tag column so all message bodies align (e.g. [file.jpeg]).
 /// Must match the display width of [file.jpeg]-style tags (24 visible chars).
@@ -192,12 +218,11 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
     if !has_log_file() {
         return;
     }
-    let h = elapsed_secs / 3600;
-    let m = (elapsed_secs % 3600) / 60;
-    let s = elapsed_secs % 60;
+    let duration = Duration::from_secs(elapsed_secs);
+    let compact_time = format_duration_compact(duration);
     let line = format!(
-        "  Running: {:02}:{:02}:{:02}  {}/{}  {}",
-        h, m, s, current, total, message
+        "  Running: {}  {}/{}  {}",
+        compact_time, current, total, message
     );
     write_to_log_at_level(Level::DEBUG, &line);
 }

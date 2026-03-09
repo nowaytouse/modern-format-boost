@@ -71,13 +71,13 @@ pub mod progress_style {
 
     pub const BATCH_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • {pos}/{len} • ⏱️ {elapsed_precise} (ETA: {eta}) • {msg}";
 
-    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • ⏱️ {elapsed_precise} • {msg}";
+    pub const EXPLORE_TEMPLATE: &str = "{spinner:.green} {prefix:.cyan.bold} ▕{bar:35.green/black}▏ {percent:>3}% • ⏱️ {elapsed} • {msg}";
 
     pub const COMPACT_TEMPLATE: &str =
         "{prefix:.cyan} ▕{bar:30.green/black}▏ {percent:>3}% ({pos}/{len}) {msg:.dim}";
 
     pub const SPINNER_TEMPLATE: &str =
-        "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed_precise} • {msg}";
+        "{spinner:.green} {prefix:.cyan.bold} • ⏱️ {elapsed} • {msg}";
 }
 
 const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
