@@ -28,7 +28,7 @@ SPINNER_PID=""
 ELAPSED_START=0
 # Write spinner to terminal TITLE BAR (OSC escape), not content area.
 # This completely avoids collision with binary output in the content area.
-_tty() { [[ -c /dev/tty ]] && printf '\033]0;%s Running: %s\007' "$1" "$2" > /dev/tty 2>/dev/null; }
+_tty() { [[ -c /dev/tty ]] && printf '\033]0;⏱ %s\007' "$2" > /dev/tty 2>/dev/null; }
 start_elapsed_spinner() {
     ELAPSED_START=$(date +%s)
     [[ -n "$SPINNER_PID" ]] && return
