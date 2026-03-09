@@ -19,7 +19,7 @@ if [[ $# -gt 0 ]]; then
     (
         osascript <<EOF
 tell application "Terminal"
-    do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$1'; echo '按任意键关闭...'; read -n 1"
+    do script "cd '$PROJECT_ROOT' && export FROM_APP=1 && '$PROCESSOR_SCRIPT' '$1'; echo '按任意键关闭...'; read -n 1"
     activate
 end tell
 EOF
@@ -75,7 +75,7 @@ else
         (
             osascript <<EOF
 tell application "Terminal"
-    do script "cd '$PROJECT_ROOT' && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
+    do script "cd '$PROJECT_ROOT' && export FROM_APP=1 && '$PROCESSOR_SCRIPT' '$SELECTED_DIR'"
     activate
 end tell
 EOF

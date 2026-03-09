@@ -254,16 +254,15 @@ fn run_imagemagick_cjxl_pipeline(
     let cjxl_ok = match cjxl_status {
         Ok(status) if status.success() => true,
         Ok(status) => {
-            let line = format!("   ❌ cjxl failed with exit code: {:?}", status.code());
-            crate::progress_mode::emit_stderr(&line);
+            let exit_code = status.code();
+            crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
             if !cjxl_stderr.is_empty() {
                 crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {}", cjxl_stderr));
             }
             false
         }
         Err(e) => {
-            let line = format!("   ❌ Failed to wait for cjxl: {}", e);
-            crate::progress_mode::emit_stderr(&line);
+            crate::log_pipeline_broken!("cjxl", "Failed to wait for process: {}", e);
             false
         }
     };

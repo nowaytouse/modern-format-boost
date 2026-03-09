@@ -193,6 +193,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             // Check if failure is due to image2 demuxer pattern matching (e.g., filenames with [])
             let stderr = String::from_utf8_lossy(&o.stderr);
             if stderr.contains("Could find no file with path") && stderr.contains("and index in the range") {
+                crate::log_rare_error!("FFprobe", "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none", input_str);
                 // Retry with -pattern_type none to disable sequence pattern matching
                 match Command::new("ffprobe")
                     .args([
@@ -215,7 +216,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                 {
                     Ok(retry_o) if retry_o.status.success() => retry_o,
                     _ => {
-                        warn!(input = %input_str, "FFPROBE FAILED: non-zero exit (pattern_type fallback also failed)");
+                        crate::log_rare_error!("FFprobe", "Pattern_type fallback also failed for: {}", input_str);
                         return ColorInfo::default();
                     }
                 }

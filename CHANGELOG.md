@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.10] - 2026-03-09
+
+### Added
+- **Enhanced error logging system**: Critical and rare error detection with color-coded severity levels
+  - **Motivation**: Early detection of rare bugs (pipeline broken, metadata loss, upstream tool errors) to prevent data/quality loss
+  - **Error severity levels**:
+    - 🚨 **CRITICAL**: Data loss, corruption, truncation (red bold)
+    - ⚠️ **RARE ERROR**: Unexpected upstream tool failures, assertion failures (yellow bold)
+    - 📋 **METADATA LOSS**: Missing or stripped metadata (magenta bold)
+    - 🔧 **PIPELINE BROKEN**: Broken pipe, connection reset, unexpected EOF (cyan bold)
+    - 🔺 **UPSTREAM ERROR**: FFmpeg/ImageMagick/cjxl unexpected behavior (yellow bold)
+  - **Auto-classification**: Errors are automatically classified by pattern matching
+  - **New macros**: `log_critical!`, `log_rare_error!`, `log_metadata_loss!`, `log_pipeline_broken!`, `log_upstream_error!`, `log_auto_error!`
+  - **Applied to**:
+    - FFprobe image2 demuxer pattern matching failures (rare error)
+    - cjxl non-zero exit codes (upstream error)
+    - Pipeline process wait failures (pipeline broken)
+  - **Impact**: Rare bugs now highly visible in both terminal (colored) and file logs, enabling faster bug detection and fixes
+  - **Files added**: `shared_utils/src/error_logging.rs`
+  - **Files modified**: `shared_utils/src/lib.rs`, `shared_utils/src/ffprobe_json.rs`, `shared_utils/src/jxl_utils.rs`
+
+- **Comprehensive file logging**: Success/failure messages now written to file logs
+  - **Root cause**: Success messages used `println!()` (stdout) instead of logging macros, so file logs were incomplete
+  - **Fix**: Changed `println!()` to `log_eprintln!()` to capture all output in file logs
+  - **Impact**: File logs are now the most comprehensive record, including all media processing results
+  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
+- **App mode log merging**: Automatic log consolidation when running via double-click
+  - **Feature**: When launched via macOS app, automatically merges 3 separate logs into single `merged_*.log`
+  - **Merged logs**: Drag-drop script + Image processing + Video processing
+  - **Detection**: Uses `FROM_APP` environment variable set by app wrapper
+  - **Impact**: Easier log review for app users, single comprehensive file
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`, `Modern Format Boost.app/Contents/MacOS/Modern Format Boost`
+
 ## [0.10.9] - 2026-03-09
 
 ### Changed

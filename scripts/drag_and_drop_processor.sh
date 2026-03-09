@@ -76,6 +76,61 @@ init_log() {
     VERBOSE_LOG_FILE="$LOG_DIR/verbose_${SESSION_START_TIME}.log"
 }
 
+merge_run_logs() {
+    [[ -z "$LOG_FILE" ]] && return
+    [[ -z "$SESSION_START_TIME" ]] && return
+
+    # Only merge if running via app
+    if [[ -n "$FROM_APP" ]]; then
+        local merged_log="$LOG_DIR/merged_${SESSION_START_TIME}.log"
+
+        # Find the most recent img and vid logs (they may have slightly different timestamps)
+        local img_log=$(ls -t "$LOG_DIR"/img_hevc_run_*.log 2>/dev/null | head -1)
+        local vid_log=$(ls -t "$LOG_DIR"/vid_hevc_run_*.log 2>/dev/null | head -1)
+
+        {
+            echo "========================================"
+            echo "📋 MERGED LOG - Modern Format Boost"
+            echo "========================================"
+            echo "Session: $SESSION_START_TIME"
+            echo ""
+
+            if [[ -f "$LOG_FILE" ]]; then
+                echo "========================================"
+                echo "🔧 Drag & Drop Script Log"
+                echo "========================================"
+                cat "$LOG_FILE"
+                echo ""
+            fi
+
+            if [[ -n "$img_log" && -f "$img_log" ]]; then
+                echo "========================================"
+                echo "🖼️  Image Processing Log"
+                echo "========================================"
+                cat "$img_log"
+                echo ""
+            fi
+
+            if [[ -n "$vid_log" && -f "$vid_log" ]]; then
+                echo "========================================"
+                echo "🎬 Video Processing Log"
+                echo "========================================"
+                cat "$vid_log"
+                echo ""
+            fi
+
+            echo "========================================"
+            echo "✅ Log Merge Complete"
+            echo "========================================"
+        } > "$merged_log"
+
+        # Remove individual logs after merge
+        [[ -f "$LOG_FILE" ]] && rm -f "$LOG_FILE"
+        [[ -n "$img_log" && -f "$img_log" ]] && rm -f "$img_log"
+        [[ -n "$vid_log" && -f "$vid_log" ]] && rm -f "$vid_log"
+    fi
+}
+
 save_log() {
     [[ -z "$LOG_FILE" ]] && return
     [[ ! -f "$LOG_FILE" ]] && return
@@ -396,6 +451,7 @@ show_summary() {
     drain_stdin
     read -rsn1
     save_log
+    merge_run_logs
 }
 
 _main() {
