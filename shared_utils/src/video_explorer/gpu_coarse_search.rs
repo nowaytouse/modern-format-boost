@@ -559,7 +559,7 @@ pub fn explore_with_gpu_coarse_search(
                     Some(v) => crate::log_eprintln!(
                         "      VMAF-Y: {:6.2} ≥ {:.1} {}",
                         v, VMAF_Y_THRESHOLD,
-                        if vmaf_ok { "" } else { "❌" }
+                        if vmaf_ok { "✅" } else { "❌" }
                     ),
                     None => crate::log_eprintln!(
                         "      VMAF-Y: N/A (calculation failed) ❌"
@@ -570,7 +570,7 @@ pub fn explore_with_gpu_coarse_search(
                     Some(c) => crate::log_eprintln!(
                         "      CAMBI:  {:6.2} ≤ {:.1} {} (lower=better)",
                         c, CAMBI_MAX,
-                        if cambi_ok { "" } else { "❌" }
+                        if cambi_ok { "✅" } else { "❌" }
                     ),
                     None => crate::log_eprintln!(
                         "      CAMBI: N/A (calculation failed) ❌"
@@ -581,7 +581,7 @@ pub fn explore_with_gpu_coarse_search(
                     Some((pu, pv)) => crate::log_eprintln!(
                         "      PSNR-UV: {:.2}/{:.2} dB ≥ {:.1} dB {}",
                         pu, pv, PSNR_UV_MIN,
-                        if chroma_ok { "" } else { "❌" }
+                        if chroma_ok { "✅" } else { "❌" }
                     ),
                     None => crate::log_eprintln!(
                         "      PSNR-UV: N/A (calculation failed) ❌"
