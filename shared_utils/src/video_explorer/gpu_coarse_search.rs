@@ -1336,7 +1336,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         best_size = Some(gpu_size);
         best_ssim_tracked = gpu_ssim;
         crate::log_eprintln!(
-            "GPU boundary CRF {:.1}: {:+.1}% SSIM {} (compresses)✅",
+            "GPU boundary CRF {:.1}: {:+.1}% │ SSIM {} (compresses)✅",
             gpu_boundary_crf,
             gpu_pct,
             gpu_ssim
@@ -1707,7 +1707,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_size = Some(size);
                 best_ssim_tracked = calculate_ssim_quick();
                 found_compress_point = true;
-                crate::log_eprintln!("   CRF {:.1}: {:+.1}% (FOUND!)✅", test_crf, total_size_pct);
+                crate::log_eprintln!("   CRF {:.1}: {:+.1}% │ FOUND!✅", test_crf, total_size_pct);
                 break;
             } else {
                 crate::log_eprintln!("   CRF {:.1}: {:+.1}%❌", test_crf, total_size_pct);
@@ -1782,7 +1782,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             let ssim_gain = current_ssim - prev_ssim;
 
                             crate::log_eprintln!(
-                                "   CRF {:.1}: {:+.1}% SSIM {:.4} (Δ{:+.4}, size {:+.1}%)✅",
+                                "   CRF {:.1}: {:+.1}% │ SSIM {:.4} (Δ{:+.4}, size {:+.1}%)✅",
                                 test_crf,
                                 total_size_pct,
                                 current_ssim,
@@ -1806,7 +1806,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         }
                         _ => {
                             crate::log_eprintln!(
-                                "   CRF {:.1}: {:+.1}% SSIM N/A (size {:+.1}%)✅",
+                                "   CRF {:.1}: {:+.1}% │ SSIM N/A (size {:+.1}%)✅",
                                 test_crf,
                                 total_size_pct,
                                 size_increase_pct
