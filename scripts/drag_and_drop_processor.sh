@@ -413,13 +413,18 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    pause_spinner
+    # Spinner keeps running on /dev/tty while binary runs.
+    # Binary output is captured (not piped to terminal) to avoid collision
+    # with the spinner's \r writes. The binary's own run-log captures
+    # full detail; summary output is printed after completion.
     local output
     if [[ -n "$LOG_FILE" ]]; then
-        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee -a "$LOG_FILE")
     else
-        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1)
     fi
+    pause_spinner
+    echo "$output" >&2
     resume_spinner
     parse_tool_stats "$output" "img"
     echo ""
@@ -438,13 +443,14 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    pause_spinner
     local output
     if [[ -n "$LOG_FILE" ]]; then
-        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee -a "$LOG_FILE")
     else
-        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1)
     fi
+    pause_spinner
+    echo "$output" >&2
     resume_spinner
     parse_tool_stats "$output" "vid"
     echo ""
