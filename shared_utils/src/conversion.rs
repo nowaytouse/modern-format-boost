@@ -673,30 +673,44 @@ pub fn check_size_tolerance(
         } else {
             ((output_size as f64 / input_size as f64) - 1.0) * 100.0
         };
+        
+        // Always log deletion (not just in verbose mode)
+        let mode = if options.allow_size_tolerance {
+            "tolerance: 1.0%"
+        } else {
+            "strict mode: no tolerance"
+        };
+        eprintln!(
+            "   🗑️  {} output deleted: larger than input by {:.1}% ({})",
+            format_label, size_increase_pct, mode
+        );
+        eprintln!(
+            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
+            input_size, output_size, size_increase_pct
+        );
+        
         if let Err(e) = fs::remove_file(output) {
-            eprintln!("⚠️ [cleanup] Failed to remove oversized output: {}", e);
+            eprintln!("   ⚠️  Failed to remove oversized output: {}", e);
         }
-        if options.verbose {
-            let mode = if options.allow_size_tolerance {
-                "tolerance: 1.0%"
-            } else {
-                "strict mode: no tolerance"
-            };
-            eprintln!(
-                "   ⏭️  Skipping: {} output larger than input by {:.1}% ({})",
-                format_label, size_increase_pct, mode
-            );
-            eprintln!(
-                "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-                input_size, output_size, size_increase_pct
-            );
-        }
-        let _ = crate::copy_on_skip_or_fail(
+        
+        // Copy original to output directory
+        match crate::copy_on_skip_or_fail(
             input,
             options.output_dir.as_deref(),
             options.base_dir.as_deref(),
             false,
-        );
+        ) {
+            Ok(Some(dest)) => {
+                eprintln!("   📋 Original copied to: {}", dest.display());
+            }
+            Ok(None) => {
+                // No output_dir specified, nothing to copy
+            }
+            Err(e) => {
+                eprintln!("   ⚠️  Failed to copy original: {}", e);
+            }
+        }
+        
         mark_as_processed(input);
         return Some(ConversionResult::skipped_size_increase(
             input,
@@ -707,25 +721,51 @@ pub fn check_size_tolerance(
 
     // Compress mode: goal is strictly smaller; equal = not achieved
     if options.compress && output_size >= input_size {
-        if let Err(e) = fs::remove_file(output) {
-            eprintln!("⚠️ [cleanup] Failed to remove unchanged-size output: {}", e);
-        }
-        if options.verbose {
+        // Always log deletion (not just in verbose mode)
+        let change_pct = if input_size == 0 {
+            0.0
+        } else {
+            ((output_size as f64 / input_size as f64) - 1.0) * 100.0
+        };
+        
+        if change_pct.abs() < 0.01 {
             eprintln!(
-                "   ⏭️  Skipping: {} output size unchanged (compression goal not achieved)",
+                "   🗑️  {} output deleted: size unchanged (compression goal not achieved)",
                 format_label
             );
+        } else {
             eprintln!(
-                "   📊 Size comparison: {} → {} bytes (0%)",
-                input_size, output_size
+                "   🗑️  {} output deleted: size increased by {:.1}% (compression goal not achieved)",
+                format_label, change_pct
             );
         }
-        let _ = crate::copy_on_skip_or_fail(
+        eprintln!(
+            "   📊 Size comparison: {} → {} bytes",
+            input_size, output_size
+        );
+        
+        if let Err(e) = fs::remove_file(output) {
+            eprintln!("   ⚠️  Failed to remove output: {}", e);
+        }
+        
+        // Copy original to output directory
+        match crate::copy_on_skip_or_fail(
             input,
             options.output_dir.as_deref(),
             options.base_dir.as_deref(),
             false,
-        );
+        ) {
+            Ok(Some(dest)) => {
+                eprintln!("   📋 Original copied to: {}", dest.display());
+            }
+            Ok(None) => {
+                // No output_dir specified, nothing to copy
+            }
+            Err(e) => {
+                eprintln!("   ⚠️  Failed to copy original: {}", e);
+            }
+        }
+        
         mark_as_processed(input);
         return Some(ConversionResult::skipped_size_unchanged(
             input,
