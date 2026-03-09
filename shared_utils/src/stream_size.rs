@@ -130,8 +130,6 @@ pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
 }
 
 fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSizeInfo> {
-    let path_str = path.to_string_lossy();
-
     let output = Command::new("ffprobe")
         .args([
             "-v",
@@ -140,8 +138,9 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
             "json",
             "-show_streams",
             "-show_format",
-            path_str.as_ref(),
+            "--",
         ])
+        .arg(crate::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
 
