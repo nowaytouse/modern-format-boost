@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.9] - 2026-03-09
+
+### Fixed
+- **FFprobe failures on special characters in filenames**: Fixed critical bug where ffprobe failed on filenames containing `[`, `]`, `{`, `}`, `%` characters
+  - **Root cause**: ffprobe interprets these characters as URL glob patterns or format specifiers, causing "non-zero exit" errors
+  - **Example**: File `FB55N[I_R{KE)K}I141L%8V.jpeg` would fail with "FFPROBE FAILED: non-zero exit"
+  - **Fix**: Added `--` separator before file path arguments in all ffprobe invocations to prevent interpretation as options/patterns
+  - **Impact**: All files with special characters in names can now be processed correctly
+  - **Files modified**: 
+    - `shared_utils/src/ffprobe_json.rs` (extract_color_info - user files, direct trigger)
+    - `shared_utils/src/stream_size.rs` (try_ffprobe_extraction - user files)
+    - `shared_utils/src/video_explorer.rs` (get_input_duration - user files)
+    - `shared_utils/src/image_analyzer.rs` (3 locations - temp files)
+    - `shared_utils/src/image_detection.rs` (frame count check - temp files)
+
+- **x265 calibration failures on empty y4m samples**: Fixed rare bug where x265 dynamic calibration would fail with "unable to open input file"
+  - **Root cause**: For certain videos, ffmpeg extraction exits with code 0 (success) but writes empty y4m file (0 bytes), possibly due to no decodable frames in first 15 seconds or codec mismatch
+  - **Example**: Video `6946418393937362319.mp4` failed all 3 CRF calibration attempts (20/18/22) with misleading x265 error
+  - **Fix**: Added file size validation after ffmpeg extraction - skip CRF attempt if y4m file is empty
+  - **Impact**: Clear diagnostic message instead of misleading x265 error; graceful fallback to GPU-only calibration
+  - **File modified**: `shared_utils/src/video_explorer/dynamic_mapping.rs`
+
+### Technical Details
+- **FFprobe `--` separator**: The `--` argument tells ffprobe "all following arguments are file paths, not options"
+  - Prevents `[` `]` from being interpreted as glob patterns
+  - Prevents `{` `}` from being interpreted as format specifiers
+  - Prevents `%` from being interpreted as format codes
+  - All user file paths now use: `.arg("--").arg(safe_path_arg(path).as_ref())`
+- **Y4M validation**: Added guard after ffmpeg extraction:
+  ```rust
+  let y4m_size = fs::metadata(&temp_input).map(|m| m.len()).unwrap_or(0);
+  if y4m_size == 0 {
+      eprintln!("❌ Extracted y4m sample is empty for CRF {:.1} (ffmpeg exited 0 but wrote nothing); skipping", anchor_crf);
+      continue;
+  }
+  ```
+- **Error messages**: Improved diagnostics for both issues - clear indication of root cause instead of misleading downstream errors
+
 ## [0.10.8] - 2026-03-09
 
 ### Fixed
