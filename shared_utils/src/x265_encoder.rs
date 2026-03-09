@@ -75,11 +75,9 @@ pub fn encode_with_x265(
     vf_args: &[String],
 ) -> Result<u64> {
     info!(
-        input = ?input,
-        output = ?output,
-        crf = config.crf,
-        preset = %config.preset,
-        "🖥️  Starting CPU encoding with x265 CLI"
+        "🖥️ CPU encoding: CRF {:.1}, preset={}",
+        config.crf,
+        config.preset
     );
 
     use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
@@ -93,9 +91,9 @@ pub fn encode_with_x265(
         .context("Failed to create temporary HEVC file")?;
     let hevc_file = hevc_temp.path().to_path_buf();
 
-    debug!(hevc_temp_file = ?hevc_file, "Using temporary HEVC file");
+    debug!("Creating temporary HEVC file for encoding");
 
-    info!("Step 1/2: Decode + x265 encode...");
+    info!("Step 1/2: Video encoding...");
     let encode_result = encode_to_hevc(input, &hevc_file, config, vf_args)?;
 
     if !encode_result {
@@ -103,7 +101,7 @@ pub fn encode_with_x265(
         bail!("x265 encoding failed");
     }
 
-    info!("Step 2/2: Mux HEVC + audio...");
+    info!("Step 2/2: Audio & container muxing...");
     mux_hevc_to_container(input, &hevc_file, output, config)?;
 
     drop(hevc_temp);
@@ -129,11 +127,7 @@ fn encode_y4m_direct(
     config: &X265Config,
     start_time: std::time::Instant,
 ) -> Result<bool> {
-    let x265_cmd_str = format!(
-        "x265 --y4m --input {:?} --output {:?} --crf {:.1} --preset {} --pools {} --log-level error",
-        input, hevc_output, config.crf, config.preset, config.threads
-    );
-    info!(command = %x265_cmd_str, "Executing x265 (direct .y4m input, no pipe)");
+    debug!("Starting x265 encoding with CRF {:.1}, preset {}", config.crf, config.preset);
 
     let output = Command::new("x265")
         .arg("--y4m")
@@ -157,7 +151,6 @@ fn encode_y4m_direct(
 
     if !output.status.success() {
         error!(
-            command = %x265_cmd_str,
             exit_code = ?output.status.code(),
             duration_secs = duration.as_secs_f64(),
             stderr = %stderr,
@@ -214,13 +207,7 @@ fn encode_to_hevc(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let ffmpeg_cmd_str = format!(
-        "ffmpeg -y -i {} -f yuv4mpegpipe {} -pix_fmt {} -",
-        crate::safe_path_arg(input),
-        vf_args.join(" "),
-        config.pix_fmt
-    );
-    info!(command = %ffmpeg_cmd_str, "Executing FFmpeg decode command");
+    debug!("Starting FFmpeg decode for x265 pipe encoding");
 
     let mut x265_cmd = Command::new("x265");
     x265_cmd
@@ -270,11 +257,7 @@ fn encode_to_hevc(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    let x265_cmd_str = format!(
-        "x265 --y4m --input - --output {:?} --crf {:.1} --preset {} --pools {} --log-level error",
-        hevc_output, config.crf, config.preset, config.threads
-    );
-    info!(command = %x265_cmd_str, "Executing x265 encode command");
+    debug!("Starting FFmpeg→x265 pipe encoding with CRF {:.1}, preset {}", config.crf, config.preset);
 
     let mut ffmpeg_child = ffmpeg_cmd
         .spawn()
@@ -344,7 +327,6 @@ fn encode_to_hevc(
 
         if !ffmpeg_status.success() {
             error!(
-                command = %ffmpeg_cmd_str,
                 exit_code = ?ffmpeg_status.code(),
                 duration_secs = duration.as_secs_f64(),
                 stderr = %ffmpeg_stderr,
@@ -365,7 +347,6 @@ fn encode_to_hevc(
 
         if !x265_status.success() {
             error!(
-                command = %x265_cmd_str,
                 exit_code = ?x265_status.code(),
                 duration_secs = duration.as_secs_f64(),
                 stderr = %x265_stderr,
@@ -485,26 +466,7 @@ fn mux_hevc_to_container(
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
-    let cmd_str = format!(
-        "ffmpeg -y -i {:?} {} -c:v copy {} {:?}",
-        hevc_file,
-        if config.preserve_audio && !input_is_image {
-            format!(
-                "-i {:?} -map 0:v:0 -map 1:a? -c:a copy{}",
-                original_input,
-                if config.has_subtitles { " -map 1:s? -c:s copy" } else { "" }
-            )
-        } else {
-            "-an".to_string()
-        },
-        if config.container == "mp4" || config.container == "mov" {
-            "-tag:v hvc1 -movflags +faststart"
-        } else {
-            ""
-        },
-        output
-    );
-    info!(command = %cmd_str, "Executing FFmpeg mux command");
+    debug!("Starting FFmpeg muxing to {} container", config.container);
 
     let output_result = cmd.output().context("Failed to execute ffmpeg mux")?;
 
@@ -513,7 +475,6 @@ fn mux_hevc_to_container(
     if !output_result.status.success() {
         let stderr = String::from_utf8_lossy(&output_result.stderr);
         error!(
-            command = %cmd_str,
             exit_code = ?output_result.status.code(),
             duration_secs = duration.as_secs_f64(),
             stderr = %stderr,
