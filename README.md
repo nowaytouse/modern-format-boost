@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost [![GitHub Stars](https://img.shields.io/github/stars/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/stargazers) [![GitHub Forks](https://img.shields.io/github/forks/nowaytouse/modern-format-boost.svg?style=social)](https://github.com/nowaytouse/modern-format-boost/network/members)
 
-[![Version](https://img.shields.io/badge/version-0.10.5-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
+[![Version](https://img.shields.io/badge/version-0.10.9-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
 [![Architecture](https://img.shields.io/badge/arch-Rust%20%7C%20Rayon%20%7C%20FFmpeg-orange.svg)](https://github.com/nowaytouse/modern-format-boost)
@@ -73,28 +73,46 @@ The video pipeline solves the bitrate/quality convex optimization problem using 
 *   **Directory Timestamp Guard**: Caches `atime`/`mtime` of the entire directory tree before processing and restores them with nanosecond precision post-processing.
 
 #### ⚡ Smart Conversion Strategy
+*   **Robust Fallback Pipeline (v0.10.9)**: If the primary JXL encoder (`cjxl`) fails, the engine automatically routes files through a multi-stage ImageMagick fallback pipeline, handling grayscale ICC conflicts and bit-depth issues to ensure maximum conversion success.
 *   **Magic Bytes Sniffing**: Bypasses file extensions entirely. Uses a buffered reader to inspect the first 16 bytes (file signature) to identify the true MIME type, correcting `png` files masked as `jpg`.
 *   **HDR Pipeline**: Fully color-managed workflow. Detects Transfer Characteristics (PQ/HLG) and Color Primaries (BT.2020/P3). Passes `color_primaries`, `transfer_characteristics`, and `matrix_coefficients` flags to the encoder to prevent "washed out" HDR conversions.
 
+#### 📊 Diagnostic & Logging
+*   **Intelligent Log Fusion**: When running via the macOS App, multiple log streams (drag-and-drop script, image engine, video engine) are automatically fused into a single `merged_*.log` file for easier troubleshooting.
+*   **Nanosecond Precision**: Directory timestamps (`atime`/`mtime`) are cached before processing and restored with nanosecond precision post-processing.
+
 ### 🛠️ Installation
 
-**Prerequisites**: macOS/Linux with `brew` installed.
+**Prerequisites**: macOS/Linux with `brew` and `rust` (cargo) installed.
 
+#### Method 1: Via Git (Recommended for Contributors)
 ```bash
-# 1. Install Runtime Dependencies
-brew install jpeg-xl ffmpeg imagemagick exiftool
-
-# 2. Clone Repository
+# Clone the repository
 git clone https://github.com/nowaytouse/modern-format-boost.git
-cd modern_format_boost
+cd modern-format-boost
 
-# 3. Compile (Release Profile with LTO)
+# Install dependencies & Build
+brew install jpeg-xl ffmpeg imagemagick exiftool
+./scripts/smart_build.sh
+```
+
+#### Method 2: Via Curl (Quick One-Liner)
+```bash
+# Download, extract, and enter the directory
+mkdir -p modern-format-boost && curl -L https://github.com/nowaytouse/modern-format-boost/tarball/main | tar -xz -C modern-format-boost --strip-components 1 && cd modern-format-boost
+
+# Build (ensure brew dependencies are installed)
 ./scripts/smart_build.sh
 ```
 
 ### 🚀 Usage
 
-#### 1. Drag & Drop (Recommended)
+#### 1. macOS GUI (Easiest)
+This project includes a **macOS App Wrapper** for a seamless experience:
+*   **Drag & Drop**: Drag a folder onto `Modern Format Boost.app` to start processing immediately in a new Terminal window.
+*   **Double-Click**: Open the App to use a native macOS folder picker with a safety confirmation dialog.
+
+#### 2. Drag & Drop Script (CLI)
 Simply drag your folder onto the start script to process everything automatically:
 ```bash
 ./scripts/drag_and_drop_processor.sh /path/to/your/photos
@@ -191,28 +209,46 @@ Fixes corrupted headers and timestamps without re-encoding.
 *   **文件夹时间守护**：在处理前缓存整个目录树的 `atime`/`mtime`，并在处理后以纳秒级精度还原，确保相册的时间线视图丝毫不差。
 
 #### ⚡ 智能转换策略
+*   **鲁棒回退管线 (v0.10.9)**：当主要的 JXL 编码器 (`cjxl`) 失败时，引擎会自动通过多级 ImageMagick 回退管线处理文件，智能解决灰度 ICC 冲突和位深度问题，确保极高的转换成功率。
 *   **魔法字节嗅探**: 完全绕过文件扩展名。通过缓冲读取文件头的前 16 个字节（文件签名）来识别真实的 MIME 类型，自动修正伪装成 `jpg` 的 `png` 文件。
 *   **HDR 全链路管线**：全色彩管理工作流。自动检测光电传输特性 (PQ/HLG) 和色域 (BT.2020/P3)。在转换时将 `color_primaries`、`transfer_characteristics` 和 `matrix_coefficients` 标志正确传递给编码器，防止 HDR 视频出现“发灰”现象。
 
+#### 📊 诊断与日志
+*   **智能日志融合**：通过 macOS App 运行时，多个日志流（脚本、图像引擎、视频引擎）会自动整合成单个 `merged_*.log` 文件，极大地方便了问题排查。
+*   **纳秒级时间还原**：在处理前缓存整个目录树的 `atime`/`mtime`，并在处理后以纳秒级精度还原，确保相册的时间线视图丝毫不差。
+
 ### 🛠️ 安装
 
-**前置要求**: macOS/Linux 系统，并已安装 `brew`。
+**前置要求**: macOS/Linux 系统，需安装 `brew` 和 `rust` (cargo)。
 
+#### 方法 1：通过 Git 克隆 (推荐)
 ```bash
-# 1. 安装运行时依赖
-brew install jpeg-xl ffmpeg imagemagick exiftool
-
-# 2. 克隆仓库
+# 克隆仓库
 git clone https://github.com/nowaytouse/modern-format-boost.git
-cd modern_format_boost
+cd modern-format-boost
 
-# 3. 编译 (Release Profile with LTO)
+# 安装运行时依赖并编译
+brew install jpeg-xl ffmpeg imagemagick exiftool
+./scripts/smart_build.sh
+```
+
+#### 方法 2：通过 Curl 一键下载
+```bash
+# 下载、解压并进入目录
+mkdir -p modern-format-boost && curl -L https://github.com/nowaytouse/modern-format-boost/tarball/main | tar -xz -C modern-format-boost --strip-components 1 && cd modern-format-boost
+
+# 执行智能构建 (请确保已安装上述 brew 依赖)
 ./scripts/smart_build.sh
 ```
 
 ### 🚀 使用方法
 
-#### 1. 拖拽使用（推荐）
+#### 1. macOS 图形化操作 (最简单)
+本项目内置了 **macOS App 封装器**，提供原生体验：
+*   **拖拽处理**：直接将文件夹拖到 `Modern Format Boost.app` 图标上，即可在自动开启的终端窗口中开始处理。
+*   **双击运行**：双击打开 App，将通过 macOS 标准文件夹选择器选取目标，并弹出安全确认对话框。
+
+#### 2. 脚本拖拽 (命令行)
 只需将您的文件夹拖到启动脚本上，即可全自动处理：
 ```bash
 ./scripts/drag_and_drop_processor.sh /path/to/your/photos
