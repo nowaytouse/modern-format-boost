@@ -26,12 +26,12 @@ clear_screen() { printf '\033[2J\033[H'; }
 
 SPINNER_PID=""
 ELAPSED_START=0
-_tty() { [[ -c /dev/tty ]] && printf '\r   %s Running: %s   ' "$1" "$2" > /dev/tty 2>/dev/null; }
-_launch_spinner() {
-    # Launch spinner background process using current ELAPSED_START.
-    # Called by start_elapsed_spinner (initial) and resume_spinner (after pause).
+# Write spinner to terminal TITLE BAR (OSC escape), not content area.
+# This completely avoids collision with binary output in the content area.
+_tty() { [[ -c /dev/tty ]] && printf '\033]0;%s Running: %s\007' "$1" "$2" > /dev/tty 2>/dev/null; }
+start_elapsed_spinner() {
+    ELAPSED_START=$(date +%s)
     [[ -n "$SPINNER_PID" ]] && return
-    [[ "$ELAPSED_START" -eq 0 ]] && return
     (
         local idx=0
         local sp
@@ -69,25 +69,11 @@ _launch_spinner() {
     SPINNER_PID=$!
     disown "$SPINNER_PID" 2>/dev/null || true
 }
-start_elapsed_spinner() {
-    ELAPSED_START=$(date +%s)
-    _launch_spinner
-}
-pause_spinner() {
-    # Kill the spinner background process and clear its line, but preserve
-    # ELAPSED_START so total time can still be shown at the end.
+stop_elapsed_spinner() {
     if [[ -n "$SPINNER_PID" ]]; then
         ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
         SPINNER_PID=""
     fi
-    [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
-}
-resume_spinner() {
-    # Restart spinner after a pause. Continues from original ELAPSED_START.
-    _launch_spinner
-}
-stop_elapsed_spinner() {
-    pause_spinner
     [[ "$ELAPSED_START" -eq 0 ]] && return
     local end
     end=$(date +%s)
@@ -115,7 +101,9 @@ stop_elapsed_spinner() {
         elapsed_str=$(printf '%02ds' "$elapsed_sec")
     fi
 
-    [[ -c /dev/tty ]] && printf '\r\033[2K   Total time: %s\n' "$elapsed_str" > /dev/tty 2>/dev/null
+    # Print total time to terminal content, and restore title
+    echo "   Total time: $elapsed_str"
+    [[ -c /dev/tty ]] && printf '\033]0;\007' > /dev/tty 2>/dev/null
 }
 
 LOG_DIR="$PROJECT_ROOT/logs"
@@ -413,19 +401,13 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Spinner keeps running on /dev/tty while binary runs.
-    # Binary output is captured (not piped to terminal) to avoid collision
-    # with the spinner's \r writes. The binary's own run-log captures
-    # full detail; summary output is printed after completion.
+    # Spinner runs in terminal title bar — no collision with binary output.
     local output
     if [[ -n "$LOG_FILE" ]]; then
-        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee -a "$LOG_FILE")
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
     else
-        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1)
+        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
     fi
-    pause_spinner
-    echo "$output" >&2
-    resume_spinner
     parse_tool_stats "$output" "img"
     echo ""
 }
@@ -445,13 +427,10 @@ process_videos() {
 
     local output
     if [[ -n "$LOG_FILE" ]]; then
-        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee -a "$LOG_FILE")
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
     else
-        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1)
+        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
     fi
-    pause_spinner
-    echo "$output" >&2
-    resume_spinner
     parse_tool_stats "$output" "vid"
     echo ""
 }
