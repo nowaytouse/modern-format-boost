@@ -93,8 +93,8 @@ pub fn format_duration_compact(duration: Duration) -> String {
 /// 28 chars fits filenames up to ~24 chars + brackets + space separator.
 const LOG_TAG_WIDTH: usize = 28;
 
-/// Max visible chars for the filename inside [brackets].
-/// [prefix] = prefix + 2 brackets. With LOG_TAG_WIDTH=28, max prefix display = 25 chars.
+/// Max visible chars for the filename displayed inside [brackets].
+/// With LOG_TAG_WIDTH=28, tag=[prefix] uses prefix+2 bytes, max prefix = 25.
 const LOG_PREFIX_MAX_DISPLAY: usize = 25;
 
 /// Prefix for periodic statistics lines — emoji instead of [Info] to avoid
@@ -119,7 +119,7 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
 }
 
 /// Pad a file-context tag (e.g. `[file.jpeg]`) to LOG_TAG_WIDTH chars for aligned message body.
-/// Always produces exactly LOG_TAG_WIDTH chars (tag right-padded with spaces, or one space if tag is already wide).
+/// Always produces exactly LOG_TAG_WIDTH chars, or tag + one space if tag is already wide.
 fn pad_tag(tag: &str) -> String {
     if tag.len() >= LOG_TAG_WIDTH {
         format!("{} ", tag)
@@ -141,19 +141,17 @@ fn fmt_stats_line_final(msg: &str) -> String {
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
 /// Truncates long names to LOG_PREFIX_MAX_DISPLAY chars, preserving the file extension:
-///   "Image_103999006594198.jpeg" → "Image_103999006…jpeg"  (fits in 25 chars)
+///   "Image_103999006594198.jpeg" → "Image_103999006…jpeg"
 ///   "Cache_4ac28036da7d11be.jpg" → "Cache_4ac28036da7…jpg"
 pub fn set_log_context(prefix: &str) {
     let s = if prefix.chars().count() > LOG_PREFIX_MAX_DISPLAY {
-        // Try to preserve extension (everything from last '.' onward)
         if let Some(dot_pos) = prefix.rfind('.') {
             let ext = &prefix[dot_pos..]; // e.g. ".jpeg"
             let ext_chars = ext.chars().count();
             if ext_chars < LOG_PREFIX_MAX_DISPLAY - 2 {
-                // room for at least one stem char + ellipsis + ext
-                let stem_max_chars = LOG_PREFIX_MAX_DISPLAY - ext_chars - 1; // 1 for '…'
-                let stem_truncated = truncate_to_char_boundary(prefix, stem_max_chars);
-                format!("{}…{}", stem_truncated, ext)
+                let stem_max_chars = LOG_PREFIX_MAX_DISPLAY - ext_chars - 1;
+                let stem = truncate_to_char_boundary(prefix, stem_max_chars);
+                format!("{}…{}", stem, ext)
             } else {
                 let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
                 format!("{}…", head)
