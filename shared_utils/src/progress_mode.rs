@@ -21,11 +21,18 @@ thread_local! {
 
 const LOG_PREFIX_MAX_LEN: usize = 28;
 
-/// Width of the tag column so all message bodies align (e.g. [file.jpeg], [Info]).
+/// Width of the tag column so all message bodies align (e.g. [file.jpeg]).
+/// Must match the display width of [file.jpeg]-style tags (24 visible chars).
 const LOG_TAG_WIDTH: usize = 24;
 
-/// Log level tag for status/summary lines written to the run log (user-facing, not a severity).
-const RUN_LOG_STATUS_TAG: &str = "[Info]";
+/// Prefix for periodic statistics lines — emoji instead of [Info] to avoid
+/// confusion with log severity levels. Followed by a fixed-width space pad so
+/// the message body aligns with regular file-tag lines.
+/// Display width: 1 emoji (2 cells on most terminals) + spaces to reach LOG_TAG_WIDTH.
+const STATS_PREFIX: &str = "📊 ";
+/// Spaces after the emoji to reach the same visual column as LOG_TAG_WIDTH.
+/// "📊 " is 2 display cells + 1 space = 3, so pad to 24: 21 spaces.
+const STATS_PREFIX_PAD: &str = "                     "; // 21 spaces
 
 /// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
@@ -39,7 +46,8 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Pad tag (e.g. `[file.jpeg]` or `[Info]`) to LOG_TAG_WIDTH for aligned message body.
+/// Pad a file-context tag (e.g. `[file.jpeg]`) to LOG_TAG_WIDTH bytes for aligned message body.
+/// NOTE: uses byte length, so works correctly for ASCII tags like `[filename.jpg]`.
 fn pad_tag(tag: &str) -> String {
     let w = LOG_TAG_WIDTH;
     if tag.len() >= w {
@@ -47,6 +55,17 @@ fn pad_tag(tag: &str) -> String {
     } else {
         format!("{}{}", tag, " ".repeat(w - tag.len()))
     }
+}
+/// Outputs a blank line before so the stats line stands out visually
+/// when interleaved with per-file progress lines.
+fn fmt_stats_line(msg: &str) -> String {
+    format!("\n  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
+}
+
+/// Format a statistics summary line (plain, no leading blank line) for
+/// the final summary emitted after all processing is done.
+fn fmt_stats_line_final(msg: &str) -> String {
+    format!("  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
 }
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
@@ -159,8 +178,7 @@ pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path
         write_to_log_at_level(Level::INFO, init_line);
     }
     let line = format!(
-        "{} Run log attached program=\"{}\" run_log=\"{}\" (all stderr and tracing written here)",
-        pad_tag(RUN_LOG_STATUS_TAG),
+        "  [stats] Run log attached program=\"{}\" run_log=\"{}\" (all stderr and tracing written here)",
         program_name,
         run_log_path.display()
     );
@@ -412,7 +430,7 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), msg);
+    let line = fmt_stats_line(&msg);
     emit_stderr(&line);
 }
 
@@ -470,14 +488,14 @@ pub fn xmp_merge_success() {
     }
 }
 
-/// Format a status line with the standard [Info] tag padding (for run log alignment).
+/// Format a statistics status line with the 📊 emoji prefix (for run log alignment).
 pub fn format_status_line(msg: &str) -> String {
-    format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), msg)
+    fmt_stats_line_final(msg)
 }
 
 /// Call on failed merge. Logs the error on its own line.
 pub fn xmp_merge_failure(msg: &str) {
-    let line = format!("{}⚠️  XMP merge failed: {}", pad_tag(RUN_LOG_STATUS_TAG), msg);
+    let line = format!("{}⚠️  XMP merge failed: {}", fmt_stats_line_final(""), msg);
     emit_stderr(&line);
 }
 
@@ -494,7 +512,7 @@ pub fn xmp_merge_finalize() {
         let failed = total.saturating_sub(success);
         let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
         let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-        let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), msg);
+        let line = fmt_stats_line_final(&msg);
         emit_stderr(&line);
     } else {
         let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
@@ -515,7 +533,7 @@ pub fn xmp_merge_finalize() {
         if fallback_ok > 0 {
             parts.push(format!("Fallback: {} done", fallback_ok));
         }
-        let line = format!("{}{}", pad_tag(RUN_LOG_STATUS_TAG), parts.join("   "));
+        let line = fmt_stats_line_final(&parts.join("   "));
         emit_stderr(&line);
         }
     }
