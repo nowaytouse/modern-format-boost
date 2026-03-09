@@ -1607,31 +1607,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                 };
 
                 crate::log_eprintln!(
-                    "   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ WALL HIT #{}{} │ {}total file {}{}",
-                    BRIGHT_RED,
-                    RESET,
-                    CYAN,
+                    "   CRF {:.1}: {:+.1}% WALL HIT #{} │ Backtrack: {:.2} → {:.2} ({}) (total file {})❌",
                     test_crf,
-                    RESET,
-                    BRIGHT_RED,
                     total_size_pct,
-                    RESET,
-                    RED,
                     wall_hits,
-                    RESET,
-                    YELLOW,
-                    total_file_diff,
-                    RESET
-                );
-
-                // Show backtrack info on separate line for better readability
-                crate::log_eprintln!(
-                    "   {}Backtrack: {:.2} → {:.2} ({}){}",
-                    YELLOW,
                     current_step,
                     new_step,
                     phase_info,
-                    RESET
+                    total_file_diff
                 );
 
                 if wall_hits >= max_wall_hits {
