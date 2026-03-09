@@ -29,12 +29,11 @@ All notable changes to this project will be documented in this file.
 - **Separator choice**: Used `│` (pipe) separators for clean visual division without overwhelming the display
 
 ### Fixed
-- **Terminal `Running: HH:MM:SS` line residue after batch processing**: After image/video processing finished, the bash spinner line (e.g. `   / Running: 44s`) was left visible on the terminal screen
-  - **Root cause**: The bash spinner writes to `/dev/tty` using `\r` (carriage return without line erase). After the binary finishes, nothing cleared that line, so it remained visible on screen
-  - **Fix**: After each binary completes, `\r\033[2K` (carriage return + erase entire line) is sent to `/dev/tty` to clean up the spinner line before continuing output
-  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through the normal stderr pipe (captured by the outer `tee "$LOG_FILE"`) instead of bypassing it via `/dev/tty` — this prevents the spinner's `\r` and binary output from colliding on the same `/dev/tty` line
-  - **Fix (Rust)**: In batch (quiet) mode, per-file `✅` success messages in `img_hevc` and `img_av1` now write only to the run log file, not terminal
-  - **Files modified**: `scripts/drag_and_drop_processor.sh`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+- **Terminal `Running: Xs` residue lines mixed into binary output during batch processing**: Lines like `   - Running: 04s     [filename] ✓ CRF 28.3:` appeared throughout processing — the bash spinner's `\r`-positioned text fusing with the binary's stderr output on the same terminal line
+  - **Root cause**: The bash spinner background process writes `\r   {sp} Running: {elapsed}   ` to `/dev/tty` every 0.15 s. Meanwhile the binary writes its progress to stderr, which reaches the same physical terminal. Because `\r` only moves the cursor to column 0 without erasing, binary output appended right after the spinner text, producing the merged lines seen in every log
+  - **Fix**: Added `pause_spinner()` which kills the spinner background process and erases its line (`\r\033[2K`) **before** each binary starts. Since the two streams are now never concurrent, the collision is impossible. `ELAPSED_START` is preserved so the final "Total time" message still displays correctly via `stop_elapsed_spinner()` after all binaries finish
+  - **Previous partial fixes retained**: `\r\033[2K` cleanup after binary completion, `| tee /dev/stderr` pipeline, and batch-mode `✅` log-only suppression in `img_hevc`/`img_av1` (Rust)
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
   - `shared_utils/src/conversion.rs` (4 occurrences)

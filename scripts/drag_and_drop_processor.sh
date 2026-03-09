@@ -66,14 +66,23 @@ start_elapsed_spinner() {
     SPINNER_PID=$!
     disown "$SPINNER_PID" 2>/dev/null || true
 }
+pause_spinner() {
+    # Kill the spinner background process and clear its line, but preserve
+    # ELAPSED_START so total time can still be shown at the end.
+    if [[ -n "$SPINNER_PID" ]]; then
+        ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
+        SPINNER_PID=""
+    fi
+    [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
+}
 stop_elapsed_spinner() {
-    [[ -z "$SPINNER_PID" ]] && return
-    ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
+    pause_spinner
+    [[ "$ELAPSED_START" -eq 0 ]] && return
     local end
     end=$(date +%s)
     local elapsed_sec=$(( end - ELAPSED_START ))
     [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
-    
+
     # Format duration using the same compact format as Rust code
     if [[ $elapsed_sec -ge 86400 ]]; then
         days=$(( elapsed_sec / 86400 ))
@@ -94,7 +103,7 @@ stop_elapsed_spinner() {
     else
         elapsed_str=$(printf '%02ds' "$elapsed_sec")
     fi
-    
+
     [[ -c /dev/tty ]] && printf '\r\033[2K   Total time: %s\n' "$elapsed_str" > /dev/tty 2>/dev/null
 }
 
@@ -393,14 +402,16 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
+    # Stop the spinner before the binary runs so its \r writes can't
+    # collide with the binary's stderr output on the same terminal line.
+    pause_spinner
+
     local output
     if [[ -n "$LOG_FILE" ]]; then
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
     else
         output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
     fi
-    # Clear the spinner line after binary finishes so it doesn't linger.
-    [[ -c /dev/tty ]] && printf '\r\033[2K' > /dev/tty 2>/dev/null
     parse_tool_stats "$output" "img"
     echo ""
 }
@@ -417,6 +428,10 @@ process_videos() {
     else
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
+
+    # Stop the spinner before the binary runs so its \r writes can't
+    # collide with the binary's stderr output on the same terminal line.
+    pause_spinner
 
     local output
     if [[ -n "$LOG_FILE" ]]; then
