@@ -30,9 +30,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **Terminal `Running: Xs` spinner text fusing into binary output lines**: The bash spinner writes `\r Running: Xs` to `/dev/tty` every 0.15s while binaries write progress to stderr on the same terminal, producing fused lines like `   | Running: 04s     [file] ✓ CRF 28.3:` and leftover spinner text after processing
-  - **Root cause**: Spinner background process and binary both write to the same physical terminal concurrently — `\r` moves cursor to column 0 without erasing, so binary output appends directly after spinner text
-  - **Fix**: Binary output is now captured silently (removed `tee /dev/stderr` from pipeline) while the spinner continues running on `/dev/tty`. After each binary completes, spinner pauses, the full captured output is printed to stderr, then spinner resumes. This eliminates all concurrent terminal writes
-  - **Design**: Binaries already write detailed per-file logs to their own run-log files (`img_hevc_run_*.log`, `vid_hevc_run_*.log`). The summary output is printed in full after completion. The `Running: Xs` spinner provides real-time elapsed-time feedback throughout
+  - **Root cause**: Spinner and binary both write to the terminal content area concurrently. `\r` moves cursor to column 0 without erasing, so binary output appends directly after spinner text. Any subsequent newline permanently commits the fused line to scrollback — no amount of pause/resume/clear can prevent this
+  - **Fix**: Moved spinner display from terminal content area (`\r` writes) to the **terminal title bar** (OSC escape `\033]0;...\007`). The title bar is completely isolated from the content area, making collision fundamentally impossible. Binary output (`tee /dev/stderr`) flows normally in the terminal content with zero interference
+  - **Result**: Running time visible in terminal tab/title bar, binary progress visible in content area, no residue anywhere
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
