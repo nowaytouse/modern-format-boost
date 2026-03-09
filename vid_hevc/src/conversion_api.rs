@@ -591,30 +591,28 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 0.0
                             };
                             // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
-                            let base_msg = if input_b < 1024.0 * 1024.0 {
+                            let msg = if input_b < 1024.0 * 1024.0 {
                                 format!(
-                                "VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
+                                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
                                 input_b / 1024.0,
                                 output_b / 1024.0,
                                 stream_change_pct
                             )
                             } else {
                                 format!(
-                                "VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
+                                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
                                 input_b / 1024.0 / 1024.0,
                                 output_b / 1024.0 / 1024.0,
                                 stream_change_pct
                             )
                             };
-                            
-                            // Combine all warnings into a single line
-                            let combined_msg = if total_file_compressed {
-                                format!("{} | Total file smaller but video stream larger (audio/container overhead) | File may already be highly optimized", base_msg)
+                            warn!("{}", msg);
+                            if total_file_compressed {
+                                warn!("   ⚠️  Total file smaller but video stream larger (audio/container overhead)");
                             } else {
-                                format!("{} | Total file and video stream both larger than original | File may already be highly optimized", base_msg)
-                            };
-                            
-                            warn!("   ⚠️  {}", combined_msg);
+                                warn!("   ⚠️  Total file and video stream both larger than original");
+                            }
+                            warn!("   ⚠️  File may already be highly optimized");
                             (
                                 format!(
                                     "Video stream compression failed: {:+.1}%",
@@ -628,7 +626,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 "Output discarded (video stream larger than original)".to_string(),
                             )
                         } else if explore_result.ssim.is_none() {
-                            warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality | This may indicate codec compatibility issues (VP8/VP9/alpha channel)");
+                            warn!("   ⚠️  SSIM CALCULATION FAILED - cannot validate quality");
+                            warn!("   ⚠️  This may indicate codec compatibility issues (VP8/VP9/alpha channel)");
                             (
                                 "SSIM calculation failed".to_string(),
                                 "Skipped: SSIM calculation failed".to_string(),
@@ -665,9 +664,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 "Output discarded (quality/size check failed)".to_string(),
                             )
                         };
-                    // Combine protection message with the main warning
-                    let final_warning = format!("{} | 🛡️  {}", fail_message, protect_msg);
-                    warn!("   ⚠️  {}", final_warning);
+                    warn!("   🛡️  {}", protect_msg);
 
                     // Keep/discard by total file size only (video stream is internal metric).
                     if shared_utils::should_keep_apple_fallback_hevc_output(
@@ -784,7 +781,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
             // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
             // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
-            warn!("   ❌ QUALITY TARGET FAILED (score: {:.4}) | 🛡️  Original file PROTECTED (quality below threshold)", ms_ssim_score);
+            warn!("   ❌ QUALITY TARGET FAILED (score: {:.4})", ms_ssim_score);
+            warn!("   🛡️  Original file PROTECTED (quality below threshold)");
 
             // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
             if config.apple_compat
