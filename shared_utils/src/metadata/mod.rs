@@ -196,16 +196,28 @@ pub fn save_directory_timestamps(
 pub fn restore_directory_timestamps(
     saved: &std::collections::HashMap<std::path::PathBuf, (filetime::FileTime, filetime::FileTime)>,
 ) {
+    let mut failed_count = 0;
+    let mut total_count = 0;
+    
     for (path, (atime, mtime)) in saved {
         if path.exists() && path.is_dir() {
+            total_count += 1;
             if let Err(e) = filetime::set_file_times(path, *atime, *mtime) {
+                failed_count += 1;
                 eprintln!(
-                    "⚠️ Failed to restore directory timestamps for {}: {}",
+                    "⚠️  Failed to restore directory timestamp for {}: {}",
                     path.display(),
                     e
                 );
             }
         }
+    }
+    
+    if failed_count > 0 {
+        eprintln!(
+            "⚠️  TIMESTAMP VERIFICATION: {}/{} directories failed (possible filesystem protection or network mount)",
+            failed_count, total_count
+        );
     }
 }
 
@@ -214,19 +226,31 @@ pub fn apply_saved_timestamps_to_dst(
     src_root: &Path,
     dst_root: &Path,
 ) {
+    let mut failed_count = 0;
+    let mut total_count = 0;
+    
     for (src_path, (atime, mtime)) in saved {
         if let Ok(rel_path) = src_path.strip_prefix(src_root) {
             let dst_path = dst_root.join(rel_path);
             if dst_path.exists() && dst_path.is_dir() {
+                total_count += 1;
                 if let Err(e) = filetime::set_file_times(&dst_path, *atime, *mtime) {
+                    failed_count += 1;
                     eprintln!(
-                        "⚠️ Failed to apply directory timestamps to {}: {}",
+                        "⚠️  Failed to apply directory timestamp to {}: {}",
                         dst_path.display(),
                         e
                     );
                 }
             }
         }
+    }
+    
+    if failed_count > 0 {
+        eprintln!(
+            "⚠️  TIMESTAMP VERIFICATION: {}/{} destination directories failed (possible filesystem protection or network mount)",
+            failed_count, total_count
+        );
     }
 }
 

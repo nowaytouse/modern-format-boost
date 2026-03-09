@@ -780,15 +780,18 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     if let Some(ref result) = explore_result_opt {
         if let Some(false) = result.ms_ssim_passed {
             let ms_ssim_score = result.ms_ssim_score.unwrap_or(0.0);
-            warn!("   ❌ MS-SSIM TARGET FAILED: {:.4} < 0.90", ms_ssim_score);
-            warn!("   🛡️  Original file PROTECTED (MS-SSIM quality too low)");
+            // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
+            // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
+            // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
+            warn!("   ❌ QUALITY TARGET FAILED (score: {:.4})", ms_ssim_score);
+            warn!("   🛡️  Original file PROTECTED (quality below threshold)");
 
             // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
             if config.apple_compat
                 && !source_is_gif
                 && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
             {
-                warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): MS-SSIM below target");
+                warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality below target");
                 warn!(
                     "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
                     result.optimal_crf,
@@ -799,7 +802,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     output_path: output_path.display().to_string(),
                     strategy: ConversionStrategy {
                         target: TargetVideoFormat::HevcMp4,
-                        reason: "Apple compat fallback: best-effort HEVC kept (MS-SSIM below target)".to_string(),
+                        reason: "Apple compat fallback: best-effort HEVC kept (quality below target)".to_string(),
                         command: String::new(),
                         preserve_audio: detection.has_audio,
                         crf: result.optimal_crf,
@@ -810,7 +813,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     size_ratio: result.output_size as f64 / detection.file_size as f64,
                     success: true,
                     message: format!(
-                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); MS-SSIM {:.4} < 0.90 — file is HEVC and importable",
+                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality score {:.4} below target — file is HEVC and importable",
                         result.optimal_crf,
                         result.iterations,
                         ms_ssim_score
@@ -838,7 +841,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 output_path: input.display().to_string(),
                 strategy: ConversionStrategy {
                     target: TargetVideoFormat::Skip,
-                    reason: format!("MS-SSIM target failed: {:.4} < 0.90", ms_ssim_score),
+                    reason: format!("Quality target failed (score: {:.4})", ms_ssim_score),
                     command: String::new(),
                     preserve_audio: detection.has_audio,
                     crf: result.optimal_crf,
