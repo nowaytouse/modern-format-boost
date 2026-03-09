@@ -31,8 +31,8 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - **Terminal `Running: Xs` spinner text fusing into binary output lines**: The bash spinner writes `\r Running: Xs` to `/dev/tty` every 0.15s while binaries write progress to stderr on the same terminal, producing fused lines like `   | Running: 04s     [file] ✓ CRF 28.3:` and leftover spinner text after processing
   - **Root cause**: Spinner background process and binary both write to the same physical terminal concurrently — `\r` moves cursor to column 0 without erasing, so binary output appends directly after spinner text
-  - **Fix**: `pause_spinner` before each binary starts (kills spinner process, erases line with `\r\033[2K`), then `resume_spinner` after binary finishes (relaunches spinner from original `ELAPSED_START`). Spinner is visible between processing stages; zero collision during binary execution
-  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through stderr instead of directly to `/dev/tty`
+  - **Fix**: Binary output is now captured silently (removed `tee /dev/stderr` from pipeline) while the spinner continues running on `/dev/tty`. After each binary completes, spinner pauses, the full captured output is printed to stderr, then spinner resumes. This eliminates all concurrent terminal writes
+  - **Design**: Binaries already write detailed per-file logs to their own run-log files (`img_hevc_run_*.log`, `vid_hevc_run_*.log`). The summary output is printed in full after completion. The `Running: Xs` spinner provides real-time elapsed-time feedback throughout
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
