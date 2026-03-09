@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.11] - 2026-03-09
+
+### Changed
+- **App and script fully in English**: Converted all Chinese UI text in the macOS app wrapper and drag-and-drop script to English
+  - App dialogs: "Select folder to process", "Will optimize the following folder", "Start Optimization", "Cancel", timeout alerts
+  - App wrapper comments fully in English
+  - All user-facing strings are now English-only
+
+- **Colorized terminal output for conversion results**: Key outcome text is now color-coded for immediate visual feedback
+  - `size reduced X%` → **green bold** (success, space saved)
+  - `size increased X%` → **yellow bold** (accepted but no size gain)
+  - Size-check rejection messages: increased amount in **yellow bold**
+  - Deleted output notifications: reason text in **yellow bold**
+  - Applied across all converters: `shared_utils`, `img_hevc`, `img_av1`, `vid_hevc` (HEVC, Lossless HEVC, GIF Apple Compat)
+
+- **Standardized logging macros across all binaries**: Replaced raw `eprintln!`/`println!` with `shared_utils::log_eprintln!` in `img_hevc/src/main.rs`, `img_av1/src/main.rs`, `vid_hevc/src/main.rs`
+  - Warning messages use `console::style(...).yellow()` for consistent visual identity
+  - Error messages route through `log_auto_error!` for automatic severity classification
+  - All output now captured in file logs (previously stdout-only calls were invisible to logs)
+
+- **Intermediate conversion steps route through emit_stderr**: WebP→APNG, JXL→APNG, Stream→APNG success messages in `vid_hevc` now use `progress_mode::emit_stderr` so they appear in file logs
+
 ## [0.10.10] - 2026-03-09
 
 ### Added

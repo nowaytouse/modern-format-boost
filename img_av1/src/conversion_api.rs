@@ -280,9 +280,9 @@ pub fn execute_conversion(
 
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!("Conversion successful: size reduced {:.1}%", reduction)
+        format!("Conversion successful: size reduced {}", console::style(format!("{:.1}%", reduction)).green().bold())
     } else {
-        format!("Conversion successful: size increased {:.1}%", -reduction)
+        format!("Conversion successful: size increased {}", console::style(format!("{:.1}%", -reduction)).yellow().bold())
     };
 
     Ok(ConversionOutput {
