@@ -29,13 +29,12 @@ All notable changes to this project will be documented in this file.
 - **Separator choice**: Used `│` (pipe) separators for clean visual division without overwhelming the display
 
 ### Fixed
-- **Terminal output residue from batch processing**: Fixed issue where spinner and per-file processing details created mixed output lines like `   - Running: 04:03:53     [filename] ✅ JPEG lossless...` and `   \ Running: 00:00:03     [file…] ✓ CRF 28.3: -19.4%`
-  - **Root cause (bash script)**: `process_images` and `process_videos` used `| tee /dev/tty` to pipe all binary output (thousands of per-iteration CRF/SSIM lines) directly to the terminal via `/dev/tty`. The bash spinner also writes to `/dev/tty` using `\r` to overwrite the same line. Because `\r` only moves the cursor to column 0 without erasing, binary output appended after the spinner text on the same visual line, producing the `   - Running: HH:MM:SS   [filename] ✅ ...` mixed lines.
-  - **Fix (bash script)**: Removed `| tee /dev/tty` from both binary invocations. Binary output is now captured silently and appended to the drag-drop log file; after each binary finishes, only the summary box lines (╔║╠╚) are printed to the terminal. The spinner cleanly shows elapsed time throughout.
-  - **Fix (bash script)**: `stop_elapsed_spinner` now uses `\r\033[2K` (erase entire line) before printing `✅ Total time:` to prevent any spinner remnant.
-  - **Fix (Rust)**: In batch (quiet) mode, per-file `✅` success messages in `img_hevc` and `img_av1` now write only to the run log file, not terminal. This ensures clean output even when binaries are run directly without the script.
+- **Terminal `Running: HH:MM:SS` line residue after batch processing**: After image/video processing finished, the bash spinner line (e.g. `   / Running: 44s`) was left visible on the terminal screen
+  - **Root cause**: The bash spinner writes to `/dev/tty` using `\r` (carriage return without line erase). After the binary finishes, nothing cleared that line, so it remained visible on screen
+  - **Fix**: After each binary completes, `\r\033[2K` (carriage return + erase entire line) is sent to `/dev/tty` to clean up the spinner line before continuing output
+  - **Fix**: Replaced `| tee /dev/tty` with `| tee /dev/stderr` so binary output flows through the normal stderr pipe (captured by the outer `tee "$LOG_FILE"`) instead of bypassing it via `/dev/tty` — this prevents the spinner's `\r` and binary output from colliding on the same `/dev/tty` line
+  - **Fix (Rust)**: In batch (quiet) mode, per-file `✅` success messages in `img_hevc` and `img_av1` now write only to the run log file, not terminal
   - **Files modified**: `scripts/drag_and_drop_processor.sh`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
-  - **Impact**: Terminal shows only the spinner elapsed time during processing, then the clean summary box after completion — no per-iteration CRF/SSIM detail lines, no interleaved runtime timestamps
 
 - **Clippy: `format!` in `format!` args (14 warnings)**: Inlined nested `format!()` calls for ANSI color strings into their outer `format!()` calls across all affected crates
   - `shared_utils/src/conversion.rs` (4 occurrences)
