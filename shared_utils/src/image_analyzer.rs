@@ -665,7 +665,8 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
             "-select_streams", "v:0",
             "-count_frames",
             "-show_entries", "stream=nb_read_frames,r_frame_rate",
-            "-of", "json"
+            "-of", "json",
+            "--",
         ])
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output()
@@ -713,7 +714,7 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
     use std::process::Command;
 
     let output = Command::new("ffprobe")
-        .args(["-v", "quiet", "-print_format", "json", "-show_format"])
+        .args(["-v", "quiet", "-print_format", "json", "-show_format", "--"])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
         .ok()?;
@@ -749,6 +750,7 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
+            "--",
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
@@ -831,6 +833,7 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
             "stream=nb_read_packets",
             "-of",
             "csv=p=0",
+            "--",
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()

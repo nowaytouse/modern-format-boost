@@ -546,7 +546,8 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
             "-select_streams", "v:0",
             "-count_frames",
             "-show_entries", "stream=nb_read_frames",
-            "-of", "json"
+            "-of", "json",
+            "--",
         ])
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output()

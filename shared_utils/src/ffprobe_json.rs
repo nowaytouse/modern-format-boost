@@ -183,8 +183,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
             "%+#5",
             "-select_streams",
             "v:0",
-            input_str.as_ref(),
+            "--",
         ])
+        .arg(crate::safe_path_arg(input).as_ref())
         .output()
     {
         Ok(o) if o.status.success() => o,

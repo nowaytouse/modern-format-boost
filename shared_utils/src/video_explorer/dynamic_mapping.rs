@@ -318,6 +318,21 @@ pub fn quick_calibrate(
                 }
             }
 
+            // Guard: verify the y4m file was actually written with content.
+            // ffmpeg can exit 0 on certain inputs (e.g. zero-duration sample, codec
+            // mismatch) while producing an empty file.  x265 then reports
+            // "unable to open input file" which looks like a file-not-found error
+            // but is really a race/empty-file issue.  Skip this CRF attempt and
+            // try the next one rather than propagating a misleading x265 error.
+            let y4m_size = fs::metadata(&temp_input).map(|m| m.len()).unwrap_or(0);
+            if y4m_size == 0 {
+                eprintln!(
+                    "   ❌ Extracted y4m sample is empty for CRF {:.1} (ffmpeg exited 0 but wrote nothing); skipping",
+                    anchor_crf
+                );
+                continue;
+            }
+
             match encode_with_x265(&temp_input, &temp_cpu, &config, vf_args) {
                 Ok(_) => fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0),
                 Err(e) => {
