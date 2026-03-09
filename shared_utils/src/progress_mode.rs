@@ -21,8 +21,6 @@ thread_local! {
     static LOG_PREFIX: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
-const LOG_PREFIX_MAX_LEN: usize = 28;
-
 /// Format duration as detailed string with progressive spacing strategy
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
@@ -92,8 +90,12 @@ pub fn format_duration_compact(duration: Duration) -> String {
 }
 
 /// Width of the tag column so all message bodies align (e.g. [file.jpeg]).
-/// Must match the display width of [file.jpeg]-style tags (24 visible chars).
-const LOG_TAG_WIDTH: usize = 24;
+/// 28 chars fits filenames up to ~24 chars + brackets + space separator.
+const LOG_TAG_WIDTH: usize = 28;
+
+/// Max visible chars for the filename displayed inside [brackets].
+/// With LOG_TAG_WIDTH=28, tag=[prefix] uses prefix+2 bytes, max prefix = 25.
+const LOG_PREFIX_MAX_DISPLAY: usize = 25;
 
 /// Prefix for periodic statistics lines — emoji instead of [Info] to avoid
 /// confusion with log severity levels. Followed by a fixed-width space pad so
@@ -101,8 +103,8 @@ const LOG_TAG_WIDTH: usize = 24;
 /// Display width: 1 emoji (2 cells on most terminals) + spaces to reach LOG_TAG_WIDTH.
 const STATS_PREFIX: &str = "📊 ";
 /// Spaces after the emoji to reach the same visual column as LOG_TAG_WIDTH.
-/// "📊 " is 2 display cells + 1 space = 3, so pad to 24: 21 spaces.
-const STATS_PREFIX_PAD: &str = "                     "; // 21 spaces
+/// "📊 " is 2 display cells + 1 space = 3, so pad to 28: 25 spaces.
+const STATS_PREFIX_PAD: &str = "                         "; // 25 spaces
 
 /// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
@@ -116,14 +118,13 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Pad a file-context tag (e.g. `[file.jpeg]`) to LOG_TAG_WIDTH bytes for aligned message body.
-/// NOTE: uses byte length, so works correctly for ASCII tags like `[filename.jpg]`.
+/// Pad a file-context tag (e.g. `[file.jpeg]`) to LOG_TAG_WIDTH chars for aligned message body.
+/// Always produces exactly LOG_TAG_WIDTH chars, or tag + one space if tag is already wide.
 fn pad_tag(tag: &str) -> String {
-    let w = LOG_TAG_WIDTH;
-    if tag.len() >= w {
+    if tag.len() >= LOG_TAG_WIDTH {
         format!("{} ", tag)
     } else {
-        format!("{}{}", tag, " ".repeat(w - tag.len()))
+        format!("{}{}", tag, " ".repeat(LOG_TAG_WIDTH - tag.len()))
     }
 }
 /// Outputs a blank line before so the stats line stands out visually
@@ -139,10 +140,26 @@ fn fmt_stats_line_final(msg: &str) -> String {
 }
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
+/// Truncates long names to LOG_PREFIX_MAX_DISPLAY chars, preserving the file extension:
+///   "Image_103999006594198.jpeg" → "Image_103999006…jpeg"
+///   "Cache_4ac28036da7d11be.jpg" → "Cache_4ac28036da7…jpg"
 pub fn set_log_context(prefix: &str) {
-    let s = if prefix.len() > LOG_PREFIX_MAX_LEN {
-        let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_LEN.saturating_sub(1));
-        format!("{}…", head)
+    let s = if prefix.chars().count() > LOG_PREFIX_MAX_DISPLAY {
+        if let Some(dot_pos) = prefix.rfind('.') {
+            let ext = &prefix[dot_pos..]; // e.g. ".jpeg"
+            let ext_chars = ext.chars().count();
+            if ext_chars < LOG_PREFIX_MAX_DISPLAY - 2 {
+                let stem_max_chars = LOG_PREFIX_MAX_DISPLAY - ext_chars - 1;
+                let stem = truncate_to_char_boundary(prefix, stem_max_chars);
+                format!("{}…{}", stem, ext)
+            } else {
+                let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
+                format!("{}…", head)
+            }
+        } else {
+            let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
+            format!("{}…", head)
+        }
     } else {
         prefix.to_string()
     };

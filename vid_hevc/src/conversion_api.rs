@@ -784,7 +784,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
             // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
             // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
-            warn!("   ❌ QUALITY TARGET FAILED (score: {:.4}) │ 🛡️  Original file PROTECTED (quality below threshold)", ms_ssim_score);
+            warn!("   QUALITY TARGET FAILED (score: {:.4}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", ms_ssim_score);
 
             // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
             if config.apple_compat
