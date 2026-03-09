@@ -61,7 +61,7 @@ stop_elapsed_spinner() {
     m=$(( (elapsed_sec % 3600) / 60 ))
     s=$(( elapsed_sec % 60 ))
     elapsed_str=$(printf '%02d:%02d:%02d' "$h" "$m" "$s")
-    [[ -c /dev/tty ]] && printf '\r   ✅ Total time: %s    \n' "$elapsed_str" > /dev/tty 2>/dev/null
+    [[ -c /dev/tty ]] && printf '\r\033[2K   ✅ Total time: %s\n' "$elapsed_str" > /dev/tty 2>/dev/null
 }
 
 LOG_DIR="$PROJECT_ROOT/logs"
