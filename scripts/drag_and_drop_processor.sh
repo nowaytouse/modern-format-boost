@@ -130,24 +130,24 @@ _handle_sigint() {
     printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
 
     local answer=""
-    if read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null; then
+    local read_result=0
+    read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
+
+    # read_result: 0 = got input, >0 = timeout or interrupted
+    # Check if user explicitly pressed 'y' or 'Y'
+    if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
         printf '\n' > /dev/tty
-        if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
-            show_cursor
-            stop_elapsed_spinner
-            echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
-            exit 130
-        fi
-    else
-        printf '\n' > /dev/tty
+        show_cursor
+        stop_elapsed_spinner
+        echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
+        exit 130
     fi
 
-    printf "${GREEN}▶  Resuming...${RESET}\n" > /dev/tty
+    # Any other case (timeout, 'n', or any other key): resume
     printf '\n' > /dev/tty
+    printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
     _CTRLC_CONFIRM_ACTIVE=false
     # Restore the Ctrl+C handler after the confirmation window.
-    # Small delay to avoid race condition where a queued signal triggers the handler again.
-    sleep 0.1
     trap '_handle_sigint' INT
 }
 

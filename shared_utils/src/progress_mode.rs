@@ -525,11 +525,14 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
     // Append milestone to the previous line with compact formatting.
-    // Use ANSI escape: move cursor up 1 line, move to end of line, write milestone.
-    // Format: "  │ 📊 XMP: 100 OK  Img: 102 OK" (compact, narrow-screen friendly)
+    // Move cursor up 1 line, then position at the ✅ emoji column (after the success message).
+    // The ✅ is typically around column 100-120 depending on message length.
+    // Use a fixed offset from the end of line to align 📊 with ✅.
     use std::io::Write;
+    // Format: move up, save cursor, move to end, move back 60 chars, write milestone
+    // This ensures 📊 aligns roughly with where ✅ appears
     let milestone = format!("  │ {} {}", STATS_PREFIX.trim(), msg);
-    let _ = write!(std::io::stderr(), "\x1b[1A\x1b[999C{}\n", milestone);
+    let _ = write!(std::io::stderr(), "\x1b[1A\x1b[999C\x1b[60D{}\n", milestone);
 }
 
 fn format_xmp_jxl_images_line(
@@ -580,6 +583,7 @@ pub fn xmp_merge_attempt() {
 pub fn xmp_merge_success() {
     let success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if xmp_milestone_interval(success) {
+        // Use the current XMP count (which includes this merge) for display
         let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
         let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
         emit_combined_status_line(img_ok, img_fail);
