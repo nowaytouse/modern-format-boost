@@ -44,9 +44,6 @@ enum Commands {
         #[arg(long)]
         in_place: bool,
 
-        #[arg(long)]
-        lossless: bool,
-
         #[arg(long, default_value_t = true)]
         explore: bool,
 
@@ -118,7 +115,6 @@ fn main() -> anyhow::Result<()> {
             recursive,
             delete_original,
             in_place,
-            lossless,
             explore,
             match_quality,
             compress,
@@ -156,10 +152,7 @@ fn main() -> anyhow::Result<()> {
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_hevc") {
                 shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
             }
-            if lossless {
-                shared_utils::progress_mode::emit_stderr("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-                shared_utils::progress_mode::emit_stderr("   Smart quality matching: DISABLED");
-            } else if verbose {
+            if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!("🎬 {} (for animated→video)", flag_mode.description_en()));
                 shared_utils::progress_mode::emit_stderr("📷 Static images: JPEG→JXL lossless; lossless PNG→JXL lossless; lossy PNG (TinyPNG/pngquant)→JXL d=1.0");
             }
@@ -190,7 +183,6 @@ fn main() -> anyhow::Result<()> {
                 force,
                 delete_original: should_delete,
                 in_place,
-                lossless,
                 explore,
                 match_quality,
                 compress,
@@ -483,7 +475,6 @@ struct AutoConvertConfig {
     force: bool,
     delete_original: bool,
     in_place: bool,
-    lossless: bool,
     explore: bool,
     match_quality: bool,
     compress: bool,
@@ -525,7 +516,7 @@ fn auto_convert_single_file(
     config: &AutoConvertConfig,
 ) -> anyhow::Result<ConversionOutput> {
     use img_hevc::lossless_converter::{
-        convert_jpeg_to_jxl, convert_to_hevc_mkv_lossless, convert_to_hevc_mp4_matched,
+        convert_jpeg_to_jxl, convert_to_hevc_mp4_matched,
         convert_to_jxl, ConvertOptions,
     };
 
@@ -835,13 +826,6 @@ fn auto_convert_single_file(
                 if meme_keep {
                     copy_original_if_adjacent_mode(input, config)?;
                     return Ok(make_skipped("GIF meme-score: keep as GIF"));
-                } else if config.lossless {
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "🔄 Animated→HEVC MKV (LOSSLESS, {:.1}s): {}",
-                        duration,
-                        input.display()
-                    ));
-                    convert_to_hevc_mkv_lossless(input, &options)?
                 } else {
                     shared_utils::progress_mode::emit_stderr(&format!(
                         "🔄 Animated→HEVC MP4 (SMART QUALITY, {:.1}s): {}",
@@ -955,9 +939,6 @@ fn auto_convert_directory(
     if config.verbose {
         println!("📂 Found {} files to process", total);
     }
-    if config.lossless && config.verbose {
-        println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-    }
 
     let success = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
@@ -965,8 +946,6 @@ fn auto_convert_directory(
     let processed = AtomicUsize::new(0);
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
-
-    let pb = shared_utils::UnifiedProgressBar::new(total as u64, "Converting");
 
     shared_utils::progress_mode::enable_quiet_mode();
 
@@ -1043,23 +1022,14 @@ fn auto_convert_directory(
                 }
             }
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            pb.set_position(current as u64);
-            let msg = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            pb.set_message(msg.clone());
             shared_utils::progress_mode::write_progress_line_to_run_log(
                 start_time.elapsed().as_secs(),
                 current as u64,
                 total as u64,
-                &msg,
+                &path.file_name().unwrap_or_default().to_string_lossy(),
             );
         });
     });
-
-    pb.finish_with_message("Complete!");
 
     shared_utils::progress_mode::disable_quiet_mode();
     shared_utils::progress_mode::xmp_merge_finalize();

@@ -37,9 +37,6 @@ enum Commands {
         #[arg(long, default_value_t = true)]
         explore: bool,
 
-        #[arg(long)]
-        lossless: bool,
-
         #[arg(long, default_value_t = true)]
         match_quality: bool,
 
@@ -74,17 +71,6 @@ enum Commands {
         verbose: bool,
     },
 
-    Simple {
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-
-        #[arg(long)]
-        lossless: bool,
-    },
-
     Strategy {
         #[arg(value_name = "INPUT")]
         input: PathBuf,
@@ -106,7 +92,6 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             in_place,
             explore,
-            lossless,
             match_quality,
             compress,
             apple_compat,
@@ -145,7 +130,7 @@ fn main() -> anyhow::Result<()> {
                 force,
                 delete_original,
                 explore_smaller: explore,
-                use_lossless: lossless,
+                use_lossless: false,
                 match_quality,
                 in_place,
                 min_ssim: 0.95,
@@ -164,9 +149,6 @@ fn main() -> anyhow::Result<()> {
             info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
             if match_quality {
                 info!("   🎯 Match Quality: ENABLED");
-            }
-            if lossless {
-                info!("   ⚠️  Mathematical lossless AV1: ENABLED (VERY SLOW!)");
             }
             if explore {
                 info!("   📊 Size exploration: ENABLED");
@@ -207,24 +189,6 @@ fn main() -> anyhow::Result<()> {
                 |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
-        }
-
-        Commands::Simple {
-            input,
-            output,
-            lossless: _,
-        } => {
-            info!("🎬 Simple Mode Conversion (AV1)");
-            info!("   ⚠️  ALL videos → AV1 MP4 (MATHEMATICAL LOSSLESS - VERY SLOW!)");
-            info!("   (Note: Simple mode now enforces lossless conversion by default)");
-            info!("");
-
-            let result = vid_av1::simple_convert(&input, output.as_deref())?;
-
-            info!("");
-            info!("✅ Complete!");
-            info!("   Output: {}", result.output_path);
-            info!("   Size: {:.1}% of original", result.size_ratio * 100.0);
         }
 
         Commands::Strategy { input } => {
