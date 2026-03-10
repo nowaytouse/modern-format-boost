@@ -170,7 +170,7 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             if ultimate {
-                shared_utils::progress_mode::emit_stderr("� Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::progress_mode::emit_stderr("🔎 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if !allow_size_tolerance {
                 shared_utils::progress_mode::emit_stderr(
@@ -875,7 +875,7 @@ fn auto_convert_single_file(
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
     } else {
-        shared_utils::log_eprintln!("{} ✅", output.message);
+        shared_utils::log_eprintln!("✅ {}", output.message);
     }
 
     Ok(output)
