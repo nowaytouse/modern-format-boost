@@ -630,22 +630,13 @@ main() {
     export LOG_FILE
     export VERBOSE_LOG_FILE
     
-    # Create a temporary script with signal handling
-    local temp_script=$(mktemp)
-    cat > "$temp_script" << 'EOF'
-#!/bin/bash
-# Set up signal handling
-trap '_handle_sigint' INT
-trap '_cleanup_on_exit' EXIT
-
-# Run the main worker
-exec "$0" --internal-worker "$@"
-EOF
+    # Set up signal handling in main process
+    trap '_handle_sigint' INT
+    trap '_cleanup_on_exit' EXIT
     
-    chmod +x "$temp_script"
-    "$temp_script" "$@" 2>&1 | tee "$LOG_FILE"
-    local exit_code=${PIPESTATUS[0]}
-    rm -f "$temp_script"
+    # Run worker directly and log separately to avoid pipe interference
+    "$BASH" "$0" --internal-worker "$@" 2>&1 | tee -a "$LOG_FILE"
+    exit_code=${PIPESTATUS[0]}
     exit "$exit_code"
 }
 
