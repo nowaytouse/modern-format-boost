@@ -792,7 +792,7 @@ fn auto_convert_single_file(
                 } else {
                     // Cannot build GifMeta (no dimensions) → keep as GIF
                     shared_utils::progress_mode::emit_stderr(&format!(
-                        "🎞️  GIF [{}] probe failed → KEEP GIF",
+                        "🎞️  Animation [{}] probe failed → KEEP GIF",
                         input.file_name().unwrap_or_default().to_string_lossy()
                     ));
                     // Update milestone display without increasing count
@@ -802,7 +802,7 @@ fn auto_convert_single_file(
             } else {
                 // ffprobe failed → keep as GIF
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "🎞️  GIF [{}] probe unavailable → KEEP GIF",
+                    "🎞️  Animation [{}] probe unavailable → KEEP GIF",
                     input.file_name().unwrap_or_default().to_string_lossy()
                 ));
                 // Update milestone display without increasing count
