@@ -107,10 +107,16 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         return analyze_avif_image(path, file_size);
     }
 
-    let reader = image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {}", e)))?
         .with_guessed_format()
         .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to guess format: {}", e)))?;
+    {
+        use image::Limits;
+        let mut limits = Limits::default();
+        limits.max_alloc = Some(2 * 1024 * 1024 * 1024);
+        reader.limits(limits);
+    }
 
     let format = reader.format().ok_or_else(|| {
         ImgQualityError::UnsupportedFormat(format!(
@@ -1022,7 +1028,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             8
         };
         (probe.width, probe.height, alpha, depth)
-    } else if let Ok(img) = image::open(path) {
+    } else if let Ok(img) = crate::image_detection::open_image_with_limits(path) {
         let (w, h) = img.dimensions();
         (w, h, has_alpha_channel(&img), detect_color_depth(&img))
     } else {
