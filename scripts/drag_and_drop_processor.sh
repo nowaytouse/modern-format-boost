@@ -453,18 +453,17 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Run the tool streaming directly to the terminal (no $() capture).
-    # Capturing into $() causes the TTY title-bar escape sequence (thousands of
-    # spaces from _tty_title) to leak into the captured string, which is then
-    # dumped back to the terminal all at once at subshell exit — causing the
-    # periodic "clear" / macOS Terminal notification badge.
+    # Run the tool directly without any pipes to ensure signal handling works
     local tmp_out
     tmp_out=$(mktemp)
-    if [[ -n "$LOG_FILE" ]]; then
-        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
-    else
-        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
-    fi
+    
+    # Run Rust process directly - it will handle its own signal processing
+    "$IMGQUALITY_HEVC" "${args[@]}" > "$tmp_out" 2>&1
+    
+    # Display the output after completion (or interruption)
+    cat "$tmp_out"
+    
+    # Parse stats from captured output
     parse_tool_stats "$(cat "$tmp_out")" "img"
     rm -f "$tmp_out"
     echo ""
@@ -483,13 +482,17 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
+    # Run the tool directly without any pipes to ensure signal handling works
     local tmp_out
     tmp_out=$(mktemp)
-    if [[ -n "$LOG_FILE" ]]; then
-        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
-    else
-        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
-    fi
+    
+    # Run Rust process directly - it will handle its own signal processing
+    "$VIDQUALITY_HEVC" "${args[@]}" > "$tmp_out" 2>&1
+    
+    # Display the output after completion (or interruption)
+    cat "$tmp_out"
+    
+    # Parse stats from captured output
     parse_tool_stats "$(cat "$tmp_out")" "vid"
     rm -f "$tmp_out"
     echo ""
@@ -634,9 +637,9 @@ main() {
     trap '_handle_sigint' INT
     trap '_cleanup_on_exit' EXIT
     
-    # Run worker directly and log separately to avoid pipe interference
-    "$BASH" "$0" --internal-worker "$@" 2>&1 | tee -a "$LOG_FILE"
-    exit_code=${PIPESTATUS[0]}
+    # Run worker directly without any pipes to ensure signal handling works
+    "$BASH" "$0" --internal-worker "$@"
+    exit_code=$?
     exit "$exit_code"
 }
 
