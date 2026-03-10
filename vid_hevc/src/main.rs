@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use vid_hevc::{
-    auto_convert, detect_video, determine_strategy, simple_convert, ConversionConfig,
+    auto_convert, detect_video, determine_strategy, ConversionConfig,
     VideoDetectionResult,
 };
 
@@ -33,8 +33,6 @@ enum Commands {
         in_place: bool,
         #[arg(long, default_value_t = true)]
         explore: bool,
-        #[arg(long)]
-        lossless: bool,
         #[arg(long, default_value_t = true)]
         match_quality: bool,
         #[arg(long, default_value_t = true)]
@@ -55,15 +53,6 @@ enum Commands {
         no_allow_size_tolerance: bool,
         #[arg(short, long)]
         verbose: bool,
-    },
-
-    Simple {
-        #[arg(value_name = "INPUT")]
-        input: PathBuf,
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-        #[arg(long)]
-        lossless: bool,
     },
 
     Strategy {
@@ -89,7 +78,6 @@ fn main() -> anyhow::Result<()> {
             delete_original,
             in_place,
             explore,
-            lossless,
             match_quality,
             apple_compat,
             no_apple_compat,
@@ -123,7 +111,7 @@ fn main() -> anyhow::Result<()> {
                 force,
                 delete_original,
                 explore_smaller: explore,
-                use_lossless: lossless,
+                use_lossless: false,
                 match_quality,
                 in_place,
                 apple_compat,
@@ -150,9 +138,6 @@ fn main() -> anyhow::Result<()> {
                 info!("   Lossy sources → HEVC MP4 (CRF auto-matched to input quality)");
             } else {
                 info!("   Lossy sources → HEVC MP4 (CRF 18-20)");
-            }
-            if lossless {
-                info!("   ⚠️  HEVC Lossless: ENABLED");
             }
             if explore {
                 info!("   📊 Size exploration: ENABLED");
@@ -193,23 +178,6 @@ fn main() -> anyhow::Result<()> {
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
             shared_utils::progress_mode::flush_log_file();
-        }
-
-        Commands::Simple {
-            input,
-            output,
-            lossless: _,
-        } => {
-            info!("🎬 Simple Mode Conversion (HEVC/H.265)");
-            info!("   ALL videos → HEVC MP4 (CRF 18)");
-            info!("");
-
-            let result = simple_convert(&input, output.as_deref())?;
-
-            info!("");
-            info!("✅ Complete!");
-            info!("   Output: {}", result.output_path);
-            info!("   Size: {:.1}% of original", result.size_ratio * 100.0);
         }
 
         Commands::Strategy { input } => {

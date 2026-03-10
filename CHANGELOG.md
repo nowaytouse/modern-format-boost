@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.18] - 2026-03-10
+
+### Fixed
+- **Periodic screen clearing / terminal notification badges during batch processing**: Progress bar was created before `enable_quiet_mode()`, causing indicatif to render to stderr every 50ms
+  - **Root cause**: `UnifiedProgressBar::new()` called before `enable_quiet_mode()` → bar created in non-quiet mode → rendered updates to stderr every 50ms → caused screen flicker and macOS Terminal notification badges when terminal was in the background
+  - **Fix**: Swapped order — `enable_quiet_mode()` first, then create bar. Additionally removed all `pb` usage (creation, `set_position`, `set_message`, `finish_with_message`) from `img_hevc` and `img_av1` batch loops entirely since the title-bar spinner replaces them
+  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
+### Added
+- **File-type emoji prefixes on per-file log lines**: `🖼️` for images, `🎬` for videos
+  - Format: `🖼️ [Cache_4ac28036…jpg] JPEG lossless transcode: size reduced 27.5% ✅`
+  - Emoji is added before the `[filename]` tag; message body alignment is unchanged
+  - **Files modified**: `shared_utils/src/progress_mode.rs` (new `file_type_emoji()` helper, updated `format_log_line()`)
+
+### Removed
+- **`--lossless` CLI flag from all 4 binaries** (`img-hevc`, `img-av1`, `vid-hevc`, `vid-av1`): Dead CLI surface — never passed by the drag-and-drop script. The internal lossless conversion logic remains intact: lossless sources are still converted losslessly by default (JPEG→JXL lossless transcode, lossless PNG→JXL, lossless animated→AV1 CRF 0). The flag only forced *all* conversions to mathematical lossless mode (very slow), which was never used in practice
+  - Removed from CLI arg definitions in `Commands::Run` enum
+  - Removed from `AutoConvertConfig` / `ConversionConfig` structs
+  - Removed conditional branches — always use smart quality matching path
+  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`, `vid_hevc/src/main.rs`, `vid_av1/src/main.rs`
+
+- **`Simple` subcommand from `vid-hevc` and `vid-av1`**: This mode forced all videos to a fixed CRF (HEVC CRF 18 / AV1 mathematical lossless), bypassing smart quality matching. Never used by the drag-and-drop script
+  - Removed `Commands::Simple` enum variant and its match arm
+  - **Files modified**: `vid_hevc/src/main.rs`, `vid_av1/src/main.rs`
+
+- **Obsolete `create_conditional_progress()` helper**: Removed from `progress_mode.rs`
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
+### Notes
+- **`--force` flag** (kept): Controls whether already-processed files and existing output files are overwritten. Used throughout the conversion pipeline. Essential for re-running conversions
+- **Behavior change**: With `--lossless` removed, animated GIFs/WebP/APNG always use smart quality matching. Static images still use lossless conversion paths unchanged
+
 ## [0.10.17] - 2026-03-10
 
 ### Fixed
