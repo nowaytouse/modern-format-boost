@@ -171,14 +171,36 @@ pub fn clear_log_context() {
     LOG_PREFIX.with(|p| p.borrow_mut().clear());
 }
 
-/// Format a log line with optional tag and padded indent so message bodies align.
+/// Detect file type emoji based on extension.
+/// Returns 🖼️ for images, 🎬 for videos, empty string for unknown.
+fn file_type_emoji(filename: &str) -> &'static str {
+    if let Some(ext_start) = filename.rfind('.') {
+        let ext = &filename[ext_start + 1..].to_lowercase();
+        match ext.as_str() {
+            // Images
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "heic" | "heif" | "jxl"
+            | "bmp" | "tiff" | "tif" | "ico" | "svg" | "psd" | "raw" | "cr2" | "nef"
+            | "arw" | "dng" | "orf" | "rw2" | "exr" | "qoi" | "flif" | "jp2" | "j2k" => "🖼️ ",
+            // Videos
+            "mp4" | "mov" | "avi" | "mkv" | "webm" | "flv" | "wmv" | "m4v" | "mpg"
+            | "mpeg" | "3gp" | "ogv" | "ts" | "mts" | "m2ts" => "🎬 ",
+            _ => "",
+        }
+    } else {
+        ""
+    }
+}
+
+/// Format a log line with optional tag, emoji prefix, and padded indent so message bodies align.
+/// When a filename prefix is set, prepends a file-type emoji (🖼️ image / 🎬 video).
 pub fn format_log_line(line: &str) -> String {
     LOG_PREFIX.with(|p| {
         let prefix = p.borrow();
         if prefix.is_empty() {
             format!("{}{}", " ".repeat(LOG_TAG_WIDTH), line)
         } else {
-            format!("{}{}", pad_tag(&format!("[{}]", prefix)), line)
+            let emoji = file_type_emoji(&prefix);
+            format!("{}{}{}",  emoji, pad_tag(&format!("[{}]", prefix)), line)
         }
     })
 }
@@ -395,14 +417,6 @@ macro_rules! quiet_eprintln {
             $crate::progress_mode::emit_stderr(&format!($($arg)*));
         }
     };
-}
-
-pub fn create_conditional_progress(total: u64, prefix: &str) -> indicatif::ProgressBar {
-    if is_quiet_mode() {
-        indicatif::ProgressBar::hidden()
-    } else {
-        crate::create_progress_bar(total, prefix)
-    }
 }
 
 // ── Verbose mode (single source of truth for process-wide verbose logging) ───
