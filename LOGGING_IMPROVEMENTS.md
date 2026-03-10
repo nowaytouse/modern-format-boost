@@ -132,18 +132,6 @@ ls -lh logs/merged_*.log
 ### 3. 对比终端和文件输出
 终端应该简洁明了，文件应该包含所有详细信息（包括终端显示的内容）
 
-## 2026-03 最新改进 (终端着色与信号安全)
-
-### 1. 内联统计信息 (Inline Progress Stats)
-之前使用 `\x1b[1A` 终端转义序列更新状态，导致在 `tee` 管道中输出乱码。
-**改进**：现在将全局统计信息（如 `XMP: 29✓ Img: 18✓`）直接内嵌到每个成功的 ConversionResult 日志行末尾，实现了完美的管道兼容性和美观的对其效果。
-
-### 2. Ctrl+C (SIGINT) 发送死锁修复
-之前在拖拽脚本的 `tee` 管道中按下 Ctrl+C 会导致 bash `tee` 进程立刻死掉，从而让 Rust 进程产生 `SIGPIPE` 并静默崩溃。
-**改进**：
-- **Bash层**：将管道包裹在 `(trap '' INT; tee "$LOG_FILE")` 中，保护日志写入器免受中断。
-- **Rust层**：更新 `universal_heartbeat.rs` / `ctrlc_guard.rs`，废弃易卡死的后台 stdin-reader 线程，转而采用安全的 OS-Level `libc::poll` 监听标准输入。彻底修复了多次中断后倒计时超时抢占输入的 Bug。
-
 ## 注意事项
 
 1. **重新编译**：修改 Rust 代码后需要重新编译
