@@ -293,9 +293,9 @@ pub fn execute_conversion(
 
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!("✅ JXL lossless: -{:.1}%", reduction)
+        format!("✅ JXL transcoding successful: -{:.1}%", reduction)
     } else {
-        format!("✅ JXL lossless: +{:.1}%", -reduction)
+        format!("✅ JXL transcoding successful: +{:.1}%", -reduction)
     };
 
     Ok(ConversionOutput {
