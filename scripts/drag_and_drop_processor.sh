@@ -120,6 +120,9 @@ _handle_sigint() {
 
     # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
     _CTRLC_CONFIRM_ACTIVE=true
+    # Block further Ctrl+C signals during the confirmation window so a second
+    # ^C cannot interrupt the read or produce stray ^C^? characters on screen.
+    trap '' INT
     local elapsed_str
     elapsed_str=$(_fmt_elapsed "$elapsed")
     printf '\n' > /dev/tty
@@ -141,6 +144,8 @@ _handle_sigint() {
 
     printf "${GREEN}▶  Resuming...${RESET}\n" > /dev/tty
     _CTRLC_CONFIRM_ACTIVE=false
+    # Restore the Ctrl+C handler after the confirmation window.
+    trap '_handle_sigint' INT
 }
 
 trap '_handle_sigint' INT
@@ -441,14 +446,20 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Spinner runs in terminal title bar — no collision with binary output.
-    local output
+    # Run the tool streaming directly to the terminal (no $() capture).
+    # Capturing into $() causes the TTY title-bar escape sequence (thousands of
+    # spaces from _tty_title) to leak into the captured string, which is then
+    # dumped back to the terminal all at once at subshell exit — causing the
+    # periodic "clear" / macOS Terminal notification badge.
+    local tmp_out
+    tmp_out=$(mktemp)
     if [[ -n "$LOG_FILE" ]]; then
-        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
     else
-        output=$("$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
     fi
-    parse_tool_stats "$output" "img"
+    parse_tool_stats "$(cat "$tmp_out")" "img"
+    rm -f "$tmp_out"
     echo ""
 }
 
@@ -465,13 +476,15 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    local output
+    local tmp_out
+    tmp_out=$(mktemp)
     if [[ -n "$LOG_FILE" ]]; then
-        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE")
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
     else
-        output=$("$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee /dev/stderr)
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
     fi
-    parse_tool_stats "$output" "vid"
+    parse_tool_stats "$(cat "$tmp_out")" "vid"
+    rm -f "$tmp_out"
     echo ""
 }
 

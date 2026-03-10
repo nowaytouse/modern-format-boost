@@ -7,9 +7,28 @@ All notable changes to this project will be documented in this file.
 ## [0.10.19] - 2026-03-10
 
 ### Fixed
+- **Periodic clear-screen / terminal notification badges from drag-and-drop script**: The script's `process_images()` and `process_videos()` functions used `output=$( cmd 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE" )` to capture tool output. The `tee /dev/stderr` inside `$()` with `2>&1` caused the TTY title-bar escape sequence (thousands of spaces from `_tty_title()`) to leak into the captured string, which was then dumped to the terminal all at once when the subshell exited — triggering macOS Terminal notification badges
+  - **Root cause**: Command substitution `$()` buffers all output, and `tee /dev/stderr` inside it with `2>&1` creates a feedback loop where the title-bar escape sequence (padding spaces) leaks into stdout, gets captured, then dumped back to the terminal at subshell exit
+  - **Fix**: Removed `$()` capture entirely. Tools now run streaming directly to the terminal via `tee`, and stats are parsed from a temp file instead of the captured string
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
+
+- **Double Ctrl+C during confirmation prompt**: When the Ctrl+C confirmation guard was active (after 4.5 min of processing), pressing Ctrl+C a second time during the 8-second `read` timeout would interrupt the `read` builtin and produce stray `^C^?` characters on screen, then fall through to the "Resuming..." path instead of properly ignoring the second signal
+  - **Root cause**: The `_handle_sigint` handler checked `_CTRLC_CONFIRM_ACTIVE` and returned early, but the second SIGINT still interrupted the `read -r -t 8` builtin, causing it to return non-zero and skip the confirmation logic
+  - **Fix**: Temporarily block SIGINT during the confirmation window with `trap '' INT`, then restore the handler with `trap '_handle_sigint' INT` after the window closes. This prevents the second Ctrl+C from interrupting `read` or producing stray characters
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
+
 - **Milestone status lines causing terminal notification badges**: The `📊 XMP merge / Images OK` milestone lines had a leading `\n` (blank line) before them to stand out visually, but this blank line was written to stderr — triggering macOS Terminal notification badges whenever the window was in the background
   - **Root cause**: `fmt_stats_line()` produced `"\n  📊 ..."` — the blank line written to stderr is enough to cause macOS Terminal's "new activity" badge even though it contains no visible characters
   - **Fix**: Removed the leading `\n` from `fmt_stats_line()`. Milestone lines now appear flush on their own line without a preceding blank line
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
+- **Emoji display issues in terminal output**: Fixed corrupted emoji characters and inconsistent emoji positioning
+  - **Root cause**: Broken Unicode character in "Ultimate Explore" messages and ✅ emoji placed at end of success messages instead of beginning
+  - **Fix**: Replaced corrupted character with 🔍 magnifying glass emoji and moved ✅ emoji to beginning of success messages for visual consistency
+  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`, `vid_hevc/src/main.rs`, `vid_av1/src/main.rs`
+
+### Changed
+- **Milestone status lines now append to per-file log lines**: Instead of appearing on a separate line, milestone status lines (📊 XMP merge: 100 OK Images: 102 OK) now append to the end of the previous per-file log line using ANSI escape codes (`\x1b[1A` move up, `\x1b[120G` move to column 120). This reduces visual clutter and keeps the log more compact
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ## [0.10.18] - 2026-03-10
