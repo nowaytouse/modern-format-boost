@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.19] - 2026-03-10
+
+### Fixed
+- **Milestone status lines causing terminal notification badges**: The `📊 XMP merge / Images OK` milestone lines had a leading `\n` (blank line) before them to stand out visually, but this blank line was written to stderr — triggering macOS Terminal notification badges whenever the window was in the background
+  - **Root cause**: `fmt_stats_line()` produced `"\n  📊 ..."` — the blank line written to stderr is enough to cause macOS Terminal's "new activity" badge even though it contains no visible characters
+  - **Fix**: Removed the leading `\n` from `fmt_stats_line()`. Milestone lines now appear flush on their own line without a preceding blank line
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
 ## [0.10.18] - 2026-03-10
 
 ### Fixed
