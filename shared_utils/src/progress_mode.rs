@@ -127,11 +127,6 @@ fn pad_tag(tag: &str) -> String {
         format!("{}{}", tag, " ".repeat(LOG_TAG_WIDTH - tag.len()))
     }
 }
-/// Format a statistics status line (no leading blank line to avoid terminal notification badges).
-fn fmt_stats_line(msg: &str) -> String {
-    format!("  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
-}
-
 /// Format a statistics summary line (plain, no leading blank line) for
 /// the final summary emitted after all processing is done.
 fn fmt_stats_line_final(msg: &str) -> String {
@@ -529,8 +524,11 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    let line = fmt_stats_line(&msg);
-    emit_stderr(&line);
+    // Append milestone to the previous line instead of writing on a new line.
+    // Use ANSI escape: move cursor up 1 line, move to column 120, write milestone.
+    use std::io::Write;
+    let milestone = format!("    {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg);
+    let _ = write!(std::io::stderr(), "\x1b[1A\x1b[120G{}\n", milestone);
 }
 
 fn format_xmp_jxl_images_line(
