@@ -151,16 +151,12 @@ _handle_sigint() {
     trap '_handle_sigint' INT
 }
 
-trap '_handle_sigint' INT
-
 # ── Cleanup on exit ─────────────────────────────────────────────────
 _cleanup_on_exit() {
     stop_elapsed_spinner
     ELAPSED_START=0
     show_cursor
 }
-trap '_cleanup_on_exit' EXIT
-
 
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE=""
@@ -629,18 +625,34 @@ _main() {
     show_summary
 }
 
+main() {
+    init_log
+    export LOG_FILE
+    export VERBOSE_LOG_FILE
+    
+    # Create a temporary script with signal handling
+    local temp_script=$(mktemp)
+    cat > "$temp_script" << 'EOF'
+#!/bin/bash
+# Set up signal handling
+trap '_handle_sigint' INT
+trap '_cleanup_on_exit' EXIT
+
+# Run the main worker
+exec "$0" --internal-worker "$@"
+EOF
+    
+    chmod +x "$temp_script"
+    "$temp_script" "$@" 2>&1 | tee "$LOG_FILE"
+    local exit_code=${PIPESTATUS[0]}
+    rm -f "$temp_script"
+    exit "$exit_code"
+}
+
 if [[ "$1" == "--internal-worker" ]]; then
     shift
     _main "$@"
     exit $?
 fi
-
-main() {
-    init_log
-    export LOG_FILE
-    export VERBOSE_LOG_FILE
-    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | tee "$LOG_FILE"
-    exit "${PIPESTATUS[0]:-$?}"
-}
 
 main "$@"
