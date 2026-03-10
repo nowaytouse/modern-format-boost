@@ -373,7 +373,7 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     };
 
     crate::progress_mode::emit_stderr(&format!(
-        "   🎞️  GIF [{}] {} → {}",
+        "🎞️  GIF [{}] {} → {}",
         meta.file_name.as_deref().unwrap_or("unknown"),
         confidence,
         if keep { "KEEP GIF" } else { "CONVERT→VIDEO" }
