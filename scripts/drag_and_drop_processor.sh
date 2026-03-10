@@ -405,9 +405,9 @@ process_images() {
     local tmp_out
     tmp_out=$(mktemp)
     if [[ -n "$LOG_FILE" ]]; then
-        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out") | (trap '' INT; tee -a "$LOG_FILE")
     else
-        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out")
     fi
     local rust_exit="${PIPESTATUS[0]}"
     if [[ $rust_exit -eq 130 ]]; then
@@ -435,9 +435,9 @@ process_videos() {
     local tmp_out
     tmp_out=$(mktemp)
     if [[ -n "$LOG_FILE" ]]; then
-        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out") | (trap '' INT; tee -a "$LOG_FILE")
     else
-        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out")
     fi
     local rust_exit="${PIPESTATUS[0]}"
     if [[ $rust_exit -eq 130 ]]; then
@@ -586,6 +586,7 @@ if [[ "$1" == "--internal-worker" ]]; then
 fi
 
 main() {
+    export FORCE_COLOR=1
     init_log
     export LOG_FILE
     export VERBOSE_LOG_FILE
