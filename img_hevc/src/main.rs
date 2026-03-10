@@ -795,6 +795,8 @@ fn auto_convert_single_file(
                         "   🎞️  GIF [{}] probe failed → KEEP GIF",
                         input.file_name().unwrap_or_default().to_string_lossy()
                     ));
+                    // Update milestone display for persistent status (use existing function)
+                    shared_utils::progress_mode::image_processed_success();
                     true
                 }
             } else {
@@ -803,6 +805,8 @@ fn auto_convert_single_file(
                     "   🎞️  GIF [{}] probe unavailable → KEEP GIF",
                     input.file_name().unwrap_or_default().to_string_lossy()
                 ));
+                // Update milestone display for persistent status (use existing function)
+                shared_utils::progress_mode::image_processed_success();
                 true
             };
 
