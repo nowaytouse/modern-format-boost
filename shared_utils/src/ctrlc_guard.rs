@@ -137,24 +137,38 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
         let _ = out.flush();
     }
 
-    // Read from stdin with a 10-second timeout using a background thread + channel.
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-
-    let _reader = std::thread::Builder::new()
-        .name("ctrlc-stdin-reader".into())
-        .spawn(move || {
+    // Read from stdin with a 10-second timeout using libc::poll.
+    // This avoids spawning a blocking thread that would get permanently stuck waiting for input
+    // if the timeout expired, which previously broke subsequent Ctrl+C prompts.
+    let mut should_exit = false;
+    
+    #[cfg(unix)]
+    {
+        let mut pfd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // Wait up to 10,000 milliseconds for input
+        let res = unsafe { libc::poll(&mut pfd, 1, 10_000) };
+        if res > 0 && (pfd.revents & libc::POLLIN) != 0 {
             let mut line = String::new();
             if io::stdin().read_line(&mut line).is_ok() {
-                let _ = tx.send(line.trim().to_ascii_lowercase());
+                let answer = line.trim().to_ascii_lowercase();
+                should_exit = matches!(answer.as_str(), "y" | "yes");
             }
-            // If the channel send fails, the receiver already timed out — that's fine.
-        });
-
-    let should_exit = match rx.recv_timeout(Duration::from_secs(10)) {
-        Ok(answer) => matches!(answer.as_str(), "y" | "yes"),
-        // Timeout or stdin closed → resume.
-        Err(_) => false,
-    };
+        }
+    }
+    
+    #[cfg(not(unix))]
+    {
+        // Fallback for non-unix platforms
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line).is_ok() {
+            let answer = line.trim().to_ascii_lowercase();
+            should_exit = matches!(answer.as_str(), "y" | "yes");
+        }
+    }
 
     {
         let mut out = io::stderr().lock();

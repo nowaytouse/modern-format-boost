@@ -576,8 +576,9 @@ main() {
     init_log
     export LOG_FILE
     export VERBOSE_LOG_FILE
-    export FORCE_COLOR=1   # Force ANSI color output from Rust binaries even though they stream through tee
-    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | tee "$LOG_FILE"
+    # Wrap tee to ignore SIGINT so it doesn't break the pipe when the user presses Ctrl+C
+    # while the Rust Universal Heartbeat is prompting for confirmation.
+    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | (trap '' INT; tee "$LOG_FILE")
     # Ensure Bash exits correctly if Rust triggers exit 130
     local exit_status="${PIPESTATUS[0]:-$?}"
     if [[ $exit_status -eq 130 ]]; then

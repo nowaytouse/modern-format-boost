@@ -795,20 +795,14 @@ fn auto_convert_single_file(
                         "🎞️  GIF [{}] probe failed → KEEP GIF",
                         input.file_name().unwrap_or_default().to_string_lossy()
                     ));
-
-                    // Update milestone display without increasing count
-                    shared_utils::progress_mode::update_milestone_display();
                     true
                 }
             } else {
                 // ffprobe failed → keep as GIF
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "🎞️  GIF [{}] probe unavailable → KEEP GIF",
+                    "🎞️  GIF [{}] probe failed → KEEP GIF",
                     input.file_name().unwrap_or_default().to_string_lossy()
                 ));
-
-                // Update milestone display without increasing count
-                shared_utils::progress_mode::update_milestone_display();
                 true
             };
 
