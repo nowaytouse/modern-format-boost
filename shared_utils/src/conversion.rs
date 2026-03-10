@@ -241,10 +241,23 @@ impl ConversionResult {
         // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
         // Format: "<FormatName> transcoding: -14.5%"  or
         //         "<FormatName> transcoding (extra): -14.5%"
-        let message = match extra_info {
+        let mut message = match extra_info {
             Some(info) => format!("✅ {} transcoding ({}): {}", format_name, info, size_tag),
             None       => format!("✅ {} transcoding: {}",          format_name, size_tag),
         };
+        
+        let stats_string = crate::progress_mode::get_current_stats_string();
+        
+        // Pad message length so stats string aligns at column 72
+        // We calculate terminal-visible width (very rough approximation for emojis and ascii)
+        let visible_len = message.chars().count();
+        let target_len = 65;
+        if visible_len < target_len {
+            message.push_str(&" ".repeat(target_len - visible_len));
+        } else {
+            message.push(' ');
+        }
+        message.push_str(&stats_string);
 
         Self {
             success: true,

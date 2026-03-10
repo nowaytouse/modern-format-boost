@@ -529,12 +529,12 @@ pub fn image_processed_failure() {
 /// Update milestone display without changing any counters.
 /// Useful for showing status after skip operations.
 pub fn update_milestone_display() {
-    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
-    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
-    emit_combined_status_line(img_ok, img_fail);
+    // Deprecated: We now embed stats directly into the log line instead of using escape sequence milestones.
 }
 
-fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
+pub fn get_current_stats_string() -> String {
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
     let xmp_ok = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
     let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     let xmp_done = false;
@@ -542,15 +542,13 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+    
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    // Append milestone to the previous line with compact formatting.
-    // Move cursor up 1 line, then position further right to avoid covering important info.
-    // Use a larger offset (80 chars) to ensure milestone doesn't cover size reduction info.
-    use std::io::Write;
-    // Format: move up, save cursor, move to end, move back 80 chars, write milestone
-    // This ensures 📊 appears after the size reduction and other important info
-    let milestone = format!("  │ {} {}", STATS_PREFIX.trim(), msg);
-    let _ = writeln!(std::io::stderr(), "\x1b[1A\x1b[999C\x1b[80D{}", milestone);
+    format!("│ {} {}", STATS_PREFIX.trim(), msg)
+}
+
+fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
+    // Deprecated: UI now relies on inline stats via get_current_stats_string() in ConversionResult
 }
 
 fn format_xmp_jxl_images_line(
