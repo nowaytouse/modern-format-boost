@@ -234,22 +234,22 @@ impl ConversionResult {
         let message = if reduction >= 0.0 {
             match extra_info {
                 Some(info) => format!(
-                    "{} ({}): size reduced \x1b[1;32m{:.1}%\x1b[0m",
+                    "{} transcoding ({}): -{:.1}%",
                     format_name, info, reduction_pct
                 ),
                 None => format!(
-                    "{} conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m",
+                    "{} transcoding: -{:.1}%",
                     format_name, reduction_pct
                 ),
             }
         } else {
             match extra_info {
                 Some(info) => format!(
-                    "{} ({}): size increased \x1b[1;33m{:.1}%\x1b[0m",
+                    "{} transcoding ({}): +{:.1}%",
                     format_name, info, -reduction_pct
                 ),
                 None => format!(
-                    "{} conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
+                    "{} transcoding: +{:.1}%",
                     format_name, -reduction_pct
                 ),
             }
