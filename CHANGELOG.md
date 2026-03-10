@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.20] - 2026-03-10
+
+### Fixed
+- **Milestone status lines not showing persistently**: Status lines were only shown at intervals (every 5/20/100 merges) instead of on every successful merge
+  - **Root cause**: Used `xmp_milestone_interval()` function to control display frequency, causing gaps in visibility during processing
+  - **Fix**: Removed interval logic entirely - now emits status line on EVERY XMP merge for persistent display
+  - **Impact**: Users can now see continuous progress updates with current statistics on every merge
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
+- **Ctrl+C guard completely ineffective in Rust processes**: The shell-level Ctrl+C confirmation was bypassed because Rust processes received SIGINT directly and exited immediately
+  - **Root cause**: When user presses Ctrl+C, both shell script and Rust process receive SIGINT simultaneously. Even though shell showed confirmation prompt, Rust process already exited
+  - **Fix**: Implemented native Rust Ctrl+C handler using `ctrlc` crate with 4.5-minute threshold
+    - Before 4.5 min: Ctrl+C exits immediately (unchanged behavior)
+    - After 4.5 min: Rust process shows confirmation prompt and waits for user input
+    - Press 'y': clean exit with proper cleanup
+    - Press 'n' or timeout (8s): resume processing
+  - **Impact**: True protection against accidental termination of long-running batch jobs
+  - **Files modified**: `Cargo.toml`, `shared_utils/Cargo.toml`, `shared_utils/src/ctrlc_guard.rs` (new), `shared_utils/src/lib.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
+### Removed
+- **Unused milestone interval functions**: Removed `xmp_milestone_interval()` and `image_milestone_interval()` functions since milestones are now shown on every merge
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
 ## [0.10.19] - 2026-03-10
 
 ### Fixed
