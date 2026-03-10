@@ -231,28 +231,19 @@ impl ConversionResult {
         };
         let reduction_pct = reduction * 100.0;
 
-        let message = if reduction >= 0.0 {
-            match extra_info {
-                Some(info) => format!(
-                    "{} transcoding ({}): -{:.1}%",
-                    format_name, info, reduction_pct
-                ),
-                None => format!(
-                    "{} transcoding: -{:.1}%",
-                    format_name, reduction_pct
-                ),
-            }
+        // Build size-change suffix: "-14.5%" (saved) or "+2.1%" (grew)
+        let size_tag = if reduction >= 0.0 {
+            format!("-{:.1}%", reduction_pct)
         } else {
-            match extra_info {
-                Some(info) => format!(
-                    "{} transcoding ({}): +{:.1}%",
-                    format_name, info, -reduction_pct
-                ),
-                None => format!(
-                    "{} transcoding: +{:.1}%",
-                    format_name, -reduction_pct
-                ),
-            }
+            format!("+{:.1}%", -reduction_pct)
+        };
+
+        // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
+        // Format: "<FormatName> transcoding: -14.5%"  or
+        //         "<FormatName> transcoding (extra): -14.5%"
+        let message = match extra_info {
+            Some(info) => format!("✅ {} transcoding ({}): {}", format_name, info, size_tag),
+            None       => format!("✅ {} transcoding: {}",          format_name, size_tag),
         };
 
         Self {
@@ -1088,7 +1079,8 @@ mod tests {
         assert_eq!(result.input_size, 1000);
         assert_eq!(result.output_size, Some(500));
         assert!((result.size_reduction.unwrap() - 50.0).abs() < 0.1);
-        assert!(result.message.contains("reduced"));
+        assert!(result.message.contains("transcoding"), "expected 'transcoding' in: {}", result.message);
+        assert!(result.message.contains("-50.0%"), "expected '-50.0%' in: {}", result.message);
     }
 
     #[test]

@@ -127,22 +127,34 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
     }
 }
 
-/// Strip ANSI escape sequences from a string (for stderr when not a TTY so captured output is plain text).
+/// Strip ANSI escape sequences from a string.
+///
+/// Handles all CSI sequences (`ESC [ <params> <final>` where final is `0x40–0x7E`),
+/// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
+/// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
 pub fn strip_ansi_str(s: &str) -> String {
-    let mut result = String::new();
-    let mut in_escape = false;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' || c.is_ascii_alphabetic() {
-                in_escape = false;
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // Consume ESC [ <params> <final_byte>, where final is 0x40..=0x7E
+            i += 2;
+            while i < bytes.len() {
+                let b = bytes[i];
+                i += 1;
+                if (0x40..=0x7e).contains(&b) {
+                    break;
+                }
             }
+        } else if let Some(ch) = s[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
         } else {
-            result.push(c);
+            i += 1;
         }
     }
-    result
+    out
 }
 
 /// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text, not raw codes.

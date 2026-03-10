@@ -104,7 +104,7 @@ fn finalize_fallback_jxl(
 ///
 /// # Example
 /// ```no_run
-/// use img_hevc::{convert_to_jxl, ConvertOptions};
+/// use img_hevc::lossless_converter::{convert_to_jxl, ConvertOptions};
 /// use std::path::Path;
 ///
 /// let input = Path::new("input.png");
