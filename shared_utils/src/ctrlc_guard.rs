@@ -96,11 +96,13 @@ pub fn init() {
             CONFIRMATION_ACTIVE.store(false, Ordering::Relaxed);
         }) {
             Ok(_) => {
-                // Handler set successfully
+                // Handler set successfully - use stderr to ensure visibility
                 eprintln!("🛡️  Ctrl+C guard initialized (4.5min threshold)");
             }
             Err(e) => {
+                // Use stderr to ensure the error message is visible even in pipes
                 eprintln!("⚠️  Failed to set Ctrl+C handler: {}", e);
+                eprintln!("   💡 Ctrl+C guard will not be available");
                 // Continue without guard - better than crashing
             }
         }
