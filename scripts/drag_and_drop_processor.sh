@@ -77,6 +77,9 @@ start_elapsed_spinner() {
     ) 2>/dev/null &
     SPINNER_PID=$!
     disown "$SPINNER_PID" 2>/dev/null || true
+    
+    # Ensure spinner is killed when bash exits (including on Ctrl+C)
+    trap 'stop_elapsed_spinner' EXIT
 }
 stop_elapsed_spinner() {
     if [[ -n "$SPINNER_PID" ]]; then
@@ -406,6 +409,11 @@ process_images() {
     else
         "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
     fi
+    local rust_exit="${PIPESTATUS[0]}"
+    if [[ $rust_exit -eq 130 ]]; then
+        rm -f "$tmp_out"
+        exit 130
+    fi
     parse_tool_stats "$(cat "$tmp_out")" "img"
     rm -f "$tmp_out"
     echo ""
@@ -430,6 +438,11 @@ process_videos() {
         "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
     else
         "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+    fi
+    local rust_exit="${PIPESTATUS[0]}"
+    if [[ $rust_exit -eq 130 ]]; then
+        rm -f "$tmp_out"
+        exit 130
     fi
     parse_tool_stats "$(cat "$tmp_out")" "vid"
     rm -f "$tmp_out"
