@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.17] - 2026-03-10
+
+### Fixed
+- **Memory limit exceeded for very large JPEGs (e.g. 99MB `mmexport1732810380466.jpeg`)**: The `image` crate's default memory allocation ceiling (~512MB) was too low to decode large JPEGs from high-resolution cameras. A 99MB JPEG can expand to ~800MB+ of raw pixel data when fully decoded
+  - **Root cause**: `image::open()` uses conservative default `Limits::default()` which enforces a ~512MB `max_alloc` ceiling. The raw decoded pixels of a 100MP+ JPEG easily exceed this
+  - **Fix**: Replaced all bare `image::open()` / `ImageReader::open()` calls with a shared `open_image_with_limits()` helper that raises `max_alloc` to 2GB. This covers 100MP+ images at full color depth (e.g. 300MP × 4 bytes = ~1.2GB max) while still rejecting pathologically large malicious inputs above 2GB
+  - **Memory safety**: The 2GB limit is a ceiling, not a reservation. Normal images (1–20MP) still use only the memory their pixels actually require (typically 4–80MB). The limit only matters for edge-case 100MP+ images, which are rare and legitimate
+  - **Files modified**: `shared_utils/src/image_detection.rs` (new `pub open_image_with_limits()`), `shared_utils/src/image_analyzer.rs`, `img_hevc/src/main.rs`
+
+### Added
+- **Ctrl+C confirmation guard for long-running jobs**: Pressing Ctrl+C after 4.5 minutes of processing now shows a confirmation prompt before exiting, preventing accidental termination of large batch jobs
+  - Before 4.5 min: Ctrl+C exits immediately (unchanged behavior)
+  - After 4.5 min: Shows `Confirm exit? [y/N] (auto-resume in 8s)`
+    - Press `y`/`Y`: clean exit (stops spinner, restores cursor, shows elapsed time)
+    - Press `n`/`N`, any other key, or no input within 8 seconds: resumes processing
+  - Reads confirmation from `/dev/tty` so it works even when stdin is piped
+  - **Files modified**: `scripts/drag_and_drop_processor.sh`
+
 ## [0.10.16] - 2026-03-10
 
 ### Fixed

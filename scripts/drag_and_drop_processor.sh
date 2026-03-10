@@ -96,6 +96,56 @@ stop_elapsed_spinner() {
     [[ -c /dev/tty ]] && printf '\033]0;\007' > /dev/tty 2>/dev/null
 }
 
+# ── Ctrl+C confirmation guard ─────────────────────────────────────────────────
+# If the user presses Ctrl+C after 4.5 min of processing, ask for confirmation.
+# No input within 8 seconds or pressing 'n' resumes processing.
+# Pressing 'y' performs a clean exit (stops spinner, restores cursor).
+_CTRLC_CONFIRM_ACTIVE=false
+
+_handle_sigint() {
+    # If already in the confirmation prompt, ignore re-entrant signals
+    [[ "$_CTRLC_CONFIRM_ACTIVE" == true ]] && return
+
+    local elapsed=0
+    [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
+
+    # Under 4.5 minutes: exit immediately without confirmation
+    if [[ "$elapsed" -lt 270 ]]; then
+        echo ""
+        show_cursor
+        stop_elapsed_spinner
+        echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
+        exit 130
+    fi
+
+    # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
+    _CTRLC_CONFIRM_ACTIVE=true
+    local elapsed_str
+    elapsed_str=$(_fmt_elapsed "$elapsed")
+    printf '\n' > /dev/tty
+    printf "${YELLOW}⚠️  Ctrl+C detected after %s of processing.${RESET}\n" "$elapsed_str" > /dev/tty
+    printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
+
+    local answer=""
+    if read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null; then
+        printf '\n' > /dev/tty
+        if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+            show_cursor
+            stop_elapsed_spinner
+            echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
+            exit 130
+        fi
+    else
+        printf '\n' > /dev/tty
+    fi
+
+    printf "${GREEN}▶  Resuming...${RESET}\n" > /dev/tty
+    _CTRLC_CONFIRM_ACTIVE=false
+}
+
+trap '_handle_sigint' INT
+
+
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE=""
 VERBOSE_LOG_FILE=""
