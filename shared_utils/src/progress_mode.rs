@@ -354,16 +354,20 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 
-/// Returns true when stderr is connected to a real terminal (TTY).
+/// Returns true when stderr is connected to a real terminal (TTY) OR if FORCE_COLOR is set.
 /// Cached after the first call — TTY state does not change during a run.
 #[inline]
 fn stderr_is_tty() -> bool {
     use std::sync::OnceLock;
     static IS_TTY: OnceLock<bool> = OnceLock::new();
     *IS_TTY.get_or_init(|| {
-        // Use the `console` crate's detection which correctly handles
-        // NO_COLOR, TERM=dumb, CI env vars, and is_terminal() semantics.
-        console::Term::stderr().is_term()
+        if std::env::var("FORCE_COLOR").is_ok() {
+            true
+        } else {
+            // Use the `console` crate's detection which correctly handles
+            // NO_COLOR, TERM=dumb, CI env vars, and is_terminal() semantics.
+            console::Term::stderr().is_term()
+        }
     })
 }
 
