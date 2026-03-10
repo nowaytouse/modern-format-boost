@@ -7,28 +7,23 @@ All notable changes to this project will be documented in this file.
 ## [0.10.19] - 2026-03-10
 
 ### Fixed
-- **Periodic clear-screen / terminal notification badges from drag-and-drop script**: The script's `process_images()` and `process_videos()` functions used `output=$( cmd 2>&1 | tee /dev/stderr | tee -a "$LOG_FILE" )` to capture tool output. The `tee /dev/stderr` inside `$()` with `2>&1` caused the TTY title-bar escape sequence (thousands of spaces from `_tty_title()`) to leak into the captured string, which was then dumped to the terminal all at once when the subshell exited — triggering macOS Terminal notification badges
-  - **Root cause**: Command substitution `$()` buffers all output, and `tee /dev/stderr` inside it with `2>&1` creates a feedback loop where the title-bar escape sequence (padding spaces) leaks into stdout, gets captured, then dumped back to the terminal at subshell exit
-  - **Fix**: Removed `$()` capture entirely. Tools now run streaming directly to the terminal via `tee`, and stats are parsed from a temp file instead of the captured string
+- **TTY title bar padding causing clear-screen**: The `_tty_title()` function in the drag-and-drop script had thousands of spaces as padding to overwrite previous title content. This padding was leaking into the terminal output stream, causing periodic clear-screen effects and macOS Terminal notification badges
+  - **Root cause**: The massive padding string (thousands of spaces) in the OSC escape sequence `\033]0;⏱ %s <spaces>\007` was somehow leaking into stdout/stderr, getting captured by `tee`, and dumped to the terminal
+  - **Fix**: Removed all padding from `_tty_title()`. Modern terminals automatically clear the rest of the title bar, so padding is unnecessary
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
-- **Double Ctrl+C during confirmation prompt**: When the Ctrl+C confirmation guard was active (after 4.5 min of processing), pressing Ctrl+C a second time during the 8-second `read` timeout would interrupt the `read` builtin and produce stray `^C^?` characters on screen, then fall through to the "Resuming..." path instead of properly ignoring the second signal
-  - **Root cause**: The `_handle_sigint` handler checked `_CTRLC_CONFIRM_ACTIVE` and returned early, but the second SIGINT still interrupted the `read -r -t 8` builtin, causing it to return non-zero and skip the confirmation logic
-  - **Fix**: Temporarily block SIGINT during the confirmation window with `trap '' INT`, then restore the handler with `trap '_handle_sigint' INT` after the window closes. This prevents the second Ctrl+C from interrupting `read` or producing stray characters
+- **Ctrl+C confirmation auto-resume race condition**: After the 8-second timeout in the Ctrl+C confirmation window, the script would print "Resuming..." but then immediately exit with "Interrupted by user" instead of actually resuming
+  - **Root cause**: Race condition where restoring `trap '_handle_sigint' INT` immediately after the timeout could trigger the handler again if a SIGINT arrived during the trap restoration
+  - **Fix**: Added 0.1s delay before restoring the trap, and added extra newline after "Resuming..." for visual separation
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
-- **Milestone status lines causing terminal notification badges**: The `📊 XMP merge / Images OK` milestone lines had a leading `\n` (blank line) before them to stand out visually, but this blank line was written to stderr — triggering macOS Terminal notification badges whenever the window was in the background
-  - **Root cause**: `fmt_stats_line()` produced `"\n  📊 ..."` — the blank line written to stderr is enough to cause macOS Terminal's "new activity" badge even though it contains no visible characters
-  - **Fix**: Removed the leading `\n` from `fmt_stats_line()`. Milestone lines now appear flush on their own line without a preceding blank line
-  - **Files modified**: `shared_utils/src/progress_mode.rs`
-
-- **Emoji display issues in terminal output**: Fixed corrupted emoji characters and inconsistent emoji positioning
-  - **Root cause**: Broken Unicode character in "Ultimate Explore" messages and ✅ emoji placed at end of success messages instead of beginning
-  - **Fix**: Replaced corrupted character with 🔍 magnifying glass emoji and moved ✅ emoji to beginning of success messages for visual consistency
-  - **Files modified**: `img_hevc/src/main.rs`, `img_av1/src/main.rs`, `vid_hevc/src/main.rs`, `vid_av1/src/main.rs`
-
-### Changed
-- **Milestone status lines now append to per-file log lines**: Instead of appearing on a separate line, milestone status lines (📊 XMP merge: 100 OK Images: 102 OK) now append to the end of the previous per-file log line using ANSI escape codes (`\x1b[1A` move up, `\x1b[120G` move to column 120). This reduces visual clutter and keeps the log more compact
+- **Milestone status lines too verbose and not narrow-screen friendly**: The inline milestone format was too long with excessive spacing: `                       📊                          XMP merge: 80 OK   Images: 81 OK`
+  - **Root cause**: Used column 120 positioning and included 25 spaces of padding from `STATS_PREFIX_PAD`
+  - **Fix**: Redesigned milestone format to be compact and beautiful:
+    - Use `│` separator instead of excessive spacing
+    - Shortened text: "XMP: 80✓  Img: 81✓" instead of "XMP merge: 80 OK   Images: 81 OK"
+    - Use `\x1b[999C` (move to end of line) instead of fixed column 120
+    - Format: `  │ 📊 XMP: 80✓  Img: 81✓` (compact, narrow-screen friendly)
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ## [0.10.18] - 2026-03-10

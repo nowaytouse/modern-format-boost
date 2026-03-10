@@ -524,11 +524,12 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    // Append milestone to the previous line instead of writing on a new line.
-    // Use ANSI escape: move cursor up 1 line, move to column 120, write milestone.
+    // Append milestone to the previous line with compact formatting.
+    // Use ANSI escape: move cursor up 1 line, move to end of line, write milestone.
+    // Format: "  │ 📊 XMP: 100 OK  Img: 102 OK" (compact, narrow-screen friendly)
     use std::io::Write;
-    let milestone = format!("    {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg);
-    let _ = write!(std::io::stderr(), "\x1b[1A\x1b[120G{}\n", milestone);
+    let milestone = format!("  │ {} {}", STATS_PREFIX.trim(), msg);
+    let _ = write!(std::io::stderr(), "\x1b[1A\x1b[999C{}\n", milestone);
 }
 
 fn format_xmp_jxl_images_line(
@@ -543,30 +544,30 @@ fn format_xmp_jxl_images_line(
 ) -> String {
     let xmp_part = if xmp_done {
         if xmp_failed > 0 {
-            format!("XMP merge done: {} OK, {} failed", xmp_ok, xmp_failed)
+            format!("XMP: {}✓ {}✗", xmp_ok, xmp_failed)
         } else {
-            format!("XMP merge done: {} OK", xmp_ok)
+            format!("XMP: {}✓", xmp_ok)
         }
     } else {
-        format!("XMP merge: {} OK", xmp_ok)
+        format!("XMP: {}✓", xmp_ok)
     };
     let images_ok = img_ok + jxl_ok;
     let mut parts = vec![xmp_part];
     if images_ok > 0 || img_fail > 0 {
         let img_part = if img_fail > 0 {
-            format!("Images: {} OK, {} failed", images_ok, img_fail)
+            format!("Img: {}✓ {}✗", images_ok, img_fail)
         } else {
-            format!("Images: {} OK", images_ok)
+            format!("Img: {}✓", images_ok)
         };
         parts.push(img_part);
     }
     if preprocess_ok > 0 {
-        parts.push(format!("Pre-processing: {} done", preprocess_ok));
+        parts.push(format!("Pre: {}✓", preprocess_ok));
     }
     if fallback_ok > 0 {
-        parts.push(format!("Fallback: {} done", fallback_ok));
+        parts.push(format!("Fallback: {}✓", fallback_ok));
     }
-    parts.join("   ")
+    parts.join("  ")
 }
 
 /// Call when an XMP sidecar is found and a merge is about to be attempted.
