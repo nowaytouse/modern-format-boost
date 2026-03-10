@@ -792,21 +792,17 @@ fn auto_convert_single_file(
                 } else {
                     // Cannot build GifMeta (no dimensions) → keep as GIF
                     shared_utils::progress_mode::emit_stderr(&format!(
-                        "🎞️  GIF [{}] probe failed → KEEP GIF",
-                        input.file_name().unwrap_or_default().to_string_lossy()
+                        "   🎞️  GIF probe failed (no dimensions), keeping as GIF: {}",
+                        input.display()
                     ));
-                    // Update milestone display without increasing count
-                    shared_utils::progress_mode::update_milestone_display();
                     true
                 }
             } else {
                 // ffprobe failed → keep as GIF
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "🎞️  GIF [{}] probe unavailable → KEEP GIF",
-                    input.file_name().unwrap_or_default().to_string_lossy()
+                    "   🎞️  GIF probe unavailable, keeping as GIF: {}",
+                    input.display()
                 ));
-                // Update milestone display without increasing count
-                shared_utils::progress_mode::update_milestone_display();
                 true
             };
 

@@ -97,67 +97,62 @@ stop_elapsed_spinner() {
 }
 
 # ── Ctrl+C confirmation guard ─────────────────────────────────────────────────
-# DISABLED: Let Rust process handle Ctrl+C directly
 # If the user presses Ctrl+C after 4.5 min of processing, ask for confirmation.
 # No input within 8 seconds or pressing 'n' resumes processing.
 # Pressing 'y' performs a clean exit (stops spinner, restores cursor).
-# _CTRLC_CONFIRM_ACTIVE=false
+_CTRLC_CONFIRM_ACTIVE=false
 
-# _handle_sigint() {
-#     # If already in the confirmation prompt, ignore re-entrant signals
-#     [[ "$_CTRLC_CONFIRM_ACTIVE" == true ]] && return
-# 
-#     local elapsed=0
-#     [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
-# 
-#     # Under 4.5 minutes: exit immediately
-#     if [[ "$elapsed" -lt 270 ]]; then
-#         echo ""
-#         show_cursor
-#         stop_elapsed_spinner
-#         ELAPSED_START=0  # Reset timer state
-#         echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
-#         exit 130
-#     fi
-# 
-#     # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
-#     _CTRLC_CONFIRM_ACTIVE=true
-#     # Block further Ctrl+C signals during the confirmation window
-#     trap '' INT
-#     local elapsed_str
-#     elapsed_str=$(_fmt_elapsed "$elapsed")
-#     printf '\n' > /dev/tty
-#     printf "${YELLOW}⚠️  Ctrl+C detected after %s of processing.${RESET}\n" "$elapsed_str" > /dev/tty
-#     printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
-# 
-#     local answer=""
-#     local read_result=0
-#     read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
-# 
-#     # Check if user explicitly pressed 'y' or 'Y'
-#     if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
-#         printf '\n' > /dev/tty
-#         show_cursor
-#         stop_elapsed_spinner
-#         ELAPSED_START=0  # Reset timer state
-#         echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
-#         exit 130
-#     fi
-# 
-#     # Any other case (timeout, 'n', or any other key): resume
-#     printf '\n' > /dev/tty
-#     printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
-#     _CTRLC_CONFIRM_ACTIVE=false
-#     # Restore the Ctrl+C handler
-#     trap '_handle_sigint' INT
-# }
+_handle_sigint() {
+    # If already in the confirmation prompt, ignore re-entrant signals
+    [[ "$_CTRLC_CONFIRM_ACTIVE" == true ]] && return
 
-# ── Cleanup on exit ─────────────────────────────────────────────────
-_cleanup_on_exit() {
-    stop_elapsed_spinner
-    ELAPSED_START=0
-    show_cursor
+    local elapsed=0
+    [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
+
+    # Under 4.5 minutes: exit immediately without confirmation
+    if [[ "$elapsed" -lt 270 ]]; then
+        echo ""
+        show_cursor
+        stop_elapsed_spinner
+        echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
+        exit 130
+    fi
+
+    # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
+    _CTRLC_CONFIRM_ACTIVE=true
+    # Block further Ctrl+C signals during the confirmation window so a second
+    # ^C cannot interrupt the read or produce stray ^C^? characters on screen.
+    trap '' INT
+    local elapsed_str
+    elapsed_str=$(_fmt_elapsed "$elapsed")
+    printf '\n' > /dev/tty
+    printf "${YELLOW}⚠️  Ctrl+C detected after %s of processing.${RESET}\n" "$elapsed_str" > /dev/tty
+    printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
+
+    local answer=""
+    local read_result=0
+    read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
+
+    # read_result: 0 = got input, >0 = timeout or interrupted
+    # Check if user explicitly pressed 'y' or 'Y'
+    if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
+        printf '\n' > /dev/tty
+        show_cursor
+        stop_elapsed_spinner
+        echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
+        exit 130
+    fi
+
+    # Any other case (timeout, 'n', or any other key): resume
+    printf '\n' > /dev/tty
+    printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
+    _CTRLC_CONFIRM_ACTIVE=false
+    # Restore the Ctrl+C handler after the confirmation window.
+    trap '_handle_sigint' INT
 }
+
+trap '_handle_sigint' INT
+
 
 LOG_DIR="$PROJECT_ROOT/logs"
 LOG_FILE=""
@@ -454,14 +449,18 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Run the tool with pipe for output capture - Rust will handle its own signal processing
+    # Run the tool streaming directly to the terminal (no $() capture).
+    # Capturing into $() causes the TTY title-bar escape sequence (thousands of
+    # spaces from _tty_title) to leak into the captured string, which is then
+    # dumped back to the terminal all at once at subshell exit — causing the
+    # periodic "clear" / macOS Terminal notification badge.
     local tmp_out
     tmp_out=$(mktemp)
-    
-    # Rust process has its own Ctrl+C guard that works even in pipes
-    "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
-    
-    # Parse stats from captured output
+    if [[ -n "$LOG_FILE" ]]; then
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
+    else
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+    fi
     parse_tool_stats "$(cat "$tmp_out")" "img"
     rm -f "$tmp_out"
     echo ""
@@ -480,14 +479,13 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Run the tool with pipe for output capture - Rust will handle its own signal processing
     local tmp_out
     tmp_out=$(mktemp)
-    
-    # Rust process has its own Ctrl+C guard that works even in pipes
-    "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
-    
-    # Parse stats from captured output
+    if [[ -n "$LOG_FILE" ]]; then
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
+    else
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+    fi
     parse_tool_stats "$(cat "$tmp_out")" "vid"
     rm -f "$tmp_out"
     echo ""
@@ -623,22 +621,18 @@ _main() {
     show_summary
 }
 
-main() {
-    init_log
-    export LOG_FILE
-    export VERBOSE_LOG_FILE
-    
-    # Remove all shell signal handling - let Rust process handle Ctrl+C
-    # Run worker directly
-    "$BASH" "$0" --internal-worker "$@"
-    exit_code=$?
-    exit "$exit_code"
-}
-
 if [[ "$1" == "--internal-worker" ]]; then
     shift
     _main "$@"
     exit $?
 fi
+
+main() {
+    init_log
+    export LOG_FILE
+    export VERBOSE_LOG_FILE
+    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | tee "$LOG_FILE"
+    exit "${PIPESTATUS[0]:-$?}"
+}
 
 main "$@"
