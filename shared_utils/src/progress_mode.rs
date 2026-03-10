@@ -366,30 +366,6 @@ pub fn flush_log_file() {
     }
 }
 
-/// Print a milestone progress line every N events (avoids \r interleaving in concurrent output).
-fn xmp_milestone_interval(count: u64) -> bool {
-    if count <= 10 {
-        count.is_multiple_of(5)
-    } else if count <= 100 {
-        count.is_multiple_of(20)
-    } else {
-        count.is_multiple_of(100)
-    }
-}
-
-fn image_milestone_interval(total_processed: u64) -> bool {
-    if total_processed == 0 {
-        return false;
-    }
-    if total_processed <= 100 {
-        total_processed.is_multiple_of(50)
-    } else if total_processed <= 1000 {
-        total_processed.is_multiple_of(200)
-    } else {
-        total_processed.is_multiple_of(500)
-    }
-}
-
 static QUIET_MODE: AtomicBool = AtomicBool::new(false);
 
 pub fn enable_quiet_mode() {
@@ -494,25 +470,23 @@ pub fn jxl_success() {
     JXL_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call when an image conversion completes successfully (not skipped).
-/// May emit a combined status line (XMP + JXL + Images) at image milestones.
+/// Call on successful image conversion. Prints milestone line on EVERY success (persistent display).
+/// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
 pub fn image_processed_success() {
     let img_ok = IMAGE_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
-    if image_milestone_interval(img_ok + img_fail) {
-        emit_combined_status_line(img_ok, img_fail);
-    }
+    // Always emit status line on every image success for persistent display
+    emit_combined_status_line(img_ok, img_fail);
 }
 
-/// Call when an image conversion fails.
-/// May emit a combined status line (XMP + JXL + Images) at image milestones.
+/// Call when an image conversion fails. Prints milestone line on EVERY failure (persistent display).
+/// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
 pub fn image_processed_failure() {
     let _ = IMAGE_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
     let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
-    if image_milestone_interval(img_ok + img_fail) {
-        emit_combined_status_line(img_ok, img_fail);
-    }
+    // Always emit status line on every image failure for persistent display
+    emit_combined_status_line(img_ok, img_fail);
 }
 
 fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
@@ -578,16 +552,14 @@ pub fn xmp_merge_attempt() {
     XMP_ATTEMPT_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call on successful merge. Prints a milestone line every N merges (no \r interleaving).
+/// Call on successful merge. Prints milestone line on EVERY merge (persistent display).
 /// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
 pub fn xmp_merge_success() {
-    let success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    if xmp_milestone_interval(success) {
-        // Use the current XMP count (which includes this merge) for display
-        let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
-        let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
-        emit_combined_status_line(img_ok, img_fail);
-    }
+    let _success = XMP_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    // Always emit status line on every XMP merge for persistent display
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    emit_combined_status_line(img_ok, img_fail);
 }
 
 /// Format a statistics status line with the 📊 emoji prefix (for run log alignment).

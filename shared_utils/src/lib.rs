@@ -63,6 +63,8 @@ pub mod types;
 
 pub mod progress_mode;
 
+pub mod ctrlc_guard;
+
 pub mod unified_progress;
 pub use unified_progress::UnifiedProgressBar;
 

@@ -60,6 +60,9 @@ tempfile = { git = "https://github.com/Stebalien/tempfile", tag = "v3.14.0" }
 proptest = { git = "https://github.com/proptest-rs/proptest", tag = "v1.6.0" }
 flate2 = { git = "https://github.com/rust-lang/flate2-rs", tag = "1.0.35" }
 
+# Signal handling (crates.io)
+ctrlc = "3.4"
+
 shared_utils = { path = "shared_utils" }
 
 [profile.release]

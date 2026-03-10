@@ -17,6 +17,22 @@ All notable changes to this project will be documented in this file.
   - **Fix**: Capture the `read` exit code explicitly with `read ... || read_result=$?`, then check both the exit code AND the answer. Only exit if `read_result == 0` (got input) AND `answer == 'y'`. All other cases (timeout, 'n', any other key) resume processing
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
+- **Milestone status lines not showing persistently**: Status lines were only shown at intervals (every 5/20/100 merges) instead of on every successful merge
+  - **Root cause**: Used `xmp_milestone_interval()` function to control display frequency, causing gaps in visibility during processing
+  - **Fix**: Removed interval logic entirely - now emits status line on EVERY XMP merge for persistent display
+  - **Impact**: Users can now see continuous progress updates with current statistics on every merge
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
+- **Ctrl+C guard completely ineffective in Rust processes**: The shell-level Ctrl+C confirmation was bypassed because Rust processes received SIGINT directly and exited immediately
+  - **Root cause**: When user presses Ctrl+C, both shell script and Rust process receive SIGINT simultaneously. Even though shell showed confirmation prompt, Rust process already exited
+  - **Fix**: Implemented native Rust Ctrl+C handler using `ctrlc` crate with 4.5-minute threshold
+    - Before 4.5 min: Ctrl+C exits immediately (unchanged behavior)
+    - After 4.5 min: Rust process shows confirmation prompt and waits for user input
+    - Press 'y': clean exit with proper cleanup
+    - Press 'n' or timeout (8s): resume processing
+  - **Impact**: True protection against accidental termination of long-running batch jobs
+  - **Files modified**: `Cargo.toml`, `shared_utils/Cargo.toml`, `shared_utils/src/ctrlc_guard.rs` (new), `shared_utils/src/lib.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+
 - **Milestone status lines too verbose and not narrow-screen friendly**: The inline milestone format was too long with excessive spacing: `                       📊                          XMP merge: 80 OK   Images: 81 OK`
   - **Root cause**: Used column 120 positioning and included 25 spaces of padding from `STATS_PREFIX_PAD`
   - **Fix**: Redesigned milestone format to be compact and beautiful:
@@ -24,6 +40,10 @@ All notable changes to this project will be documented in this file.
     - Shortened text: "XMP: 80✓  Img: 81✓" instead of "XMP merge: 80 OK   Images: 81 OK"
     - Use `\x1b[999C\x1b[60D` (move to end, then back 60 chars) to align 📊 with ✅
     - Format: `  │ 📊 XMP: 80✓  Img: 81✓` (compact, narrow-screen friendly)
+  - **Files modified**: `shared_utils/src/progress_mode.rs`
+
+### Removed
+- **Unused milestone interval functions**: Removed `xmp_milestone_interval()` and `image_milestone_interval()` functions since milestones are now shown on every merge
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
 ## [0.10.18] - 2026-03-10
