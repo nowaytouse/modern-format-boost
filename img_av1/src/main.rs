@@ -16,7 +16,6 @@ struct AutoConvertConfig {
     recursive: bool,
     delete_original: bool,
     in_place: bool,
-    lossless: bool,
     explore: bool,
     match_quality: bool,
     compress: bool,
@@ -61,9 +60,6 @@ enum Commands {
 
         #[arg(long)]
         in_place: bool,
-
-        #[arg(long)]
-        lossless: bool,
 
         #[arg(long, default_value_t = true)]
         explore: bool,
@@ -136,7 +132,6 @@ fn main() -> anyhow::Result<()> {
             recursive,
             delete_original,
             in_place,
-            lossless,
             explore,
             match_quality,
             compress,
@@ -170,10 +165,7 @@ fn main() -> anyhow::Result<()> {
                 }
             };
 
-            if lossless {
-                shared_utils::log_eprintln!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-                shared_utils::log_eprintln!("   Smart quality matching: DISABLED");
-            } else if verbose {
+            if verbose {
                 shared_utils::log_eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
                 shared_utils::log_eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
             }
@@ -216,7 +208,6 @@ fn main() -> anyhow::Result<()> {
                 recursive,
                 delete_original: should_delete,
                 in_place,
-                lossless,
                 explore,
                 match_quality,
                 compress,
@@ -506,7 +497,7 @@ fn auto_convert_single_file(
     config: &AutoConvertConfig,
 ) -> anyhow::Result<ConversionOutput> {
     use img_av1::lossless_converter::{
-        convert_jpeg_to_jxl, convert_to_av1_mp4, convert_to_av1_mp4_lossless,
+        convert_jpeg_to_jxl, convert_to_av1_mp4,
         convert_to_av1_mp4_matched, convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
 
@@ -684,21 +675,12 @@ fn auto_convert_single_file(
                 return Ok(make_skipped("Skipping short animation"));
             }
 
-            if config.lossless {
-                verbose_log!(
-                    "🔄 Animated lossless→AV1 MP4 (LOSSLESS, {:.1}s): {}",
-                    duration,
-                    input.display()
-                );
-                convert_to_av1_mp4_lossless(input, &options)?
-            } else {
-                verbose_log!(
-                    "🔄 Animated lossless→AV1 MP4 (CRF 0, {:.1}s): {}",
-                    duration,
-                    input.display()
-                );
-                convert_to_av1_mp4(input, &options)?
-            }
+            verbose_log!(
+                "🔄 Animated lossless→AV1 MP4 (CRF 0, {:.1}s): {}",
+                duration,
+                input.display()
+            );
+            convert_to_av1_mp4(input, &options)?
         }
         (_, false, true) => {
             let duration = match analysis.duration_secs {
@@ -728,21 +710,12 @@ fn auto_convert_single_file(
                 return Ok(make_skipped("Skipping short animation"));
             }
 
-            if config.lossless {
-                verbose_log!(
-                    "🔄 Animated lossy→AV1 MP4 (LOSSLESS, {:.1}s): {}",
-                    duration,
-                    input.display()
-                );
-                convert_to_av1_mp4_lossless(input, &options)?
-            } else {
-                verbose_log!(
-                    "🔄 Animated lossy→AV1 MP4 (MATCH QUALITY, {:.1}s): {}",
-                    duration,
-                    input.display()
-                );
-                convert_to_av1_mp4_matched(input, &options, &analysis)?
-            }
+            verbose_log!(
+                "🔄 Animated lossy→AV1 MP4 (MATCH QUALITY, {:.1}s): {}",
+                duration,
+                input.display()
+            );
+            convert_to_av1_mp4_matched(input, &options, &analysis)?
         }
         (_, false, false) => {
             // Modern lossy static already skipped above; only legacy lossy reach here.
@@ -849,9 +822,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     if config.verbose {
         println!("📂 Found {} files to process", total);
     }
-    if config.lossless && config.verbose {
-        println!("⚠️  Mathematical lossless mode: ENABLED (VERY SLOW!)");
-    }
 
     let success = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
@@ -859,8 +829,6 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
     let processed = AtomicUsize::new(0);
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
-
-    let pb = shared_utils::UnifiedProgressBar::new(total as u64, "Converting");
 
     shared_utils::progress_mode::enable_quiet_mode();
 
@@ -922,17 +890,9 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
                 }
             }
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            pb.set_position(current as u64);
-            pb.set_message(
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string(),
-            );
+            let _ = current;
         });
     });
-
-    pb.finish_with_message("Complete!");
 
     shared_utils::progress_mode::disable_quiet_mode();
     shared_utils::progress_mode::xmp_merge_finalize();
