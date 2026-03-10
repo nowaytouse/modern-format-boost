@@ -489,6 +489,14 @@ pub fn image_processed_failure() {
     emit_combined_status_line(img_ok, img_fail);
 }
 
+/// Update milestone display without changing any counters.
+/// Useful for showing status after skip operations.
+pub fn update_milestone_display() {
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    emit_combined_status_line(img_ok, img_fail);
+}
+
 fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let xmp_ok = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
     let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
