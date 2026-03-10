@@ -501,6 +501,9 @@ fn auto_convert_single_file(
         convert_to_av1_mp4_matched, convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
 
+    // Pause if the user is being prompted to exit via Ctrl+C
+    shared_utils::ctrlc_guard::wait_if_prompt_active();
+
     // Check for Apple Photos library before processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
         eprintln!("{}", e);
@@ -763,7 +766,7 @@ fn auto_convert_single_file(
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
     } else {
-        shared_utils::log_eprintln!("✅ {}", output.message);
+        shared_utils::log_eprintln!("{}", output.message);
     }
 
     Ok(output)

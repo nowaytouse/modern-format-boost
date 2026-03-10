@@ -15,6 +15,7 @@ pub mod colors {
     pub const BOLD: &str = "\x1b[1m";
     pub const DIM: &str = "\x1b[2m";
     pub const ITALIC: &str = "\x1b[3m";
+    pub const UNDERLINE: &str = "\x1b[4m";
 
     pub const RED: &str = "\x1b[31m";
     pub const GREEN: &str = "\x1b[32m";
@@ -30,6 +31,22 @@ pub mod colors {
     pub const BRIGHT_BLUE: &str = "\x1b[94m";
     pub const BRIGHT_MAGENTA: &str = "\x1b[95m";
     pub const BRIGHT_CYAN: &str = "\x1b[96m";
+    pub const BRIGHT_WHITE: &str = "\x1b[97m";
+
+    pub const BG_BLACK: &str = "\x1b[40m";
+    pub const BG_RED: &str = "\x1b[41m";
+    pub const BG_GREEN: &str = "\x1b[42m";
+    pub const BG_YELLOW: &str = "\x1b[43m";
+    pub const BG_BLUE: &str = "\x1b[44m";
+    pub const BG_MAGENTA: &str = "\x1b[45m";
+    pub const BG_CYAN: &str = "\x1b[46m";
+    pub const BG_WHITE: &str = "\x1b[47m";
+
+    // 24-bit True Colors (RGB)
+    pub const MFB_BLUE: &str = "\x1b[38;2;41;121;255m";
+    pub const MFB_PURPLE: &str = "\x1b[38;2;161;86;255m";
+    pub const MFB_PINK: &str = "\x1b[38;2;255;105;180m";
+    pub const MFB_GREEN: &str = "\x1b[38;2;0;224;150m";
 }
 
 pub mod symbols {
@@ -206,6 +223,9 @@ impl ExploreProgressState {
         use colors::*;
         use symbols::*;
 
+        // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
+        crate::ctrlc_guard::wait_if_prompt_active();
+
         let elapsed = self.start_time.elapsed().as_secs_f64();
 
         let (_size_icon, size_color) = if self.size_pct < 0.0 {
@@ -298,38 +318,40 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
         .max(40);
 
     let box_width = max_width + 4;
+    let theme_color = MFB_BLUE;
 
-    eprintln!("{}╭{}╮{}", CYAN, "─".repeat(box_width), RESET);
+    eprintln!("{}╭{}╮{}", theme_color, "─".repeat(box_width), RESET);
 
     let title_padding = box_width - strip_ansi(title).len() - 2;
     eprintln!(
-        "{}│{} {}{}{} {}{}│{}",
-        CYAN,
+        "{}│{} {}{}{}{} {}{}│{}",
+        theme_color,
         RESET,
         BOLD,
+        UNDERLINE,
         title,
         RESET,
         " ".repeat(title_padding),
-        CYAN,
+        theme_color,
         RESET
     );
 
-    eprintln!("{}├{}┤{}", CYAN, "─".repeat(box_width), RESET);
+    eprintln!("{}├{}┤{}", theme_color, "─".repeat(box_width), RESET);
 
     for line in lines {
         let padding = box_width - strip_ansi(line).len() - 2;
         eprintln!(
             "{}│{} {}{} {}│{}",
-            CYAN,
+            theme_color,
             RESET,
             line,
             " ".repeat(padding),
-            CYAN,
+            theme_color,
             RESET
         );
     }
 
-    eprintln!("{}╰{}╯{}", CYAN, "─".repeat(box_width), RESET);
+    eprintln!("{}╰{}╯{}", theme_color, "─".repeat(box_width), RESET);
 }
 
 fn strip_ansi(s: &str) -> String {
