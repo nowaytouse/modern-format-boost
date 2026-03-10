@@ -64,12 +64,26 @@
 //! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion path fails loudly with path in message.
 
 use crate::img_errors::{ImgQualityError, Result};
-use image::{DynamicImage, GenericImageView, Rgba};
+use image::{DynamicImage, GenericImageView, ImageReader, Rgba};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+
+/// Open an image with relaxed memory limits to handle very large JPEGs.
+/// Increases max_alloc from default ~512MB to 2GB for legitimate large images.
+/// Still protects against malicious images (2GB is reasonable for 100MP+ images).
+pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, image::ImageError> {
+    use image::Limits;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(2 * 1024 * 1024 * 1024); // 2GB (reasonable for 100MP images)
+
+    let mut reader = ImageReader::open(path)?;
+    reader = reader.with_guessed_format()?;
+    reader.limits(limits);
+    reader.decode()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ImageType {
@@ -750,7 +764,7 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
     }
 
     if png_info.color_type == 3 {
-        if let Ok(img) = image::open(path) {
+        if let Ok(img) = open_image_with_limits(path) {
             let dithering_score = detect_dithering_pattern(&img);
             factors.dithering_detected = dithering_score;
             if dithering_score > 0.5 {
@@ -1637,7 +1651,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     let compression = detect_compression(&format, path)?;
 
-    let img = image::open(path).map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?;
+    let img = open_image_with_limits(path).map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?;
     let (width, height) = img.dimensions();
     let has_alpha = img.color().has_alpha();
     let bit_depth = match img.color() {
