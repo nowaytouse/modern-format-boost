@@ -115,9 +115,6 @@ const LOG_PREFIX_MAX_DISPLAY: usize = 25;
 /// the message body aligns with regular file-tag lines.
 /// Display width: 1 emoji (2 cells on most terminals) + spaces to reach LOG_TAG_WIDTH.
 const STATS_PREFIX: &str = "📊 ";
-/// Spaces after the emoji to reach the same visual column as LOG_TAG_WIDTH.
-/// "📊 " is 2 display cells + 1 space = 3, so pad to 28: 25 spaces.
-const STATS_PREFIX_PAD: &str = "                         "; // 25 spaces
 
 /// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
@@ -143,7 +140,7 @@ fn pad_tag(tag: &str) -> String {
 /// Format a statistics summary line (plain, no leading blank line) for
 /// the final summary emitted after all processing is done.
 fn fmt_stats_line_final(msg: &str) -> String {
-    format!("  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
+    format!("    {} {}", STATS_PREFIX.trim(), msg)
 }
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
