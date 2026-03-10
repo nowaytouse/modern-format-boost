@@ -279,6 +279,11 @@ impl LogConfig {
 }
 
 pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
+    if std::env::var("FORCE_COLOR").is_ok() {
+        console::set_colors_enabled(true);
+        console::set_colors_enabled_stderr(true);
+    }
+
     let _ = CURRENT_LOG_LEVEL.set(config.level);
     std::fs::create_dir_all(&config.log_dir)
         .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;
