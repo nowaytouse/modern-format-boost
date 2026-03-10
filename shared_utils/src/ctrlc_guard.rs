@@ -36,6 +36,23 @@ static START_INSTANT: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+/// Returns true if the Ctrl+C confirmation prompt is currently active.
+pub fn is_prompt_active() -> bool {
+    PROMPT_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Blocks the current thread while the Ctrl+C confirmation prompt is active.
+/// Call this in tight loops or before emitting logs to pause execution.
+pub fn wait_if_prompt_active() {
+    if is_prompt_active() {
+        while PROMPT_ACTIVE.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Small delay after prompt dismissal to ensure logs format cleanly
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Initialize the Ctrl+C guard. Safe to call multiple times (idempotent).
 ///
 /// Spawns a background daemon thread that watches for Ctrl+C signals and
