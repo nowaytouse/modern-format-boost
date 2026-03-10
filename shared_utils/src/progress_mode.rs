@@ -127,10 +127,9 @@ fn pad_tag(tag: &str) -> String {
         format!("{}{}", tag, " ".repeat(LOG_TAG_WIDTH - tag.len()))
     }
 }
-/// Outputs a blank line before so the stats line stands out visually
-/// when interleaved with per-file progress lines.
+/// Format a statistics status line (no leading blank line to avoid terminal notification badges).
 fn fmt_stats_line(msg: &str) -> String {
-    format!("\n  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
+    format!("  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
 }
 
 /// Format a statistics summary line (plain, no leading blank line) for
