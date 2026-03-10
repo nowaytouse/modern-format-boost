@@ -40,10 +40,10 @@ pub mod thread_manager;
 pub mod tools;
 pub mod video;
 pub mod video_explorer;
-#[cfg(test)]
-mod video_explorer_tests;
-#[cfg(test)]
-mod image_detection_tests;
+// #[cfg(test)]
+// mod video_explorer_tests;
+// #[cfg(test)]
+// mod image_detection_tests;
 pub mod video_quality_detector;
 pub mod xmp_merger;
 

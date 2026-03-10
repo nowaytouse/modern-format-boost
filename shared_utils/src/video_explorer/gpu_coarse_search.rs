@@ -1593,7 +1593,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let phase_info = if wall_hits == 1 {
                     format!("decay ×{:.1}", DECAY_FACTOR)
                 } else if new_step <= MIN_STEP + 0.01 {
-                    format!("→ FINE TUNING")
+                    "→ FINE TUNING".to_string()
                 } else {
                     format!("decay {}×{:.1}^{}", DIM, DECAY_FACTOR, wall_hits)
                 };
