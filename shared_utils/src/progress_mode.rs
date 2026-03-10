@@ -25,67 +25,80 @@ thread_local! {
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
-    let years = total_millis / (365 * 86400 * 1000); // Approximate year as 365 days
-    let months = (total_millis % (365 * 86400 * 1000)) / (30 * 86400 * 1000); // Approximate month as 30 days
-    let weeks = (total_millis % (30 * 86400 * 1000)) / (7 * 86400 * 1000);
-    let days = (total_millis % (7 * 86400 * 1000)) / (86400 * 1000);
-    let hours = (total_millis % (86400 * 1000)) / (3600 * 1000);
+    let years   = total_millis / (365 * 86400 * 1000);
+    let months  = (total_millis % (365 * 86400 * 1000)) / (30 * 86400 * 1000);
+    let weeks   = (total_millis % (30 * 86400 * 1000)) / (7 * 86400 * 1000);
+    let days    = (total_millis % (7 * 86400 * 1000)) / (86400 * 1000);
+    let hours   = (total_millis % (86400 * 1000)) / (3600 * 1000);
     let minutes = (total_millis % (3600 * 1000)) / (60 * 1000);
     let seconds = (total_millis % (60 * 1000)) / 1000;
-    let millis = total_millis % 1000;
-    
+    let millis  = total_millis % 1000;
+
     let mut parts = Vec::new();
-    
-    if years > 0 {
-        parts.push(format!("{:02}Y", years));
+
+    if years   > 0 { parts.push(format!("{:02}Y", years)); }
+    if months  > 0 || years > 0 { parts.push(format!("{:02}M", months)); }
+    if weeks   > 0 || months > 0 || years > 0 { parts.push(format!("{:02}W", weeks)); }
+    if days    > 0 || weeks > 0 || months > 0 || years > 0 { parts.push(format!("{:02}D", days)); }
+    if hours   > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 { parts.push(format!("{:02}h", hours)); }
+    if minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 { parts.push(format!("{:02}m", minutes)); }
+
+    // Seconds: only show when there are no hours-or-larger components
+    // (avoids "1h01m40s" when "1h01m" is cleaner at hour-level precision)
+    let has_hours_plus = hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
+    if !has_hours_plus && (total_millis >= 1000 || seconds > 0) {
+        parts.push(format!("{:02}s", seconds));
     }
-    if months > 0 || years > 0 {
-        parts.push(format!("{:02}M", months));
+
+    // Milliseconds: only show when there are no seconds-or-larger components
+    // (i.e., sub-second precision is useful), or when ms is non-zero and
+    // there are no minutes-or-larger components (show "5s372ms" but not "30s000ms").
+    let has_large_unit = minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
+    if !has_large_unit && millis > 0 {
+        parts.push(format!("{:03}ms", millis));
+    } else if total_millis == 0 {
+        // Zero duration: show "000ms"
+        parts.push("000ms".to_string());
     }
-    if weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}W", weeks));
+
+    if parts.is_empty() {
+        return "00s".to_string();
     }
-    if days > 0 || weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}D", days));
+
+    // Strip leading zeros from the first (most-significant) part so we get
+    // "1m30s" rather than "01m30s" while sub-units stay zero-padded ("01m", "30s").
+    if let Some(first) = parts.first_mut() {
+        // Find where digits end and the unit suffix begins
+        let suffix_start = first.find(|c: char| c.is_alphabetic()).unwrap_or(first.len());
+        let digits = &first[..suffix_start];
+        let suffix = &first[suffix_start..];
+        let trimmed = digits.trim_start_matches('0');
+        let trimmed = if trimmed.is_empty() { "0" } else { trimmed };
+        *first = format!("{}{}", trimmed, suffix);
     }
-    if hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}h", hours));
-    }
-    if minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}m", minutes));
-    }
-    parts.push(format!("{:02}s", seconds));
-    parts.push(format!("{:03}ms", millis));
-    
-    // Progressive spacing: more spaces for longer units, fewer for shorter units
+
+    // Progressive spacing for large compound durations
     if years > 0 || months > 0 || weeks > 0 || days > 0 || hours > 0 {
         let mut result = String::new();
         for (i, part) in parts.iter().enumerate() {
             result.push_str(part);
-            
-            // Determine spacing based on unit position
-            let spacing = if i == 0 && years > 0 {
-                "   " // 3 spaces after years
-            } else if i == 1 && (months > 0 || years > 0) {
-                "   " // 3 spaces after months
-            } else if i == 2 && (weeks > 0 || months > 0 || years > 0) {
-                "   " // 3 spaces after weeks
-            } else if i == 3 && (days > 0 || weeks > 0 || months > 0 || years > 0) {
-                "   " // 3 spaces after days
+            let spacing = if i == 0 && years > 0
+                || i == 1 && (months > 0 || years > 0)
+                || i == 2 && (weeks > 0 || months > 0 || years > 0)
+                || i == 3 && (days > 0 || weeks > 0 || months > 0 || years > 0)
+            {
+                "   " // 3 spaces after large units
             } else if i == 4 && (hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0) {
                 "  "  // 2 spaces after hours
-            } else if i < parts.len() - 1 {
-                ""   // no spaces for minutes and seconds
             } else {
-                ""   // last element
+                ""    // no extra spacing for minutes/seconds/ms
             };
-            
             result.push_str(spacing);
         }
         result
     } else {
-        // No spaces for short durations (m, s, ms only)
         parts.join("")
+
     }
 }
 
@@ -102,9 +115,6 @@ const LOG_PREFIX_MAX_DISPLAY: usize = 25;
 /// the message body aligns with regular file-tag lines.
 /// Display width: 1 emoji (2 cells on most terminals) + spaces to reach LOG_TAG_WIDTH.
 const STATS_PREFIX: &str = "📊 ";
-/// Spaces after the emoji to reach the same visual column as LOG_TAG_WIDTH.
-/// "📊 " is 2 display cells + 1 space = 3, so pad to 28: 25 spaces.
-const STATS_PREFIX_PAD: &str = "                         "; // 25 spaces
 
 /// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
 fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
@@ -130,7 +140,7 @@ fn pad_tag(tag: &str) -> String {
 /// Format a statistics summary line (plain, no leading blank line) for
 /// the final summary emitted after all processing is done.
 fn fmt_stats_line_final(msg: &str) -> String {
-    format!("  {}{}{}", STATS_PREFIX, STATS_PREFIX_PAD, msg)
+    format!("    {} {}", STATS_PREFIX.trim(), msg)
 }
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
@@ -166,15 +176,17 @@ pub fn clear_log_context() {
 }
 
 /// Detect file type emoji based on extension.
-/// Returns 🖼️ for images, 🎬 for videos, empty string for unknown.
+/// Returns 🖼️  for still images, 🎞️  for GIF/animated, 🎬 for videos, empty string for unknown.
 fn file_type_emoji(filename: &str) -> &'static str {
     if let Some(ext_start) = filename.rfind('.') {
         let ext = &filename[ext_start + 1..].to_lowercase();
         match ext.as_str() {
-            // Images
-            "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "heic" | "heif" | "jxl"
+            // Animated / GIF
+            "gif" => "🎞️ ",
+            // Still images
+            "jpg" | "jpeg" | "png" | "webp" | "avif" | "heic" | "heif" | "jxl"
             | "bmp" | "tiff" | "tif" | "ico" | "svg" | "psd" | "raw" | "cr2" | "nef"
-            | "arw" | "dng" | "orf" | "rw2" | "exr" | "qoi" | "flif" | "jp2" | "j2k" => "🖼️ ",
+            | "arw" | "dng" | "orf" | "rw2" | "exr" | "qoi" | "flif" | "jp2" | "j2k" => "🖼️  ",
             // Videos
             "mp4" | "mov" | "avi" | "mkv" | "webm" | "flv" | "wmv" | "m4v" | "mpg"
             | "mpeg" | "3gp" | "ogv" | "ts" | "mts" | "m2ts" => "🎬 ",
@@ -186,7 +198,7 @@ fn file_type_emoji(filename: &str) -> &'static str {
 }
 
 /// Format a log line with optional tag, emoji prefix, and padded indent so message bodies align.
-/// When a filename prefix is set, prepends a file-type emoji (🖼️ image / 🎬 video).
+/// When a filename prefix is set, prepends a file-type emoji (🖼️ image / 🎞️ GIF / 🎬 video).
 pub fn format_log_line(line: &str) -> String {
     LOG_PREFIX.with(|p| {
         let prefix = p.borrow();
@@ -194,7 +206,7 @@ pub fn format_log_line(line: &str) -> String {
             format!("{}{}", " ".repeat(LOG_TAG_WIDTH), line)
         } else {
             let emoji = file_type_emoji(&prefix);
-            format!("{}{}{}",  emoji, pad_tag(&format!("[{}]", prefix)), line)
+            format!("{}{}{}", emoji, pad_tag(&format!("[{}]", prefix)), line)
         }
     })
 }
@@ -339,22 +351,47 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 
-/// Emit a line to stderr via tracing (and to run log when a log file is configured).
-/// Run log always receives the line when configured so the file is complete and unfiltered.
-/// Applies a uniform 2-space indent so multi-line blocks (e.g. precheck report) stay aligned.
-/// When stderr is not a TTY (e.g. redirect/script), ANSI is stripped so output is plain text.
+/// Returns true when stderr is connected to a real terminal (TTY) OR if FORCE_COLOR is set.
+/// Cached after the first call — TTY state does not change during a run.
+#[inline]
+fn stderr_is_tty() -> bool {
+    use std::sync::OnceLock;
+    static IS_TTY: OnceLock<bool> = OnceLock::new();
+    *IS_TTY.get_or_init(|| {
+        if std::env::var("FORCE_COLOR").is_ok() {
+            true
+        } else {
+            // Use the `console` crate's detection which correctly handles
+            // NO_COLOR, TERM=dumb, CI env vars, and is_terminal() semantics.
+            console::Term::stderr().is_term()
+        }
+    })
+}
+
+/// Emit a line to stderr (and to run log when configured).
+///
+/// * When stderr **is a TTY**: ANSI colour codes are forwarded as-is.
+/// * When stderr **is not a TTY** (pipe/redirect/script): ANSI is stripped so
+///   captured output is plain, readable text.
+/// * The run-log always receives the plain (stripped) version.
 #[inline]
 pub fn emit_stderr(line: &str) {
-    // File log always receives the original line; RunLogWriter strips ANSI on write.
+    // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
+    crate::ctrlc_guard::wait_if_prompt_active();
+
+    // File log always receives the plain line.
     if has_log_file() {
         write_to_log(line);
     }
-    // Write directly to stderr with ANSI intact, bypassing tracing's TTY detection.
-    // When stderr is piped through `tee /dev/tty` (drag-and-drop script), the ANSI
-    // codes are forwarded to the real TTY by tee and rendered correctly.
-    // File log stripping is handled by RunLogWriter / StripAnsiWriter independently.
     use std::io::Write;
-    let _ = writeln!(std::io::stderr(), "{}{}", STDERR_INDENT, line);
+    let out = if stderr_is_tty() {
+        // TTY: keep colours.
+        format!("{}{}", STDERR_INDENT, line)
+    } else {
+        // Non-TTY: strip ANSI so piped / redirected output is clean.
+        format!("{}{}", STDERR_INDENT, crate::logging::strip_ansi_str(line))
+    };
+    let _ = writeln!(std::io::stderr(), "{}", out);
 }
 
 /// Flush the log file buffer. Call at program exit.
@@ -489,7 +526,15 @@ pub fn image_processed_failure() {
     emit_combined_status_line(img_ok, img_fail);
 }
 
-fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
+/// Update milestone display without changing any counters.
+/// Useful for showing status after skip operations.
+pub fn update_milestone_display() {
+    // Deprecated: We now embed stats directly into the log line instead of using escape sequence milestones.
+}
+
+pub fn get_current_stats_string() -> String {
+    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
     let xmp_ok = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
     let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     let xmp_done = false;
@@ -497,16 +542,13 @@ fn emit_combined_status_line(img_ok: u64, img_fail: u64) {
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+    
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    // Append milestone to the previous line with compact formatting.
-    // Move cursor up 1 line, then position at the ✅ emoji column (after the success message).
-    // The ✅ is typically around column 100-120 depending on message length.
-    // Use a fixed offset from the end of line to align 📊 with ✅.
-    use std::io::Write;
-    // Format: move up, save cursor, move to end, move back 60 chars, write milestone
-    // This ensures 📊 aligns roughly with where ✅ appears
-    let milestone = format!("  │ {} {}", STATS_PREFIX.trim(), msg);
-    let _ = write!(std::io::stderr(), "\x1b[1A\x1b[999C\x1b[60D{}\n", milestone);
+    format!("│ {} {}", STATS_PREFIX.trim(), msg)
+}
+
+fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
+    // Deprecated: UI now relies on inline stats via get_current_stats_string() in ConversionResult
 }
 
 fn format_xmp_jxl_images_line(

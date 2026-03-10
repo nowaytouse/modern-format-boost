@@ -336,6 +336,9 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 }
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
+    // Pause if the user is being prompted to exit via Ctrl+C
+    shared_utils::ctrlc_guard::wait_if_prompt_active();
+
     // Validate input file (check symlinks, file type, readability)
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(VidQualityError::ConversionError(e));

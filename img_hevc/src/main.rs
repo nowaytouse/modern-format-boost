@@ -257,7 +257,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<()> {
+fn verify_conversion(original: &std::path::Path, converted: &std::path::Path) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
     println!("   Converted: {}", converted.display());
@@ -306,7 +306,7 @@ fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<
     Ok(())
 }
 
-fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
+fn load_image_safe(path: &std::path::Path) -> anyhow::Result<image::DynamicImage> {
     let is_jxl = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase() == "jxl")
@@ -517,8 +517,11 @@ fn auto_convert_single_file(
 ) -> anyhow::Result<ConversionOutput> {
     use img_hevc::lossless_converter::{
         convert_jpeg_to_jxl, convert_to_hevc_mp4_matched,
-        convert_to_jxl, ConvertOptions,
+        convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
+
+    // Pause if the user is being prompted to exit via Ctrl+C
+    shared_utils::ctrlc_guard::wait_if_prompt_active();
 
     // Check for Apple Photos library before processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
@@ -792,16 +795,16 @@ fn auto_convert_single_file(
                 } else {
                     // Cannot build GifMeta (no dimensions) → keep as GIF
                     shared_utils::progress_mode::emit_stderr(&format!(
-                        "   🎞️  GIF probe failed (no dimensions), keeping as GIF: {}",
-                        input.display()
+                        "🎞️  GIF [{}] probe failed → KEEP GIF",
+                        input.file_name().unwrap_or_default().to_string_lossy()
                     ));
                     true
                 }
             } else {
                 // ffprobe failed → keep as GIF
                 shared_utils::progress_mode::emit_stderr(&format!(
-                    "   🎞️  GIF probe unavailable, keeping as GIF: {}",
-                    input.display()
+                    "🎞️  GIF [{}] probe failed → KEEP GIF",
+                    input.file_name().unwrap_or_default().to_string_lossy()
                 ));
                 true
             };
@@ -875,7 +878,7 @@ fn auto_convert_single_file(
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
     } else {
-        shared_utils::log_eprintln!("✅ {}", output.message);
+        shared_utils::log_eprintln!("{}", output.message);
     }
 
     Ok(output)

@@ -231,29 +231,33 @@ impl ConversionResult {
         };
         let reduction_pct = reduction * 100.0;
 
-        let message = if reduction >= 0.0 {
-            match extra_info {
-                Some(info) => format!(
-                    "{} ({}): size reduced \x1b[1;32m{:.1}%\x1b[0m",
-                    format_name, info, reduction_pct
-                ),
-                None => format!(
-                    "{} conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m",
-                    format_name, reduction_pct
-                ),
-            }
+        // Build size-change suffix: "-14.5%" (saved) or "+2.1%" (grew) with ANSI colors
+        let size_tag = if reduction >= 0.0 {
+            format!("\x1b[1;32m-{:.1}%\x1b[0m", reduction_pct)
         } else {
-            match extra_info {
-                Some(info) => format!(
-                    "{} ({}): size increased \x1b[1;33m{:.1}%\x1b[0m",
-                    format_name, info, -reduction_pct
-                ),
-                None => format!(
-                    "{} conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
-                    format_name, -reduction_pct
-                ),
-            }
+            format!("\x1b[1;33m+{:.1}%\x1b[0m", -reduction_pct)
         };
+
+        // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
+        // Format: "<FormatName> transcoding: -14.5%"  or
+        //         "<FormatName> transcoding (extra): -14.5%"
+        let mut message = match extra_info {
+            Some(info) => format!("✅ {} transcoding ({}): {}", format_name, info, size_tag),
+            None       => format!("✅ {} transcoding: {}",          format_name, size_tag),
+        };
+        
+        let stats_string = crate::progress_mode::get_current_stats_string();
+        
+        // Pad message length so stats string aligns at column 72
+        // We calculate terminal-visible width (very rough approximation for emojis and ascii)
+        let visible_len = message.chars().count();
+        let target_len = 65;
+        if visible_len < target_len {
+            message.push_str(&" ".repeat(target_len - visible_len));
+        } else {
+            message.push(' ');
+        }
+        message.push_str(&stats_string);
 
         Self {
             success: true,
@@ -1088,7 +1092,8 @@ mod tests {
         assert_eq!(result.input_size, 1000);
         assert_eq!(result.output_size, Some(500));
         assert!((result.size_reduction.unwrap() - 50.0).abs() < 0.1);
-        assert!(result.message.contains("reduced"));
+        assert!(result.message.contains("transcoding"), "expected 'transcoding' in: {}", result.message);
+        assert!(result.message.contains("-50.0%"), "expected '-50.0%' in: {}", result.message);
     }
 
     #[test]

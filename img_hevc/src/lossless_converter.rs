@@ -104,7 +104,7 @@ fn finalize_fallback_jxl(
 ///
 /// # Example
 /// ```no_run
-/// use img_hevc::{convert_to_jxl, ConvertOptions};
+/// use img_hevc::lossless_converter::{convert_to_jxl, ConvertOptions};
 /// use std::path::Path;
 ///
 /// let input = Path::new("input.png");
@@ -583,7 +583,7 @@ pub fn convert_jpeg_to_jxl(
             &output,
             input_size,
             options,
-            "JPEG lossless transcode",
+            "JPEG lossless",
         );
     }
 
@@ -608,9 +608,9 @@ pub fn convert_jpeg_to_jxl(
         if let Ok(out) = retry_original {
             if out.status.success() {
                 let label = if source_to_use != input {
-                    "JPEG lossless transcode (sanitized tail)"
+                    "JPEG lossless (sanitized tail)"
                 } else {
-                    "JPEG lossless transcode"
+                    "JPEG lossless"
                 };
                 return commit_jpeg_to_jxl_success(
                     input,
@@ -634,7 +634,7 @@ pub fn convert_jpeg_to_jxl(
                     &output,
                     input_size,
                     options,
-                    "JPEG lossless transcode (--allow_jpeg_reconstruction 0)",
+                    "JPEG lossless (--allow_jpeg_reconstruction 0)",
                 );
             }
         }

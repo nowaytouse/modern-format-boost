@@ -4,28 +4,25 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.10.20] - 2026-03-10
+## [0.10.21] - 2026-03-11
 
 ### Fixed
-- **Milestone status lines not showing persistently**: Status lines were only shown at intervals (every 5/20/100 merges) instead of on every successful merge
-  - **Root cause**: Used `xmp_milestone_interval()` function to control display frequency, causing gaps in visibility during processing
-  - **Fix**: Removed interval logic entirely - now emits status line on EVERY XMP merge for persistent display
-  - **Impact**: Users can now see continuous progress updates with current statistics on every merge
-  - **Files modified**: `shared_utils/src/progress_mode.rs`
+- **Ctrl+C Bypass Bug**: Fixed a severe issue where intercepting Ctrl+C failed to suspend active processing tasks. Previously, the confirmation prompt was displayed on a separate background thread without locking or notifying the `rayon` thread pool or global output buffers. Working tasks continued executing (and spamming the UI) while the prompt awaited user input. Now, `ctrlc_guard` explicitly exports its blocking state, intercepting both UI log emissions and core work allocation loops natively, effectively pausing all resource consumption until the user decides.
 
-- **Ctrl+C guard completely ineffective in Rust processes**: The shell-level Ctrl+C confirmation was bypassed because Rust processes received SIGINT directly and exited immediately
-  - **Root cause**: When user presses Ctrl+C, both shell script and Rust process receive SIGINT simultaneously. Even though shell showed confirmation prompt, Rust process already exited
-  - **Fix**: Implemented native Rust Ctrl+C handler using `ctrlc` crate with 4.5-minute threshold
-    - Before 4.5 min: Ctrl+C exits immediately (unchanged behavior)
-    - After 4.5 min: Rust process shows confirmation prompt and waits for user input
-    - Press 'y': clean exit with proper cleanup
-    - Press 'n' or timeout (8s): resume processing
-  - **Impact**: True protection against accidental termination of long-running batch jobs
-  - **Files modified**: `Cargo.toml`, `shared_utils/Cargo.toml`, `shared_utils/src/ctrlc_guard.rs` (new), `shared_utils/src/lib.rs`, `img_hevc/src/main.rs`, `img_av1/src/main.rs`
+### Changed
+- **Deep UI Modernization & TrueColor Integration**: Revamped terminal aesthetics across the application. Added full RGB 24-bit TrueColor constants (`MFB_Blue`, `MFB_Purple`, `MFB_Pink`, `MFB_Green`) to `modern_ui.rs`.
+- **Card-based Terminal Output**: Upgraded static data displays to sophisticated rounded-corner "Card" styles featuring the project's brand color, underline emphasis, and precision spacing.
+- **Summary Report Overhaul**: The end-of-batch Summary Report was transformed from a plain ASCII table to a stunning modern UI container, enhancing data legibility with semantic colors (Red, Green, Yellow) that dynamically correspond to the run's success rate and file size reductions.
 
-### Removed
-- **Unused milestone interval functions**: Removed `xmp_milestone_interval()` and `image_milestone_interval()` functions since milestones are now shown on every merge
-  - **Files modified**: `shared_utils/src/progress_mode.rs`
+## [0.10.20] - 2026-03-11
+
+### Fixed
+- **Terminal Color Restoration**: Fixed an issue where the terminal output lacked ANSI colors (leaving only black and white text) by ensuring the wrapper script `drag_and_drop_processor.sh` explicitly exports `FORCE_COLOR=1` down to the Rust binaries.
+- **Terminal Progress Stats Layout & Color Loss**: Replaced the ugly `\x1b[1A` cursor movement code that previously mangled terminal outputs when piped via `tee`. Global progress statistics are now generated dynamically and embedded as perfectly aligned inline content directly on the success logs (e.g. `XMP: 29✓ Img: 18✓`). ANSI color sequences (`\x1b[1;32m` for reduction, `\x1b[1;33m` for increases) were precisely restored inside string payloads to ensure the bash terminal accurately renders the colors.
+- **Image Conversion Summary UX**: Refined the spacing for the final `Images: X OK, Y failed` log block, shrinking the massive 25-space padding gap to align nicely and compactly with the rest of the output.
+- **Ctrl+C (SIGINT) Guard Deadlock**: Addressed a fatal bug where the 10-second background thread reading user prompts on Ctrl+C would hang indefinitely in a blocked `read_line` state. The wait thread logic was completely removed in favor of using OS-level `libc::poll` on `STDIN_FILENO` with a 10s timeout, making the UI perfectly responsive.
+- **Bash `tee` Output Crash & Linger on SIGINT**: Thoroughly patched terminal pipeline termination handling! Previously, attempting to quit via Ctrl+C failed because the inner execution instances of `tee` silently crashed, and Rust's `130` interrupt code was swallowed. We wrapped all inner `tee` pipes in `(trap '' INT; tee)` buffers, and explicitly programmed the Bash wrapper to listen for `PIPESTATUS[0] -eq 130` on both `img_hevc` and `vid_hevc` invocations to exit reliably. Additionally, an `EXIT` trap was introduced to guarantee the background title bar timer (spinner) destroys itself instead of outliving the script.
+- **GIF Apple Compat Log Precision**: Specified formatting strings exactly as requested for fallback actions: `🎞️  GIF [filename] → KEEP GIF` and `🎞️  GIF [filename] probe failed → KEEP GIF`.
 
 ## [0.10.19] - 2026-03-10
 

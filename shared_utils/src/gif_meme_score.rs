@@ -345,14 +345,16 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     match apply_veto(meta, bpp) {
         VetoVerdict::KeepGif => {
             crate::progress_mode::emit_stderr(&format!(
-                "   🎞️  GIF veto=KEEP [bpp={:.3} px={:.0} dur={:.1}s] → KEEP GIF (veto rule)",
+                "🎞️  GIF [{}] → KEEP GIF (veto: bpp={:.3} px={:.0} dur={:.1}s)",
+                meta.file_name.as_deref().unwrap_or("?"),
                 bpp, pixels, meta.duration_secs
             ));
             return true;
         }
         VetoVerdict::ConvertVideo => {
             crate::progress_mode::emit_stderr(&format!(
-                "   🎞️  GIF veto=CONVERT [bpp={:.3} px={:.0} dur={:.1}s] → CONVERT→VIDEO (veto rule)",
+                "🎞️  GIF [{}] → CONVERT→VIDEO (veto: bpp={:.3} px={:.0} dur={:.1}s)",
+                meta.file_name.as_deref().unwrap_or("?"),
                 bpp, pixels, meta.duration_secs
             ));
             return false;
@@ -364,19 +366,19 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     let s = score_gif(meta);
 
     // Layer 3: confidence interval
-    let (keep, confidence) = if s.total >= CONF_KEEP {
-        (true, "high-conf meme")
+    let keep = if s.total >= CONF_KEEP {
+        true  // high-confidence meme
     } else if s.total <= CONF_CONVERT {
-        (false, "high-conf video")
+        false // high-confidence video
     } else {
-        (true, "uncertain→keep") // conservative: prefer keeping GIF over false conversion
+        true  // uncertain → keep (conservative: prefer keeping GIF over false conversion)
     };
 
     crate::progress_mode::emit_stderr(&format!(
-        "   🎞️  GIF score={:.3} [sharp={:.2} res={:.2} dur={:.2} fps={:.2} ratio={:.2} fname={:.2} loop={:.2} bpp={:.3}] {} → {}",
-        s.total, s.sharpness, s.resolution, s.duration, s.fps, s.aspect_ratio, s.filename_score, s.loop_frequency_score, s.bytes_per_pixel,
-        confidence,
-        if keep { "KEEP GIF" } else { "CONVERT→VIDEO" }
+        "🎞️  GIF [{}] → {} (score={:.3})",
+        meta.file_name.as_deref().unwrap_or("?"),
+        if keep { "KEEP GIF" } else { "CONVERT→VIDEO" },
+        s.total,
     ));
 
     keep

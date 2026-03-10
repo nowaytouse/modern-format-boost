@@ -77,6 +77,9 @@ start_elapsed_spinner() {
     ) 2>/dev/null &
     SPINNER_PID=$!
     disown "$SPINNER_PID" 2>/dev/null || true
+    
+    # Ensure spinner is killed when bash exits (including on Ctrl+C)
+    trap 'stop_elapsed_spinner' EXIT
 }
 stop_elapsed_spinner() {
     if [[ -n "$SPINNER_PID" ]]; then
@@ -96,62 +99,7 @@ stop_elapsed_spinner() {
     [[ -c /dev/tty ]] && printf '\033]0;\007' > /dev/tty 2>/dev/null
 }
 
-# ── Ctrl+C confirmation guard ─────────────────────────────────────────────────
-# If the user presses Ctrl+C after 4.5 min of processing, ask for confirmation.
-# No input within 8 seconds or pressing 'n' resumes processing.
-# Pressing 'y' performs a clean exit (stops spinner, restores cursor).
-_CTRLC_CONFIRM_ACTIVE=false
-
-_handle_sigint() {
-    # If already in the confirmation prompt, ignore re-entrant signals
-    [[ "$_CTRLC_CONFIRM_ACTIVE" == true ]] && return
-
-    local elapsed=0
-    [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
-
-    # Under 4.5 minutes: exit immediately without confirmation
-    if [[ "$elapsed" -lt 270 ]]; then
-        echo ""
-        show_cursor
-        stop_elapsed_spinner
-        echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
-        exit 130
-    fi
-
-    # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
-    _CTRLC_CONFIRM_ACTIVE=true
-    # Block further Ctrl+C signals during the confirmation window so a second
-    # ^C cannot interrupt the read or produce stray ^C^? characters on screen.
-    trap '' INT
-    local elapsed_str
-    elapsed_str=$(_fmt_elapsed "$elapsed")
-    printf '\n' > /dev/tty
-    printf "${YELLOW}⚠️  Ctrl+C detected after %s of processing.${RESET}\n" "$elapsed_str" > /dev/tty
-    printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
-
-    local answer=""
-    local read_result=0
-    read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
-
-    # read_result: 0 = got input, >0 = timeout or interrupted
-    # Check if user explicitly pressed 'y' or 'Y'
-    if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
-        printf '\n' > /dev/tty
-        show_cursor
-        stop_elapsed_spinner
-        echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
-        exit 130
-    fi
-
-    # Any other case (timeout, 'n', or any other key): resume
-    printf '\n' > /dev/tty
-    printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
-    _CTRLC_CONFIRM_ACTIVE=false
-    # Restore the Ctrl+C handler after the confirmation window.
-    trap '_handle_sigint' INT
-}
-
-trap '_handle_sigint' INT
+# (Ctrl+C confirmation is now exclusively handled by the Rust binaries)
 
 
 LOG_DIR="$PROJECT_ROOT/logs"
@@ -457,9 +405,14 @@ process_images() {
     local tmp_out
     tmp_out=$(mktemp)
     if [[ -n "$LOG_FILE" ]]; then
-        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out") | (trap '' INT; tee -a "$LOG_FILE")
     else
-        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out")
+    fi
+    local rust_exit="${PIPESTATUS[0]}"
+    if [[ $rust_exit -eq 130 ]]; then
+        rm -f "$tmp_out"
+        exit 130
     fi
     parse_tool_stats "$(cat "$tmp_out")" "img"
     rm -f "$tmp_out"
@@ -482,9 +435,14 @@ process_videos() {
     local tmp_out
     tmp_out=$(mktemp)
     if [[ -n "$LOG_FILE" ]]; then
-        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out" | tee -a "$LOG_FILE"
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out") | (trap '' INT; tee -a "$LOG_FILE")
     else
-        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out")
+    fi
+    local rust_exit="${PIPESTATUS[0]}"
+    if [[ $rust_exit -eq 130 ]]; then
+        rm -f "$tmp_out"
+        exit 130
     fi
     parse_tool_stats "$(cat "$tmp_out")" "vid"
     rm -f "$tmp_out"
@@ -628,11 +586,19 @@ if [[ "$1" == "--internal-worker" ]]; then
 fi
 
 main() {
+    export FORCE_COLOR=1
     init_log
     export LOG_FILE
     export VERBOSE_LOG_FILE
-    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | tee "$LOG_FILE"
-    exit "${PIPESTATUS[0]:-$?}"
+    # Wrap tee to ignore SIGINT so it doesn't break the pipe when the user presses Ctrl+C
+    # while the Rust Universal Heartbeat is prompting for confirmation.
+    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | (trap '' INT; tee "$LOG_FILE")
+    # Ensure Bash exits correctly if Rust triggers exit 130
+    local exit_status="${PIPESTATUS[0]:-$?}"
+    if [[ $exit_status -eq 130 ]]; then
+        exit 130
+    fi
+    exit $exit_status
 }
 
 main "$@"
