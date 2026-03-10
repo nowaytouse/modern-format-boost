@@ -97,59 +97,60 @@ stop_elapsed_spinner() {
 }
 
 # ── Ctrl+C confirmation guard ─────────────────────────────────────────────────
+# DISABLED: Let Rust process handle Ctrl+C directly
 # If the user presses Ctrl+C after 4.5 min of processing, ask for confirmation.
 # No input within 8 seconds or pressing 'n' resumes processing.
 # Pressing 'y' performs a clean exit (stops spinner, restores cursor).
-_CTRLC_CONFIRM_ACTIVE=false
+# _CTRLC_CONFIRM_ACTIVE=false
 
-_handle_sigint() {
-    # If already in the confirmation prompt, ignore re-entrant signals
-    [[ "$_CTRLC_CONFIRM_ACTIVE" == true ]] && return
-
-    local elapsed=0
-    [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
-
-    # Under 4.5 minutes: exit immediately
-    if [[ "$elapsed" -lt 270 ]]; then
-        echo ""
-        show_cursor
-        stop_elapsed_spinner
-        ELAPSED_START=0  # Reset timer state
-        echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
-        exit 130
-    fi
-
-    # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
-    _CTRLC_CONFIRM_ACTIVE=true
-    # Block further Ctrl+C signals during the confirmation window
-    trap '' INT
-    local elapsed_str
-    elapsed_str=$(_fmt_elapsed "$elapsed")
-    printf '\n' > /dev/tty
-    printf "${YELLOW}⚠️  Ctrl+C detected after %s of processing.${RESET}\n" "$elapsed_str" > /dev/tty
-    printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
-
-    local answer=""
-    local read_result=0
-    read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
-
-    # Check if user explicitly pressed 'y' or 'Y'
-    if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
-        printf '\n' > /dev/tty
-        show_cursor
-        stop_elapsed_spinner
-        ELAPSED_START=0  # Reset timer state
-        echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
-        exit 130
-    fi
-
-    # Any other case (timeout, 'n', or any other key): resume
-    printf '\n' > /dev/tty
-    printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
-    _CTRLC_CONFIRM_ACTIVE=false
-    # Restore the Ctrl+C handler
-    trap '_handle_sigint' INT
-}
+# _handle_sigint() {
+#     # If already in the confirmation prompt, ignore re-entrant signals
+#     [[ "$_CTRLC_CONFIRM_ACTIVE" == true ]] && return
+# 
+#     local elapsed=0
+#     [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
+# 
+#     # Under 4.5 minutes: exit immediately
+#     if [[ "$elapsed" -lt 270 ]]; then
+#         echo ""
+#         show_cursor
+#         stop_elapsed_spinner
+#         ELAPSED_START=0  # Reset timer state
+#         echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
+#         exit 130
+#     fi
+# 
+#     # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
+#     _CTRLC_CONFIRM_ACTIVE=true
+#     # Block further Ctrl+C signals during the confirmation window
+#     trap '' INT
+#     local elapsed_str
+#     elapsed_str=$(_fmt_elapsed "$elapsed")
+#     printf '\n' > /dev/tty
+#     printf "${YELLOW}⚠️  Ctrl+C detected after %s of processing.${RESET}\n" "$elapsed_str" > /dev/tty
+#     printf "${BOLD}   Confirm exit? [y/N] (auto-resume in 8s): ${RESET}" > /dev/tty
+# 
+#     local answer=""
+#     local read_result=0
+#     read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
+# 
+#     # Check if user explicitly pressed 'y' or 'Y'
+#     if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
+#         printf '\n' > /dev/tty
+#         show_cursor
+#         stop_elapsed_spinner
+#         ELAPSED_START=0  # Reset timer state
+#         echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
+#         exit 130
+#     fi
+# 
+#     # Any other case (timeout, 'n', or any other key): resume
+#     printf '\n' > /dev/tty
+#     printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
+#     _CTRLC_CONFIRM_ACTIVE=false
+#     # Restore the Ctrl+C handler
+#     trap '_handle_sigint' INT
+# }
 
 # ── Cleanup on exit ─────────────────────────────────────────────────
 _cleanup_on_exit() {
@@ -453,15 +454,12 @@ process_images() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Run the tool directly without any pipes to ensure signal handling works
+    # Run the tool with pipe for output capture - Rust will handle its own signal processing
     local tmp_out
     tmp_out=$(mktemp)
     
-    # Run Rust process directly - it will handle its own signal processing
-    "$IMGQUALITY_HEVC" "${args[@]}" > "$tmp_out" 2>&1
-    
-    # Display the output after completion (or interruption)
-    cat "$tmp_out"
+    # Rust process has its own Ctrl+C guard that works even in pipes
+    "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
     
     # Parse stats from captured output
     parse_tool_stats "$(cat "$tmp_out")" "img"
@@ -482,15 +480,12 @@ process_videos() {
         args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
 
-    # Run the tool directly without any pipes to ensure signal handling works
+    # Run the tool with pipe for output capture - Rust will handle its own signal processing
     local tmp_out
     tmp_out=$(mktemp)
     
-    # Run Rust process directly - it will handle its own signal processing
-    "$VIDQUALITY_HEVC" "${args[@]}" > "$tmp_out" 2>&1
-    
-    # Display the output after completion (or interruption)
-    cat "$tmp_out"
+    # Rust process has its own Ctrl+C guard that works even in pipes
+    "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | tee "$tmp_out"
     
     # Parse stats from captured output
     parse_tool_stats "$(cat "$tmp_out")" "vid"
@@ -633,11 +628,8 @@ main() {
     export LOG_FILE
     export VERBOSE_LOG_FILE
     
-    # Set up signal handling in main process
-    trap '_handle_sigint' INT
-    trap '_cleanup_on_exit' EXIT
-    
-    # Run worker directly without any pipes to ensure signal handling works
+    # Remove all shell signal handling - let Rust process handle Ctrl+C
+    # Run worker directly
     "$BASH" "$0" --internal-worker "$@"
     exit_code=$?
     exit "$exit_code"
