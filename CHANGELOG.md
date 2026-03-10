@@ -12,9 +12,9 @@ All notable changes to this project will be documented in this file.
   - **Fix**: Removed all padding from `_tty_title()`. Modern terminals automatically clear the rest of the title bar, so padding is unnecessary
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
-- **Ctrl+C confirmation auto-resume race condition**: After the 8-second timeout in the Ctrl+C confirmation window, the script would print "Resuming..." but then immediately exit with "Interrupted by user" instead of actually resuming
-  - **Root cause**: Race condition where restoring `trap '_handle_sigint' INT` immediately after the timeout could trigger the handler again if a SIGINT arrived during the trap restoration
-  - **Fix**: Added 0.1s delay before restoring the trap, and added extra newline after "Resuming..." for visual separation
+- **Ctrl+C confirmation auto-resume not working**: After the 8-second timeout in the Ctrl+C confirmation window, the script would print "Resuming..." but then immediately exit with "Interrupted by user" instead of actually resuming. The root cause was that `read -r -t 8` returns non-zero on timeout, and the original logic treated any non-zero return as "user didn't press y", but didn't distinguish between timeout and actual user input
+  - **Root cause**: The `if read -r -t 8 ...` condition was false on timeout (exit code >128), causing the code to fall through to the else branch. But the logic didn't properly check if the user explicitly pressed 'y' - it only checked the read success, not the actual answer
+  - **Fix**: Capture the `read` exit code explicitly with `read ... || read_result=$?`, then check both the exit code AND the answer. Only exit if `read_result == 0` (got input) AND `answer == 'y'`. All other cases (timeout, 'n', any other key) resume processing
   - **Files modified**: `scripts/drag_and_drop_processor.sh`
 
 - **Milestone status lines too verbose and not narrow-screen friendly**: The inline milestone format was too long with excessive spacing: `                       📊                          XMP merge: 80 OK   Images: 81 OK`
@@ -22,7 +22,7 @@ All notable changes to this project will be documented in this file.
   - **Fix**: Redesigned milestone format to be compact and beautiful:
     - Use `│` separator instead of excessive spacing
     - Shortened text: "XMP: 80✓  Img: 81✓" instead of "XMP merge: 80 OK   Images: 81 OK"
-    - Use `\x1b[999C` (move to end of line) instead of fixed column 120
+    - Use `\x1b[999C\x1b[60D` (move to end, then back 60 chars) to align 📊 with ✅
     - Format: `  │ 📊 XMP: 80✓  Img: 81✓` (compact, narrow-screen friendly)
   - **Files modified**: `shared_utils/src/progress_mode.rs`
 
