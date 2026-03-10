@@ -231,11 +231,11 @@ impl ConversionResult {
         };
         let reduction_pct = reduction * 100.0;
 
-        // Build size-change suffix: "-14.5%" (saved) or "+2.1%" (grew)
+        // Build size-change suffix: "-14.5%" (saved) or "+2.1%" (grew) with ANSI colors
         let size_tag = if reduction >= 0.0 {
-            format!("-{:.1}%", reduction_pct)
+            format!("\x1b[1;32m-{:.1}%\x1b[0m", reduction_pct)
         } else {
-            format!("+{:.1}%", -reduction_pct)
+            format!("\x1b[1;33m+{:.1}%\x1b[0m", -reduction_pct)
         };
 
         // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
