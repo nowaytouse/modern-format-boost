@@ -184,7 +184,7 @@ fn main() -> anyhow::Result<()> {
                 );
             }
             if ultimate {
-                shared_utils::log_eprintln!("� Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::log_eprintln!("🔍 Ultimate Explore: ENABLED (search until SSIM saturates)");
             }
             if !allow_size_tolerance {
                 shared_utils::log_eprintln!(
@@ -763,7 +763,7 @@ fn auto_convert_single_file(
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
     } else {
-        shared_utils::log_eprintln!("{} ✅", output.message);
+        shared_utils::log_eprintln!("✅ {}", output.message);
     }
 
     Ok(output)
