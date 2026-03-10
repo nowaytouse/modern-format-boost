@@ -376,6 +376,9 @@ fn stderr_is_tty() -> bool {
 /// * The run-log always receives the plain (stripped) version.
 #[inline]
 pub fn emit_stderr(line: &str) {
+    // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
+    crate::ctrlc_guard::wait_if_prompt_active();
+
     // File log always receives the plain line.
     if has_log_file() {
         write_to_log(line);

@@ -517,8 +517,11 @@ fn auto_convert_single_file(
 ) -> anyhow::Result<ConversionOutput> {
     use img_hevc::lossless_converter::{
         convert_jpeg_to_jxl, convert_to_hevc_mp4_matched,
-        convert_to_jxl, ConvertOptions,
+        convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
     };
+
+    // Pause if the user is being prompted to exit via Ctrl+C
+    shared_utils::ctrlc_guard::wait_if_prompt_active();
 
     // Check for Apple Photos library before processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {

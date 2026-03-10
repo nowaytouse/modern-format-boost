@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.21] - 2026-03-11
+
+### Fixed
+- **Ctrl+C Bypass Bug**: Fixed a severe issue where intercepting Ctrl+C failed to suspend active processing tasks. Previously, the confirmation prompt was displayed on a separate background thread without locking or notifying the `rayon` thread pool or global output buffers. Working tasks continued executing (and spamming the UI) while the prompt awaited user input. Now, `ctrlc_guard` explicitly exports its blocking state, intercepting both UI log emissions and core work allocation loops natively, effectively pausing all resource consumption until the user decides.
+
+### Changed
+- **Deep UI Modernization & TrueColor Integration**: Revamped terminal aesthetics across the application. Added full RGB 24-bit TrueColor constants (`MFB_Blue`, `MFB_Purple`, `MFB_Pink`, `MFB_Green`) to `modern_ui.rs`.
+- **Card-based Terminal Output**: Upgraded static data displays to sophisticated rounded-corner "Card" styles featuring the project's brand color, underline emphasis, and precision spacing.
+- **Summary Report Overhaul**: The end-of-batch Summary Report was transformed from a plain ASCII table to a stunning modern UI container, enhancing data legibility with semantic colors (Red, Green, Yellow) that dynamically correspond to the run's success rate and file size reductions.
+
 ## [0.10.20] - 2026-03-11
 
 ### Fixed
