@@ -373,8 +373,8 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     };
 
     crate::progress_mode::emit_stderr(&format!(
-        "   🎞️  GIF score={:.3} [sharp={:.2} res={:.2} dur={:.2} fps={:.2} ratio={:.2} fname={:.2} loop={:.2} bpp={:.3}] {} → {}",
-        s.total, s.sharpness, s.resolution, s.duration, s.fps, s.aspect_ratio, s.filename_score, s.loop_frequency_score, s.bytes_per_pixel,
+        "   🎞️  GIF [{}] {} → {}",
+        meta.file_name.as_deref().unwrap_or("unknown"),
         confidence,
         if keep { "KEEP GIF" } else { "CONVERT→VIDEO" }
     ));

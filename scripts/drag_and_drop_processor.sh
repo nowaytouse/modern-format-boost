@@ -109,19 +109,19 @@ _handle_sigint() {
     local elapsed=0
     [[ "$ELAPSED_START" -gt 0 ]] && elapsed=$(( $(date +%s) - ELAPSED_START ))
 
-    # Under 4.5 minutes: exit immediately without confirmation
+    # Under 4.5 minutes: exit immediately
     if [[ "$elapsed" -lt 270 ]]; then
         echo ""
         show_cursor
         stop_elapsed_spinner
+        ELAPSED_START=0  # Reset timer state
         echo -e "\n${YELLOW}⚠️  Interrupted by user.${RESET}"
         exit 130
     fi
 
     # 4.5+ minutes: ask for confirmation (read from /dev/tty, 8s timeout)
     _CTRLC_CONFIRM_ACTIVE=true
-    # Block further Ctrl+C signals during the confirmation window so a second
-    # ^C cannot interrupt the read or produce stray ^C^? characters on screen.
+    # Block further Ctrl+C signals during the confirmation window
     trap '' INT
     local elapsed_str
     elapsed_str=$(_fmt_elapsed "$elapsed")
@@ -133,12 +133,12 @@ _handle_sigint() {
     local read_result=0
     read -r -t 8 -n 1 answer < /dev/tty 2>/dev/null || read_result=$?
 
-    # read_result: 0 = got input, >0 = timeout or interrupted
     # Check if user explicitly pressed 'y' or 'Y'
     if [[ $read_result -eq 0 && ( "$answer" == "y" || "$answer" == "Y" ) ]]; then
         printf '\n' > /dev/tty
         show_cursor
         stop_elapsed_spinner
+        ELAPSED_START=0  # Reset timer state
         echo -e "\n${YELLOW}⚠️  Interrupted by user after $elapsed_str.${RESET}"
         exit 130
     fi
@@ -147,11 +147,19 @@ _handle_sigint() {
     printf '\n' > /dev/tty
     printf "${GREEN}▶  Resuming...${RESET}\n\n" > /dev/tty
     _CTRLC_CONFIRM_ACTIVE=false
-    # Restore the Ctrl+C handler after the confirmation window.
+    # Restore the Ctrl+C handler
     trap '_handle_sigint' INT
 }
 
 trap '_handle_sigint' INT
+
+# ── Cleanup on exit ─────────────────────────────────────────────────
+_cleanup_on_exit() {
+    stop_elapsed_spinner
+    ELAPSED_START=0
+    show_cursor
+}
+trap '_cleanup_on_exit' EXIT
 
 
 LOG_DIR="$PROJECT_ROOT/logs"
