@@ -340,12 +340,13 @@ fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
             return Err(anyhow::anyhow!("djxl failed to decode JXL file"));
         }
 
-        let img = image::open(temp_path)
+        let img = shared_utils::image_detection::open_image_with_limits(temp_path)
             .map_err(|e| anyhow::anyhow!("Failed to open decoded PNG: {}", e))?;
 
         Ok(img)
     } else {
-        Ok(image::open(path)?)
+        shared_utils::image_detection::open_image_with_limits(path)
+            .map_err(|e| anyhow::anyhow!("{}", e))
     }
 }
 
