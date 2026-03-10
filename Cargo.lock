@@ -105,8 +105,8 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.95"
-source = "git+https://github.com/dtolnay/anyhow?tag=1.0.95#48be1caa24fa65467aaa8071eb698542e4fa1d43"
+version = "1.0.97"
+source = "git+https://github.com/dtolnay/anyhow?tag=1.0.97#bfb89ef244fa60af17fb844dc3bddf4b62e4ac9f"
 
 [[package]]
 name = "anyhow"
@@ -324,8 +324,8 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chrono"
-version = "0.4.39"
-source = "git+https://github.com/chronotope/chrono?tag=v0.4.39#8b863490d88ba098038392c8aa930012ffd0c439"
+version = "0.4.40"
+source = "git+https://github.com/chronotope/chrono?tag=v0.4.40#2b7a28ebe9c6be2d81579732f40ce14c8f5e104c"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
@@ -333,13 +333,13 @@ dependencies = [
  "num-traits",
  "serde",
  "wasm-bindgen",
- "windows-targets",
+ "windows-link 0.1.3",
 ]
 
 [[package]]
 name = "clap"
-version = "4.5.9"
-source = "git+https://github.com/clap-rs/clap?tag=v4.5.9#43e73682835653ac48f32cc786514553d697c693"
+version = "4.5.38"
+source = "git+https://github.com/clap-rs/clap?tag=v4.5.38#6b12a81bafe7b9d013b06981f520ab4c70da5510"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -347,8 +347,8 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.9"
-source = "git+https://github.com/clap-rs/clap?tag=v4.5.9#43e73682835653ac48f32cc786514553d697c693"
+version = "4.5.38"
+source = "git+https://github.com/clap-rs/clap?tag=v4.5.38#6b12a81bafe7b9d013b06981f520ab4c70da5510"
 dependencies = [
  "anstream",
  "anstyle",
@@ -358,8 +358,8 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.8"
-source = "git+https://github.com/clap-rs/clap?tag=v4.5.9#43e73682835653ac48f32cc786514553d697c693"
+version = "4.5.32"
+source = "git+https://github.com/clap-rs/clap?tag=v4.5.38#6b12a81bafe7b9d013b06981f520ab4c70da5510"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -369,8 +369,8 @@ dependencies = [
 
 [[package]]
 name = "clap_lex"
-version = "0.7.1"
-source = "git+https://github.com/clap-rs/clap?tag=v4.5.9#43e73682835653ac48f32cc786514553d697c693"
+version = "0.7.4"
+source = "git+https://github.com/clap-rs/clap?tag=v4.5.38#6b12a81bafe7b9d013b06981f520ab4c70da5510"
 
 [[package]]
 name = "color_quant"
@@ -530,6 +530,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "env_home"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f84e12ccf0a7ddc17a6c41c93326024c42920d7ee630d04950e6926645c0fe"
+
+[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -623,8 +629,8 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flate2"
-version = "1.0.35"
-source = "git+https://github.com/rust-lang/flate2-rs?tag=1.0.35#14aec222af2b85485bd3df4578d8d510eca46af7"
+version = "1.1.1"
+source = "git+https://github.com/rust-lang/flate2-rs?tag=1.1.1#98c98c8a57586b37e6f93e94d993e4f038fd8d32"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -777,8 +783,8 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "image"
-version = "0.25.5"
-source = "git+https://github.com/image-rs/image?tag=v0.25.5#317bc1692c134d750360ca9c8e108a08ff534d93"
+version = "0.25.6"
+source = "git+https://github.com/image-rs/image?tag=v0.25.6#f337e27aadaae8b86484429bc6020fef8a019c95"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -811,9 +817,9 @@ dependencies = [
 
 [[package]]
 name = "img-av1"
-version = "0.10.19"
+version = "0.10.20"
 dependencies = [
- "anyhow 1.0.95",
+ "anyhow 1.0.97",
  "clap",
  "console",
  "filetime",
@@ -825,8 +831,8 @@ dependencies = [
  "serde",
  "serde_json",
  "shared_utils",
- "tempfile 3.14.0",
- "thiserror 2.0.9",
+ "tempfile 3.19.1",
+ "thiserror 2.0.12",
  "walkdir 2.5.0 (git+https://github.com/BurntSushi/walkdir?tag=2.5.0)",
  "which",
  "xattr",
@@ -834,9 +840,9 @@ dependencies = [
 
 [[package]]
 name = "img-hevc"
-version = "0.10.19"
+version = "0.10.20"
 dependencies = [
- "anyhow 1.0.95",
+ "anyhow 1.0.97",
  "clap",
  "console",
  "filetime",
@@ -848,8 +854,8 @@ dependencies = [
  "serde",
  "serde_json",
  "shared_utils",
- "tempfile 3.14.0",
- "thiserror 2.0.9",
+ "tempfile 3.19.1",
+ "thiserror 2.0.12",
  "vid-hevc",
  "walkdir 2.5.0 (git+https://github.com/BurntSushi/walkdir?tag=2.5.0)",
  "which",
@@ -1652,14 +1658,14 @@ dependencies = [
 
 [[package]]
 name = "shared_utils"
-version = "0.10.19"
+version = "0.10.20"
 dependencies = [
- "anyhow 1.0.95",
+ "anyhow 1.0.97",
  "chrono",
  "console",
  "ctrlc",
  "filetime",
- "flate2 1.0.35",
+ "flate2 1.1.1",
  "image",
  "indicatif",
  "libc",
@@ -1669,8 +1675,8 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
- "tempfile 3.14.0",
- "thiserror 2.0.9",
+ "tempfile 3.19.1",
+ "thiserror 2.0.12",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1769,13 +1775,13 @@ checksum = "df7f62577c25e07834649fc3b39fafdc597c0a3527dc1c60129201ccfcbaa50c"
 
 [[package]]
 name = "tempfile"
-version = "3.14.0"
-source = "git+https://github.com/Stebalien/tempfile?tag=v3.14.0#b232c584c89de0793361e04945f8acd3c35af879"
+version = "3.19.1"
+source = "git+https://github.com/Stebalien/tempfile?tag=v3.19.1#95540ed3fcb9ca74845c02aee058726b2dca58b7"
 dependencies = [
- "cfg-if",
  "fastrand",
+ "getrandom 0.3.4",
  "once_cell",
- "rustix 0.38.44",
+ "rustix 1.1.4",
  "windows-sys 0.59.0",
 ]
 
@@ -1803,10 +1809,10 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.9"
-source = "git+https://github.com/dtolnay/thiserror?tag=2.0.9#c535cecb6f8d98cbdc72f526fc4c8a8ae826e2a3"
+version = "2.0.12"
+source = "git+https://github.com/dtolnay/thiserror?tag=2.0.12#95a512669395f30cf9ae10343149726c0563ed76"
 dependencies = [
- "thiserror-impl 2.0.9",
+ "thiserror-impl 2.0.12",
 ]
 
 [[package]]
@@ -1831,8 +1837,8 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.9"
-source = "git+https://github.com/dtolnay/thiserror?tag=2.0.9#c535cecb6f8d98cbdc72f526fc4c8a8ae826e2a3"
+version = "2.0.12"
+source = "git+https://github.com/dtolnay/thiserror?tag=2.0.12#95a512669395f30cf9ae10343149726c0563ed76"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2133,9 +2139,9 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vid-av1"
-version = "0.10.19"
+version = "0.10.20"
 dependencies = [
- "anyhow 1.0.95",
+ "anyhow 1.0.97",
  "clap",
  "filetime",
  "libc",
@@ -2143,7 +2149,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shared_utils",
- "thiserror 2.0.9",
+ "thiserror 2.0.12",
  "tracing",
  "tracing-subscriber",
  "walkdir 2.5.0 (git+https://github.com/BurntSushi/walkdir?tag=2.5.0)",
@@ -2153,9 +2159,9 @@ dependencies = [
 
 [[package]]
 name = "vid-hevc"
-version = "0.10.19"
+version = "0.10.20"
 dependencies = [
- "anyhow 1.0.95",
+ "anyhow 1.0.97",
  "clap",
  "console",
  "filetime",
@@ -2165,8 +2171,8 @@ dependencies = [
  "serde",
  "serde_json",
  "shared_utils",
- "tempfile 3.14.0",
- "thiserror 2.0.9",
+ "tempfile 3.19.1",
+ "thiserror 2.0.12",
  "tracing",
  "tracing-subscriber",
  "walkdir 2.5.0 (git+https://github.com/BurntSushi/walkdir?tag=2.5.0)",
@@ -2323,10 +2329,12 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "which"
-version = "8.0.2"
-source = "git+https://github.com/harryfei/which-rs?tag=8.0.2#5bb3e82a82a6ef8f56a3a455125680fd6579c7ca"
+version = "8.0.0"
+source = "git+https://github.com/harryfei/which-rs?tag=8.0.0#adac2cdae7eaef4d5ce4cb2984ba43a0559adf06"
 dependencies = [
- "libc",
+ "env_home",
+ "rustix 1.1.4",
+ "winsafe",
 ]
 
 [[package]]
@@ -2346,7 +2354,7 @@ checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
  "windows-implement",
  "windows-interface",
- "windows-link",
+ "windows-link 0.2.1",
  "windows-result",
  "windows-strings",
 ]
@@ -2375,6 +2383,12 @@ dependencies = [
 
 [[package]]
 name = "windows-link"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e6ad25900d524eaabdbbb96d20b4311e1e7ae1699af4fb28c17ae66c80d798a"
+
+[[package]]
+name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
@@ -2385,7 +2399,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
 dependencies = [
- "windows-link",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -2394,7 +2408,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
- "windows-link",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -2412,7 +2426,7 @@ version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
- "windows-link",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -2487,6 +2501,12 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "winsafe"
+version = "0.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wit-bindgen"

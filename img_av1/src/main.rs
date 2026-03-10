@@ -763,7 +763,7 @@ fn auto_convert_single_file(
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
     } else {
-        shared_utils::log_eprintln!("✅ {}", output.message);
+        shared_utils::log_eprintln!("{}", output.message);
     }
 
     Ok(output)
