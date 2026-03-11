@@ -1409,8 +1409,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let required_zero_gains =
             calculate_zero_gains_for_duration_and_range(duration, crf_range, ultimate_mode);
 
-        let max_iterations_for_video =
-            calculate_max_iterations_for_duration(duration, ultimate_mode);
+        let max_iterations_for_video = if ultimate_mode { 200 } else { calculate_max_iterations_for_duration(duration, ultimate_mode) };
 
         if ultimate_mode {
             crate::verbose_eprintln!(
@@ -1487,7 +1486,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             );
         }
 
-        while iterations < max_iterations_for_video {
+        while iterations < max_iterations_for_video && test_crf >= min_crf {
             if test_crf < min_crf {
                 if current_step > MIN_STEP + 0.01 {
                     crate::verbose_eprintln!(
@@ -1545,13 +1544,11 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                         let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
                         
-                        // Ultimate Mode: Enhanced Quality Wall Detection via VMAF(Y) + PSNR(UV)
-                        let mut ceiling_hit = false;
+                        // Ultimate Mode: Unified Multi-Metric Tracking
                         let mut ultimate_metrics_str = String::new();
+                        let mut quality_saturated = false;
                         
                         if ultimate_mode {
-                            // Check for saturation in perceptual (VMAF) and chroma (PSNR-UV)
-                            // Use a reasonable sample rate during search to keep it fast (1/6 frames)
                             let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
                             let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
                             
@@ -1559,61 +1556,44 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 let chroma_avg = (u + v_score) / 2.0;
                                 ultimate_metrics_str = format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
                                 
-                                // Cache these for Phase III to avoid redundant heavy calculation
+                                // Cache for Phase III
                                 *best_vmaf_tracked = Some(v);
                                 *best_psnr_uv_tracked = Some((u, v_score));
 
-                                // "God Zone" ceiling: quality is statistically saturated.
-                                if v > 98.0 || chroma_avg > 48.0 {
-                                    ceiling_hit = true;
+                                // Saturation Check: In high quality zones (>97), we monitor for gain stop
+                                if v > 97.0 || chroma_avg > 47.0 {
+                                    quality_saturated = true;
                                 }
                             }
                         }
 
                         if current_step <= MIN_STEP + 0.01 {
-                            // Increment gains if SSIM is flat OR we are in the God Zone
-                            if is_zero_gain || ceiling_hit {
+                            // Unified saturation counter: SSIM flat OR Quality high and flat
+                            if is_zero_gain || quality_saturated {
                                 consecutive_zero_gains += 1;
                             } else {
                                 consecutive_zero_gains = 0;
                             }
                         }
 
-                        // Revised Trigger logic:
-                        // 1. Normal: 3-4 zero gains.
-                        // 2. Ultimate: Must reach 30 zero gains for absolute saturation.
-                        // 3. Ultimate Ceiling (God Zone): If quality is amazing (>98), 
-                        //    we require 10 consecutive confirmations.
-                        // 4. Ultimate Dead-Wall (Fast-Fail): If quality is BELOW gate (VMAF<93 or UV<38)
-                        //    AND we hit 3 consecutive zero-gains, it's a dead-end. Stop wasting time.
-                        const ULTIMATE_CEILING_CONFIRMATION: u32 = 10;
-                        const ULTIMATE_DEAD_WALL_CONFIRMATION: u32 = 3;
-                        
-                        let is_below_gate = ultimate_mode && (
-                            best_vmaf_tracked.is_none_or(|v| v < 93.0) || 
-                            best_psnr_uv_tracked.is_none_or(|(u, v)| u.min(v) < 38.0)
-                        );
+                        // THE RED LINE: Hit the wall when either:
+                        // 1. We reached 30 consecutive zero gains (Physical Saturation)
+                        // 2. We reached required_zero_gains (Normal mode)
+                        let quality_wall_triggered = current_step <= MIN_STEP + 0.01 && 
+                            consecutive_zero_gains >= required_zero_gains;
 
-                        let quality_wall_triggered = current_step <= MIN_STEP + 0.01 && (
-                            (is_below_gate && consecutive_zero_gains >= ULTIMATE_DEAD_WALL_CONFIRMATION) ||
-                            consecutive_zero_gains >= required_zero_gains || 
-                            (ultimate_mode && ceiling_hit && consecutive_zero_gains >= ULTIMATE_CEILING_CONFIRMATION)
-                        );
-
-                        // Ultimate Mode: Early failure if the quality wall is below the mandatory gate
+                        // HIGH CONFIDENCE GATE: If we hit the wall but quality is still garbage, 
+                        // this encode is not credible. Abort immediately.
                         if ultimate_mode && quality_wall_triggered {
                             const VMAF_Y_MIN: f64 = 93.0;
                             const PSNR_UV_MIN: f64 = 38.0;
                             
-                            let v_fail = best_vmaf_tracked.is_none_or(|v| v < VMAF_Y_MIN);
-                            let uv_fail = best_psnr_uv_tracked.is_none_or(|(u, v)| u.min(v) < PSNR_UV_MIN);
+                            let v_val = best_vmaf_tracked.unwrap_or(0.0);
+                            let uv_val = best_psnr_uv_tracked.map(|(u,v)| u.min(v)).unwrap_or(0.0);
 
-                            if v_fail || uv_fail {
-                                let v_val = best_vmaf_tracked.unwrap_or(0.0);
-                                let uv_val = best_psnr_uv_tracked.map(|(u,v)| u.min(v)).unwrap_or(0.0);
-                                
+                            if v_val < VMAF_Y_MIN || uv_val < PSNR_UV_MIN {
                                 crate::log_eprintln!(
-                                    "   \x1b[1;31m❌ DEAD-WALL HIT:\x1b[0m Saturated below gate (VMAF:{:.2}, UV:{:.2}). No further gain possible.",
+                                    "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
                                     v_val, uv_val
                                 );
                                 quality_wall_hit = true;
@@ -1623,19 +1603,17 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                         let wall_status = if quality_wall_triggered {
                             if ultimate_mode {
-                                format!("{}DOMAIN WALL{}", BRIGHT_MAGENTA, RESET)
+                                format!("{}DOMAIN WALL (50/50){}", BRIGHT_MAGENTA, RESET)
                             } else {
                                 format!("{}QUALITY WALL{}", BRIGHT_YELLOW, RESET)
                             }
                         } else if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
-                            if ultimate_mode && ceiling_hit {
-                                format!("{}[SATURATED {}/{}]{}", BRIGHT_MAGENTA, consecutive_zero_gains, ULTIMATE_CEILING_CONFIRMATION, RESET)
-                            } else {
-                                format!(
-                                    "{}[{}/{}]{}",
-                                    DIM, consecutive_zero_gains, required_zero_gains, RESET
-                                )
-                            }
+                            format!("{}[SATURATED {}/{}]{}", 
+                                if ultimate_mode { BRIGHT_MAGENTA } else { DIM },
+                                consecutive_zero_gains, 
+                                required_zero_gains, 
+                                RESET
+                            )
                         } else {
                             String::new()
                         };
@@ -1832,10 +1810,9 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         let mut test_crf = gpu_boundary_crf + step_size_upward;
         let mut found_compress_point = false;
-        let mut collapse_counter = 0u32;
+        let mut failure_credibility = 0.0f64;
 
-        let max_iterations_for_video =
-            calculate_max_iterations_for_duration(duration, ultimate_mode);
+        let max_iterations_for_video = if ultimate_mode { 150 } else { calculate_max_iterations_for_duration(duration, ultimate_mode) };
 
         while test_crf <= max_crf && iterations < max_iterations_for_video {
             let size = encode_cached(test_crf, &mut size_cache)?;
@@ -1846,7 +1823,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 0.0
             };
 
-            // In Ultimate Mode, check quality even during upward search to fast-fail
+            // Ultimate Mode: Insight-Based Credibility Check (Sticky)
             if ultimate_mode {
                 let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
                 let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
@@ -1854,36 +1831,26 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                     let chroma_avg = (u + v_score) / 2.0;
                     crate::log_eprintln!(
-                        "   CRF {:.1}: {:+.1}% │ VMAF:{:.2} UV:{:.2}",
-                        test_crf, total_size_pct, v, chroma_avg
+                        "   CRF {:.1}: {:+.1}% │ VMAF:{:.2} UV:{:.2} (Index: {:.1}/3.0)",
+                        test_crf, total_size_pct, v, chroma_avg, failure_credibility
                     );
 
-                    // Thresholds from Phase III
-                    const VMAF_Y_MIN: f64 = 93.0;
-                    const PSNR_UV_MIN: f64 = 38.0;
-
-                    if v < VMAF_Y_MIN || chroma_avg < PSNR_UV_MIN {
-                        collapse_counter += 1;
-                        if collapse_counter >= 3 {
-                            crate::log_eprintln!(
-                                "   \x1b[1;31m❌ QUALITY COLLAPSED (3/3):\x1b[0m CRF {:.1} sustained below gate. Aborting.",
-                                test_crf
-                            );
-                            break;
-                        } else {
-                            crate::log_eprintln!(
-                                "   \x1b[1;33m⚠️  QUALITY WARNING ({}/3):\x1b[0m Below gate (VMAF:{:.2}, UV:{:.2}). Verifying...",
-                                collapse_counter, v, chroma_avg
-                            );
-                        }
-                    } else {
-                        // Reset counter if quality recovers
-                        collapse_counter = 0;
-                    }
-                    
-                    // Cache for potential use
+                    // Cache for Phase III
                     *best_vmaf_tracked = Some(v);
                     *best_psnr_uv_tracked = Some((u, v_score));
+
+                    // Logic: If below gate, build failure credibility. NO RESET on decimal gains.
+                    const VMAF_Y_MIN: f64 = 93.0;
+                    const PSNR_UV_MIN: f64 = 38.0;
+                    if v < VMAF_Y_MIN || chroma_avg < PSNR_UV_MIN {
+                        failure_credibility += 0.3;
+                        if failure_credibility >= 3.0 {
+                            crate::log_eprintln!(
+                                "   \x1b[1;31m❌ FAILURE CREDIBILITY REACHED (3.0):\x1b[0m Sustained quality collapse over 10 integer insights. Aborting.",
+                            );
+                            break;
+                        }
+                    }
                 }
             }
 

@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.32] - 2026-03-12
+
+### Added
+- **Sticky Quality Insights**: Failure credibility no longer resets on minor (decimal-level) quality fluctuations. Once a "Non-Viability Insight" is gained, it persists until a full recovery above the quality gate.
+- **Extreme Saturation Depth**: Increased `ULTIMATE_REQUIRED_ZERO_GAINS` to **50 consecutive samples**. This ensures the search firmly hits the "Physical Red Line" (Size Wall) for maximum archival quality.
+- **Enhanced Loop Logic**: Increased total iteration limits to 200 to accommodate deeper saturation searches.
+
+## [0.10.31] - 2026-03-12
+
+### Added
+- **Credibility-Driven Abort Mechanism**: Replaced count-based fast-fail with a weighted "Failure Credibility Index" (threshold 3.0, +0.3 per low-quality insight).
+- **Unified 30-step Saturation**: Consolidated all saturation logic into a mandatory 30-step verification for Ultimate Mode.
+
+## [0.10.30] - 2026-03-12 (Internal Release)
+- Preliminary logic cleanup for wall detection and metric caching.
+
 ## [0.10.29] - 2026-03-12
 
 ### Added
