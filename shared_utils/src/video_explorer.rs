@@ -140,7 +140,7 @@ pub const ULTIMATE_MAX_WALL_HITS: u32 = 28;
 
 /// In ultimate mode, SSIM saturation (Domain Wall) requires this many consecutive zero-gains.
 /// Kept 15–20 so short CRF ranges (e.g. GIF) still get a robust check (scaled minimum is 15).
-pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 20;
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 30;
 
 pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 

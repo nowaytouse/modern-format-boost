@@ -63,7 +63,8 @@ The video pipeline solves the bitrate/quality convex optimization problem using 
 *   **Phase II: Psychovisual Fine-Tuning**
     *   Performs a localized, high-precision search around the knee point using software encoders (x265/SVT-AV1) with psychovisual tuning (AQ-mode, psy-rd).
 *   **Phase III: Fusion Verification**
-    *   Validates output using a weighted fusion of **MS-SSIM** and **SSIM-All**. Candidates below the adaptive threshold (0.95-0.98) are automatically rejected.
+    *   **Normal Mode**: Validates output using a weighted fusion of **MS-SSIM** and **SSIM-All**. Candidates below the adaptive threshold (0.95-0.98) are automatically rejected.
+    *   **Ultimate Mode**: Unlocks the 3D Quality Gate. It replaces SSIM with a high-precision analysis: **VMAF-Y** (perceptual), **PSNR-UV** (chroma fidelity), and **CAMBI** (banding detection). It performs up to **30 consecutive saturation checks** during Phase II to find the absolute "Quality Wall," ensuring maximum perceptual fidelity for high-value archival content.
 
 **Video Processing Strategy:**
 
