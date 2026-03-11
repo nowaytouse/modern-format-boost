@@ -22,6 +22,7 @@ libc = { workspace = true }
 xattr = { workspace = true }
 libheif-rs = { workspace = true }
 shared_utils = { workspace = true }
+vid-av1 = { path = "../vid_av1" }
 tempfile = { workspace = true }
 console = { workspace = true }
 
