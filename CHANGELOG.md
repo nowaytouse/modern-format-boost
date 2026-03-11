@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.27] - 2026-03-12
+
+### Changed
+- **Ultimate Saturation Depth**: Increased `ULTIMATE_REQUIRED_ZERO_GAINS` from 20 to **30 consecutive samples** to ensure absolute "Domain Wall" saturation for high-fidelity archival.
+- **Refined Quality Fast-Fail**: Upgraded the early-exit logic in Phase 2 Upward Search with a **3-sample confirmation counter**. 
+  - Prevents premature aborts due to transient quality dips.
+  - Only terminates the search if 3 consecutive CRF steps fail to meet the Phase III quality gate (VMAF 93.0 / PSNR-UV 38.0).
+
 ## [0.10.26] - 2026-03-11
 
 ### Added
