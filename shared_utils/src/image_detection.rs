@@ -1820,9 +1820,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         _ => {}
     }
 
-    let estimated_quality = if format == DetectedFormat::JPEG {
-        precision.quality_estimate
-    } else if format == DetectedFormat::WebP && compression == CompressionType::Lossy {
+    let estimated_quality = if format == DetectedFormat::JPEG || (format == DetectedFormat::WebP && compression == CompressionType::Lossy) {
         precision.quality_estimate
     } else {
         None
