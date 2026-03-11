@@ -46,7 +46,7 @@ macro_rules! progress_done {
     }};
 }
 
-pub const ABSOLUTE_MIN_CRF: f32 = 10.0;
+pub const ABSOLUTE_MIN_CRF: f32 = 0.0;
 
 pub const ABSOLUTE_MAX_CRF: f32 = 51.0;
 
@@ -221,9 +221,9 @@ pub const SERVER_MAX_ENCODE_THREADS: usize = 16;
 
 pub const EXPLORE_DEFAULT_INITIAL_CRF: f32 = 18.0;
 
-pub const EXPLORE_DEFAULT_MIN_CRF: f32 = 10.0;
+pub const EXPLORE_DEFAULT_MIN_CRF: f32 = 0.0;
 
-pub const EXPLORE_DEFAULT_MAX_CRF: f32 = 28.0;
+pub const EXPLORE_DEFAULT_MAX_CRF: f32 = 51.0;
 
 pub const EXPLORE_DEFAULT_TARGET_RATIO: f64 = 1.0;
 

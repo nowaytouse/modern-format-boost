@@ -1390,7 +1390,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             RESET
         );
 
-        let crf_range = gpu_boundary_crf - min_crf;
+        let search_floor = if ultimate_mode { 0.0 } else { min_crf };
+        let crf_range = gpu_boundary_crf - search_floor;
 
         let initial_step = (crf_range / 1.5).clamp(8.0, 25.0);
         const DECAY_FACTOR: f32 = 0.4;
@@ -1724,15 +1725,25 @@ fn cpu_fine_tune_from_gpu_boundary(
                 };
 
                 crate::log_eprintln!(
-                    "   CRF {:.1}: {:+.1}% WALL HIT #{} │ Backtrack: {:.2} → {:.2} ({}) (total file {})❌",
+                    "   CRF {:.1}: {:+.1}% {}WALL HIT #{} │ Backtrack: {:.2} → {:.2} ({}) (total file {})❌",
                     test_crf,
                     total_size_pct,
+                    BRIGHT_RED,
                     wall_hits,
                     current_step,
                     new_step,
                     phase_info,
                     total_file_diff
                 );
+
+                if current_step <= MIN_STEP + 0.01 && new_step <= MIN_STEP + 0.01 {
+                    crate::log_eprintln!(
+                        "   {}🧱 Minimum step reached and hit wall again. Stopping.{}",
+                        BRIGHT_YELLOW,
+                        RESET
+                    );
+                    break;
+                }
 
                 if wall_hits >= max_wall_hits {
                     if ultimate_mode {
@@ -1781,11 +1792,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 iterations,
                 RESET
             );
-        } else if test_crf < min_crf {
+        } else if test_crf < search_floor {
             crate::log_eprintln!();
             crate::log_eprintln!(
-                "   {}Min CRF boundary reached (highly compressible){}",
+                "   {}Search floor reached ({:.1}) - maximum quality achieved{}",
                 BRIGHT_GREEN,
+                search_floor,
                 RESET
             );
             crate::verbose_eprintln!(
@@ -1899,17 +1911,25 @@ fn cpu_fine_tune_from_gpu_boundary(
             best_size = Some(max_size);
         } else {
             crate::log_eprintln!();
-            crate::log_eprintln!("Phase 3: Search DOWNWARD with marginal benefit analysis (step {:.2})", PHASE3_DOWNWARD_STEP);
+            crate::log_eprintln!(
+                "{}Phase 3: Search DOWNWARD with Sprint & Backtrack (min step {:.2}){}",
+                BRIGHT_CYAN,
+                PHASE3_DOWNWARD_STEP,
+                RESET
+            );
 
             let compress_point = best_crf.unwrap_or(gpu_boundary_crf);
-            let mut test_crf = compress_point - PHASE3_DOWNWARD_STEP;
+            let mut current_step = PHASE3_DOWNWARD_STEP;
+            let mut test_crf = compress_point - current_step;
             let mut consecutive_failures = 0u32;
             let mut prev_ssim_opt = best_ssim_tracked;
             let mut prev_size = best_size.unwrap_or(0);
 
-            while test_crf >= min_crf && iterations < max_iterations_for_video {
+            let search_floor = if ultimate_mode { 0.0 } else { min_crf };
+
+            while test_crf >= search_floor && iterations < max_iterations_for_video {
                 if size_cache.contains_key(test_crf) {
-                    test_crf -= PHASE3_DOWNWARD_STEP;
+                    test_crf -= current_step;
                     continue;
                 }
 
@@ -1931,9 +1951,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_size = Some(size);
                     best_ssim_tracked = current_ssim_opt;
 
-                    let size_increase = size as f64 - prev_size as f64;
+                    let size_increase = size as i64 - prev_size as i64;
                     let size_increase_pct = if prev_size > 0 {
-                        (size_increase / prev_size as f64) * 100.0
+                        (size_increase as f64 / prev_size as f64) * 100.0
                     } else {
                         0.0
                     };
@@ -1942,25 +1962,27 @@ fn cpu_fine_tune_from_gpu_boundary(
                         (Some(current_ssim), Some(prev_ssim)) => {
                             let ssim_gain = current_ssim - prev_ssim;
 
-                            let tolerance_msg = if size >= input_size { " (Within 1MB tolerance)" } else { "" };
+                            let tolerance_msg = if size >= input_size { format!(" {}(Within 1MB tolerance){}", YELLOW, RESET) } else { String::new() };
                             crate::log_eprintln!(
-                                "   CRF {:.1}: {:+.1}%{} │ SSIM {:.4} (Δ{:+.4}, size {:+.1}%)✅",
-                                test_crf,
-                                total_size_pct,
-                                tolerance_msg,
-                                current_ssim,
-                                ssim_gain,
-                                size_increase_pct
+                                "   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{}{} │ {}SSIM {:.4}{} ({}Δ{:+.4}{}, size {}{:+.1}%{}) {}(step {:.2}){} ✅",
+                                BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                                BRIGHT_GREEN, total_size_pct, RESET, tolerance_msg,
+                                BRIGHT_YELLOW, current_ssim, RESET,
+                                DIM, ssim_gain, RESET,
+                                DIM, size_increase_pct, RESET,
+                                DIM, current_step, RESET
                             );
 
                             if ssim_gain < 0.0001 && current_ssim >= 0.99 {
-                                crate::log_eprintln!("   SSIM plateau → STOP");
+                                crate::log_eprintln!("   {}SSIM plateau → STOP{}", BRIGHT_CYAN, RESET);
                                 true
                             } else if size_increase_pct > 5.0 && ssim_gain < 0.001 {
                                 crate::log_eprintln!(
-                                    "   Diminishing returns (size +{:.1}% but SSIM +{:.4}) → STOP",
+                                    "   {}Diminishing returns (size +{:.1}% but SSIM +{:.4}) → STOP{}",
+                                    BRIGHT_YELLOW,
                                     size_increase_pct,
-                                    ssim_gain
+                                    ssim_gain,
+                                    RESET
                                 );
                                 true
                             } else {
@@ -1969,10 +1991,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                         }
                         _ => {
                             crate::log_eprintln!(
-                                "   CRF {:.1}: {:+.1}% │ SSIM N/A (size {:+.1}%)✅",
-                                test_crf,
-                                total_size_pct,
-                                size_increase_pct
+                                "   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} │ SSIM N/A (size {:+.1}%) (step {:.2}) ✅",
+                                BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                                BRIGHT_GREEN, total_size_pct, RESET, size_increase_pct, current_step
                             );
                             false
                         }
@@ -1984,26 +2005,41 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     prev_ssim_opt = current_ssim_opt;
                     prev_size = size;
-                    test_crf -= PHASE3_DOWNWARD_STEP;
+
+                    // Sprint: double the step for faster iteration
+                    current_step *= 2.0;
+                    test_crf = best_crf.unwrap() - current_step;
                 } else {
                     consecutive_failures += 1;
                     crate::log_eprintln!(
-                        "   ✗ CRF {:.1}: {:+.1}% ❌ (fail #{}/{})",
-                        test_crf,
-                        total_size_pct,
-                        consecutive_failures,
-                        MAX_CONSECUTIVE_FAILURES
+                        "   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ (fail #{}/{}, step {:.2})",
+                        BRIGHT_RED, RESET, CYAN, test_crf, RESET,
+                        BRIGHT_RED, total_size_pct, RESET, BRIGHT_RED, consecutive_failures, MAX_CONSECUTIVE_FAILURES, current_step
                     );
 
-                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                    // Backtrack: if we hit a wall, go back to best_crf and use smaller step
+                    if current_step <= PHASE3_DOWNWARD_STEP + 0.01 {
                         crate::log_eprintln!(
-                            "   {} consecutive failures → STOP",
-                            MAX_CONSECUTIVE_FAILURES
+                            "   {}Reached minimum step {:.2} and hit wall. Stopping.{}",
+                            BRIGHT_YELLOW,
+                            PHASE3_DOWNWARD_STEP,
+                            RESET
                         );
                         break;
                     }
 
-                    test_crf -= PHASE3_DOWNWARD_STEP;
+                    current_step = PHASE3_DOWNWARD_STEP;
+                    test_crf = best_crf.unwrap_or(compress_point) - current_step;
+
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        crate::log_eprintln!(
+                            "   {}Max consecutive failures ({}) → STOP{}",
+                            BRIGHT_RED,
+                            MAX_CONSECUTIVE_FAILURES,
+                            RESET
+                        );
+                        break;
+                    }
                 }
             }
         }
@@ -2011,11 +2047,12 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let (final_crf, final_full_size) = match (best_crf, best_size) {
         (Some(crf), Some(size)) => {
-            crate::log_eprintln!("✅ Best CRF {:.1} already encoded (full video)", crf);
+            crate::log_eprintln!("{}✅ Best CRF {:.1} already encoded (full video){}", BRIGHT_GREEN, crf, RESET);
             (crf, size)
         }
         _ => {
-            crate::log_eprintln!("⚠️ Cannot compress this file");
+            crate::log_eprintln!("{}⚠️  Cannot compress this file{}", BRIGHT_YELLOW, RESET);
+
             let last_output_video = crate::stream_size::get_output_video_stream_size(output);
             crate::verbose_eprintln!(
                 "   Video stream: input {} vs output {} ({:+.1}%)",
