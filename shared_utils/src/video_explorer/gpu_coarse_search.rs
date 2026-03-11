@@ -1486,18 +1486,21 @@ fn cpu_fine_tune_from_gpu_boundary(
             );
         }
 
-        while iterations < max_iterations_for_video && test_crf >= min_crf {
-            if test_crf < min_crf {
+        // Determine search floor based on mode
+        let search_floor = if ultimate_mode { ABSOLUTE_MIN_CRF } else { min_crf };
+
+        while iterations < max_iterations_for_video && test_crf >= search_floor {
+            if test_crf < search_floor {
                 if current_step > MIN_STEP + 0.01 {
                     crate::verbose_eprintln!(
-                        "   {}Reached min_crf boundary, fine tuning from CRF {:.1}{}",
+                        "   {}Reached search floor, fine tuning from CRF {:.1}{}",
                         BRIGHT_CYAN,
                         last_good_crf,
                         RESET
                     );
                     current_step = MIN_STEP;
                     test_crf = last_good_crf - current_step;
-                    if test_crf < min_crf {
+                    if test_crf < search_floor {
                         break;
                     }
                 } else {
