@@ -17,8 +17,8 @@ impl FileSize {
     pub const ZERO: FileSize = FileSize(0);
 
     pub const KB: u64 = 1024;
-    pub const MB: u64 = 1024 * 1024;
-    pub const GB: u64 = 1024 * 1024 * 1024;
+    pub const MB: u64 = 1_048_576;
+    pub const GB: u64 = 1_048_576 * 1024;
 
     #[inline]
     pub const fn new(bytes: u64) -> Self {
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(kb.bytes(), 1024);
 
         let mb = FileSize::from_mb(1);
-        assert_eq!(mb.bytes(), 1024 * 1024);
+        assert_eq!(mb.bytes(), 1_048_576);
     }
 
     #[test]
@@ -179,8 +179,8 @@ mod tests {
     fn test_display() {
         assert_eq!(FileSize::new(500).display(), "500 B");
         assert_eq!(FileSize::new(1024).display(), "1.00 KB");
-        assert_eq!(FileSize::new(1024 * 1024).display(), "1.00 MB");
-        assert_eq!(FileSize::new(1024 * 1024 * 1024).display(), "1.00 GB");
+        assert_eq!(FileSize::new(1_048_576).display(), "1.00 MB");
+        assert_eq!(FileSize::new(1_048_576 * 1024).display(), "1.00 GB");
     }
 
     #[test]
@@ -188,11 +188,11 @@ mod tests {
         let small = FileSize::new(100 * 1024);
         assert_eq!(small.metadata_margin().bytes(), METADATA_MARGIN_MIN);
 
-        let medium = FileSize::new(10 * 1024 * 1024);
-        let expected = (10 * 1024 * 1024) as f64 * METADATA_MARGIN_PERCENT;
+        let medium = FileSize::new(10 * 1_048_576);
+        let expected = (10 * 1_048_576) as f64 * METADATA_MARGIN_PERCENT;
         assert_eq!(medium.metadata_margin().bytes(), expected as u64);
 
-        let large = FileSize::new(100 * 1024 * 1024 * 1024);
+        let large = FileSize::new(100 * 1_048_576 * 1024);
         assert_eq!(large.metadata_margin().bytes(), METADATA_MARGIN_MAX);
     }
 

@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.21] - 2026-03-11
 
+### Changed
+- **Standardized 1MB File Size Threshold**: Unified all 1MB size threshold checks across the codebase to exactly `1_048_576` bytes instead of using ambiguous limits (like `1_000_000`, `1000 * 1000`, or `1024 * 1024`).
+- **Translation**: Unified log messaging and CLI outputs. Removed all internal Simplified Chinese console messages (e.g. from `pure_media_verifier.rs` and `stream_size.rs`) to full English representation logic for better integration and consistency across regions.
+
+## [0.10.21] - 2026-03-11
+
 ### Fixed
 - **Ctrl+C Bypass Bug**: Fixed a severe issue where intercepting Ctrl+C failed to suspend active processing tasks. Previously, the confirmation prompt was displayed on a separate background thread without locking or notifying the `rayon` thread pool or global output buffers. Working tasks continued executing (and spamming the UI) while the prompt awaited user input. Now, `ctrlc_guard` explicitly exports its blocking state, intercepting both UI log emissions and core work allocation loops natively, effectively pausing all resource consumption until the user decides.
 
