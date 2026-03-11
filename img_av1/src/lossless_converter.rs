@@ -292,7 +292,7 @@ pub fn convert_to_avif(
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-    let q = quality.unwrap_or(85);
+    let q = quality.ok_or_else(|| ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string()))?;
 
     let result = Command::new("avifenc")
         .arg("-s")
@@ -409,8 +409,8 @@ pub fn convert_to_av1_mp4_matched(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size);
+    let input_size = fs::metadata(input).map(|m| m.len()).map_err(ImgQualityError::IoError)?;
+    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size)?;
     vid_av1::animated_image::convert_to_av1_mp4_matched(
         input,
         options,
@@ -420,7 +420,7 @@ pub fn convert_to_av1_mp4_matched(
     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
-fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
+fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> Result<f32> {
     let quality_analysis = shared_utils::from_image_analysis(
         &analysis.format,
         analysis.width,
@@ -440,12 +440,10 @@ fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_siz
                 &result,
                 shared_utils::EncoderType::Av1,
             );
-            result.crf
+            Ok(result.crf)
         }
         Err(e) => {
-            eprintln!("   ⚠️  Quality analysis failed: {}", e);
-            eprintln!("   ⚠️  Using conservative CRF 23.0 (high quality)");
-            23.0
+            Err(ImgQualityError::AnalysisError(format!("Quality analysis failed for animation: {}", e)))
         }
     }
 }
@@ -453,7 +451,7 @@ fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_siz
 pub fn calculate_matched_distance_for_static(
     analysis: &crate::ImageAnalysis,
     file_size: u64,
-) -> f32 {
+) -> Result<f32> {
     let estimated_quality = analysis.jpeg_analysis.as_ref().map(|j| j.estimated_quality);
 
     let quality_analysis = shared_utils::from_image_analysis(
@@ -475,12 +473,10 @@ pub fn calculate_matched_distance_for_static(
                 &result,
                 shared_utils::EncoderType::Jxl,
             );
-            result.distance
+            Ok(result.distance)
         }
         Err(e) => {
-            eprintln!("   ⚠️  Quality analysis failed: {}", e);
-            eprintln!("   ⚠️  Using conservative distance 1.0 (Q90 equivalent)");
-            1.0
+            Err(ImgQualityError::AnalysisError(format!("Quality analysis failed for static: {}", e)))
         }
     }
 }
@@ -507,7 +503,7 @@ pub fn convert_to_jxl_matched(
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let distance = calculate_matched_distance_for_static(analysis, input_size);
+    let distance = calculate_matched_distance_for_static(analysis, input_size)?;
     eprintln!("   🎯 Matched JXL distance: {:.2}", distance);
 
     let max_threads = shared_utils::thread_manager::get_optimal_threads();

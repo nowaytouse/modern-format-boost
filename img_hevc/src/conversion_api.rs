@@ -50,9 +50,9 @@ pub struct ConversionOutput {
     pub size_reduction: Option<f32>,
 }
 
-pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
+pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     if detection.format.is_modern_format() {
-        return ConversionStrategy {
+        return Ok(ConversionStrategy {
             target: TargetFormat::NoConversion,
             reason: format!(
                 "Skipping modern format ({}) - already optimized, no conversion needed",
@@ -60,7 +60,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
             ),
             command: String::new(),
             expected_reduction: 0.0,
-        };
+        });
     }
 
     match (
@@ -71,7 +71,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
         (ImageType::Static, _, DetectedFormat::JPEG) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("jxl");
-            ConversionStrategy {
+            Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "JPEG lossless transcode to JXL, preserving DCT coefficients".to_string(),
                 command: format!(
@@ -80,13 +80,13 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                     output_path.display()
                 ),
                 expected_reduction: 15.0,
-            }
+            })
         }
 
         (ImageType::Static, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("jxl");
-            ConversionStrategy {
+            Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "Static lossless image, recommend JXL for better compression".to_string(),
                 command: format!(
@@ -95,14 +95,16 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                     output_path.display()
                 ),
                 expected_reduction: 45.0,
-            }
+            })
         }
 
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("mp4");
-            let fps = detection.fps.unwrap_or(10.0);
-            ConversionStrategy {
+            let fps = detection.fps.ok_or_else(|| ImgQualityError::AnalysisError(
+                format!("Cannot determine FPS for animated image: {}", input_path)
+            ))?;
+            Ok(ConversionStrategy {
                 target: TargetFormat::HEVCMP4,
                 reason:
                     "Animated lossless image, recommend HEVC MP4 with CRF 0 (visually lossless)"
@@ -114,21 +116,23 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                     output_path.display()
                 ),
                 expected_reduction: 30.0,
-            }
+            })
         }
 
-        (ImageType::Animated, CompressionType::Lossy, _) => ConversionStrategy {
+        (ImageType::Animated, CompressionType::Lossy, _) => Ok(ConversionStrategy {
             target: TargetFormat::NoConversion,
             reason: "Animated lossy image, skipping to avoid further quality loss".to_string(),
             command: String::new(),
             expected_reduction: 0.0,
-        },
+        }),
 
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("avif");
-            let quality = detection.estimated_quality.unwrap_or(85);
-            ConversionStrategy {
+            let quality = detection.estimated_quality.ok_or_else(|| ImgQualityError::AnalysisError(
+                format!("Cannot determine estimated quality for lossy image: {}", input_path)
+            ))?;
+            Ok(ConversionStrategy {
                 target: TargetFormat::AVIF,
                 reason: "Static lossy image (non-JPEG), recommend AVIF for better compression"
                     .to_string(),
@@ -139,7 +143,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> ConversionStrategy {
                     quality
                 ),
                 expected_reduction: 25.0,
-            }
+            })
         }
     }
 }
@@ -419,7 +423,9 @@ fn convert_to_avif(
     quality: Option<u8>,
     config: &ConversionConfig,
 ) -> Result<()> {
-    let q = quality.unwrap_or(85).to_string();
+    let q = quality
+        .ok_or_else(|| ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string()))?
+        .to_string();
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
 
@@ -477,7 +483,8 @@ fn convert_to_hevc_mp4(
 ) -> Result<()> {
     use shared_utils::ffmpeg_process::FfmpegProcess;
 
-    let fps_str = fps.unwrap_or(10.0).to_string();
+    let fps_val = fps.ok_or_else(|| ImgQualityError::AnalysisError("Missing FPS for HEVC MP4 conversion".to_string()))?;
+    let fps_str = fps_val.to_string();
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
@@ -572,7 +579,7 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
 
     let detection = detect_image(path)?;
 
-    let strategy = determine_strategy(&detection);
+    let strategy = determine_strategy(&detection)?;
 
     execute_conversion(&detection, &strategy, config)
 }
@@ -600,7 +607,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_jpeg_strategy() {
+    fn test_jpeg_strategy() -> Result<()> {
         let detection = DetectionResult {
             file_path: "/test/image.jpg".to_string(),
             format: DetectedFormat::JPEG,
@@ -619,13 +626,14 @@ mod tests {
             precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
-        let strategy = determine_strategy(&detection);
+        let strategy = determine_strategy(&detection)?;
         assert_eq!(strategy.target, TargetFormat::JXL);
         assert!(strategy.command.contains("--lossless_jpeg=1"));
+        Ok(())
     }
 
     #[test]
-    fn test_gif_animated_strategy() {
+    fn test_gif_animated_strategy() -> Result<()> {
         let detection = DetectionResult {
             file_path: "/test/animation.gif".to_string(),
             format: DetectedFormat::GIF,
@@ -644,7 +652,8 @@ mod tests {
             precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
-        let strategy = determine_strategy(&detection);
+        let strategy = determine_strategy(&detection)?;
         assert_eq!(strategy.target, TargetFormat::HEVCMP4);
+        Ok(())
     }
 }

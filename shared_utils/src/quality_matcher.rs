@@ -690,15 +690,7 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
     if analysis.file_size > 0 {
         if let Some(duration) = analysis.duration_secs {
             if duration > 0.0 {
-                let fps = analysis.fps.unwrap_or_else(|| {
-                    let codec = parse_source_codec(&analysis.source_codec);
-                    match codec {
-                        SourceCodec::Gif => 10.0,
-                        SourceCodec::Apng => 15.0,
-                        SourceCodec::WebpAnimated => 20.0,
-                        _ => 24.0,
-                    }
-                });
+                let fps = analysis.fps.ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
                 let total_frames = (duration * fps) as u64;
                 let bits_per_frame = (analysis.file_size * 8) as f64 / total_frames.max(1) as f64;
                 return Ok(bits_per_frame / pixels as f64);
@@ -971,11 +963,10 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
             }
     }
 
-    if let Some(video_bitrate) = analysis.video_bitrate {
+    if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
         let pixels = (analysis.width as u64) * (analysis.height as u64);
         if pixels > 0 && video_bitrate > 0 {
-            let bpp_estimate =
-                video_bitrate as f64 / (pixels as f64 * analysis.fps.unwrap_or(24.0));
+            let bpp_estimate = video_bitrate as f64 / (pixels as f64 * fps);
             if (0.01..=5.0).contains(&bpp_estimate) {
                 score += 2.0;
                 max_score += 2.0;

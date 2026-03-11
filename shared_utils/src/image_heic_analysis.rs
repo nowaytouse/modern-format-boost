@@ -47,14 +47,12 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let height = handle.height();
     let has_alpha = handle.has_alpha_channel();
     let bit_depth = handle.luma_bits_per_pixel();
-    let is_lossless = false;
+
+    // Detect HDR, Dolby Vision, and Lossless
+    let (is_hdr, is_dolby_vision, is_lossless) = detect_heic_metadata(path);
 
     let image_count = ctx.image_ids().len();
-
     let has_auxiliary = handle.number_of_depth_images() > 0;
-
-    // Detect HDR and Dolby Vision
-    let (is_hdr, is_dolby_vision) = detect_heic_hdr_dv(path);
 
     let decoded_image = lib_heif
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)
@@ -111,27 +109,28 @@ pub fn is_heic_file(path: &Path) -> bool {
     false
 }
 
-/// Detect HDR and Dolby Vision in HEIC files by reading raw file bytes
-/// Returns (is_hdr, is_dolby_vision)
-fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
+/// Detect HDR, Dolby Vision, and Lossless mode in HEIC files by reading raw file bytes
+/// Returns (is_hdr, is_dolby_vision, is_lossless)
+fn detect_heic_metadata(path: &Path) -> (bool, bool, bool) {
     use std::fs::File;
     use std::io::Read;
 
     let mut file = match File::open(path) {
         Ok(f) => f,
-        Err(_) => return (false, false),
+        Err(_) => return (false, false, false),
     };
 
     // Read first 64KB for box scanning
     let mut buffer = vec![0u8; 65536];
     let bytes_read = file.read(&mut buffer).unwrap_or(0);
     if bytes_read < 12 {
-        return (false, false);
+        return (false, false, false);
     }
     buffer.truncate(bytes_read);
 
     let mut is_hdr = false;
     let mut is_dolby_vision = false;
+    let mut is_lossless = false;
 
     // Scan for HEVC configuration boxes (hvcC) and color info (colr, nclx)
     let mut pos = 0;
@@ -159,6 +158,18 @@ fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
             // Check for HDR transfer characteristics in hvcC
             // Byte 22+ contains VPS/SPS/PPS NAL units
             if pos + 30 < buffer.len() {
+                // Check general_profile_idc in hvcC
+                // Profile 4 = RExt (Range Extensions), which supports lossless
+                let profile_idc = buffer[pos + 5] & 0x1F;
+                if profile_idc == 4 {
+                    // Check if constraint flags indicate lossless
+                    // This is complex, but we can look for high bit depth + 4:4:4 in hvcC
+                    let chroma_idc = buffer[pos + 30] & 0x03;
+                    if chroma_idc == 3 { // 4:4:4
+                        is_lossless = true;
+                    }
+                }
+
                 // Look for transfer_characteristics indicating HDR
                 // PQ (SMPTE 2084) = 16, HLG = 18
                 for &b in buffer.iter().take(std::cmp::min(pos + box_size, buffer.len() - 1)).skip(pos + 22) {
@@ -195,7 +206,7 @@ fn detect_heic_hdr_dv(path: &Path) -> (bool, bool) {
         pos += box_size;
     }
 
-    (is_hdr, is_dolby_vision)
+    (is_hdr, is_dolby_vision, is_lossless)
 }
 
 #[cfg(test)]

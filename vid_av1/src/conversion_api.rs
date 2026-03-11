@@ -421,16 +421,29 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     flag_mode.description_en(),
                     initial_crf
                 );
-                let explore_result = shared_utils::explore_av1_with_gpu_coarse_full(
-                    input_path,
-                    &temp_path,
-                    vf_args,
-                    initial_crf as f32,
-                    ultimate,
-                    config.force_ms_ssim_long,
-                    config.min_ssim,
-                    config.child_threads,
-                )
+                let explore_result = if ultimate {
+                    shared_utils::explore_av1_with_gpu_coarse_ultimate(
+                        input_path,
+                        &temp_path,
+                        vf_args,
+                        initial_crf as f32,
+                        ultimate,
+                        config.allow_size_tolerance,
+                        config.child_threads,
+                    )
+                } else {
+                    shared_utils::explore_av1_with_gpu_coarse_full(
+                        input_path,
+                        &temp_path,
+                        vf_args,
+                        initial_crf as f32,
+                        ultimate,
+                        config.force_ms_ssim_long,
+                        config.allow_size_tolerance,
+                        config.min_ssim,
+                        config.child_threads,
+                    )
+                }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
                 for log_line in &explore_result.log {

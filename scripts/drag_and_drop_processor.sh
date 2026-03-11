@@ -387,7 +387,7 @@ count_files() {
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
     draw_separator "Processing Images ($IMG_COUNT)"
-    local args=(run --recursive)
+    local args=(run --recursive --allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
 
@@ -422,7 +422,7 @@ process_images() {
 process_videos() {
     [[ $VID_COUNT -eq 0 ]] && return 0
     draw_separator "Processing Videos ($VID_COUNT)"
-    local args=(run --recursive)
+    local args=(run --recursive --allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
 

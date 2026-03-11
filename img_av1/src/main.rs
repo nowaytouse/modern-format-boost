@@ -274,7 +274,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<()> {
+fn verify_conversion(original: &Path, converted: &Path) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
     println!("   Converted: {}", converted.display());
@@ -323,7 +323,7 @@ fn verify_conversion(original: &PathBuf, converted: &PathBuf) -> anyhow::Result<
     Ok(())
 }
 
-fn load_image_safe(path: &PathBuf) -> anyhow::Result<image::DynamicImage> {
+fn load_image_safe(path: &Path) -> anyhow::Result<image::DynamicImage> {
     let is_jxl = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase() == "jxl")

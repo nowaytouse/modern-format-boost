@@ -9,6 +9,10 @@ use super::dynamic_mapping;
 use super::precheck;
 use super::*;
 
+/// Global tolerance for video path: 1MB (1,048,576 bytes).
+/// Used when allow_size_tolerance flag is enabled to allow minimal size increases.
+const TOLERANCE_BYTES: u64 = 1_048_576;
+
 /// Build the colour/HDR FFmpeg arguments from an FFprobeResult.
 /// These arguments must be appended to every final HEVC/AV1/H.264 encode so that
 /// colour metadata (primaries, TRC, matrix, mastering display, CLL) is preserved.
@@ -100,6 +104,7 @@ pub(crate) fn format_quality_check_line(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn explore_with_gpu_coarse_search(
     input: &Path,
     output: &Path,
@@ -110,6 +115,7 @@ pub fn explore_with_gpu_coarse_search(
     min_ssim: f64,
     ultimate_mode: bool,
     force_ms_ssim_long: bool,
+    allow_size_tolerance: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
@@ -435,6 +441,7 @@ pub fn explore_with_gpu_coarse_search(
         cpu_max_crf,
         min_ssim,
         ultimate_mode,
+        allow_size_tolerance,
         max_threads,
         duration,
         probe_result.as_ref(),
@@ -919,6 +926,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     max_crf: f32,
     min_ssim: f64,
     ultimate_mode: bool,
+    allow_size_tolerance: bool,
     max_threads: usize,
     duration: f32,
     probe_info: Option<&crate::ffprobe::FFprobeResult>,
@@ -1331,14 +1339,19 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
     let gpu_ssim = calculate_ssim_quick();
 
-    if gpu_size < input_size {
+    let is_gpu_effectively_compressed = gpu_size < input_size || (allow_size_tolerance && (gpu_size - input_size) < TOLERANCE_BYTES);
+
+    if is_gpu_effectively_compressed {
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
         best_ssim_tracked = gpu_ssim;
+        
+        let tolerance_msg = if gpu_size >= input_size { " (Within 1MB tolerance)" } else { "" };
         crate::log_eprintln!(
-            "GPU boundary CRF {:.1}: {:+.1}% │ SSIM {} (compresses)✅",
+            "GPU boundary CRF {:.1}: {:+.1}%{} │ SSIM {} ✅",
             gpu_boundary_crf,
             gpu_pct,
+            tolerance_msg,
             gpu_ssim
                 .map(|s| format!("{:.4}", s))
                 .unwrap_or_else(|| "N/A".to_string())
@@ -1485,7 +1498,9 @@ fn cpu_fine_tune_from_gpu_boundary(
             };
             let current_ssim_opt = calculate_ssim_quick();
 
-            if size < input_size {
+            let is_effectively_compressed = size < input_size || (allow_size_tolerance && (size - input_size) < TOLERANCE_BYTES);
+
+            if is_effectively_compressed {
                 last_good_crf = test_crf;
                 last_good_size = size;
                 last_good_ssim = current_ssim_opt;
@@ -1507,15 +1522,38 @@ fn cpu_fine_tune_from_gpu_boundary(
                         };
 
                         let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
+                        
+                        // Ultimate Mode: Enhanced Quality Wall Detection via VMAF(Y) + PSNR(UV)
+                        let mut multi_metric_wall = false;
+                        let mut ultimate_metrics_str = String::new();
+                        
+                        if ultimate_mode && current_step <= MIN_STEP + 0.01 {
+                            // Check for saturation in perceptual (VMAF) and chroma (PSNR-UV)
+                            let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 1);
+                            let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 1);
+                            
+                            if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
+                                let chroma_avg = (u + v_score) / 2.0;
+                                ultimate_metrics_str = format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
+                                
+                                // 1. VMAF-Y > 98 (perceptual ceiling)
+                                // 2. PSNR-UV > 48 (chroma saturation ceiling)
+                                if v > 98.0 || chroma_avg > 48.0 {
+                                    multi_metric_wall = true;
+                                    crate::log_eprintln!("      📊 ULTIMATE WALL DETECTED: VMAF-Y={:.2}, PSNR-UV={:.2} (Saturation Hit)", v, chroma_avg);
+                                }
+                            }
+                        }
+
                         if current_step <= MIN_STEP + 0.01 {
-                            if is_zero_gain {
+                            if is_zero_gain || multi_metric_wall {
                                 consecutive_zero_gains += 1;
                             } else {
                                 consecutive_zero_gains = 0;
                             }
                         }
 
-                        let quality_wall_triggered = consecutive_zero_gains >= required_zero_gains
+                        let quality_wall_triggered = (consecutive_zero_gains >= required_zero_gains || (ultimate_mode && multi_metric_wall))
                             && current_step <= MIN_STEP + 0.01;
 
                         let wall_status = if quality_wall_triggered {
@@ -1533,9 +1571,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                             String::new()
                         };
 
-                        crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}{:.4}{} ({}Δ{:+.5}{}, step {}{:.2}{}) {} {}✅{} {}",
+                        // Use ultimate metrics in main log if available
+                        let quality_display = if ultimate_mode && !ultimate_metrics_str.is_empty() {
+                            format!("{}{}{}", BRIGHT_MAGENTA, ultimate_metrics_str, RESET)
+                        } else {
+                            format!("SSIM {}{:.4}{}", BRIGHT_YELLOW, current_ssim, RESET)
+                        };
+
+                        crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} {} ({}Δ{:+.5}{}, step {}{:.2}{}) {} {}✅{} {}",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET, BRIGHT_YELLOW, current_ssim, RESET,
+                            BRIGHT_GREEN, total_size_pct, RESET, quality_display,
                             DIM, ssim_gain, RESET, DIM, current_step, RESET,
                             gpu_comparison, BRIGHT_GREEN, RESET, wall_status);
 
@@ -1556,8 +1601,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                     crate::log_eprintln!();
                     if ultimate_mode {
                         domain_wall_hit = true;
-                        crate::log_eprintln!("   {}DOMAIN WALL HIT:{} SSIM fully saturated after {} consecutive zero-gains",
-                            BRIGHT_MAGENTA, RESET, consecutive_zero_gains);
+                        let msg = if consecutive_zero_gains >= required_zero_gains {
+                            format!("SSIM saturated after {} consecutive zero-gains", consecutive_zero_gains)
+                        } else {
+                            "VMAF(Y) + PSNR(UV) absolute quality ceiling reached".to_string()
+                        };
+                        crate::log_eprintln!("   {}DOMAIN WALL HIT:{} {}",
+                            BRIGHT_MAGENTA, RESET, msg);
                     } else {
                         crate::log_eprintln!("   {}QUALITY WALL HIT:{} SSIM saturated after {} consecutive zero-gains",
                             BRIGHT_YELLOW, RESET, consecutive_zero_gains);
@@ -1577,6 +1627,30 @@ fn cpu_fine_tune_from_gpu_boundary(
                 _prev_size = size;
                 test_crf -= current_step;
             } else {
+                // Check if the overshoot is within tolerance
+                let size_increase = size - input_size;
+                
+                if allow_size_tolerance && size_increase < TOLERANCE_BYTES {
+                    // This is actually "good enough", treat as success but don't update last_good_* if it's an increase
+                    // unless we have no last_good_*.
+                    if last_good_crf == gpu_boundary_crf && size > input_size {
+                         // First step and it's an increase but within tolerance - accept it
+                         last_good_crf = test_crf;
+                         last_good_size = size;
+                         last_good_ssim = current_ssim_opt;
+                         best_crf = Some(test_crf);
+                         best_size = Some(size);
+                    }
+                    
+                    crate::log_eprintln!("   {}⚠{} {}CRF {:.1}{}: {}{:+.1}%{} (Within 1MB tolerance) ✅",
+                        BRIGHT_YELLOW, RESET, CYAN, test_crf, RESET,
+                        YELLOW, total_size_pct, RESET);
+                    
+                    // Continue searching or stop based on gain (same as success branch)
+                    test_crf -= current_step;
+                    continue;
+                }
+
                 overshoot_detected = true;
                 wall_hits += 1;
 
@@ -1702,12 +1776,15 @@ fn cpu_fine_tune_from_gpu_boundary(
                 0.0
             };
 
-            if size < input_size {
+            let is_effectively_compressed = size < input_size || (allow_size_tolerance && (size - input_size) < TOLERANCE_BYTES);
+
+            if is_effectively_compressed {
                 best_crf = Some(test_crf);
                 best_size = Some(size);
                 best_ssim_tracked = calculate_ssim_quick();
                 found_compress_point = true;
-                crate::log_eprintln!("   CRF {:.1}: {:+.1}% │ FOUND!✅", test_crf, total_size_pct);
+                let tolerance_msg = if size >= input_size { " (Within 1MB tolerance)" } else { "" };
+                crate::log_eprintln!("   CRF {:.1}: {:+.1}%{} │ FOUND!✅", test_crf, total_size_pct, tolerance_msg);
                 break;
             } else {
                 crate::log_eprintln!("   CRF {:.1}: {:+.1}%❌", test_crf, total_size_pct);
@@ -1763,7 +1840,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                 };
                 let current_ssim_opt = calculate_ssim_quick();
 
-                if size < input_size {
+                let is_effectively_compressed = size < input_size || (allow_size_tolerance && (size - input_size) < TOLERANCE_BYTES);
+
+                if is_effectively_compressed {
                     consecutive_failures = 0;
 
                     best_crf = Some(test_crf);
@@ -1781,10 +1860,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                         (Some(current_ssim), Some(prev_ssim)) => {
                             let ssim_gain = current_ssim - prev_ssim;
 
+                            let tolerance_msg = if size >= input_size { " (Within 1MB tolerance)" } else { "" };
                             crate::log_eprintln!(
-                                "   CRF {:.1}: {:+.1}% │ SSIM {:.4} (Δ{:+.4}, size {:+.1}%)✅",
+                                "   CRF {:.1}: {:+.1}%{} │ SSIM {:.4} (Δ{:+.4}, size {:+.1}%)✅",
                                 test_crf,
                                 total_size_pct,
+                                tolerance_msg,
                                 current_ssim,
                                 ssim_gain,
                                 size_increase_pct
@@ -2062,6 +2143,7 @@ pub fn explore_hevc_with_gpu_coarse(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    allow_size_tolerance: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
@@ -2072,6 +2154,7 @@ pub fn explore_hevc_with_gpu_coarse(
         initial_crf,
         false,
         false,
+        allow_size_tolerance,
         min_ssim,
         max_threads,
     )
@@ -2083,6 +2166,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     vf_args: Vec<String>,
     initial_crf: f32,
     ultimate_mode: bool,
+    allow_size_tolerance: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
@@ -2093,6 +2177,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
         initial_crf,
         ultimate_mode,
         false,
+        allow_size_tolerance,
         min_ssim,
         max_threads,
     )
@@ -2105,6 +2190,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
     initial_crf: f32,
     ultimate_mode: bool,
     force_ms_ssim_long: bool,
+    allow_size_tolerance: bool,
     min_ssim: f64,
     max_threads: usize,
 ) -> Result<ExploreResult> {
@@ -2119,6 +2205,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
         min_ssim,
         ultimate_mode,
         force_ms_ssim_long,
+        allow_size_tolerance,
         max_threads,
     )
 }
@@ -2128,6 +2215,7 @@ pub fn explore_av1_with_gpu_coarse(
     output: &Path,
     vf_args: Vec<String>,
     initial_crf: f32,
+    allow_size_tolerance: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
@@ -2141,6 +2229,7 @@ pub fn explore_av1_with_gpu_coarse(
         min_ssim,
         false,
         false,
+        allow_size_tolerance,
         max_threads,
     )
 }
@@ -2151,6 +2240,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
     vf_args: Vec<String>,
     initial_crf: f32,
     ultimate_mode: bool,
+    allow_size_tolerance: bool,
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
@@ -2161,6 +2251,7 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
         initial_crf,
         ultimate_mode,
         false,
+        allow_size_tolerance,
         min_ssim,
         max_threads,
     )
@@ -2173,6 +2264,7 @@ pub fn explore_av1_with_gpu_coarse_full(
     initial_crf: f32,
     ultimate_mode: bool,
     force_ms_ssim_long: bool,
+    allow_size_tolerance: bool,
     min_ssim: f64,
     max_threads: usize,
 ) -> Result<ExploreResult> {
@@ -2187,6 +2279,7 @@ pub fn explore_av1_with_gpu_coarse_full(
         min_ssim,
         ultimate_mode,
         force_ms_ssim_long,
+        allow_size_tolerance,
         max_threads,
     )
 }
