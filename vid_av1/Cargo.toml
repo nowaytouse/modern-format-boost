@@ -22,3 +22,4 @@ libc = { workspace = true }
 xattr = { workspace = true }
 which = { workspace = true }
 shared_utils = { workspace = true }
+tempfile = { workspace = true }
