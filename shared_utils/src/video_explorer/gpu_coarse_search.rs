@@ -1793,6 +1793,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         let mut test_crf = gpu_boundary_crf + step_size_upward;
         let mut found_compress_point = false;
+        let mut collapse_counter = 0u32;
 
         let max_iterations_for_video =
             calculate_max_iterations_for_duration(duration, ultimate_mode);
@@ -1823,12 +1824,22 @@ fn cpu_fine_tune_from_gpu_boundary(
                     const PSNR_UV_MIN: f64 = 38.0;
 
                     if v < VMAF_Y_MIN || chroma_avg < PSNR_UV_MIN {
-                        crate::log_eprintln!(
-                            "   \x1b[1;31m❌ QUALITY COLLAPSE:\x1b[0m CRF {:.1} already below gate (VMAF:{:.2} < {:.1} or UV:{:.2} < {:.1}).",
-                            test_crf, v, VMAF_Y_MIN, chroma_avg, PSNR_UV_MIN
-                        );
-                        crate::log_eprintln!("      Aborting upward search: no valid compression point exists.");
-                        break;
+                        collapse_counter += 1;
+                        if collapse_counter >= 3 {
+                            crate::log_eprintln!(
+                                "   \x1b[1;31m❌ QUALITY COLLAPSED (3/3):\x1b[0m CRF {:.1} sustained below gate. Aborting.",
+                                test_crf
+                            );
+                            break;
+                        } else {
+                            crate::log_eprintln!(
+                                "   \x1b[1;33m⚠️  QUALITY WARNING ({}/3):\x1b[0m Below gate (VMAF:{:.2}, UV:{:.2}). Verifying...",
+                                collapse_counter, v, chroma_avg
+                            );
+                        }
+                    } else {
+                        // Reset counter if quality recovers
+                        collapse_counter = 0;
                     }
                     
                     // Cache for potential use
