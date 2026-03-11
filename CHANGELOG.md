@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.29] - 2026-03-12
+
+### Added
+- **Ultimate 'Dead-Wall' Detection**: Intelligent fast-fail for downward search paths.
+  - If video quality is already below mandatory thresholds (VMAF 93 / UV 38) and exhibits saturation (3 consecutive zero-gains), the search aborts immediately.
+  - Prevents wasting performance on up to 27 redundant iterations when a "Quality Gate" failure is statistically inevitable.
+- **Enhanced Ceiling Verification**: Ceiling checks now strictly validate both VMAF-Y and PSNR-UV components.
+
 ## [0.10.28] - 2026-03-12
 
 ### Added
