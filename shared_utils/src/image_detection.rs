@@ -3027,44 +3027,44 @@ mod tests {
     #[test]
     fn test_detect_png_format() {
         let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
         let mut data = png_magic.to_vec();
         data.extend_from_slice(&[0u8; 24]);
-        file.write_all(&data).expect("写入失败");
+        file.write_all(&data).expect("Failed to write");
 
         let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "PNG 格式检测应该成功");
-        assert_eq!(result.unwrap(), DetectedFormat::PNG, "应该检测为 PNG 格式");
+        assert!(result.is_ok(), "PNG format detection should succeed");
+        assert_eq!(result.unwrap(), DetectedFormat::PNG, "Should be detected as PNG format");
     }
 
     #[test]
     fn test_detect_jpeg_format() {
         let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
         let mut data = jpeg_magic.to_vec();
         data.extend_from_slice(&[0u8; 28]);
-        file.write_all(&data).expect("写入失败");
+        file.write_all(&data).expect("Failed to write");
 
         let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "JPEG 格式检测应该成功");
+        assert!(result.is_ok(), "JPEG format detection should succeed");
         assert_eq!(
             result.unwrap(),
             DetectedFormat::JPEG,
-            "应该检测为 JPEG 格式"
+            "Should be detected as JPEG format"
         );
     }
 
     #[test]
     fn test_detect_gif_format() {
         let gif_magic: &[u8] = b"GIF89a";
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
         let mut data = gif_magic.to_vec();
         data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).expect("写入失败");
+        file.write_all(&data).expect("Failed to write");
 
         let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "GIF 格式检测应该成功");
-        assert_eq!(result.unwrap(), DetectedFormat::GIF, "应该检测为 GIF 格式");
+        assert!(result.is_ok(), "GIF format detection should succeed");
+        assert_eq!(result.unwrap(), DetectedFormat::GIF, "Should be detected as GIF format");
     }
 
     #[test]
@@ -3074,37 +3074,37 @@ mod tests {
         webp_data.extend_from_slice(b"WEBP");
         webp_data.extend_from_slice(&[0u8; 20]);
 
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(&webp_data).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        file.write_all(&webp_data).expect("Failed to write");
 
         let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "WebP 格式检测应该成功");
+        assert!(result.is_ok(), "WebP format detection should succeed");
         assert_eq!(
             result.unwrap(),
             DetectedFormat::WebP,
-            "应该检测为 WebP 格式"
+            "Should be detected as WebP format"
         );
     }
 
     #[test]
     fn test_detect_unknown_format() {
         let random_data: &[u8] = &[0x00, 0x01, 0x02, 0x03, 0x04, 0x05];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
         let mut data = random_data.to_vec();
         data.extend_from_slice(&[0u8; 26]);
-        file.write_all(&data).expect("写入失败");
+        file.write_all(&data).expect("Failed to write");
 
         let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "未知格式检测应该成功（返回 Unknown）");
+        assert!(result.is_ok(), "Unknown format detection should succeed (return Unknown)");
         match result.unwrap() {
             DetectedFormat::Unknown(_) => (),
-            other => panic!("应该检测为 Unknown 格式，实际为 {:?}", other),
+            other => panic!("Should be detected as Unknown format, actual {:?}", other),
         }
     }
 
     #[test]
     fn test_detect_nonexistent_file() {
         let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
-        assert!(result.is_err(), "不存在的文件应该返回错误");
+        assert!(result.is_err(), "Non-existent file should return error");
     }
 }
