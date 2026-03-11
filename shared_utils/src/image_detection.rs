@@ -1807,20 +1807,12 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 precision.is_lossless_deterministic = comp == CompressionType::Lossless;
             }
         }
-        DetectedFormat::JXL => {
-            if let Ok(comp) = detect_jxl_compression(path) {
-                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
-            }
-        }
-        DetectedFormat::JP2 => {
-            if let Ok(comp) = detect_jp2_compression(path) {
-                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
-            }
-        }
         _ => {}
     }
 
-    let estimated_quality = if format == DetectedFormat::JPEG || (format == DetectedFormat::WebP && compression == CompressionType::Lossy) {
+    let estimated_quality = if format == DetectedFormat::JPEG {
+        precision.quality_estimate
+    } else if format == DetectedFormat::WebP && compression == CompressionType::Lossy {
         precision.quality_estimate
     } else {
         None
@@ -2289,7 +2281,7 @@ fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
 ///
 /// Only returns Err when hvcC box is missing entirely.
-pub fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
+fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
