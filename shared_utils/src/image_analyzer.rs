@@ -629,13 +629,6 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
                 if frame_count <= 1 {
                     eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
                     return Some(0.0);
-                } else {
-                    let estimated_duration = frame_count as f32 / 10.0;
-                    eprintln!(
-                        "📊 Estimated duration from frame count: {:.2}s ({} frames)",
-                        estimated_duration, frame_count
-                    );
-                    return Some(estimated_duration);
                 }
             }
         }
@@ -703,10 +696,8 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                     .unwrap_or("0/1");
                 
                 // Parse frame rate (format: "num/den")
-                let fps = if let Some((num, den)) = r_frame_rate.split_once('/') {
-                    let num: f32 = num.parse().unwrap_or(0.0);
-                    let den: f32 = den.parse().unwrap_or(1.0);
-                    if den > 0.0 { num / den } else { 0.0 }
+                let fps = if let Ok(rate) = crate::ffprobe::parse_frame_rate(r_frame_rate) {
+                    rate as f32
                 } else {
                     0.0
                 };
@@ -877,10 +868,9 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
             let compression = detect_compression(&detected_format, path)?;
             Ok(compression == CompressionType::Lossless)
         }
-        // GIF uses palette quantization — inherently lossy like pngquant.
-        // Returning false routes static GIF to the lossy JXL path (d=1.0) in main.rs.
-        // Animated GIF still goes through the is_animated branch regardless of this value.
-        ImageFormat::Gif => Ok(false),
+        // GIF uses palette quantization — inherently lossless for its own 256-color space.
+        // Returning true preserves the palette exactly in JXL/AVIF lossless modes.
+        ImageFormat::Gif => Ok(true),
         ImageFormat::Tiff => {
             let compression = detect_compression(&DetectedFormat::TIFF, path)?;
             Ok(compression == CompressionType::Lossless)

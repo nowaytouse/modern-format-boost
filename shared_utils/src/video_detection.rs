@@ -7,7 +7,16 @@
 
 use crate::ffprobe::{probe_video, FFprobeError};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct VideoPrecisionMetadata {
+    pub original_crf: Option<f32>,
+    pub original_preset: Option<String>,
+    pub original_encoder: Option<String>,
+    pub is_lossless_deterministic: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectedCodec {
@@ -194,6 +203,10 @@ pub struct VideoDetectionResult {
     pub audio_channels: Option<u32>,
     /// Variable frame rate (VFR) detected - common in iPhone slow-motion videos
     pub is_variable_frame_rate: bool,
+    /// Precise metadata from encoder tags
+    pub precision: VideoPrecisionMetadata,
+    /// Raw tags from format section
+    pub tags: HashMap<String, String>,
 }
 
 pub fn determine_compression_type(
@@ -202,10 +215,25 @@ pub fn determine_compression_type(
     width: u32,
     height: u32,
     fps: f64,
+    precision: &VideoPrecisionMetadata,
 ) -> CompressionType {
-    if codec.is_lossless() {
+    if codec.is_lossless() || precision.is_lossless_deterministic {
         return CompressionType::Lossless;
     }
+    
+    // Use original CRF if available for more precise categorization
+    if let Some(crf) = precision.original_crf {
+        if crf <= 15.0 {
+            return CompressionType::VisuallyLossless;
+        } else if crf <= 23.0 {
+            return CompressionType::HighQuality;
+        } else if crf <= 30.0 {
+            return CompressionType::Standard;
+        } else {
+            return CompressionType::LowQuality;
+        }
+    }
+
     if matches!(codec, DetectedCodec::ProRes | DetectedCodec::DNxHD) {
         return CompressionType::VisuallyLossless;
     }
@@ -258,12 +286,15 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         0.0
     };
 
+    let precision = extract_video_precision(&probe.tags);
+
     let compression = determine_compression_type(
         &codec,
         probe.bit_rate,
         probe.width,
         probe.height,
         probe.frame_rate,
+        &precision,
     );
 
     let color_space = probe
@@ -321,5 +352,33 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         subtitle_codec: probe.subtitle_codec,
         audio_channels: probe.audio_channels,
         is_variable_frame_rate: probe.is_variable_frame_rate,
+        precision,
+        tags: probe.tags,
     })
+}
+
+fn extract_video_precision(tags: &HashMap<String, String>) -> VideoPrecisionMetadata {
+    let mut precision = VideoPrecisionMetadata::default();
+    
+    if let Some(encoder) = tags.get("encoder") {
+        precision.original_encoder = Some(encoder.clone());
+        
+        let encoder_lower = encoder.to_lowercase();
+        if encoder_lower.contains("x264") || encoder_lower.contains("x265") {
+            // Try to extract CRF/QP/preset from complex encoder tags if available
+            // Note: Standard ffprobe doesn't always show full x265-params in format tags, 
+            // but some tools (like handbrake) or custom encodes do.
+            if let Some(comment) = tags.get("comment") {
+                if let Some(crf_pos) = comment.find("crf=") {
+                    let sub = &comment[crf_pos + 4..];
+                    let crf_val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if let Ok(crf) = crf_val.parse::<f32>() {
+                        precision.original_crf = Some(crf);
+                    }
+                }
+            }
+        }
+    }
+    
+    precision
 }

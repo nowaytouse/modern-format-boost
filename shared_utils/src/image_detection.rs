@@ -417,8 +417,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             let data = std::fs::read(path)?;
             let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
             let is_animated = frame_count > 1;
-            let fps = if is_animated { Some(10.0) } else { None };
-            Ok((is_animated, frame_count, fps))
+            Ok((is_animated, frame_count, None))
         }
         DetectedFormat::WebP => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
@@ -430,8 +429,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             } else {
                 1
             };
-            let fps = if is_animated { Some(24.0) } else { None };
-            Ok((is_animated, frame_count, fps))
+            Ok((is_animated, frame_count, None))
         }
         DetectedFormat::PNG => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
@@ -1810,13 +1808,56 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         _ => {}
     }
 
-    let estimated_quality = if format == DetectedFormat::JPEG {
-        precision.quality_estimate
-    } else if format == DetectedFormat::WebP && compression == CompressionType::Lossy {
+    let mut estimated_quality = if format == DetectedFormat::JPEG || (format == DetectedFormat::WebP && compression == CompressionType::Lossy) {
         precision.quality_estimate
     } else {
         None
     };
+
+    if estimated_quality.is_none() && compression == CompressionType::Lossy {
+        let pixels = (width as u64) * (height as u64);
+        if pixels > 0 && file_size > 0 {
+            // Heuristic v2: Multi-factor quality estimation
+            let raw_bpp = (file_size * 8) as f64 / pixels as f64 / (frame_count.max(1) as f64);
+            
+            // Format efficiency multiplier (relative to JPEG)
+            // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
+            let efficiency_factor = match format {
+                DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => 3.0,
+                DetectedFormat::WebP => 1.5,
+                _ => 1.0,
+            };
+
+            // Entropy compensation: 
+            // High entropy (>7.5) means complex texture, needs more BPP for same quality
+            // Low entropy (<4.0) means flat colors, quality is higher even with low BPP
+            let entropy_adj = (7.5 / entropy.max(1.0)).sqrt().clamp(0.7, 1.3);
+            
+            let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
+            let bpp_quality = (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0) as u8;
+
+            eprintln!(
+                "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
+                   \x1b[33m      File: {}\x1b[0m\n\
+                   \x1b[33m      Heuristic: BPP={:.3}, Eff={:.1}x, Entropy={:.2} -> \x1b[1;32mEstimated Q: {}\x1b[0m",
+                format.as_str(),
+                path.display(),
+                raw_bpp,
+                efficiency_factor,
+                entropy,
+                bpp_quality
+            );
+            estimated_quality = Some(bpp_quality);
+        } else {
+            eprintln!(
+                "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed AND dimensions invalid.\x1b[0m\n\
+                   \x1b[31m      File: {}\x1b[0m\n\
+                   \x1b[31m      Defaulting to safe base Q85\x1b[0m",
+                path.display()
+            );
+            estimated_quality = Some(85);
+        }
+    }
 
     let duration = if is_animated {
         fps.map(|f| frame_count as f32 / f)

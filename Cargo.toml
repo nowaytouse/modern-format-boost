@@ -9,59 +9,59 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.10.20"
+version = "0.10.26"
 edition = "2021"
 license = "MIT"
 authors = ["Modern Format Boost Contributors"]
 
 [workspace.dependencies]
-# Core error handling (GitHub stable)
-anyhow    = { git = "https://github.com/dtolnay/anyhow",    tag = "1.0.97" }
-thiserror = { git = "https://github.com/dtolnay/thiserror", tag = "2.0.12" }
+# Core error handling
+anyhow    = "1.0.102"
+thiserror = "2.0.18"
 
-# Logging and tracing (crates.io — complex feature dependencies)
-tracing            = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "json"] }
-tracing-appender   = "0.2"
+# Logging and tracing
+tracing            = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter", "json"] }
+tracing-appender   = "0.2.3"
 
-# CLI (GitHub stable)
-clap = { git = "https://github.com/clap-rs/clap", tag = "v4.5.38", features = ["derive", "cargo"] }
+# CLI
+clap = { version = "4.5.60", features = ["derive", "cargo"] }
 
-# Serialization (crates.io — tightly coupled versions)
-serde      = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# Serialization
+serde      = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.138"
 
-# Parallelism (crates.io — complex dependency tree)
-rayon = "1.11"
+# Parallelism
+rayon = "1.11.0"
 
-# Progress indicators (crates.io)
-indicatif = { version = "0.18", features = ["rayon"] }
+# Progress indicators
+indicatif = { version = "0.18.4", features = ["rayon"] }
 
-# File system utilities (GitHub stable)
-walkdir  = { git = "https://github.com/BurntSushi/walkdir", tag = "2.5.0" }
-filetime = { git = "https://github.com/alexcrichton/filetime", tag = "0.2.25" }
-libc     = "0.2"
-xattr    = { git = "https://github.com/Stebalien/xattr", tag = "v1.3.1" }
+# File system utilities
+walkdir  = "2.5.0"
+filetime = "0.2.27"
+libc     = "0.2.169"
+xattr    = "1.6.1"
 
-# System utilities (GitHub stable)
-which = { git = "https://github.com/harryfei/which-rs", tag = "8.0.0" }
-log   = { git = "https://github.com/rust-lang/log", tag = "0.4.22" }
+# System utilities
+which = "8.0.2"
+log   = "0.4.29"
 
-# Terminal (crates.io — console has breaking changes in GitHub)
-console = "0.16"
-chrono  = { git = "https://github.com/chronotope/chrono", tag = "v0.4.40", features = ["serde"] }
+# Terminal
+console = "0.16.2"
+chrono  = { version = "0.4.44", features = ["serde"] }
 
-# Image processing (GitHub stable)
-image       = { git = "https://github.com/image-rs/image", tag = "v0.25.6", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
-libheif-rs  = { git = "https://github.com/Cykooz/libheif-rs", tag = "v2.7.0" }
+# Image processing
+image       = { version = "0.25.10", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
+libheif-rs  = "2.7.0"
 
-# Testing and compression (GitHub stable)
-tempfile = { git = "https://github.com/Stebalien/tempfile", tag = "v3.19.1" }
-proptest = { git = "https://github.com/proptest-rs/proptest", tag = "v1.6.0" }
-flate2   = { git = "https://github.com/rust-lang/flate2-rs", tag = "1.1.1" }
+# Testing and compression
+tempfile = "3.16.0"
+proptest = "1.10.0"
+flate2   = "1.1.9"
 
-# Signal handling (crates.io)
-ctrlc = "3.4"
+# Signal handling
+ctrlc = "3.4.5"
 
 shared_utils = { path = "shared_utils" }
 

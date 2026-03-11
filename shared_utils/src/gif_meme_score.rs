@@ -12,13 +12,13 @@
 //! 7. **Weighted scoring**: seven dimensions combined when no veto/uncertainty applies
 //!
 //! Dimensions (base weights, adjusted dynamically):
-//!   - sharpness       (0.38): Low bytes/pixel → simple palette → meme-like
-//!   - resolution      (0.16): Small canvas → meme-like (≤200² ≈ 1.0, ≥1080p ≈ 0.0)
-//!   - duration        (0.18): Short loop → meme-like (≤1 s ≈ 1.0, ≥10 s ≈ 0.0)
+//!   - sharpness       (0.40): Low bytes/pixel → simple palette → meme-like
+//!   - resolution      (0.18): Small canvas → meme-like (≤200² ≈ 1.0, ≥1080p ≈ 0.0)
+//!   - duration        (0.20): Short loop → meme-like (≤1 s ≈ 1.0, ≥10 s ≈ 0.0)
 //!   - aspect_ratio    (0.10): Square canvas → meme-like
-//!   - fps             (0.04): Low frame rate → meme-like (≤6 fps ≈ 1.0, ≥30 fps ≈ 0.0)
 //!   - filename        (0.08): Single-word name → meme-like (NEW)
-//!   - loop_frequency  (0.06): High loop rate → meme-like (NEW)
+//!   - loop_frequency  (0.04): High loop rate → meme-like (NEW)
+//!   - fps             (0.00): DEPRECATED - High frame rate memes (Live2D) exist.
 
 /// Meta-information about an animated GIF derived from ffprobe / image-analyzer.
 #[derive(Debug, Clone)]
@@ -152,7 +152,7 @@ fn score_filename(name: Option<&str>) -> f64 {
 }
 
 /// Calculate loop frequency score.
-/// High loop rate (short duration with many repetitions) → meme-like.
+/// High loop rate (short duration indicating intentional cyclic animation) → meme-like.
 /// Returns score in [0.0, 1.0] where 1.0 = high loop frequency (meme-like).
 fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
     if duration_secs <= 0.01 || frame_count == 0 {
@@ -263,8 +263,8 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     // Duration: short loop ≈ meme
     let duration_score = 1.0 - normalize(meta.duration_secs, 1.0, 10.0);
 
-    // FPS: low frame-rate ≈ meme
-    let fps_score = 1.0 - normalize(meta.fps, 6.0, 30.0);
+    // FPS: DEPRECATED - High frame rate memes (Live2D) exist.
+    let fps_score = 0.5; // neutral
 
     // Aspect ratio: square ≈ meme
     let ratio = if meta.height > 0 {
@@ -285,13 +285,13 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let complexity = normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
     
     // Base weights (sum to 1.0 before normalization)
-    let w_sharpness  = 0.38;  // Reduced from 0.45 to make room for new dimensions
-    let w_resolution = 0.16 + 0.10 * complexity; // up to 0.26 for complex content
-    let w_duration   = 0.18 + 0.08 * complexity; // up to 0.26
+    let w_sharpness  = 0.40;
+    let w_resolution = 0.18 + 0.10 * complexity; // up to 0.28 for complex content
+    let w_duration   = 0.20 + 0.08 * complexity; // up to 0.28
     let w_aspect     = 0.10 * (1.0 - 0.3 * complexity);
-    let w_fps        = 0.04 * (1.0 - 0.3 * complexity);
-    let w_filename   = 0.08;  // NEW: filename weight (moderate influence)
-    let w_loop_freq  = 0.06;  // NEW: loop frequency weight (moderate influence)
+    let w_fps        = 0.00; // DEPRECATED
+    let w_filename   = 0.08;
+    let w_loop_freq  = 0.04;
     
     // Renormalise so weights always sum to 1.0
     let w_sum = w_sharpness + w_resolution + w_duration + w_aspect + w_fps + w_filename + w_loop_freq;
@@ -375,10 +375,15 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     };
 
     crate::progress_mode::emit_stderr(&format!(
-        "🎞️  GIF [{}] → {} (score={:.3})",
+        "🎞️  GIF [{}] → {} (score={:.3}) │ sharpness:{:.2} res:{:.2} dur:{:.2} name:{:.2} loop:{:.2}",
         meta.file_name.as_deref().unwrap_or("?"),
         if keep { "KEEP GIF" } else { "CONVERT→VIDEO" },
         s.total,
+        s.sharpness,
+        s.resolution,
+        s.duration,
+        s.filename_score,
+        s.loop_frequency_score,
     ));
 
     keep

@@ -529,15 +529,21 @@ fn classify_content_type(
         return ImageContentType::Animation;
     }
 
-    // Precise palette-based classification
+    // 🚀 Precise-First: Palette-based classification (Deterministic)
     if let Some(p_size) = precision.palette_size {
-        if p_size <= 64 && complexity < 0.3 {
+        // Very small palette (e.g. 1-32 colors) is almost always an Icon or simple UI element
+        // regardless of resolution if it's small enough.
+        if p_size <= 64 && width <= 512 && height <= 512 {
             return ImageContentType::Icon;
         }
-        if p_size <= 256 && complexity < 0.5 {
+        // Medium palette (up to 256 colors) with low complexity is a Graphic/Art.
+        // This catches indexed PNGs/GIFs that aren't natural photos.
+        if p_size <= 256 && complexity < 0.6 {
             return ImageContentType::Graphic;
         }
     }
+
+    // Heuristic fallbacks (Score-based)
 
     if width <= 512 && height <= 512 && has_alpha && complexity < 0.4 {
         return ImageContentType::Icon;

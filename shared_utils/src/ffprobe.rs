@@ -82,6 +82,8 @@ pub struct FFprobeResult {
     pub is_variable_frame_rate: bool,
     /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
     pub stream_index: usize,
+    /// Format tags (e.g. encoder, creation_time) from the format section
+    pub tags: std::collections::HashMap<String, String>,
 }
 
 pub fn is_ffprobe_available() -> bool {
@@ -176,20 +178,32 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let format = &json["format"];
     let format_name = format["format_name"]
         .as_str()
-        .unwrap_or("unknown")
+        .ok_or_else(|| FFprobeError::ParseError("Missing format_name".to_string()))?
         .to_string();
-    let duration = format["duration"]
-        .as_str()
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0);
+
     let size = format["size"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0);
+        .ok_or_else(|| FFprobeError::ParseError("Missing or invalid file size".to_string()))?;
+
     let bit_rate = format["bit_rate"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(0);
+        .unwrap_or(0); // overall bitrate can be 0 if unknown, handled downstream
+
+    let mut duration = format["duration"]
+        .as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    
+    let mut tags = std::collections::HashMap::new();
+    if let Some(tags_obj) = format["tags"].as_object() {
+        for (k, v) in tags_obj {
+            if let Some(val) = v.as_str() {
+                tags.insert(k.clone(), val.to_string());
+            }
+        }
+    }
 
     let streams = json["streams"]
         .as_array()
@@ -228,19 +242,33 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         (actual_index, video_streams[0].1)
     };
 
+    if duration <= 0.0 {
+        if let Some(d) = video_stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok()) {
+            duration = d;
+        }
+    }
+    if duration <= 0.0 {
+        return Err(FFprobeError::ParseError("Missing duration (both format and video stream reported 0 or invalid duration)".to_string()));
+    }
+
     let video_codec = video_stream["codec_name"]
         .as_str()
-        .unwrap_or("unknown")
+        .ok_or_else(|| FFprobeError::ParseError("Missing video codec name".to_string()))?
         .to_string();
     let video_codec_long = video_stream["codec_long_name"]
         .as_str()
         .unwrap_or("")
         .to_string();
-    let width = video_stream["width"].as_u64().unwrap_or(0) as u32;
-    let height = video_stream["height"].as_u64().unwrap_or(0) as u32;
+    let width = video_stream["width"].as_u64().ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))? as u32;
+    let height = video_stream["height"].as_u64().ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))? as u32;
+    if width == 0 || height == 0 {
+        return Err(FFprobeError::ParseError(format!("Invalid dimensions: {}x{}", width, height)));
+    }
 
-    let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"));
-    let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"));
+    let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
+        .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {}", e)))?;
+    let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
+        .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {}", e)))?;
 
     // Enhanced VFR detection with slow-motion handling
     let is_variable_frame_rate = detect_vfr_enhanced(
@@ -257,7 +285,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
     let pix_fmt = video_stream["pix_fmt"]
         .as_str()
-        .unwrap_or("unknown")
+        .ok_or_else(|| FFprobeError::ParseError("Missing pixel format".to_string()))?
         .to_string();
     let color_space = video_stream["color_space"].as_str().and_then(|s| {
         if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
@@ -346,6 +374,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         subtitle_codec,
         is_variable_frame_rate,
         stream_index,
+        tags,
     })
 }
 
@@ -565,33 +594,23 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     }
 }
 
-const FALLBACK_FRAME_RATE: f64 = 24.0;
-
-pub fn parse_frame_rate(s: &str) -> f64 {
+pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
-            let num = parts[0].parse::<f64>().unwrap_or(0.0);
-            let den = parts[1].parse::<f64>().unwrap_or(0.0);
+            let num = parts[0].parse::<f64>().map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {}", e)))?;
+            let den = parts[1].parse::<f64>().map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {}", e)))?;
             if den > 0.0 {
                 let rate = num / den;
                 if rate > 0.0 {
-                    return rate;
+                    return Ok(rate);
                 }
             }
         }
     }
     match s.parse::<f64>() {
-        Ok(v) if v > 0.0 => v,
-        _ => {
-            if !s.is_empty() && s != "0" && s != "0/1" {
-                eprintln!(
-                    "⚠️ [ffprobe] Failed to parse frame rate '{}', using fallback {}fps",
-                    s, FALLBACK_FRAME_RATE
-                );
-            }
-            FALLBACK_FRAME_RATE
-        }
+        Ok(v) if v > 0.0 => Ok(v),
+        _ => Err(FFprobeError::ParseError(format!("Could not parse frame rate: '{}'", s))),
     }
 }
 
@@ -645,7 +664,7 @@ mod tests {
         ];
 
         for (input, expected, tolerance) in cases {
-            let result = parse_frame_rate(input);
+            let result = parse_frame_rate(input).unwrap();
             assert!(
                 (result - expected).abs() < *tolerance,
                 "parse_frame_rate({:?}): expected {}, got {}",
@@ -658,10 +677,10 @@ mod tests {
 
     #[test]
     fn test_parse_frame_rate_edge_cases() {
-        assert_eq!(parse_frame_rate("30/0"), FALLBACK_FRAME_RATE);
-        assert_eq!(parse_frame_rate("invalid"), FALLBACK_FRAME_RATE);
-        assert_eq!(parse_frame_rate(""), FALLBACK_FRAME_RATE);
-        assert_eq!(parse_frame_rate("30/1/extra"), FALLBACK_FRAME_RATE);
+        assert!(parse_frame_rate("30/0").is_err());
+        assert!(parse_frame_rate("invalid").is_err());
+        assert!(parse_frame_rate("").is_err());
+        assert!(parse_frame_rate("30/1/extra").is_err());
     }
 
     #[test]
