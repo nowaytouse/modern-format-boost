@@ -1487,7 +1487,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
 
         // Determine search floor based on mode
-        let search_floor = if ultimate_mode { ABSOLUTE_MIN_CRF } else { min_crf };
+        // Ultimate Mode has NO floor (0.0) to allow hitting the true physical wall.
+        let search_floor = if ultimate_mode { 0.0 } else { min_crf };
 
         while iterations < max_iterations_for_video && test_crf >= search_floor {
             if test_crf < search_floor {
