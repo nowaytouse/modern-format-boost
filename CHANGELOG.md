@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.23] - 2026-03-11
+
+### Added
+- **AV1 Animated Image Parity**: Synchronized `vid_av1` and `img_av1` with their HEVC counterparts to handle animated WebP and JXL inputs efficiently.
+  - Implemented `webpmux` pre-extraction for animated WebP to APNG conversion.
+  - Added multi-stream validation for animated HEIC/HEIF sequences.
+- **AV1 Mathematical Lossless Mode**: Added proper support for `libsvtav1` lossless parameters (`-svtav1-params lossless=1`) within `vid_av1`.
+
+### Changed
+- **Delegated AV1 Processing**: Refactored `img_av1/lossless_converter` to delegate all animation-centric processes back to the shared `vid_av1::animated_image` logic, eliminating duplicate definitions and guaranteeing consistent handling.
+
+### Fixed
+- **Error Muting in AV1 Conversion**: Fixed a bug inside `vid_av1`'s conversion API where failures returned by `copy_on_skip_or_fail` were quietly swallowed instead of aborting the operation.
+- **GIF Fallback Ignorance**: Fixed an issue where animated GIFs were subjected to standard Apple compatibility fallbacks, preventing proper skip preservation.
+
 ## [0.10.22] - 2026-03-11
 
 ### Added
