@@ -1546,7 +1546,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
                         
                         // Ultimate Mode: Enhanced Quality Wall Detection via VMAF(Y) + PSNR(UV)
-                        let mut multi_metric_wall = false;
+                        let mut ceiling_hit = false;
                         let mut ultimate_metrics_str = String::new();
                         
                         if ultimate_mode {
@@ -1563,28 +1563,48 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 *best_vmaf_tracked = Some(v);
                                 *best_psnr_uv_tracked = Some((u, v_score));
 
-                                // Wall detection trigger: only when step is small enough to be "near the wall"
-                                if current_step <= MIN_STEP + 0.01 {
-                                    // 1. VMAF-Y > 98 (perceptual ceiling)
-                                    // 2. PSNR-UV > 48 (chroma saturation ceiling)
-                                    if v > 98.0 || chroma_avg > 48.0 {
-                                        multi_metric_wall = true;
-                                        crate::log_eprintln!("      📊 ULTIMATE WALL DETECTED: VMAF-Y={:.2}, PSNR-UV={:.2} (Saturation Hit)", v, chroma_avg);
-                                    }
+                                // "God Zone" ceiling: quality is statistically saturated.
+                                if v > 98.0 || chroma_avg > 48.0 {
+                                    ceiling_hit = true;
                                 }
                             }
                         }
 
                         if current_step <= MIN_STEP + 0.01 {
-                            if is_zero_gain || multi_metric_wall {
+                            // Increment gains if SSIM is flat OR we are in the God Zone
+                            if is_zero_gain || ceiling_hit {
                                 consecutive_zero_gains += 1;
                             } else {
                                 consecutive_zero_gains = 0;
                             }
                         }
 
-                        let quality_wall_triggered = (consecutive_zero_gains >= required_zero_gains || (ultimate_mode && multi_metric_wall))
-                            && current_step <= MIN_STEP + 0.01;
+                        // Revised Trigger logic:
+                        // 1. Normal: 3-4 zero gains.
+                        // 2. Ultimate: Must reach 30 zero gains.
+                        // 3. Ultimate Ceiling: Even if quality is amazing (>98), 
+                        //    we require 10 consecutive confirmations to filter out VMAF noise.
+                        const ULTIMATE_CEILING_CONFIRMATION: u32 = 10;
+                        
+                        let quality_wall_triggered = current_step <= MIN_STEP + 0.01 && (
+                            consecutive_zero_gains >= required_zero_gains || 
+                            (ultimate_mode && ceiling_hit && consecutive_zero_gains >= ULTIMATE_CEILING_CONFIRMATION)
+                        );
+
+                        // Ultimate Mode: Early failure if the quality wall is below the mandatory gate
+                        if ultimate_mode && quality_wall_triggered {
+                            if let Some(v) = *best_vmaf_tracked {
+                                const VMAF_Y_MIN: f64 = 93.0;
+                                if v < VMAF_Y_MIN {
+                                    crate::log_eprintln!(
+                                        "   \x1b[1;31m❌ CEILING BELOW GATE:\x1b[0m Ultimate wall hit at VMAF:{:.2} (< {:.1}). Aborting.",
+                                        v, VMAF_Y_MIN
+                                    );
+                                    quality_wall_hit = true;
+                                    break; 
+                                }
+                            }
+                        }
 
                         let wall_status = if quality_wall_triggered {
                             if ultimate_mode {
@@ -1593,10 +1613,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 format!("{}QUALITY WALL{}", BRIGHT_YELLOW, RESET)
                             }
                         } else if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
-                            format!(
-                                "{}[{}/{}]{}",
-                                DIM, consecutive_zero_gains, required_zero_gains, RESET
-                            )
+                            if ultimate_mode && ceiling_hit {
+                                format!("{}[SATURATED {}/{}]{}", BRIGHT_MAGENTA, consecutive_zero_gains, ULTIMATE_CEILING_CONFIRMATION, RESET)
+                            } else {
+                                format!(
+                                    "{}[{}/{}]{}",
+                                    DIM, consecutive_zero_gains, required_zero_gains, RESET
+                                )
+                            }
                         } else {
                             String::new()
                         };
