@@ -1571,7 +1571,7 @@ pub fn gpu_coarse_search_with_log(
     let max_iterations_limit = GPU_ABSOLUTE_MAX_ITERATIONS;
 
     log_msg!(
-        "GPU搜索 ({}, {:.2}MB, {:.1}s)",
+        "GPU Search ({}, {:.2}MB, {:.1}s)",
         gpu.gpu_type,
         input_size as f64 / 1024.0 / 1024.0,
         quick_duration

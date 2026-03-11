@@ -8,7 +8,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Standardized 1MB File Size Threshold**: Unified all 1MB size threshold checks across the codebase to exactly `1_048_576` bytes instead of using ambiguous limits (like `1_000_000`, `1000 * 1000`, or `1024 * 1024`).
-- **Translation**: Unified log messaging and CLI outputs. Removed all internal Simplified Chinese console messages (e.g. from `pure_media_verifier.rs` and `stream_size.rs`) to full English representation logic for better integration and consistency across regions.
+- **Translation**: Unified log messaging and CLI outputs. Removed all internal Simplified Chinese console messages (e.g. from `pure_media_verifier.rs`, `stream_size.rs` and other test files) to full English representation logic for better integration and consistency across regions.
+- **Dependencies**: Updated all crates to their latest stable version (`cargo update`).
 
 ## [0.10.21] - 2026-03-11
 
