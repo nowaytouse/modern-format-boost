@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.34] - 2026-03-12
+
+### Added
+- **Unified Insight Evaluation Mechanism (3.0 pts)**: Standardized early termination across all search phases based on quality stagnation.
+  - **Integer-Level Quality Tracking**: Now specifically monitors for integer improvements in VMAF-Y and PSNR-UV (ignoring decimal fluctuations).
+  - **10-Sample Confirmation Window**: Replaces immediate adoption with a mandatory 10-iteration exploration. Each sample without integer quality gain adds 0.3 to the "Insight Index".
+  - **Immediate Discard on Saturation**: The search only terminates (discards further exploration) once the index reaches 3.0, ensuring absolute quality saturation.
+- **Improved Phase 3 Persistence**: Removed legacy SSIM plateau logic in favor of the high-fidelity VMAF/PSNR insight system.
+
 ## [0.10.33] - 2026-03-12
 
 ### Added
