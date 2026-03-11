@@ -11,11 +11,6 @@ All notable changes to this project will be documented in this file.
 - **Translation**: Unified log messaging and CLI outputs. Removed all internal Simplified Chinese console messages (e.g. from `pure_media_verifier.rs`, `stream_size.rs` and other test files) to full English representation logic for better integration and consistency across regions.
 - **Dependencies**: Updated all crates to their latest stable version (`cargo update`).
 
-## [0.10.21] - 2026-03-11
-
-### Fixed
-- **Ctrl+C Bypass Bug**: Fixed a severe issue where intercepting Ctrl+C failed to suspend active processing tasks. Previously, the confirmation prompt was displayed on a separate background thread without locking or notifying the `rayon` thread pool or global output buffers. Working tasks continued executing (and spamming the UI) while the prompt awaited user input. Now, `ctrlc_guard` explicitly exports its blocking state, intercepting both UI log emissions and core work allocation loops natively, effectively pausing all resource consumption until the user decides.
-
 ### Changed
 - **Deep UI Modernization & TrueColor Integration**: Revamped terminal aesthetics across the application. Added full RGB 24-bit TrueColor constants (`MFB_Blue`, `MFB_Purple`, `MFB_Pink`, `MFB_Green`) to `modern_ui.rs`.
 - **Card-based Terminal Output**: Upgraded static data displays to sophisticated rounded-corner "Card" styles featuring the project's brand color, underline emphasis, and precision spacing.
