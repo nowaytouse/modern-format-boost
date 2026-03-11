@@ -334,79 +334,8 @@ pub fn convert_to_avif(
 }
 
 pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
-    if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
-    }
-
-    let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", options)?;
-
-    if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    if output.exists() && !options.force {
-        return Ok(ConversionResult::skipped_exists(input, &output));
-    }
-
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-
-    let (width, height) = get_input_dimensions(input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
-
-    let max_threads = if options.child_threads > 0 {
-        options.child_threads
-    } else {
-        shared_utils::thread_manager::get_optimal_threads()
-    };
-    let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")
-        .arg("-threads")
-        .arg(max_threads.to_string())
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg("-c:v")
-        .arg("libsvtav1")
-        .arg("-crf")
-        .arg("0")
-        .arg("-preset")
-        .arg("6")
-        .arg("-svtav1-params")
-        .arg(&svt_params);
-
-    for arg in &vf_args {
-        cmd.arg(arg);
-    }
-
-    cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
-    let result = cmd.output();
-
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
-                return Err(ImgQualityError::ConversionError(e));
-            }
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-            finalize_conversion(input, &output, input_size, "AV1", None, options)
-                .map_err(ImgQualityError::IoError)
-        }
-        Ok(output_cmd) => {
-            let _ = fs::remove_file(&temp_output);
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            Err(ImgQualityError::ConversionError(format!(
-                "ffmpeg failed: {}",
-                stderr
-            )))
-        }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "ffmpeg not found: {}",
-            e
-        ))),
-    }
+    vid_av1::animated_image::convert_to_av1_mp4(input, options)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 pub fn convert_to_avif_lossless(
@@ -475,76 +404,20 @@ pub fn convert_to_av1_mp4_matched(
     options: &ConvertOptions,
     analysis: &crate::ImageAnalysis,
 ) -> Result<ConversionResult> {
-    if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
-    }
-
-    let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", options)?;
-
-    if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    if output.exists() && !options.force {
-        return Ok(ConversionResult::skipped_exists(input, &output));
-    }
-
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-
-    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size);
-
-    let (width, height) = get_input_dimensions(input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, analysis.has_alpha);
-
-    let flag_mode = options
-        .flag_mode()
-        .map_err(ImgQualityError::ConversionError)?;
-
-    eprintln!(
-        "   {} Mode: CRF {:.1} (based on input analysis)",
-        flag_mode.description_en(),
-        initial_crf
-    );
-
-    let explore_result = match shared_utils::explore_precise_quality_match_with_compression(
-        input,
-        &temp_output,
-        shared_utils::VideoEncoder::Av1,
-        vf_args,
-        initial_crf,
-        50.0,
-        0.91,
-        options.child_threads,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = fs::remove_file(&temp_output);
-            return Err(ImgQualityError::ConversionError(e.to_string()));
-        }
-    };
-
-    for log in &explore_result.log {
-        eprintln!("{}", log);
-    }
-
-    if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&temp_output) {
-        let _ = fs::remove_file(&temp_output);
+    // Validate input file
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(ImgQualityError::ConversionError(e));
     }
-    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-        return Ok(ConversionResult::skipped_exists(input, &output));
-    }
-    let extra = format!("CRF {:.1}", explore_result.optimal_crf);
-    finalize_conversion(
+
+    let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
+    let initial_crf = calculate_matched_crf_for_animation(analysis, input_size);
+    vid_av1::animated_image::convert_to_av1_mp4_matched(
         input,
-        &output,
-        input_size,
-        "Quality-matched AV1",
-        Some(&extra),
         options,
+        initial_crf,
+        analysis.has_alpha,
     )
-    .map_err(ImgQualityError::IoError)
+    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> f32 {
@@ -715,75 +588,8 @@ pub fn convert_to_av1_mp4_lossless(
     input: &Path,
     options: &ConvertOptions,
 ) -> Result<ConversionResult> {
-    eprintln!("⚠️  Mathematical lossless AV1 encoding - this will be VERY SLOW!");
-
-    if !options.force && is_already_processed(input) {
-        return Ok(ConversionResult::skipped_duplicate(input));
-    }
-
-    let input_size = fs::metadata(input)?.len();
-    let output = get_output_path(input, "mp4", options)?;
-
-    if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-
-    if output.exists() && !options.force {
-        return Ok(ConversionResult::skipped_exists(input, &output));
-    }
-
-    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-
-    let (width, height) = get_input_dimensions(input)?;
-    let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
-
-    let max_threads = shared_utils::thread_manager::get_optimal_threads();
-    let svt_params = format!("lossless=1:lp={}", max_threads);
-    let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-y")
-        .arg("-threads")
-        .arg(max_threads.to_string())
-        .arg("-i")
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg("-c:v")
-        .arg("libsvtav1")
-        .arg("-preset")
-        .arg("4")
-        .arg("-svtav1-params")
-        .arg(&svt_params);
-
-    for arg in &vf_args {
-        cmd.arg(arg);
-    }
-
-    cmd.arg(shared_utils::safe_path_arg(&temp_output).as_ref());
-    let result = cmd.output();
-
-    match result {
-        Ok(output_cmd) if output_cmd.status.success() => {
-            if let Err(e) = shared_utils::avif_av1_health::verify_av1_mp4_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
-                return Err(ImgQualityError::ConversionError(e));
-            }
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-            finalize_conversion(input, &output, input_size, "Lossless AV1", None, options)
-                .map_err(ImgQualityError::IoError)
-        }
-        Ok(output_cmd) => {
-            let _ = fs::remove_file(&temp_output);
-            let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            Err(ImgQualityError::ConversionError(format!(
-                "ffmpeg lossless failed: {}",
-                stderr
-            )))
-        }
-        Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "ffmpeg not found: {}",
-            e
-        ))),
-    }
+    vid_av1::animated_image::convert_to_av1_mkv_lossless(input, options)
+        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
 fn verify_jxl_health(path: &Path) -> Result<()> {
@@ -980,10 +786,6 @@ fn get_output_path(
         shared_utils::conversion::determine_output_path(input, extension, &options.output_dir)
             .map_err(ImgQualityError::ConversionError)
     }
-}
-
-fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
-    shared_utils::conversion::get_input_dimensions(input).map_err(ImgQualityError::ConversionError)
 }
 
 #[cfg(test)]

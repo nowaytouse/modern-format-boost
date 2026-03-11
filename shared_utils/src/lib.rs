@@ -212,7 +212,7 @@ pub use gpu_accel::{
 };
 
 pub use video_explorer::{
-    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full, explore_hevc_with_gpu_coarse, explore_hevc_with_gpu_coarse_full,
+    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full, explore_av1_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse, explore_hevc_with_gpu_coarse_full,
     explore_hevc_with_gpu_coarse_ultimate, explore_with_gpu_coarse_search,
 };
 

@@ -296,12 +296,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         info!("   Reason: {}", strategy.reason);
 
         if let Some(ref out_dir) = config.output_dir {
-            let _ = shared_utils::copy_on_skip_or_fail(
+            shared_utils::copy_on_skip_or_fail(
                 input,
                 Some(out_dir),
                 config.base_dir.as_deref(),
                 false,
-            );
+            )
+            .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
         }
 
         return Ok(ConversionOutput {
@@ -331,6 +332,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         .unwrap_or("output");
     let target_ext = strategy.target.extension();
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
+    // GIF as source has no Apple compatibility issue; do not show "APPLE COMPAT FALLBACK" for GIF→video.
+    let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
 
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext) {
         output_dir.join(format!("{}_av1.{}", stem, target_ext))
@@ -541,6 +544,52 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         };
                     warn!("   ⚠️  {} │ 🛡️  {} │ 🗑️  {}", fail_message, protect_msg, delete_msg);
 
+                    // Keep/discard by total file size only (video stream is internal metric).
+                    if shared_utils::should_keep_apple_fallback_hevc_output(
+                        detection.codec.as_str(),
+                        total_file_compressed,
+                        _total_size_ratio,
+                        config.allow_size_tolerance,
+                        config.apple_compat,
+                        source_is_gif,
+                    ) {
+                        warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
+                        warn!(
+                            "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is AV1 and importable",
+                            explore_result.optimal_crf,
+                            explore_result.iterations
+                        );
+                        shared_utils::conversion::commit_temp_to_output(
+                            &temp_path,
+                            &output_path,
+                            config.force,
+                        )
+                        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+                        return Ok(ConversionOutput {
+                            input_path: input.display().to_string(),
+                            output_path: output_path.display().to_string(),
+                            strategy: ConversionStrategy {
+                                target: TargetVideoFormat::Av1Mp4,
+                                reason: "Apple compat fallback: best-effort AV1 kept (quality/size below target)".to_string(),
+                                command: String::new(),
+                                preserve_audio: detection.has_audio,
+                                crf: explore_result.optimal_crf,
+                                lossless: false,
+                            },
+                            input_size: detection.file_size,
+                            output_size: explore_result.output_size,
+                            size_ratio: explore_result.output_size as f64 / detection.file_size as f64,
+                            success: true,
+                            message: format!(
+                                "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality/size below target — file is AV1 and importable",
+                                explore_result.optimal_crf,
+                                explore_result.iterations
+                            ),
+                            final_crf: explore_result.optimal_crf,
+                            exploration_attempts: explore_result.iterations as u8,
+                        });
+                    }
+
                     if let Err(e) = std::fs::remove_file(&temp_path) {
                         warn!("Failed to clean up temp file {}: {}", temp_path.display(), e);
                     }
@@ -578,6 +627,76 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 if let Some(false) = explore_result.ms_ssim_passed {
                     let ms_ssim_score = explore_result.ms_ssim_score.unwrap_or(0.0);
                     warn!("   QUALITY TARGET FAILED (score: {:.4}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", ms_ssim_score);
+
+                    // Only keep best-effort AV1 when source is Apple-incompatible.
+                    if config.apple_compat
+                        && !source_is_gif
+                        && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
+                    {
+                        warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality below target");
+                        warn!(
+                            "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is AV1 and importable",
+                            explore_result.optimal_crf,
+                            explore_result.iterations
+                        );
+                        return Ok(ConversionOutput {
+                            input_path: input.display().to_string(),
+                            output_path: output_path.display().to_string(),
+                            strategy: ConversionStrategy {
+                                target: TargetVideoFormat::Av1Mp4,
+                                reason: "Apple compat fallback: best-effort AV1 kept (quality below target)".to_string(),
+                                command: String::new(),
+                                preserve_audio: detection.has_audio,
+                                crf: explore_result.optimal_crf,
+                                lossless: false,
+                            },
+                            input_size: detection.file_size,
+                            output_size: explore_result.output_size,
+                            size_ratio: explore_result.output_size as f64 / detection.file_size as f64,
+                            success: true,
+                            message: format!(
+                                "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality score {:.4} below target — file is AV1 and importable",
+                                explore_result.optimal_crf,
+                                explore_result.iterations,
+                                ms_ssim_score
+                            ),
+                            final_crf: explore_result.optimal_crf,
+                            exploration_attempts: explore_result.iterations as u8,
+                        });
+                    }
+
+                    if output_path.exists() {
+                        let _ = std::fs::remove_file(&output_path);
+                        info!("   🗑️  Low MS-SSIM output deleted");
+                    }
+
+                    shared_utils::copy_on_skip_or_fail(
+                        input,
+                        config.output_dir.as_deref(),
+                        config.base_dir.as_deref(),
+                        false,
+                    )
+                    .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
+
+                    return Ok(ConversionOutput {
+                        input_path: input.display().to_string(),
+                        output_path: input.display().to_string(),
+                        strategy: ConversionStrategy {
+                            target: TargetVideoFormat::Skip,
+                            reason: format!("Quality target failed (score: {:.4})", ms_ssim_score),
+                            command: String::new(),
+                            preserve_audio: detection.has_audio,
+                            crf: explore_result.optimal_crf,
+                            lossless: false,
+                        },
+                        input_size: detection.file_size,
+                        output_size: detection.file_size,
+                        size_ratio: 1.0,
+                        success: false,
+                        message: format!("Skipped: MS-SSIM {:.4} below target 0.90", ms_ssim_score),
+                        final_crf: explore_result.optimal_crf,
+                        exploration_attempts: explore_result.iterations as u8,
+                    });
                 }
 
                 (
@@ -667,13 +786,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             );
         }
 
-        // Only keep best-effort output when source is Apple-incompatible (AV1/VP9/VVC/AV2),
-        // and only when total file behavior is acceptable.
-        if config.apple_compat
-            && shared_utils::is_apple_incompatible_video_codec(detection.codec.as_str())
-            && (total_file_compressed
-                || (config.allow_size_tolerance && total_size_ratio < 1.01))
-        {
+        // Apple-compat fallback: still decided purely by total file behavior (video stream is internal detail).
+        if shared_utils::should_keep_apple_fallback_hevc_output(
+            detection.codec.as_str(),
+            total_file_compressed,
+            total_size_ratio,
+            config.allow_size_tolerance,
+            config.apple_compat,
+            source_is_gif,
+        ) {
             warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): compression check failed (total file not smaller enough)");
             warn!(
                 "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is AV1 and importable",
@@ -707,12 +828,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             let _ = std::fs::remove_file(&output_path);
             info!("   🗑️  Output deleted (cannot compress by total file size)");
         }
-        let _ = shared_utils::copy_on_skip_or_fail(
+        shared_utils::copy_on_skip_or_fail(
             input,
             config.output_dir.as_deref(),
             config.base_dir.as_deref(),
             false,
-        );
+        )
+        .map_err(|e| VidQualityError::GeneralError(e.to_string()))?;
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: input.display().to_string(),
