@@ -134,13 +134,12 @@ pub fn verify_compression_simple(
     (can_compress, compare_size)
 }
 
-pub const ULTIMATE_MIN_WALL_HITS: u32 = 4;
+pub const ULTIMATE_MIN_WALL_HITS: u32 = 15;
 
-pub const ULTIMATE_MAX_WALL_HITS: u32 = 28;
+pub const ULTIMATE_MAX_WALL_HITS: u32 = 50;
 
-/// In ultimate mode, SSIM saturation (Domain Wall) requires this many consecutive zero-gains.
-/// Kept 15–20 so short CRF ranges (e.g. GIF) still get a robust check (scaled minimum is 15).
-pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 30;
+/// In ultimate mode, absolute saturation requires 50 consecutive samples to be statistically certain.
+pub const ULTIMATE_REQUIRED_ZERO_GAINS: u32 = 50;
 
 pub const NORMAL_MAX_WALL_HITS: u32 = 4;
 
