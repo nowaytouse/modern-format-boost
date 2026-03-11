@@ -43,6 +43,7 @@ pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
 mod tests {
     use super::*;
     use crate::image_analyzer::{ImageFeatures, JxlIndicator};
+    use crate::image_detection::PrecisionMetadata;
     use std::collections::HashMap;
 
     #[test]
@@ -75,6 +76,7 @@ mod tests {
             ssim: None,
             metadata: HashMap::new(),
             hdr_info: None,
+            precision: PrecisionMetadata::default(),
         };
 
         let rec = get_recommendation(&analysis);

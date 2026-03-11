@@ -97,6 +97,16 @@ pub enum CompressionType {
     Lossy,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PrecisionMetadata {
+    pub bit_depth: Option<u8>,
+    pub palette_size: Option<usize>,
+    pub color_type: Option<u8>, // Format-specific (e.g. PNG color type)
+    pub is_lossless_deterministic: bool,
+    pub quality_estimate: Option<u8>,
+    pub chroma_subsampling: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PngQuantizationAnalysis {
     pub is_quantized: bool,
@@ -219,6 +229,8 @@ pub struct DetectionResult {
     pub estimated_quality: Option<u8>,
 
     pub entropy: f64,
+
+    pub precision: PrecisionMetadata,
 }
 
 pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
@@ -454,6 +466,85 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
         }
         _ => Ok((false, 1, None)),
     }
+}
+
+/// Parse GIF palette size from Global Color Table (GCT) and Local Color Table (LCT)
+pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
+    let mut file = File::open(path)?;
+    let mut header = [0u8; 13];
+    file.read_exact(&mut header)?;
+
+    if !header.starts_with(b"GIF87a") && !header.starts_with(b"GIF89a") {
+        return Err(ImgQualityError::AnalysisError("Not a valid GIF file".to_string()));
+    }
+
+    // Logical Screen Descriptor (bytes 6-12)
+    // Byte 10: GCT flag (bit 7), Color Resolution (bits 4-6), Sort flag (bit 3), GCT size (bits 0-2)
+    let packed = header[10];
+    let has_gct = (packed & 0x80) != 0;
+    let gct_size_exp = packed & 0x07;
+    let gct_colors = if has_gct { 1 << (gct_size_exp + 1) } else { 0 };
+
+    let mut metadata = PrecisionMetadata {
+        bit_depth: Some(8),
+        palette_size: Some(gct_colors),
+        is_lossless_deterministic: true,
+        ..Default::default()
+    };
+
+    // If GCT exists, we skip it and look for LCT in image descriptors
+    if has_gct {
+        let gct_byte_size = 3 * gct_colors;
+        let _pos = 13 + gct_byte_size;
+        
+        // We can't easily scan the whole file for all LCTs without a full decoder,
+        // but typically GCT is the primary source. If we need perfect accuracy, 
+        // we'd need to parse all blocks. For now, GCT is a huge improvement over heuristics.
+        let mut data = Vec::new();
+        let mut file = File::open(path)?;
+        file.read_to_end(&mut data)?;
+        
+        // Basic scan for Image Descriptor (0x2C) to find LCT
+        let mut max_palette = gct_colors;
+        let mut current_pos = 13 + gct_byte_size;
+        
+        while current_pos + 10 < data.len() {
+            match data[current_pos] {
+                0x2C => { // Image Descriptor
+                    let packed_img = data[current_pos + 9];
+                    let has_lct = (packed_img & 0x80) != 0;
+                    if has_lct {
+                        let lct_size_exp = packed_img & 0x07;
+                        let lct_colors = 1 << (lct_size_exp + 1);
+                        max_palette = max_palette.max(lct_colors);
+                        current_pos += 10 + (3 * lct_colors);
+                    } else {
+                        current_pos += 10;
+                    }
+                    // Skip image data blocks
+                    while current_pos < data.len() && data[current_pos] != 0 {
+                        let block_size = data[current_pos] as usize;
+                        current_pos += block_size + 1;
+                    }
+                    current_pos += 1;
+                }
+                0x21 => { // Extension
+                    if current_pos + 2 >= data.len() { break; }
+                    current_pos += 2;
+                    while current_pos < data.len() && data[current_pos] != 0 {
+                        let block_size = data[current_pos] as usize;
+                        current_pos += block_size + 1;
+                    }
+                    current_pos += 1;
+                }
+                0x3B => break, // Trailer
+                _ => current_pos += 1,
+            }
+        }
+        metadata.palette_size = Some(max_palette);
+    }
+
+    Ok(metadata)
 }
 
 /// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
@@ -999,15 +1090,14 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
     })
 }
 
-struct PngStructureInfo {
-    width: u32,
-    height: u32,
-    bit_depth: u8,
-    color_type: u8,
-    palette_size: Option<usize>,
-    has_trns: bool,
-    #[allow(dead_code)]
-    has_text_chunks: bool,
+pub struct PngStructureInfo {
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: u8,
+    pub color_type: u8,
+    pub palette_size: Option<usize>,
+    pub has_trns: bool,
+    pub has_text_chunks: bool,
 }
 
 struct PngQuantizationWeights {
@@ -1017,7 +1107,7 @@ struct PngQuantizationWeights {
     heuristic: f64,
 }
 
-fn parse_png_structure(data: &[u8]) -> Result<PngStructureInfo> {
+pub fn parse_png_structure(data: &[u8]) -> Result<PngStructureInfo> {
     let ihdr_start = 8;
     if data.len() < ihdr_start + 8 + 13 {
         return Err(ImgQualityError::AnalysisError("PNG too small".to_string()));
@@ -1668,10 +1758,72 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     let entropy = calculate_entropy(&img);
 
+    let mut precision = PrecisionMetadata::default();
+    
+    match format {
+        DetectedFormat::PNG => {
+            let data = std::fs::read(path)?;
+            if let Ok(info) = parse_png_structure(&data) {
+                precision.bit_depth = Some(info.bit_depth);
+                precision.palette_size = info.palette_size;
+                precision.color_type = Some(info.color_type);
+                precision.is_lossless_deterministic = true;
+            }
+        }
+        DetectedFormat::GIF => {
+            if let Ok(gif_prec) = parse_gif_precision_metadata(path) {
+                precision = gif_prec;
+            }
+        }
+        DetectedFormat::TIFF => {
+            if let Ok(comp) = detect_tiff_compression(path) {
+                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+                // TIFF bit depth is usually in Tag 258, but Image crate handles basic ones.
+                // For now, we flag deterministic lossless.
+            }
+        }
+        DetectedFormat::WebP => {
+            let data = std::fs::read(path)?;
+            if crate::image_formats::webp::is_animated_from_bytes(&data) {
+                precision.is_lossless_deterministic = detect_webp_animation_compression(&data) == CompressionType::Lossless;
+            } else {
+                precision.is_lossless_deterministic = crate::image_formats::webp::is_lossless_from_bytes(&data);
+                if !precision.is_lossless_deterministic {
+                    precision.quality_estimate = estimate_webp_quality(path).ok();
+                }
+            }
+        }
+        DetectedFormat::JPEG => {
+            precision.is_lossless_deterministic = false;
+            precision.quality_estimate = estimate_jpeg_quality(path).ok();
+        }
+        DetectedFormat::HEIC | DetectedFormat::HEIF => {
+            if let Ok(comp) = detect_heic_compression(path) {
+                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+            }
+        }
+        DetectedFormat::AVIF => {
+            if let Ok(comp) = detect_avif_compression(path) {
+                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+            }
+        }
+        DetectedFormat::JXL => {
+            if let Ok(comp) = detect_jxl_compression(path) {
+                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+            }
+        }
+        DetectedFormat::JP2 => {
+            if let Ok(comp) = detect_jp2_compression(path) {
+                precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+            }
+        }
+        _ => {}
+    }
+
     let estimated_quality = if format == DetectedFormat::JPEG {
-        estimate_jpeg_quality(path).ok()
+        precision.quality_estimate
     } else if format == DetectedFormat::WebP && compression == CompressionType::Lossy {
-        estimate_webp_quality(path).ok()
+        precision.quality_estimate
     } else {
         None
     };
@@ -1701,6 +1853,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         duration,
         estimated_quality,
         entropy,
+        precision,
     })
 }
 
@@ -2138,7 +2291,7 @@ fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
 ///
 /// Only returns Err when hvcC box is missing entirely.
-fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
+pub fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 

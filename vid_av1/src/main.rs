@@ -55,9 +55,6 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         force_ms_ssim_long: bool,
 
-        #[arg(long, default_value_t = false)]
-        cpu: bool,
-
         #[arg(long)]
         base_dir: Option<PathBuf>,
 
@@ -98,7 +95,6 @@ fn main() -> anyhow::Result<()> {
             no_apple_compat,
             ultimate,
             force_ms_ssim_long,
-            cpu,
             base_dir,
             allow_size_tolerance,
             no_allow_size_tolerance,
@@ -136,7 +132,7 @@ fn main() -> anyhow::Result<()> {
                 min_ssim: 0.95,
                 require_compression: compress,
                 apple_compat,
-                use_gpu: !cpu,
+                use_gpu: true,
                 force_ms_ssim_long,
                 ultimate_mode: ultimate,
                 child_threads: thread_config.child_threads,
@@ -144,11 +140,16 @@ fn main() -> anyhow::Result<()> {
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
+            // Run 时自动创建并写入 ./logs/vid_av1_run_<timestamp>.log
+            if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_av1") {
+                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
+            }
             info!("🎬 Run Mode Conversion (AV1)");
             info!("   Lossless sources → AV1 Lossless");
-            info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
             if match_quality {
-                info!("   🎯 Match Quality: ENABLED");
+                info!("   Lossy sources → AV1 MP4 (CRF auto-matched to input quality)");
+            } else {
+                info!("   Lossy sources → AV1 MP4 (CRF 20)");
             }
             if explore {
                 info!("   📊 Size exploration: ENABLED");
@@ -165,9 +166,6 @@ fn main() -> anyhow::Result<()> {
             }
             if ultimate {
                 info!("   🔍 Ultimate Explore: ENABLED (search until SSIM saturates)");
-            }
-            if cpu {
-                info!("   🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
             }
             if force_ms_ssim_long {
                 info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
@@ -189,6 +187,7 @@ fn main() -> anyhow::Result<()> {
                 |file| auto_convert(file, &config).map_err(|e| e.into()),
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
+            shared_utils::progress_mode::flush_log_file();
         }
 
         Commands::Strategy { input } => {
