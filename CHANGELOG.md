@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.28] - 2026-03-12
+
+### Added
+- **Noise-Resistant Wall Detection**: Introduced a mandatory **10-sample confirmation window** for the "Ultimate Wall" (God Zone: VMAF > 98 / PSNR-UV > 48).
+  - Effectively filters out VMAF/PSNR measurement noise and encoder jitter.
+  - Prevents early stopping bias by ensuring the quality ceiling is statistically significant.
+  - New UI indicator: `[SATURATED X/10]` shows the confirmation progress in purple.
+
+### Changed
+- **Total Quality Awareness**: Standardized quality gate checks across both upward (Fast-Fail) and downward (Ceiling) search paths.
+
 ## [0.10.27] - 2026-03-12
 
 ### Changed
