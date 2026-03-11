@@ -4,16 +4,6 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.10.23] - 2026-03-11
-
-### Added
-- **Deterministic Video Quality Detection**: Prioritized x264/x265 encoder settings (CRF/QP) and exact B-frame counts (via ffprobe) over heuristic BPP-based estimates.
-- **Refined Image Lossless Detection**: Fixed HEIC/AVIF `is_lossless` detection by parsing bitstream parameters (hvcC/av1C). Expanded deterministic checks to TIFF, JXL, and JP2 formats.
-
-### Fixed
-- **Workspace Compilation**: Resolved all build errors in `vid_av1`, `vid_hevc`, `img_av1`, and `img_hevc` caused by the `has_b_frames` field refactor and new `PrecisionMetadata` fields.
-- **API Consistency**: Updated `from_video_detection` and its call sites across all crates to handle the expanded bitstream metadata.
-
 ## [0.10.22] - 2026-03-11
 
 ### Added
@@ -31,6 +21,11 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **Standardized 1MB File Size Threshold**: Unified all 1MB size threshold checks across the codebase to exactly `1_048_576` bytes instead of using ambiguous limits (like `1_000_000`, `1000 * 1000`, or `1024 * 1024`).
 - **Translation**: Unified log messaging and CLI outputs. Removed all internal Simplified Chinese console messages (e.g. from `pure_media_verifier.rs` and `stream_size.rs`) to full English representation logic for better integration and consistency across regions.
+
+## [0.10.21] - 2026-03-11
+
+### Fixed
+- **Ctrl+C Bypass Bug**: Fixed a severe issue where intercepting Ctrl+C failed to suspend active processing tasks. Previously, the confirmation prompt was displayed on a separate background thread without locking or notifying the `rayon` thread pool or global output buffers. Working tasks continued executing (and spamming the UI) while the prompt awaited user input. Now, `ctrlc_guard` explicitly exports its blocking state, intercepting both UI log emissions and core work allocation loops natively, effectively pausing all resource consumption until the user decides.
 
 ### Changed
 - **Deep UI Modernization & TrueColor Integration**: Revamped terminal aesthetics across the application. Added full RGB 24-bit TrueColor constants (`MFB_Blue`, `MFB_Purple`, `MFB_Pink`, `MFB_Green`) to `modern_ui.rs`.
