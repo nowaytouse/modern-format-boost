@@ -1899,7 +1899,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     // User-relevant success: total file smaller and quality met (not video-stream efficiency).
     let total_file_compressed = final_full_size < input_size;
     let _video_stream_compressed =
-        crate::stream_size::can_compress_pure_video(output, input_video_stream_size);
+        crate::stream_size::can_compress_pure_video(output, input_video_stream_size, true);
     let ssim_ok = match ssim {
         Some(s) => s >= min_ssim,
         None => false,
