@@ -1581,28 +1581,43 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                         // Revised Trigger logic:
                         // 1. Normal: 3-4 zero gains.
-                        // 2. Ultimate: Must reach 30 zero gains.
-                        // 3. Ultimate Ceiling: Even if quality is amazing (>98), 
-                        //    we require 10 consecutive confirmations to filter out VMAF noise.
+                        // 2. Ultimate: Must reach 30 zero gains for absolute saturation.
+                        // 3. Ultimate Ceiling (God Zone): If quality is amazing (>98), 
+                        //    we require 10 consecutive confirmations.
+                        // 4. Ultimate Dead-Wall (Fast-Fail): If quality is BELOW gate (VMAF<93 or UV<38)
+                        //    AND we hit 3 consecutive zero-gains, it's a dead-end. Stop wasting time.
                         const ULTIMATE_CEILING_CONFIRMATION: u32 = 10;
+                        const ULTIMATE_DEAD_WALL_CONFIRMATION: u32 = 3;
                         
+                        let is_below_gate = ultimate_mode && (
+                            best_vmaf_tracked.is_none_or(|v| v < 93.0) || 
+                            best_psnr_uv_tracked.is_none_or(|(u, v)| u.min(v) < 38.0)
+                        );
+
                         let quality_wall_triggered = current_step <= MIN_STEP + 0.01 && (
+                            (is_below_gate && consecutive_zero_gains >= ULTIMATE_DEAD_WALL_CONFIRMATION) ||
                             consecutive_zero_gains >= required_zero_gains || 
                             (ultimate_mode && ceiling_hit && consecutive_zero_gains >= ULTIMATE_CEILING_CONFIRMATION)
                         );
 
                         // Ultimate Mode: Early failure if the quality wall is below the mandatory gate
                         if ultimate_mode && quality_wall_triggered {
-                            if let Some(v) = *best_vmaf_tracked {
-                                const VMAF_Y_MIN: f64 = 93.0;
-                                if v < VMAF_Y_MIN {
-                                    crate::log_eprintln!(
-                                        "   \x1b[1;31m❌ CEILING BELOW GATE:\x1b[0m Ultimate wall hit at VMAF:{:.2} (< {:.1}). Aborting.",
-                                        v, VMAF_Y_MIN
-                                    );
-                                    quality_wall_hit = true;
-                                    break; 
-                                }
+                            const VMAF_Y_MIN: f64 = 93.0;
+                            const PSNR_UV_MIN: f64 = 38.0;
+                            
+                            let v_fail = best_vmaf_tracked.is_none_or(|v| v < VMAF_Y_MIN);
+                            let uv_fail = best_psnr_uv_tracked.is_none_or(|(u, v)| u.min(v) < PSNR_UV_MIN);
+
+                            if v_fail || uv_fail {
+                                let v_val = best_vmaf_tracked.unwrap_or(0.0);
+                                let uv_val = best_psnr_uv_tracked.map(|(u,v)| u.min(v)).unwrap_or(0.0);
+                                
+                                crate::log_eprintln!(
+                                    "   \x1b[1;31m❌ DEAD-WALL HIT:\x1b[0m Saturated below gate (VMAF:{:.2}, UV:{:.2}). No further gain possible.",
+                                    v_val, uv_val
+                                );
+                                quality_wall_hit = true;
+                                break; 
                             }
                         }
 
