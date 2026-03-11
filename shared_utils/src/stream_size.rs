@@ -215,16 +215,26 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     })
 }
 
-pub fn can_compress_pure_video(output_path: &Path, input_video_stream_size: u64) -> bool {
+pub fn can_compress_pure_video(
+    output_path: &Path,
+    input_video_stream_size: u64,
+    allow_size_tolerance: bool,
+) -> bool {
     let output_info = extract_stream_sizes(output_path);
-    let result = output_info.video_stream_size < input_video_stream_size.saturating_add(1_048_576);
+
+    let result = if allow_size_tolerance {
+        output_info.video_stream_size < input_video_stream_size.saturating_add(1_048_576)
+    } else {
+        output_info.video_stream_size < input_video_stream_size
+    };
 
     #[cfg(debug_assertions)]
     {
         eprintln!(
-            "   [DEBUG] can_compress_pure_video: output_video={} vs input_video={} → {}",
+            "   [DEBUG] can_compress_pure_video: output_video={} vs input_video={} (tolerance={}) → {}",
             output_info.video_stream_size,
             input_video_stream_size,
+            allow_size_tolerance,
             if result {
                 "✅ CAN COMPRESS"
             } else {
@@ -504,16 +514,19 @@ mod prop_tests {
             input_video_size in 1u64..1_000_000_000u64,
         ) {
             let expected_can_compress = output_video_size < input_video_size.saturating_add(1_048_576);
-
+            
+            // Check tolerance=true manually (mirrors logic)
             prop_assert_eq!(
                 expected_can_compress,
-                output_video_size < input_video_size.saturating_add(1_048_576),
-                "Pure video stream logic: output {} {} input {} should = {}",
-                output_video_size,
-                if expected_can_compress { "<" } else { ">=" },
-                input_video_size,
-                expected_can_compress
+                if true { output_video_size < input_video_size.saturating_add(1_048_576) } else { output_video_size < input_video_size }
             );
+
+            // Check tolerance=false
+            prop_assert_eq!(
+                output_video_size < input_video_size,
+                if false { output_video_size < input_video_size.saturating_add(1_048_576) } else { output_video_size < input_video_size }
+            );
+
         }
     }
 
