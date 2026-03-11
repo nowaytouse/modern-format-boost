@@ -876,7 +876,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     let output_stream_info = shared_utils::extract_stream_sizes(&output_path);
 
     let verify_result =
-        shared_utils::verify_pure_media_compression(&input_stream_info, &output_stream_info);
+        shared_utils::verify_pure_media_compression(&input_stream_info, &output_stream_info, config.allow_size_tolerance);
 
     if metadata_delta > 0 || output_stream_info.container_overhead > 10000 {
         info!("   📋 Metadata: +{} bytes", metadata_delta);

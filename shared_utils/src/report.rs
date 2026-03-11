@@ -34,22 +34,22 @@ pub fn print_summary_report(
         MFB_BLUE, RESET, BRIGHT_WHITE, result.total, RESET, MFB_BLUE, RESET
     );
     println!(
-        "{}│{}  {}✅ Succeeded:{}{}          {}{:>10}{}                                         {}│{}",
-        MFB_BLUE, RESET, MFB_GREEN, RESET, " ".repeat(1), BRIGHT_GREEN, result.succeeded, RESET, MFB_BLUE, RESET
+        "{}│{}  {}✅ Succeeded:{}           {}{:>10}{}                                         {}│{}",
+        MFB_BLUE, RESET, MFB_GREEN, RESET, BRIGHT_GREEN, result.succeeded, RESET, MFB_BLUE, RESET
     );
     println!(
-        "{}│{}  {}❌ Failed:{}{}             {}{:>10}{}                                         {}│{}",
-        MFB_BLUE, RESET, BRIGHT_RED, RESET, " ".repeat(1), BRIGHT_RED, result.failed, RESET, MFB_BLUE, RESET
+        "{}│{}  {}❌ Failed:{}              {}{:>10}{}                                         {}│{}",
+        MFB_BLUE, RESET, BRIGHT_RED, RESET, BRIGHT_RED, result.failed, RESET, MFB_BLUE, RESET
     );
     println!(
-        "{}│{}  {}⏭️  Skipped:{}{}            {}{:>10}{}                                         {}│{}",
-        MFB_BLUE, RESET, BRIGHT_YELLOW, RESET, " ".repeat(1), BRIGHT_YELLOW, result.skipped, RESET, MFB_BLUE, RESET
+        "{}│{}  {}⏭️  Skipped:{}             {}{:>10}{}                                         {}│{}",
+        MFB_BLUE, RESET, BRIGHT_YELLOW, RESET, BRIGHT_YELLOW, result.skipped, RESET, MFB_BLUE, RESET
     );
     
     let rate_color = if result.success_rate() > 90.0 { BRIGHT_GREEN } else { BRIGHT_YELLOW };
     println!(
-        "{}│{}  {}📈 Success Rate:{}{}       {}{:>9.1}%{}                                         {}│{}",
-        MFB_BLUE, RESET, BRIGHT_CYAN, RESET, " ".repeat(1), rate_color, result.success_rate(), RESET, MFB_BLUE, RESET
+        "{}│{}  {}📈 Success Rate:{}        {}{:>9.1}%{}                                         {}│{}",
+        MFB_BLUE, RESET, BRIGHT_CYAN, RESET, rate_color, result.success_rate(), RESET, MFB_BLUE, RESET
     );
     println!("{}├────────────────────────────────────────────────────────────────────────────┤{}", MFB_BLUE, RESET);
     println!(
