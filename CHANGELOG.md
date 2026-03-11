@@ -4,6 +4,64 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.26] - 2026-03-11
+
+### Added
+- **Ultimate Mode: Multi-Metric Wall Detection**: In Ultimate mode, the "CRF Wall" detection now uses a combination of **VMAF (Y)** and **PSNR (UV)** instead of relying solely on SSIM-ALL saturation.
+  - Detects absolute quality ceilings (VMAF > 98 or PSNR-UV > 48) to prevent wasted bits when perceptual and chroma saturation is reached.
+  - Provides detailed feedback: `📊 ULTIMATE WALL DETECTED: VMAF-Y=XX.XX, PSNR-UV=XX.XX`.
+- **Loud & Visible Fallback System**: Introduced a highly visible, ANSI-colored warning system for when precise metadata is unavailable and heuristics must be used.
+  - Warnings now include the **full filename** for immediate troubleshooting.
+  - Multi-tier alerts: Yellow for standard fallbacks, Red for critical detection failures.
+- **Enhanced Heuristic Engine (v2)**: Revolutionized image quality estimation when bitstream parsing fails:
+  - **Efficiency-Weighted BPP**: Integrated format-specific multipliers (AVIF/HEIC 3.0x, WebP 1.5x) to reflect superior modern compression efficiency.
+  - **Texture-Aware Compensation**: Quality estimates are now dynamically adjusted based on image entropy (texture complexity).
+- **Premium UI Enhancements**: Upgraded terminal aesthetics with double-line box drawing, new high-fidelity symbols (💠, 🥇, 🛡️), and improved result summary banners.
+
+### Changed
+- **Unified 1MB Size Tolerance**: Implemented a mandatory 1MB (`1,048,576 bytes`) size increase tolerance across all video search phases when `--allow-size-tolerance` is enabled.
+- **Meme Scoring Rebalance**: Reduced FPS weight to 0.0 to accommodate modern high-frame-rate memes (e.g., Live2D stickers).
+- **Dependency Update**: Migrated all workspace dependencies to their latest stable versions (Anyhow 1.0.102, Thiserror 2.0.18, Clap 4.5.60, etc.) and switched from git tags to crates.io for improved stability.
+- **Drag & Drop Defaults**: Enabled `--allow-size-tolerance` by default in the macOS drag-and-drop processor script.
+
+### Fixed
+- **Strict Metadata Policy**: Eliminated all occurrences of `unwrap_or(24.0)`, `unwrap_or(85)`, and other "irresponsible" silent fallbacks.
+- **Code Health & Reliability**: Fixed multiple Clippy warnings, type mismatches in AV1 conversion, and missing fields in unit tests.
+- **Scope & Truncation Errors**: Resolved critical scope issues in CRF exploration and ensured long file stability during builds.
+
+## [0.10.25] - 2026-03-11 (Internal Release)
+- Preliminary transition to precision-first metadata.
+- Internal testing of enhanced heuristic engine.
+
+### Added
+- **Absolute-Precision-First Strategy**: Completed the transition to a mandatory precision-first metadata policy. The system now refuses to "cheat" or "fake" critical metadata (FPS, dimensions, quality) through hardcoded defaults.
+- **Loud & Visible Fallback System**: Introduced a highly visible, ANSI-colored warning system for when precise metadata is unavailable and heuristics must be used.
+  - Warnings now include the **full filename** for immediate troubleshooting.
+  - Multi-tier alerts: Yellow for standard fallbacks, Red for critical detection failures.
+- **Enhanced Heuristic Engine (v2)**: Revolutionized image quality estimation when bitstream parsing fails:
+  - **Efficiency-Weighted BPP**: Integrated format-specific multipliers (AVIF/HEIC 3.0x, WebP 1.5x) to reflect superior modern compression efficiency.
+  - **Texture-Aware Compensation**: Quality estimates are now dynamically adjusted based on image entropy (texture complexity).
+  - **Animation-Aware BPP**: BPP calculation now correctly accounts for frame count in animated sequences.
+
+### Changed
+- **Meme Scoring Rebalance**: Significant update to the GIF/animated image "Meme Score" mechanism:
+  - **FPS De-weighting**: Reduced FPS weight to 0.0 to accommodate modern high-frame-rate memes (e.g., Live2D stickers).
+  - **Dimension Priority**: Shifted decision weight towards canvas resolution and duration as primary indicators.
+- **Unified strict Metadata Parsing**: Standardized `parse_frame_rate` and mandatory dimension checks across `shared_utils`, `vid_av1`, and `vid_hevc`.
+
+### Fixed
+- **Silent Metadata Failure**: Eliminated all occurrences of `unwrap_or(24.0)`, `unwrap_or(85)`, and other "irresponsible" silent fallbacks that previously masked detection errors.
+- **Unreliable Repeat Rate**: Removed dependence on unreliable repetition metrics that could misidentify source materials as memes.
+
+## [0.10.24] - 2026-03-11
+
+### Added
+- **Precise-First Detection Strategy**: Significant refactor of the analysis pipeline to prioritize deterministic metadata over heuristics.
+- **Enhanced Video Metadata**: Added `ffprobe` tag extraction and `VideoPrecisionMetadata` to identify original encoder settings (CRF, preset), enabling more accurate quality categorization.
+- **GIF Optimization**: Updated GIF source handling to treat them as indexed-lossless, ensuring maximum fidelity when converting to modern formats.
+- **HEVC/HEIC Bitstream Analysis**: Replaced hardcoded lossy assumptions for HEIC with real-time bitstream checks for lossless profiles and 4:4:4 chroma.
+- **Deterministic Content Selection**: Refined the content classifier to use precise palette and bit-depth indicators for improved Icon/Graphic vs. Photo detection.
+
 ## [0.10.23] - 2026-03-11
 
 ### Added

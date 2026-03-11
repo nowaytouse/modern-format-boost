@@ -74,6 +74,10 @@ pub mod symbols {
     pub const ERROR: &str = "❌";
     pub const SUCCESS: &str = "✅";
     pub const INFO: &str = "ℹ️";
+    pub const DIAMOND: &str = "💠";
+    pub const MEDAL: &str = "🥇";
+    pub const SHIELD: &str = "🛡️";
+    pub const LINK: &str = "🔗";
 }
 
 pub mod progress_style {
@@ -317,31 +321,36 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
         .max(strip_ansi(title).len())
         .max(40);
 
-    let box_width = max_width + 4;
+    let box_width = max_width + 6;
     let theme_color = MFB_BLUE;
 
-    eprintln!("{}╭{}╮{}", theme_color, "─".repeat(box_width), RESET);
+    eprintln!("{}╔{}╗{}", theme_color, "═".repeat(box_width), RESET);
 
-    let title_padding = box_width - strip_ansi(title).len() - 2;
+    let title_stripped = strip_ansi(title);
+    let title_padding_total = box_width - title_stripped.len() - 2;
+    let title_padding_left = title_padding_total / 2;
+    let title_padding_right = title_padding_total - title_padding_left;
+
     eprintln!(
-        "{}│{} {}{}{}{} {}{}│{}",
+        "{}║{} {}{}{}{} {}{}║{}",
         theme_color,
-        RESET,
+        " ".repeat(title_padding_left),
         BOLD,
-        UNDERLINE,
+        BRIGHT_WHITE,
         title,
         RESET,
-        " ".repeat(title_padding),
+        " ".repeat(title_padding_right),
         theme_color,
         RESET
     );
 
-    eprintln!("{}├{}┤{}", theme_color, "─".repeat(box_width), RESET);
+    eprintln!("{}╠{}╣{}", theme_color, "═".repeat(box_width), RESET);
 
     for line in lines {
-        let padding = box_width - strip_ansi(line).len() - 2;
+        let line_stripped = strip_ansi(line);
+        let padding = box_width - line_stripped.len() - 2;
         eprintln!(
-            "{}│{} {}{} {}│{}",
+            "{}║{} {}{} {}║{}",
             theme_color,
             RESET,
             line,
@@ -351,7 +360,13 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
         );
     }
 
-    eprintln!("{}╰{}╯{}", theme_color, "─".repeat(box_width), RESET);
+    eprintln!("{}╚{}╝{}", theme_color, "═".repeat(box_width), RESET);
+}
+
+pub fn print_success_banner(msg: &str) {
+    use colors::*;
+    use symbols::*;
+    eprintln!("\n   {}{}{} {}  {}{}{}", BOLD, MFB_GREEN, SPARKLE, msg, SPARKLE, RESET, RESET);
 }
 
 fn strip_ansi(s: &str) -> String {

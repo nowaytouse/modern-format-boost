@@ -546,16 +546,29 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     flag_mode.description_en(),
                     initial_crf
                 );
-                let explore_result = shared_utils::explore_hevc_with_gpu_coarse_full(
-                    input_path,
-                    &temp_path,
-                    vf_args,
-                    initial_crf,
-                    ultimate,
-                    config.force_ms_ssim_long,
-                    config.min_ssim,
-                    config.child_threads,
-                )
+                let explore_result = if ultimate {
+                    shared_utils::explore_hevc_with_gpu_coarse_ultimate(
+                        input_path,
+                        &temp_path,
+                        vf_args,
+                        initial_crf,
+                        ultimate,
+                        config.allow_size_tolerance,
+                        config.child_threads,
+                    )
+                } else {
+                    shared_utils::explore_hevc_with_gpu_coarse_full(
+                        input_path,
+                        &temp_path,
+                        vf_args,
+                        initial_crf,
+                        ultimate,
+                        config.force_ms_ssim_long,
+                        config.allow_size_tolerance,
+                        config.min_ssim,
+                        config.child_threads,
+                    )
+                }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
                 for log_line in &explore_result.log {
@@ -1386,6 +1399,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
 
         let strategy = determine_strategy(&detection);
@@ -1434,6 +1449,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
 
         let strategy = determine_strategy_with_apple_compat(&detection, true);
@@ -1487,6 +1504,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
 
         let normal = determine_strategy(&detection);
@@ -1542,6 +1561,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
 
         let normal = determine_strategy(&detection);
@@ -1599,7 +1620,9 @@ mod tests {
                 has_subtitles: false,
                 subtitle_codec: None,
                 audio_channels: None,
-            is_variable_frame_rate: false,
+                is_variable_frame_rate: false,
+                precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+                tags: std::collections::HashMap::new(),
             }
         };
 
@@ -1672,6 +1695,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1717,6 +1742,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(
@@ -1765,6 +1792,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let crf = calculate_matched_crf(&det);
         assert!(
@@ -1818,6 +1847,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let crf = calculate_matched_crf(&det);
         assert!(
@@ -1866,6 +1897,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(
@@ -1915,6 +1948,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1964,6 +1999,8 @@ mod tests {
             subtitle_codec: None,
             audio_channels: None,
             is_variable_frame_rate: false,
+            precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
+            tags: std::collections::HashMap::new(),
         };
         let normal = determine_strategy(&det);
         assert_eq!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") skipped in normal mode");

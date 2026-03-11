@@ -51,7 +51,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             l.split_whitespace()
                 .find_map(|s| s.parse::<u32>().ok())
         })
-        .unwrap_or(100); // Default to 100ms if parsing fails
+        .ok_or_else(|| VidQualityError::ConversionError("Failed to parse frame duration from WebP".to_string()))?;
     
     let fps = 1000.0 / frame_duration_ms as f64;
     
@@ -233,8 +233,7 @@ fn is_static_animated_image(path: &Path) -> bool {
         return false;
     }
     if let Ok(analysis) = shared_utils::image_analyzer::analyze_image(path) {
-        if analysis.is_animated {
-            let duration_secs = analysis.duration_secs.unwrap_or(1.0);
+        if let Some(duration_secs) = analysis.duration_secs {
             if duration_secs < 0.01 {
                 return true;
             }
@@ -847,6 +846,7 @@ pub fn convert_to_hevc_mp4_matched(
             vf_args,
             initial_crf,
             true,
+            options.allow_size_tolerance,
             options.child_threads,
         )
     } else {
@@ -855,6 +855,7 @@ pub fn convert_to_hevc_mp4_matched(
             &temp_output,
             vf_args,
             initial_crf,
+            options.allow_size_tolerance,
             options.child_threads,
         )
     }

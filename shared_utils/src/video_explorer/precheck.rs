@@ -170,12 +170,12 @@ fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
 /// Prefer avg_frame_rate (actual frames per second); fallback to r_frame_rate.
 /// r_frame_rate can be the time_base reciprocal (e.g. 90000) rather than real FPS — callers
 /// should use fps_sanitise_for_validation when fps may be time_base.
-fn parse_fps_from_stream(stream: &serde_json::Value) -> f64 {
+fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
     let avg = parse_rational_fps(&stream["avg_frame_rate"])
         .filter(|&v| v > 0.0 && v.is_finite() && v <= FPS_THRESHOLD_INVALID);
     let r_fps = parse_rational_fps(&stream["r_frame_rate"])
         .filter(|&v| v > 0.0 && v.is_finite());
-    avg.or(r_fps).unwrap_or(30.0)
+    avg.or(r_fps)
 }
 
 /// If fps looks like time_base (e.g. 90000) rather than real FPS, derive from frame_count/duration.
@@ -269,7 +269,7 @@ fn bpp_from_precheck_json(
         .as_u64()
         .and_then(|h| u32::try_from(h).ok())
         .context("Missing or invalid video height")?;
-    let fps = parse_fps_from_stream(stream);
+    let fps = parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -295,11 +295,11 @@ fn bpp_from_precheck_json(
         file_size
     };
     let total_pixels = width as u64 * height as u64 * frame_count;
-    Ok(if total_pixels > 0 {
-        (bytes_for_bpp as f64 * 8.0) / total_pixels as f64
+    if total_pixels > 0 {
+        Ok((bytes_for_bpp as f64 * 8.0) / total_pixels as f64)
     } else {
-        0.5
-    })
+        bail!("Total pixels is 0, cannot calculate BPP")
+    }
 }
 
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
@@ -330,7 +330,7 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
     let stream = json["streams"].get(0).context("No video stream")?;
-    let fps: f64 = parse_fps_from_stream(stream);
+    let fps: f64 = parse_fps_from_stream(stream).context("Could not determine FPS for duration calculation")?;
 
     let frame_count: u64 = json["streams"]
         .get(0)
@@ -421,7 +421,7 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         (width, height)
     };
 
-    let fps = parse_fps_from_stream(stream);
+    let fps = parse_fps_from_stream(stream).context("Could not determine FPS for video info")?;
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -464,8 +464,9 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let bpp = if total_pixels > 0 {
         (bytes_for_bpp as f64 * 8.0) / total_pixels as f64
     } else {
-        0.5
+        bail!("Total pixels is 0, cannot calculate BPP");
     };
+
 
     use crate::quality_matcher::parse_source_codec;
     let source_codec_enum = parse_source_codec(&codec);
