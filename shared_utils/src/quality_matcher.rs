@@ -356,17 +356,17 @@ impl Default for AnalysisDetails {
     }
 }
 
-/// Safe BPP range for CRF formula: avoids log2(0), NaN, and overflow. Final CRF is still clamped to [15, 40] (AV1) or [0, 35] (HEVC).
+/// Safe BPP range for CRF formula: avoids log2(0), NaN, and overflow. Final CRF is still clamped to [0, 51] for maximum flexibility.
 const SAFE_BPP_MIN: f64 = 1e-6;
 const SAFE_BPP_MAX: f64 = 50.0;
 
 /// AV1 CRF output range; final clamp is the last line of defense for extreme BPP or content/bias adjustments.
-const AV1_CRF_CLAMP_MIN: f32 = 15.0;
-const AV1_CRF_CLAMP_MAX: f32 = 40.0;
+const AV1_CRF_CLAMP_MIN: f32 = 0.0;
+const AV1_CRF_CLAMP_MAX: f32 = 51.0;
 
-/// HEVC CRF output range (x265 0–51, we use 0–35 for quality matching).
+/// HEVC CRF output range (x265 0–51, we use 0–51 to allow full range in ultimate mode).
 const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
-const HEVC_CRF_CLAMP_MAX: f32 = 35.0;
+const HEVC_CRF_CLAMP_MAX: f32 = 51.0;
 
 pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_av1_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)

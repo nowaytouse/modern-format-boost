@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.33] - 2026-03-12
+
+### Added
+- **CPU Fine-Tune Sprint & Backtrack**: Implemented an accelerated search algorithm for Phase 3 (Downward Search).
+  - **Sprint**: Doubles the CRF step (0.1 → 0.2 → 0.4...) on successful compression to rapidly find the quality ceiling.
+  - **Backtrack**: Immediately reverts to the last known good CRF and resets step to 0.1 upon overshooting, ensuring precision without sacrificing speed.
+- **Enhanced UI Aesthetics**: Fully colorized Phase headers, Wall Hit warnings, and search results using a unified ANSI color scheme (Success=Green, Warning=Yellow, Failure=Red, Value=Cyan).
+- **Single-Line Failure Diagnostics**: Re-engineered the `VIDEO STREAM COMPRESSION FAILED` warning into a concise, professional single-line format with visual separators and localized size units (KB/MB).
+
+### Changed
+- **Absolute Quality Freedom (Extreme Mode)**: Removed all artificial CRF barriers for high-fidelity sources.
+  - Lowered `ABSOLUTE_MIN_CRF` and `EXPLORE_DEFAULT_MIN_CRF` to **0.0**.
+  - Relaxed AV1 minimum CRF clamp from 15.0 to **0.0**.
+  - Extended HEVC maximum CRF range to 51.0 for edge-case compatibility.
+- **Smart Boundary Awareness**: Updated all search phases to use dynamic `search_floor` (0.0 in Ultimate Mode) instead of legacy hardcoded minimums.
+
+### Fixed
+- **Size Tolerance Discrepancy**: Fixed a critical logic error where `conversion_api.rs` would fail an encode due to video stream growth even when `allow_size_tolerance` (1MB) was enabled.
+- **Phase 2 Efficiency**: Optimized Phase 2 (Upward Search) to terminate immediately if a Wall Hit occurs at the minimum step (0.1), preventing redundant iterations.
+
 ## [0.10.32] - 2026-03-12
 
 ### Added
