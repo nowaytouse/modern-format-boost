@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.23] - 2026-03-11
+
+### Added
+- **Deterministic Video Quality Detection**: Prioritized x264/x265 encoder settings (CRF/QP) and exact B-frame counts (via ffprobe) over heuristic BPP-based estimates.
+- **Refined Image Lossless Detection**: Fixed HEIC/AVIF `is_lossless` detection by parsing bitstream parameters (hvcC/av1C). Expanded deterministic checks to TIFF, JXL, and JP2 formats.
+
+### Fixed
+- **API Consistency**: Updated the video analysis pipeline to handle the expanded 14-argument signature, ensuring 100% test coverage and resolving previous signature mismatch errors.
+
+## [0.10.22] - 2026-03-11
+
+### Added
+- **Precision-First Image Quality Detection**: Refactored the quality analysis pipeline to prioritize deterministic metadata extraction over heuristic estimates.
+  - **PNG/GIF Palette Detection**: Explicitly parses PNG chunks and GIF Global Color Tables to get exact palette sizes, providing 100% accurate color diversity metrics for indexed formats.
+  - **Lossless Determinism**: Implemented deterministic headers checks for WebP (VP8L), HEIC/AVIF (Profile/Chroma), and TIFF (Compression Tag) to accurately identify lossless sources.
+  - **High-Bit-Depth Awareness**: Quality heuristics now respect 10-bit+ bit depths extracted directly from headers, adjusting noise and complexity expectations accordingly.
+  - **Content Classification Override**: Integrated precise metadata into the content classifier, ensuring PNG-8 and GIF files are correctly identified as Graphics/Icons rather than Photos.
+
+### Changed
+- **Unified Analysis Metadata**: Introduced `PrecisionMetadata` struct across `image_detection`, `image_analyzer`, and `image_quality_detector` modules to ensure consistent data propagation.
+
 ## [0.10.21] - 2026-03-11
 
 ### Changed
