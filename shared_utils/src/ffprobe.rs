@@ -59,7 +59,10 @@ pub struct FFprobeResult {
     pub audio_channels: Option<u32>,
     pub profile: Option<String>,
     pub level: Option<String>,
-    pub has_b_frames: bool,
+    /// Actual B-frame count (max_b_frames) from ffprobe.
+    pub max_b_frames: u8,
+    /// Raw encoder settings string (e.g. from x264-params or x265-params tags).
+    pub encoder_settings: Option<String>,
     pub video_bit_rate: Option<u64>,
     pub refs: Option<u32>,
     /// HDR10 mastering display metadata (e.g. "G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,500)")
@@ -279,7 +282,17 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let level = video_stream["level"]
         .as_u64()
         .map(|l| format!("{:.1}", l as f64 / 10.0));
-    let has_b_frames = video_stream["has_b_frames"].as_u64().unwrap_or(0) > 0;
+    
+    // Extract actual B-frame count (integer) instead of just a boolean
+    let max_b_frames = video_stream["has_b_frames"].as_i64().unwrap_or(0) as u8;
+
+    // Extract encoder settings from tags (x264-params, x265-params, etc.)
+    let encoder_settings = video_stream["tags"]["x265-params"]
+        .as_str()
+        .or_else(|| video_stream["tags"]["x264-params"].as_str())
+        .or_else(|| video_stream["tags"]["encoder_settings"].as_str())
+        .map(|s| s.to_string());
+
     let video_bit_rate = video_stream["bit_rate"]
         .as_str()
         .and_then(|s| s.parse::<u64>().ok());
@@ -333,7 +346,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         audio_channels,
         profile,
         level,
-        has_b_frames,
+        max_b_frames,
+        encoder_settings,
         video_bit_rate,
         refs,
         mastering_display: hdr.mastering_display,

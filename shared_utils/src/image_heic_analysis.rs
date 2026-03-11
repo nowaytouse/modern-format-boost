@@ -47,7 +47,11 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let height = handle.height();
     let has_alpha = handle.has_alpha_channel();
     let bit_depth = handle.luma_bits_per_pixel();
-    let is_lossless = false;
+    
+    // Deterministic lossless detection from headers
+    let is_lossless = crate::image_detection::detect_heic_compression(path)
+        .map(|comp| comp == crate::image_detection::CompressionType::Lossless)
+        .unwrap_or(false);
 
     let image_count = ctx.image_ids().len();
 

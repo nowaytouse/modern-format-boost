@@ -2144,3 +2144,28 @@ pub fn explore_av1_with_gpu_coarse(
         max_threads,
     )
 }
+
+pub fn explore_av1_with_gpu_coarse_full(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    initial_crf: f32,
+    ultimate_mode: bool,
+    force_ms_ssim_long: bool,
+    min_ssim: f64,
+    max_threads: usize,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
+    explore_with_gpu_coarse_search(
+        input,
+        output,
+        VideoEncoder::Av1,
+        vf_args,
+        initial_crf,
+        max_crf,
+        min_ssim,
+        ultimate_mode,
+        force_ms_ssim_long,
+        max_threads,
+    )
+}

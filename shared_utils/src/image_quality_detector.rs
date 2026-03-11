@@ -25,6 +25,7 @@ use crate::progress_mode::{has_log_file, write_to_log_at_level};
 use tracing::Level;
 use image::{open, GenericImageView};
 use serde::{Deserialize, Serialize};
+use crate::image_detection::PrecisionMetadata;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +60,8 @@ pub struct ImageQualityAnalysis {
     pub routing_decision: RoutingDecision,
 
     pub confidence: f64,
+
+    pub precision: PrecisionMetadata,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -132,6 +135,7 @@ pub fn analyze_image_quality(
     file_size: u64,
     format: &str,
     frame_count: u32,
+    precision: PrecisionMetadata,
 ) -> Result<ImageQualityAnalysis, String> {
     let expected_size = (width as usize) * (height as usize) * 4;
     if rgba_data.len() < expected_size {
@@ -150,10 +154,23 @@ pub fn analyze_image_quality(
 
     let pixels = (width as u64) * (height as u64);
 
-    let edge_density = calculate_edge_density(rgba_data, width, height);
-    let color_diversity = calculate_color_diversity(rgba_data, width, height);
+     let edge_density = calculate_edge_density(rgba_data, width, height);
+    
+    // Color diversity override: if we have exact palette size (PNG-8, GIF), use it deterministicly.
+    let color_diversity = if let Some(p_size) = precision.palette_size {
+        (p_size as f64 / 256.0).min(1.0)
+    } else {
+        calculate_color_diversity(rgba_data, width, height)
+    };
+
     let texture_variance = calculate_texture_variance(rgba_data, width, height);
-    let noise_level = calculate_noise_level(rgba_data, width, height);
+    
+    // Noise level override: for deterministic lossless or high-depth formats, noise is often intentional/fine-grain.
+    let noise_level = if precision.is_lossless_deterministic && (precision.bit_depth.unwrap_or(8) >= 10) {
+        0.0 // True high-fidelity lossless doesn't have "compression noise"
+    } else {
+        calculate_noise_level(rgba_data, width, height)
+    };
     let sharpness = calculate_sharpness(rgba_data, width, height);
     let contrast = calculate_contrast(rgba_data, width, height);
     let has_alpha = detect_alpha_usage(rgba_data);
@@ -170,6 +187,7 @@ pub fn analyze_image_quality(
         is_animated,
         width,
         height,
+        &precision,
     );
 
     let compression_potential =
@@ -207,6 +225,7 @@ pub fn analyze_image_quality(
         compression_potential,
         routing_decision,
         confidence,
+        precision,
     })
 }
 
@@ -504,9 +523,20 @@ fn classify_content_type(
     is_animated: bool,
     width: u32,
     height: u32,
+    precision: &PrecisionMetadata,
 ) -> ImageContentType {
     if is_animated {
         return ImageContentType::Animation;
+    }
+
+    // Precise palette-based classification
+    if let Some(p_size) = precision.palette_size {
+        if p_size <= 64 && complexity < 0.3 {
+            return ImageContentType::Icon;
+        }
+        if p_size <= 256 && complexity < 0.5 {
+            return ImageContentType::Graphic;
+        }
     }
 
     if width <= 512 && height <= 512 && has_alpha && complexity < 0.4 {
@@ -672,7 +702,7 @@ pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalys
         .extension()
         .map(|e| e.to_string_lossy().to_uppercase())
         .unwrap_or_else(|| "unknown".to_string());
-    analyze_image_quality(width, height, rgba.as_raw(), file_size, &format, 1).ok()
+    analyze_image_quality(width, height, rgba.as_raw(), file_size, &format, 1, PrecisionMetadata::default()).ok()
 }
 
 /// Format [ImageQualityAnalysis] as multi-line media info. **Log file only** — does not write to
@@ -773,7 +803,7 @@ mod tests {
     #[test]
     fn test_analyze_solid_color() {
         let data = create_solid_color(100, 100, 128, 128, 128, 255);
-        let result = analyze_image_quality(100, 100, &data, 10000, "png", 1).unwrap();
+        let result = analyze_image_quality(100, 100, &data, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity < 0.2,
@@ -800,7 +830,7 @@ mod tests {
     #[test]
     fn test_analyze_gradient() {
         let data = create_gradient(200, 200);
-        let result = analyze_image_quality(200, 200, &data, 50000, "png", 1).unwrap();
+        let result = analyze_image_quality(200, 200, &data, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity > 0.1 && result.complexity < 0.8,
@@ -817,7 +847,7 @@ mod tests {
     #[test]
     fn test_analyze_checkerboard() {
         let data = create_checkerboard(200, 200, 10);
-        let result = analyze_image_quality(200, 200, &data, 50000, "png", 1).unwrap();
+        let result = analyze_image_quality(200, 200, &data, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.edge_density > 0.3,
@@ -834,7 +864,7 @@ mod tests {
     #[test]
     fn test_analyze_noisy() {
         let data = create_noisy(200, 200, 12345);
-        let result = analyze_image_quality(200, 200, &data, 100000, "jpeg", 1).unwrap();
+        let result = analyze_image_quality(200, 200, &data, 100000, "jpeg", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity > 0.5,
@@ -855,12 +885,12 @@ mod tests {
     #[test]
     fn test_alpha_detection() {
         let data_alpha = create_solid_color(100, 100, 128, 128, 128, 128);
-        let result_alpha = analyze_image_quality(100, 100, &data_alpha, 10000, "png", 1).unwrap();
+        let result_alpha = analyze_image_quality(100, 100, &data_alpha, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
         assert!(result_alpha.has_alpha, "Should detect alpha usage");
 
         let data_no_alpha = create_solid_color(100, 100, 128, 128, 128, 255);
         let result_no_alpha =
-            analyze_image_quality(100, 100, &data_no_alpha, 10000, "png", 1).unwrap();
+            analyze_image_quality(100, 100, &data_no_alpha, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             !result_no_alpha.has_alpha,
             "Should not detect alpha when all 255"
@@ -871,14 +901,14 @@ mod tests {
     fn test_animation_detection() {
         let data = create_solid_color(100, 100, 128, 128, 128, 255);
 
-        let static_result = analyze_image_quality(100, 100, &data, 10000, "png", 1).unwrap();
+        let static_result = analyze_image_quality(100, 100, &data, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             !static_result.is_animated,
             "frame_count=1 should not be animated"
         );
         assert_ne!(static_result.content_type, ImageContentType::Animation);
 
-        let animated_result = analyze_image_quality(100, 100, &data, 50000, "gif", 10).unwrap();
+        let animated_result = analyze_image_quality(100, 100, &data, 50000, "gif", 10, PrecisionMetadata::default()).unwrap();
         assert!(
             animated_result.is_animated,
             "frame_count=10 should be animated"
@@ -889,7 +919,7 @@ mod tests {
     #[test]
     fn test_classify_icon() {
         let data = create_solid_color(64, 64, 100, 150, 200, 200);
-        let result = analyze_image_quality(64, 64, &data, 5000, "png", 1).unwrap();
+        let result = analyze_image_quality(64, 64, &data, 5000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert_eq!(
             result.content_type,
@@ -911,7 +941,7 @@ mod tests {
             }
         }
 
-        let result = analyze_image_quality(1920, 1080, &data, 500000, "png", 1).unwrap();
+        let result = analyze_image_quality(1920, 1080, &data, 500000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity < 0.5,
@@ -928,7 +958,7 @@ mod tests {
     #[test]
     fn test_classify_photo() {
         let data = create_noisy(1920, 1080, 54321);
-        let result = analyze_image_quality(1920, 1080, &data, 2000000, "jpeg", 1).unwrap();
+        let result = analyze_image_quality(1920, 1080, &data, 2000000, "jpeg", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity > 0.5,
@@ -943,7 +973,7 @@ mod tests {
     #[test]
     fn test_classify_graphic() {
         let data = create_checkerboard(800, 600, 50);
-        let result = analyze_image_quality(800, 600, &data, 100000, "png", 1).unwrap();
+        let result = analyze_image_quality(800, 600, &data, 100000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.color_diversity < 0.2,
@@ -961,31 +991,31 @@ mod tests {
     fn test_skip_modern_formats() {
         let data = create_gradient(500, 500);
 
-        let avif_result = analyze_image_quality(500, 500, &data, 50000, "avif", 1).unwrap();
+        let avif_result = analyze_image_quality(500, 500, &data, 50000, "avif", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             avif_result.routing_decision.should_skip,
             "AVIF should be skipped"
         );
 
-        let jxl_result = analyze_image_quality(500, 500, &data, 50000, "jxl", 1).unwrap();
+        let jxl_result = analyze_image_quality(500, 500, &data, 50000, "jxl", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             jxl_result.routing_decision.should_skip,
             "JXL should be skipped"
         );
 
-        let heic_result = analyze_image_quality(500, 500, &data, 50000, "heic", 1).unwrap();
+        let heic_result = analyze_image_quality(500, 500, &data, 50000, "heic", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             heic_result.routing_decision.should_skip,
             "HEIC should be skipped"
         );
 
-        let png_result = analyze_image_quality(500, 500, &data, 50000, "png", 1).unwrap();
+        let png_result = analyze_image_quality(500, 500, &data, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             !png_result.routing_decision.should_skip,
             "PNG should not be skipped"
         );
 
-        let jpeg_result = analyze_image_quality(500, 500, &data, 50000, "jpeg", 1).unwrap();
+        let jpeg_result = analyze_image_quality(500, 500, &data, 50000, "jpeg", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             !jpeg_result.routing_decision.should_skip,
             "JPEG should not be skipped"
@@ -996,7 +1026,7 @@ mod tests {
     fn test_format_recommendations_by_content() {
         let photo_data = create_noisy(1000, 1000, 11111);
         let photo_result =
-            analyze_image_quality(1000, 1000, &photo_data, 500000, "jpeg", 1).unwrap();
+            analyze_image_quality(1000, 1000, &photo_data, 500000, "jpeg", 1, PrecisionMetadata::default()).unwrap();
 
         let photo_formats = photo_result.content_type.recommended_formats();
         assert!(
@@ -1005,7 +1035,7 @@ mod tests {
         );
 
         let anim_data = create_gradient(500, 500);
-        let anim_result = analyze_image_quality(500, 500, &anim_data, 100000, "gif", 5).unwrap();
+        let anim_result = analyze_image_quality(500, 500, &anim_data, 100000, "gif", 5, PrecisionMetadata::default()).unwrap();
 
         let anim_formats = anim_result.content_type.recommended_formats();
         assert!(
@@ -1017,7 +1047,7 @@ mod tests {
     #[test]
     fn test_strict_solid_complexity() {
         let data = create_solid_color(500, 500, 100, 100, 100, 255);
-        let result = analyze_image_quality(500, 500, &data, 10000, "png", 1).unwrap();
+        let result = analyze_image_quality(500, 500, &data, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity < 0.15,
@@ -1034,7 +1064,7 @@ mod tests {
     #[test]
     fn test_strict_noise_complexity() {
         let data = create_noisy(500, 500, 99999);
-        let result = analyze_image_quality(500, 500, &data, 100000, "png", 1).unwrap();
+        let result = analyze_image_quality(500, 500, &data, 100000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.complexity > 0.6,
@@ -1051,7 +1081,7 @@ mod tests {
     #[test]
     fn test_strict_checkerboard_edges() {
         let data = create_checkerboard(500, 500, 5);
-        let result = analyze_image_quality(500, 500, &data, 50000, "png", 1).unwrap();
+        let result = analyze_image_quality(500, 500, &data, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.edge_density > 0.1,
@@ -1063,7 +1093,7 @@ mod tests {
     #[test]
     fn test_strict_compression_potential() {
         let simple = create_solid_color(500, 500, 200, 200, 200, 255);
-        let simple_result = analyze_image_quality(500, 500, &simple, 10000, "png", 1).unwrap();
+        let simple_result = analyze_image_quality(500, 500, &simple, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             simple_result.compression_potential > 0.7,
             "STRICT: Simple content compression potential must be > 0.7, got {}",
@@ -1071,7 +1101,7 @@ mod tests {
         );
 
         let complex = create_noisy(500, 500, 77777);
-        let complex_result = analyze_image_quality(500, 500, &complex, 100000, "jpeg", 1).unwrap();
+        let complex_result = analyze_image_quality(500, 500, &complex, 100000, "jpeg", 1, PrecisionMetadata::default()).unwrap();
         assert!(
             complex_result.compression_potential < 0.5,
             "STRICT: Complex content compression potential must be < 0.5, got {}",
@@ -1082,14 +1112,14 @@ mod tests {
     #[test]
     fn test_edge_minimum_size() {
         let data = create_solid_color(10, 10, 128, 128, 128, 255);
-        let result = analyze_image_quality(10, 10, &data, 400, "png", 1);
+        let result = analyze_image_quality(10, 10, &data, 400, "png", 1, PrecisionMetadata::default());
         assert!(result.is_ok(), "Should handle minimum size images");
     }
 
     #[test]
     fn test_edge_large_image() {
         let data = create_gradient(3840, 2160);
-        let result = analyze_image_quality(3840, 2160, &data, 5000000, "png", 1).unwrap();
+        let result = analyze_image_quality(3840, 2160, &data, 5000000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             result.confidence > 0.7,
@@ -1100,17 +1130,17 @@ mod tests {
     #[test]
     fn test_edge_invalid_dimensions() {
         let data = vec![0u8; 100];
-        let result = analyze_image_quality(0, 100, &data, 100, "png", 1);
+        let result = analyze_image_quality(0, 100, &data, 100, "png", 1, PrecisionMetadata::default());
         assert!(result.is_err(), "Should fail on zero width");
 
-        let result2 = analyze_image_quality(100, 0, &data, 100, "png", 1);
+        let result2 = analyze_image_quality(100, 0, &data, 100, "png", 1, PrecisionMetadata::default());
         assert!(result2.is_err(), "Should fail on zero height");
     }
 
     #[test]
     fn test_edge_insufficient_data() {
         let data = vec![0u8; 100];
-        let result = analyze_image_quality(100, 100, &data, 100, "png", 1);
+        let result = analyze_image_quality(100, 100, &data, 100, "png", 1, PrecisionMetadata::default());
         assert!(result.is_err(), "Should fail on insufficient data");
     }
 
@@ -1119,8 +1149,8 @@ mod tests {
         let high_edges = create_checkerboard(200, 200, 5);
         let low_edges = create_solid_color(200, 200, 128, 128, 128, 255);
 
-        let high_result = analyze_image_quality(200, 200, &high_edges, 50000, "png", 1).unwrap();
-        let low_result = analyze_image_quality(200, 200, &low_edges, 50000, "png", 1).unwrap();
+        let high_result = analyze_image_quality(200, 200, &high_edges, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
+        let low_result = analyze_image_quality(200, 200, &low_edges, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             high_result.edge_density > low_result.edge_density * 3.0,
@@ -1135,8 +1165,8 @@ mod tests {
         let high_div = create_gradient(200, 200);
         let low_div = create_solid_color(200, 200, 128, 128, 128, 255);
 
-        let high_result = analyze_image_quality(200, 200, &high_div, 50000, "png", 1).unwrap();
-        let low_result = analyze_image_quality(200, 200, &low_div, 50000, "png", 1).unwrap();
+        let high_result = analyze_image_quality(200, 200, &high_div, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
+        let low_result = analyze_image_quality(200, 200, &low_div, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             high_result.color_diversity > low_result.color_diversity * 3.0,
@@ -1151,8 +1181,8 @@ mod tests {
         let high_noise = create_noisy(200, 200, 12345);
         let low_noise = create_gradient(200, 200);
 
-        let high_result = analyze_image_quality(200, 200, &high_noise, 50000, "png", 1).unwrap();
-        let low_result = analyze_image_quality(200, 200, &low_noise, 50000, "png", 1).unwrap();
+        let high_result = analyze_image_quality(200, 200, &high_noise, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
+        let low_result = analyze_image_quality(200, 200, &low_noise, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             high_result.noise_level > low_result.noise_level,
@@ -1167,8 +1197,8 @@ mod tests {
         let sharp = create_checkerboard(200, 200, 20);
         let smooth = create_gradient(200, 200);
 
-        let sharp_result = analyze_image_quality(200, 200, &sharp, 50000, "png", 1).unwrap();
-        let smooth_result = analyze_image_quality(200, 200, &smooth, 50000, "png", 1).unwrap();
+        let sharp_result = analyze_image_quality(200, 200, &sharp, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
+        let smooth_result = analyze_image_quality(200, 200, &smooth, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             sharp_result.sharpness > smooth_result.sharpness,
@@ -1182,8 +1212,8 @@ mod tests {
     fn test_consistency_same_input() {
         let data = create_gradient(300, 300);
 
-        let result1 = analyze_image_quality(300, 300, &data, 50000, "png", 1).unwrap();
-        let result2 = analyze_image_quality(300, 300, &data, 50000, "png", 1).unwrap();
+        let result1 = analyze_image_quality(300, 300, &data, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
+        let result2 = analyze_image_quality(300, 300, &data, 50000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             (result1.complexity - result2.complexity).abs() < 0.001,
@@ -1204,8 +1234,8 @@ mod tests {
         let small = create_checkerboard(100, 100, 10);
         let large = create_checkerboard(400, 400, 40);
 
-        let small_result = analyze_image_quality(100, 100, &small, 10000, "png", 1).unwrap();
-        let large_result = analyze_image_quality(400, 400, &large, 160000, "png", 1).unwrap();
+        let small_result = analyze_image_quality(100, 100, &small, 10000, "png", 1, PrecisionMetadata::default()).unwrap();
+        let large_result = analyze_image_quality(400, 400, &large, 160000, "png", 1, PrecisionMetadata::default()).unwrap();
 
         assert!(
             small_result.color_diversity < 0.2,

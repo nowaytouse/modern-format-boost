@@ -1,6 +1,7 @@
 use crate::ffprobe_json::ColorInfo;
 use crate::image_heic_analysis::{analyze_heic_file, is_heic_file, HeicAnalysis};
 use crate::image_jpeg_analysis::{analyze_jpeg_file, JpegQualityAnalysis};
+use crate::image_detection::{PrecisionMetadata, detect_image};
 use crate::img_errors::{ImgQualityError, Result};
 use image::{DynamicImage, GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,8 @@ pub struct ImageAnalysis {
 
     /// HDR metadata extracted from image (bit depth, color transfer, primaries, mastering display)
     pub hdr_info: Option<ColorInfo>,
+
+    pub precision: PrecisionMetadata,
 }
 
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
@@ -218,6 +221,12 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
 
+    let precision = if let Ok(detection) = detect_image(path) {
+        detection.precision
+    } else {
+        PrecisionMetadata::default()
+    };
+
     Ok(ImageAnalysis {
         file_path: path.display().to_string(),
         format: format_str,
@@ -238,6 +247,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         ssim,
         metadata,
         hdr_info,
+        precision,
     })
 }
 
@@ -334,6 +344,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         ssim: None,
         metadata,
         hdr_info,
+        precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
     })
 }
 
@@ -1007,6 +1018,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         ssim: None,
         metadata,
         hdr_info,
+        precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
     })
 }
 
@@ -1081,6 +1093,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         ssim: None,
         metadata,
         hdr_info,
+        precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
     })
 }
 
