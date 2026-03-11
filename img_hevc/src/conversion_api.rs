@@ -616,6 +616,7 @@ mod tests {
             duration: None,
             estimated_quality: Some(85),
             entropy: 7.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
         let strategy = determine_strategy(&detection);
@@ -640,6 +641,7 @@ mod tests {
             duration: Some(3.0),
             estimated_quality: None,
             entropy: 5.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
         let strategy = determine_strategy(&detection);

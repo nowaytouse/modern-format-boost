@@ -585,6 +585,7 @@ mod tests {
             duration: None,
             estimated_quality: Some(85),
             entropy: 7.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
         let strategy = determine_strategy(&detection);
@@ -612,6 +613,7 @@ mod tests {
             duration: Some(3.0),
             estimated_quality: None,
             entropy: 5.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
 
         let strategy = determine_strategy(&detection);
@@ -635,6 +637,7 @@ mod tests {
             duration: Some(1.0),
             estimated_quality: Some(80),
             entropy: 5.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
         let strategy = determine_strategy(&detection);
         assert_eq!(strategy.target, TargetFormat::NoConversion);
@@ -662,6 +665,7 @@ mod tests {
             duration: None,
             estimated_quality: None,
             entropy: 4.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
         let strategy = determine_strategy(&detection);
         let config = ConversionConfig {
@@ -692,6 +696,7 @@ mod tests {
             duration: None,
             estimated_quality: Some(80),
             entropy: 5.0,
+            precision: shared_utils::image_detection::PrecisionMetadata::default(),
         };
         let strategy = determine_strategy(&detection);
         assert_eq!(strategy.target, TargetFormat::AVIF);
