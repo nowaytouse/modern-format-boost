@@ -457,7 +457,9 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     let actual_ssim = explore_result.ssim.unwrap_or(0.0);
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
-                        < explore_result.input_video_stream_size;
+                        < explore_result.input_video_stream_size ||
+                        (config.allow_size_tolerance && 
+                         (explore_result.output_video_stream_size as i64 - explore_result.input_video_stream_size as i64) < 1024 * 1024);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let _total_size_ratio = if detection.file_size > 0 {
                         explore_result.output_size as f64 / detection.file_size as f64
@@ -481,29 +483,38 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             } else {
                                 0.0
                             };
+                            
+                            use shared_utils::modern_ui::colors::*;
+                            
+                            // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
                             let base_msg = if input_b < 1024.0 * 1024.0 {
                                 format!(
-                                "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
+                                "{}⚠️  VIDEO STREAM COMPRESSION FAILED:{} {:.1} KB → {:.1} KB ({:+.1}%)",
+                                BRIGHT_YELLOW,
+                                RESET,
                                 input_b / 1024.0,
                                 output_b / 1024.0,
                                 stream_change_pct
                             )
                             } else {
                                 format!(
-                                "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
+                                "{}⚠️  VIDEO STREAM COMPRESSION FAILED:{} {:.3} MB → {:.3} MB ({:+.1}%)",
+                                BRIGHT_YELLOW,
+                                RESET,
                                 input_b / 1024.0 / 1024.0,
                                 output_b / 1024.0 / 1024.0,
                                 stream_change_pct
                             )
                             };
                             
+                            // Create beautiful single-line format with visual separators
                             let additional_info = if total_file_compressed {
-                                "│ Total file smaller but video stream larger"
+                                format!("{}│{} Total file smaller but video stream larger", DIM, RESET)
                             } else {
-                                "│ Total file and video stream both larger"
+                                format!("{}│{} Total file and video stream both larger", DIM, RESET)
                             };
                             
-                            let final_msg = format!("{} {} │ File may already be highly optimized", base_msg, additional_info);
+                            let final_msg = format!("{} {} {}│{} File may already be highly optimized", base_msg, additional_info, DIM, RESET);
                             warn!("   {}", final_msg);
                             (
                                 format!(
