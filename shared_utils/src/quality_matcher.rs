@@ -1250,7 +1250,7 @@ pub fn from_video_detection(
     bitrate: u64,
     fps: f64,
     duration_secs: f64,
-    has_b_frames: bool,
+    max_b_frames: u8,
     bit_depth: u8,
     file_size: u64,
 ) -> QualityAnalysis {
@@ -1277,7 +1277,8 @@ pub fn from_video_detection(
         source_codec: codec.to_string(),
         width,
         height,
-        has_b_frames,
+        has_b_frames: max_b_frames > 0,
+        b_frame_count: Some(max_b_frames),
         bit_depth,
         has_alpha: false,
         duration_secs: Some(duration_secs),

@@ -807,7 +807,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
         detection.bitrate,
         detection.fps,
         detection.duration_secs,
-        detection.has_b_frames,
+        detection.max_b_frames,
         detection.bit_depth,
         detection.file_size,
     );
