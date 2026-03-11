@@ -349,7 +349,7 @@ mod prop_tests {
             };
 
             prop_assert!(info.video_stream_size <= info.total_file_size,
-                "视频流大小 {} 应 <= 总文件大小 {}",
+                "Video stream size {} should be <= total file size {}",
                 info.video_stream_size, info.total_file_size);
         }
     }
@@ -379,7 +379,7 @@ mod prop_tests {
             let calculated_overhead = info.total_file_size
                 .saturating_sub(info.video_stream_size + info.audio_stream_size);
             prop_assert_eq!(calculated_overhead, info.container_overhead,
-                "计算的容器开销 {} 应等于存储的容器开销 {}",
+                "Calculated container overhead {} should equal stored container overhead {}",
                 calculated_overhead, info.container_overhead);
         }
     }
@@ -402,7 +402,7 @@ mod prop_tests {
             };
 
             prop_assert_eq!(info.pure_media_size(), video_size + audio_size,
-                "纯媒体大小应等于视频 {} + 音频 {}", video_size, audio_size);
+                "Pure media size should equal video {} + audio {}", video_size, audio_size);
         }
     }
 
@@ -430,7 +430,7 @@ mod prop_tests {
             let expected_percent = overhead as f64 / total_size as f64 * 100.0;
 
             prop_assert!((calculated_percent - expected_percent).abs() < 0.01,
-                "计算的百分比 {} 应接近预期 {}", calculated_percent, expected_percent);
+                "Calculated percentage {} should be close to expected {}", calculated_percent, expected_percent);
         }
     }
 
@@ -455,11 +455,11 @@ mod prop_tests {
             };
 
             prop_assert!(info.video_stream_size > total_size * 95 / 100,
-                "回退估算的视频流大小 {} 应 > 总大小 {} 的 95%",
+                "Fallback estimated video stream size {} should be > 95% of total size {}",
                 info.video_stream_size, total_size);
 
             prop_assert!(info.container_overhead < total_size * 5 / 100,
-                "回退估算的容器开销 {} 应 < 总大小 {} 的 5%",
+                "Fallback estimated container overhead {} should be < 5% of total size {}",
                 info.container_overhead, total_size);
         }
     }
@@ -489,10 +489,10 @@ mod prop_tests {
 
             if actual_percent > 10.0 {
                 prop_assert!(is_excessive,
-                    "当容器开销 {:.1}% > 10% 时，应标记为过大", actual_percent);
+                    "When container overhead {:.1}% > 10%, it should be marked as excessive", actual_percent);
             } else {
                 prop_assert!(!is_excessive,
-                    "当容器开销 {:.1}% <= 10% 时，不应标记为过大", actual_percent);
+                    "When container overhead {:.1}% <= 10%, it should not be marked as excessive", actual_percent);
             }
         }
     }

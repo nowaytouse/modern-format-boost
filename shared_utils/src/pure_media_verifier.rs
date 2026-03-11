@@ -274,7 +274,7 @@ mod prop_tests {
 
             if output_total >= input_total {
                 prop_assert!(result.is_container_overhead_issue(),
-                    "当总文件 {} >= {} 但视频压缩成功时，应检测到容器开销问题",
+                    "When total file {} >= {} but video successfully compressed, a container overhead issue should be detected",
                     output_total, input_total);
             }
         }

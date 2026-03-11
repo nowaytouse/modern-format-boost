@@ -269,11 +269,11 @@ mod tests {
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
             0x00, 0x90, 0x77, 0x53, 0xDE,
         ];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(png_data).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        file.write_all(png_data).expect("Failed to write to file");
 
         let level = png::estimate_compression_level(file.path());
-        assert!(level <= 9, "PNG 压缩级别应在 0-9 范围内，实际: {}", level);
+        assert!(level <= 9, "PNG compression level should be between 0-9, actual: {}", level);
     }
 
     #[test]
@@ -286,11 +286,11 @@ mod tests {
             0x0C, 0x0C, 0x0C, 0x0C, 0x07, 0x09, 0x0E, 0x0F, 0x0D, 0x0C, 0x0E, 0x0B, 0x0C, 0x0C,
             0x0C,
         ];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(jpeg_data).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        file.write_all(jpeg_data).expect("Failed to write to file");
 
         let quality = jpeg::estimate_quality(file.path());
-        assert!(quality >= 90, "低量化值应返回高质量，实际: {}", quality);
+        assert!(quality >= 90, "Low quantization value should return high quality, actual: {}", quality);
     }
 
     #[test]
@@ -303,12 +303,12 @@ mod tests {
             data.extend_from_slice(&[0u8; 20]);
             data
         };
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(&webp_lossless).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        file.write_all(&webp_lossless).expect("Failed to write to file");
 
         assert!(
             webp::is_lossless(file.path()),
-            "VP8L chunk 应被检测为 lossless"
+            "VP8L chunk should be detected as lossless"
         );
     }
 
@@ -322,12 +322,12 @@ mod tests {
             data.extend_from_slice(&[0u8; 20]);
             data
         };
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(&webp_lossy).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        file.write_all(&webp_lossy).expect("Failed to write to file");
 
         assert!(
             !webp::is_lossless(file.path()),
-            "VP8 chunk 应被检测为 lossy"
+            "VP8 chunk should be detected as lossy"
         );
     }
 
@@ -371,12 +371,12 @@ mod tests {
     #[test]
     fn test_jxl_codestream_signature() {
         let jxl_codestream: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
-        let mut file = NamedTempFile::new().expect("创建临时文件失败");
-        file.write_all(jxl_codestream).expect("写入失败");
+        let mut file = NamedTempFile::new().expect("Failed to create temporary file");
+        file.write_all(jxl_codestream).expect("Failed to write to file");
 
         assert!(
             jxl::verify_signature(file.path()),
-            "JXL codestream 签名应被识别"
+            "JXL codestream signature should be recognized"
         );
     }
 
@@ -384,10 +384,10 @@ mod tests {
     fn test_error_handling_nonexistent_file() {
         let path = std::path::Path::new("/nonexistent/file.test");
 
-        assert!(!webp::is_lossless(path), "不存在的文件应返回 false");
-        assert!(!webp::is_animated(path), "不存在的文件应返回 false");
-        assert!(!gif::is_animated(path), "不存在的文件应返回 false");
-        assert_eq!(gif::get_frame_count(path), 0, "不存在的文件应返回 0");
-        assert!(!jxl::verify_signature(path), "不存在的文件应返回 false");
+        assert!(!webp::is_lossless(path), "Non-existent file should return false");
+        assert!(!webp::is_animated(path), "Non-existent file should return false");
+        assert!(!gif::is_animated(path), "Non-existent file should return false");
+        assert_eq!(gif::get_frame_count(path), 0, "Non-existent file should return 0");
+        assert!(!jxl::verify_signature(path), "Non-existent file should return false");
     }
 }
