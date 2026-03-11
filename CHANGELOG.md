@@ -11,7 +11,8 @@ All notable changes to this project will be documented in this file.
 - **Refined Image Lossless Detection**: Fixed HEIC/AVIF `is_lossless` detection by parsing bitstream parameters (hvcC/av1C). Expanded deterministic checks to TIFF, JXL, and JP2 formats.
 
 ### Fixed
-- **API Consistency**: Updated the video analysis pipeline to handle the expanded 14-argument signature, ensuring 100% test coverage and resolving previous signature mismatch errors.
+- **Workspace Compilation**: Resolved all build errors in `vid_av1`, `vid_hevc`, `img_av1`, and `img_hevc` caused by the `has_b_frames` field refactor and new `PrecisionMetadata` fields.
+- **API Consistency**: Updated `from_video_detection` and its call sites across all crates to handle the expanded bitstream metadata.
 
 ## [0.10.22] - 2026-03-11
 
