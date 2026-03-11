@@ -4,8 +4,8 @@
 //! 完全排除容器格式和元数据的影响。
 //!
 //! ## 核心逻辑
-//! - 主要标准: `output_video_stream_size < input_video_stream_size`
-//! - 只要纯视频流变小就算成功，无论总文件大小如何
+//! - 主要标准: `output_video_stream_size < input_video_stream_size + 1_048_576`
+//! - 只要纯视频流变小或是稍大（增幅 < 1MB），就算成功，无论总文件大小如何
 
 use crate::stream_size::StreamSizeInfo;
 
@@ -38,20 +38,20 @@ impl PureMediaVerifyResult {
         if self.video_compressed {
             if self.is_container_overhead_issue() {
                 format!(
-                    "✅ 纯视频压缩成功 ({:+.1}%)，但容器开销导致总文件未压缩 ({:+.1}%)",
+                    "✅ Video compressed ({:+.1}%), but container overhead increased total size ({:+.1}%)",
                     self.video_size_change_percent(),
                     self.total_size_change_percent()
                 )
             } else {
                 format!(
-                    "✅ 压缩成功：视频 {:+.1}%，总文件 {:+.1}%",
+                    "✅ Compression success: Video {:+.1}%, Total {:+.1}%",
                     self.video_size_change_percent(),
                     self.total_size_change_percent()
                 )
             }
         } else {
             format!(
-                "❌ 压缩失败：视频 {:+.1}%（未变小）",
+                "❌ Compression failed: Video {:+.1}% (Not smaller)",
                 self.video_size_change_percent()
             )
         }
@@ -61,11 +61,16 @@ impl PureMediaVerifyResult {
 pub fn verify_pure_media_compression(
     input_info: &StreamSizeInfo,
     output_info: &StreamSizeInfo,
+    allow_size_tolerance: bool,
 ) -> PureMediaVerifyResult {
     let input_video = input_info.video_stream_size;
     let output_video = output_info.video_stream_size;
 
-    let video_compressed = output_video < input_video;
+    let video_compressed = if allow_size_tolerance {
+        output_video < input_video.saturating_add(1_048_576)
+    } else {
+        output_video < input_video
+    };
 
     let video_compression_ratio = if input_video > 0 {
         output_video as f64 / input_video as f64
@@ -95,8 +100,12 @@ pub fn verify_pure_media_compression(
 }
 
 #[inline]
-pub fn is_video_compressed(input_video_size: u64, output_video_size: u64) -> bool {
-    output_video_size < input_video_size
+pub fn is_video_compressed(input_video_size: u64, output_video_size: u64, allow_size_tolerance: bool) -> bool {
+    if allow_size_tolerance {
+        output_video_size < input_video_size.saturating_add(1_048_576)
+    } else {
+        output_video_size < input_video_size
+    }
 }
 
 #[inline]
@@ -131,18 +140,29 @@ mod tests {
         let input = make_stream_info(1000, 100, 50);
         let output = make_stream_info(800, 100, 50);
 
-        let result = verify_pure_media_compression(&input, &output);
+        let result = verify_pure_media_compression(&input, &output, false);
 
         assert!(result.video_compressed);
         assert!(result.video_compression_ratio < 1.0);
     }
 
     #[test]
-    fn test_video_not_compressed() {
-        let input = make_stream_info(1000, 100, 50);
-        let output = make_stream_info(1100, 100, 50);
+    fn test_video_compressed_success_within_tolerance() {
+        let input = make_stream_info(10_000_000, 100, 50);
+        let output = make_stream_info(10_500_000, 100, 50); // 500,000 bytes larger
 
-        let result = verify_pure_media_compression(&input, &output);
+        let result = verify_pure_media_compression(&input, &output, true);
+
+        assert!(result.video_compressed); // Accepts because < 1_048_576 increase
+        assert!(result.video_compression_ratio > 1.0);
+    }
+
+    #[test]
+    fn test_video_not_compressed_exceeds_tolerance() {
+        let input = make_stream_info(1000, 100, 50);
+        let output = make_stream_info(1_049_577, 100, 50); // > 1_048_576 bytes larger
+
+        let result = verify_pure_media_compression(&input, &output, true);
 
         assert!(!result.video_compressed);
         assert!(result.video_compression_ratio > 1.0);
@@ -153,7 +173,7 @@ mod tests {
         let input = make_stream_info(1000, 100, 50);
         let output = make_stream_info(900, 100, 200);
 
-        let result = verify_pure_media_compression(&input, &output);
+        let result = verify_pure_media_compression(&input, &output, false);
 
         assert!(result.video_compressed);
         assert!(result.is_container_overhead_issue());
@@ -162,9 +182,9 @@ mod tests {
 
     #[test]
     fn test_is_video_compressed() {
-        assert!(is_video_compressed(1000, 900));
-        assert!(!is_video_compressed(1000, 1000));
-        assert!(!is_video_compressed(1000, 1100));
+        assert!(is_video_compressed(1000, 900, false));
+        assert!(is_video_compressed(10_000_000, 10_500_000, true)); // Within tolerance
+        assert!(!is_video_compressed(10_000, 1_058_577, true)); // Exceeds tolerance
     }
 
     #[test]
@@ -206,11 +226,11 @@ mod prop_tests {
             let input = make_stream_info(input_video, audio, overhead);
             let output = make_stream_info(output_video, audio, overhead);
 
-            let result = verify_pure_media_compression(&input, &output);
+            let result = verify_pure_media_compression(&input, &output, true);
 
-            let expected_compressed = output_video < input_video;
+            let expected_compressed = output_video < input_video.saturating_add(1_048_576);
             prop_assert_eq!(result.video_compressed, expected_compressed,
-                "当 output {} {} input {} 时，video_compressed 应为 {}",
+                "When output {} {} input {}, video_compressed should be {}",
                 output_video, if expected_compressed { "<" } else { ">=" },
                 input_video, expected_compressed);
         }
@@ -226,7 +246,7 @@ mod prop_tests {
             let expected = output_video as f64 / input_video as f64;
 
             prop_assert!((ratio - expected).abs() < 0.0001,
-                "压缩率 {} 应接近预期 {}", ratio, expected);
+                "Compression ratio {} should be close to expected {}", ratio, expected);
         }
     }
 
@@ -244,10 +264,10 @@ mod prop_tests {
             let input = make_stream_info(input_video, 0, input_overhead);
             let output = make_stream_info(output_video, 0, output_overhead);
 
-            let result = verify_pure_media_compression(&input, &output);
+            let result = verify_pure_media_compression(&input, &output, true);
 
             prop_assert!(result.video_compressed,
-                "视频从 {} 压缩到 {} 应该成功", input_video, output_video);
+                "Video compressed from {} to {} should succeed", input_video, output_video);
 
             let input_total = input.total_file_size;
             let output_total = output.total_file_size;

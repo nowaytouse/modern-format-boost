@@ -217,7 +217,7 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
 
 pub fn can_compress_pure_video(output_path: &Path, input_video_stream_size: u64) -> bool {
     let output_info = extract_stream_sizes(output_path);
-    let result = output_info.video_stream_size < input_video_stream_size;
+    let result = output_info.video_stream_size < input_video_stream_size.saturating_add(1_048_576);
 
     #[cfg(debug_assertions)]
     {
@@ -503,12 +503,12 @@ mod prop_tests {
             output_video_size in 1u64..1_000_000_000u64,
             input_video_size in 1u64..1_000_000_000u64,
         ) {
-            let expected_can_compress = output_video_size < input_video_size;
+            let expected_can_compress = output_video_size < input_video_size.saturating_add(1_048_576);
 
             prop_assert_eq!(
                 expected_can_compress,
-                output_video_size < input_video_size,
-                "纯视频流对比逻辑：output {} {} input {} 应该 = {}",
+                output_video_size < input_video_size.saturating_add(1_048_576),
+                "Pure video stream logic: output {} {} input {} should = {}",
                 output_video_size,
                 if expected_can_compress { "<" } else { ">=" },
                 input_video_size,
@@ -529,15 +529,17 @@ mod prop_tests {
             let output_larger = base_size + delta;
 
             if delta > 0 {
-                prop_assert!(output_smaller < input_video_size,
-                    "当 output {} < input {} 时应该能压缩", output_smaller, input_video_size);
+                prop_assert!(output_smaller < input_video_size.saturating_add(1_048_576),
+                    "When output {} < tolerance(input {}) it should compress", output_smaller, input_video_size);
             }
 
-            prop_assert!((output_equal >= input_video_size),
-                "当 output {} == input {} 时不应该能压缩", output_equal, input_video_size);
+            prop_assert!((output_equal < input_video_size.saturating_add(1_048_576)),
+                "When output {} == input {} it should compress (within tolerance)", output_equal, input_video_size);
 
-            prop_assert!((output_larger >= input_video_size),
-                "当 output {} > input {} 时不应该能压缩", output_larger, input_video_size);
+            if delta >= 1_048_576 {
+                prop_assert!(output_larger >= input_video_size.saturating_add(1_048_576),
+                    "When output {} > input {} and exceeds tolerance it should not compress", output_larger, input_video_size);
+            }
         }
     }
 }

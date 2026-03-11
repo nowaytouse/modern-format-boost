@@ -17,9 +17,9 @@
 //! All size checks use `>=` for this; do not change to `>`.
 //!
 //! ## allow_size_tolerance (default true)
-//! When true: "oversized" threshold is `output size increase < 1MB` (accept). Video path may treat
+//! When true: "oversized" threshold is `output size increase < 1_048_576 bytes` (accept). Video path may treat
 //! `video_compression_ratio < 1.01` as acceptable when require_compression is checked.
-//! Does **not** mean "accept up to 1MB larger as success" for compress goal — compress still requires output < input.
+//! Does **not** mean "accept up to 1_048_576 bytes larger as success" for compress goal — compress still requires output < input.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
@@ -646,15 +646,14 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// Check if output exceeds size tolerance and clean up if so.
 ///
 /// **Two independent but coordinated flags:**
-/// - `allow_size_tolerance` (KB-level): when true, allows size increase < 1MB; when false, requires `output <= input`.
-///   This KB-level tolerance (< 1MB increase = acceptable) is fairer to all file sizes than percentage-based.
-///   Examples: 10KB→1000KB ✅ acceptable, 10KB→1025KB ❌ rejected, 10MB→11MB ❌ rejected
+/// - `allow_size_tolerance`: when true, allows size increase < 1_048_576 bytes; when false, requires `output <= input`.
+///   This absolute byte tolerance is fairer to all file sizes than percentage-based.
 /// - `compress`: when true, **goal is to make output smaller than input**.
-///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < 1MB, still accepts.
-///   Only when increase ≥ 1MB (or tolerance disabled), compress mode rejects the output.
+///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < 1_048_576 bytes, still accepts.
+///   Only when increase ≥ 1_048_576 bytes (or tolerance disabled), compress mode rejects the output.
 ///
 /// **Logic flow:**
-/// 1. Check oversized threshold (tolerance-based): if increase ≥ 1MB → reject
+/// 1. Check oversized threshold (tolerance-based): if increase ≥ 1_048_576 bytes → reject
 /// 2. Check compress goal: if compress=true AND increase ≥ tolerance → reject
 /// 3. Otherwise: accept
 ///
@@ -668,11 +667,12 @@ pub fn check_size_tolerance(
     options: &ConvertOptions,
     format_label: &str,
 ) -> Option<ConversionResult> {
-    // KB-level tolerance: allow size increase < 1MB (1024KB)
-    const TOLERANCE_BYTES: u64 = 1024 * 1024; // 1MB
+    // Tolerance: allow size increase < 1_048_576 bytes (1MB)
+    const TOLERANCE_BYTES: u64 = 1_048_576; // 1MB absolute value
     
     let max_allowed_size = if options.allow_size_tolerance {
-        input_size.saturating_add(TOLERANCE_BYTES - 1) // < 1MB means up to 1MB-1 byte
+        input_size.saturating_add(TOLERANCE_BYTES - 1) // up to 1_048_576 - 1 bytes
+
     } else {
         input_size
     };
@@ -690,7 +690,7 @@ pub fn check_size_tolerance(
         
         // Always log deletion (not just in verbose mode)
         let mode = if options.allow_size_tolerance {
-            "tolerance: KB-level (< 1MB increase)".to_string()
+            "tolerance: absolute (< 1_048_576 bytes increase)".to_string()
         } else {
             "strict mode: no tolerance".to_string()
         };
@@ -751,7 +751,7 @@ pub fn check_size_tolerance(
     if options.compress && output_size >= input_size {
         let size_increase_bytes = output_size.saturating_sub(input_size);
         
-        // If tolerance is enabled and increase is within tolerance (< 1MB), accept it
+        // If tolerance is enabled and increase is within tolerance (< 1_048_576 bytes), accept it
         if options.allow_size_tolerance && size_increase_bytes < TOLERANCE_BYTES {
             // Within tolerance, accept the output
             return None;
