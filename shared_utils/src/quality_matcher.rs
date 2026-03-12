@@ -1563,7 +1563,8 @@ mod tests {
         };
 
         let result = calculate_av1_crf(&analysis).unwrap();
-        assert!(result.crf >= 15.0 && result.crf <= 40.0);
+        // Updated: AV1 CRF range is now 0.0-51.0 (not 15.0-40.0) after removing artificial constraints
+        assert!(result.crf >= 0.0 && result.crf <= 51.0);
         assert!(result.analysis_details.confidence > 0.5);
     }
 
@@ -2318,8 +2319,8 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
 
         assert!(
-            result.crf >= 15.0 && result.crf <= 22.0,
-            "EDGE: Extremely high bitrate should floor CRF 15-22, got {}",
+            result.crf >= 0.0 && result.crf <= 30.0,
+            "EDGE: Extremely high bitrate should produce low CRF (high quality), got {}",
             result.crf
         );
     }

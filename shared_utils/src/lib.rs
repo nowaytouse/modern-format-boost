@@ -20,6 +20,7 @@ pub mod conversion;
 pub mod crf_constants;
 pub mod date_analysis;
 pub mod error_handler;
+pub mod unified_error;
 pub mod explore_strategy;
 pub mod ffmpeg_process;
 pub mod ffprobe;
@@ -227,6 +228,14 @@ pub use lru_cache::{CacheEntry, LruCache, SerializableCache};
 
 pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
 
+// Re-export unified error types
+pub use unified_error::{
+    UnifiedError,
+    Result as UnifiedResult,
+    ImgResult,
+    VidResult,
+};
+
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
 
 pub use explore_strategy::{
@@ -312,6 +321,18 @@ pub use universal_heartbeat::{HeartbeatConfig, HeartbeatGuard, UniversalHeartbea
 
 pub use logging::{
     flush_logs, init_logging, log_external_tool, log_operation_end, log_operation_start, LogConfig,
+};
+
+// Enhanced logging with 24-bit color support
+pub mod enhanced_logging;
+pub use enhanced_logging::{
+    init_enhanced_logging, LogLevel, LogRouter, LogTarget, TerminalColor, UpstreamToolLogger,
+};
+
+// Modern terminal logging with color safety
+pub mod terminal_logging;
+pub use terminal_logging::{
+    init_terminal_logger, terminal_logger, ColorGuard, TerminalLogger,
 };
 
 pub use common_utils::{
