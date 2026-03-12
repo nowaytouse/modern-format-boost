@@ -1988,14 +1988,14 @@ pub fn gpu_coarse_search_with_log(
 
     let probe_crfs = if use_initial {
         log_msg!(
-            "   🎯 Using initial_crf {:.0} as search anchor",
+            "   🎯 [GPU] Using initial_crf {:.0} as search anchor",
             config.initial_crf
         );
         vec![config.initial_crf, config.max_crf, config.min_crf]
     } else {
         let mid_crf = (config.min_crf + config.max_crf) / 2.0;
         log_msg!(
-            "   ⚠️ initial_crf {:.0} out of range, using mid_crf {:.0}",
+            "   ⚠️ [GPU] initial_crf {:.0} out of range, using mid_crf {:.0}",
             config.initial_crf,
             mid_crf
         );
@@ -2005,7 +2005,7 @@ pub fn gpu_coarse_search_with_log(
     let probe_results = if skip_parallel {
         log_msg!("   ⚡ Skip parallel probe (large file mode)");
         let test_crf = probe_crfs[0];
-        log_msg!("   🔄 Testing CRF {:.0} (anchor point)...", test_crf);
+        log_msg!("   🔄 [GPU] Testing CRF {:.0} (anchor point)...", test_crf);
         let single_result = encode_gpu(test_crf);
         if let Ok(size) = &single_result {
             size_cache.insert(test_crf, *size);
@@ -2018,7 +2018,7 @@ pub fn gpu_coarse_search_with_log(
         vec![(test_crf, single_result)]
     } else {
         log_msg!(
-            "   🚀 Parallel probe: CRF {:.0}, {:.0}, {:.0}",
+            "   🚀 [GPU] Parallel probe: CRF {:.0}, {:.0}, {:.0}",
             probe_crfs[0],
             probe_crfs[1],
             probe_crfs[2]

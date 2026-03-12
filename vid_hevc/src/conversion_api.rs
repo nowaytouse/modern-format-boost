@@ -1136,8 +1136,9 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> f32 {
         }
         Err(e) => {
             warn!("   ⚠️  Quality analysis failed: {}", e);
-            warn!("   ⚠️  Using conservative CRF 23.0");
-            23.0
+            let fallback = shared_utils::HEVC_CRF_DEFAULT;
+            warn!("   ⚠️  Using default conservative CRF {:.1}", fallback);
+            fallback
         }
     }
 }
