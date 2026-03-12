@@ -9,10 +9,6 @@ use super::dynamic_mapping;
 use super::precheck;
 use super::*;
 
-/// Global tolerance for video path: 1MB (1,048,576 bytes).
-/// Used when allow_size_tolerance flag is enabled to allow minimal size increases.
-const TOLERANCE_BYTES: u64 = 1_048_576;
-
 /// Build the colour/HDR FFmpeg arguments from an FFprobeResult.
 /// These arguments must be appended to every final HEVC/AV1/H.264 encode so that
 /// colour metadata (primaries, TRC, matrix, mastering display, CLL) is preserved.
@@ -927,7 +923,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     max_crf: f32,
     min_ssim: f64,
     ultimate_mode: bool,
-    allow_size_tolerance: bool,
+    _allow_size_tolerance: bool,
     max_threads: usize,
     duration: f32,
     probe_info: Option<&crate::ffprobe::FFprobeResult>,
@@ -1342,7 +1338,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     };
     let gpu_ssim = calculate_ssim_quick();
 
-    let is_gpu_effectively_compressed = gpu_size < input_size || (allow_size_tolerance && (gpu_size - input_size) < TOLERANCE_BYTES);
+    let is_gpu_effectively_compressed = gpu_size < input_size;
 
     if is_gpu_effectively_compressed {
         best_crf = Some(gpu_boundary_crf);
@@ -1361,7 +1357,6 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        let tolerance_msg = if gpu_size >= input_size { " (Within 1MB tolerance)" } else { "" };
         let quality_display = if ultimate_mode && !gpu_ultimate_metrics_str.is_empty() {
             format!("{}{}{}", BRIGHT_MAGENTA, gpu_ultimate_metrics_str, RESET)
         } else {
@@ -1372,10 +1367,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         };
 
         crate::log_eprintln!(
-            "GPU boundary CRF {:.1}: {:+.1}%{} │ {} ✅",
+            "GPU boundary CRF {:.1}: {:+.1}% │ {} ✅",
             gpu_boundary_crf,
             gpu_pct,
-            tolerance_msg,
             quality_display
         );
         crate::log_eprintln!();
@@ -1524,7 +1518,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             };
             let current_ssim_opt = calculate_ssim_quick();
 
-            let is_effectively_compressed = size < input_size || (allow_size_tolerance && (size - input_size) < TOLERANCE_BYTES);
+            let is_effectively_compressed = size < input_size;
 
             if is_effectively_compressed {
                 last_good_crf = test_crf;
@@ -1679,30 +1673,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                 _prev_size = size;
                 test_crf -= current_step;
             } else {
-                // Check if the overshoot is within tolerance
-                let size_increase = size - input_size;
-                
-                if allow_size_tolerance && size_increase < TOLERANCE_BYTES {
-                    // This is actually "good enough", treat as success but don't update last_good_* if it's an increase
-                    // unless we have no last_good_*.
-                    if last_good_crf == gpu_boundary_crf && size > input_size {
-                         // First step and it's an increase but within tolerance - accept it
-                         last_good_crf = test_crf;
-                         last_good_size = size;
-                         last_good_ssim = current_ssim_opt;
-                         best_crf = Some(test_crf);
-                         best_size = Some(size);
-                    }
-                    
-                    crate::log_eprintln!("   {}⚠{} {}CRF {:.1}{}: {}{:+.1}%{} (Within 1MB tolerance) ✅",
-                        BRIGHT_YELLOW, RESET, CYAN, test_crf, RESET,
-                        YELLOW, total_size_pct, RESET);
-                    
-                    // Continue searching or stop based on gain (same as success branch)
-                    test_crf -= current_step;
-                    continue;
-                }
-
                 overshoot_detected = true;
                 wall_hits += 1;
 
@@ -1856,7 +1826,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
                     
                     crate::log_eprintln!(
-                        "   CRF {:.1}: {:+.1}% │ VMAF:{:.2} UV:{:.2} (Index: {:.1}/3.0) {}",
+                        "   CRF {:.1}: {:+.1}% │ VMAF:{:.2} UV:{:.2} (Index: {:.0}/3) {}",
                         test_crf, total_size_pct, v, chroma_avg, failure_credibility,
                         if vmaf_improved || psnr_improved { "↑" } else { "→" }
                     );
@@ -1867,24 +1837,21 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Logic: If no integer improvement, build failure credibility.
                     if !vmaf_improved && !psnr_improved {
-                        failure_credibility += 0.3;
+                        failure_credibility += 1.0;
                         if failure_credibility >= 3.0 {
                             crate::log_eprintln!(
-                                "   {}❌ QUALITY PLATEAU REACHED (3.0):{} No integer improvement over 10 insights. Stopping.",
+                                "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
                                 BRIGHT_RED, RESET
                             );
                             break;
                         }
                     } else {
-                        // Reset or decay credibility on significant improvement? 
-                        // User said "10 times cannot get improvement -> terminate". 
-                        // So if we get improvement, we should probably reset the counter.
                         failure_credibility = 0.0;
                     }
                 }
             }
 
-            let is_effectively_compressed = size < input_size || (allow_size_tolerance && (size - input_size) < TOLERANCE_BYTES);
+            let is_effectively_compressed = size < input_size;
 
             if is_effectively_compressed {
                 if best_crf.is_none_or(|c| test_crf < c) {
@@ -1893,10 +1860,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_ssim_tracked = calculate_ssim_quick();
                 }
                 found_compress_point = true;
-                let tolerance_msg = if size >= input_size { format!(" {}(Within 1MB tolerance){}", YELLOW, RESET) } else { String::new() };
-                crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{}{} │ FOUND! ✅", 
+                crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} │ FOUND! ✅",
                     BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                    BRIGHT_GREEN, total_size_pct, RESET, tolerance_msg);
+                    BRIGHT_GREEN, total_size_pct, RESET);
                 
                 // User requirement: Do NOT stop immediately. Continue exploring for quality gains.
                 // unless it's NOT ultimate mode.
@@ -1992,7 +1958,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                 }
 
-                let is_effectively_compressed = size < input_size || (allow_size_tolerance && (size - input_size) < TOLERANCE_BYTES);
+                let is_effectively_compressed = size < input_size;
 
                 if is_effectively_compressed {
                     consecutive_failures = 0;
@@ -2010,21 +1976,19 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     let improvement_indicator = if vmaf_improved || psnr_improved { "↑" } else { "→" };
                     let insight_msg = if ultimate_mode { 
-                        format!("{} (Index: {:.1}/3.0) {}", metrics_info, failure_credibility, improvement_indicator) 
+                        format!("{} (Index: {:.0}/3) {}", metrics_info, failure_credibility, improvement_indicator)
                     } else { 
-                        String::new() 
+                        String::new()
                     };
 
-                    let tolerance_msg = if size >= input_size { format!(" {}(Within 1MB tolerance){}", YELLOW, RESET) } else { String::new() };
-                    
                     if let Some(current_ssim) = current_ssim_opt {
                         let prev_ssim = prev_ssim_opt.unwrap_or(current_ssim);
                         let ssim_gain = current_ssim - prev_ssim;
-                        
+
                         crate::log_eprintln!(
-                            "   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{}{} │ {}SSIM {:.4}{} ({}Δ{:+.4}{}) {}{} (step {:.2}) ✅",
+                            "   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} │ {}SSIM {:.4}{} ({}Δ{:+.4}{}) {}{} (step {:.2}) ✅",
                             BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET, tolerance_msg,
+                            BRIGHT_GREEN, total_size_pct, RESET,
                             BRIGHT_YELLOW, current_ssim, RESET,
                             DIM, ssim_gain, RESET,
                             insight_msg,
@@ -2042,10 +2006,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
                         if !vmaf_improved && !psnr_improved {
-                            failure_credibility += 0.3;
+                            failure_credibility += 1.0;
                             if failure_credibility >= 3.0 {
                                 crate::log_eprintln!(
-                                    "   {}❌ QUALITY PLATEAU REACHED (3.0):{} No integer improvement over 10 insights. Stopping.",
+                                    "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
                                     BRIGHT_RED, RESET
                                 );
                                 break;
@@ -2073,7 +2037,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     consecutive_failures += 1;
                     
                     let insight_msg = if ultimate_mode {
-                        format!("{} (Index: {:.1}/3.0) →", metrics_info, failure_credibility)
+                        format!("{} (Index: {:.0}/3) →", metrics_info, failure_credibility)
                     } else {
                         String::new()
                     };
@@ -2100,10 +2064,10 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Insight mechanism also applies to failures
                     if ultimate_mode {
-                        failure_credibility += 0.3;
+                        failure_credibility += 1.0;
                         if failure_credibility >= 3.0 {
                             crate::log_eprintln!(
-                                "   {}❌ FAILURE CREDIBILITY REACHED (3.0):{} Sustained failure/quality collapse. Stopping.",
+                                "   {}❌ FAILURE CREDIBILITY REACHED (3/3):{} Sustained failure/quality collapse. Stopping.",
                                 BRIGHT_RED, RESET
                             );
                             break;
