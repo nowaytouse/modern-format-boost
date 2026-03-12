@@ -20,6 +20,7 @@ use crate::float_compare::SSIM_EPSILON;
 use crate::types::{FileSize, Ssim};
 
 pub mod codec_detection;
+pub mod error_handling;
 pub mod metadata;
 pub mod ssim_calculator;
 pub mod stream_analysis;
