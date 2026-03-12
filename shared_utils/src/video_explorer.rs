@@ -4273,13 +4273,14 @@ mod tests {
 
     #[test]
     fn test_adaptive_max_walls_formula_correctness() {
-        assert_eq!(calculate_adaptive_max_walls(10.0), 12);
+        // Updated for v0.10.32+: ULTIMATE_MIN_WALL_HITS changed from 4 to 15
+        assert_eq!(calculate_adaptive_max_walls(10.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
-        assert_eq!(calculate_adaptive_max_walls(18.0), 13);
+        assert_eq!(calculate_adaptive_max_walls(18.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
-        assert_eq!(calculate_adaptive_max_walls(30.0), 13);
+        assert_eq!(calculate_adaptive_max_walls(30.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
-        assert_eq!(calculate_adaptive_max_walls(50.0), 14);
+        assert_eq!(calculate_adaptive_max_walls(50.0), 15); // clamped to ULTIMATE_MIN_WALL_HITS
 
         assert_eq!(
             calculate_adaptive_max_walls(100000.0),
@@ -4289,9 +4290,12 @@ mod tests {
 
     #[test]
     fn test_ultimate_mode_constants() {
-        assert_eq!(
-            ULTIMATE_MIN_WALL_HITS, NORMAL_MAX_WALL_HITS,
-            "Ultimate min should equal normal max for smooth transition"
+        // Updated for v0.10.32+: ULTIMATE_MIN_WALL_HITS (15) > NORMAL_MAX_WALL_HITS (4)
+        // This is intentional to ensure deeper saturation in ultimate mode
+        assert!(
+            ULTIMATE_MIN_WALL_HITS > NORMAL_MAX_WALL_HITS,
+            "Ultimate min ({}) should be greater than normal max ({}) for extreme saturation",
+            ULTIMATE_MIN_WALL_HITS, NORMAL_MAX_WALL_HITS
         );
     }
 
