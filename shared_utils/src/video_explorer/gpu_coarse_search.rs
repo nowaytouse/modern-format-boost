@@ -1467,6 +1467,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut consecutive_zero_gains: u32 = 0;
         let mut quality_wall_hit = false;
         let mut domain_wall_hit = false;
+        let mut consecutive_01_successes = 0;
 
         if duration >= LONG_VIDEO_THRESHOLD_SECS {
             crate::verbose_eprintln!("   {}Long video ({:.1} min) - no iteration limit, searching until SSIM saturates{}",
@@ -1671,9 +1672,39 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 prev_ssim_opt = current_ssim_opt;
                 _prev_size = size;
+
+                if current_step <= MIN_STEP + 0.01 {
+                    consecutive_01_successes += 1;
+                } else if consecutive_01_successes >= 2 {
+                    consecutive_01_successes += 1;
+                } else {
+                    consecutive_01_successes = 0;
+                }
+
+                if consecutive_01_successes >= 2 && current_step < 1.6 {
+                    current_step = (current_step * 2.0).min(1.6);
+                }
+
                 test_crf -= current_step;
             } else {
                 overshoot_detected = true;
+                
+                if current_step > MIN_STEP + 0.01 && consecutive_01_successes >= 2 {
+                    crate::log_eprintln!(
+                        "   CRF {:.1}: {:+.1}% {}SPRINT OVERSHOOT │ Backtrack: {:.2} → {:.2}{}❌",
+                        test_crf,
+                        total_size_pct,
+                        BRIGHT_YELLOW,
+                        current_step,
+                        MIN_STEP,
+                        RESET
+                    );
+                    current_step = MIN_STEP;
+                    consecutive_01_successes = 0;
+                    test_crf = last_good_crf - current_step;
+                    continue;
+                }
+                
                 wall_hits += 1;
 
                 let total_file_diff = crate::format_size_diff(size as i64 - input_size as i64);
