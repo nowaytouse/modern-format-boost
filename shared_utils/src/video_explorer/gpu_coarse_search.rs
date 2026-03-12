@@ -414,7 +414,7 @@ pub fn explore_with_gpu_coarse_search(
         (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
     };
 
-    crate::verbose_eprintln!("Phase 2: CPU Fine-Tune (0.5→0.1 step)");
+    crate::verbose_eprintln!("Phase 2: 🖥️  CPU Fine-Tune (0.5→0.1 step)");
     crate::verbose_eprintln!("Starting from GPU boundary: CRF {:.1}", cpu_center_crf);
 
     let clamped_cpu_center_crf = cpu_center_crf.clamp(cpu_min_crf, cpu_max_crf);
@@ -1357,20 +1357,19 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
 
-        let quality_display = if ultimate_mode && !gpu_ultimate_metrics_str.is_empty() {
-            format!("{}{}{}", BRIGHT_MAGENTA, gpu_ultimate_metrics_str, RESET)
+        let metrics_display = if ultimate_mode && !gpu_ultimate_metrics_str.is_empty() {
+            format!(" │ {}", gpu_ultimate_metrics_str)
+        } else if let Some(s) = gpu_ssim {
+            format!(" │ SSIM:{:.4}", s)
         } else {
-            format!("SSIM {}", 
-                gpu_ssim
-                    .map(|s| format!("{:.4}", s))
-                    .unwrap_or_else(|| "N/A".to_string()))
+            " │ SSIM N/A".to_string()
         };
 
+        use crate::modern_ui::colors::*;
         crate::log_eprintln!(
-            "GPU boundary CRF {:.1}: {:+.1}% │ {} ✅",
-            gpu_boundary_crf,
-            gpu_pct,
-            quality_display
+            "{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
+            RESET, RESET, BRIGHT_GREEN, RESET, CYAN, gpu_boundary_crf, RESET,
+            BRIGHT_GREEN, gpu_pct, RESET, metrics_display
         );
         crate::log_eprintln!();
         crate::verbose_eprintln!(
@@ -1534,7 +1533,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         let ssim_gain = current_ssim - prev_ssim;
 
                         let ssim_vs_gpu = current_ssim / gpu_ssim_baseline;
-                        let gpu_comparison = if ssim_vs_gpu > 1.01 {
+                        let _gpu_comparison = if ssim_vs_gpu > 1.01 {
                             format!("{}×{:.3} GPU{}", BRIGHT_GREEN, ssim_vs_gpu, RESET)
                         } else if ssim_vs_gpu > 1.001 {
                             format!("{}×{:.4} GPU{}", GREEN, ssim_vs_gpu, RESET)
@@ -1601,14 +1600,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                             }
                         }
 
-                        let wall_status = if quality_wall_triggered {
-                            if ultimate_mode {
-                                format!("{}DOMAIN WALL (50/50){}", BRIGHT_MAGENTA, RESET)
-                            } else {
-                                format!("{}QUALITY WALL{}", BRIGHT_YELLOW, RESET)
-                            }
-                        } else if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
-                            format!("{}[SATURATED {}/{}]{}", 
+                        let sat_status = if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
+                            format!(" {}[SAT:{}/{}]{}", 
                                 if ultimate_mode { BRIGHT_MAGENTA } else { DIM },
                                 consecutive_zero_gains, 
                                 required_zero_gains, 
@@ -1618,18 +1611,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                             String::new()
                         };
 
-                        // Use ultimate metrics in main log if available
-                        let quality_display = if ultimate_mode && !ultimate_metrics_str.is_empty() {
+                        let metrics_display = if ultimate_mode && !ultimate_metrics_str.is_empty() {
                             format!("{}{}{}", BRIGHT_MAGENTA, ultimate_metrics_str, RESET)
                         } else {
-                            format!("SSIM {}{:.4}{}", BRIGHT_YELLOW, current_ssim, RESET)
+                            format!(" │ SSIM:{:.4} Δ{:+.4}", current_ssim, ssim_gain)
                         };
 
-                        crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} {} ({}Δ{:+.5}{}, step {}{:.2}{}) {} {}✅{} {}",
-                            BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET, quality_display,
-                            DIM, ssim_gain, RESET, DIM, current_step, RESET,
-                            gpu_comparison, BRIGHT_GREEN, RESET, wall_status);
+                        use crate::modern_ui::colors::*;
+                        crate::log_eprintln!("{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
+                            RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                            MFB_BLUE, total_size_pct, RESET, metrics_display, sat_status);
 
                         if quality_wall_triggered {
                             quality_wall_hit = true;
@@ -1637,9 +1628,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                         quality_wall_triggered
                     }
                     _ => {
-                        crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} SSIM {}N/A{} (step {}{:.2}{}) {}✅{}",
-                            BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET, DIM, RESET, DIM, current_step, RESET, BRIGHT_GREEN, RESET);
+                        use crate::modern_ui::colors::*;
+                        crate::log_eprintln!("{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
+                            RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                            MFB_BLUE, total_size_pct, RESET);
                         false
                     }
                 };
@@ -1673,9 +1665,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 prev_ssim_opt = current_ssim_opt;
                 _prev_size = size;
 
-                if current_step <= MIN_STEP + 0.01 {
-                    consecutive_01_successes += 1;
-                } else if consecutive_01_successes >= 2 {
+                if current_step <= MIN_STEP + 0.01 || consecutive_01_successes >= 2 {
                     consecutive_01_successes += 1;
                 } else {
                     consecutive_01_successes = 0;
@@ -1690,14 +1680,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                 overshoot_detected = true;
                 
                 if current_step > MIN_STEP + 0.01 && consecutive_01_successes >= 2 {
+                    use crate::modern_ui::colors::*;
                     crate::log_eprintln!(
-                        "   CRF {:.1}: {:+.1}% {}SPRINT OVERSHOOT │ Backtrack: {:.2} → {:.2}{}❌",
-                        test_crf,
-                        total_size_pct,
-                        BRIGHT_YELLOW,
-                        current_step,
-                        MIN_STEP,
-                        RESET
+                        "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ SPRINT OVERSHOOT (Backtrack: {:.2} → {:.2})",
+                        RESET, RESET, BRIGHT_YELLOW, RESET, CYAN, test_crf, RESET,
+                        DIM, total_size_pct, RESET, current_step, MIN_STEP
                     );
                     current_step = MIN_STEP;
                     consecutive_01_successes = 0;
@@ -1707,7 +1694,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 
                 wall_hits += 1;
 
-                let total_file_diff = crate::format_size_diff(size as i64 - input_size as i64);
+                let _total_file_diff = crate::format_size_diff(size as i64 - input_size as i64);
                 
                 // Calculate new_step first for phase_info
                 let curve_step = initial_step * DECAY_FACTOR.powi(wall_hits as i32);
@@ -1725,16 +1712,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                     format!("decay {}×{:.1}^{}", DIM, DECAY_FACTOR, wall_hits)
                 };
 
+                use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
-                    "   CRF {:.1}: {:+.1}% {}WALL HIT #{} │ Backtrack: {:.2} → {:.2} ({}) (total file {})❌",
-                    test_crf,
-                    total_size_pct,
-                    BRIGHT_RED,
-                    wall_hits,
-                    current_step,
-                    new_step,
-                    phase_info,
-                    total_file_diff
+                    "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
+                    RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
+                    DIM, total_size_pct, RESET, wall_hits, current_step, new_step, phase_info
                 );
 
                 if current_step <= MIN_STEP + 0.01 && new_step <= MIN_STEP + 0.01 {
@@ -1816,10 +1798,11 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
     } else {
+        use crate::modern_ui::colors::*;
         crate::log_eprintln!(
-            "⚠️ GPU boundary CRF {:.1}: {:+.1}% (TOO LARGE)",
-            gpu_boundary_crf,
-            gpu_pct
+            "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}%{} ❌ (TOO LARGE)",
+            RESET, RESET, BRIGHT_RED, RESET, CYAN, gpu_boundary_crf, RESET,
+            BRIGHT_RED, gpu_pct, RESET
         );
         crate::log_eprintln!();
         crate::log_eprintln!("Phase 2: Search UPWARD for compression boundary");
@@ -1855,11 +1838,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // Check for integer-level improvement (ignoring decimals)
                     let vmaf_improved = v.floor() > prev_best_vmaf.floor();
                     let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
-                    
+                    let improvement_indicator = if vmaf_improved || psnr_improved { "↑" } else { "→" };
+                    use crate::modern_ui::colors::*;
                     crate::log_eprintln!(
-                        "   CRF {:.1}: {:+.1}% │ VMAF:{:.2} UV:{:.2} (Index: {:.0}/3) {}",
-                        test_crf, total_size_pct, v, chroma_avg, failure_credibility,
-                        if vmaf_improved || psnr_improved { "↑" } else { "→" }
+                        "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
+                        RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
+                        DIM, total_size_pct, RESET, v, chroma_avg, failure_credibility, improvement_indicator
                     );
 
                     // Cache for Phase III and tracking
@@ -1891,9 +1875,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_ssim_tracked = calculate_ssim_quick();
                 }
                 found_compress_point = true;
-                crate::log_eprintln!("   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} │ FOUND! ✅",
-                    BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                    BRIGHT_GREEN, total_size_pct, RESET);
+                use crate::modern_ui::colors::*;
+                crate::log_eprintln!(
+                    "{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}%{} │ FOUND! ✅",
+                    RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                    BRIGHT_GREEN, total_size_pct, RESET
+                );
                 
                 // User requirement: Do NOT stop immediately. Continue exploring for quality gains.
                 // unless it's NOT ultimate mode.
@@ -1901,9 +1888,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     break;
                 }
             } else {
-                crate::log_eprintln!("   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} ❌", 
-                    BRIGHT_RED, RESET, CYAN, test_crf, RESET,
-                    BRIGHT_RED, total_size_pct, RESET);
+                use crate::modern_ui::colors::*;
+                crate::log_eprintln!(
+                    "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}%{} ❌", 
+                    RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
+                    BRIGHT_RED, total_size_pct, RESET
+                );
             }
             test_crf += step_size_upward;
         }
@@ -1969,6 +1959,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let mut vmaf_improved = false;
                 let mut psnr_improved = false;
                 let mut metrics_info = String::new();
+                let mut current_vmaf_val = None;
+                let mut current_psnr_val = None;
 
                 if ultimate_mode {
                     let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
@@ -1984,8 +1976,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                         
                         metrics_info = format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
                         
-                        if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
-                        if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
+                        current_vmaf_val = Some(v);
+                        current_psnr_val = Some((u, v_score));
                     }
                 }
 
@@ -1997,42 +1989,51 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_crf = Some(test_crf);
                     best_size = Some(size);
                     best_ssim_tracked = current_ssim_opt;
+                    
+                    if ultimate_mode {
+                        if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = current_vmaf_val; }
+                        if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = current_psnr_val; }
+                    }
 
                     let size_increase = size as i64 - prev_size as i64;
-                    let size_increase_pct = if prev_size > 0 {
+                    let _size_increase_pct = if prev_size > 0 {
                         (size_increase as f64 / prev_size as f64) * 100.0
                     } else {
                         0.0
                     };
 
                     let improvement_indicator = if vmaf_improved || psnr_improved { "↑" } else { "→" };
-                    let insight_msg = if ultimate_mode { 
+                    let _insight_msg = if ultimate_mode { 
                         format!("{} (Index: {:.0}/3) {}", metrics_info, failure_credibility, improvement_indicator)
                     } else { 
                         String::new()
                     };
 
-                    if let Some(current_ssim) = current_ssim_opt {
-                        let prev_ssim = prev_ssim_opt.unwrap_or(current_ssim);
-                        let ssim_gain = current_ssim - prev_ssim;
-
-                        crate::log_eprintln!(
-                            "   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} │ {}SSIM {:.4}{} ({}Δ{:+.4}{}) {}{} (step {:.2}) ✅",
-                            BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET,
-                            BRIGHT_YELLOW, current_ssim, RESET,
-                            DIM, ssim_gain, RESET,
-                            insight_msg,
-                            size_increase_pct,
-                            current_step
-                        );
+                    let ssim_gain = match (current_ssim_opt, prev_ssim_opt) {
+                        (Some(curr), Some(prev)) => curr - prev,
+                        _ => 0.0,
+                    };
+                    
+                    let metrics_str = if ultimate_mode {
+                        let v_val = *best_vmaf_tracked;
+                        let uv_val = *best_psnr_uv_tracked;
+                        if let (Some(v), Some((u, v_score))) = (v_val, uv_val) {
+                            let chroma_avg = (u + v_score) / 2.0;
+                            format!(" │ VMAF:{:.2} UV:{:.2} ({:.0}/3 {})", v, chroma_avg, failure_credibility, improvement_indicator)
+                        } else {
+                            String::new()
+                        }
+                    } else if let Some(current_ssim) = current_ssim_opt {
+                        format!(" │ SSIM:{:.4} Δ{:+.4}", current_ssim, ssim_gain)
                     } else {
-                        crate::log_eprintln!(
-                            "   {}✓{} {}CRF {:.1}{}: {}{:+.1}%{} │ SSIM N/A {}{} (step {:.2}) ✅",
-                            BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET, insight_msg, size_increase_pct, current_step
-                        );
-                    }
+                        " │ SSIM N/A".to_string()
+                    };
+
+                    crate::log_eprintln!(
+                        "{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}%{}{} (step {:.2}) ✅",
+                        RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
+                        BRIGHT_GREEN, total_size_pct, RESET, metrics_str, current_step
+                    );
 
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
@@ -2067,16 +2068,23 @@ fn cpu_fine_tune_from_gpu_boundary(
                 } else {
                     consecutive_failures += 1;
                     
-                    let insight_msg = if ultimate_mode {
-                        format!("{} (Index: {:.0}/3) →", metrics_info, failure_credibility)
+                    let metrics_str = if ultimate_mode {
+                        let v_val = *best_vmaf_tracked;
+                        let uv_val = *best_psnr_uv_tracked;
+                        if let (Some(v), Some((u, v_score))) = (v_val, uv_val) {
+                            let chroma_avg = (u + v_score) / 2.0;
+                            format!(" │ VMAF:{:.2} UV:{:.2} ({:.0}/3 →)", v, chroma_avg, failure_credibility)
+                        } else {
+                            String::new()
+                        }
                     } else {
                         String::new()
                     };
 
                     crate::log_eprintln!(
-                        "   {}✗{} {}CRF {:.1}{}: {}{:+.1}%{} {}❌ (fail #{}/{}, step {:.2}) {}",
-                        BRIGHT_RED, RESET, CYAN, test_crf, RESET,
-                        BRIGHT_RED, total_size_pct, RESET, BRIGHT_RED, consecutive_failures, MAX_CONSECUTIVE_FAILURES, current_step, insight_msg
+                        "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}%{}{} {}❌ (fail #{}/{}, step {:.2})",
+                        RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
+                        BRIGHT_RED, total_size_pct, RESET, metrics_str, BRIGHT_RED, consecutive_failures, MAX_CONSECUTIVE_FAILURES, current_step
                     );
 
                     // Backtrack logic
