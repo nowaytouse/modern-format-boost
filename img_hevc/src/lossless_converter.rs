@@ -864,7 +864,7 @@ pub fn convert_to_hevc_mp4_matched(
     }
 
     let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-    let initial_crf = calculate_matched_crf_for_animation_hevc(analysis, input_size);
+    let initial_crf = calculate_matched_crf_for_animation_hevc(analysis, input_size)?;
     vid_hevc::animated_image::convert_to_hevc_mp4_matched(
         input,
         options,
@@ -877,7 +877,7 @@ pub fn convert_to_hevc_mp4_matched(
 fn calculate_matched_crf_for_animation_hevc(
     analysis: &crate::ImageAnalysis,
     file_size: u64,
-) -> f32 {
+) -> Result<f32> {
     let quality_analysis = shared_utils::from_image_analysis(
         &analysis.format,
         analysis.width,
@@ -897,20 +897,19 @@ fn calculate_matched_crf_for_animation_hevc(
                 &result,
                 shared_utils::EncoderType::Hevc,
             );
-            result.crf
+            Ok(result.crf)
         }
-        Err(e) => {
-            eprintln!("   ⚠️  Quality analysis failed: {}", e);
-            eprintln!("   ⚠️  Using conservative CRF 18.0 (high quality)");
-            18.0
-        }
+        Err(e) => Err(ImgQualityError::AnalysisError(format!(
+            "Quality analysis failed: {}",
+            e
+        ))),
     }
 }
 
 pub fn calculate_matched_distance_for_static(
     analysis: &crate::ImageAnalysis,
     file_size: u64,
-) -> f32 {
+) -> Result<f32> {
     let estimated_quality = analysis.jpeg_analysis.as_ref().map(|j| j.estimated_quality);
 
     let quality_analysis = shared_utils::from_image_analysis(
@@ -932,13 +931,12 @@ pub fn calculate_matched_distance_for_static(
                 &result,
                 shared_utils::EncoderType::Jxl,
             );
-            result.distance
+            Ok(result.distance)
         }
-        Err(e) => {
-            eprintln!("   ⚠️  Quality analysis failed: {}", e);
-            eprintln!("   ⚠️  Using conservative distance 1.0 (Q90 equivalent)");
-            1.0
-        }
+        Err(e) => Err(ImgQualityError::AnalysisError(format!(
+            "Quality analysis failed: {}",
+            e
+        ))),
     }
 }
 
@@ -969,7 +967,7 @@ pub fn convert_to_jxl_matched(
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let distance = calculate_matched_distance_for_static(analysis, input_size);
+    let distance = calculate_matched_distance_for_static(analysis, input_size)?;
     eprintln!("   🎯 Matched JXL distance: {:.2}", distance);
 
     let max_threads = if options.child_threads > 0 {

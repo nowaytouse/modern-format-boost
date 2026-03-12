@@ -539,7 +539,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
 
                 let ultimate = flag_mode.is_ultimate();
-                let initial_crf = calculate_matched_crf(&detection);
+                let initial_crf = calculate_matched_crf(&detection)?;
                 info!(
                     "   {} {}: CRF {:.1}",
                     if ultimate { "🔥" } else { "🔬" },
@@ -579,11 +579,19 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = explore_result.ssim.unwrap_or(0.0);
+                    let actual_ssim = match explore_result.ssim {
+                        Some(s) => s,
+                        None => {
+                            warn!("   ⚠️  SSIM not measured, cannot verify quality");
+                            return Err(VidQualityError::GeneralError(
+                                "Quality verification failed: SSIM not measured".to_string()
+                            ));
+                        }
+                    };
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
                         < explore_result.input_video_stream_size ||
-                        (config.allow_size_tolerance && 
+                        (config.allow_size_tolerance &&
                          (explore_result.output_video_stream_size as i64 - explore_result.input_video_stream_size as i64) < 1024 * 1024);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
@@ -592,8 +600,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         1.0
                     };
 
-                    warn!(
-                        "   📊 DEBUG: input_stream={} bytes, output_stream={} bytes, compressed={}",
+                    tracing::debug!(
+                        "stream_size: input={} output={} compressed={}",
                         explore_result.input_video_stream_size,
                         explore_result.output_video_stream_size,
                         video_stream_compressed
@@ -609,23 +617,16 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                                 0.0
                             };
                             
-                            use shared_utils::modern_ui::colors::*;
-                            
-                            // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
                             let base_msg = if input_b < 1024.0 * 1024.0 {
                                 format!(
-                                "{}⚠️  VIDEO STREAM COMPRESSION FAILED:{} {:.1} KB → {:.1} KB ({:+.1}%)",
-                                BRIGHT_YELLOW,
-                                RESET,
+                                "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
                                 input_b / 1024.0,
                                 output_b / 1024.0,
                                 stream_change_pct
                             )
                             } else {
                                 format!(
-                                "{}⚠️  VIDEO STREAM COMPRESSION FAILED:{} {:.3} MB → {:.3} MB ({:+.1}%)",
-                                BRIGHT_YELLOW,
-                                RESET,
+                                "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.3} MB → {:.3} MB ({:+.1}%)",
                                 input_b / 1024.0 / 1024.0,
                                 output_b / 1024.0 / 1024.0,
                                 stream_change_pct
@@ -634,12 +635,12 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             
                             // Create beautiful single-line format with visual separators
                             let additional_info = if total_file_compressed {
-                                format!("{}│{} Total file smaller but video stream larger", DIM, RESET)
+                                "│ Total file smaller but video stream larger"
                             } else {
-                                format!("{}│{} Total file and video stream both larger", DIM, RESET)
+                                "│ Total file and video stream both larger"
                             };
                             
-                            let final_msg = format!("{} {} {}│{} File may already be highly optimized", base_msg, additional_info, DIM, RESET);
+                            let final_msg = format!("{} {} │ File may already be highly optimized", base_msg, additional_info);
                             warn!("   {}", final_msg);
                             (
                                 format!(
@@ -805,11 +806,13 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
 
     if let Some(ref result) = explore_result_opt {
         if let Some(false) = result.ms_ssim_passed {
-            let ms_ssim_score = result.ms_ssim_score.unwrap_or(0.0);
+            let score_str = result.ms_ssim_score
+                .map(|s| format!("{:.4}", s))
+                .unwrap_or_else(|| "Unknown".to_string());
             // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
             // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
             // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
-            warn!("   QUALITY TARGET FAILED (score: {:.4}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", ms_ssim_score);
+            warn!("   QUALITY TARGET FAILED (score: {}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", score_str);
 
             // Only keep best-effort HEVC when source is Apple-incompatible (AV1/VP9/VVC/AV2).
             if config.apple_compat
@@ -838,10 +841,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     size_ratio: result.output_size as f64 / detection.file_size as f64,
                     success: true,
                     message: format!(
-                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality score {:.4} below target — file is HEVC and importable",
+                        "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); quality score {} below target — file is HEVC and importable",
                         result.optimal_crf,
                         result.iterations,
-                        ms_ssim_score
+                        score_str
                     ),
                     final_crf: result.optimal_crf,
                     exploration_attempts: result.iterations as u8,
@@ -866,7 +869,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 output_path: input.display().to_string(),
                 strategy: ConversionStrategy {
                     target: TargetVideoFormat::Skip,
-                    reason: format!("Quality target failed (score: {:.4})", ms_ssim_score),
+                    reason: format!("Quality target failed (score: {})", score_str),
                     command: String::new(),
                     preserve_audio: detection.has_audio,
                     crf: result.optimal_crf,
@@ -876,7 +879,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 output_size: detection.file_size,
                 size_ratio: 1.0,
                 success: false,
-                message: format!("Skipped: MS-SSIM {:.4} below target 0.90", ms_ssim_score),
+                message: format!("Skipped: MS-SSIM {} below target 0.90", score_str),
                 final_crf: result.optimal_crf,
                 exploration_attempts: result.iterations as u8,
             });
@@ -1090,7 +1093,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     })
 }
 
-pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> f32 {
+pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {
     let mut builder = shared_utils::VideoAnalysisBuilder::new()
         .basic(
             detection.codec.as_str(),
@@ -1132,14 +1135,12 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> f32 {
     match shared_utils::calculate_hevc_crf(&analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&analysis, &result, shared_utils::EncoderType::Hevc);
-            result.crf
+            Ok(result.crf)
         }
-        Err(e) => {
-            warn!("   ⚠️  Quality analysis failed: {}", e);
-            let fallback = shared_utils::HEVC_CRF_DEFAULT;
-            warn!("   ⚠️  Using default conservative CRF {:.1}", fallback);
-            fallback
-        }
+        Err(e) => Err(crate::VidQualityError::AnalysisError(format!(
+            "Quality analysis failed: {}",
+            e
+        ))),
     }
 }
 
@@ -1407,7 +1408,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1457,7 +1459,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1512,7 +1515,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1569,7 +1573,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1629,7 +1634,8 @@ mod tests {
                 is_hdr10_plus: false,
                 has_subtitles: false,
                 subtitle_codec: None,
-                audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,                audio_channels: None,
                 is_variable_frame_rate: false,
                 precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
                 tags: std::collections::HashMap::new(),
@@ -1703,7 +1709,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1750,7 +1757,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1800,12 +1808,13 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
         };
-        let crf = calculate_matched_crf(&det);
+        let crf = calculate_matched_crf(&det).unwrap();
         assert!(
             (0.0..=35.0).contains(&crf),
             "CRF {:.1} should be in [0, 35]",
@@ -1855,12 +1864,13 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
         };
-        let crf = calculate_matched_crf(&det);
+        let crf = calculate_matched_crf(&det).unwrap();
         assert!(
             (0.0..=22.0).contains(&crf),
             "High bitrate AV1 should get CRF <= 22, got {:.1}",
@@ -1905,7 +1915,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1956,7 +1967,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -2007,7 +2019,8 @@ mod tests {
             is_hdr10_plus: false,
             has_subtitles: false,
             subtitle_codec: None,
-            audio_channels: None,
+            max_b_frames: 0,
+            encoder_params: None,            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
