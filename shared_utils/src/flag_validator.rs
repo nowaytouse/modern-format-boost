@@ -29,7 +29,7 @@ impl FlagMode {
     pub fn description_en(&self) -> &'static str {
         match self {
             FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
-            FlagMode::UltimateExplore => "� Ultimate explore (SSIM saturation)",
+            FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
         }
     }
 

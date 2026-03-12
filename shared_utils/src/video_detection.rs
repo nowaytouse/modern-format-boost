@@ -15,6 +15,7 @@ pub struct VideoPrecisionMetadata {
     pub original_crf: Option<f32>,
     pub original_preset: Option<String>,
     pub original_encoder: Option<String>,
+    pub original_max_b_frames: Option<u8>,
     pub is_lossless_deterministic: bool,
 }
 
@@ -176,7 +177,9 @@ pub struct VideoDetectionResult {
     pub quality_score: u8,
     pub archival_candidate: bool,
     pub profile: Option<String>,
+    pub max_b_frames: u8,
     pub has_b_frames: bool,
+    pub encoder_params: Option<String>,
     pub video_bitrate: Option<u64>,
     pub bits_per_pixel: f64,
     /// color_primaries from ffprobe (e.g. "bt2020", "bt709")
@@ -286,7 +289,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         0.0
     };
 
-    let precision = extract_video_precision(&probe.tags);
+    let precision = extract_video_precision(&probe.tags, probe.encoder_settings.as_deref(), probe.max_b_frames);
 
     let compression = determine_compression_type(
         &codec,
@@ -337,7 +340,9 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         quality_score,
         archival_candidate,
         profile: probe.profile,
+        max_b_frames: probe.max_b_frames,
         has_b_frames: probe.has_b_frames,
+        encoder_params: probe.encoder_settings.clone(),
         video_bitrate: probe.video_bit_rate,
         bits_per_pixel,
         color_primaries: probe.color_primaries,
@@ -357,25 +362,47 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     })
 }
 
-fn extract_video_precision(tags: &HashMap<String, String>) -> VideoPrecisionMetadata {
+fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Option<&str>, max_b_frames: u8) -> VideoPrecisionMetadata {
     let mut precision = VideoPrecisionMetadata::default();
+    precision.original_max_b_frames = Some(max_b_frames);
     
     if let Some(encoder) = tags.get("encoder") {
         precision.original_encoder = Some(encoder.clone());
+    }
+
+    // Prioritize explicit encoder_settings (x264-params/x265-params) over generic tags
+    let search_string = if let Some(settings) = encoder_settings {
+        settings.to_string()
+    } else if let Some(comment) = tags.get("comment") {
+        comment.clone()
+    } else {
+        String::new()
+    };
+
+    if !search_string.is_empty() {
+        let lower = search_string.to_lowercase();
         
-        let encoder_lower = encoder.to_lowercase();
-        if encoder_lower.contains("x264") || encoder_lower.contains("x265") {
-            // Try to extract CRF/QP/preset from complex encoder tags if available
-            // Note: Standard ffprobe doesn't always show full x265-params in format tags, 
-            // but some tools (like handbrake) or custom encodes do.
-            if let Some(comment) = tags.get("comment") {
-                if let Some(crf_pos) = comment.find("crf=") {
-                    let sub = &comment[crf_pos + 4..];
-                    let crf_val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-                    if let Ok(crf) = crf_val.parse::<f32>() {
-                        precision.original_crf = Some(crf);
-                    }
-                }
+        // Extract CRF
+        if let Some(crf_pos) = lower.find("crf=") {
+            let sub = &lower[crf_pos + 4..];
+            let val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            if let Ok(v) = val.parse::<f32>() {
+                precision.original_crf = Some(v);
+            }
+        } else if let Some(qp_pos) = lower.find("qp=") {
+            let sub = &lower[qp_pos + 4..];
+            let val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            if let Ok(v) = val.parse::<f32>() {
+                precision.original_crf = Some(v);
+            }
+        }
+
+        // Extract Preset
+        if let Some(preset_pos) = lower.find("preset=") {
+            let sub = &lower[preset_pos + 7..];
+            let val: String = sub.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            if !val.is_empty() {
+                precision.original_preset = Some(val);
             }
         }
     }
