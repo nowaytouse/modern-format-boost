@@ -926,7 +926,30 @@ pub fn convert_to_hevc_mp4_matched(
         || (options.apple_compat && explore_result.ssim.is_some_and(|s| s >= 0.90));
 
     if !quality_or_compat_ok {
-        let actual_ssim = explore_result.ssim.unwrap_or(0.0);
+        let actual_ssim = match explore_result.ssim {
+            Some(s) => s,
+            None => {
+                tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
+                let _ = shared_utils::copy_on_skip_or_fail(
+                    input,
+                    options.output_dir.as_deref(),
+                    options.base_dir.as_deref(),
+                    false,
+                );
+                mark_as_processed(input);
+                return Ok(ConversionResult {
+                    success: false,
+                    input_path: input.display().to_string(),
+                    output_path: None,
+                    input_size,
+                    output_size: None,
+                    size_reduction: None,
+                    message: "Skipped: SSIM calculation failed".to_string(),
+                    skipped: true,
+                    skip_reason: Some("ssim_failed".to_string()),
+                });
+            }
+        };
         let threshold = explore_result.actual_min_ssim;
 
         let video_stream_compressed =
@@ -957,10 +980,13 @@ pub fn convert_to_hevc_mp4_matched(
                 "Output discarded (SSIM calculation failed)".to_string(),
             )
         } else if actual_ssim < threshold {
-            tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, "Quality validation failed");
+            let score_str = explore_result.ms_ssim_score
+                .map(|s| format!("{:.4}", s))
+                .unwrap_or_else(|| "Unknown".to_string());
+            tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, score = score_str, "Quality validation failed");
             eprintln!(
-                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
-                actual_ssim, threshold
+                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4} (Score: {})",
+                actual_ssim, threshold, score_str
             );
             (
                 "Original file PROTECTED (quality below threshold)".to_string(),

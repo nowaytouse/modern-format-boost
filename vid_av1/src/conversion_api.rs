@@ -414,7 +414,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
 
                 let ultimate = flag_mode.is_ultimate();
-                let initial_crf = calculate_matched_crf(&detection);
+                let initial_crf = calculate_matched_crf(&detection)?;
                 info!(
                     "   {} {}: CRF {:.1}",
                     if ultimate { "🔥" } else { "🔬" },
@@ -454,7 +454,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = explore_result.ssim.unwrap_or(0.0);
+                    let actual_ssim = match explore_result.ssim {
+                        Some(s) => s,
+                        None => {
+                            warn!("   ⚠️  SSIM not measured, cannot verify quality");
+                            return Err(VidQualityError::GeneralError(
+                                "Quality verification failed: SSIM not measured".to_string()
+                            ));
+                        }
+                    };
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
                         < explore_result.input_video_stream_size ||
@@ -649,7 +657,15 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
 
                 if let Some(false) = explore_result.ms_ssim_passed {
-                    let ms_ssim_score = explore_result.ms_ssim_score.unwrap_or(0.0);
+                    let ms_ssim_score = match explore_result.ms_ssim_score {
+                        Some(score) => score,
+                        None => {
+                            warn!("   ⚠️  MS-SSIM marked as failed but score not available");
+                            return Err(VidQualityError::GeneralError(
+                                "MS-SSIM verification failed: score not measured".to_string()
+                            ));
+                        }
+                    };
                     warn!("   QUALITY TARGET FAILED (score: {:.4}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", ms_ssim_score);
 
                     // Only keep best-effort AV1 when source is Apple-incompatible.
@@ -717,7 +733,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         output_size: detection.file_size,
                         size_ratio: 1.0,
                         success: false,
-                        message: format!("Skipped: MS-SSIM {:.4} below target 0.90", ms_ssim_score),
+                        message: format!("Skipped: MS-SSIM {:.4} below target {:.2}", ms_ssim_score, explore_result.actual_min_ssim),
                         final_crf: explore_result.optimal_crf,
                         exploration_attempts: explore_result.iterations as u8,
                     });
@@ -944,7 +960,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     })
 }
 
-pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
+pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
     let analysis = shared_utils::from_video_detection(
         &detection.file_path,
         detection.codec.as_str(),
@@ -961,13 +977,12 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> u8 {
     match shared_utils::calculate_av1_crf(&analysis) {
         Ok(result) => {
             shared_utils::log_quality_analysis(&analysis, &result, shared_utils::EncoderType::Av1);
-            result.crf.round() as u8
+            Ok(result.crf.round() as u8)
         }
-        Err(e) => {
-            warn!("   ⚠️  Quality analysis failed: {}", e);
-            warn!("   ⚠️  Using conservative CRF 28");
-            28
-        }
+        Err(e) => Err(crate::VidQualityError::AnalysisError(format!(
+            "Quality analysis failed: {}",
+            e
+        ))),
     }
 }
 
