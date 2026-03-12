@@ -17,6 +17,9 @@ pub enum VidQualityError {
     #[error("Conversion failed: {0}")]
     ConversionError(String),
 
+    #[error("Quality analysis failed: {0}")]
+    AnalysisError(String),
+
     #[error("External tool not found: {0}")]
     ToolNotFound(String),
 

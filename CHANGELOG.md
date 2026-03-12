@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.36] - 2026-03-13
+
+### Added
+- **Unified Error Handling System**: Consolidated 6 error handling modules into `unified_error.rs`
+  - Centralized error types (VidQualityError, ImgQualityError, AppError) into `UnifiedError`
+  - Added comprehensive error classification (Fatal/Recoverable/Optional)
+  - Implemented user-friendly messages with emoji indicators
+  - Provided convenient constructors and context methods
+- **Modern 24-bit True Color Logging System**: New logging infrastructure
+  - Added `enhanced_logging.rs` with full log level hierarchy (ERROR > WARN > INFO > DEBUG > TRACE)
+  - Added `terminal_logging.rs` with color-safe output mechanism
+  - Support for 24-bit true color terminal output
+  - Added upstream tool logger (prevents silencing upstream logs)
+  - Unified visual style across all logging paths
+
+### Changed
+- **Restored Sprint & Backtrack Mechanism**: Re-enabled accelerated search in Phase 3
+  - **Sprint**: Double step (0.1 → 0.2 → 0.4...max 1.6) on consecutive successes
+  - **Backtrack**: Reset to 0.1 precision on overshoot for accuracy
+- **Enhanced Quality Verification**: Improved error handling for missing VMAF/PSNR metrics
+- **Improved Log Formatting**: Better GPU/CPU phase distinction, cleaner fallback messages
+- **Code Quality**: Removed silent fallback values and dead modules
+
+### Fixed
+- **Test Compatibility**: Updated test expectations for new constants
+  - ULTIMATE_MIN_WALL_HITS: 4 → 15
+  - ULTIMATE_REQUIRED_ZERO_GAINS: 20 → 50
+  - ABSOLUTE_MIN_CRF: 10.0 → 0.0
+- **Missing Field Errors**: Fixed VideoDetectionResult tests with encoder_params and max_b_frames
+
 ## [0.10.34] - 2026-03-12
 
 ### Added

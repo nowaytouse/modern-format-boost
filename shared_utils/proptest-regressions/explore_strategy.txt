@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 26ecb0944ba5c77038302c3ec0f7da16a6d3ddabf8a899144d009828818dac80 # shrinks to crf = -65.61923, value = 0
+cc f212a6177eb0d162da115dc4606a326d5dab8bb4c352e10100f246eff1f073d7 # shrinks to crf = 63.99509, value = 0
