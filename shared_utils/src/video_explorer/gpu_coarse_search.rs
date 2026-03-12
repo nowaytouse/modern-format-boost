@@ -204,7 +204,7 @@ pub fn explore_with_gpu_coarse_search(
         };
 
         let gpu_progress = crate::UnifiedProgressBar::new_iteration(
-            "🔍 GPU Search",
+            "[GPU] Coarse Search",
             gpu_sample_input_size,
             gpu_config.max_iterations as u64,
         );
@@ -960,7 +960,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         15
     };
     let cpu_progress =
-        crate::UnifiedProgressBar::new_iteration("CPU Fine-Tune", input_size, estimated_iterations);
+        crate::UnifiedProgressBar::new_iteration("[CPU] Fine-Tune", input_size, estimated_iterations);
 
     #[derive(Debug, Clone)]
     enum AudioTranscodeStrategy {
@@ -1367,7 +1367,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
         use crate::modern_ui::colors::*;
         crate::log_eprintln!(
-            "{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
+            "{}{}   {}✓{} [GPU] {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
             RESET, RESET, BRIGHT_GREEN, RESET, CYAN, gpu_boundary_crf, RESET,
             BRIGHT_GREEN, gpu_pct, RESET, metrics_display
         );
@@ -1618,7 +1618,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         };
 
                         use crate::modern_ui::colors::*;
-                        crate::log_eprintln!("{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
+                        crate::log_eprintln!("{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
                             RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                             MFB_BLUE, total_size_pct, RESET, metrics_display, sat_status);
 
@@ -1629,7 +1629,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                     _ => {
                         use crate::modern_ui::colors::*;
-                        crate::log_eprintln!("{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
+                        crate::log_eprintln!("{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
                             RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                             MFB_BLUE, total_size_pct, RESET);
                         false
@@ -1645,10 +1645,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                         } else {
                             "VMAF(Y) + PSNR(UV) absolute quality ceiling reached".to_string()
                         };
-                        crate::log_eprintln!("   {}DOMAIN WALL HIT:{} {}",
+                        crate::log_eprintln!("   {} [CPU] DOMAIN WALL HIT:{} {}",
                             BRIGHT_MAGENTA, RESET, msg);
                     } else {
-                        crate::log_eprintln!("   {}QUALITY WALL HIT:{} SSIM saturated after {} consecutive zero-gains",
+                        crate::log_eprintln!("   {} [CPU] QUALITY WALL HIT:{} SSIM saturated after {} consecutive zero-gains",
                             BRIGHT_YELLOW, RESET, consecutive_zero_gains);
                     }
                     crate::verbose_eprintln!(
@@ -1682,7 +1682,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if current_step > MIN_STEP + 0.01 && consecutive_01_successes >= 2 {
                     use crate::modern_ui::colors::*;
                     crate::log_eprintln!(
-                        "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ SPRINT OVERSHOOT (Backtrack: {:.2} → {:.2})",
+                        "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ SPRINT OVERSHOOT (Backtrack: {:.2} → {:.2})",
                         RESET, RESET, BRIGHT_YELLOW, RESET, CYAN, test_crf, RESET,
                         DIM, total_size_pct, RESET, current_step, MIN_STEP
                     );
@@ -1714,14 +1714,14 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
-                    "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
+                    "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
                     RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     DIM, total_size_pct, RESET, wall_hits, current_step, new_step, phase_info
                 );
 
                 if current_step <= MIN_STEP + 0.01 && new_step <= MIN_STEP + 0.01 {
                     crate::log_eprintln!(
-                        "   {}🧱 Minimum step reached and hit wall again. Stopping.{}",
+                        "   {} [CPU] 🧱 Minimum step reached and hit wall again. Stopping.{}",
                         BRIGHT_YELLOW,
                         RESET
                     );
@@ -1731,7 +1731,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if wall_hits >= max_wall_hits {
                     if ultimate_mode {
                         crate::log_eprintln!(
-                            "   {}Adaptive wall limit ({}) reached.{} Stopping at best CRF {:.1}",
+                            "   {} [CPU] Adaptive wall limit ({}) reached.{} Stopping at best CRF {:.1}",
                             BRIGHT_YELLOW,
                             max_wall_hits,
                             RESET,
@@ -1739,7 +1739,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
                     } else {
                         crate::log_eprintln!(
-                            "   {}Max wall hits ({}) reached.{} Stopping at best CRF {:.1}",
+                            "   {} [CPU] Max wall hits ({}) reached.{} Stopping at best CRF {:.1}",
                             BRIGHT_YELLOW,
                             max_wall_hits,
                             RESET,
@@ -1763,7 +1763,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         } else if overshoot_detected {
             crate::log_eprintln!();
             crate::log_eprintln!(
-                "   {}Size wall hit: overshoot at CRF < {:.1}{}",
+                "   {} [CPU] Size wall hit: overshoot at CRF < {:.1}{}",
                 BRIGHT_RED,
                 last_good_crf,
                 RESET
@@ -1778,7 +1778,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         } else if test_crf < search_floor {
             crate::log_eprintln!();
             crate::log_eprintln!(
-                "   {}Search floor reached ({:.1}) - maximum quality achieved{}",
+                "   {} [CPU] Search floor reached ({:.1}) - maximum quality achieved{}",
                 BRIGHT_GREEN,
                 search_floor,
                 RESET
@@ -1800,12 +1800,12 @@ fn cpu_fine_tune_from_gpu_boundary(
     } else {
         use crate::modern_ui::colors::*;
         crate::log_eprintln!(
-            "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}%{} ❌ (TOO LARGE)",
+            "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌ (TOO LARGE)",
             RESET, RESET, BRIGHT_RED, RESET, CYAN, gpu_boundary_crf, RESET,
             BRIGHT_RED, gpu_pct, RESET
         );
         crate::log_eprintln!();
-        crate::log_eprintln!("Phase 2: Search UPWARD for compression boundary");
+        crate::log_eprintln!("Phase 2: [CPU] Search UPWARD for compression boundary");
         crate::log_eprintln!("   (Higher CRF = Smaller file, find first compressible)");
 
         let mut test_crf = gpu_boundary_crf + step_size_upward;
@@ -1841,7 +1841,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let improvement_indicator = if vmaf_improved || psnr_improved { "↑" } else { "→" };
                     use crate::modern_ui::colors::*;
                     crate::log_eprintln!(
-                        "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
+                        "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
                         RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                         DIM, total_size_pct, RESET, v, chroma_avg, failure_credibility, improvement_indicator
                     );
@@ -1877,7 +1877,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 found_compress_point = true;
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
-                    "{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}%{} │ FOUND! ✅",
+                    "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} │ FOUND! ✅",
                     RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                     BRIGHT_GREEN, total_size_pct, RESET
                 );
@@ -1890,7 +1890,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
-                    "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}%{} ❌", 
+                    "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌", 
                     RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     BRIGHT_RED, total_size_pct, RESET
                 );
@@ -1924,7 +1924,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         } else {
             crate::log_eprintln!();
             crate::log_eprintln!(
-                "{}Phase 3: Search DOWNWARD with Sprint & Backtrack (min step {:.2}){}",
+                "{}Phase 3: [CPU] Search DOWNWARD with Sprint & Backtrack (min step {:.2}){}",
                 BRIGHT_CYAN,
                 PHASE3_DOWNWARD_STEP,
                 RESET
@@ -2030,7 +2030,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     crate::log_eprintln!(
-                        "{}{}   {}✓{} {}CRF {:<4.1}{} {}{:6.1}%{}{} (step {:.2}) ✅",
+                        "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{}{} (step {:.2}) ✅",
                         RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                         BRIGHT_GREEN, total_size_pct, RESET, metrics_str, current_step
                     );
@@ -2082,7 +2082,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     crate::log_eprintln!(
-                        "{}{}   {}✗{} {}CRF {:<4.1}{} {}{:6.1}%{}{} {}❌ (fail #{}/{}, step {:.2})",
+                        "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{}{} {}❌ (fail #{}/{}, step {:.2})",
                         RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                         BRIGHT_RED, total_size_pct, RESET, metrics_str, BRIGHT_RED, consecutive_failures, MAX_CONSECUTIVE_FAILURES, current_step
                     );
@@ -2223,7 +2223,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     crate::log_eprintln!();
     crate::log_eprintln!("═══════════════════════════════════════════════════════════");
     crate::log_eprintln!(
-        "RESULT: CRF {:.1} │ Size {:+.1}% │ Iterations: {}",
+        "[FINISH] RESULT: CRF {:.1} │ Size {:+.1}% │ Iterations: {}",
         final_crf,
         size_change_pct,
         iterations
