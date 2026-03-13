@@ -1475,8 +1475,8 @@ pub fn gpu_coarse_search_with_log(
         }
     };
 
-    const SKIP_GPU_SIZE_THRESHOLD: u64 = 500 * 1024;
-    const SKIP_GPU_DURATION_THRESHOLD: f32 = 3.0;
+    let skip_gpu_size_threshold: u64 = if config.ultimate_mode { 10 * 1024 } else { 500 * 1024 };
+    let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 0.5 } else { 3.0 };
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
     const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
@@ -1504,16 +1504,17 @@ pub fn gpu_coarse_search_with_log(
     };
 
     let skip_gpu =
-        input_size < SKIP_GPU_SIZE_THRESHOLD || quick_duration < SKIP_GPU_DURATION_THRESHOLD;
+        input_size < skip_gpu_size_threshold || quick_duration < skip_gpu_duration_threshold;
 
     if skip_gpu {
-        let reason = if input_size < SKIP_GPU_SIZE_THRESHOLD {
+        let reason = if input_size < skip_gpu_size_threshold {
             format!(
-                "file too small ({:.1}KB < 500KB)",
-                input_size as f64 / 1024.0
+                "file too small ({:.1}KB < {}KB)",
+                input_size as f64 / 1024.0,
+                skip_gpu_size_threshold / 1024
             )
         } else {
-            format!("duration too short ({:.1}s < 3s)", quick_duration)
+            format!("duration too short ({:.1}s < {:.1}s)", quick_duration, skip_gpu_duration_threshold)
         };
         log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
         return Ok(GpuCoarseResult {
