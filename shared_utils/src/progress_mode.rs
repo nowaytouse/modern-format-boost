@@ -321,7 +321,9 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
 /// Strips ANSI escape codes so file logs are plain text.
 /// Flushes after each write so log output is immediate (no loss on crash/kill).
 pub fn write_to_log(line: &str) {
-    let plain = crate::logging::strip_ansi_str(line);
+    // Ensure every line written to the run log has milestone stats appended (unless it already does)
+    let line_with_stats = append_stats_to_line(line);
+    let plain = crate::logging::strip_ansi_str(&line_with_stats);
     if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
         if let Some(ref mut w) = *guard {
             let _ = writeln!(w, "{}", plain);
@@ -379,19 +381,30 @@ pub fn emit_stderr(line: &str) {
     // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
     crate::ctrlc_guard::wait_if_prompt_active();
 
-    // File log always receives the plain line.
-    if has_log_file() {
-        write_to_log(line);
+    // Process each line separately to ensure milestone stats are appended to every line
+    for subline in line.lines() {
+        if subline.trim().is_empty() {
+            continue;
+        }
+        
+        // Add milestone stats to non-empty lines that don't already have them
+        let line_with_stats = append_stats_to_line(subline);
+
+        // File log always receives the plain line.
+        if has_log_file() {
+            write_to_log(&line_with_stats);
+        }
+        
+        use std::io::Write;
+        let out = if stderr_is_tty() {
+            // TTY: keep colours.
+            format!("{}{}", STDERR_INDENT, line_with_stats)
+        } else {
+            // Non-TTY: strip ANSI so piped / redirected output is clean.
+            format!("{}{}", STDERR_INDENT, crate::logging::strip_ansi_str(&line_with_stats))
+        };
+        let _ = writeln!(std::io::stderr(), "{}", out);
     }
-    use std::io::Write;
-    let out = if stderr_is_tty() {
-        // TTY: keep colours.
-        format!("{}{}", STDERR_INDENT, line)
-    } else {
-        // Non-TTY: strip ANSI so piped / redirected output is clean.
-        format!("{}{}", STDERR_INDENT, crate::logging::strip_ansi_str(line))
-    };
-    let _ = writeln!(std::io::stderr(), "{}", out);
 }
 
 /// Flush the log file buffer. Call at program exit.
@@ -463,7 +476,8 @@ macro_rules! verbose_eprintln {
             let _msg = format!($($arg)*);
             let _line = $crate::progress_mode::format_log_line(&_msg);
             if $crate::progress_mode::has_log_file() && !$crate::progress_mode::is_verbose_mode() {
-                $crate::progress_mode::write_to_log_at_level($crate::progress_mode::tracing_level_debug(), &_line);
+                let _line_with_stats = $crate::progress_mode::append_stats_to_line(&_line);
+                $crate::progress_mode::write_to_log_at_level($crate::progress_mode::tracing_level_debug(), &_line_with_stats);
             } else if $crate::progress_mode::is_verbose_mode() {
                 $crate::progress_mode::emit_stderr(&_line);
             }
@@ -530,10 +544,36 @@ pub fn image_processed_failure() {
     emit_combined_status_line(img_ok, img_fail);
 }
 
-/// Update milestone display without changing any counters.
-/// Useful for showing status after skip operations.
-pub fn update_milestone_display() {
-    // Deprecated: We now embed stats directly into the log line instead of using escape sequence milestones.
+/// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
+/// Skips if the line already contains stats or is empty.
+pub fn append_stats_to_line(line: &str) -> String {
+    let trimmed = line.trim_end_matches(['\n', '\r']);
+    if trimmed.is_empty() {
+        return line.to_string();
+    }
+    
+    // Check if it already has stats (avoids double appending)
+    // We check for "│ 📊" which is the delimiter used in get_current_stats_string()
+    if trimmed.contains("│ 📊") {
+        return trimmed.to_string();
+    }
+    
+    let stats_string = get_current_stats_string();
+    let mut padded = trimmed.to_string();
+    
+    // Strip ANSI for accurate length calculation
+    let plain = crate::logging::strip_ansi_str(trimmed);
+    let visible_len = plain.chars().count();
+    
+    // Align stats to column 65 (Standard for this project)
+    let target_len = 65;
+    if visible_len < target_len {
+        padded.push_str(&" ".repeat(target_len - visible_len));
+    } else {
+        padded.push(' ');
+    }
+    padded.push_str(&stats_string);
+    padded
 }
 
 pub fn get_current_stats_string() -> String {
@@ -576,17 +616,17 @@ fn format_xmp_jxl_images_line(
     };
     let images_ok = img_ok + jxl_ok;
     let mut parts = vec![xmp_part];
-    if images_ok > 0 || img_fail > 0 {
-        let img_part = if img_fail > 0 {
-            format!("Img: {}✓ {}✗", images_ok, img_fail)
-        } else {
-            format!("Img: {}✓", images_ok)
-        };
-        parts.push(img_part);
-    }
-    if preprocess_ok > 0 {
-        parts.push(format!("Pre: {}✓", preprocess_ok));
-    }
+    
+    // Always show Img and Pre even if 0, as requested by user's "milestone everywhere"
+    let img_part = if img_fail > 0 {
+        format!("Img: {}✓ {}✗", images_ok, img_fail)
+    } else {
+        format!("Img: {}✓", images_ok)
+    };
+    parts.push(img_part);
+    
+    parts.push(format!("Pre: {}✓", preprocess_ok));
+
     if fallback_ok > 0 {
         parts.push(format!("Fallback: {}✓", fallback_ok));
     }

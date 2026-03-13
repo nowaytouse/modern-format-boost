@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.42] - 2026-03-13
+
+### Changed
+- **Unified Milestone Statistics**: Milestone statistics (XMP, Img, Pre) are now appended to *every* image processing log line, including multi-line fallback and diagnostic messages.
+  - **Multi-line Support**: Diagnostic messages such as `[QUALITY FALLBACK]` and `[Smart Fix]` now display milestones on every line for perfect terminal alignment.
+  - **Consistent Progress Tracker**: The statistics bar (`│ 📊 XMP: ... Img: ... Pre: ...`) is now visible from the very first log entry, ensuring the conversion status is always available.
+  - **Full Log Audit**: All tracing and verbose logs in the run log file now also include milestones, providing a synchronized timeline of system state and progress.
+- **Improved Alignment Logic**: Re-engineered the padding and ANSI-stripping logic to ensure statistics are perfectly aligned at column 65 across all log levels.
+
 ## [0.10.41] - 2026-03-13
 
 ### Changed

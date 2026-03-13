@@ -7,6 +7,7 @@ use image::{DynamicImage, GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use crate::log_eprintln;
 
 /// Minimum duration (seconds) for converting animated images to HEVC video.
 /// Shorter animations are skipped (no conversion to video).
@@ -77,7 +78,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if !["heic", "heif", "hif"].contains(&ext_str.as_str()) {
-                eprintln!(
+                log_eprintln!(
                     "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually HEIC, will process as actual format",
                     path.display(),
                     ext_str
@@ -91,7 +92,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if ext_str != "jxl" {
-                eprintln!(
+                log_eprintln!(
                     "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually JXL, will process as actual format",
                     path.display(),
                     ext_str
@@ -149,7 +150,7 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
             extension_mismatch = true;
             real_extension_suggestion = suggested.to_string();
 
-            eprintln!(
+            log_eprintln!(
                  "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually {}, will process as actual format",
                  path.display(),
                  ext_str,
@@ -304,7 +305,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                 )
             }
             Err(e) => {
-                eprintln!(
+                log_eprintln!(
                     "⚠️ Deep HEIC analysis failed (skipping to basic info): {}",
                     e
                 );
@@ -646,7 +647,7 @@ fn get_animation_duration(path: &Path) -> Option<f32> {
         if ext.to_str().unwrap_or("").to_lowercase() == "gif" {
             if let Some(frame_count) = try_get_frame_count(path) {
                 if frame_count <= 1 {
-                    eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
+                    log_eprintln!("🔍 Detected static GIF (1 frame): {}", path.display());
                     return Some(0.0);
                 }
             }
@@ -661,7 +662,7 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     
     // Check if djxl is available
     if which::which("djxl").is_err() {
-        eprintln!("⚠️  djxl not found; cannot process animated JXL");
+        log_eprintln!("⚠️  djxl not found; cannot process animated JXL");
         return None;
     }
     
@@ -680,11 +681,11 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
         .ok()?;
     
     if !djxl_result.status.success() || !temp_apng_path.exists() {
-        eprintln!("⚠️  djxl conversion failed for JXL");
+        log_eprintln!("⚠️  djxl conversion failed for JXL");
         return None;
     }
     
-    eprintln!("🔧 JXL detected, converted to temporary APNG for duration detection");
+    log_eprintln!("🔧 JXL detected, converted to temporary APNG for duration detection");
     
     // APNG doesn't have duration in format metadata, we need to calculate from frames and fps
     // Use ffprobe with -count_frames to get nb_read_frames
@@ -723,7 +724,7 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                 
                 if nb_frames > 0 && fps > 0.0 {
                     let duration = nb_frames as f32 / fps;
-                    eprintln!("📊 JXL animation: {} frames @ {:.2} fps = {:.2}s", 
+                    log_eprintln!("📊 JXL animation: {} frames @ {:.2} fps = {:.2}s", 
                         nb_frames, fps, duration);
                     return Some(duration);
                 }
@@ -972,8 +973,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         if let Ok(probe) = crate::probe_video(path) {
             (probe.width, probe.height, false, 8)
         } else {
-            eprintln!("⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable");
-            eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
+            log_eprintln!("⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable");
+            log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
             (0, 0, false, 8)
         }
     };

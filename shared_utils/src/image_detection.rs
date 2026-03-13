@@ -731,16 +731,16 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
     let analysis = analyze_png_quantization(path)?;
 
     if std::env::var("IMGQUALITY_VERBOSE").is_ok() || std::env::var("IMGQUALITY_DEBUG").is_ok() {
-        eprintln!(
-            "   📊 PNG Analysis: {} (confidence: {:.1}%)",
+        crate::progress_mode::emit_stderr(&format!(
+            "   📊 PNG Analysis: {} (confidence: {:.1}%)\n      {}",
             if analysis.is_quantized {
                 "Quantized/Lossy"
             } else {
                 "Lossless"
             },
-            analysis.confidence * 100.0
-        );
-        eprintln!("      {}", analysis.explanation);
+            analysis.confidence * 100.0,
+            analysis.explanation
+        ));
     }
 
     Ok(if analysis.is_quantized {
@@ -1836,7 +1836,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
             let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
             let bpp_quality = (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0) as u8;
 
-            eprintln!(
+            crate::progress_mode::emit_stderr(&format!(
                 "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
                    \x1b[33m      File: {}\x1b[0m\n\
                    \x1b[33m      Heuristic: BPP={:.3}, Eff={:.1}x, Entropy={:.2} -> \x1b[1;32mEstimated Q: {}\x1b[0m",
@@ -1846,15 +1846,15 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                 efficiency_factor,
                 entropy,
                 bpp_quality
-            );
+            ));
             estimated_quality = Some(bpp_quality);
         } else {
-            eprintln!(
+            crate::progress_mode::emit_stderr(&format!(
                 "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed AND dimensions invalid.\x1b[0m\n\
                    \x1b[31m      File: {}\x1b[0m\n\
                    \x1b[31m      Defaulting to safe base Q85\x1b[0m",
                 path.display()
-            );
+            ));
             estimated_quality = Some(85);
         }
     }
