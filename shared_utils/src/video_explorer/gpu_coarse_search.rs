@@ -195,7 +195,7 @@ pub fn explore_with_gpu_coarse_search(
             (input_size as f64 * ratio as f64) as u64
         };
 
-        let gpu_step = if ultimate_mode { 1.0 } else { 2.0 };
+        let gpu_step = if ultimate_mode { 0.5 } else { 2.0 };
         let gpu_config = GpuCoarseConfig {
             initial_crf,
             min_crf: 0.0,
