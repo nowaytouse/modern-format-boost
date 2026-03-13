@@ -197,7 +197,7 @@ pub fn explore_with_gpu_coarse_search(
 
         let gpu_config = GpuCoarseConfig {
             initial_crf,
-            min_crf: if ultimate_mode { 0.0 } else { crate::gpu_accel::GPU_DEFAULT_MIN_CRF },
+            min_crf: 0.0,
             max_crf,
             step: 2.0,
             max_iterations: crate::gpu_accel::GPU_ABSOLUTE_MAX_ITERATIONS,
@@ -1844,6 +1844,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
                                 BRIGHT_RED, RESET
                             );
+                            // Ensure best_crf is set before stopping
+                            if best_crf.is_none() && size < input_size {
+                                best_crf = Some(test_crf);
+                                best_size = Some(size);
+                                best_ssim_tracked = calculate_ssim_quick();
+                            }
                             early_insight_triggered = true;
                             break;
                         }
@@ -1868,12 +1874,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                     BRIGHT_GREEN, total_size_pct, RESET
                 );
-                
-                // User requirement: Do NOT stop immediately. Continue exploring for quality gains.
-                // unless it's NOT ultimate mode.
-                if !ultimate_mode {
-                    break;
-                }
             } else {
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(

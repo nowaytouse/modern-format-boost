@@ -204,10 +204,6 @@ pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
 
 pub const GPU_MAX_ITERATIONS: u32 = GPU_ABSOLUTE_MAX_ITERATIONS;
 
-pub const GPU_DEFAULT_MIN_CRF: f32 = 1.0;
-
-pub const GPU_DEFAULT_MAX_CRF: f32 = 48.0;
-
 static GPU_ACCEL: OnceLock<GpuAccel> = OnceLock::new();
 
 /// Maximum concurrent GPU encode tasks (probe/encode). Read from env `MODERN_FORMAT_BOOST_GPU_CONCURRENCY` (default 4).
@@ -1172,8 +1168,8 @@ impl Default for GpuCoarseConfig {
     fn default() -> Self {
         Self {
             initial_crf: 18.0,
-            min_crf: GPU_DEFAULT_MIN_CRF,
-            max_crf: GPU_DEFAULT_MAX_CRF,
+            min_crf: 0.0,
+            max_crf: 51.0,
             step: GPU_COARSE_STEP,
             max_iterations: GPU_MAX_ITERATIONS,
             ultimate_mode: false,
