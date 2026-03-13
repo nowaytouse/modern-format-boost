@@ -437,6 +437,10 @@ pub fn set_verbose_mode(v: bool) {
     VERBOSE_MODE.store(v, Ordering::Relaxed);
 }
 
+pub fn tracing_level_debug() -> Level {
+    Level::DEBUG
+}
+
 pub fn is_verbose_mode() -> bool {
     VERBOSE_MODE.load(Ordering::Relaxed)
 }
@@ -459,7 +463,7 @@ macro_rules! verbose_eprintln {
             let _msg = format!($($arg)*);
             let _line = $crate::progress_mode::format_log_line(&_msg);
             if $crate::progress_mode::has_log_file() && !$crate::progress_mode::is_verbose_mode() {
-                $crate::progress_mode::write_to_log_at_level(tracing::Level::DEBUG, &_line);
+                $crate::progress_mode::write_to_log_at_level($crate::progress_mode::tracing_level_debug(), &_line);
             } else if $crate::progress_mode::is_verbose_mode() {
                 $crate::progress_mode::emit_stderr(&_line);
             }
