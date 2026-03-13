@@ -1183,8 +1183,8 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
         .arg(crate::safe_path_arg(std::path::Path::new(input)).as_ref())
         .arg("-i")
         .arg(crate::safe_path_arg(std::path::Path::new(output)).as_ref())
-        .arg("-lavfi")
-        .arg("psnr=stats_file=-")
+        .arg("-filter_complex")
+        .arg("[0:v][1:v]psnr=stats_file=-")
         .arg("-f")
         .arg("null")
         .arg("-")
@@ -1408,6 +1408,23 @@ pub fn gpu_coarse_search(
 }
 
 pub fn gpu_coarse_search_with_log(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    encoder: &str,
+    input_size: u64,
+    config: &GpuCoarseConfig,
+    progress_cb: Option<&dyn Fn(f32, u64)>,
+    log_cb: Option<&dyn Fn(&str)>,
+) -> anyhow::Result<GpuCoarseResult> {
+    let result = gpu_coarse_search_with_log_impl(
+        input, output, encoder, input_size, config, progress_cb, log_cb,
+    );
+    // Ensure temp output is always deleted, regardless of success/failure
+    let _ = std::fs::remove_file(output);
+    result
+}
+
+fn gpu_coarse_search_with_log_impl(
     input: &std::path::Path,
     output: &std::path::Path,
     encoder: &str,

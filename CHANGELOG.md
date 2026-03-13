@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.38] - 2026-03-13
+
+### Added
+- **Container Overhead Tolerance**: Added 1MB tolerance for container overhead in `vid_hevc` size checks. Total file size is now accepted if it exceeds original size by less than 1MB, provided the video stream itself was compressed.
+- **Duplicate Path Diagnostics**: Enhanced "Already exists" logging in `smart_file_copier` to show file size and accessibility status, aiding in troubleshooting.
+
+### Fixed
+- **Temp File Deletion**: Fixed an issue where temporary files (`.gpu_temp.mov`) were left behind when GPU coarse search failed or was interrupted.
+- **PSNR Calculation**: Fixed "PSNR calc failed" errors in GPU acceleration module by using explicit filter graph syntax `[0:v][1:v]psnr` instead of implicit inputs.
+
 ## [0.10.37] - 2026-03-13
 
 ### Added

@@ -213,7 +213,15 @@ pub fn smart_copy_with_structure(
             eprintln!("   📋 Copied: {} → {}", source.display(), dest.display());
         }
     } else if verbose {
-        eprintln!("   ⏭️  Already exists: {}", dest.display());
+        if let Ok(meta) = fs::metadata(&dest) {
+            eprintln!(
+                "   ⏭️  Already exists: {} ({} bytes)",
+                dest.display(),
+                meta.len()
+            );
+        } else {
+            eprintln!("   ⚠️  Already exists but inaccessible: {}", dest.display());
+        }
     }
 
     let dest = fix_extension_if_mismatch(&dest)?;
