@@ -64,6 +64,7 @@ All notable changes to this project will be documented in this file.
   - GPU segment duration: 25s → 10s in ultimate mode (5 segments = 50s total)
   - GPU skip threshold: 500KB → 100KB in ultimate mode
   - GPU skip duration: 3.0s → 1.0s in ultimate mode
+  - **GPU search logs now visible in ultimate mode** (was silent, causing confusion)
   - More GPU iterations with shorter samples = higher utilization without timeout
 - **Test Compatibility**: Updated test expectations for new constants
   - ULTIMATE_MIN_WALL_HITS: 4 → 15
