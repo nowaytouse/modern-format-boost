@@ -1470,18 +1470,23 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     let is_modern_lossy = !is_lossless
         && matches!(
             codec,
-            SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::Heic | SourceCodec::JpegXl
+            SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::JpegXl
         );
 
     let is_jxl = matches!(codec, SourceCodec::JpegXl);
 
-    let should_skip = is_modern_lossy || is_jxl;
+    // HEIC/HEIF: always skip regardless of lossless/lossy.
+    // Lossless detection for HEIC relies on complex hvcC profile parsing (RExt/SCC + 4:4:4)
+    // which has high false-positive risk. Safer to preserve the original.
+    let is_heic = matches!(codec, SourceCodec::Heic);
+
+    let should_skip = is_modern_lossy || is_jxl || is_heic;
 
     let reason = if should_skip {
         let codec_name = match codec {
             SourceCodec::WebpStatic => "lossy WebP",
             SourceCodec::Avif => "lossy AVIF",
-            SourceCodec::Heic => "lossy HEIC/HEIF",
+            SourceCodec::Heic => "HEIC/HEIF (always preserved)",
             SourceCodec::JpegXl => "JPEG XL (already optimal)",
             _ => "modern lossy format",
         };
@@ -1775,6 +1780,7 @@ mod tests {
         assert!(should_skip_image_format("webp", false).should_skip);
         assert!(should_skip_image_format("avif", false).should_skip);
         assert!(should_skip_image_format("heic", false).should_skip);
+        assert!(should_skip_image_format("heic", true).should_skip); // HEIC always preserved
 
         assert!(should_skip_image_format("jxl", true).should_skip);
         assert!(should_skip_image_format("jxl", false).should_skip);
@@ -1785,6 +1791,7 @@ mod tests {
         assert!(!should_skip_image_format("jpeg", false).should_skip);
         assert!(!should_skip_image_format("png", true).should_skip);
         assert!(!should_skip_image_format("gif", true).should_skip);
+        assert!(!should_skip_image_format("tiff", true).should_skip); // TIFF lossless → JXL
     }
 
     #[test]
