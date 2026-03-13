@@ -631,8 +631,7 @@ pub type Result<T> = std::result::Result<T, UnifiedError>;
 pub type ImgResult<T> = std::result::Result<T, UnifiedError>;
 pub type VidResult<T> = std::result::Result<T, UnifiedError>;
 
-// Legacy type alias for VidQualityError (deprecated, use UnifiedError)
-#[deprecated(note = "Use UnifiedError instead")]
+// Legacy type alias for VidQualityError
 pub type VidQualityError = UnifiedError;
 
 // Convenience constructors
