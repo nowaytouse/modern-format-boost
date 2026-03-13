@@ -8,9 +8,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **Hardcoded Quality Degradation in Image Routing**:
-  - **Unified Quality 100 Path**: Eliminated hardcoded `d=1.0` (lower quality) routing for palette-quantized PNG and GIF sources.
-  - **Consistent Distance Policy**: All lossy legacy static sources now correctly use the `Quality 100` (`d=0.1`) route unless pixel analysis specifically recommends lossless.
-  - **Static GIF Fix**: Resolved an issue where 1-frame "static" GIFs were forced to `d=1.0`; they now benefit from the high-fidelity `d=0.1` path.
+  - **Unified Quality 100 Path**: Eliminated hardcoded `d=1.0` routing for palette-quantized PNG and GIF sources.
+  - **Static GIF Routing Unification**: 1-frame GIFs now correctly follow the `pixel_analysis` decision path, enabling `d=0.0` (Lossless) when appropriate.
+  - **Startup Log Alignment**: Updated the initialization banner to correctly reflect the new `d=0.0/0.1` distance standards for static images.
   - **Doc-Comment Correction**: Updated developer documentation to reflect the current high-fidelity distance standards.
 
 ## [0.10.43] - 2026-03-14

@@ -155,7 +155,7 @@ fn main() -> anyhow::Result<()> {
             }
             if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!("{} {} (for animated→video)", symbols::VIDEO, flag_mode.description_en()));
-                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (lossless) │ PNG→JXL (d=0.0/1.0)", symbols::IMAGE));
+                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (lossless) │ PNG→JXL (d=0.0/0.1)", symbols::IMAGE));
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr(&format!("{} Apple Compatibility: {}ENABLED{} (WebP→HEVC)", symbols::SHIELD, colors::BOLD, colors::RESET));
@@ -745,7 +745,7 @@ fn auto_convert_single_file(
 
             if should_skip_modern {
                 verbose_log!(
-                    "⏭️ Skipping modern lossy animated format (avoid generation loss): {}",
+                    "⏭️ Skipping modern lossy animated format (avoid generational loss): {}",
                     input.display()
                 );
                 if is_apple_native && config.apple_compat {
@@ -762,14 +762,16 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 Some(0.0) => {
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "⏭️ Detected static GIF (1 frame), treating as static image: {}",
+                    let distance = match &pixel_analysis {
+                        Some(q) => if q.routing_decision.use_lossless { 0.0 } else { 0.1 },
+                        None => 0.1,
+                    };
+                    verbose_log!(
+                        "🔄 Static GIF→JXL ({}): {}",
+                        if distance == 0.0 { "Lossless" } else { "Quality 100" },
                         input.display()
-                    ));
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "🔄 Static GIF→JXL (Quality 100): {}", input.display()
-                    ));
-                    let conv_result = convert_to_jxl(input, &options, 0.1, analysis.hdr_info.as_ref())?;
+                    );
+                    let conv_result = convert_to_jxl(input, &options, distance, analysis.hdr_info.as_ref())?;
                     return Ok(convert_result_to_output(conv_result));
                 }
                 _ => {
