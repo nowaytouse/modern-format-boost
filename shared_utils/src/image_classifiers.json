@@ -4,7 +4,6 @@
       "name": "ANIMATION",
       "priority": 1000,
       "adjust": 0,
-      "formats": ["webp", "avif", "gif"],
       "bonus": 0.0,
       "rules": {
         "is_animated": true
@@ -14,7 +13,6 @@
       "name": "ICON",
       "priority": 950,
       "adjust": 6,
-      "formats": ["webp", "png", "avif"],
       "bonus": 0.25,
       "rules": {
         "width": {"max": 512},
@@ -27,7 +25,6 @@
       "name": "MANGA",
       "priority": 920,
       "adjust": 4,
-      "formats": ["jxl", "webp", "avif"],
       "bonus": 0.2,
       "rules": {
         "color_diversity": {"max": 0.3},
@@ -40,7 +37,6 @@
       "name": "DOCUMENT",
       "priority": 900,
       "adjust": 8,
-      "formats": ["png", "webp"],
       "bonus": 0.4,
       "rules": {
         "color_diversity": {"max": 0.1},
@@ -53,7 +49,6 @@
       "name": "MAP",
       "priority": 850,
       "adjust": 4,
-      "formats": ["webp", "jxl", "png"],
       "bonus": 0.2,
       "rules": {
         "color_diversity": {"min": 0.6},
@@ -65,7 +60,6 @@
        "name": "GAME_CAPTURE",
        "priority": 800,
        "adjust": 2,
-       "formats": ["avif", "jxl", "webp"],
        "bonus": 0.1,
        "rules": {
          "aspect_ratio": {"min": 1.3, "max": 2.5},
@@ -78,7 +72,6 @@
       "name": "MOBILE_SCREENSHOT",
       "priority": 750,
       "adjust": 10,
-      "formats": ["webp", "png"],
       "bonus": 0.35,
       "rules": {
         "aspect_ratio": {"min": 0.4, "max": 0.6},
@@ -91,7 +84,6 @@
       "name": "SCREENSHOT",
       "priority": 700,
       "adjust": 8,
-      "formats": ["webp", "png", "avif"],
       "bonus": 0.3,
       "rules": {
         "aspect_ratio": {"min": 1.3, "max": 2.2},
@@ -104,7 +96,6 @@
       "name": "WEB_UI",
       "priority": 680,
       "adjust": 7,
-      "formats": ["webp", "avif", "png"],
       "bonus": 0.25,
       "rules": {
         "edge_density": {"min": 0.3},
@@ -116,7 +107,6 @@
       "name": "NIGHT_PHOTO",
       "priority": 650,
       "adjust": -4,
-      "formats": ["avif", "jxl"],
       "bonus": -0.2,
       "rules": {
         "contrast": {"max": 0.4},
@@ -127,7 +117,6 @@
       "name": "MACRO_PHOTO",
       "priority": 600,
       "adjust": -1,
-      "formats": ["avif", "jxl", "webp"],
       "bonus": 0.0,
       "rules": {
         "sharpness": {"min": 0.6},
@@ -138,7 +127,6 @@
       "name": "MEME",
       "priority": 550,
       "adjust": 5,
-      "formats": ["webp", "jpeg"],
       "bonus": 0.2,
       "rules": {
         "edge_density": {"min": 0.25},
@@ -150,7 +138,6 @@
       "name": "ARTWORK",
       "priority": 500,
       "adjust": 2,
-      "formats": ["avif", "webp", "jxl", "png"],
       "bonus": 0.1,
       "rules": {
         "complexity": {"min": 0.3, "max": 0.8},
@@ -161,7 +148,6 @@
       "name": "PHOTO",
       "priority": 400,
       "adjust": -2,
-      "formats": ["avif", "jxl", "webp", "jpeg"],
       "bonus": -0.1,
       "rules": {
         "complexity": {"min": 0.55},
