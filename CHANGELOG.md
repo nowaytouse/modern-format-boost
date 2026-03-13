@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.47] - 2026-03-14
+
+### Added
+- **HEVC transquant_bypass Detection**: Implemented advanced HEVC bitstream analysis to detect `transquant_bypass_enabled_flag` from SPS (Sequence Parameter Set).
+  - Added `parse_hevc_transquant_bypass_enabled` function for hvcC box parsing
+  - Implemented custom `BitReader` struct for Exp-Golomb decoding of SPS RBSP
+  - Enhanced HEIC/HEIF lossless detection capabilities with precise flag extraction
+- **mp4parse Dependency**: Added mp4parse crate (v0.17.0) to workspace for robust MP4 container parsing
+
+### Fixed
+- **EXR Error Handling**: Improved EXR format detection with proper error messages instead of silent fallback to lossless assumption
+
 ## [0.10.46] - 2026-03-14
 
 ### Added
