@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.44] - 2026-03-14
+
+### Fixed
+- **Hardcoded Quality Degradation in Image Routing**:
+  - **Unified Quality 100 Path**: Eliminated hardcoded `d=1.0` (lower quality) routing for palette-quantized PNG and GIF sources.
+  - **Consistent Distance Policy**: All lossy legacy static sources now correctly use the `Quality 100` (`d=0.1`) route unless pixel analysis specifically recommends lossless.
+  - **Static GIF Fix**: Resolved an issue where 1-frame "static" GIFs were forced to `d=1.0`; they now benefit from the high-fidelity `d=0.1` path.
+  - **Doc-Comment Correction**: Updated developer documentation to reflect the current high-fidelity distance standards.
+
 ## [0.10.43] - 2026-03-14
 
 ### Added
