@@ -68,17 +68,12 @@ pub struct ImageQualityAnalysis {
 pub struct ImageContentType {
     pub name: String,
     pub adjust: i8,
-    pub formats: Vec<String>,
     pub bonus: f64,
 }
 
 impl ImageContentType {
     pub fn quality_adjustment(&self) -> i8 {
         self.adjust
-    }
-
-    pub fn recommended_formats(&self) -> Vec<&str> {
-        self.formats.iter().map(|s| s.as_str()).collect()
     }
 }
 
@@ -87,7 +82,6 @@ struct ClassifierRule {
     name: String,
     priority: i32,
     adjust: i8,
-    formats: Vec<String>,
     bonus: f64,
     rules: RuleConditions,
 }
@@ -601,14 +595,12 @@ fn classify_content_type(
         ImageContentType {
             name: rule.name.clone(),
             adjust: rule.adjust,
-            formats: rule.formats.clone(),
             bonus: rule.bonus,
         }
     } else {
         ImageContentType {
             name: "UNKNOWN".to_string(),
             adjust: 0,
-            formats: vec!["avif".to_string(), "webp".to_string(), "jxl".to_string()],
             bonus: 0.0,
         }
     }
@@ -666,9 +658,8 @@ fn make_routing_decision(
     let use_lossless = compression_potential < 0.2
         || format_lower == "png" && has_alpha && content_type.name == "ICON";
 
-    let formats = content_type.recommended_formats();
-    let primary = formats.first().unwrap_or(&"avif").to_string();
-    let alternatives: Vec<String> = formats.iter().skip(1).map(|s| s.to_string()).collect();
+    let primary = if use_lossless { "jxl".to_string() } else { "avif".to_string() };
+    let alternatives = vec!["webp".to_string()];
 
     let base_ratio = match primary.as_str() {
         "avif" => 0.25,
