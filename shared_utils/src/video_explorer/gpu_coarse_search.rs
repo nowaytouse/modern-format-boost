@@ -450,6 +450,21 @@ pub fn explore_with_gpu_coarse_search(
         crate::log_eprintln!("{}⚠️  Early Insight Triggered: Quality Plateau Detected{}",
             crate::modern_ui::colors::BRIGHT_YELLOW, crate::modern_ui::colors::RESET);
         crate::log_eprintln!("   No integer-level quality improvement over 3 consecutive iterations");
+
+        // Display quality metrics that triggered early insight
+        if let Some(vmaf) = best_vmaf_tracked {
+            let vmaf_pass = vmaf >= 93.0;
+            crate::log_eprintln!("   VMAF-Y: {:.2} {} 93.0 {}",
+                vmaf, if vmaf_pass { "≥" } else { "<" }, if vmaf_pass { "✅" } else { "❌" });
+        }
+        if let Some((u, v)) = best_psnr_uv_tracked {
+            let u_pass = u >= 35.0;
+            let v_pass = v >= 35.0;
+            crate::log_eprintln!("   PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ 35.0 dB)",
+                u, if u_pass { "✅" } else { "❌" },
+                v, if v_pass { "✅" } else { "❌" });
+        }
+
         crate::log_eprintln!("   Skipping final quality verification (unnecessary)");
         crate::log_eprintln!("{}═══════════════════════════════════════════════════════════{}",
             crate::modern_ui::colors::BRIGHT_YELLOW, crate::modern_ui::colors::RESET);
