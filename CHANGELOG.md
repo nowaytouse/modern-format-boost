@@ -58,8 +58,8 @@ All notable changes to this project will be documented in this file.
   - GPU initial step: 2.0 → 0.5 in ultimate mode (4x more precise)
   - GPU minimum step: 0.5 → 0.1 in ultimate mode (5x more precise)
   - Stage 3 fine-tune: 0.5 → 0.1 in ultimate mode
-  - GPU skip threshold: 500KB → 10KB in ultimate mode (allows GPU for small files)
-  - GPU skip duration: 3.0s → 0.5s in ultimate mode (allows GPU for short clips)
+  - GPU skip threshold: 500KB → 100KB in ultimate mode (allows GPU for medium-small files)
+  - GPU skip duration: 3.0s → 1.0s in ultimate mode (allows GPU for short clips)
   - More GPU iterations = higher GPU utilization and better quality boundary detection
 - **Test Compatibility**: Updated test expectations for new constants
   - ULTIMATE_MIN_WALL_HITS: 4 → 15
