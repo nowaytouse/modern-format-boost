@@ -1400,7 +1400,8 @@ pub fn gpu_coarse_search_with_log(
 
     let mut log = Vec::new();
 
-    let silent_mode = progress_cb.is_some();
+    // Always show GPU search logs in ultimate mode for transparency
+    let silent_mode = progress_cb.is_some() && !config.ultimate_mode;
 
     macro_rules! log_msg {
         ($($arg:tt)*) => {{
