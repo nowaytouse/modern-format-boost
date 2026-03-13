@@ -269,6 +269,9 @@ pub fn has_log_file() -> bool {
 /// (e.g. `./logs/img_hevc_run_2026-02-28_14-30-00.log`). That directory is gitignored.
 /// Call at Run startup so quality and progress are always written without requiring `--log-file`.
 pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
+    if binary_name.contains("vid") {
+        IS_VIDEO_MODE.store(true, Ordering::Relaxed);
+    }
     if has_log_file() {
         return Ok(());
     }
@@ -448,6 +451,15 @@ pub fn flush_log_file() {
 }
 
 static QUIET_MODE: AtomicBool = AtomicBool::new(false);
+static IS_VIDEO_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_is_video_mode(val: bool) {
+    IS_VIDEO_MODE.store(val, Ordering::Relaxed);
+}
+
+pub fn is_video_mode() -> bool {
+    IS_VIDEO_MODE.load(Ordering::Relaxed)
+}
 
 pub fn enable_quiet_mode() {
     QUIET_MODE.store(true, Ordering::Relaxed);
@@ -538,6 +550,8 @@ static XMP_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static JXL_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static IMAGE_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static IMAGE_FAIL_COUNT: AtomicU64 = AtomicU64::new(0);
+static VIDEO_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
+static VIDEO_FAIL_COUNT: AtomicU64 = AtomicU64::new(0);
 static PREPROCESSING_COUNT: AtomicU64 = AtomicU64::new(0);
 static FALLBACK_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -569,10 +583,14 @@ pub fn image_processed_success() {
 /// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
 pub fn image_processed_failure() {
     let _ = IMAGE_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
-    let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
-    let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
-    // Always emit status line on every image failure for persistent display
-    emit_combined_status_line(img_ok, img_fail);
+}
+
+pub fn video_processed_success() {
+    VIDEO_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn video_processed_failure() {
+    VIDEO_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
@@ -620,9 +638,49 @@ pub fn get_current_stats_string() -> String {
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let vid_ok = VIDEO_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let vid_fail = VIDEO_FAIL_COUNT.load(Ordering::Relaxed);
     
-    let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    format!("{}│{} {} {}", colors::DIM, colors::RESET, symbols::CHART, msg)
+    let is_video = IS_VIDEO_MODE.load(Ordering::Relaxed);
+    
+    let msg = if is_video {
+        format_video_stats_line(vid_ok, vid_fail, preprocess_ok, fallback_ok)
+    } else {
+        format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok)
+    };
+    
+    // Very minimalist separator for video
+    let separator = if is_video {
+        format!("{}│{}", colors::DIM, colors::RESET)
+    } else {
+        format!("{}│{} {}", colors::DIM, colors::RESET, symbols::CHART)
+    };
+    
+    format!(" {} {}", separator, msg)
+}
+
+fn format_video_stats_line(
+    vid_ok: u64,
+    vid_fail: u64,
+    preprocess_ok: u64,
+    _fallback_ok: u64,
+) -> String {
+    let mut parts = Vec::new();
+
+    // Video Stats: V: 12✓
+    let vid_msg = if vid_fail > 0 {
+        format!("{}V:{}{}✓{}{}{}✗{}", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok, colors::DIM, colors::MFB_RED, vid_fail, colors::RESET)
+    } else {
+        format!("{}V:{}{}✓{}", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok, colors::RESET)
+    };
+    parts.push(vid_msg);
+
+    // Preprocessing: P: 1✓ (Only show if > 0 for video)
+    if preprocess_ok > 0 {
+        parts.push(format!("{}P:{}{}✓{}", colors::MFB_CYAN, colors::MFB_GREEN, preprocess_ok, colors::RESET));
+    }
+
+    parts.join(&format!("{} ", colors::DIM))
 }
 
 fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
@@ -642,26 +700,26 @@ fn format_xmp_jxl_images_line(
     let images_ok = img_ok + jxl_ok;
     let mut parts = Vec::new();
 
-    // XMP Stats
+    // XMP Stats: X: 12✓
     let xmp_msg = if xmp_failed > 0 {
-        format!("{}XMP: {}{}{}✓ {}{}{}{}✗{}", colors::MFB_BLUE, colors::RESET, colors::MFB_GREEN, xmp_ok, colors::RESET, colors::DIM, colors::MFB_RED, xmp_failed, colors::RESET)
+        format!("{}X:{}{}✓{}{}{}✗{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::DIM, colors::MFB_RED, xmp_failed, colors::RESET)
     } else {
-        format!("{}XMP: {}{}{}✓{}", colors::MFB_BLUE, colors::RESET, colors::MFB_GREEN, xmp_ok, colors::RESET)
+        format!("{}X:{}{}✓{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::RESET)
     };
     parts.push(xmp_msg);
 
-    // Image Stats (includes JXL successes and internal processing)
+    // Image Stats: I: 123✓
     let img_msg = if img_fail > 0 {
-        format!("{}Img: {}{}{}✓ {}{}{}{}✗{}", colors::MFB_PURPLE, colors::RESET, colors::MFB_GREEN, images_ok, colors::RESET, colors::DIM, colors::MFB_RED, img_fail, colors::RESET)
+        format!("{}I:{}{}✓{}{}{}✗{}", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok, colors::DIM, colors::MFB_RED, img_fail, colors::RESET)
     } else {
-        format!("{}Img: {}{}{}✓{}", colors::MFB_PURPLE, colors::RESET, colors::MFB_GREEN, images_ok, colors::RESET)
+        format!("{}I:{}{}✓{}", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok, colors::RESET)
     };
     parts.push(img_msg);
 
-    // Preprocessing (ImageMagick/FFmpeg fallbacks)
-    parts.push(format!("{}Pre: {}{}{}✓{}", colors::MFB_CYAN, colors::RESET, colors::MFB_GREEN, preprocess_ok, colors::RESET));
+    // Preprocessing: P: 1✓
+    parts.push(format!("{}P:{}{}✓{}", colors::MFB_CYAN, colors::MFB_GREEN, preprocess_ok, colors::RESET));
 
-    parts.join(&format!("  {}  ", colors::DIM))
+    parts.join(&format!("{} ", colors::DIM))
 }
 
 /// Call when an XMP sidecar is found and a merge is about to be attempted.
@@ -693,39 +751,65 @@ pub fn xmp_merge_failure(msg: &str) {
 /// Call after all processing is done to print the final summary.
 /// Same line shows XMP summary, Images OK/failed, and Pre-processing count when non-zero.
 pub fn xmp_merge_finalize() {
-    let total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
+    let is_video = IS_VIDEO_MODE.load(Ordering::Relaxed);
+    let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
-    if total > 0 {
+    let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let vid_ok = VIDEO_SUCCESS_COUNT.load(Ordering::Relaxed);
+    let vid_fail = VIDEO_FAIL_COUNT.load(Ordering::Relaxed);
+
+    if is_video {
+        if vid_ok > 0 || vid_fail > 0 || preprocess_ok > 0 || fallback_ok > 0 {
+            let mut parts = Vec::new();
+            if vid_ok > 0 || vid_fail > 0 {
+                let vid_part = if vid_fail > 0 {
+                    format!("Videos: {} OK, {} failed", vid_ok, vid_fail)
+                } else {
+                    format!("Videos: {} OK", vid_ok)
+                };
+                parts.push(vid_part);
+            }
+            if preprocess_ok > 0 {
+                parts.push(format!("Pre-processing: {} done", preprocess_ok));
+            }
+            if fallback_ok > 0 {
+                parts.push(format!("Fallback: {} done", fallback_ok));
+            }
+            let line = fmt_stats_line_final(&parts.join("   "));
+            emit_stderr(&line);
+        }
+        return;
+    }
+
+    if xmp_total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
-        let failed = total.saturating_sub(success);
-        let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
+        let failed = xmp_total.saturating_sub(success);
         let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
         let line = fmt_stats_line_final(&msg);
         emit_stderr(&line);
     } else {
-        let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
         if jxl_ok > 0 || img_ok > 0 || img_fail > 0 || preprocess_ok > 0 || fallback_ok > 0 {
-        let mut parts = Vec::new();
-        let images_ok = img_ok + jxl_ok;
-        if images_ok > 0 || img_fail > 0 {
-            let img_part = if img_fail > 0 {
-                format!("Images: {} OK, {} failed", images_ok, img_fail)
-            } else {
-                format!("Images: {} OK", images_ok)
-            };
-            parts.push(img_part);
-        }
-        if preprocess_ok > 0 {
-            parts.push(format!("Pre-processing: {} done", preprocess_ok));
-        }
-        if fallback_ok > 0 {
-            parts.push(format!("Fallback: {} done", fallback_ok));
-        }
-        let line = fmt_stats_line_final(&parts.join("   "));
-        emit_stderr(&line);
+            let mut parts = Vec::new();
+            let images_ok = img_ok + jxl_ok;
+            if images_ok > 0 || img_fail > 0 {
+                let img_part = if img_fail > 0 {
+                    format!("Images: {} OK, {} failed", images_ok, img_fail)
+                } else {
+                    format!("Images: {} OK", images_ok)
+                };
+                parts.push(img_part);
+            }
+            if preprocess_ok > 0 {
+                parts.push(format!("Pre-processing: {} done", preprocess_ok));
+            }
+            if fallback_ok > 0 {
+                parts.push(format!("Fallback: {} done", fallback_ok));
+            }
+            let line = fmt_stats_line_final(&parts.join("   "));
+            emit_stderr(&line);
         }
     }
 }

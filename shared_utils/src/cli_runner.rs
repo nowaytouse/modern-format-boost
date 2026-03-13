@@ -160,6 +160,7 @@ where
                         result.message()
                     );
                     batch_result.success();
+                    crate::progress_mode::video_processed_success();
                     total_input_bytes += result.input_size();
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
                 } else {
@@ -169,6 +170,7 @@ where
                         result.message()
                     );
                     batch_result.fail(fixed.clone(), result.message().to_string());
+                    crate::progress_mode::video_processed_failure();
                 }
             }
             Err(e) => {
@@ -193,6 +195,7 @@ where
                     } else {
                         info!("📋 Copied original (conversion failed): {}", fixed.display());
                     }
+                    crate::progress_mode::video_processed_failure();
                 }
             }
         }
