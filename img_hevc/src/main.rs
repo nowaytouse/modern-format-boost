@@ -762,6 +762,7 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 Some(0.0) => {
+                    #[allow(deprecated)]
                     let distance = match &pixel_analysis {
                         Some(q) => if q.routing_decision.use_lossless { 0.0 } else { 0.1 },
                         None => 0.1,
