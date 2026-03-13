@@ -939,7 +939,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         1.0
     };
     let total_within_tolerance = if config.allow_size_tolerance {
-        total_size_ratio < 1.01
+        // Allow up to 1MB increase for container overhead
+        actual_output_size <= detection.file_size.saturating_add(1_048_576)
     } else {
         total_file_compressed
     };
