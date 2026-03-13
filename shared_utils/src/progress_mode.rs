@@ -383,8 +383,9 @@ pub fn emit_stderr(line: &str) {
     crate::ctrlc_guard::wait_if_prompt_active();
 
     let mut active_ansi = String::new();
+    let mut is_first = true;
 
-    // Process each line separately to ensure milestone stats are appended to every line
+    // Process each line separately to ensure milestone stats are appended correctly
     for subline in line.lines() {
         if subline.trim().is_empty() {
             continue;
@@ -412,8 +413,13 @@ pub fn emit_stderr(line: &str) {
             }
         }
         
-        // Add milestone stats to non-empty lines that don't already have them
-        let line_with_stats = append_stats_to_line(&curr_line);
+        // Add milestone stats only to the first line of a multi-line message
+        let line_with_stats = if is_first {
+            append_stats_to_line(&curr_line)
+        } else {
+            curr_line
+        };
+        is_first = false;
 
         // File log always receives the plain line.
         if has_log_file() {
@@ -577,9 +583,12 @@ pub fn append_stats_to_line(line: &str) -> String {
         return line.to_string();
     }
     
+    // Strip ANSI for accurate length calculation and duplicate check
+    let plain = crate::logging::strip_ansi_str(trimmed);
+    
     // Check if it already has stats (avoids double appending)
     // We check for "│ 📊" which is the delimiter used in get_current_stats_string()
-    if trimmed.contains("│ 📊") {
+    if plain.contains("│ 📊") {
         return trimmed.to_string();
     }
     
@@ -591,8 +600,6 @@ pub fn append_stats_to_line(line: &str) -> String {
         trimmed = &trimmed[..trimmed.len() - 4];
     }
     
-    // Strip ANSI for accurate length calculation
-    let plain = crate::logging::strip_ansi_str(trimmed);
     let visible_len = plain.chars().count();
     
     // Align stats to column 65 (Standard for this project)
