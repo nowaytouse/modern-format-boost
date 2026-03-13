@@ -1578,12 +1578,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
                                 if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
 
-                                // Early insight: only trigger if quality already meets final settlement thresholds
+                                // Early insight: only trigger if quality fails threshold AND no improvement
                                 const VMAF_Y_MIN: f64 = 93.0;
                                 const PSNR_UV_MIN: f64 = 38.0;
-                                let quality_meets_threshold = v >= VMAF_Y_MIN && u.min(v_score) >= PSNR_UV_MIN;
+                                let any_metric_fails = v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
 
-                                if !vmaf_improved && !psnr_improved && quality_meets_threshold {
+                                if !vmaf_improved && !psnr_improved && any_metric_fails {
                                     failure_credibility += 1.0;
                                     if failure_credibility >= 3.0 {
                                         crate::log_eprintln!(
@@ -1838,6 +1838,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut test_crf = gpu_boundary_crf + step_size_upward;
         let mut found_compress_point = false;
         let mut failure_credibility = 0.0f64;
+        let mut best_tested_crf = gpu_boundary_crf;
+        let mut best_tested_size = gpu_size;
 
         let max_iterations_for_video = if ultimate_mode { 150 } else { calculate_max_iterations_for_duration(duration, ultimate_mode) };
 
@@ -1877,23 +1879,30 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
                     if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
 
-                    // Early insight: only trigger if quality already meets final settlement thresholds
+                    // Early insight: only trigger if quality fails threshold AND no improvement
                     const VMAF_Y_MIN: f64 = 93.0;
                     const PSNR_UV_MIN: f64 = 38.0;
-                    let quality_meets_threshold = v >= VMAF_Y_MIN && u.min(v_score) >= PSNR_UV_MIN;
+                    let any_metric_fails = v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
 
-                    if !vmaf_improved && !psnr_improved && quality_meets_threshold {
+                    if !vmaf_improved && !psnr_improved && any_metric_fails {
                         failure_credibility += 1.0;
                         if failure_credibility >= 3.0 {
                             crate::log_eprintln!(
                                 "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
                                 BRIGHT_RED, RESET
                             );
-                            // Ensure best_crf is set before stopping
-                            if best_crf.is_none() && size < input_size {
-                                best_crf = Some(test_crf);
-                                best_size = Some(size);
-                                best_ssim_tracked = calculate_ssim_quick();
+                            // Use best tested CRF if no compression achieved
+                            if best_crf.is_none() {
+                                if size < input_size {
+                                    best_crf = Some(test_crf);
+                                    best_size = Some(size);
+                                    best_ssim_tracked = calculate_ssim_quick();
+                                } else {
+                                    // No compression achieved - use best tested CRF
+                                    best_crf = Some(best_tested_crf);
+                                    best_size = Some(best_tested_size);
+                                    best_ssim_tracked = calculate_ssim_quick();
+                                }
                             }
                             early_insight_triggered = true;
                             break;
@@ -1902,6 +1911,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                         failure_credibility = 0.0;
                     }
                 }
+            }
+
+            // Track best tested CRF (smallest size increase, even if not compressed)
+            if size < best_tested_size {
+                best_tested_crf = test_crf;
+                best_tested_size = size;
             }
 
             let is_effectively_compressed = size < input_size;
@@ -1922,7 +1937,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             } else {
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
-                    "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌", 
+                    "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌",
                     RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                     BRIGHT_RED, total_size_pct, RESET
                 );
@@ -1933,26 +1948,11 @@ fn cpu_fine_tune_from_gpu_boundary(
         if !found_compress_point {
             crate::log_eprintln!("⚠️ Cannot compress even at max CRF {:.1}!", max_crf);
             crate::log_eprintln!("   File may be already optimally compressed");
-            let last_size = fs::metadata(output).map(|m| m.len()).unwrap_or(0);
-            let last_pct = if input_size > 0 {
-                (last_size as f64 / input_size as f64 - 1.0) * 100.0
-            } else {
-                0.0
-            };
-            crate::verbose_eprintln!(
-                "   Total file: input {} vs output {} ({:+.1}%)",
-                crate::format_bytes(input_size),
-                crate::format_bytes(last_size),
-                last_pct
-            );
-            let max_size = if let Some(&cached) = size_cache.get(max_crf) {
-                cached
-            } else {
-                iterations += 1;
-                encode_cached(max_crf, &mut size_cache)?
-            };
-            best_crf = Some(max_crf);
-            best_size = Some(max_size);
+            // Use best tested CRF instead of fallback to max_crf
+            if best_crf.is_none() {
+                best_crf = Some(best_tested_crf);
+                best_size = Some(best_tested_size);
+            }
         } else {
             crate::log_eprintln!();
             crate::log_eprintln!(
@@ -2074,13 +2074,13 @@ fn cpu_fine_tune_from_gpu_boundary(
                         const VMAF_Y_MIN: f64 = 93.0;
                         const PSNR_UV_MIN: f64 = 38.0;
 
-                        let quality_meets_threshold = if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
-                            v >= VMAF_Y_MIN && uv.0.min(uv.1) >= PSNR_UV_MIN
+                        let any_metric_fails = if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
+                            v < VMAF_Y_MIN || uv.0.min(uv.1) < PSNR_UV_MIN
                         } else {
                             false
                         };
 
-                        if !vmaf_improved && !psnr_improved && quality_meets_threshold {
+                        if !vmaf_improved && !psnr_improved && any_metric_fails {
                             failure_credibility += 1.0;
                             if failure_credibility >= 3.0 {
                                 crate::log_eprintln!(
