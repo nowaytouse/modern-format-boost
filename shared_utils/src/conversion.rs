@@ -29,6 +29,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
+use rand::{distributions::Alphanumeric, Rng};
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -553,7 +554,15 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
         .map(|e| e.to_string_lossy())
         .unwrap_or_default();
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{}.tmp.{}", stem, ext))
+    
+    // Add unique random string for security (prevents collision with user files)
+    let random_id: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(8)
+        .map(char::from)
+        .collect();
+
+    parent.join(format!("{}.tmp.{}.{}", stem, random_id, ext))
 }
 
 /// Commits a temp file to the final output path. Reduces TOCTOU window to the instant before rename.

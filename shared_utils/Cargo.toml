@@ -29,6 +29,7 @@ rayon = { workspace = true }
 libheif-rs = { workspace = true }
 flate2 = { workspace = true }
 ctrlc = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

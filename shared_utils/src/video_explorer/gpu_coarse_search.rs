@@ -2255,69 +2255,115 @@ fn cpu_fine_tune_from_gpu_boundary(
                 crate::log_eprintln!();
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
-                    "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune{}",
+                    "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack){}",
                     BRIGHT_MAGENTA, RESET
                 );
                 crate::log_eprintln!(
-                    "   {}Starting from 0.1 optimum (CRF {:.2}) and stepping downwards by 0.01{}",
+                    "   {}Starting from 0.1 optimum (CRF {:.2}) with adaptive step (0.01 → 0.05 sprint){}",
                     DIM, best, RESET
                 );
 
                 let mut current_best = best;
                 let mut current_best_size = best_size.unwrap_or(0);
-                
-                let fine_step = 0.01;
-                let mut test_crf = best - fine_step;
+
+                let base_step = 0.01;
+                let mut current_step = base_step;
+                let max_sprint_step = 0.05;
+                let mut test_crf = best - current_step;
                 let mut fine_failures = 0;
                 let max_fine_failures = 3;
                 let search_floor = 0.0;
+                let mut consecutive_successes = 0;
 
                 while test_crf >= search_floor && iterations < 200 {
                     // Preempt float precision issues
                     test_crf = (test_crf * 100.0).round() / 100.0;
-                    
+
                     if size_cache.contains_key(test_crf) {
-                        test_crf -= fine_step;
+                        test_crf -= current_step;
                         continue;
                     }
-                    
+
                     let size = encode_cached(test_crf, &mut size_cache)?;
                     iterations += 1;
-                    
+
                     let is_effectively_compressed = size < input_size;
                     let total_size_pct = if input_size > 0 {
                         (size as f64 / input_size as f64 - 1.0) * 100.0
                     } else {
                         0.0
                     };
-                    
+
                     if is_effectively_compressed {
                         current_best = test_crf;
                         current_best_size = size;
                         best_ssim_tracked = calculate_ssim_quick(); // track latest if valid
                         fine_failures = 0;
-                        
+                        consecutive_successes += 1;
+
+                        let step_info = if current_step > base_step + 0.001 {
+                            format!("SPRINT step {:.2}", current_step)
+                        } else {
+                            "0.01-GRANULARITY GAIN".to_string()
+                        };
+
+                        // Calculate VMAF and PSNR for Phase 4 logs
+                        let mut metrics_info = String::new();
+                        if ultimate_mode {
+                            let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
+                            let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
+
+                            if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
+                                let chroma_avg = (u + v_score) / 2.0;
+                                metrics_info = format!(" │ VMAF:{:.2} UV:{:.2}", v, chroma_avg);
+                            }
+                        }
+
                         crate::log_eprintln!(
-                            "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} │ 0.01-GRANULARITY GAIN",
+                            "{}{}   {}✓{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{}{} │ {}",
                             RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
-                            BRIGHT_GREEN, total_size_pct, RESET
+                            BRIGHT_GREEN, total_size_pct, RESET, metrics_info, step_info
                         );
+
+                        // Sprint: double step after 2 consecutive successes (max 0.05)
+                        if consecutive_successes >= 2 && current_step < max_sprint_step {
+                            let old_step = current_step;
+                            current_step = (current_step * 2.0).min(max_sprint_step);
+                            crate::log_eprintln!(
+                                "   {}⚡ Sprint activated: step {:.2} → {:.2}{}",
+                                BRIGHT_CYAN, old_step, current_step, RESET
+                            );
+                        }
                     } else {
                         fine_failures += 1;
+                        consecutive_successes = 0;
+
                         crate::log_eprintln!(
                             "{}{}   {}✗{} [CPU] {}CRF {:<5.2}{} {}{:6.1}%{} │ CAPACITY EXCEEDED",
                             RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
                             BRIGHT_RED, total_size_pct, RESET
                         );
-                        
+
+                        // Backtrack: reset to base step and retry from last good CRF
+                        if current_step > base_step + 0.001 {
+                            let old_step = current_step;
+                            current_step = base_step;
+                            test_crf = current_best - current_step;
+                            crate::log_eprintln!(
+                                "   {}↩️  Backtrack: step {:.2} → {:.2}, retry from CRF {:.2}{}",
+                                BRIGHT_YELLOW, old_step, current_step, test_crf, RESET
+                            );
+                            continue;
+                        }
+
                         if fine_failures >= max_fine_failures {
                             crate::log_eprintln!("   {}Max 0.01-granularity failures reached. Stopping.{}", BRIGHT_YELLOW, RESET);
                             break;
                         }
                     }
-                    test_crf -= fine_step;
+                    test_crf -= current_step;
                 }
-                
+
                 best_crf = Some(current_best);
                 best_size = Some(current_best_size);
             }
