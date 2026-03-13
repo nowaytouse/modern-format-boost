@@ -124,6 +124,7 @@ pub fn quick_calibrate(
     vf_args: &[String],
     gpu_encoder: &str,
     sample_duration: f32,
+    ultimate_mode: bool,
 ) -> Result<DynamicCrfMapper> {
     use std::fs;
     use std::process::Command;
@@ -141,6 +142,8 @@ pub fn quick_calibrate(
 
     let calibration_crfs = vec![20.0_f32, 18.0, 22.0];
     let mut calibration_success = false;
+
+    let cpu_sample_cap = if ultimate_mode { 30.0 } else { 15.0 };
 
     for (attempt, anchor_crf) in calibration_crfs.iter().enumerate() {
         crate::verbose_eprintln!(
@@ -164,7 +167,7 @@ pub fn quick_calibrate(
         let gpu_result = Command::new("ffmpeg")
             .arg("-y")
             .arg("-t")
-            .arg(format!("{}", sample_duration.min(15.0)))
+            .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
             .arg("-i")
             .arg(crate::safe_path_arg(input).as_ref())
             .arg("-c:v")
@@ -208,7 +211,7 @@ pub fn quick_calibrate(
             cpu_cmd
                 .arg("-y")
                 .arg("-t")
-                .arg(format!("{}", sample_duration.min(15.0)))
+                .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
                 .arg("-i")
                 .arg(crate::safe_path_arg(input).as_ref())
                 .arg("-an")
@@ -274,7 +277,7 @@ pub fn quick_calibrate(
             let extract_result = Command::new("ffmpeg")
                 .arg("-y")
                 .arg("-t")
-                .arg(format!("{}", sample_duration.min(15.0)))
+                .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
                 .arg("-i")
                 .arg(crate::safe_path_arg(input).as_ref())
                 .arg("-an")
@@ -348,7 +351,7 @@ pub fn quick_calibrate(
             cpu_cmd
                 .arg("-y")
                 .arg("-t")
-                .arg(format!("{}", sample_duration.min(15.0)))
+                .arg(format!("{}", sample_duration.min(cpu_sample_cap)))
                 .arg("-i")
                 .arg(crate::safe_path_arg(input).as_ref())
                 .arg("-c:v")

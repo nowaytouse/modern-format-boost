@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Security Enhancement: Unique Temp Files**: Added 8-character random string (e.g., `.tmp.A7b2K9xZ.mp4`) to temporary file names in `shared_utils`. This prevents collisions with user-named files, enables safe concurrent processing, and ensures that cleanup operations only target program-generated files.
+- **Sampling Duration Increase**: Increased GPU and CPU sampling duration in Ultimate Mode by 15.0s each.
+  - GPU: 45.0s → 60.0s (segmented: 50.0s → 65.0s)
+  - CPU (Calibration): 15.0s → 30.0s
 - **Phase 4 Metrics Display**: Added VMAF and PSNR (UV) display to Phase 4 (0.01-granularity fine-tune) logs for consistency with CPU/GPU phases.
 - **Diagnostic Logging**: Added temp file verification and detailed error messages before commit to diagnose "No such file or directory" errors.
 

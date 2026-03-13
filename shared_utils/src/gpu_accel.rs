@@ -190,11 +190,11 @@ pub const GPU_SAMPLE_DURATION: f32 = 60.0;
 /// Duration (seconds) per segment in multi-segment sampling (5 segments). Longer segments improve SSIM representativeness across media types.
 pub const GPU_SEGMENT_DURATION: f32 = 15.0;
 
-/// Ultimate mode: shorter sample to avoid timeout (was 90.0, reduced to prevent hang)
-pub const GPU_SAMPLE_DURATION_ULTIMATE: f32 = 45.0;
+/// Ultimate mode: longer sample for better accuracy (was 45.0)
+pub const GPU_SAMPLE_DURATION_ULTIMATE: f32 = 60.0;
 
-/// Ultimate mode: shorter segment per position in multi-segment sampling (5 segments = 50s total, was 125s)
-pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 10.0;
+/// Ultimate mode: longer segment per position (5 segments = 65s total, was 50s)
+pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 13.0;
 
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
@@ -1695,8 +1695,18 @@ pub fn gpu_coarse_search_with_log(
         config.max_crf
     );
 
+    let seg_dur = if config.ultimate_mode {
+        GPU_SEGMENT_DURATION_ULTIMATE
+    } else {
+        GPU_SEGMENT_DURATION
+    };
+
     if duration >= 60.0 {
-        log_msg!("   📊 Multi-segment sampling: 5 segments × 10s = 50s (0%, 25%, 50%, 75%, 90%)");
+        log_msg!(
+            "   📊 Multi-segment sampling: 5 segments × {:.0}s = {:.0}s (0%, 25%, 50%, 75%, 90%)",
+            seg_dur,
+            seg_dur * 5.0
+        );
     } else {
         log_msg!("   📊 Full video sampling: {:.1}s", duration);
     }

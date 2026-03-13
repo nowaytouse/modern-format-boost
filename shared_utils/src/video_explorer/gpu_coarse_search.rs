@@ -250,6 +250,7 @@ pub fn explore_with_gpu_coarse_search(
                         &vf_args,
                         gpu_encoder_name,
                         sample_dur,
+                        ultimate_mode,
                     )
                     .unwrap_or_else(|_| dynamic_mapping::DynamicCrfMapper::new(input_size));
 
