@@ -50,6 +50,15 @@ All notable changes to this project will be documented in this file.
   - Now shows individual U and V channel results: `U=38.38 dB ✅, V=35.67 dB ✅`
   - Clear indication of which channel passes/fails threshold
   - Easier to diagnose quality issues at a glance
+- **Early Insight Log Transparency**: Added quality metrics display when early insight triggers
+  - Shows VMAF-Y and PSNR-UV values when quality plateau is detected
+  - Helps users understand why exploration stopped early
+  - Provides visibility into quality gate decisions
+- **GPU Utilization in Ultimate Mode**: Increased GPU exploration precision for better quality
+  - GPU initial step: 2.0 → 0.5 in ultimate mode (4x more precise)
+  - GPU minimum step: 0.5 → 0.1 in ultimate mode (5x more precise)
+  - Stage 3 fine-tune: 0.5 → 0.1 in ultimate mode
+  - More GPU iterations = higher GPU utilization and better quality boundary detection
 - **Test Compatibility**: Updated test expectations for new constants
   - ULTIMATE_MIN_WALL_HITS: 4 → 15
   - ULTIMATE_REQUIRED_ZERO_GAINS: 20 → 50

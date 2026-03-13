@@ -2103,7 +2103,7 @@ pub fn gpu_coarse_search_with_log(
 
     const GPU_DECAY_FACTOR: f32 = 0.5;
     const GPU_MAX_WALL_HITS: u32 = 4;
-    const GPU_MIN_STEP: f32 = 0.5;
+    let gpu_min_step: f32 = if config.ultimate_mode { 0.1 } else { 0.5 };
 
     if (boundary_high - boundary_low) > 4.0 {
         if found_compress_point {
@@ -2178,12 +2178,12 @@ pub fn gpu_coarse_search_with_log(
 
                             let curve_step = initial_step * GPU_DECAY_FACTOR.powi(wall_hits as i32);
                             let new_step = if curve_step < 1.0 {
-                                GPU_MIN_STEP
+                                gpu_min_step
                             } else {
                                 curve_step
                             };
 
-                            let phase_info = if new_step <= GPU_MIN_STEP + 0.01 {
+                            let phase_info = if new_step <= gpu_min_step + 0.01 {
                                 "→ FINE TUNING".to_string()
                             } else {
                                 format!("decay ×{:.1}^{}", GPU_DECAY_FACTOR, wall_hits)
@@ -2271,7 +2271,7 @@ pub fn gpu_coarse_search_with_log(
 
                             let curve_step = initial_step * GPU_DECAY_FACTOR.powi(wall_hits as i32);
                             let new_step = if curve_step < 1.0 {
-                                GPU_MIN_STEP
+                                gpu_min_step
                             } else {
                                 curve_step
                             };
@@ -2366,9 +2366,10 @@ pub fn gpu_coarse_search_with_log(
                 max_iterations_limit
             );
         } else {
-            log_msg!("   📍 Stage 3: Fine-tune with 0.5 step (quality ceiling detection)");
+            let stage3_step = if config.ultimate_mode { 0.1 } else { 0.5 };
+            log_msg!("   📍 Stage 3: Fine-tune with {:.1} step (quality ceiling detection)", stage3_step);
 
-            let mut offset = 0.5_f32;
+            let mut offset = stage3_step;
             let mut consecutive_small_improvements = 0;
 
             #[allow(clippy::while_immutable_condition)]
