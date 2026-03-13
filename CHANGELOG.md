@@ -28,6 +28,28 @@ All notable changes to this project will be documented in this file.
 - **Code Quality**: Removed silent fallback values and dead modules
 
 ### Fixed
+- **Phase 2 Duplicate Output**: Fixed duplicate logging in Phase 2 when ultimate_mode is enabled
+  - Moved quality metrics check to only run when compression fails
+  - Each CRF now outputs only once during exploration
+- **Phase 2 Early Termination**: Fixed Phase 2 continuing after finding compression point
+  - Now correctly stops immediately after finding first compressible CRF
+  - Properly transitions to Phase 3 without wasted iterations
+- **Phase 3 False Quality Collapse Detection**: Fixed incorrect "quality collapse" detection
+  - Now distinguishes between size wall (file too large) and actual quality degradation
+  - Only triggers failure credibility when quality metrics truly fail thresholds
+  - Size wall without quality issues no longer stops exploration prematurely
+- **PSNR-UV Threshold Consistency**: Unified PSNR_UV_MIN threshold across all phases
+  - Changed from 38.0 dB to 35.0 dB (4 locations)
+  - More realistic threshold matching actual video quality characteristics
+  - Prevents false quality gate failures for high-VMAF content
+- **x265 Encoder Logging Verbosity**: Reduced terminal noise during exploration
+  - Changed info-level logs to debug-level in encode_with_x265, encode_to_hevc, encode_y4m_direct, mux_hevc_to_container
+  - Exploration phase now runs silently, details available in debug mode
+  - Aligns with plan.json T04-8: "Terminal output should show only key summary information"
+- **Quality Verification Log Clarity**: Improved PSNR-UV pass/fail reporting
+  - Now shows individual U and V channel results: `U=38.38 dB ✅, V=35.67 dB ✅`
+  - Clear indication of which channel passes/fails threshold
+  - Easier to diagnose quality issues at a glance
 - **Test Compatibility**: Updated test expectations for new constants
   - ULTIMATE_MIN_WALL_HITS: 4 → 15
   - ULTIMATE_REQUIRED_ZERO_GAINS: 20 → 50

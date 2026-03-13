@@ -18,7 +18,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Debug, Clone)]
 pub struct X265Config {
@@ -74,7 +74,7 @@ pub fn encode_with_x265(
     config: &X265Config,
     vf_args: &[String],
 ) -> Result<u64> {
-    info!(
+    debug!(
         "🖥️ CPU encoding started: CRF {:.1}, preset={}",
         config.crf,
         config.preset
@@ -91,9 +91,6 @@ pub fn encode_with_x265(
         .context("Failed to create temporary HEVC file")?;
     let hevc_file = hevc_temp.path().to_path_buf();
 
-    debug!("Creating temporary HEVC file for encoding");
-
-    info!("Step 1/2: Video encoding...");
     let encode_result = encode_to_hevc(input, &hevc_file, config, vf_args)?;
 
     if !encode_result {
@@ -101,10 +98,7 @@ pub fn encode_with_x265(
         bail!("x265 encoding failed");
     }
 
-    info!("Step 1/2: Video encoding completed✅");
-    info!("Step 2/2: Audio & container muxing...");
     mux_hevc_to_container(input, &hevc_file, output, config)?;
-    info!("Step 2/2: Audio & container muxing completed✅");
 
     drop(hevc_temp);
 
@@ -112,7 +106,7 @@ pub fn encode_with_x265(
         .context("Failed to get output file size")?
         .len();
 
-    info!(
+    debug!(
         output_size = output_size,
         output_path = ?output,
         "✅ x265 CPU encoding complete"
@@ -164,7 +158,7 @@ fn encode_y4m_direct(
         bail!("x265 encode failed with exit code {:?}", output.status.code());
     }
 
-    info!(
+    debug!(
         duration_secs = duration.as_secs_f64(),
         output_file = ?hevc_output,
         "x265 encoding completed successfully (direct .y4m)"
@@ -208,8 +202,6 @@ fn encode_to_hevc(
         .arg("-")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    debug!("Starting FFmpeg decode for x265 pipe encoding");
 
     let mut x265_cmd = Command::new("x265");
     x265_cmd
@@ -258,8 +250,6 @@ fn encode_to_hevc(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-
-    debug!("Starting FFmpeg→x265 pipe encoding with CRF {:.1}, preset {}", config.crf, config.preset);
 
     let mut ffmpeg_child = ffmpeg_cmd
         .spawn()
@@ -380,7 +370,7 @@ fn encode_to_hevc(
             bail!("Pipe copy thread panicked: {:?}", join_err);
         }
 
-        info!(
+        debug!(
             duration_secs = duration.as_secs_f64(),
             output_file = ?hevc_output,
             "x265 encoding completed successfully"
@@ -485,7 +475,7 @@ fn mux_hevc_to_container(
         bail!("FFmpeg mux failed: {}", stderr);
     }
 
-    info!(
+    debug!(
         duration_secs = duration.as_secs_f64(),
         output_file = ?output,
         "FFmpeg mux completed successfully"
