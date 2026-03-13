@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost
 
-[![Version](https://img.shields.io/badge/version-0.10.27-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
+[![Version](https://img.shields.io/badge/version-0.10.43-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -80,11 +80,11 @@
 
 ## 📜 Changelog / 最近更新
 
-### v0.10.27
-*   **算法增强**：极致模式饱和度检测提升至 **30 次**。
-*   **容错优化**：质量崩溃判定引入 **3 次确认机制**，避免局部波动误判。
-*   **UI 升级**：全新 **Premium** 双线结果展示框及高保真符号。
-*   **性能飞跃**：极致验证 Phase III 全量复用搜索缓存，VMAF 计算开销降低 60%。
+### v0.10.43
+*   **Minimalist Video Logs**: Implementation of minimalist, abbreviated milestones (`V:`, `P:`, `X:`) tailored for video processing to reduce terminal noise.
+*   **Intelligent Mode Detection**: Automated switching between Image and Video milestone displays based on the active tool.
+*   **Refined UI Aesthetics**: Condensed log format with improved visual separators and removed redundant icons for a cleaner stage-focused experience.
+*   **Critical Fixes**: Resolved format string issues and logic redundancies in the core logging system.
 
 ---
 

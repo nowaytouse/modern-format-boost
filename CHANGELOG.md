@@ -4,7 +4,20 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [Unreleased]
+## [0.10.43] - 2026-03-14
+
+### Added
+- **Minimalist Abbreviated Milestones for Video Mode**:
+  - Implemented `IS_VIDEO_MODE` detection and minimalist milestone formatting specifically for video tools.
+  - Shortened all milestone labels to single characters (`X`, `I`, `P`, `V`) for maximum terminal space efficiency.
+  - **Video-Specific Tracking**: `vid_hevc` and `vid_av1` now track and display video milestones (`V:`) and preprocessing (`P:`) instead of image counters.
+  - **Dynamic XMP Shorthand**: Added `X:` (XMP) support to video mode, automatically appearing only when sidecar merges occur.
+  - **Refined Aesthetics**: Removed the 📊 chart icon and extra spacing in video mode for a cleaner, stage-focused log appearance.
+
+### Fixed
+- **Format String Errors**: Resolved critical `format!` macro argument count mismatches in the milestone reporting logic.
+- **Redundant Logic**: Cleaned up duplicate `enable_quiet_mode` definitions in `shared_utils`.
+- **Milestone Hook Integration**: Fixed missing video success/failure hooks in the shared CLI runner, ensuring accurate progress tracking for all video tools.
 
 ## [0.10.42] - 2026-03-13
 
