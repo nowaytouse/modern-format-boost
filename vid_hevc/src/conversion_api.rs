@@ -1244,9 +1244,13 @@ fn execute_hevc_conversion(
     let result = Command::new("ffmpeg").args(&args).output()?;
 
     if !result.status.success() {
-        return Err(VidQualityError::FFmpegError(
-            String::from_utf8_lossy(&result.stderr).to_string(),
-        ));
+        return Err(VidQualityError::FFmpegError {
+            message: "FFmpeg command failed".to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
+            exit_code: result.status.code(),
+            command: None,
+            file_path: None,
+        });
     }
 
     Ok(std::fs::metadata(output)?.len())
@@ -1344,9 +1348,13 @@ fn execute_hevc_lossless(
     let result = Command::new("ffmpeg").args(&args).output()?;
 
     if !result.status.success() {
-        return Err(VidQualityError::FFmpegError(
-            String::from_utf8_lossy(&result.stderr).to_string(),
-        ));
+        return Err(VidQualityError::FFmpegError {
+            message: "FFmpeg command failed".to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
+            exit_code: result.status.code(),
+            command: None,
+            file_path: None,
+        });
     }
 
     Ok(std::fs::metadata(output)?.len())
