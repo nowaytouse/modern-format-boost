@@ -609,28 +609,6 @@ fn auto_convert_single_file(
         }
     }
 
-    let options = ConvertOptions {
-        force: config.force,
-        output_dir: config.output_dir.clone(),
-        base_dir: config.base_dir.clone(),
-        delete_original: config.delete_original,
-        in_place: config.in_place,
-        explore: config.explore,
-        match_quality: config.match_quality,
-        compress: config.compress,
-        apple_compat: config.apple_compat,
-        use_gpu: config.use_gpu,
-        ultimate: config.ultimate,
-        allow_size_tolerance: config.allow_size_tolerance,
-        verbose: config.verbose,
-        child_threads: if config.child_threads > 0 {
-            config.child_threads
-        } else {
-            2
-        },
-        input_format: Some(analysis.format.clone()),
-    };
-
     // 完整接入图像质量分析：静态图始终做像素级分析，用于路由 + 质量输出（自动写入 run log）
     let pixel_analysis = if !analysis.is_animated {
         shared_utils::analyze_image_quality_from_path(input)
@@ -664,6 +642,40 @@ fn auto_convert_single_file(
             });
         }
     }
+
+    let mut quality_label = analysis.quality_summary();
+    if let Some(ref pa) = pixel_analysis {
+        let ct_str = format!("{:?}", pa.content_type).to_uppercase();
+        quality_label = if quality_label.is_empty() {
+            ct_str
+        } else {
+            format!("{}: {}", ct_str, quality_label)
+        };
+    }
+
+    let options = ConvertOptions {
+        force: config.force,
+        output_dir: config.output_dir.clone(),
+        base_dir: config.base_dir.clone(),
+        delete_original: config.delete_original,
+        in_place: config.in_place,
+        explore: config.explore,
+        match_quality: config.match_quality,
+        compress: config.compress,
+        apple_compat: config.apple_compat,
+        use_gpu: config.use_gpu,
+        ultimate: config.ultimate,
+        allow_size_tolerance: config.allow_size_tolerance,
+        verbose: config.verbose,
+        child_threads: if config.child_threads > 0 {
+            config.child_threads
+        } else {
+            2
+        },
+        input_format: Some(analysis.format.clone()),
+        quality_label: Some(quality_label),
+    };
+
 
     macro_rules! verbose_log {
         ($($arg:tt)*) => {
