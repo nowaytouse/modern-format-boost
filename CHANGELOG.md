@@ -6,6 +6,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.40] - 2026-03-13
+
+### Added
+- **JSON-based Image Classification Engine**: Refactored the hardcoded classification logic into a flexible, data-driven rule engine.
+  - **Extensible Rules**: New categories added: `MOBILE_SCREENSHOT`, `GAME_CAPTURE`, `WEB_UI`, `MAP`, `DOCUMENT`, `NIGHT_PHOTO`, `MACRO_PHOTO`, and `MEME`.
+  - **Dynamic Configuration**: Classification logic is now driven by `image_classifiers.json` (embedded in binary), allowing for rapid updates to thresholds, quality adjustments, and format recommendations.
+  - **Advanced Matching**: Rules now support multi-dimensional matching across complexity, edge density, color diversity, texture variance, noise, sharpness, contrast, aspect ratio, and resolution.
+- **Improved Metadata Logic**: Transitioned `ImageContentType` to a rich data structure that carries its own encoding bias and recommended formats directly from the rule engine.
+
 ## [0.10.39] - 2026-03-13
 
 ### Added
