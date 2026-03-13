@@ -356,6 +356,8 @@ pub struct ExploreResult {
     pub cambi_score: Option<f64>,
     /// Ultimate mode 3D quality gate: (PSNR_U, PSNR_V) in dB.
     pub psnr_uv_score: Option<(f64, f64)>,
+    /// Early insight triggered: quality plateau detected, skipped further exploration.
+    pub early_insight_triggered: bool,
 }
 
 impl Default for ExploreResult {
@@ -382,6 +384,7 @@ impl Default for ExploreResult {
             vmaf_y_score: None,
             cambi_score: None,
             psnr_uv_score: None,
+            early_insight_triggered: false,
         }
     }
 }
