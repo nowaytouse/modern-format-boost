@@ -251,6 +251,25 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     })
 }
 
+impl ImageAnalysis {
+    /// Returns a human-readable quality summary label (e.g. "Q=95 Excellence", "Lossless").
+    pub fn quality_summary(&self) -> String {
+        if let Some(ref jpeg) = self.jpeg_analysis {
+            format!("Q={} {}", jpeg.estimated_quality, jpeg.quality_description)
+        } else if let Some(ref heic) = self.heic_analysis {
+            if heic.is_lossless {
+                "Lossless".to_string()
+            } else {
+                format!("{} {}", heic.codec, if heic.bit_depth > 8 { "HDR" } else { "SD" })
+            }
+        } else if self.is_lossless {
+            "Lossless".to_string()
+        } else {
+            "Lossy".to_string()
+        }
+    }
+}
+
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     let (width, height, has_alpha, color_depth, is_lossless, codec, features, heic_analysis_opt) =
         match analyze_heic_file(path) {

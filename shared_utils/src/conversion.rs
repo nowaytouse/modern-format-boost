@@ -224,6 +224,7 @@ impl ConversionResult {
         output_size: u64,
         format_name: &str,
         extra_info: Option<&str>,
+        quality_label: Option<&str>,
     ) -> Self {
         let reduction = if input_size == 0 {
             0.0
@@ -240,11 +241,20 @@ impl ConversionResult {
         };
 
         // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
-        // Format: "<FormatName> transcoding: -14.5%"  or
-        //         "<FormatName> transcoding (extra): -14.5%"
-        let mut message = match extra_info {
-            Some(info) => format!("✅ {} transcoding ({}): {}", format_name, info, size_tag),
-            None       => format!("✅ {} transcoding: {}",          format_name, size_tag),
+        // Format: "「Quality」 ✅ <FormatName> transcoding: -14.5%"
+        let core_msg = match extra_info {
+            Some(info) => format!("{} transcoding ({}): {}", format_name, info, size_tag),
+            None       => format!("{} transcoding: {}",          format_name,          size_tag),
+        };
+        
+        let mut message = if let Some(q) = quality_label {
+            if q.is_empty() {
+                format!("✅ {}", core_msg)
+            } else {
+                format!("✅ {} | {}", q, core_msg)
+            }
+        } else {
+            format!("✅ {}", core_msg)
         };
         
         let stats_string = crate::progress_mode::get_current_stats_string();
@@ -291,6 +301,7 @@ pub struct ConvertOptions {
     pub verbose: bool,
     pub child_threads: usize,
     pub input_format: Option<String>,
+    pub quality_label: Option<String>,
 }
 
 impl Default for ConvertOptions {
@@ -311,6 +322,7 @@ impl Default for ConvertOptions {
             verbose: false,
             child_threads: 0,
             input_format: None,
+            quality_label: None,
         }
     }
 }
@@ -499,6 +511,7 @@ pub fn finalize_conversion(
         output_size,
         format_name,
         extra_info,
+        options.quality_label.as_deref(),
     ))
 }
 
@@ -1094,7 +1107,7 @@ mod tests {
         let input = Path::new("/test/input.png");
         let output = Path::new("/test/output.avif");
 
-        let result = ConversionResult::success(input, output, 1000, 500, "AVIF", None);
+        let result = ConversionResult::success(input, output, 1000, 500, "AVIF", None, None);
 
         assert!(result.success);
         assert!(!result.skipped);

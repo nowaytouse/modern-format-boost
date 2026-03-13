@@ -6,13 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-- **GPU Search Efficiency Optimization**: Introduced a bitrate-based condition for GPU coarse search.
-  - **Auto-Skip**: GPU pre-scan is now automatically skipped for low-complexity videos (bitrate ≤ 5 Mbps), such as simple animations or PPT recordings.
-  - **Performance**: Prevents inaccurate GPU metrics and wasted processing time on videos where CPU encoding is already extremely fast.
-  - **Logging**: Added specific optimization triggers in logs to inform users when GPU search is bypassed for efficiency.
+## [0.10.39] - 2026-03-13
 
-## [0.10.38] - 2026-03-13
+### Added
+- **Image Quality Metrics in Logs**: Added pixel-based quality analysis to terminal output.
+  - **Dynamic Labels**: Automated detection of content types (`PHOTO`, `SCREENSHOT`, `ARTWORK`, etc.) and quality factors (e.g., `Q=95 Excellence`).
+  - **Improved Formatting**: Success logs now prominently display quality metrics using a clean `✅ TYPE | QUALITY | ACTION` format.
+  - **Log Realignment**: Re-calculated padding to ensure statistics (XMP, Img, Pre) remain perfectly aligned at the terminal's right margin.
+- **Enhanced Image Analysis**: Integrated `ImageAnalysis` with a new `quality_summary` engine for consistent reporting across HEVC and AV1 tools.
 
 ### Added
 - **Container Overhead Tolerance**: Added 1MB tolerance for container overhead in `vid_hevc` size checks. Total file size is now accepted if it exceeds original size by less than 1MB, provided the video stream itself was compressed.
