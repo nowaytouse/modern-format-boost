@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use std::vec::Vec;
+use crate::modern_ui::{colors, symbols};
 
 // ── Per-thread log context (file name or ID) for concurrent processing ───────
 // When set, every log_eprintln! / verbose_eprintln! line is prefixed so interleaved
@@ -381,14 +382,38 @@ pub fn emit_stderr(line: &str) {
     // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
     crate::ctrlc_guard::wait_if_prompt_active();
 
+    let mut active_ansi = String::new();
+
     // Process each line separately to ensure milestone stats are appended to every line
     for subline in line.lines() {
         if subline.trim().is_empty() {
             continue;
         }
+
+        let mut curr_line = subline.to_string();
+        if !active_ansi.is_empty() && !curr_line.starts_with("\x1b[") {
+            curr_line.insert_str(0, &active_ansi);
+        }
+
+        // scan curr_line for the last color code to update active_ansi
+        let mut temp = &curr_line[..];
+        while let Some(idx) = temp.find("\x1b[") {
+            temp = &temp[idx..];
+            if let Some(m_idx) = temp.find('m') {
+                let code = &temp[..=m_idx];
+                if code == "\x1b[0m" {
+                    active_ansi.clear();
+                } else {
+                    active_ansi = code.to_string();
+                }
+                temp = &temp[m_idx + 1..];
+            } else {
+                break;
+            }
+        }
         
         // Add milestone stats to non-empty lines that don't already have them
-        let line_with_stats = append_stats_to_line(subline);
+        let line_with_stats = append_stats_to_line(&curr_line);
 
         // File log always receives the plain line.
         if has_log_file() {
@@ -547,7 +572,7 @@ pub fn image_processed_failure() {
 /// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
 /// Skips if the line already contains stats or is empty.
 pub fn append_stats_to_line(line: &str) -> String {
-    let trimmed = line.trim_end_matches(['\n', '\r']);
+    let mut trimmed = line.trim_end_matches(['\n', '\r']);
     if trimmed.is_empty() {
         return line.to_string();
     }
@@ -559,7 +584,12 @@ pub fn append_stats_to_line(line: &str) -> String {
     }
     
     let stats_string = get_current_stats_string();
-    let mut padded = trimmed.to_string();
+    
+    // Check if it ends with \x1b[0m
+    let has_reset = trimmed.ends_with("\x1b[0m");
+    if has_reset {
+        trimmed = &trimmed[..trimmed.len() - 4];
+    }
     
     // Strip ANSI for accurate length calculation
     let plain = crate::logging::strip_ansi_str(trimmed);
@@ -567,13 +597,10 @@ pub fn append_stats_to_line(line: &str) -> String {
     
     // Align stats to column 65 (Standard for this project)
     let target_len = 65;
-    if visible_len < target_len {
-        padded.push_str(&" ".repeat(target_len - visible_len));
-    } else {
-        padded.push(' ');
-    }
-    padded.push_str(&stats_string);
-    padded
+    let padding_len = if visible_len < target_len { target_len - visible_len } else { 1 };
+    
+    // Put \x1b[0m before padding to prevent color bleed to stats
+    format!("{}\x1b[0m{}{}", trimmed, " ".repeat(padding_len), stats_string)
 }
 
 pub fn get_current_stats_string() -> String {
@@ -588,7 +615,7 @@ pub fn get_current_stats_string() -> String {
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     
     let msg = format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
-    format!("│ {} {}", STATS_PREFIX.trim(), msg)
+    format!("{}│{} {} {}", colors::DIM, colors::RESET, symbols::CHART, msg)
 }
 
 fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
@@ -597,40 +624,37 @@ fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
 
 fn format_xmp_jxl_images_line(
     xmp_ok: u64,
-    xmp_done: bool,
+    _xmp_done: bool,
     xmp_failed: u64,
     jxl_ok: u64,
     img_ok: u64,
     img_fail: u64,
     preprocess_ok: u64,
-    fallback_ok: u64,
+    _fallback_ok: u64,
 ) -> String {
-    let xmp_part = if xmp_done {
-        if xmp_failed > 0 {
-            format!("XMP: {}✓ {}✗", xmp_ok, xmp_failed)
-        } else {
-            format!("XMP: {}✓", xmp_ok)
-        }
-    } else {
-        format!("XMP: {}✓", xmp_ok)
-    };
     let images_ok = img_ok + jxl_ok;
-    let mut parts = vec![xmp_part];
-    
-    // Always show Img and Pre even if 0, as requested by user's "milestone everywhere"
-    let img_part = if img_fail > 0 {
-        format!("Img: {}✓ {}✗", images_ok, img_fail)
-    } else {
-        format!("Img: {}✓", images_ok)
-    };
-    parts.push(img_part);
-    
-    parts.push(format!("Pre: {}✓", preprocess_ok));
+    let mut parts = Vec::new();
 
-    if fallback_ok > 0 {
-        parts.push(format!("Fallback: {}✓", fallback_ok));
-    }
-    parts.join("  ")
+    // XMP Stats
+    let xmp_msg = if xmp_failed > 0 {
+        format!("{}XMP: {}{}{}✓ {}{}{}{}✗{}", colors::MFB_BLUE, colors::RESET, colors::MFB_GREEN, xmp_ok, colors::RESET, colors::DIM, colors::MFB_RED, xmp_failed, colors::RESET)
+    } else {
+        format!("{}XMP: {}{}{}✓{}", colors::MFB_BLUE, colors::RESET, colors::MFB_GREEN, xmp_ok, colors::RESET)
+    };
+    parts.push(xmp_msg);
+
+    // Image Stats (includes JXL successes and internal processing)
+    let img_msg = if img_fail > 0 {
+        format!("{}Img: {}{}{}✓ {}{}{}{}✗{}", colors::MFB_PURPLE, colors::RESET, colors::MFB_GREEN, images_ok, colors::RESET, colors::DIM, colors::MFB_RED, img_fail, colors::RESET)
+    } else {
+        format!("{}Img: {}{}{}✓{}", colors::MFB_PURPLE, colors::RESET, colors::MFB_GREEN, images_ok, colors::RESET)
+    };
+    parts.push(img_msg);
+
+    // Preprocessing (ImageMagick/FFmpeg fallbacks)
+    parts.push(format!("{}Pre: {}{}{}✓{}", colors::MFB_CYAN, colors::RESET, colors::MFB_GREEN, preprocess_ok, colors::RESET));
+
+    parts.join(&format!("  {}  ", colors::DIM))
 }
 
 /// Call when an XMP sidecar is found and a merge is about to be attempted.

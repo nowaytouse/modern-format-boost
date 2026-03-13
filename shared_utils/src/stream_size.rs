@@ -228,20 +228,17 @@ pub fn can_compress_pure_video(
         output_info.video_stream_size < input_video_stream_size
     };
 
-    #[cfg(debug_assertions)]
-    {
-        eprintln!(
-            "   [DEBUG] can_compress_pure_video: output_video={} vs input_video={} (tolerance={}) → {}",
-            output_info.video_stream_size,
-            input_video_stream_size,
-            allow_size_tolerance,
-            if result {
-                "✅ CAN COMPRESS"
-            } else {
-                "❌ CANNOT COMPRESS"
-            }
-        );
-    }
+    tracing::debug!(
+        "can_compress_pure_video: output_video={} vs input_video={} (tolerance={}) → {}",
+        output_info.video_stream_size,
+        input_video_stream_size,
+        allow_size_tolerance,
+        if result {
+            "✅ CAN COMPRESS"
+        } else {
+            "❌ CANNOT COMPRESS"
+        }
+    );
 
     result
 }
