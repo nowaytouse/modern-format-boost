@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **GPU Search Efficiency Optimization**: Introduced a bitrate-based condition for GPU coarse search.
+  - **Auto-Skip**: GPU pre-scan is now automatically skipped for low-complexity videos (bitrate ≤ 5 Mbps), such as simple animations or PPT recordings.
+  - **Performance**: Prevents inaccurate GPU metrics and wasted processing time on videos where CPU encoding is already extremely fast.
+  - **Logging**: Added specific optimization triggers in logs to inform users when GPU search is bypassed for efficiency.
+
 ## [0.10.38] - 2026-03-13
 
 ### Added
