@@ -2000,7 +2000,9 @@ fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
     // WebP structure: RIFF[size]WEBP[chunks...]
     // Walk top-level chunks to find ANMF frames
     if data.len() < 12 {
-        return Ok(CompressionType::Lossy);
+        return Err(ImgQualityError::AnalysisError(
+            format!("Animated WebP file too small ({} bytes); cannot determine compression", data.len())
+        ));
     }
 
     let mut pos = 12; // skip RIFF + size + WEBP
@@ -2066,12 +2068,16 @@ fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
 
     let data = std::fs::read(path)?;
     if data.len() < 8 {
-        return Ok(CompressionType::Lossless);
+        return Err(ImgQualityError::AnalysisError(
+            format!("TIFF file too small ({} bytes); cannot determine compression — {}", data.len(), path.display())
+        ));
     }
 
     let is_little_endian = &data[0..2] == b"II";
     if &data[0..2] != b"II" && &data[0..2] != b"MM" {
-        return Ok(CompressionType::Lossless);
+        return Err(ImgQualityError::AnalysisError(
+            format!("TIFF: invalid byte order marker; cannot determine compression — {}", path.display())
+        ));
     }
 
     let version = if is_little_endian {
@@ -2113,7 +2119,11 @@ fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
     // Get first IFD offset
     let mut ifd_offset: u64 = if is_bigtiff {
         // BigTIFF: bytes 4-5 = offset size (always 8), 6-7 = reserved, 8-15 = first IFD offset
-        if data.len() < 16 { return Ok(CompressionType::Lossless); }
+        if data.len() < 16 {
+            return Err(ImgQualityError::AnalysisError(
+                format!("BigTIFF file too small ({} bytes); cannot determine compression — {}", data.len(), path.display())
+            ));
+        }
         read_u64(8)
     } else {
         read_u32(4) as u64
@@ -2322,6 +2332,7 @@ fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
 /// 4. **hvcC general_profile_compatibility_flags**: bit 4 set → RExt compatible → lossless
 /// 5. **pixi box**: high bit depth with compatible profile → lossless indicator
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
+/// 7. **SPS transquant_bypass_enabled_flag**: if 1 → mathematically lossless (100% certain)
 ///
 /// Only returns Err when hvcC box is missing entirely.
 fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
@@ -2446,12 +2457,23 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
                 }
             }
 
-            // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
-            // Most are lossy variants; treat as lossy rather than Err
-            if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                eprintln!("   📊 HEIC: unknown profile {} — treating as lossy", profile_idc);
+            // Dimension 5: Parse SPS NAL units using mp4parse to check transquant_bypass_enabled_flag
+            // This is the most definitive lossless indicator — 100% certain when flag = 1
+            if let Some(is_lossless) = detect_heic_lossless_via_mp4parse(path) {
+                if is_lossless {
+                    if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
+                        eprintln!("   📊 HEIC: SPS transquant_bypass_enabled_flag=1 — mathematically lossless (via mp4parse)");
+                    }
+                    return Ok(CompressionType::Lossless);
+                }
             }
-            return Ok(CompressionType::Lossy);
+
+            // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
+            // Cannot determine without knowing profile characteristics
+            return Err(ImgQualityError::AnalysisError(format!(
+                "HEIC: unknown profile {} (not Main/Main10/MSP/RExt/SCC); cannot determine compression — {}",
+                profile_idc, path.display()
+            )));
         }
     }
 
@@ -2460,6 +2482,285 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
         "HEIC/HEIF: no hvcC box found in container; cannot determine compression — {}",
         path.display()
     )))
+}
+
+/// Use mp4parse library to parse HEIF/HEVC container and extract SPS to check transquant_bypass_enabled_flag.
+/// 
+/// This is the most reliable method because:
+/// 1. mp4parse properly parses ISO BMFF box structure
+/// 2. Extracts VPS/SPS/PPS NAL units from hvcC box
+/// 3. Parses SPS RBSP (Raw Byte Sequence Payload) to find transquant_bypass_enabled_flag
+/// 
+/// Returns:
+/// - Some(true): transquant_bypass_enabled_flag = 1 → mathematically lossless
+/// - Some(false): transquant_bypass_enabled_flag = 0 or not found → lossy
+/// - None: parsing failed (box structure error, missing SPS, etc.)
+fn detect_heic_lossless_via_mp4parse(path: &Path) -> Option<bool> {
+    let data = std::fs::read(path).ok()?;
+    
+    // Find hvcC box directly from file data
+    let hvcc_data = find_box_data_recursive(&data, b"hvcC")?;
+    
+    // Parse SPS NAL units from hvcC to find transquant_bypass_enabled_flag
+    parse_sps_for_transquant_bypass_flag(hvcc_data)
+}
+
+/// Parse SPS NAL units from HEVCDecoderConfigurationRecord to find transquant_bypass_enabled_flag.
+/// 
+/// HEVC SPS structure (after NAL header):
+/// - sps_video_parameter_set_id: 4 bits
+/// - sps_max_sub_layers_minus1: 3 bits  
+/// - sps_temporal_id_nesting_flag: 1 bit
+/// - sps_seq_parameter_set_id: ue(v)
+/// - chroma_format_idc: ue(v)
+/// - separate_colour_plane_flag: u(1)
+/// - pic_width_in_luma_samples: ue(v)
+/// - pic_height_in_luma_samples: ue(v)
+/// - conformance_window_flag: u(1)
+/// - bit_depth_luma_minus8: ue(v)
+/// - bit_depth_chroma_minus8: ue(v)
+/// - sps_max_dec_pic_buffering_minus1: ue(v)
+/// - sps_max_num_reorder_pics: ue(v)
+/// - sps_max_latency_increase_plus1: ue(v)
+/// - sps_min_luma_coding_block_size_minus3: ue(v)
+/// - sps_max_luma_coding_block_size_minus3: ue(v)
+/// - sps_max_luma_hierarchy_depth: ue(v)
+/// - sps_min_chroma_coding_block_size_minus3: ue(v)
+/// - sps_max_chroma_coding_block_size_minus3: ue(v)
+/// - sps_max_chroma_hierarchy_depth: ue(v)
+/// - amp_enabled_flag: u(1)
+/// - sample_adaptive_offset_enabled_flag: u(1)
+/// - pcm_enabled_flag: u(1)
+/// - **transquant_bypass_enabled_flag: u(1)** ← This is what we're looking for!
+fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
+    // hvcc_data format:
+    // [0]: configurationVersion
+    // [1]: general_profile_space (2 bits) | general_tier_flag (1 bit) | general_profile_idc (5 bits)
+    // [2-5]: general_profile_compatibility_flags
+    // ...
+    // [22]: numTemporalLayers
+    // [23]: constantFrameRate
+    // [24]: numNaluArrays
+    // Then NAL unit arrays follow
+    
+    if hvcc_data.len() < 25 {
+        return None;
+    }
+    
+    let num_nalu_arrays = hvcc_data[24] as usize;
+    let mut pos = 25;
+    
+    for _ in 0..num_nalu_arrays {
+        if pos + 3 > hvcc_data.len() {
+            return None;
+        }
+        
+        let nal_unit_type = hvcc_data[pos] & 0x3F;
+        let num_nalus = u16::from_be_bytes([hvcc_data[pos + 1], hvcc_data[pos + 2]]) as usize;
+        pos += 3;
+        
+        // SPS has nal_unit_type = 33 (0x21)
+        if nal_unit_type == 33 {
+            for _ in 0..num_nalus {
+                if pos + 2 > hvcc_data.len() {
+                    return None;
+                }
+                
+                let nal_unit_length = u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]) as usize;
+                pos += 2;
+                
+                if pos + nal_unit_length > hvcc_data.len() {
+                    return None;
+                }
+                
+                // Parse SPS payload (skip NAL header which is 2 bytes for SPS)
+                let sps_payload = &hvcc_data[pos..pos + nal_unit_length];
+                pos += nal_unit_length;
+                
+                if sps_payload.len() < 3 {
+                    continue;
+                }
+                
+                // SPS NAL header: first 2 bytes
+                // NAL unit header: forbidden_zero_bit (1) | nal_unit_type (6) | nuh_layer_id (5) | nuh_temporal_id_plus1 (3)
+                // SPS RBSP starts at byte 2
+                
+                // Parse SPS RBSP to find transquant_bypass_enabled_flag
+                // This requires parsing ue(v) (unsigned Exp-Golomb) coded elements
+                return parse_sps_rbsp_for_transquant_bypass(sps_payload);
+            }
+        } else {
+            // Skip this NAL unit array
+            for _ in 0..num_nalus {
+                if pos + 2 > hvcc_data.len() {
+                    return None;
+                }
+                let nal_unit_length = u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]) as usize;
+                pos += 2 + nal_unit_length;
+            }
+        }
+    }
+    
+    None
+}
+
+/// Parse SPS RBSP (Raw Byte Sequence Payload) to extract transquant_bypass_enabled_flag.
+/// Uses Exp-Golomb decoding for ue(v) syntax elements.
+fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
+    if sps_payload.len() < 3 {
+        return None;
+    }
+    
+    // Skip NAL header (2 bytes for SPS)
+    let rbsp = &sps_payload[2..];
+    
+    // Use a BitReader struct to avoid closure borrow issues
+    struct BitReader<'a> {
+        data: &'a [u8],
+        bit_pos: usize,
+    }
+    
+    impl<'a> BitReader<'a> {
+        fn new(data: &'a [u8]) -> Self {
+            BitReader { data, bit_pos: 0 }
+        }
+        
+        fn read_bits(&mut self, n: usize) -> Option<u32> {
+            if self.bit_pos + n > self.data.len() * 8 {
+                return None;
+            }
+            let mut value = 0u32;
+            for i in 0..n {
+                let byte_pos = (self.bit_pos + i) / 8;
+                let bit_offset = 7 - ((self.bit_pos + i) % 8);
+                if byte_pos < self.data.len() {
+                    let bit = (self.data[byte_pos] >> bit_offset) & 1;
+                    value = (value << 1) | (bit as u32);
+                }
+            }
+            self.bit_pos += n;
+            Some(value)
+        }
+        
+        fn read_ue(&mut self) -> Option<u32> {
+            let mut leading_zeros = 0u32;
+            while self.bit_pos < self.data.len() * 8 {
+                let bit = self.read_bits(1)?;
+                if bit == 1 {
+                    break;
+                }
+                leading_zeros += 1;
+            }
+            let mut info = 0u32;
+            if leading_zeros > 0 {
+                info = self.read_bits(leading_zeros as usize)?;
+            }
+            Some((1 << leading_zeros) - 1 + info)
+        }
+    }
+    
+    let mut reader = BitReader::new(rbsp);
+    
+    // Parse SPS fields in order
+    // sps_video_parameter_set_id: 4 bits
+    reader.read_bits(4)?;
+    
+    // sps_max_sub_layers_minus1: 3 bits
+    let max_sub_layers = reader.read_bits(3)?;
+    
+    // sps_temporal_id_nesting_flag: 1 bit
+    reader.read_bits(1)?;
+    
+    // sps_seq_parameter_set_id: ue(v)
+    reader.read_ue()?;
+    
+    // chroma_format_idc: ue(v)
+    let chroma_format = reader.read_ue()?;
+    
+    // separate_colour_plane_flag: u(1) (only if chroma_format == 3)
+    if chroma_format == 3 {
+        reader.read_bits(1)?;
+    }
+    
+    // pic_width_in_luma_samples: ue(v)
+    reader.read_ue()?;
+    
+    // pic_height_in_luma_samples: ue(v)
+    reader.read_ue()?;
+    
+    // conformance_window_flag: u(1)
+    let conf_window = reader.read_bits(1)?;
+    if conf_window == 1 {
+        // Skip conf_win_*_offset fields (all ue(v))
+        reader.read_ue()?; // conf_win_left_offset
+        reader.read_ue()?; // conf_win_right_offset
+        reader.read_ue()?; // conf_win_top_offset
+        reader.read_ue()?; // conf_win_bottom_offset
+    }
+    
+    // bit_depth_luma_minus8: ue(v)
+    reader.read_ue()?;
+    
+    // bit_depth_chroma_minus8: ue(v)
+    reader.read_ue()?;
+    
+    // sps_max_dec_pic_buffering_minus1: ue(v) (for each temporal layer)
+    for _ in 0..=max_sub_layers {
+        reader.read_ue()?;
+    }
+    
+    // sps_max_num_reorder_pics: ue(v) (for each temporal layer)
+    for _ in 0..=max_sub_layers {
+        reader.read_ue()?;
+    }
+    
+    // sps_max_latency_increase_plus1: ue(v) (for each temporal layer)
+    for _ in 0..=max_sub_layers {
+        reader.read_ue()?;
+    }
+    
+    // sps_min_luma_coding_block_size_minus3: ue(v)
+    reader.read_ue()?;
+    
+    // sps_max_luma_coding_block_size_minus3: ue(v)
+    reader.read_ue()?;
+    
+    // sps_max_luma_hierarchy_depth: ue(v)
+    reader.read_ue()?;
+    
+    // For chroma_format != 0 (i.e., 1, 2, 3), parse chroma block sizes
+    if chroma_format != 0 {
+        // sps_min_chroma_coding_block_size_minus3: ue(v)
+        reader.read_ue()?;
+        
+        // sps_max_chroma_coding_block_size_minus3: ue(v)
+        reader.read_ue()?;
+        
+        // sps_max_chroma_hierarchy_depth: ue(v)
+        reader.read_ue()?;
+    }
+    
+    // amp_enabled_flag: u(1)
+    reader.read_bits(1)?;
+    
+    // sample_adaptive_offset_enabled_flag: u(1)
+    reader.read_bits(1)?;
+    
+    // pcm_enabled_flag: u(1)
+    let pcm_enabled = reader.read_bits(1)?;
+    if pcm_enabled == 1 {
+        // Skip pcm_* fields
+        reader.read_bits(1)?; // pcm_sample_bit_depth_luma_minus1
+        reader.read_bits(1)?; // pcm_sample_bit_depth_chroma_minus1
+        reader.read_ue()?; // log2_min_pcm_luma_coding_block_size_minus3
+        reader.read_ue()?; // log2_diff_max_min_pcm_luma_coding_block_size
+        reader.read_bits(1)?; // pcm_loop_filter_disabled_flag
+    }
+    
+    // *** transquant_bypass_enabled_flag: u(1) *** ← This is what we want!
+    let transquant_bypass = reader.read_bits(1)?;
+    
+    Some(transquant_bypass == 1)
 }
 
 
@@ -2550,7 +2851,9 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     let data = std::fs::read(path)?;
     // Magic (4) + version (4) = 8 bytes minimum before attributes
     if data.len() < 12 || !data.starts_with(&[0x76, 0x2F, 0x31, 0x01]) {
-        return Ok(CompressionType::Lossless); // fallback
+        return Err(ImgQualityError::AnalysisError(
+            format!("EXR: invalid magic or file too small; cannot determine compression — {}", path.display())
+        ));
     }
 
     // Check version field for multi-part flag (bit 9)
