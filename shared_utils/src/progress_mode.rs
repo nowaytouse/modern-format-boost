@@ -644,7 +644,7 @@ pub fn get_current_stats_string() -> String {
     let is_video = IS_VIDEO_MODE.load(Ordering::Relaxed);
     
     let msg = if is_video {
-        format_video_stats_line(vid_ok, vid_fail, preprocess_ok, fallback_ok)
+        format_video_stats_line(vid_ok, vid_fail, xmp_ok, xmp_failed, preprocess_ok, fallback_ok)
     } else {
         format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok)
     };
@@ -662,10 +662,22 @@ pub fn get_current_stats_string() -> String {
 fn format_video_stats_line(
     vid_ok: u64,
     vid_fail: u64,
+    xmp_ok: u64,
+    xmp_failed: u64,
     preprocess_ok: u64,
     _fallback_ok: u64,
 ) -> String {
     let mut parts = Vec::new();
+
+    // XMP Stats: X: 12✓ (Only show if used for video)
+    if xmp_ok > 0 || xmp_failed > 0 {
+        let xmp_msg = if xmp_failed > 0 {
+            format!("{}X:{}{}✓{}{}{}✗{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::DIM, colors::MFB_RED, xmp_failed, colors::RESET)
+        } else {
+            format!("{}X:{}{}✓{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::RESET)
+        };
+        parts.push(xmp_msg);
+    }
 
     // Video Stats: V: 12✓
     let vid_msg = if vid_fail > 0 {
@@ -762,8 +774,17 @@ pub fn xmp_merge_finalize() {
     let vid_fail = VIDEO_FAIL_COUNT.load(Ordering::Relaxed);
 
     if is_video {
-        if vid_ok > 0 || vid_fail > 0 || preprocess_ok > 0 || fallback_ok > 0 {
+        if vid_ok > 0 || vid_fail > 0 || xmp_total > 0 || preprocess_ok > 0 || fallback_ok > 0 {
             let mut parts = Vec::new();
+            if xmp_total > 0 {
+                let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
+                let failed = xmp_total.saturating_sub(success);
+                parts.push(if failed > 0 {
+                    format!("XMP: {} OK, {} failed", success, failed)
+                } else {
+                    format!("XMP: {} OK", success)
+                });
+            }
             if vid_ok > 0 || vid_fail > 0 {
                 let vid_part = if vid_fail > 0 {
                     format!("Videos: {} OK, {} failed", vid_ok, vid_fail)
