@@ -1184,16 +1184,23 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
         .arg("-i")
         .arg(crate::safe_path_arg(std::path::Path::new(output)).as_ref())
         .arg("-lavfi")
-        .arg("psnr")
+        .arg("psnr=stats_file=-")
         .arg("-f")
         .arg("null")
         .arg("-")
         .output()
         .map_err(|e| format!("PSNR calculation failed: {}", e))?;
 
+    if !psnr_output.status.success() {
+        let stderr = String::from_utf8_lossy(&psnr_output.stderr);
+        return Err(format!("ffmpeg psnr failed: {}", stderr.lines().last().unwrap_or("unknown error")));
+    }
+
     let stderr = String::from_utf8_lossy(&psnr_output.stderr);
 
+    // Try multiple parsing strategies
     for line in stderr.lines() {
+        // Strategy 1: Look for "psnr_avg:" in stats output
         if line.contains("psnr_avg:") {
             if let Some(pos) = line.find("psnr_avg:") {
                 let after = &line[pos + 9..];
@@ -1206,9 +1213,23 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
                 }
             }
         }
+
+        // Strategy 2: Look for "average:" in stats output
+        if line.contains("average:") {
+            if let Some(pos) = line.find("average:") {
+                let after = &line[pos + 8..];
+                let parts: Vec<&str> = after.split_whitespace().collect();
+                if !parts.is_empty() {
+                    if let Ok(psnr) = parts[0].trim().parse::<f64>() {
+                        return Ok(psnr);
+                    }
+                }
+            }
+        }
     }
 
-    Err("Failed to parse PSNR from ffmpeg output".to_string())
+    Err(format!("Failed to parse PSNR from ffmpeg output. Last line: {}",
+        stderr.lines().last().unwrap_or("(empty)")))
 }
 
 #[derive(Debug)]
