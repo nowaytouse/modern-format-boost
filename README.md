@@ -1,6 +1,6 @@
 # 🚀 Modern Format Boost
 
-[![Version](https://img.shields.io/badge/version-0.10.43-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
+[![Version](https://img.shields.io/badge/version-0.10.45-blue.svg)](https://github.com/nowaytouse/modern-format-boost/releases)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/nowaytouse/modern-format-boost)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -79,6 +79,13 @@
 ---
 
 ## 📜 Changelog / 最近更新
+
+### v0.10.45
+*   **Mega-Release Cumulative Update**: Comprehensive consolidation of all project leaps since v0.10.9.
+*   **High-Fidelity Algorithm Leap**: Extreme Mode with 0.01-granularity fine-tuning, Sprint & Backtrack search, and 3D Quality Gate (VMAF/PSNR/CAMBI).
+*   **Image Intelligence v2**: JPEG lossless reconstruction, Heuristic v2 estimation, and precision-first routing for palette formats.
+*   **Modern UI & 24-bit Colors**: Full TrueColor terminal support with minimized video milestone tracking and title-bar progress.
+*   **System Resiliency**: Unique temp files, Ctrl+C job protection, and 1MB unified size tolerance.
 
 ### v0.10.43
 *   **Minimalist Video Logs**: Implementation of minimalist, abbreviated milestones (`V:`, `P:`, `X:`) tailored for video processing to reduce terminal noise.

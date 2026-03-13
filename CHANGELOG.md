@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.45] - 2026-03-14
+
+### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.45)
+
+#### High-Fidelity Algorithm & Quality Logic
+- **Extreme Mode Saturation Search**: Implemented **0.01-precision** CRF fine-tuning to ensure video quality reaches the "Physical Red Line" (Saturation).
+- **3D 3rd-Generation Quality Gate**: Integrated **VMAF-Y** (Perceptual), **PSNR-UV** (Chroma保真度), and **CAMBI** (Banding detection) for exhaustive verification.
+- **Sprint & Backtrack Optimization**: Search performance leap using double-step sprints (up to 1.6x) and precise 0.1-step rollbacks on overshoot.
+- **Unified 1MB Size Tolerance**: Standardized size increase checks (1,048,576 bytes) workspace-wide to ensure high-quality leaps remain balanced with file size.
+
+#### Image Processing Intelligence (v2)
+- **JPEG Lossless Transcoding**: Mathematical bit-exact reconstruction using direct DQT mapping into **JXL varDCT** profiles.
+- **Heuristic v2 Estimation Engine**: Revolutionary quality detection using Efficiency-Weighted BPP and **Image Entropy (Edge Density/Complexity)** estimation.
+- **Lossless Detection Parity**: Deterministic identification for Modular JXL, WebP-L, and High-Bit-Depth (10-bit+) sources.
+- **Meme Score v3**: High-frame-rate aware heuristic engine for smart decisions on modern animations and Live2D stickers.
+- **Consistent High-Fidelity Path**: Unified all legacy static sources to the `Quality 100` (`d=0.1`) route unless lossless is recommended.
+
+#### Professional UI & Logging Infrastructure
+- **24-bit TrueColor Terminal Support**: Implemented a sophisticated, brand-aligned TrueColor UI with semantic "Card"-style summaries.
+- **Minimalist Video Milestones**: Introduced abbreviated trackers (`V:`, `X:`, `P:`, `I:`) specifically tailored for high-concurrency video processing logs.
+- **Terminal Title-Bar Spinner**: Isolated background progress indicators using OSC escape sequences, preventing content clutter and TTY interference.
+- **Unified Error Classification**: Consolidated all project failures into a central system: 🚨 Critical, ⚠️ Rare, 📋 Metadata, and 🔧 Pipeline errors.
+
+#### Ecosystem & Safety Enhancements
+- **Apple Ecosystem Parity**: Full support for **AAE sidecars**, iPhone VFR (Slow-Mo) detection, and iCloud-standard metadata preservation.
+- **Collision-Resistant Temp Files**: Introduced 8-character random UUID prefixes for all temporary assets to ensure thread-safe processing and reliable cleanup.
+- **Ctrl+C (SIGINT) Job Guard**: Resilient interruption protection using libc-poll events, job duration awareness (4.5m), and auto-resume logic.
+
 ## [0.10.44] - 2026-03-14
 
 ### Fixed
