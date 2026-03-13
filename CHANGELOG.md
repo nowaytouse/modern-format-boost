@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.10.45] - 2026-03-14
+## [0.10.46] - 2026-03-14
 
 ### Added
 - **Lossless Static Routing for WebP, AVIF, and TIFF**: Explicit lossless detection and routing for three additional formats to JXL `d=0.0`:
@@ -16,10 +16,15 @@ All notable changes to this project will be documented in this file.
 - **HEIC/HEIF Always Preserved**: HEIC and HEIF sources are now **always skipped** regardless of lossless/lossy detection status.
   - **Rationale**: Lossless detection for HEIC requires parsing complex `hvcC` profiles (`RExt`/`SCC` + 4:4:4 chroma). False positives risk lossy re-encoding of content that was incorrectly identified as lossless. Safer to preserve the original file unconditionally.
   - Previously, lossless HEIC was routed to JXL `d=0.0` conversion.
+- **Modern Lossy Skip Enforced**: Modern formats (WebP, AVIF, JXL, etc.) now **always skip** when identified as lossy by both metadata and pixel-based heuristic.
+  - Prevents non-beneficial quality-degrading re-encodings (like the legacy `d=0.1` path).
+- **Heuristic Quality Switch Fixed**: Corrected `use_lossless` threshold in pixel analysis:
+  - **Fixed Bug**: Previously, noisy images were incorrectly hitting `d=0.0` (causing volume explosion) while simple images were hitting `d=0.1`.
+  - **New Policy**: Lossless (Modular) path is now strictly reserved for high-potential simple graphics (`potential > 0.75`).
 
 
 
-### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.45)
+### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.46)
 
 #### High-Fidelity Algorithm & Quality Logic
 - **Extreme Mode Saturation Search**: Implemented **0.01-precision** CRF fine-tuning to ensure video quality reaches the "Physical Red Line" (Saturation).

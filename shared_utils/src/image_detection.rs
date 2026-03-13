@@ -692,10 +692,8 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
 
-            // For animated WebP, each ANMF frame can independently use VP8 or VP8L.
-            // Any VP8 (lossy) frame → entire file is lossy.
             if crate::image_formats::webp::is_animated_from_bytes(&data) {
-                return Ok(detect_webp_animation_compression(&data));
+                return detect_webp_animation_compression(&data);
             }
 
             let is_lossless = crate::image_formats::webp::is_lossless_from_bytes(&data);
@@ -1783,7 +1781,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         DetectedFormat::WebP => {
             let data = std::fs::read(path)?;
             if crate::image_formats::webp::is_animated_from_bytes(&data) {
-                precision.is_lossless_deterministic = detect_webp_animation_compression(&data) == CompressionType::Lossless;
+                if let Ok(comp) = detect_webp_animation_compression(&data) {
+                    precision.is_lossless_deterministic = comp == CompressionType::Lossless;
+                }
             } else {
                 precision.is_lossless_deterministic = crate::image_formats::webp::is_lossless_from_bytes(&data);
                 if !precision.is_lossless_deterministic {
@@ -1994,13 +1994,13 @@ fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
 /// Detect WebP animated compression by traversing all ANMF (animation frame) chunks.
 ///
 /// WebP animation: RIFF header → VP8X → ANIM → ANMF* frames.
-/// Each ANMF payload contains frame data starting with VP8/VP8L/VP8X sub-chunk.
+/// Each ANMF payload contains frame data starting with VP8/VP8L sub-chunk.
 /// Any VP8 (lossy) frame → Lossy. All VP8L → Lossless.
-fn detect_webp_animation_compression(data: &[u8]) -> CompressionType {
+fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
     // WebP structure: RIFF[size]WEBP[chunks...]
     // Walk top-level chunks to find ANMF frames
     if data.len() < 12 {
-        return CompressionType::Lossy;
+        return Ok(CompressionType::Lossy);
     }
 
     let mut pos = 12; // skip RIFF + size + WEBP
@@ -2020,10 +2020,16 @@ fn detect_webp_animation_compression(data: &[u8]) -> CompressionType {
             let frame_data = &data[payload_start + 24..payload_end];
             if frame_data.len() >= 4 {
                 // Check sub-chunk type: VP8L = lossless, VP8 = lossy
-                if &frame_data[0..4] == b"VP8 " {
-                    return CompressionType::Lossy;
+                let sub_chunk = &frame_data[0..4];
+                if sub_chunk == b"VP8 " {
+                    return Ok(CompressionType::Lossy);
+                } else if sub_chunk != b"VP8L" {
+                    // Unknown frame type in animated WebP — ambiguous
+                    return Err(ImgQualityError::AnalysisError(
+                        format!("Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression", 
+                        String::from_utf8_lossy(sub_chunk), payload_start + 24)
+                    ));
                 }
-                // VP8L is fine, continue checking other frames
             }
         }
 
@@ -2033,13 +2039,17 @@ fn detect_webp_animation_compression(data: &[u8]) -> CompressionType {
     }
 
     if found_any_frame {
-        CompressionType::Lossless
+        Ok(CompressionType::Lossless)
     } else {
-        // No ANMF frames found in animated WebP — fallback
+        // No ANMF frames found in animated WebP — ambiguous if VP8L also not found via window search
         if data.windows(4).any(|w| w == b"VP8L") {
-            CompressionType::Lossless
+            Ok(CompressionType::Lossless)
+        } else if data.windows(4).any(|w| w == b"VP8 ") {
+             Ok(CompressionType::Lossy)
         } else {
-            CompressionType::Lossy
+            Err(ImgQualityError::AnalysisError(
+                "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine compression".to_string()
+            ))
         }
     }
 }
@@ -2140,25 +2150,17 @@ fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
                     read_u16(pos + 8)
                 };
 
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() || std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                    eprintln!("   📊 TIFF IFD#{} Compression: {} ({})",
-                        ifd_count, compression,
-                        match compression {
-                            1 => "No compression",
-                            5 => "LZW",
-                            6 | 7 => "JPEG (lossy)",
-                            8 | 32946 => "Deflate",
-                            32773 => "PackBits",
-                            50001 => "WebP (lossy)",
-                            _ => "Unknown"
-                        }
-                    );
-                }
-
                 // Any lossy IFD → entire file is lossy
-                // JPEG (6, 7) and WebP (50001) are lossy
+                // Known lossy: JPEG (6, 7) and WebP (50001)
+                // Known lossless: 1 (None), 5 (LZW), 8/32946 (Deflate), 32773 (PackBits), 50000 (Zxl)
                 if compression == 6 || compression == 7 || compression == 50001 {
                     return Ok(CompressionType::Lossy);
+                } else if !matches!(compression, 1 | 5 | 8 | 32946 | 32773 | 50000) {
+                     // Unknown compression scheme — ambiguous
+                     return Err(ImgQualityError::AnalysisError(
+                         format!("TIFF: unknown compression scheme {} in IFD#{}; cannot determine compression", 
+                         compression, ifd_count)
+                     ));
                 }
             }
 
