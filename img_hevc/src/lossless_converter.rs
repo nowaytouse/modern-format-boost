@@ -109,7 +109,7 @@ fn finalize_fallback_jxl(
 ///
 /// let input = Path::new("input.png");
 /// let options = ConvertOptions::default();
-/// let result = convert_to_jxl(input, &options, 1.0, None)?;
+/// let result = convert_to_jxl(input, &options, 0.1, None)?;
 /// # Ok::<(), img_hevc::ImgQualityError>(())
 /// ```
 pub fn convert_to_jxl(
