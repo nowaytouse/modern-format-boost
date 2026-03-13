@@ -82,6 +82,13 @@ where
             event.record(&mut visitor);
         }
 
+        // 3. Milestone Stats: Append to ERROR, WARN, INFO (but skip trace/debug for less noise)
+        if level <= tracing::Level::INFO {
+            let stats = crate::progress_mode::get_current_stats_string();
+            // Align stats for tracing logs
+            write!(writer, "  {}", stats)?;
+        }
+
         writeln!(writer)
     }
 }
