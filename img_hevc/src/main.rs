@@ -155,7 +155,7 @@ fn main() -> anyhow::Result<()> {
             }
             if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!("{} {} (for animated→video)", symbols::VIDEO, flag_mode.description_en()));
-                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (lossless) │ WebP/AVIF/TIFF Lossless→JXL (d=0.0) │ PNG→JXL (d=0.0/0.1)", symbols::IMAGE));
+                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)", symbols::IMAGE));
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr(&format!("{} Apple Compatibility: {}ENABLED{} (WebP→HEVC)", symbols::SHIELD, colors::BOLD, colors::RESET));
@@ -537,8 +537,9 @@ fn auto_convert_single_file(
     shared_utils::progress_mode::set_log_context(&_label);
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
-    // Apple compat: HEIC/HEIF are already native — skip without running heavy analysis (avoids SecurityLimitExceeded etc.)
-    if config.apple_compat && shared_utils::image_heic_analysis::is_heic_file(input) {
+    // Always skip HEIC/HEIF: Lossless is extremely rare, and re-encoding lossy HEIC causes generational loss.
+    // Apple ecosystem also heavily relies on original HEIC/HEIF files.
+    if shared_utils::image_heic_analysis::is_heic_file(input) {
         // Skip Live Photos in Apple compat mode
         if shared_utils::is_live_photo(input) {
             let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
@@ -560,7 +561,7 @@ fn auto_convert_single_file(
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
             skipped: true,
-            message: "HEIC/HEIF is Apple native, skipping".to_string(),
+            message: "HEIC/HEIF detected; skipping to avoid generational loss and preserve original fidelity".to_string(),
             original_size: file_size,
             output_size: None,
             size_reduction: None,
@@ -761,13 +762,25 @@ fn auto_convert_single_file(
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
                 Some(0.0) => {
+                    let is_modern = matches!(format, "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF");
                     #[allow(deprecated)]
-                    let distance = match &pixel_analysis {
-                        Some(q) => if q.routing_decision.use_lossless { 0.0 } else { 0.1 },
-                        None => 0.1,
+                    let use_lossless = match &pixel_analysis {
+                        Some(q) => q.routing_decision.use_lossless,
+                        None => false, // Default to lossy for heuristic if missing
                     };
+
+                    if is_modern && !use_lossless {
+                        verbose_log!(
+                            "⏭️ Skipping static-disguised modern format (lossy): {}",
+                            input.display()
+                        );
+                        copy_original_if_adjacent_mode(input, config)?;
+                        return Ok(make_skipped("Skipping static modern format to avoid generational loss"));
+                    }
+
+                    let distance = if use_lossless { 0.0 } else { 0.1 };
                     verbose_log!(
-                        "🔄 Static GIF→JXL ({}): {}",
+                        "🔄 Static GIF/Modern→JXL ({}): {}",
                         if distance == 0.0 { "Lossless" } else { "Quality 100" },
                         input.display()
                     );

@@ -639,26 +639,25 @@ fn make_routing_decision(
     _pixels: u64,
 ) -> RoutingDecision {
     let format_lower = source_format.to_lowercase();
+    let modern_formats = ["webp", "avif", "jxl", "heic", "heif"];
+    let is_modern = modern_formats.iter().any(|f| format_lower.contains(f));
 
-    // Animated modern formats should NOT be skipped here — they need to flow through
-    // the animated routing pipeline (HEVC MP4 / GIF / AV1 MP4).
-    let modern_lossy = ["avif", "jxl", "heic", "heif"];
-    let is_modern_lossy = modern_lossy.iter().any(|f| format_lower.contains(f));
+    let use_lossless = compression_potential > 0.75
+        || format_lower == "png" && has_alpha && content_type.name == "ICON";
 
-    if is_modern_lossy && !is_animated {
+    // Modern formats should skip if identified as lossy by heuristic to avoid generational loss.
+    // Lossless modern formats (heuristic) are allowed to proceed to potential JXL d=0.0 routing.
+    if is_modern && !is_animated && !use_lossless {
         return RoutingDecision {
             primary_format: source_format.to_string(),
             alternatives: vec![],
             use_lossless: false,
             estimated_ratio: 1.0,
-            reason: "Already in modern format - skip to avoid generational loss".to_string(),
+            reason: format!("Source is modern {} (lossy) - skip to avoid generational loss", source_format),
             should_skip: true,
-            skip_reason: Some(format!("Source is {} - already optimal", source_format)),
+            skip_reason: Some(format!("Source is modern {} (perceptual lossy confirmed)", source_format)),
         };
     }
-
-    let use_lossless = compression_potential < 0.2
-        || format_lower == "png" && has_alpha && content_type.name == "ICON";
 
     let formats = content_type.recommended_formats();
     let primary = formats.first().unwrap_or(&"avif").to_string();

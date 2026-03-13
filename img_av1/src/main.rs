@@ -167,7 +167,7 @@ fn main() -> anyhow::Result<()> {
 
             if verbose {
                 shared_utils::log_eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
-                shared_utils::log_eprintln!("📷 Static images: Always lossless (JPEG→JXL, PNG→JXL)");
+                shared_utils::log_eprintln!("📷 Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)");
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Create run log automatically; quality and progress are always recorded
@@ -513,15 +513,16 @@ fn auto_convert_single_file(
     let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
     let input = fixed_input.as_path();
 
-    // Apple compat: HEIC/HEIF are already native — skip without running heavy analysis (avoids SecurityLimitExceeded etc.)
-    if config.apple_compat && shared_utils::image_heic_analysis::is_heic_file(input) {
+    // Always skip HEIC/HEIF: Lossless is extremely rare, and re-encoding lossy HEIC causes generational loss.
+    // Apple ecosystem also heavily relies on original HEIC/HEIF files.
+    if shared_utils::image_heic_analysis::is_heic_file(input) {
         let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
             skipped: true,
-            message: "HEIC/HEIF is Apple native, skipping".to_string(),
+            message: "HEIC/HEIF detected; skipping to avoid generational loss and preserve original fidelity".to_string(),
             original_size: file_size,
             output_size: None,
             size_reduction: None,
