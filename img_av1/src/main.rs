@@ -642,7 +642,9 @@ fn auto_convert_single_file(
     ) {
         ("WebP", true, false)
         | ("AVIF", true, false)
-        | ("TIFF", true, false) => {
+        | ("TIFF", true, false)
+        | ("HEIC", true, false)
+        | ("HEIF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0)?
         }
