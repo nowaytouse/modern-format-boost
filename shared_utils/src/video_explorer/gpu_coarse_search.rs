@@ -1967,10 +1967,12 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut failure_credibility = 0.0f64;
             let mut consecutive_failures = 0u32;
             let mut consecutive_01_successes = 0u32;
+            let mut consecutive_compressions = 0u32;
             let mut prev_ssim_opt = best_ssim_tracked;
             let mut prev_size = best_size.unwrap_or(0);
             let search_floor = if ultimate_mode { 0.0 } else { min_crf };
             let mut test_crf = compress_point - current_step;
+            const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 10;
 
             while test_crf >= search_floor && iterations < max_iterations_for_video {
                 if size_cache.contains_key(test_crf) {
@@ -2018,11 +2020,12 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                 if is_effectively_compressed {
                     consecutive_failures = 0;
+                    consecutive_compressions += 1;
 
                     best_crf = Some(test_crf);
                     best_size = Some(size);
                     best_ssim_tracked = current_ssim_opt;
-                    
+
                     if ultimate_mode {
                         if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = current_vmaf_val; }
                         if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = current_psnr_val; }
@@ -2036,9 +2039,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     let improvement_indicator = if vmaf_improved || psnr_improved { "↑" } else { "→" };
-                    let _insight_msg = if ultimate_mode { 
+                    let _insight_msg = if ultimate_mode {
                         format!("{} (Index: {:.0}/3) {}", metrics_info, failure_credibility, improvement_indicator)
-                    } else { 
+                    } else {
                         String::new()
                     };
 
@@ -2046,7 +2049,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         (Some(curr), Some(prev)) => curr - prev,
                         _ => 0.0,
                     };
-                    
+
                     let metrics_str = if ultimate_mode {
                         let v_val = *best_vmaf_tracked;
                         let uv_val = *best_psnr_uv_tracked;
@@ -2067,6 +2070,15 @@ fn cpu_fine_tune_from_gpu_boundary(
                         RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                         BRIGHT_GREEN, total_size_pct, RESET, metrics_str, current_step
                     );
+
+                    // Check if reached max consecutive compressions
+                    if consecutive_compressions >= MAX_CONSECUTIVE_COMPRESSIONS {
+                        crate::log_eprintln!(
+                            "   {}✓ Efficiency limit reached: {} consecutive compressions found. Stopping.{}",
+                            BRIGHT_GREEN, MAX_CONSECUTIVE_COMPRESSIONS, RESET
+                        );
+                        break;
+                    }
 
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
