@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.45] - 2026-03-14
 
+### Added
+- **Lossless Static Routing for WebP, AVIF, and TIFF**: Explicit lossless detection and routing for three additional formats to JXL `d=0.0`:
+  - **WebP**: Binary-level VP8L chunk detection (highest reliability) — lossless WebP now routes to mathematical lossless JXL.
+  - **AVIF**: Multi-dimension `av1C` box analysis (chroma subsampling, `colr` Identity, `pixi` box, high bit depth) — deterministic lossless identification.
+  - **TIFF**: Compression tag (259) across all IFDs including BigTIFF — `1` (None), `32946`/`8` (Deflate) are lossless; JPEG compression (6/7) is lossy.
+
+### Changed
+- **HEIC/HEIF Always Preserved**: HEIC and HEIF sources are now **always skipped** regardless of lossless/lossy detection status.
+  - **Rationale**: Lossless detection for HEIC requires parsing complex `hvcC` profiles (`RExt`/`SCC` + 4:4:4 chroma). False positives risk lossy re-encoding of content that was incorrectly identified as lossless. Safer to preserve the original file unconditionally.
+  - Previously, lossless HEIC was routed to JXL `d=0.0` conversion.
+
+
+
 ### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.45)
 
 #### High-Fidelity Algorithm & Quality Logic
