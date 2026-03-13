@@ -2169,7 +2169,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         }
     }
 
-    if ultimate_mode {
+    if ultimate_mode && !early_insight_triggered {
         if let Some(best) = best_crf {
             if best < max_crf {
                 crate::log_eprintln!();
