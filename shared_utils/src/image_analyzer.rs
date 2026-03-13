@@ -427,12 +427,26 @@ fn generate_jxl_indicator(
                 }
             }
         }
-        ImageFormat::Avif => JxlIndicator {
-            should_convert: false,
-            reason: "AVIF is already a modern efficient format; no conversion needed".to_string(),
-            command: String::new(),
-            benefit: String::new(),
-        },
+        ImageFormat::Avif => {
+            if is_lossless {
+                JxlIndicator {
+                    should_convert: true,
+                    reason: "Lossless AVIF; recommend converting to JXL".to_string(),
+                    command: format!(
+                        "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
+                        file_path, output_path
+                    ),
+                    benefit: "JXL modular mode is typically more efficient than AVIF lossless".to_string(),
+                }
+            } else {
+                JxlIndicator {
+                    should_convert: false,
+                    reason: "AVIF is already a modern efficient format; no conversion needed".to_string(),
+                    command: String::new(),
+                    benefit: String::new(),
+                }
+            }
+        }
         _ => JxlIndicator {
             should_convert: false,
             reason: "Unsupported format or no conversion needed".to_string(),
@@ -1172,7 +1186,7 @@ fn extract_hdr_info(path: &Path) -> Option<ColorInfo> {
     // Only return HDR info if it's actually HDR or has meaningful metadata
     if color_info.is_hdr()
         || color_info.bit_depth.is_some_and(|d| d > 8)
-        || color_info.color_primaries.as_deref() == Some("bt2020")
+        || matches!(color_info.color_primaries.as_deref(), Some("bt2020"))
     {
         Some(color_info)
     } else {
