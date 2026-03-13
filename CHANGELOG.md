@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.41] - 2026-03-13
+
+### Changed
+- **Terminal Noise Reduction**: JPEG-related conversion logs (e.g., JPEG to JXL lossless transcoding) are now hidden from the terminal by default.
+  - **Quiet Success**: These operations are considered routine and low-risk; hiding them keeps the terminal focused on more significant conversions (HEVC, AV1).
+  - **Full Accountability**: All JPEG conversion details remain fully recorded in the run log file for auditing and verification.
+  - **Opt-in Visibility**: Use the `--verbose` flag to restore these logs to the terminal if needed.
+
 ## [0.10.40] - 2026-03-13
 
 ### Added

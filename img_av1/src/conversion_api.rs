@@ -51,6 +51,12 @@ pub struct ConversionOutput {
     pub size_reduction: Option<f32>,
 }
 
+impl ConversionOutput {
+    pub fn is_jpeg_transcode(&self) -> bool {
+        self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
+    }
+}
+
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     match (
         &detection.image_type,
