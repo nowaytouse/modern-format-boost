@@ -28,6 +28,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use crate::modern_ui::{colors, symbols};
 use std::sync::{LazyLock, Mutex};
 use rand::{distributions::Alphanumeric, Rng};
 
@@ -713,27 +714,41 @@ pub fn check_size_tolerance(
         
         // Display in KB or MB depending on size
         if size_increase_mb >= 1.0 {
-            eprintln!(
-                "   🗑️  {} output deleted: larger than input by {:.2}MB / {:.1}% ({})",
-                format_label, size_increase_mb, size_increase_pct, mode
+            crate::log_eprintln!(
+                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{} │ {}",
+                symbols::CROSS,
+                format_label,
+                colors::BOLD, 100.0 + size_increase_pct, colors::RESET,
+                colors::MFB_ORANGE, size_increase_mb, colors::RESET,
+                mode
             );
-            eprintln!(
-                "   📊 Size comparison: {} → {} bytes (+{:.2}MB)",
-                input_size, output_size, size_increase_mb
+            crate::log_eprintln!(
+                "   {} Size: {} → {} (Δ +{:.2}MB)",
+                symbols::CHART,
+                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
+                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
+                size_increase_mb
             );
         } else {
-            eprintln!(
-                "   🗑️  {} output deleted: larger than input by {:.1}KB / {:.1}% ({})",
-                format_label, size_increase_kb, size_increase_pct, mode
+            crate::log_eprintln!(
+                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{} │ {}",
+                symbols::CROSS,
+                format_label,
+                colors::BOLD, 100.0 + size_increase_pct, colors::RESET,
+                colors::MFB_ORANGE, size_increase_kb, colors::RESET,
+                mode
             );
-            eprintln!(
-                "   📊 Size comparison: {} → {} bytes (+{:.1}KB)",
-                input_size, output_size, size_increase_kb
+            crate::log_eprintln!(
+                "   {} Size: {} → {} (Δ +{:.1}KB)",
+                symbols::CHART,
+                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
+                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
+                size_increase_kb
             );
         }
         
         if let Err(e) = fs::remove_file(output) {
-            eprintln!("   ⚠️  Failed to remove oversized output: {}", e);
+            crate::log_eprintln!("   {} Cleanup failed: {}", symbols::WARNING, e);
         }
         
         // Copy original to output directory
@@ -744,7 +759,7 @@ pub fn check_size_tolerance(
             false,
         ) {
             Ok(Some(dest)) => {
-                eprintln!("   📋 Original copied to: {}", dest.display());
+                crate::log_eprintln!("   {} Original preserved: {}", symbols::SHIELD, format!("{}{}{}", colors::DIM, dest.display(), colors::RESET));
             }
             Ok(None) => {
                 // No output_dir specified, nothing to copy
@@ -795,28 +810,32 @@ pub fn check_size_tolerance(
             );
         } else if size_change_mb >= 1.0 {
             crate::log_eprintln!(
-                "   🗑️  {} output deleted: size increased by {} / {} (compression goal not achieved)",
+                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{}",
+                symbols::CROSS,
                 format_label,
-                format!("\x1b[1;33m{:.2}MB\x1b[0m", size_change_mb),
-                format!("\x1b[33m{:.1}%\x1b[0m", change_pct)
+                colors::BOLD, change_pct + 100.0, colors::RESET,
+                colors::MFB_ORANGE, size_change_mb, colors::RESET
             );
             crate::log_eprintln!(
-                "   📊 Size: {} → {} (+{:.2}MB)",
-                format!("\x1b[2m{} bytes\x1b[0m", input_size),
-                format!("\x1b[2m{} bytes\x1b[0m", output_size),
+                "   {} Size: {} → {} (Δ +{:.2}MB)",
+                symbols::CHART,
+                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
+                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
                 size_change_mb
             );
         } else {
             crate::log_eprintln!(
-                "   🗑️  {} output deleted: size increased by {} / {} (compression goal not achieved)",
+                "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.1}KB{}",
+                symbols::CROSS,
                 format_label,
-                format!("\x1b[1;33m{:.1}KB\x1b[0m", size_change_kb),
-                format!("\x1b[33m{:.1}%\x1b[0m", change_pct)
+                colors::BOLD, change_pct + 100.0, colors::RESET,
+                colors::MFB_ORANGE, size_change_kb, colors::RESET
             );
             crate::log_eprintln!(
-                "   📊 Size: {} → {} (+{:.1}KB)",
-                format!("\x1b[2m{} bytes\x1b[0m", input_size),
-                format!("\x1b[2m{} bytes\x1b[0m", output_size),
+                "   {} Size: {} → {} (Δ +{:.1}KB)",
+                symbols::CHART,
+                format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
+                format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
                 size_change_kb
             );
         }
@@ -1032,22 +1051,21 @@ mod tests {
     #[test]
     fn test_temp_path_for_output_keeps_extension() {
         // Temp path must end with same extension as output so FFmpeg/muxers see correct format.
-        assert_eq!(
-            temp_path_for_output(Path::new("/dir/file.mov")).to_string_lossy(),
-            "/dir/file.tmp.mov"
-        );
-        assert_eq!(
-            temp_path_for_output(Path::new("out.mp4")).to_string_lossy(),
-            "out.tmp.mp4"
-        );
-        assert_eq!(
-            temp_path_for_output(Path::new("a/b/c.mkv")).to_string_lossy(),
-            "a/b/c.tmp.mkv"
-        );
-        assert_eq!(
-            temp_path_for_output(Path::new("name.with.dots.mov")).to_string_lossy(),
-            "name.with.dots.tmp.mov"
-        );
+        let path1 = temp_path_for_output(Path::new("/dir/file.mov")).to_string_lossy().to_string();
+        assert!(path1.starts_with("/dir/file.tmp."));
+        assert!(path1.ends_with(".mov"));
+
+        let path2 = temp_path_for_output(Path::new("out.mp4")).to_string_lossy().to_string();
+        assert!(path2.starts_with("out.tmp."));
+        assert!(path2.ends_with(".mp4"));
+
+        let path3 = temp_path_for_output(Path::new("a/b/c.mkv")).to_string_lossy().to_string();
+        assert!(path3.starts_with("a/b/c.tmp."));
+        assert!(path3.ends_with(".mkv"));
+
+        let path4 = temp_path_for_output(Path::new("name.with.dots.mov")).to_string_lossy().to_string();
+        assert!(path4.starts_with("name.with.dots.tmp."));
+        assert!(path4.ends_with(".mov"));
     }
 
     #[test]

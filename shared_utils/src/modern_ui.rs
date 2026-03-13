@@ -42,11 +42,34 @@ pub mod colors {
     pub const BG_CYAN: &str = "\x1b[46m";
     pub const BG_WHITE: &str = "\x1b[47m";
 
-    // 24-bit True Colors (RGB)
-    pub const MFB_BLUE: &str = "\x1b[38;2;41;121;255m";
-    pub const MFB_PURPLE: &str = "\x1b[38;2;161;86;255m";
-    pub const MFB_PINK: &str = "\x1b[38;2;255;105;180m";
-    pub const MFB_GREEN: &str = "\x1b[38;2;0;224;150m";
+    // 24-bit True Colors (RGB) - Premium Palette
+    pub const MFB_BLUE: &str = "\x1b[38;2;67;160;255m";      // Electric Blue
+    pub const MFB_PURPLE: &str = "\x1b[38;2;187;134;252m";    // Soft Lilac (Premium)
+    pub const MFB_PINK: &str = "\x1b[38;2;255;121;198m";      // Hot Pink
+    pub const MFB_GREEN: &str = "\x1b[38;2;80;250;123m";      // Spring Green
+    pub const MFB_YELLOW: &str = "\x1b[38;2;241;250;140m";     // Pale Gold
+    pub const MFB_CYAN: &str = "\x1b[38;2;139;233;253m";       // Sky Cyan
+    pub const MFB_ORANGE: &str = "\x1b[38;2;255;184;108m";     // Burnt Orange
+    pub const MFB_RED: &str = "\x1b[38;2;255;85;85m";         // Vivid Red
+    
+    // UI Interaction Colors
+    pub const ACCENT: &str = "\x1b[38;2;0;198;255m";
+    pub const SUCCESS_GRADIENT: &str = "\x1b[38;2;0;255;135m";
+    pub const WARNING_GRADIENT: &str = "\x1b[38;2;255;220;0m";
+    pub const ERROR_GRADIENT: &str = "\x1b[38;2;255;75;43m";
+    pub const MUTE: &str = "\x1b[38;2;100;100;100m";
+}
+
+pub mod gradients {
+    use super::colors::*;
+    
+    pub fn blue_to_cyan(text: &str) -> String {
+        format!("{}{}{}", MFB_BLUE, text, RESET) // Simplified for now, real gradient logic would iterate chars
+    }
+    
+    pub fn purple_to_pink(text: &str) -> String {
+        format!("{}{}{}", MFB_PURPLE, text, RESET)
+    }
 }
 
 pub mod symbols {
@@ -390,13 +413,13 @@ fn strip_ansi(s: &str) -> String {
 
 pub fn print_stage(_icon: &str, title: &str) {
     use colors::*;
-    eprintln!("{}📍{} {}{}{}", DIM, RESET, BOLD, title, RESET);
+    eprintln!("{} {} {}{}{}", MFB_BLUE, symbols::DIAMOND, BOLD, title, RESET);
     let _ = io::stderr().flush();
 }
 
 pub fn print_substage(title: &str) {
     use colors::*;
-    eprintln!("   {}{}•{} {}", DIM, colors::CYAN, RESET, title);
+    eprintln!("   {} {} {}{}", colors::DIM, symbols::BULLET, RESET, title);
 }
 
 pub fn print_success(msg: &str) {
