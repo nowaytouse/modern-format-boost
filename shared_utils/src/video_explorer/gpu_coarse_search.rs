@@ -1462,6 +1462,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 
         let mut consecutive_zero_gains: u32 = 0;
+        let mut failure_credibility: f64 = 0.0;
         let mut quality_wall_hit = false;
         let mut domain_wall_hit = false;
 
@@ -1547,14 +1548,36 @@ fn cpu_fine_tune_from_gpu_boundary(
                         if ultimate_mode {
                             let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
                             let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
-                            
+
                             if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                                 let chroma_avg = (u + v_score) / 2.0;
+
+                                // Check for integer-level improvement
+                                let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
+                                let prev_best_psnr = best_psnr_uv_tracked.map(|(u,v)| (u+v)/2.0).unwrap_or(0.0);
+                                let vmaf_improved = v.floor() > prev_best_vmaf.floor();
+                                let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
+
                                 ultimate_metrics_str = format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
-                                
-                                // Cache for Phase III
-                                *best_vmaf_tracked = Some(v);
-                                *best_psnr_uv_tracked = Some((u, v_score));
+
+                                // Update best tracked values
+                                if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
+                                if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
+
+                                // Early insight: check for integer-level improvement
+                                if !vmaf_improved && !psnr_improved {
+                                    failure_credibility += 1.0;
+                                    if failure_credibility >= 3.0 {
+                                        crate::log_eprintln!(
+                                            "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
+                                            BRIGHT_RED, RESET
+                                        );
+                                        early_insight_triggered = true;
+                                        break;
+                                    }
+                                } else {
+                                    failure_credibility = 0.0;
+                                }
 
                                 // Saturation Check: In high quality zones (>97), we monitor for gain stop
                                 if v > 97.0 || chroma_avg > 47.0 {
