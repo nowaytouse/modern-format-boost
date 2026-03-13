@@ -24,15 +24,29 @@
       }
     },
     {
+      "name": "MANGA",
+      "priority": 920,
+      "adjust": 4,
+      "formats": ["jxl", "webp", "avif"],
+      "bonus": 0.2,
+      "rules": {
+        "color_diversity": {"max": 0.3},
+        "edge_density": {"min": 0.25},
+        "texture_variance": {"min": 0.15},
+        "contrast": {"min": 0.5}
+      }
+    },
+    {
       "name": "DOCUMENT",
       "priority": 900,
       "adjust": 8,
       "formats": ["png", "webp"],
       "bonus": 0.4,
       "rules": {
-        "color_diversity": {"max": 0.2},
+        "color_diversity": {"max": 0.1},
         "edge_density": {"min": 0.3},
-        "contrast": {"min": 0.7}
+        "contrast": {"min": 0.8},
+        "texture_variance": {"max": 0.15}
       }
     },
     {
