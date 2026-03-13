@@ -64,42 +64,80 @@ pub struct ImageQualityAnalysis {
     pub precision: PrecisionMetadata,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ImageContentType {
-    Photo,
-    Artwork,
-    Screenshot,
-    Icon,
-    Animation,
-    Graphic,
-    #[default]
-    Unknown,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ImageContentType {
+    pub name: String,
+    pub adjust: i8,
+    pub formats: Vec<String>,
+    pub bonus: f64,
 }
 
 impl ImageContentType {
     pub fn quality_adjustment(&self) -> i8 {
-        match self {
-            ImageContentType::Screenshot => 8,
-            ImageContentType::Icon => 6,
-            ImageContentType::Graphic => 5,
-            ImageContentType::Artwork => 2,
-            ImageContentType::Animation => 0,
-            ImageContentType::Photo => -2,
-            ImageContentType::Unknown => 0,
-        }
+        self.adjust
     }
 
-    pub fn recommended_formats(&self) -> Vec<&'static str> {
-        match self {
-            ImageContentType::Photo => vec!["avif", "jxl", "webp", "jpeg"],
-            ImageContentType::Artwork => vec!["avif", "webp", "jxl", "png"],
-            ImageContentType::Screenshot => vec!["webp", "png", "avif"],
-            ImageContentType::Icon => vec!["webp", "png", "avif"],
-            ImageContentType::Animation => vec!["webp", "avif", "gif"],
-            ImageContentType::Graphic => vec!["webp", "png", "avif"],
-            ImageContentType::Unknown => vec!["avif", "webp", "jxl"],
-        }
+    pub fn recommended_formats(&self) -> Vec<&str> {
+        self.formats.iter().map(|s| s.as_str()).collect()
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ClassifierRule {
+    name: String,
+    priority: i32,
+    adjust: i8,
+    formats: Vec<String>,
+    bonus: f64,
+    rules: RuleConditions,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuleConditions {
+    is_animated: Option<bool>,
+    has_alpha: Option<bool>,
+    complexity: Option<ThresholdRange>,
+    edge_density: Option<ThresholdRange>,
+    color_diversity: Option<ThresholdRange>,
+    texture_variance: Option<ThresholdRange>,
+    noise_level: Option<ThresholdRange>,
+    sharpness: Option<ThresholdRange>,
+    contrast: Option<ThresholdRange>,
+    aspect_ratio: Option<ThresholdRange>,
+    width: Option<ThresholdRange>,
+    height: Option<ThresholdRange>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ThresholdRange {
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl ThresholdRange {
+    fn matches(&self, value: f64) -> bool {
+        if let Some(min) = self.min {
+            if value < min { return false; }
+        }
+        if let Some(max) = self.max {
+            if value > max { return false; }
+        }
+        true
+    }
+}
+
+static CLASSIFIER_RULES: std::sync::OnceLock<Vec<ClassifierRule>> = std::sync::OnceLock::new();
+
+fn get_classifier_rules() -> &'static [ClassifierRule] {
+    CLASSIFIER_RULES.get_or_init(|| {
+        let json = include_str!("image_classifiers.json");
+        let wrapper: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
+        if let Some(rules_array) = wrapper.get("classifiers") {
+            serde_json::from_value(rules_array.clone()).unwrap_or_default()
+        } else {
+            vec![]
+        }
+    })
 }
 
 /// Routing output from pixel-based analysis. **Deprecated for routing**: main flow uses
@@ -183,19 +221,22 @@ pub fn analyze_image_quality(
         complexity,
         edge_density,
         color_diversity,
+        texture_variance,
+        noise_level,
+        sharpness,
+        contrast,
         has_alpha,
         is_animated,
         width,
         height,
-        &precision,
     );
 
     let compression_potential =
-        calculate_compression_potential(complexity, content_type, has_alpha, is_animated);
+        calculate_compression_potential(complexity, &content_type, has_alpha, is_animated);
 
     let routing_decision = make_routing_decision(
         format,
-        content_type,
+        &content_type,
         has_alpha,
         is_animated,
         compression_potential,
@@ -519,74 +560,69 @@ fn classify_content_type(
     complexity: f64,
     edge_density: f64,
     color_diversity: f64,
+    texture_variance: f64,
+    noise_level: f64,
+    sharpness: f64,
+    contrast: f64,
     has_alpha: bool,
     is_animated: bool,
     width: u32,
     height: u32,
-    precision: &PrecisionMetadata,
 ) -> ImageContentType {
-    if is_animated {
-        return ImageContentType::Animation;
-    }
-
-    // 🚀 Precise-First: Palette-based classification (Deterministic)
-    if let Some(p_size) = precision.palette_size {
-        // Very small palette (e.g. 1-32 colors) is almost always an Icon or simple UI element
-        // regardless of resolution if it's small enough.
-        if p_size <= 64 && width <= 512 && height <= 512 {
-            return ImageContentType::Icon;
-        }
-        // Medium palette (up to 256 colors) with low complexity is a Graphic/Art.
-        // This catches indexed PNGs/GIFs that aren't natural photos.
-        if p_size <= 256 && complexity < 0.6 {
-            return ImageContentType::Graphic;
-        }
-    }
-
-    // Heuristic fallbacks (Score-based)
-
-    if width <= 512 && height <= 512 && has_alpha && complexity < 0.4 {
-        return ImageContentType::Icon;
-    }
-
     let aspect_ratio = width as f64 / height.max(1) as f64;
-    let is_screen_ratio = (1.3..2.0).contains(&aspect_ratio) || (0.5..0.8).contains(&aspect_ratio);
-    if is_screen_ratio && color_diversity < 0.3 && edge_density > 0.2 && complexity < 0.5 {
-        return ImageContentType::Screenshot;
+    let rules = get_classifier_rules();
+    
+    // Find the matching rule with highest priority
+    let mut best_rule: Option<&ClassifierRule> = None;
+
+    for rule in rules {
+        let cond = &rule.rules;
+        
+        if let Some(v) = cond.is_animated { if v != is_animated { continue; } }
+        if let Some(v) = cond.has_alpha { if v != has_alpha { continue; } }
+        
+        if let Some(r) = &cond.complexity { if !r.matches(complexity) { continue; } }
+        if let Some(r) = &cond.edge_density { if !r.matches(edge_density) { continue; } }
+        if let Some(r) = &cond.color_diversity { if !r.matches(color_diversity) { continue; } }
+        if let Some(r) = &cond.texture_variance { if !r.matches(texture_variance) { continue; } }
+        if let Some(r) = &cond.noise_level { if !r.matches(noise_level) { continue; } }
+        if let Some(r) = &cond.sharpness { if !r.matches(sharpness) { continue; } }
+        if let Some(r) = &cond.contrast { if !r.matches(contrast) { continue; } }
+        if let Some(r) = &cond.aspect_ratio { if !r.matches(aspect_ratio) { continue; } }
+        if let Some(r) = &cond.width { if !r.matches(width as f64) { continue; } }
+        if let Some(r) = &cond.height { if !r.matches(height as f64) { continue; } }
+
+        if best_rule.is_none() || rule.priority > best_rule.unwrap().priority {
+            best_rule = Some(rule);
+        }
     }
 
-    if color_diversity < 0.2 && edge_density > 0.15 && complexity < 0.4 {
-        return ImageContentType::Graphic;
+    if let Some(rule) = best_rule {
+        ImageContentType {
+            name: rule.name.clone(),
+            adjust: rule.adjust,
+            formats: rule.formats.clone(),
+            bonus: rule.bonus,
+        }
+    } else {
+        ImageContentType {
+            name: "UNKNOWN".to_string(),
+            adjust: 0,
+            formats: vec!["avif".to_string(), "webp".to_string(), "jxl".to_string()],
+            bonus: 0.0,
+        }
     }
-
-    if complexity > 0.6 && color_diversity > 0.5 {
-        return ImageContentType::Photo;
-    }
-
-    if complexity > 0.3 && complexity < 0.7 && edge_density > 0.2 {
-        return ImageContentType::Artwork;
-    }
-
-    ImageContentType::Unknown
 }
 
 fn calculate_compression_potential(
     complexity: f64,
-    content_type: ImageContentType,
+    content_type: &ImageContentType,
     has_alpha: bool,
     is_animated: bool,
 ) -> f64 {
     let mut potential = 1.0 - complexity;
 
-    potential += match content_type {
-        ImageContentType::Screenshot => 0.3,
-        ImageContentType::Icon => 0.25,
-        ImageContentType::Graphic => 0.2,
-        ImageContentType::Artwork => 0.1,
-        ImageContentType::Animation => 0.0,
-        ImageContentType::Photo => -0.1,
-        ImageContentType::Unknown => 0.0,
-    };
+    potential += content_type.bonus;
 
     if has_alpha {
         potential -= 0.1;
@@ -601,7 +637,7 @@ fn calculate_compression_potential(
 
 fn make_routing_decision(
     source_format: &str,
-    content_type: ImageContentType,
+    content_type: &ImageContentType,
     has_alpha: bool,
     is_animated: bool,
     compression_potential: f64,
@@ -628,7 +664,7 @@ fn make_routing_decision(
     }
 
     let use_lossless = compression_potential < 0.2
-        || format_lower == "png" && has_alpha && content_type == ImageContentType::Icon;
+        || format_lower == "png" && has_alpha && content_type.name == "ICON";
 
     let formats = content_type.recommended_formats();
     let primary = formats.first().unwrap_or(&"avif").to_string();
@@ -646,8 +682,8 @@ fn make_routing_decision(
     let estimated_ratio = base_ratio + (1.0 - compression_potential) * 0.3;
 
     let reason = format!(
-        "{:?} content detected (complexity: {:.2}). {} recommended for {}",
-        content_type,
+        "{} content detected (complexity: {:.2}). {} recommended for {}",
+        content_type.name,
         1.0 - compression_potential,
         primary.to_uppercase(),
         if use_lossless {
@@ -728,8 +764,8 @@ pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_p
     write_to_log_at_level(
         Level::DEBUG,
         &format!(
-            "  content_type={:?} complexity={:.4} edge_density={:.4} compression_potential={:.4}",
-            analysis.content_type,
+            "  content_type={} complexity={:.4} edge_density={:.4} compression_potential={:.4}",
+            analysis.content_type.name,
             analysis.complexity,
             analysis.edge_density,
             analysis.compression_potential

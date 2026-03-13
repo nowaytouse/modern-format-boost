@@ -645,7 +645,7 @@ fn auto_convert_single_file(
 
     let mut quality_label = analysis.quality_summary();
     if let Some(ref pa) = pixel_analysis {
-        let ct_str = format!("{:?}", pa.content_type).to_uppercase();
+        let ct_str = pa.content_type.name.to_uppercase();
         quality_label = if quality_label.is_empty() {
             ct_str
         } else {
