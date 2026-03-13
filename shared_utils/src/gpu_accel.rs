@@ -1475,8 +1475,8 @@ pub fn gpu_coarse_search_with_log(
         }
     };
 
-    let skip_gpu_size_threshold: u64 = if config.ultimate_mode { 10 * 1024 } else { 500 * 1024 };
-    let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 0.5 } else { 3.0 };
+    let skip_gpu_size_threshold: u64 = if config.ultimate_mode { 100 * 1024 } else { 500 * 1024 };
+    let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 1.0 } else { 3.0 };
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
     const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
