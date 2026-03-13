@@ -161,7 +161,16 @@ pub fn explore_with_gpu_coarse_search(
         .map(|p| p.duration as f32)
         .unwrap_or(crate::gpu_accel::GPU_SAMPLE_DURATION);
 
-    let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available() && has_gpu_encoder {
+    // [New Logic] Bitrate-based GPU Start Condition
+    // Low bitrate videos (animation/PPT < 5Mbps) don't benefit from GPU pre-scan
+    let bitrate_bps = if duration > 0.0 {
+        (input_size as f64 * 8.0) / duration as f64
+    } else {
+        0.0
+    };
+    let is_high_complexity = bitrate_bps > 5_000_000.0; // > 5 Mbps
+
+    let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available() && has_gpu_encoder && is_high_complexity {
         crate::verbose_eprintln!();
         crate::verbose_eprintln!("Phase 1: GPU Coarse Search");
 
@@ -400,10 +409,21 @@ pub fn explore_with_gpu_coarse_search(
         }
     } else {
         crate::log_eprintln!();
-        if !gpu.is_available() {
+        if !is_high_complexity {
+            crate::log_eprintln!(
+                "⚠️  OPTIMIZATION: Low complexity video ({:.1} Mbps < 5.0 Mbps)",
+                bitrate_bps / 1_000_000.0
+            );
+            crate::log_eprintln!(
+                "   Skipping GPU coarse search (CPU is faster for low-bitrate animation/PPT)"
+            );
+        } else if !gpu.is_available() {
             crate::log_eprintln!("⚠️  FALLBACK: No GPU available (skipping GPU coarse phase)");
         } else {
-            crate::log_eprintln!("⚠️  FALLBACK: No GPU encoder for {:?} (skipping GPU coarse phase)", encoder);
+            crate::log_eprintln!(
+                "⚠️  FALLBACK: No GPU encoder for {:?} (skipping GPU coarse phase)",
+                encoder
+            );
         }
         (ABSOLUTE_MIN_CRF, max_crf, initial_crf)
     };
