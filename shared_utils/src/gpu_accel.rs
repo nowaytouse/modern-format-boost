@@ -198,7 +198,7 @@ pub const GPU_SEGMENT_DURATION_ULTIMATE: f32 = 25.0;
 
 pub const GPU_SAMPLE_SEGMENTS: usize = 5;
 
-pub const GPU_COARSE_STEP: f32 = 2.0;
+pub const GPU_COARSE_STEP: f32 = 1.0;
 
 pub const GPU_ABSOLUTE_MAX_ITERATIONS: u32 = 750;
 
