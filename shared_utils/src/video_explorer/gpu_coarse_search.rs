@@ -1578,8 +1578,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
                                 if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
 
-                                // Early insight: check for integer-level improvement
-                                if !vmaf_improved && !psnr_improved {
+                                // Early insight: only trigger if quality already meets final settlement thresholds
+                                const VMAF_Y_MIN: f64 = 93.0;
+                                const PSNR_UV_MIN: f64 = 38.0;
+                                let quality_meets_threshold = v >= VMAF_Y_MIN && u.min(v_score) >= PSNR_UV_MIN;
+
+                                if !vmaf_improved && !psnr_improved && quality_meets_threshold {
                                     failure_credibility += 1.0;
                                     if failure_credibility >= 3.0 {
                                         crate::log_eprintln!(
@@ -1873,8 +1877,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
                     if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
 
-                    // Logic: If no integer improvement, build failure credibility.
-                    if !vmaf_improved && !psnr_improved {
+                    // Early insight: only trigger if quality already meets final settlement thresholds
+                    const VMAF_Y_MIN: f64 = 93.0;
+                    const PSNR_UV_MIN: f64 = 38.0;
+                    let quality_meets_threshold = v >= VMAF_Y_MIN && u.min(v_score) >= PSNR_UV_MIN;
+
+                    if !vmaf_improved && !psnr_improved && quality_meets_threshold {
                         failure_credibility += 1.0;
                         if failure_credibility >= 3.0 {
                             crate::log_eprintln!(
@@ -2062,7 +2070,17 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
-                        if !vmaf_improved && !psnr_improved {
+                        // Only trigger if quality already meets final settlement thresholds
+                        const VMAF_Y_MIN: f64 = 93.0;
+                        const PSNR_UV_MIN: f64 = 38.0;
+
+                        let quality_meets_threshold = if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
+                            v >= VMAF_Y_MIN && uv.0.min(uv.1) >= PSNR_UV_MIN
+                        } else {
+                            false
+                        };
+
+                        if !vmaf_improved && !psnr_improved && quality_meets_threshold {
                             failure_credibility += 1.0;
                             if failure_credibility >= 3.0 {
                                 crate::log_eprintln!(
