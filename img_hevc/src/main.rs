@@ -767,9 +767,9 @@ fn auto_convert_single_file(
                         input.display()
                     ));
                     shared_utils::progress_mode::emit_stderr(&format!(
-                        "🔄 Static GIF→JXL (Lossy d=1.0): {}", input.display()
+                        "🔄 Static GIF→JXL (Quality 100): {}", input.display()
                     ));
-                    let conv_result = convert_to_jxl(input, &options, 1.0, analysis.hdr_info.as_ref())?;
+                    let conv_result = convert_to_jxl(input, &options, 0.1, analysis.hdr_info.as_ref())?;
                     return Ok(convert_result_to_output(conv_result));
                 }
                 _ => {
@@ -850,23 +850,15 @@ fn auto_convert_single_file(
         }
         (_, false, false) => {
             // Modern lossy static already skipped above; only legacy lossy reach here.
-            // Palette-quantized sources (lossy PNG / static GIF): try JXL d=1.0.
+            // All lossy sources (including palette-quantized PNG/GIF) use d=0.1 (Quality 100).
             // Size protection will skip automatically if output is larger.
-            let is_palette_quantized = matches!(
-                analysis.format.to_uppercase().as_str(),
-                "PNG" | "GIF"
-            );
             #[allow(deprecated)]
-            let jxl_distance = if is_palette_quantized {
-                1.0
-            } else {
-                match &pixel_analysis {
-                    Some(q) => {
-                        let rd = &q.routing_decision;
-                        if rd.use_lossless { 0.0 } else { 0.1 }
-                    }
-                    None => 0.1,
+            let jxl_distance = match &pixel_analysis {
+                Some(q) => {
+                    let rd = &q.routing_decision;
+                    if rd.use_lossless { 0.0 } else { 0.1 }
                 }
+                None => 0.1,
             };
             verbose_log!(
                 "🔄 {} Lossy→JXL ({}): {}",
@@ -875,7 +867,7 @@ fn auto_convert_single_file(
                     "GIF" => "Static GIF",
                     _ => "Legacy",
                 },
-                if jxl_distance == 0.0 { "Lossless" } else if jxl_distance <= 0.1 { "Quality 100" } else { "Lossy d=1.0" },
+                if jxl_distance == 0.0 { "Lossless" } else { "Quality 100" },
                 input.display()
             );
             convert_to_jxl(input, &options, jxl_distance, analysis.hdr_info.as_ref())?
