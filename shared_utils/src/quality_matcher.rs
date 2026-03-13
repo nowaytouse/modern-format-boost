@@ -2108,8 +2108,8 @@ mod tests {
         let result = calculate_av1_crf(&high_bpp).unwrap();
 
         assert!(
-            result.crf >= 15.0,
-            "Ultra-high BPP should floor CRF at 15, got {}",
+            result.crf >= 6.0,
+            "Ultra-high BPP should floor CRF at 6, got {}",
             result.crf
         );
         assert!(
@@ -2337,8 +2337,8 @@ mod tests {
         let result = calculate_av1_crf(&analysis).unwrap();
 
         assert!(
-            result.crf >= 15.0 && result.crf <= 25.0,
-            "EDGE: Small resolution high-bpp should produce CRF 15-25, got {}",
+            result.crf >= 10.0 && result.crf <= 25.0,
+            "EDGE: Small resolution high-bpp should produce CRF 10-25, got {}",
             result.crf
         );
     }

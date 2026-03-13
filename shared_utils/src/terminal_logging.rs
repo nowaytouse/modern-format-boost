@@ -8,7 +8,6 @@
 //! - ���一的视觉风格
 //! - 调试级别控制
 
-use std::io;
 
 /// 颜色管理器 - 确保颜色正确关闭
 pub struct ColorGuard {
@@ -227,23 +226,21 @@ impl TerminalLogger {
     }
 }
 
+use std::sync::OnceLock;
+
 /// 全局终端日志器实例
-static mut GLOBAL_LOGGER: Option<TerminalLogger> = None;
+static GLOBAL_LOGGER: OnceLock<TerminalLogger> = OnceLock::new();
 
 /// 初始化全局终端日志器
 pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
-    unsafe {
-        GLOBAL_LOGGER = Some(TerminalLogger::new(use_colors, debug_mode));
-    }
+    let _ = GLOBAL_LOGGER.set(TerminalLogger::new(use_colors, debug_mode));
 }
 
 /// 获取全局终端日志器
 pub fn terminal_logger() -> &'static TerminalLogger {
-    unsafe {
-        GLOBAL_LOGGER
-            .as_ref()
-            .expect("Terminal logger not initialized. Call init_terminal_logger first.")
-    }
+    GLOBAL_LOGGER
+        .get()
+        .expect("Terminal logger not initialized. Call init_terminal_logger first.")
 }
 
 // ─── 便捷宏 ─────────────────────────────────────────────────────────────────
