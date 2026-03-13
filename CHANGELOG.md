@@ -14,13 +14,14 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **HEIC/HEIF Always Preserved**: HEIC and HEIF sources are now **always skipped** regardless of lossless/lossy detection status.
-  - **Rationale**: Lossless detection for HEIC requires parsing complex `hvcC` profiles (`RExt`/`SCC` + 4:4:4 chroma). False positives risk lossy re-encoding of content that was incorrectly identified as lossless. Safer to preserve the original file unconditionally.
+  - **Rationale**: Lossless detection for HEIC requires parsing complex `hvcC` profiles (`RExt`/`SCC` + 4:4:4 chroma). False positives risk lossy re-encoding.
   - Previously, lossless HEIC was routed to JXL `d=0.0` conversion.
 - **Modern Lossy Skip Enforced**: Modern formats (WebP, AVIF, JXL, etc.) now **always skip** when identified as lossy by both metadata and pixel-based heuristic.
   - Prevents non-beneficial quality-degrading re-encodings (like the legacy `d=0.1` path).
-- **Heuristic Quality Switch Fixed**: Corrected `use_lossless` threshold in pixel analysis:
-  - **Fixed Bug**: Previously, noisy images were incorrectly hitting `d=0.0` (causing volume explosion) while simple images were hitting `d=0.1`.
-  - **New Policy**: Lossless (Modular) path is now strictly reserved for high-potential simple graphics (`potential > 0.75`).
+- **Heuristic Quality Switch Fixed / 修复启发式质量决策反转**:
+  - **Fixed Bug**: Corrected `use_lossless` threshold in pixel analysis:
+    - **修复**: 此前 `compression_potential < 0.2` 的逻辑导致噪点丰富的图像错误触发 `d=0.0` (无损)，产生“体积爆炸”；而简单图形却走了有损路径。
+    - **新策略**: 现在系统将 **Modular JXL (d=0.0)** 路径严格保留给高潜力的简单图形 (`potential > 0.75`)，平衡了还原度与体积比。
 
 
 
