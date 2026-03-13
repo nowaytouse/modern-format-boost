@@ -537,31 +537,15 @@ fn auto_convert_single_file(
     shared_utils::progress_mode::set_log_context(&_label);
     let _log_guard = shared_utils::progress_mode::LogContextGuard;
 
-    // Always skip HEIC/HEIF: Lossless is extremely rare, and re-encoding lossy HEIC causes generational loss.
-    // Apple ecosystem also heavily relies on original HEIC/HEIF files.
-    if shared_utils::image_heic_analysis::is_heic_file(input) {
-        // Skip Live Photos in Apple compat mode
-        if shared_utils::is_live_photo(input) {
-            let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-            copy_original_if_adjacent_mode(input, config)?;
-            return Ok(ConversionOutput {
-                original_path: input.display().to_string(),
-                output_path: input.display().to_string(),
-                skipped: true,
-                message: "Live Photo detected, skipping in Apple compat mode".to_string(),
-                original_size: file_size,
-                output_size: None,
-                size_reduction: None,
-            });
-        }
-
+    // Check for Live Photos first (before any analysis)
+    if shared_utils::is_live_photo(input) {
         let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
             skipped: true,
-            message: "HEIC/HEIF detected; skipping to avoid generational loss and preserve original fidelity".to_string(),
+            message: "Live Photo detected, skipping in Apple compat mode".to_string(),
             original_size: file_size,
             output_size: None,
             size_reduction: None,
@@ -569,6 +553,9 @@ fn auto_convert_single_file(
     }
 
     let analysis = analyze_image(input)?;
+
+    // HEIC/HEIF: Skip lossy (avoid generational loss), but allow lossless → JXL.
+    // This is handled by should_skip_image_format below based on analysis.is_lossless.
 
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
     if !analysis.is_animated {
@@ -715,7 +702,9 @@ fn auto_convert_single_file(
     ) {
         ("WebP", true, false)
         | ("AVIF", true, false)
-        | ("TIFF", true, false) => {
+        | ("TIFF", true, false)
+        | ("HEIC", true, false)
+        | ("HEIF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }

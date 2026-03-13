@@ -1475,18 +1475,20 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
 
     let is_jxl = matches!(codec, SourceCodec::JpegXl);
 
-    // HEIC/HEIF: always skip regardless of lossless/lossy.
-    // Lossless detection for HEIC relies on complex hvcC profile parsing (RExt/SCC + 4:4:4)
-    // which has high false-positive risk. Safer to preserve the original.
+    // HEIC/HEIF: Skip lossy (avoid generational loss), but allow lossless → JXL conversion.
+    // Lossless HEIC/HEIF is rare but valuable for archival; JXL provides better compression
+    // and broader compatibility while maintaining mathematical losslessness.
     let is_heic = matches!(codec, SourceCodec::Heic);
+    let is_heic_lossy = is_heic && !is_lossless;
 
-    let should_skip = is_modern_lossy || is_jxl || is_heic;
+    let should_skip = is_modern_lossy || is_jxl || is_heic_lossy;
 
     let reason = if should_skip {
         let codec_name = match codec {
             SourceCodec::WebpStatic => "lossy WebP",
             SourceCodec::Avif => "lossy AVIF",
-            SourceCodec::Heic => "HEIC/HEIF (always preserved)",
+            SourceCodec::Heic if !is_lossless => "lossy HEIC/HEIF (preserved to avoid generational loss)",
+            SourceCodec::Heic => "lossless HEIC/HEIF (converts to JXL)",
             SourceCodec::JpegXl => "JPEG XL (already optimal)",
             _ => "modern lossy format",
         };
@@ -1779,8 +1781,8 @@ mod tests {
     fn test_should_skip_image_format() {
         assert!(should_skip_image_format("webp", false).should_skip);
         assert!(should_skip_image_format("avif", false).should_skip);
-        assert!(should_skip_image_format("heic", false).should_skip);
-        assert!(should_skip_image_format("heic", true).should_skip); // HEIC always preserved
+        assert!(should_skip_image_format("heic", false).should_skip); // lossy HEIC preserved
+        assert!(!should_skip_image_format("heic", true).should_skip); // lossless HEIC → JXL
 
         assert!(should_skip_image_format("jxl", true).should_skip);
         assert!(should_skip_image_format("jxl", false).should_skip);
@@ -1792,6 +1794,7 @@ mod tests {
         assert!(!should_skip_image_format("png", true).should_skip);
         assert!(!should_skip_image_format("gif", true).should_skip);
         assert!(!should_skip_image_format("tiff", true).should_skip); // TIFF lossless → JXL
+        assert!(!should_skip_image_format("heif", true).should_skip); // HEIF lossless → JXL
     }
 
     #[test]
