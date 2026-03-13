@@ -54,6 +54,7 @@ chrono  = { version = "0.4.44", features = ["serde"] }
 # Image processing
 image       = { version = "0.25.10", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
 libheif-rs  = "2.7.0"
+mp4parse    = "0.17.0"
 
 # Testing and compression
 tempfile = "3.16.0"
