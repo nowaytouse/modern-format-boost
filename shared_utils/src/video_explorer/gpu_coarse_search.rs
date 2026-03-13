@@ -556,7 +556,7 @@ pub fn explore_with_gpu_coarse_search(
                 // Thresholds
                 const VMAF_Y_THRESHOLD: f64 = 93.0;
                 const CAMBI_MAX: f64        = 5.0;
-                const PSNR_UV_MIN: f64      = 38.0;
+                const PSNR_UV_MIN: f64      = 35.0;
 
                 let vmaf_ok   = vmaf_y.map(|v| v >= VMAF_Y_THRESHOLD).unwrap_or(false);
                 let cambi_ok  = cambi.map(|c| c <= CAMBI_MAX).unwrap_or(false);
@@ -588,11 +588,16 @@ pub fn explore_with_gpu_coarse_search(
                 }
 
                 match psnr_uv {
-                    Some((pu, pv)) => crate::log_eprintln!(
-                        "      PSNR-UV: {:.2}/{:.2} dB ≥ {:.1} dB {}",
-                        pu, pv, PSNR_UV_MIN,
-                        if chroma_ok { "✅" } else { "❌" }
-                    ),
+                    Some((pu, pv)) => {
+                        let u_pass = pu >= PSNR_UV_MIN;
+                        let v_pass = pv >= PSNR_UV_MIN;
+                        crate::log_eprintln!(
+                            "      PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ {:.1} dB)",
+                            pu, if u_pass { "✅" } else { "❌" },
+                            pv, if v_pass { "✅" } else { "❌" },
+                            PSNR_UV_MIN
+                        );
+                    },
                     None => crate::log_eprintln!(
                         "      PSNR-UV: N/A (calculation failed) ❌"
                     ),
@@ -622,9 +627,15 @@ pub fn explore_with_gpu_coarse_search(
                     }
                     if !chroma_ok {
                         let uv_str = psnr_uv
-                            .map(|(u, v): (f64, f64)| format!("min={:.2}", u.min(v)))
+                            .map(|(u, v): (f64, f64)| {
+                                let u_pass = u >= PSNR_UV_MIN;
+                                let v_pass = v >= PSNR_UV_MIN;
+                                format!("U={:.2} dB {}, V={:.2} dB {}",
+                                    u, if u_pass { "✅" } else { "❌" },
+                                    v, if v_pass { "✅" } else { "❌" })
+                            })
                             .unwrap_or_else(|| "N/A".to_string());
-                        crate::log_eprintln!("      FAILED PSNR-UV {} dB < {:.1} dB (chroma quality too low)", uv_str, PSNR_UV_MIN);
+                        crate::log_eprintln!("      FAILED PSNR-UV {} < {:.1} dB (chroma quality too low)", uv_str, PSNR_UV_MIN);
                     }
                     crate::log_eprintln!("      Suggestion: Lower CRF or disable --compress");
                     result.ms_ssim_passed = Some(false);
@@ -1580,7 +1591,7 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                                 // Early insight: only trigger if quality fails threshold AND no improvement
                                 const VMAF_Y_MIN: f64 = 93.0;
-                                const PSNR_UV_MIN: f64 = 38.0;
+                                const PSNR_UV_MIN: f64 = 35.0;
                                 let any_metric_fails = v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
 
                                 if !vmaf_improved && !psnr_improved && any_metric_fails {
@@ -1623,7 +1634,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         // this encode is not credible. Abort immediately.
                         if ultimate_mode && quality_wall_triggered {
                             const VMAF_Y_MIN: f64 = 93.0;
-                            const PSNR_UV_MIN: f64 = 38.0;
+                            const PSNR_UV_MIN: f64 = 35.0;
 
                             let v_val = match best_vmaf_tracked {
                                 Some(v) => v,
@@ -1852,18 +1863,26 @@ fn cpu_fine_tune_from_gpu_boundary(
                 0.0
             };
 
+            // Track best tested CRF (smallest size increase, even if not compressed)
+            if size < best_tested_size {
+                best_tested_crf = test_crf;
+                best_tested_size = size;
+            }
+
+            let is_effectively_compressed = size < input_size;
+
             // Ultimate Mode: Insight-Based Credibility Check (Sticky)
-            if ultimate_mode {
+            if ultimate_mode && !is_effectively_compressed {
                 let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
                 let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
-                
+
                 if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
                     let chroma_avg = (u + v_score) / 2.0;
-                    
+
                     // Track best metrics to check for improvement
                     let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
                     let prev_best_psnr = best_psnr_uv_tracked.map(|(u,v)| (u+v)/2.0).unwrap_or(0.0);
-                    
+
                     // Check for integer-level improvement (ignoring decimals)
                     let vmaf_improved = v.floor() > prev_best_vmaf.floor();
                     let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
@@ -1879,12 +1898,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = Some(v); }
                     if psnr_improved || best_psnr_uv_tracked.is_none() { *best_psnr_uv_tracked = Some((u, v_score)); }
 
-                    // Early insight: only trigger if quality fails threshold AND no improvement
+                    // Early insight: only trigger if BOTH quality metrics fail threshold AND no improvement
                     const VMAF_Y_MIN: f64 = 93.0;
-                    const PSNR_UV_MIN: f64 = 38.0;
-                    let any_metric_fails = v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
+                    const PSNR_UV_MIN: f64 = 35.0;
+                    let both_metrics_fail = v < VMAF_Y_MIN && u.min(v_score) < PSNR_UV_MIN;
 
-                    if !vmaf_improved && !psnr_improved && any_metric_fails {
+                    if !vmaf_improved && !psnr_improved && both_metrics_fail {
                         failure_credibility += 1.0;
                         if failure_credibility >= 3.0 {
                             crate::log_eprintln!(
@@ -1893,16 +1912,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                             );
                             // Use best tested CRF if no compression achieved
                             if best_crf.is_none() {
-                                if size < input_size {
-                                    best_crf = Some(test_crf);
-                                    best_size = Some(size);
-                                    best_ssim_tracked = calculate_ssim_quick();
-                                } else {
-                                    // No compression achieved - use best tested CRF
-                                    best_crf = Some(best_tested_crf);
-                                    best_size = Some(best_tested_size);
-                                    best_ssim_tracked = calculate_ssim_quick();
-                                }
+                                best_crf = Some(best_tested_crf);
+                                best_size = Some(best_tested_size);
+                                best_ssim_tracked = calculate_ssim_quick();
                             }
                             early_insight_triggered = true;
                             break;
@@ -1912,14 +1924,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                 }
             }
-
-            // Track best tested CRF (smallest size increase, even if not compressed)
-            if size < best_tested_size {
-                best_tested_crf = test_crf;
-                best_tested_size = size;
-            }
-
-            let is_effectively_compressed = size < input_size;
 
             if is_effectively_compressed {
                 if best_crf.is_none_or(|c| test_crf < c) {
@@ -1934,7 +1938,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     RESET, RESET, BRIGHT_GREEN, RESET, CYAN, test_crf, RESET,
                     BRIGHT_GREEN, total_size_pct, RESET
                 );
-            } else {
+                break; // Stop Phase 2 after finding first compression point
+            } else if !ultimate_mode {
                 use crate::modern_ui::colors::*;
                 crate::log_eprintln!(
                     "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌",
@@ -1972,7 +1977,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut prev_size = best_size.unwrap_or(0);
             let search_floor = if ultimate_mode { 0.0 } else { min_crf };
             let mut test_crf = compress_point - current_step;
-            const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 10;
+            const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
 
             while test_crf >= search_floor && iterations < max_iterations_for_video {
                 if size_cache.contains_key(test_crf) {
@@ -2021,6 +2026,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if is_effectively_compressed {
                     consecutive_failures = 0;
                     consecutive_compressions += 1;
+                    crate::log_eprintln!("   [DEBUG] consecutive_compressions = {}/{}", consecutive_compressions, MAX_CONSECUTIVE_COMPRESSIONS);
 
                     best_crf = Some(test_crf);
                     best_size = Some(size);
@@ -2084,7 +2090,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if ultimate_mode {
                         // Only trigger if quality already meets final settlement thresholds
                         const VMAF_Y_MIN: f64 = 93.0;
-                        const PSNR_UV_MIN: f64 = 38.0;
+                        const PSNR_UV_MIN: f64 = 35.0;
 
                         let any_metric_fails = if let (Some(v), Some(uv)) = (current_vmaf_val, current_psnr_val) {
                             v < VMAF_Y_MIN || uv.0.min(uv.1) < PSNR_UV_MIN
@@ -2186,16 +2192,30 @@ fn cpu_fine_tune_from_gpu_boundary(
                     current_step = PHASE3_DOWNWARD_STEP;
                     test_crf -= current_step;
 
-                    // Insight mechanism also applies to failures
+                    // Insight mechanism: only count as credible failure if quality actually degraded
                     if ultimate_mode {
-                        failure_credibility += 1.0;
-                        if failure_credibility >= 3.0 {
-                            crate::log_eprintln!(
-                                "   {}❌ FAILURE CREDIBILITY REACHED (3/3):{} Sustained failure/quality collapse. Stopping.",
-                                BRIGHT_RED, RESET
-                            );
-                            early_insight_triggered = true;
-                            break;
+                        // Check if quality metrics are actually failing (not just size wall)
+                        const VMAF_Y_MIN: f64 = 93.0;
+                        const PSNR_UV_MIN: f64 = 35.0;
+                        let quality_degraded = if let (Some(v), Some((u, v_score))) = (current_vmaf_val, current_psnr_val) {
+                            v < VMAF_Y_MIN && u.min(v_score) < PSNR_UV_MIN
+                        } else {
+                            false
+                        };
+
+                        if quality_degraded && !vmaf_improved && !psnr_improved {
+                            failure_credibility += 1.0;
+                            if failure_credibility >= 3.0 {
+                                crate::log_eprintln!(
+                                    "   {}❌ FAILURE CREDIBILITY REACHED (3/3):{} Sustained failure/quality collapse. Stopping.",
+                                    BRIGHT_RED, RESET
+                                );
+                                early_insight_triggered = true;
+                                break;
+                            }
+                        } else {
+                            // Size wall without quality collapse - don't count as credible failure
+                            failure_credibility = 0.0;
                         }
                     }
 
