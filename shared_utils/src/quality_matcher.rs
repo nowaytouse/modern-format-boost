@@ -1467,27 +1467,28 @@ pub fn should_keep_apple_fallback_hevc_output(
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
 
+    // Modern lossy static formats: skip to avoid generational loss.
+    // WebP/AVIF lossy static are skipped; HEIC/HEIF lossy static follow the same pattern.
     let is_modern_lossy = !is_lossless
         && matches!(
             codec,
-            SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::JpegXl
+            SourceCodec::WebpStatic | SourceCodec::Avif | SourceCodec::Heic | SourceCodec::JpegXl
         );
 
     let is_jxl = matches!(codec, SourceCodec::JpegXl);
 
-    // HEIC/HEIF: Skip lossy (avoid generational loss), but allow lossless → JXL conversion.
-    // Lossless HEIC/HEIF is rare but valuable for archival; JXL provides better compression
+    // Lossless HEIC/HEIF: allow conversion to JXL (archival-friendly format).
+    // Lossless HEIC/HEIF is rare but valuable; JXL provides better compression
     // and broader compatibility while maintaining mathematical losslessness.
-    let is_heic = matches!(codec, SourceCodec::Heic);
-    let is_heic_lossy = is_heic && !is_lossless;
+    let is_heic_lossless = matches!(codec, SourceCodec::Heic) && is_lossless;
 
-    let should_skip = is_modern_lossy || is_jxl || is_heic_lossy;
+    let should_skip = is_modern_lossy || is_jxl;
 
     let reason = if should_skip {
         let codec_name = match codec {
             SourceCodec::WebpStatic => "lossy WebP",
             SourceCodec::Avif => "lossy AVIF",
-            SourceCodec::Heic if !is_lossless => "lossy HEIC/HEIF (preserved to avoid generational loss)",
+            SourceCodec::Heic if !is_lossless => "lossy HEIC/HEIF",
             SourceCodec::Heic => "lossless HEIC/HEIF (converts to JXL)",
             SourceCodec::JpegXl => "JPEG XL (already optimal)",
             _ => "modern lossy format",
@@ -1496,6 +1497,9 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
             "Source is {} - skipping to avoid generational loss",
             codec_name
         )
+    } else if is_heic_lossless {
+        // Lossless HEIC/HEIF is not skipped; it will be converted to JXL.
+        String::new()
     } else {
         String::new()
     };
@@ -1779,22 +1783,26 @@ mod tests {
 
     #[test]
     fn test_should_skip_image_format() {
+        // Modern lossy static: skip (avoid generational loss)
         assert!(should_skip_image_format("webp", false).should_skip);
         assert!(should_skip_image_format("avif", false).should_skip);
-        assert!(should_skip_image_format("heic", false).should_skip); // lossy HEIC preserved
-        assert!(!should_skip_image_format("heic", true).should_skip); // lossless HEIC → JXL
+        assert!(should_skip_image_format("heic", false).should_skip); // lossy HEIC → skip
 
+        // JXL: always skip (already optimal)
         assert!(should_skip_image_format("jxl", true).should_skip);
         assert!(should_skip_image_format("jxl", false).should_skip);
 
+        // Modern lossless static: convert to JXL
         assert!(!should_skip_image_format("webp", true).should_skip);
         assert!(!should_skip_image_format("avif", true).should_skip);
+        assert!(!should_skip_image_format("heic", true).should_skip); // lossless HEIC → JXL
 
+        // Legacy formats: convert to JXL
         assert!(!should_skip_image_format("jpeg", false).should_skip);
         assert!(!should_skip_image_format("png", true).should_skip);
         assert!(!should_skip_image_format("gif", true).should_skip);
-        assert!(!should_skip_image_format("tiff", true).should_skip); // TIFF lossless → JXL
-        assert!(!should_skip_image_format("heif", true).should_skip); // HEIF lossless → JXL
+        assert!(!should_skip_image_format("tiff", true).should_skip);
+        assert!(!should_skip_image_format("heif", true).should_skip); // lossless HEIF → JXL
     }
 
     #[test]
