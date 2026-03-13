@@ -9,6 +9,7 @@ use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult}
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
+use shared_utils::modern_ui::{colors, symbols};
 
 
 #[derive(Parser)]
@@ -153,29 +154,25 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
             }
             if verbose {
-                shared_utils::progress_mode::emit_stderr(&format!("🎬 {} (for animated→video)", flag_mode.description_en()));
-                shared_utils::progress_mode::emit_stderr("📷 Static images: JPEG→JXL lossless; lossless PNG→JXL lossless; lossy PNG (TinyPNG/pngquant)→JXL d=1.0");
+                shared_utils::progress_mode::emit_stderr(&format!("{} {} (for animated→video)", symbols::VIDEO, flag_mode.description_en()));
+                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (lossless) │ PNG→JXL (d=0.0/1.0)", symbols::IMAGE));
             }
             if apple_compat {
-                shared_utils::progress_mode::emit_stderr("🍎 Apple Compatibility: ENABLED (animated WebP → HEVC)");
+                shared_utils::progress_mode::emit_stderr(&format!("{} Apple Compatibility: {}ENABLED{} (WebP→HEVC)", symbols::SHIELD, colors::BOLD, colors::RESET));
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if force_video {
-                shared_utils::progress_mode::emit_stderr("🎬 Force Video: ENABLED (skip meme-score, always convert to video)");
+                shared_utils::progress_mode::emit_stderr(&format!("{} Force Video: {}ENABLED{} (skip meme-score)", symbols::ROCKET, colors::BOLD, colors::RESET));
                 std::env::set_var("MODERN_FORMAT_BOOST_FORCE_VIDEO", "1");
             }
             if in_place {
-                shared_utils::progress_mode::emit_stderr(
-                    "🔄 In-place mode: ENABLED (original files will be deleted after conversion)",
-                );
+                shared_utils::progress_mode::emit_stderr(&format!("{} In-place mode: {}ENABLED{} (auto-delete original)", symbols::SAVE, colors::BOLD, colors::RESET));
             }
             if ultimate {
-                shared_utils::progress_mode::emit_stderr("🔎 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::progress_mode::emit_stderr(&format!("{} Ultimate Explore: {}ENABLED{} (max SSIM mode)", symbols::SEARCH, colors::BOLD, colors::RESET));
             }
             if !allow_size_tolerance {
-                shared_utils::progress_mode::emit_stderr(
-                    "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)",
-                );
+                shared_utils::progress_mode::emit_stderr(&format!("{} Size Tolerance: {}DISABLED{} (strict < original)", symbols::CHART, colors::BOLD, colors::RESET));
             }
             let config = AutoConvertConfig {
                 output_dir: output.clone(),

@@ -642,7 +642,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                             };
                             
                             let final_msg = format!("{} {} │ File may already be highly optimized", base_msg, additional_info);
-                            warn!("   {}", final_msg);
+                            tracing::debug!("   {}", final_msg);
                             (
                                 format!(
                                     "Video stream compression failed: {:+.1}%",
@@ -705,12 +705,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         config.apple_compat,
                         source_is_gif,
                     ) {
-                        warn!("   ⚠️  APPLE COMPAT FALLBACK (not full success): quality/size below target");
-                        warn!(
-                            "   Keeping best-effort output: last attempt CRF {:.1} ({} iterations), file is HEVC and importable",
-                            explore_result.optimal_crf,
-                            explore_result.iterations
-                        );
+                        warn!("   ⚠️  APPLE COMPAT FALLBACK: keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets", explore_result.optimal_crf, explore_result.iterations);
                         shared_utils::conversion::commit_temp_to_output(
                             &temp_path,
                             &output_path,
@@ -744,8 +739,6 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     if let Err(e) = std::fs::remove_file(&temp_path) {
                         warn!("Failed to clean up temp file {}: {}", temp_path.display(), e);
                     }
-                    info!("   🗑️  {}", delete_msg);
-
                     shared_utils::copy_on_skip_or_fail(
                         input,
                         config.output_dir.as_deref(),

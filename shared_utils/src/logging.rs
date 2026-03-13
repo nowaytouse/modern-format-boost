@@ -29,11 +29,97 @@ use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     filter::FilterFn,
-    fmt::{self, writer::MakeWriter},
+    fmt::{self, format::FormatEvent, writer::MakeWriter, FmtContext, FormatFields},
     layer::{Layer, SubscriberExt},
+    registry::LookupSpan,
     util::SubscriberInitExt,
     EnvFilter,
+    field::Visit,
 };
+use tracing::field::Field;
+use crate::modern_ui::{colors, symbols};
+
+struct ModernFormatter;
+
+impl<S, N> FormatEvent<S, N> for ModernFormatter
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        _ctx: &FmtContext<'_, S, N>,
+        mut writer: fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        let metadata = event.metadata();
+        let level = *metadata.level();
+
+        // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
+        crate::ctrlc_guard::wait_if_prompt_active();
+
+        // 1. Level Design / Hierarchy
+        let (icon, color, label) = match level {
+            tracing::Level::ERROR => (symbols::ERROR, colors::MFB_RED, " ERR "),
+            tracing::Level::WARN => (symbols::WARNING, colors::MFB_ORANGE, " WRN "),
+            tracing::Level::INFO => ("", "", ""), // Info often has its own icons in the message
+            tracing::Level::DEBUG => (symbols::DIAMOND, colors::MFB_CYAN, " DBG "),
+            tracing::Level::TRACE => (symbols::BULLET, colors::MFB_PURPLE, " TRC "),
+        };
+
+        if level != tracing::Level::INFO {
+            write!(writer, "{}{}{} ", color, icon, colors::RESET)?;
+            write!(writer, "{}{}{}{} ", colors::DIM, color, label, colors::RESET)?;
+        }
+
+        // 2. Message and Fields
+        {
+            let mut visitor = FieldVisitor {
+                writer: &mut writer,
+                is_first: true,
+                has_message: false,
+            };
+            event.record(&mut visitor);
+        }
+
+        writeln!(writer)
+    }
+}
+
+struct FieldVisitor<'a, 'b> {
+    writer: &'a mut fmt::format::Writer<'b>,
+    is_first: bool,
+    has_message: bool,
+}
+
+impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            let msg = format!("{:?}", value);
+            // Strip quotes from Debug format of string
+            let msg = msg.trim_start_matches('"').trim_end_matches('"');
+            let _ = write!(self.writer, "{}", msg);
+            self.has_message = true;
+        } else {
+            if self.is_first && self.has_message {
+                let _ = write!(self.writer, " ");
+            } else if !self.is_first {
+                let _ = write!(self.writer, " ");
+            }
+            
+            let _ = write!(
+                self.writer,
+                "{}{}={}{:?}{}",
+                colors::DIM,
+                field.name(),
+                colors::RESET,
+                value,
+                colors::RESET
+            );
+            self.is_first = false;
+        }
+    }
+}
 
 // ── Current log level: so progress_mode direct writes respect the same level as the tracing filter ──
 /// Cached level from init_logging; used by progress_mode::write_to_log_at_level so direct run-log writes respect the level.
@@ -324,12 +410,8 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
 
     // Stderr (terminal): filtered for display — exclude gpu_detection, no level/target in message.
     let stderr_layer = fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_ansi(true)
-        .with_target(false)
-        .with_level(false)
-        .with_line_number(false)
-        .without_time()
+        .with_writer(io::stderr)
+        .event_format(ModernFormatter)
         .with_filter(FilterFn::new(|m: &tracing::Metadata| m.target() != "gpu_detection"));
 
     tracing_subscriber::registry()
