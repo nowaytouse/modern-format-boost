@@ -96,8 +96,6 @@ pub mod vmaf_standalone;
 
 pub mod cli_runner;
 
-pub mod errors;
-
 pub mod conversion_types;
 
 pub mod video_detection;
@@ -229,11 +227,13 @@ pub use lru_cache::{CacheEntry, LruCache, SerializableCache};
 pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
 
 // Re-export unified error types
+#[allow(deprecated)]
 pub use unified_error::{
     UnifiedError,
     Result as UnifiedResult,
     ImgResult,
     VidResult,
+    VidQualityError, // Legacy alias for backward compatibility
 };
 
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};

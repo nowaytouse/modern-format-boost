@@ -55,6 +55,9 @@ pub enum UnifiedError {
         command: Option<String>,
         file_path: Option<PathBuf>,
     },
+    ConversionError(String),
+    AnalysisError(String),
+    GeneralError(String),
 
     // Image-specific errors
     ImageFormatNotSupported(String),
@@ -129,7 +132,10 @@ impl UnifiedError {
             | UnifiedError::ImageAnalysisError(_)
             | UnifiedError::ImageProcessingError(_)
             | UnifiedError::NotImplemented(_)
-            | UnifiedError::SkipFile(_) => ErrorCategory::Recoverable,
+            | UnifiedError::SkipFile(_)
+            | UnifiedError::ConversionError(_)
+            | UnifiedError::AnalysisError(_)
+            | UnifiedError::GeneralError(_) => ErrorCategory::Recoverable,
         }
     }
 
@@ -202,6 +208,15 @@ impl UnifiedError {
                     msg.push_str(&format!("\n   Error output: {}", stderr));
                 }
                 msg
+            }
+            UnifiedError::ConversionError(err) => {
+                format!("❌ Conversion failed: {}", err)
+            }
+            UnifiedError::AnalysisError(err) => {
+                format!("❌ Analysis failed: {}", err)
+            }
+            UnifiedError::GeneralError(err) => {
+                format!("❌ Error: {}", err)
             }
             UnifiedError::ImageFormatNotSupported(fmt) => {
                 format!("❌ Image format not supported: {}", fmt)
@@ -480,6 +495,9 @@ impl fmt::Display for UnifiedError {
                 }
                 Ok(())
             }
+            UnifiedError::ConversionError(err) => write!(f, "Conversion error: {}", err),
+            UnifiedError::AnalysisError(err) => write!(f, "Analysis error: {}", err),
+            UnifiedError::GeneralError(err) => write!(f, "General error: {}", err),
             UnifiedError::ImageFormatNotSupported(fmt) => {
                 write!(f, "Image format not supported: {}", fmt)
             }
@@ -595,10 +613,27 @@ impl From<image::ImageError> for UnifiedError {
     }
 }
 
+impl From<crate::ffprobe::FFprobeError> for UnifiedError {
+    fn from(e: crate::ffprobe::FFprobeError) -> Self {
+        match e {
+            crate::ffprobe::FFprobeError::ToolNotFound(s) => UnifiedError::ToolNotFound {
+                tool_name: s,
+                operation: Some("video probing".to_string()),
+            },
+            crate::ffprobe::FFprobeError::IoError(e) => UnifiedError::Io(e),
+            other => UnifiedError::FFprobeError(other.to_string()),
+        }
+    }
+}
+
 // Type aliases for backward compatibility
 pub type Result<T> = std::result::Result<T, UnifiedError>;
 pub type ImgResult<T> = std::result::Result<T, UnifiedError>;
 pub type VidResult<T> = std::result::Result<T, UnifiedError>;
+
+// Legacy type alias for VidQualityError (deprecated, use UnifiedError)
+#[deprecated(note = "Use UnifiedError instead")]
+pub type VidQualityError = UnifiedError;
 
 // Convenience constructors
 impl UnifiedError {
@@ -630,6 +665,18 @@ impl UnifiedError {
 
     pub fn skip_file(msg: impl Into<String>) -> Self {
         UnifiedError::SkipFile(msg.into())
+    }
+
+    pub fn conversion_error(msg: impl Into<String>) -> Self {
+        UnifiedError::ConversionError(msg.into())
+    }
+
+    pub fn analysis_error(msg: impl Into<String>) -> Self {
+        UnifiedError::AnalysisError(msg.into())
+    }
+
+    pub fn general_error(msg: impl Into<String>) -> Self {
+        UnifiedError::GeneralError(msg.into())
     }
 }
 

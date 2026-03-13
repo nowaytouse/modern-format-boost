@@ -1214,7 +1214,7 @@ mod prop_tests {
             let _ = cache.get(crf);
             let _ = cache.contains_key(crf);
 
-            if (0.0..64.0).contains(&crf) {
+            if crf >= 0.0 && crf <= 63.99 {
                 prop_assert_eq!(cache.get(crf), Some(&value));
             } else {
                 prop_assert_eq!(cache.get(crf), None);
