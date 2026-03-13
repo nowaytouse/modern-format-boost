@@ -2104,9 +2104,11 @@ pub fn gpu_coarse_search_with_log(
 
     let gpu_decay_factor: f32 = if config.ultimate_mode { 0.6 } else { 0.5 };
     let gpu_max_wall_hits: u32 = if config.ultimate_mode { 6 } else { 4 };
-    let gpu_min_step: f32 = if config.ultimate_mode { 0.5 } else { 0.5 };
+    let gpu_min_step: f32 = if config.ultimate_mode { 0.1 } else { 0.5 };
 
-    if (boundary_high - boundary_low) > 4.0 {
+    let stage1_threshold = if config.ultimate_mode { 2.0 } else { 4.0 };
+
+    if (boundary_high - boundary_low) > stage1_threshold {
         if found_compress_point {
             let crf_range = config.max_crf - boundary_low;
             let initial_step = (crf_range / 2.0).clamp(4.0, 15.0);
@@ -2367,7 +2369,7 @@ pub fn gpu_coarse_search_with_log(
                 max_iterations_limit
             );
         } else {
-            let stage3_step = if config.ultimate_mode { 0.5 } else { 0.5 };
+            let stage3_step = if config.ultimate_mode { 0.1 } else { 0.5 };
             log_msg!("   📍 Stage 3: Fine-tune with {:.1} step (quality ceiling detection)", stage3_step);
 
             let mut offset = stage3_step;
