@@ -583,6 +583,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                         Some(s) => s,
                         None => {
                             warn!("   ⚠️  SSIM not measured, cannot verify quality");
+                            let _ = std::fs::remove_file(&temp_path);
                             return Err(VidQualityError::GeneralError(
                                 "Quality verification failed: SSIM not measured".to_string()
                             ));
@@ -786,8 +787,16 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         _ => unreachable!("HEVC tool should not return AV1/FFV1 target"),
     };
 
+    // Verify temp file exists before commit
+    if !temp_path.exists() {
+        warn!("⚠️  Temp file missing before commit: {}", temp_path.display());
+        return Err(VidQualityError::ConversionError(
+            format!("Temp file not found: {}", temp_path.display())
+        ));
+    }
+
     if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
-        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
+        .map_err(|e| VidQualityError::ConversionError(format!("Commit failed: {} (temp: {}, output: {})", e, temp_path.display(), output_path.display())))?
     {
         info!("⏭️ Output was created concurrently, skipping overwrite");
         return Ok(ConversionOutput {
@@ -854,6 +863,9 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
             if output_path.exists() {
                 let _ = std::fs::remove_file(&output_path);
                 info!("   🗑️  Low MS-SSIM output deleted");
+            }
+            if temp_path.exists() {
+                let _ = std::fs::remove_file(&temp_path);
             }
 
             shared_utils::copy_on_skip_or_fail(
@@ -997,6 +1009,9 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         if output_path.exists() {
             let _ = std::fs::remove_file(&output_path);
             info!("   🗑️  Output deleted (cannot compress by total file size)");
+        }
+        if temp_path.exists() {
+            let _ = std::fs::remove_file(&temp_path);
         }
 
         shared_utils::copy_on_skip_or_fail(

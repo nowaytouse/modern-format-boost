@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [Unreleased]
+
+## [0.10.37] - 2026-03-13
+
+### Added
+- **Security Enhancement: Unique Temp Files**: Added 8-character random string (e.g., `.tmp.A7b2K9xZ.mp4`) to temporary file names in `shared_utils`. This prevents collisions with user-named files, enables safe concurrent processing, and ensures that cleanup operations only target program-generated files.
+- **Phase 4 Metrics Display**: Added VMAF and PSNR (UV) display to Phase 4 (0.01-granularity fine-tune) logs for consistency with CPU/GPU phases.
+- **Diagnostic Logging**: Added temp file verification and detailed error messages before commit to diagnose "No such file or directory" errors.
+
+### Fixed
+- **Temp File Cleanup**: Temp files (`.tmp.` pattern) are now properly cleaned up when processing fails or is interrupted, preventing leftover files in output directory.
+- **Dependency Update**: Updated all workspace dependencies to their latest compatible versions.
+
 ## [0.10.36] - 2026-03-13
 
 ### Added
@@ -66,6 +79,16 @@ All notable changes to this project will be documented in this file.
   - GPU skip duration: 3.0s → 1.0s in ultimate mode
   - **GPU search logs now visible in ultimate mode** (was silent, causing confusion)
   - More GPU iterations with shorter samples = higher utilization without timeout
+- **PSNR Calculation Reliability**: Improved PSNR calculation with better error handling
+  - Added stats_file output for more reliable parsing
+  - Multiple parsing strategies (psnr_avg, average)
+  - Detailed error messages when parsing fails
+  - Prevents "PSNR calc failed, fallback to size-only" errors
+- **Phase 4 Sprint & Backtrack**: Added acceleration to 0.01-granularity fine-tune
+  - Sprint: doubles step (0.01 → 0.02 → 0.04 → 0.05 max) after 2 consecutive successes
+  - Backtrack: resets to 0.01 step on overshoot, retries from last good CRF
+  - Dramatically faster while maintaining precision
+  - Prevents slow linear 0.01 step exploration
 - **Test Compatibility**: Updated test expectations for new constants
   - ULTIMATE_MIN_WALL_HITS: 4 → 15
   - ULTIMATE_REQUIRED_ZERO_GAINS: 20 → 50
