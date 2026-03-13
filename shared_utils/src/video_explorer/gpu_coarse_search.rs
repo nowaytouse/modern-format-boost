@@ -442,6 +442,20 @@ pub fn explore_with_gpu_coarse_search(
 
     result.log.clear();
 
+    // Skip quality verification if early insight triggered
+    if result.early_insight_triggered {
+        crate::log_eprintln!();
+        crate::log_eprintln!("{}═══════════════════════════════════════════════════════════{}",
+            crate::modern_ui::colors::BRIGHT_YELLOW, crate::modern_ui::colors::RESET);
+        crate::log_eprintln!("{}⚠️  Early Insight Triggered: Quality Plateau Detected{}",
+            crate::modern_ui::colors::BRIGHT_YELLOW, crate::modern_ui::colors::RESET);
+        crate::log_eprintln!("   No integer-level quality improvement over 3 consecutive iterations");
+        crate::log_eprintln!("   Skipping final quality verification (unnecessary)");
+        crate::log_eprintln!("{}═══════════════════════════════════════════════════════════{}",
+            crate::modern_ui::colors::BRIGHT_YELLOW, crate::modern_ui::colors::RESET);
+        return Ok(result);
+    }
+
     crate::verbose_eprintln!();
     crate::verbose_eprintln!("Phase 3: Quality Verification");
 
@@ -2463,6 +2477,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         vmaf_y_score: None,
         cambi_score: None,
         psnr_uv_score: None,
+        early_insight_triggered,
     })
 }
 
