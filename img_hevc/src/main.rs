@@ -142,7 +142,7 @@ fn main() -> anyhow::Result<()> {
             ) {
                 Ok(mode) => mode,
                 Err(e) => {
-                    eprintln!("{}", e);
+                    shared_utils::log_eprintln!("{}", e);
                     std::process::exit(1);
                 }
             };
@@ -1089,7 +1089,7 @@ fn auto_convert_directory(
             }
         }
         shared_utils::restore_directory_timestamps(saved);
-        println!("✅ Directory timestamps restored");
+        shared_utils::log_eprintln!("✅ Directory timestamps restored");
     }
 
     Ok(())
