@@ -777,6 +777,8 @@ fn auto_convert_single_file(
 
     if output.skipped {
         verbose_log!("⏭️ {}", output.message);
+    } else if output.is_jpeg_transcode() {
+        shared_utils::verbose_eprintln!("{}", output.message);
     } else {
         shared_utils::log_eprintln!("{}", output.message);
     }

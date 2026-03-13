@@ -137,6 +137,10 @@ pub struct ConversionResult {
 }
 
 impl ConversionResult {
+    pub fn is_jpeg_transcode(&self) -> bool {
+        self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
+    }
+
     pub fn skipped_duplicate(input: &Path) -> Self {
         Self {
             success: true,
