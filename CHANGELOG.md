@@ -54,10 +54,10 @@ All notable changes to this project will be documented in this file.
   - Shows VMAF-Y and PSNR-UV values when quality plateau is detected
   - Helps users understand why exploration stopped early
   - Provides visibility into quality gate decisions
-- **GPU Utilization in Ultimate Mode**: Increased GPU exploration precision for better quality
-  - GPU initial step: 2.0 → 0.5 in ultimate mode (4x more precise)
-  - GPU minimum step: 0.5 → 0.1 in ultimate mode (5x more precise)
-  - Stage 3 fine-tune: 0.5 → 0.1 in ultimate mode
+- **GPU Utilization in Ultimate Mode**: Increased GPU exploration iterations for better quality
+  - GPU initial step: 2.0 → 1.0 in ultimate mode (2x more tests)
+  - GPU decay factor: 0.5 → 0.6 in ultimate mode (slower convergence = more iterations)
+  - GPU max wall hits: 4 → 6 in ultimate mode (50% more attempts before giving up)
   - GPU skip threshold: 500KB → 100KB in ultimate mode (allows GPU for medium-small files)
   - GPU skip duration: 3.0s → 1.0s in ultimate mode (allows GPU for short clips)
   - More GPU iterations = higher GPU utilization and better quality boundary detection

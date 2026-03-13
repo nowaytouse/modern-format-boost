@@ -2102,9 +2102,9 @@ pub fn gpu_coarse_search_with_log(
         }
     }
 
-    const GPU_DECAY_FACTOR: f32 = 0.5;
-    const GPU_MAX_WALL_HITS: u32 = 4;
-    let gpu_min_step: f32 = if config.ultimate_mode { 0.1 } else { 0.5 };
+    let gpu_decay_factor: f32 = if config.ultimate_mode { 0.6 } else { 0.5 };
+    let gpu_max_wall_hits: u32 = if config.ultimate_mode { 6 } else { 4 };
+    let gpu_min_step: f32 = if config.ultimate_mode { 0.5 } else { 0.5 };
 
     if (boundary_high - boundary_low) > 4.0 {
         if found_compress_point {
@@ -2119,8 +2119,8 @@ pub fn gpu_coarse_search_with_log(
             );
             log_msg!(
                 "      Strategy: step × {:.1} per wall hit, max {} hits",
-                GPU_DECAY_FACTOR,
-                GPU_MAX_WALL_HITS
+                gpu_decay_factor,
+                gpu_max_wall_hits
             );
 
             let mut current_step = initial_step;
@@ -2167,17 +2167,17 @@ pub fn gpu_coarse_search_with_log(
                                 (size as f64 / sample_input_size as f64 - 1.0) * 100.0
                             );
 
-                            if wall_hits >= GPU_MAX_WALL_HITS {
+                            if wall_hits >= gpu_max_wall_hits {
                                 log_msg!(
                                     "   🧱 MAX WALL HITS ({})! Stopping at CRF {:.1}",
-                                    GPU_MAX_WALL_HITS,
+                                    gpu_max_wall_hits,
                                     last_compressible_crf
                                 );
                                 boundary_high = test_crf;
                                 break;
                             }
 
-                            let curve_step = initial_step * GPU_DECAY_FACTOR.powi(wall_hits as i32);
+                            let curve_step = initial_step * gpu_decay_factor.powi(wall_hits as i32);
                             let new_step = if curve_step < 1.0 {
                                 gpu_min_step
                             } else {
@@ -2187,7 +2187,7 @@ pub fn gpu_coarse_search_with_log(
                             let phase_info = if new_step <= gpu_min_step + 0.01 {
                                 "→ FINE TUNING".to_string()
                             } else {
-                                format!("decay ×{:.1}^{}", GPU_DECAY_FACTOR, wall_hits)
+                                format!("decay ×{:.1}^{}", gpu_decay_factor, wall_hits)
                             };
                             log_msg!(
                                 "   ↩️ Curve backtrack: step {:.1} → {:.1} ({})",
@@ -2262,15 +2262,15 @@ pub fn gpu_coarse_search_with_log(
                                 (size as f64 / sample_input_size as f64 - 1.0) * 100.0
                             );
 
-                            if wall_hits >= GPU_MAX_WALL_HITS {
+                            if wall_hits >= gpu_max_wall_hits {
                                 log_msg!(
                                     "   🧱 MAX WALL HITS ({})! Cannot find compress point",
-                                    GPU_MAX_WALL_HITS
+                                    gpu_max_wall_hits
                                 );
                                 break;
                             }
 
-                            let curve_step = initial_step * GPU_DECAY_FACTOR.powi(wall_hits as i32);
+                            let curve_step = initial_step * gpu_decay_factor.powi(wall_hits as i32);
                             let new_step = if curve_step < 1.0 {
                                 gpu_min_step
                             } else {
@@ -2367,7 +2367,7 @@ pub fn gpu_coarse_search_with_log(
                 max_iterations_limit
             );
         } else {
-            let stage3_step = if config.ultimate_mode { 0.1 } else { 0.5 };
+            let stage3_step = if config.ultimate_mode { 0.5 } else { 0.5 };
             log_msg!("   📍 Stage 3: Fine-tune with {:.1} step (quality ceiling detection)", stage3_step);
 
             let mut offset = stage3_step;
