@@ -262,8 +262,6 @@ impl ConversionResult {
             format!("✅ {}", core_msg)
         };
         
-        // Append milestone stats (│ 📊 XMP: ... Img: ...) with aligned padding
-        let message = crate::progress_mode::append_stats_to_line(&message);
 
         Self {
             success: true,
