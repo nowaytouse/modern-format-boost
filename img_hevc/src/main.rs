@@ -155,7 +155,7 @@ fn main() -> anyhow::Result<()> {
             }
             if verbose {
                 shared_utils::progress_mode::emit_stderr(&format!("{} {} (for animated→video)", symbols::VIDEO, flag_mode.description_en()));
-                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (lossless) │ PNG→JXL (d=0.0/0.1)", symbols::IMAGE));
+                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (lossless) │ WebP/AVIF/TIFF Lossless→JXL (d=0.0) │ PNG→JXL (d=0.0/0.1)", symbols::IMAGE));
             }
             if apple_compat {
                 shared_utils::progress_mode::emit_stderr(&format!("{} Apple Compatibility: {}ENABLED{} (WebP→HEVC)", symbols::SHIELD, colors::BOLD, colors::RESET));
@@ -714,8 +714,7 @@ fn auto_convert_single_file(
     ) {
         ("WebP", true, false)
         | ("AVIF", true, false)
-        | ("HEIC", true, false)
-        | ("HEIF", true, false) => {
+        | ("TIFF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
