@@ -19,8 +19,55 @@ use anyhow::{Context, Result};
 use crate::image_analyzer::ImageAnalysis;
 use crate::image_quality_detector::ImageQualityAnalysis;
 use crate::video_detection::VideoDetectionResult;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use blake3::Hasher;
+
+/// 🏷️ File Signature for robust change detection
+#[derive(Debug, Clone, PartialEq)]
+struct FileSignature {
+    mtime: i64,
+    ctime: i64,
+    btime: i64,
+    atime: i64,
+    size: i64,
+}
+
+impl FileSignature {
+    fn from_path(path: &Path) -> Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        let size = metadata.len() as i64;
+        
+        // Use nanoseconds for maximum rigor as requested
+        let mtime = metadata.modified()?
+            .duration_since(UNIX_EPOCH)?
+            .as_nanos() as i64;
+        
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(unix)]
+        let ctime = metadata.ctime_nsec(); // Unix ctime nanoseconds
+        #[cfg(windows)]
+        use std::os::windows::fs::MetadataExt;
+        #[cfg(windows)]
+        let ctime = metadata.last_write_time() as i64;
+        #[cfg(not(any(unix, windows)))]
+        let ctime = mtime;
+
+        // Birthtime (btime)
+        let btime = match metadata.created() {
+            Ok(t) => t.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(ctime),
+            Err(_) => ctime,
+        };
+
+        // Atime (last access)
+        let atime = match metadata.accessed() {
+            Ok(t) => t.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as i64).unwrap_or(mtime),
+            Err(_) => mtime,
+        };
+
+        Ok(Self { mtime, ctime, btime, atime, size })
+    }
+}
 
 pub struct AnalysisCache {
     conn: std::sync::Mutex<Connection>,
@@ -70,10 +117,26 @@ impl AnalysisCache {
                 file_path TEXT PRIMARY KEY,
                 content_hash BLOB NOT NULL,
                 mtime INTEGER NOT NULL,
-                file_size INTEGER NOT NULL
+                file_size INTEGER NOT NULL,
+                atime INTEGER DEFAULT 0,
+                ctime INTEGER DEFAULT 0,
+                btime INTEGER DEFAULT 0
             )",
             [],
         )?;
+
+        // --- MIGRATION: Add new columns if they don't exist in an old DB ---
+        let existing_columns: std::collections::HashSet<String> = conn
+            .prepare("PRAGMA table_info(path_index)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<_, _>>()?;
+
+        for col in &["atime", "ctime", "btime"] {
+            if !existing_columns.contains(*col) {
+                info!("🛠️  [Cache] Migrating path_index: adding column '{}'", col);
+                conn.execute(&format!("ALTER TABLE path_index ADD COLUMN {} INTEGER DEFAULT 0", col), [])?;
+            }
+        }
 
         // Index for cleaning up old records
         conn.execute(
@@ -96,31 +159,39 @@ impl AnalysisCache {
     /// Try to get analysis result for a file. 
     /// Returns Ok(Some(result)) if cached and still valid (metadata match or hash match).
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as i64;
-        let mtime = metadata.modified()?
-            .duration_since(UNIX_EPOCH)?
-            .as_secs() as i64;
+        let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
 
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         // 1. Try path index first (FASTEST)
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data FROM path_index p 
+            "SELECT r.analysis_data, p.atime, p.ctime, p.btime FROM path_index p 
              JOIN analysis_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
         
-        let mut rows = stmt.query(params![path_str, mtime, file_size])?;
+        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
         if let Some(row) = rows.next()? {
-            let data: Vec<u8> = row.get(0)?;
-            let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
-                .context("Failed to unpack cached analysis data (path hit)")?;
-            // Ensure path is updated to current if it was cached under a different name
-            analysis.file_path = path.display().to_string();
-            debug!("🚀 [Cache] HIT (Path) - {}", path.display());
-            return Ok(Some(analysis));
+            // Strict Invalidation: Check ctime and btime too
+            let _cached_atime: i64 = row.get(1)?;
+            let cached_ctime: i64 = row.get(2)?;
+            let cached_btime: i64 = row.get(3)?;
+
+            // Use XOR or direct compare for maximum rigor
+            let strict_match = (cached_ctime == 0 || cached_ctime == sig.ctime) && 
+                               (cached_btime == 0 || cached_btime == sig.btime);
+
+            if !strict_match {
+                warn!("⚠️  [Cache] Path Match but Metadata Discrepancy (ctime/btime changed). Invalidating entry for {}", path.display());
+            } else {
+                let data: Vec<u8> = row.get(0)?;
+                let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
+                    .context("Failed to unpack cached analysis data (path hit)")?;
+                analysis.file_path = path.display().to_string();
+                debug!("🚀 [Cache] HIT (Path) - {}", path.display());
+                return Ok(Some(analysis));
+            }
         }
 
         // 2. Fallback to Content Hash (BLAKE3)
@@ -137,9 +208,9 @@ impl AnalysisCache {
             
             // Back-fill the path index for this exact file to speed up next check
             conn.execute(
-                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size) 
-                 VALUES (?, ?, ?, ?)",
-                params![path_str, content_hash.as_bytes(), mtime, file_size],
+                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
             )?;
 
             analysis.file_path = path.display().to_string();
@@ -152,29 +223,30 @@ impl AnalysisCache {
 
     /// Try to get quality analysis result for a file.
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as i64;
-        let mtime = metadata.modified()?
-            .duration_since(UNIX_EPOCH)?
-            .as_secs() as i64;
+        let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
 
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         // 1. Path Index
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data FROM path_index p 
+            "SELECT r.analysis_data, p.ctime, p.btime FROM path_index p 
              JOIN quality_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
         
-        let mut rows = stmt.query(params![path_str, mtime, file_size])?;
+        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
         if let Some(row) = rows.next()? {
-            let data: Vec<u8> = row.get(0)?;
-            let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
-                .context("Failed to unpack cached quality data (path hit)")?;
-            debug!("📊 [Cache] Quality HIT (Path) - {}", path.display());
-            return Ok(Some(analysis));
+            let cached_ctime: i64 = row.get(1)?;
+            let cached_btime: i64 = row.get(2)?;
+            
+            if (cached_ctime == 0 || cached_ctime == sig.ctime) && (cached_btime == 0 || cached_btime == sig.btime) {
+                let data: Vec<u8> = row.get(0)?;
+                let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
+                    .context("Failed to unpack cached quality data (path hit)")?;
+                debug!("📊 [Cache] Quality HIT (Path) - {}", path.display());
+                return Ok(Some(analysis));
+            }
         }
 
         // 2. Hash Index
@@ -190,9 +262,9 @@ impl AnalysisCache {
                 .context("Failed to unpack cached quality data (hash hit)")?;
             
             conn.execute(
-                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size) 
-                 VALUES (?, ?, ?, ?)",
-                params![path_str, content_hash.as_bytes(), mtime, file_size],
+                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
             )?;
 
             debug!("📊 [Cache] Quality HIT (Hash) - {}", path.display());
@@ -204,11 +276,7 @@ impl AnalysisCache {
 
     /// Stores an analysis result in the cache.
     pub fn store_analysis(&self, path: &Path, analysis: &ImageAnalysis) -> Result<()> {
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as i64;
-        let mtime = metadata.modified()?
-            .duration_since(UNIX_EPOCH)?
-            .as_secs() as i64;
+        let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
         
         // Calculate hash for cross-path reuse
@@ -228,13 +296,13 @@ impl AnalysisCache {
         conn.execute(
             "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at) 
              VALUES (?, ?, ?, ?)",
-            params![content_hash.as_bytes(), file_size, packed_data, now],
+            params![content_hash.as_bytes(), sig.size, packed_data, now],
         )?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size) 
-             VALUES (?, ?, ?, ?)",
-            params![path_str, content_hash.as_bytes(), mtime, file_size],
+            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
 
         Ok(())
@@ -242,11 +310,7 @@ impl AnalysisCache {
 
     /// Stores a quality analysis result in the cache.
     pub fn store_quality_analysis(&self, path: &Path, analysis: &ImageQualityAnalysis) -> Result<()> {
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as i64;
-        let mtime = metadata.modified()?
-            .duration_since(UNIX_EPOCH)?
-            .as_secs() as i64;
+        let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
         
         let content_hash = calculate_blake3(path)?;
@@ -262,13 +326,13 @@ impl AnalysisCache {
         conn.execute(
             "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at) 
              VALUES (?, ?, ?, ?)",
-            params![content_hash.as_bytes(), file_size, packed_data, now],
+            params![content_hash.as_bytes(), sig.size, packed_data, now],
         )?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size) 
-             VALUES (?, ?, ?, ?)",
-            params![path_str, content_hash.as_bytes(), mtime, file_size],
+            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
 
         Ok(())
@@ -276,26 +340,29 @@ impl AnalysisCache {
 
     /// Try to get a cached video analysis result.
     pub fn get_video_analysis(&self, path: &Path) -> Result<Option<VideoDetectionResult>> {
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as i64;
-        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
 
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         // 1. Path Index
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data FROM path_index p 
+            "SELECT r.analysis_data, p.ctime, p.btime FROM path_index p 
              JOIN video_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
         
-        let mut rows = stmt.query(params![path_str, mtime, file_size])?;
+        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
         if let Some(row) = rows.next()? {
-            let data: Vec<u8> = row.get(0)?;
-            let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
-                .context("Failed to unpack cached video data (path hit)")?;
-            return Ok(Some(analysis));
+            let cached_ctime: i64 = row.get(1)?;
+            let cached_btime: i64 = row.get(2)?;
+
+            if (cached_ctime == 0 || cached_ctime == sig.ctime) && (cached_btime == 0 || cached_btime == sig.btime) {
+                let data: Vec<u8> = row.get(0)?;
+                let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
+                    .context("Failed to unpack cached video data (path hit)")?;
+                return Ok(Some(analysis));
+            }
         }
 
         // 2. Hash Index (Content Match)
@@ -312,9 +379,9 @@ impl AnalysisCache {
             
             // Backfill path index
             conn.execute(
-                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size) 
-                 VALUES (?, ?, ?, ?)",
-                params![path_str, content_hash.as_bytes(), mtime, file_size],
+                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
             )?;
 
             return Ok(Some(analysis));
@@ -325,9 +392,7 @@ impl AnalysisCache {
 
     /// Stores a video analysis result in the cache.
     pub fn store_video_analysis(&self, path: &Path, analysis: &VideoDetectionResult) -> Result<()> {
-        let metadata = std::fs::metadata(path)?;
-        let file_size = metadata.len() as i64;
-        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
         
         let content_hash = calculate_blake3(path)?;
@@ -341,13 +406,13 @@ impl AnalysisCache {
         conn.execute(
             "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at) 
              VALUES (?, ?, ?, ?)",
-            params![content_hash.as_bytes(), file_size, packed_data, now],
+            params![content_hash.as_bytes(), sig.size, packed_data, now],
         )?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size) 
-             VALUES (?, ?, ?, ?)",
-            params![path_str, content_hash.as_bytes(), mtime, file_size],
+            "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
 
         Ok(())
@@ -374,6 +439,69 @@ impl AnalysisCache {
         }
         
         Ok(removed)
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+
+    #[test]
+    fn test_cache_metadata_rigor() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("test_cache.db");
+        let cache = AnalysisCache::new(&db_path)?;
+
+        let mut temp_file = NamedTempFile::new()?;
+        writeln!(temp_file, "rigor test data")?;
+        let path = temp_file.path();
+
+        let analysis = ImageAnalysis {
+            file_path: path.display().to_string(),
+            format: "test".to_string(),
+            ..Default::default()
+        };
+
+        // 1. Store initial analysis
+        cache.store_analysis(path, &analysis)?;
+
+        // 2. Fetch immediately (HIT)
+        let hit = cache.get_analysis(path)?;
+        assert!(hit.is_some(), "Should have a cache hit");
+
+        // 3. Simulate change (overwrite file with same size but different content/metadata)
+        std::thread::sleep(std::time::Duration::from_millis(10)); 
+        {
+            let mut f = std::fs::File::create(path)?;
+            writeln!(f, "modified data!!")?;
+        }
+        
+        // Even if size is same, mtime/ctime will change.
+        let miss = cache.get_analysis(path)?;
+        // It might still hit if only ctime/btime check is strict and mtime matches,
+        // but since mtime changed (overwrite), it will miss path_index.
+        // Then it will try hash check, which will ALSO miss because content changed.
+        assert!(miss.is_none(), "Should be a cache MISS after file modification");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_signature_stability() -> Result<()> {
+        let temp_file = NamedTempFile::new()?;
+        let path = temp_file.path();
+        
+        let sig1 = FileSignature::from_path(path)?;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let sig2 = FileSignature::from_path(path)?;
+        
+        // Sig should be stable if file not touched
+        assert_eq!(sig1.mtime, sig2.mtime);
+        assert_eq!(sig1.ctime, sig2.ctime);
+        assert_eq!(sig1.size, sig2.size);
+        
+        Ok(())
     }
 }
 

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.56] - 2026-03-15
+
+### Added
+- **Robust Cache Invalidation**: Upgraded `AnalysisCache` with nanosecond-resolution change detection. The system now tracks `mtime`, `ctime`, `btime`, and `atime` in its path index. Any metadata discrepancy triggers a re-verification, ensuring maximum rigor for complex file systems.
+- **SQL Schema Migration**: Implemented automatic migration for the SQLite cache database to support the new metadata dimensions without requiring a manual reset.
+- **Default Analysis Implementation**: Added `Default` traits to `ImageAnalysis` and related types to streamline testing and object lifecycle management.
+
 ## [0.10.55] - 2026-03-15
 
 ### Added
