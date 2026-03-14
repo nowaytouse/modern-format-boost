@@ -8,8 +8,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Global Video CRF Search Cache (Warm Start)**: Implemented a cross-file global cache for the optimal Constant Rate Factor (CRF). When encoding consecutive videos or animated images, the system uses the CRF from the last successful encoding as the starting point for exploration, accelerating the convergence.
+- **Robust Animation Detection Fallback**: Integrated `ffprobe` / `libavformat` as a powerful fallback for animated image detection. If our ultra-fast native byte-level parser considers an image static (or encounters an unrecognized format), the system will now double-check the stream data with `ffprobe`. This eliminates false-static categorizations for complex or mildly malformed files.
 - **Dynamic/Static Image Cache Integration**: Clarified and reinforced the `AnalysisCache` mechanism for static images (JPEG/PNG/HEIC/AVIF) and dynamic images (GIF/WebP/APNG). The persistent SQLite database caches both metadata analysis and image quality metrics to avoid redundant heavy computations.
 - **Animated Image Encoder Integration**: Modified `vid-av1` and `vid-hevc` animated image workflows to seamlessly adopt the global CRF cache hit, allowing the system to rapidly adjust compression levels for sequences of similar GIFs or WebPs.
+
+### Fixed
+- **Compilation Reliability**: Fixed an unused parenthesis warning in `shared_utils/src/image_formats.rs`.
 
 ## [0.10.57] - 2026-03-15
 
