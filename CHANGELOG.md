@@ -17,6 +17,15 @@ All notable changes to this project will be documented in this file.
 - **JPEG Analysis Optimization**: Implemented a cache-bypass fast-path for JPEGs.
   - Bypasses SQLite retrieval/hashing overhead as header-based DQT analysis is faster.
   - Reduces cache pressure for routine JPEG-to-JXL lossless transcoding.
+- **Media Detection & Logic Consolidation**:
+  - Refactored `image_analyzer.rs` to unify detection paths for HEIC, JXL, AVIF, and standard image formats.
+  - Standardized the use of `detect_compression`, `detect_animation`, and `detect_lossless` across all format handlers.
+  - Reduced redundant boilerplate and simplified the overall analysis flow.
+
+### Changed
+- **Refactoring & Maintainability**:
+  - Consolidated scattered detection snippets into reusable modules, improving code quality and preventing "reinventing the wheel."
+  - Improved data flow from low-level magic byte detection to high-level quality analysis.
 
 ### Fixed
 - **Misleading UI Labels**: Fixed `[GPU]` label appearing when GPU coarse search was skipped for low-complexity video.
