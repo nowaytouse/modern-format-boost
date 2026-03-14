@@ -8,6 +8,7 @@
 use crate::detection_api::{detect_video, CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
+use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
@@ -239,6 +240,14 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 }
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
+    auto_convert_with_cache(input, config, None)
+}
+
+pub fn auto_convert_with_cache(
+    input: &Path,
+    config: &ConversionConfig,
+    cache: Option<&AnalysisCache>,
+) -> Result<ConversionOutput> {
     // Pause if the user is being prompted to exit via Ctrl+C
     shared_utils::ctrlc_guard::wait_if_prompt_active();
 
@@ -288,6 +297,9 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
     if detection.is_hdr10_plus {
         warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
     }
+
+    let mut detection = detection;
+    let mut explore_result_opt: Option<shared_utils::ExploreResult> = None;
 
     let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat);
 
@@ -414,7 +426,14 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
 
                 let ultimate = flag_mode.is_ultimate();
-                let initial_crf = calculate_matched_crf(&detection)?;
+                
+                // 🚀 CRF Hint Logic: Use cached best CRF if available for "warm start"
+                let initial_crf = if let Some(hint) = detection.precision.last_best_crf {
+                    info!("   💡 Using cached CRF hint: {:.1} (warm start)", hint);
+                    hint
+                } else {
+                    calculate_matched_crf(&detection)? as f32
+                };
                 info!(
                     "   {} {}: CRF {:.1}",
                     if ultimate { "🔥" } else { "🔬" },
@@ -445,6 +464,8 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                     )
                 }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
+
+                explore_result_opt = Some(explore_result.clone());
 
                 for log_line in &explore_result.log {
                     info!("{}", log_line);
@@ -750,6 +771,23 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         _ => unreachable!("AV1 tool should not return HEVC target"),
     };
 
+    // In AV1 conversion logic, the explore_result wasn't explicitly captured in a way that's shared across all branches in current code, 
+    // but the final_crf and output_size were. For caching we want the full result if possible.
+    // ... (This might need a bit more refactor if we want the full ExploreResult here)
+    // For now, if we have final_crf and output_size, we can still update.
+    
+    // 💾 Update cache with the new best CRF
+    if let Some(cache) = cache {
+        if success_status_for_cache(strategy.target, &explore_result_opt) && final_crf > 0.0 {
+            detection.precision.last_best_crf = Some(final_crf);
+            if let Err(e) = cache.store_video_analysis(input, &detection) {
+                tracing::debug!("Failed to update video cache: {}", e);
+            } else {
+                tracing::debug!("Updated video cache with best CRF: {:.1}", final_crf);
+            }
+        }
+    }
+
     if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
     {
@@ -958,6 +996,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         final_crf,
         exploration_attempts: attempts,
     })
+}
+
+fn success_status_for_cache(target: TargetVideoFormat, explore_result: &Option<shared_utils::ExploreResult>) -> bool {
+    matches!(target, TargetVideoFormat::Av1Mp4) && explore_result.as_ref().map(|r| r.quality_passed).unwrap_or(false)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
