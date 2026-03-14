@@ -740,11 +740,7 @@ fn auto_convert_single_file(
                 Some(d) if d > 0.0 => d,
                 Some(0.0) => {
                     let is_modern = matches!(format, "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF");
-                    #[allow(deprecated)]
-                    let use_lossless = match &pixel_analysis {
-                        Some(q) => q.routing_decision.use_lossless,
-                        None => false, // Default to lossy for heuristic if missing
-                    };
+                    let use_lossless = analysis.is_lossless;
 
                     if is_modern && !use_lossless {
                         verbose_log!(
