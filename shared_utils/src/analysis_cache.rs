@@ -237,7 +237,6 @@ impl AnalysisCache {
             params![path_str, content_hash.as_bytes(), mtime, file_size],
         )?;
 
-        debug!("💾 [Cache] Stored - {}", path.display());
         Ok(())
     }
 
@@ -272,7 +271,6 @@ impl AnalysisCache {
             params![path_str, content_hash.as_bytes(), mtime, file_size],
         )?;
 
-        debug!("📊 [Cache] Quality Stored - {}", path.display());
         Ok(())
     }
 

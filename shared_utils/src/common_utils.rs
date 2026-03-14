@@ -233,6 +233,13 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 /// Recursively find a box by type and return its payload (excluding size + type).
 /// Used by ISO BMFF formats (AVIF, HEIC, JXL container).
 pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
+    find_box_data_recursive_impl(data, box_type, 0, 32)
+}
+
+fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u32, max_depth: u32) -> Option<&'a [u8]> {
+    if depth >= max_depth {
+        return None;
+    }
     let mut pos = 0;
     while pos + 8 <= data.len() {
         let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
@@ -263,7 +270,7 @@ pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option
         }
         if next_pos > payload_start {
             let sub = &data[payload_start..next_pos];
-            if let Some(payload) = find_box_data_recursive(sub, box_type) {
+            if let Some(payload) = find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth) {
                 return Some(payload);
             }
         }
