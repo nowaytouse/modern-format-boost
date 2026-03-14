@@ -936,9 +936,14 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
 
 /// Returns (duration_secs, frame_count) from ImageMagick `identify -format "%T"`.
 /// Works for any format ImageMagick can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
-/// Use as fallback when ffprobe has no stream/format duration. Does not log.
+/// Use as fallback when ffprobe has no stream/format duration. Emits a warning log when used.
 pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
     use std::process::Command;
+
+    log_eprintln!(
+        "⚠️  [Duration Fallback] Using ImageMagick identify for animation duration: {}",
+        path.display()
+    );
 
     let safe_path = crate::safe_path_arg(path);
     let output = Command::new("magick")
@@ -951,9 +956,26 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
                 .arg(safe_path.as_ref())
                 .output()
         })
-        .ok()?;
+        .ok();
+
+    let output = match output {
+        Some(output) => output,
+        None => {
+            log_eprintln!(
+                "⚠️  [Duration Fallback] Failed to spawn ImageMagick identify for {}",
+                path.display()
+            );
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        log_eprintln!(
+            "⚠️  [Duration Fallback] ImageMagick identify failed for {}: {}",
+            path.display(),
+            stderr.trim()
+        );
         return None;
     }
 
@@ -969,10 +991,20 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
     }
 
     if frame_count == 0 {
+        log_eprintln!(
+            "⚠️  [Duration Fallback] ImageMagick identify returned 0 frames for {}",
+            path.display()
+        );
         return None;
     }
 
     let duration_secs = total_cs as f64 / 100.0;
+    log_eprintln!(
+        "📊  [Duration Fallback] ImageMagick animation detected: {} frames, {:.2}s ({})",
+        frame_count,
+        duration_secs,
+        path.display()
+    );
     Some((duration_secs, frame_count as u64))
 }
 
@@ -1065,13 +1097,34 @@ fn check_webp_lossless(path: &Path) -> Result<bool> {
 }
 
 /// Pixel-level fallback for is_lossless when format-level detection returns Err or is unavailable.
-/// Decodes the image and uses image_quality_detector routing heuristic (compression_potential, content_type).
-/// Returns false if decode fails (e.g. HEIC/AVIF/JXL without in-process decoder).
-#[allow(deprecated)]
+/// Decodes the image and logs classification metrics as a diagnostic warning.
+/// Does **not** attempt routing decisions anymore; returns false conservatively when used.
 fn pixel_fallback_lossless(path: &Path) -> bool {
-    crate::image_quality_detector::analyze_image_quality_from_path(path)
-        .map(|a| a.routing_decision.use_lossless)
-        .unwrap_or(false)
+    log_eprintln!(
+        "⚠️  [Lossless Fallback] Format-level detection failed; using pixel-level heuristic for {}",
+        path.display()
+    );
+
+    match crate::image_quality_detector::analyze_image_quality_from_path(path) {
+        Some(analysis) => {
+            log_eprintln!(
+                "   📊 Fallback analysis: content_type={} complexity={:.3} edge_density={:.3} color_diversity={:.3}",
+                analysis.content_type.name,
+                analysis.complexity,
+                analysis.edge_density,
+                analysis.color_diversity,
+            );
+            // 保守策略：不再根据旧 RoutingDecision 决定是否视为无损，统一视为有损
+            false
+        }
+        None => {
+            log_eprintln!(
+                "⚠️  [Lossless Fallback] Pixel-level analysis failed for {}; treating as lossy",
+                path.display()
+            );
+            false
+        }
+    }
 }
 
 fn is_jxl_file(path: &Path) -> bool {
