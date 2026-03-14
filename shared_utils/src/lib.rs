@@ -158,7 +158,7 @@ pub use video::*;
 #[allow(deprecated)] // re-export for quality dimensions; routing use is deprecated
 pub use image_quality_detector::{
     analyze_image_quality, analyze_image_quality_from_path, log_media_info_for_image_quality,
-    ImageContentType, ImageQualityAnalysis, RoutingDecision,
+    ImageContentType, ImageQualityAnalysis,
 };
 
 pub use video_quality_detector::{
