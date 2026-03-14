@@ -186,11 +186,8 @@ impl ConversionResult {
     }
 
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
-        let increase_pct = if input_size == 0 {
-            0.0
-        } else {
-            (output_size as f64 / input_size as f64 - 1.0) * 100.0
-        };
+        let diff_bytes = output_size as i64 - input_size as i64;
+        let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
         Self {
             success: true,
             input_path: input.display().to_string(),
@@ -198,7 +195,7 @@ impl ConversionResult {
             input_size,
             output_size: None,
             size_reduction: None,
-            message: format!("Skipped: Output would be larger (+{:.1}%)", increase_pct),
+            message: format!("Skipped: Output would be larger ({})", size_diff),
             skipped: true,
             skip_reason: Some("size_increase".to_string()),
         }
@@ -238,11 +235,13 @@ impl ConversionResult {
         };
         let reduction_pct = reduction * 100.0;
 
-        // Build size-change suffix: "-14.5%" (saved) or "+2.1%" (grew) with ANSI colors
+        // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI colors
         let size_tag = if reduction >= 0.0 {
             format!("\x1b[1;32m-{:.1}%\x1b[0m", reduction_pct)
         } else {
-            format!("\x1b[1;33m+{:.1}%\x1b[0m", -reduction_pct)
+            let diff_bytes = output_size as i64 - input_size as i64;
+            let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
+            format!("\x1b[1;33m{}\x1b[0m", size_diff)
         };
 
         // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
@@ -440,7 +439,9 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     if reduction >= 0.0 {
         format!("size reduced {:.1}%", reduction_pct)
     } else {
-        format!("size increased {:.1}%", -reduction_pct)
+        let diff_bytes = output_size as i64 - input_size as i64;
+        let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
+        format!("size increased {}", size_diff)
     }
 }
 
