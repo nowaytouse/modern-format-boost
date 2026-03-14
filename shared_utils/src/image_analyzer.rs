@@ -22,6 +22,17 @@ pub struct JxlIndicator {
     pub benefit: String,
 }
 
+impl Default for JxlIndicator {
+    fn default() -> Self {
+        Self {
+            should_convert: false,
+            reason: "Initial".into(),
+            command: String::new(),
+            benefit: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImageFeatures {
     pub entropy: f64,
@@ -67,6 +78,35 @@ pub struct ImageAnalysis {
 
     /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
     pub perception: VisualPerception,
+}
+
+impl Default for ImageAnalysis {
+    fn default() -> Self {
+        Self {
+            file_path: String::new(),
+            format: "unknown".into(),
+            width: 0,
+            height: 0,
+            file_size: 0,
+            color_depth: 8,
+            color_space: "unknown".into(),
+            has_alpha: false,
+            is_animated: false,
+            duration_secs: None,
+            is_lossless: false,
+            jpeg_analysis: None,
+            heic_analysis: None,
+            features: ImageFeatures::default(),
+            jxl_indicator: JxlIndicator::default(),
+            psnr: None,
+            ssim: None,
+            metadata: HashMap::new(),
+            hdr_info: None,
+            precision: PrecisionMetadata::default(),
+            history: ProcessHistory::default(),
+            perception: VisualPerception::default(),
+        }
+    }
 }
 
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
