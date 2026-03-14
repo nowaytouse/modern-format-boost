@@ -410,75 +410,92 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 }
 
 pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u32, Option<f32>)> {
-    let mut is_animated = false;
-    let mut frame_count = 1;
-    let mut fps = None;
-
+    // 🚀 Stage 1: Native Fast-Path for Simple Formats
+    // GIF, WebP, and PNG have simple, deterministic byte-level frame structures.
+    // We can rely on our native parsers for these to save the ffprobe overhead.
     match format {
         DetectedFormat::GIF => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
-            is_animated = frame_count > 1;
+            let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
+            return Ok((frame_count > 1, frame_count, None));
         }
         DetectedFormat::WebP => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
-            if is_animated {
-                frame_count = crate::image_formats::webp::count_frames_from_bytes(&data);
-            }
+            let is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
+            let frame_count = if is_animated {
+                crate::image_formats::webp::count_frames_from_bytes(&data)
+            } else {
+                1
+            };
+            return Ok((is_animated, frame_count, None));
         }
         DetectedFormat::PNG => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let (anim, count) = parse_apng_frames(&data);
-            is_animated = anim;
-            frame_count = count;
+            let (is_animated, frame_count) = parse_apng_frames(&data);
+            return Ok((is_animated, frame_count, None));
         }
+        _ => {} // Fall through for ISOBMFF and unknown formats
+    }
+
+    // 🚀 Stage 2: libavformat / ffprobe for Complex Containers
+    // Third-party libraries like libavformat have years of fuzzing, fixes, and edge-case
+    // coverage for complex ISOBMFF containers (AVIF, HEIC). Hand-written box-level parsing
+    // is prone to false positives (e.g., seeing 'avis' brand but missing 'hdlr' or 'iloc' links)
+    // and false negatives. We trust ffprobe natively here.
+    let mut fps = None;
+    if crate::ffprobe::is_ffprobe_available() {
+        if let Ok(probe) = crate::ffprobe::probe_video(path) {
+            let probe_frames = probe.frame_count as u32;
+            if probe.frame_rate > 0.0 {
+                fps = Some(probe.frame_rate as f32);
+            }
+            
+            if probe_frames > 1 {
+                return Ok((true, probe_frames, fps));
+            } else if probe_frames == 1 {
+                return Ok((false, 1, fps));
+            } else if probe.duration > 0.1 && probe.format_name.contains("video") {
+                return Ok((true, 0, fps));
+            }
+        }
+
+        // If metadata probe fails to find frame count (common for AVIF/JXL sequences),
+        // we explicitly count the packets. This demuxes the file and is 100% accurate.
+        if matches!(format, DetectedFormat::AVIF | DetectedFormat::JXL) {
+            if let Some(explicit_count) = crate::ffprobe::get_frame_count(path) {
+                if explicit_count > 1 {
+                    return Ok((true, explicit_count as u32, fps));
+                } else {
+                    return Ok((false, 1, fps));
+                }
+            }
+        }
+    }
+
+    // 🛡️ Stage 3: Ultimate Fallback (if ffprobe is missing or fails entirely)
+    let mut is_animated = false;
+    let mut frame_count = 1;
+
+    match format {
         DetectedFormat::AVIF => {
             is_animated = is_isobmff_animated_sequence(path);
-            if !is_animated {
-                frame_count = 1;
-            } else {
+            if is_animated {
                 frame_count = 0;
             }
         }
         DetectedFormat::JXL => {
             is_animated = is_jxl_animated_via_ffprobe(path);
-            if !is_animated {
-                frame_count = 1;
-            } else {
+            if is_animated {
                 frame_count = 0;
             }
         }
         _ => {}
-    }
-
-    // 🚀 Robust Fallback: If native checks indicate static (or for unknown formats),
-    // we employ ffprobe / libavformat as a reliable tie-breaker.
-    // This safeguards against cases where byte-level heuristics might fail on complex
-    // or slightly malformed files.
-    if !is_animated && crate::ffprobe::is_ffprobe_available() {
-        if let Ok(probe) = crate::ffprobe::probe_video(path) {
-            let probe_frames = probe.frame_count as u32;
-            // Only trust ffprobe if it explicitly finds more than 1 frame.
-            if probe_frames > 1 {
-                is_animated = true;
-                frame_count = probe_frames;
-                if probe.frame_rate > 0.0 {
-                    fps = Some(probe.frame_rate as f32);
-                }
-            } else if probe_frames == 0 && probe.duration > 0.1 && probe.format_name.contains("video") {
-                 is_animated = true;
-                 if probe.frame_rate > 0.0 {
-                     fps = Some(probe.frame_rate as f32);
-                 }
-            }
-        }
     }
 
     Ok((is_animated, frame_count, fps))
