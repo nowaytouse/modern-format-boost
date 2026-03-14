@@ -437,7 +437,7 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     };
     let aspect_score = if (0.75..=1.35).contains(&ratio) {
         1.0
-    } else if ratio > 2.0 || ratio < 0.5 {
+    } else if !(0.5..=2.0).contains(&ratio) {
         0.1
     } else {
         0.6

@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.57] - 2026-03-15
+
+### Added
+- **Video CRF Search Hint (Warm Start)**: Implemented a cross-session caching mechanism for video analysis. The system now stores the optimal Constant Rate Factor (CRF) from previous successful conversions in the persistent SQLite database.
+- **Improved Encoder Convergence**: Modified `vid-hevc` and `vid-av1` to utilize the cached `last_best_crf` as a search hint. This enables faster convergence during exploration while still maintaining full verification rigor.
+- **Cache Persistence in CLI**: Enabled automatic SQLite cache initialization for the standalone video binaries (`vid-hevc` and `vid-av1`).
+
+
 ## [0.10.56] - 2026-03-15
 
 ### Added
