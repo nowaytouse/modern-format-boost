@@ -42,3 +42,39 @@ pub const CRF_CACHE_MAX_VALID: f32 = 63.99;
 pub const NORMAL_MAX_ITERATIONS: u32 = 60;
 
 pub const EMERGENCY_MAX_ITERATIONS: u32 = 500;
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+// To store f32 in AtomicU32, we multiply by 100.0 and round.
+pub static GLOBAL_LAST_HIT_CRF_AV1: AtomicU32 = AtomicU32::new(0);
+pub static GLOBAL_LAST_HIT_CRF_HEVC: AtomicU32 = AtomicU32::new(0);
+
+pub fn update_global_last_hit_crf_av1(crf: f32) {
+    if crf > 0.0 {
+        GLOBAL_LAST_HIT_CRF_AV1.store((crf * 100.0).round() as u32, Ordering::Relaxed);
+    }
+}
+
+pub fn get_global_last_hit_crf_av1() -> Option<f32> {
+    let val = GLOBAL_LAST_HIT_CRF_AV1.load(Ordering::Relaxed);
+    if val > 0 {
+        Some(val as f32 / 100.0)
+    } else {
+        None
+    }
+}
+
+pub fn update_global_last_hit_crf_hevc(crf: f32) {
+    if crf > 0.0 {
+        GLOBAL_LAST_HIT_CRF_HEVC.store((crf * 100.0).round() as u32, Ordering::Relaxed);
+    }
+}
+
+pub fn get_global_last_hit_crf_hevc() -> Option<f32> {
+    let val = GLOBAL_LAST_HIT_CRF_HEVC.load(Ordering::Relaxed);
+    if val > 0 {
+        Some(val as f32 / 100.0)
+    } else {
+        None
+    }
+}
