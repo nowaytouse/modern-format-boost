@@ -1849,7 +1849,7 @@ fn estimate_webp_quality(path: &Path) -> Result<u8> {
 
 /// Parse APNG (Animated PNG) frame count from PNG data
 /// Returns (is_animated, frame_count)
-fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
+pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
     // Look for acTL (Animation Control) chunk
     let mut pos = 8; // Skip PNG signature
     while pos + 12 <= data.len() {

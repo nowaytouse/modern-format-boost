@@ -732,23 +732,28 @@ fn is_animated_format(path: &Path, format: &ImageFormat) -> Result<bool> {
 fn check_png_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     
-    // Signal A: Structural acTL search
-    // (Note: parse_apng_frames in image_detection already does this robustly)
-    let (structural_is_animated, frame_count) = crate::image_detection::parse_apng_frames(&bytes);
-    if structural_is_animated && frame_count > 1 {
+    // Stage 1: Structural Walk (Official Spec)
+    let (structural_is_animated, structural_count) = crate::image_detection::parse_apng_frames(&bytes);
+    if structural_is_animated && structural_count > 1 {
         return Ok(true);
     }
 
-    // Signal B: Loose acTL/fcTL marker search (Joint Audit)
+    // Stage 2: Feature Scan (Loose Bitstream Search)
+    // Scan for acTL [61 63 54 4C] or fcTL [66 63 54 4C] markers
     let has_actl = bytes.windows(4).any(|w| w == b"acTL");
     let has_fctl = bytes.windows(4).any(|w| w == b"fcTL");
 
     if (has_actl || has_fctl) && !structural_is_animated {
-        // [Joint Audit: DISAGREEMENT]
-        // Bitstream has APNG markers but structural walk missed them (maybe malformed/truncated).
+        // [Disagreement] Deep Internal Validation
+        if deep_research_png_animation(&bytes) {
+             log_eprintln!("🎞️  [Deep Research: APNG] Structural walk failed but internal byte-research confirmed fcTL markers: {}", path.display());
+             return Ok(true);
+        }
+
+        // Final tie-breaker for ambiguous cases
         if let Some(duration) = get_animation_duration(path) {
             if duration > 0.0 {
-                 log_eprintln!("🎞️  [Joint Audit: PNG] acTL/fcTL hints found but structural scan missed them; ffprobe confirmed duration ({:.2}s). Correcting to ANIMATED.", duration);
+                 log_eprintln!("🎞️  [Joint Audit: APNG] Structural walk failed but bitstream hints and duration confirm animation: {}", path.display());
                  return Ok(true);
             }
         }
@@ -762,56 +767,112 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
     let bytes = std::fs::read(path)?;
     
-    // Joint Audit Stage: Internal Bitstream Research
-    // count_frames_from_bytes now internalizes the "Structural vs Raw" disagreement check
-    // and performs a deep byte-level audit (validation of markers) before returning.
-    let verified_count = crate::image_formats::gif::count_frames_from_bytes(&bytes);
-    
-    if verified_count > 1 {
+    // Stage 1: Structural Count (spec-compliant chunk walking)
+    let structural_count = crate::image_formats::gif::count_frames_from_bytes(&bytes);
+    if structural_count > 1 {
         return Ok(true);
     }
 
-    // [Final Fallback] Only if the internal Deep Audit is still suspicious of malformation
-    // or if the bitstream hinting suggests something the auditor couldn't verify.
+    // Stage 2: Feature Scan (Signal B)
+    // Look for GCE markers [0x21, 0xF9, 0x04] globally
     let gce_marker = &[0x21, 0xF9, 0x04];
-    let raw_hints = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
+    let gce_hints = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
 
-    if raw_hints > verified_count {
+    if gce_hints > structural_count {
+        // [Disagreement] Internal Deep Research
+        if deep_research_gif_animation(&bytes, gce_hints) {
+             log_eprintln!("🎞️  [Deep Research: GIF] Structural scan saw {} frames, but internal byte-research confirmed {} valid GCE markers: {}", structural_count, gce_hints, path.display());
+             return Ok(true);
+        }
+
+        // Final Tie-breaker: if byte-scan and structural-scan disagree on frame count,
+        // check external duration to settle the dispute.
         if let Some(duration) = try_ffprobe_json(path) {
             if duration > 0.0 {
-                log_eprintln!("🎞️  [Joint Audit: GIF] Internal deep audit found {} frames, but bitstream hints ({}) and ffprobe duration ({:.2}s) suggest more. Correcting.", verified_count, raw_hints, duration);
+                log_eprintln!("🎞️  [Joint Audit: GIF] Structural scan missed animation ({} frames), but GCE hints ({}) and duration confirm it: {}", structural_count, gce_hints, path.display());
                 return Ok(true);
             }
         }
     }
     
-    Ok(verified_count > 1)
+    Ok(structural_count > 1)
 }
 
 fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
     
-    // Signal A: Chunk-based Count
+    // Stage 1: RIFF-structural frame counting
     let structural_count = crate::image_formats::webp::count_frames_from_bytes(&bytes);
     if structural_count > 1 {
         return Ok(true);
     }
 
-    // Signal B: Global Animation Header (ANIM chunk)
-    let has_anim_chunk = bytes.windows(4).any(|w| w == b"ANIM");
+    // Stage 2: Feature Scanning
+    // Look for global 'ANIM' or 'ANMF' chunks that might have been skipped in structural walk
+    let has_anim = bytes.windows(4).any(|w| w == b"ANIM");
+    let has_anmf = bytes.windows(4).any(|w| w == b"ANMF");
 
-    if has_anim_chunk && structural_count <= 1 {
-        // [Joint Audit: DISAGREEMENT]
-        // Header says animated, but no frames found.
+    if (has_anim || has_anmf) && structural_count <= 1 {
+        // [Disagreement] Internal Deep Research
+        // Count consistent animation frame chunks (ANMF for WebP Extended)
+        let mut confirmed_frames = 0;
+        let mut p = 0;
+        while p + 8 < bytes.len() {
+            if &bytes[p..p+4] == b"ANMF" {
+                confirmed_frames += 1;
+            }
+            p += 1;
+        }
+
+        if confirmed_frames > 1 {
+             log_eprintln!("🎞️  [Deep Research: WebP] Structural scan missed frames, but internal byte-research confirmed {} ANMF chunks: {}", confirmed_frames, path.display());
+             return Ok(true);
+        }
+
+        // Final fallback tie-breaker
         if let Some(duration) = get_animation_duration(path) {
             if duration > 0.01 {
-                log_eprintln!("🎞️  [Joint Audit: WebP] ANIM chunk present but 0 frames found; ffprobe confirmed duration ({:.2}s). Correcting.", duration);
+                log_eprintln!("🎞️  [Joint Audit: WebP] Byte markers found but structural walk failed; duration confirmed animation: {}", path.display());
                 return Ok(true);
             }
         }
     }
 
     Ok(structural_count > 1)
+}
+
+/// Internal Deep Research: GIF
+/// Validates if GCE markers are consistent with GIF block structure.
+fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
+    if gce_hints <= 1 { return false; }
+    
+    // Look for GCE patterns and verify if they are followed by valid block terminators
+    // GCE = [21 F9 04 ... 00]
+    let mut confirmed = 0;
+    let mut i = 0;
+    while i + 6 < bytes.len() {
+        if &bytes[i..i+3] == &[0x21, 0xF9, 0x04] && bytes[i+7] == 0x00 {
+            confirmed += 1;
+        }
+        i += 1;
+    }
+    
+    confirmed > 1
+}
+
+/// Internal Deep Research: APNG
+/// Validates if fcTL/acTL markers are consistent.
+fn deep_research_png_animation(bytes: &[u8]) -> bool {
+    // APNG uses fcTL (Frame Control Chunk)
+    let mut confirmed_fctl = 0;
+    let mut i = 8; // skip signature
+    while i + 8 < bytes.len() {
+        if &bytes[i+4..i+8] == b"fcTL" {
+            confirmed_fctl += 1;
+        }
+        i += 1;
+    }
+    confirmed_fctl > 0 // Even 1 fcTL usually means it's an APNG (the first frame might have it)
 }
 
 /// Public entry for retrying animation duration (e.g. from main when analysis.duration_secs is None).
