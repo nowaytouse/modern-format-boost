@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.48] - 2026-03-14
+
+### Fixed
+- **Cache Logging**: Removed noisy debug logs (💾/📊 messages) from analysis cache operations
+- **Stack Overflow Prevention**: Added recursion depth limit (32 levels) to `find_box_data_recursive` to prevent stack overflow on deeply nested or malformed ISO BMFF containers (HEIC/AVIF/JXL)
+- **Media Detection Robustness**: Restored safe fallback behavior for corrupted/truncated files:
+  - WebP animation: Falls back to lossy for files < 12 bytes
+  - TIFF: Falls back to lossless for invalid headers or truncated files
+  - EXR: Falls back to lossless for invalid magic or small files
+  - HEIC unknown profiles: Falls back to lossy for rare profiles (5-8, 10+) or missing hvcC box
+
 ## [0.10.47] - 2026-03-14
 
 ### Added
