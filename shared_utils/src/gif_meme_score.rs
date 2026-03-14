@@ -607,8 +607,15 @@ pub fn gif_meta_from_probe_with_path(
         .and_then(|s| s.to_str())
         .map(|s| s.to_string());
 
+    let duration = if probe.duration > 0.0 {
+        probe.duration
+    } else {
+        // If animated but duration is 0, give it a candidate 0.1s for scoring
+        0.1
+    };
+
     Some(GifMeta {
-        duration_secs: probe.duration,
+        duration_secs: duration,
         width: probe.width,
         height: probe.height,
         fps: probe.frame_rate,
