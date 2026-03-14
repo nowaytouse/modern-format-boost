@@ -88,38 +88,62 @@ fn score_filename(name: Option<&str>) -> f64 {
         Some(n) if !n.is_empty() => n,
         _ => return 0.5, // neutral: no filename info
     };
-    
+
     // Remove extension and common separators, then split by separators
     let stem = name
         .rsplit_once('.')
         .map(|(s, _)| s)
         .unwrap_or(name);
-    
+
+    // Fast-path: social/cache-like fingerprints
+    let is_hex32 = stem.len() == 32
+        && stem.chars().all(|c| c.is_ascii_hexdigit())
+        && stem.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if is_hex32 {
+        // Typical MD5-style cache name: strongly meme-like
+        return 0.95;
+    }
+
+    if stem.starts_with("mmexport") || stem.starts_with("wx_camera") {
+        // Common WeChat export / camera cache
+        return 0.90;
+    }
+
+    let is_numeric = stem.len() >= 10
+        && stem.len() <= 16
+        && stem.chars().all(|c| c.is_ascii_digit());
+    if is_numeric {
+        // Likely timestamp-based export from messaging apps
+        return 0.80;
+    }
+
     // Split by common separators
     let parts: Vec<&str> = stem
         .split(&['-', '_', '.', ' '][..])
         .filter(|s| !s.is_empty())
         .collect();
-    
+
     if parts.is_empty() {
         return 0.5;
     }
-    
+
     // Count total "words" across all parts
-    let mut total_words = 0;
-    
+    let mut total_words: usize = 0;
+
     for part in &parts {
-        let mut word_count_in_part = 0;
+        let mut word_count_in_part = 0usize;
         let mut in_word = false;
         let mut prev_is_cjk = false;
-        
+        let mut cjk_chars_in_part = 0usize;
+
         for ch in part.chars() {
             let is_cjk = ('\u{4E00}'..='\u{9FFF}').contains(&ch)  // CJK Unified Ideographs
                 || ('\u{3040}'..='\u{309F}').contains(&ch)        // Hiragana
                 || ('\u{30A0}'..='\u{30FF}').contains(&ch)        // Katakana
                 || ('\u{AC00}'..='\u{D7AF}').contains(&ch);       // Hangul
-            
+
             if is_cjk {
+                cjk_chars_in_part += 1;
                 // Each CJK character can be a word
                 if !prev_is_cjk || !in_word {
                     word_count_in_part += 1;
@@ -137,10 +161,15 @@ fn score_filename(name: Option<&str>) -> f64 {
                 prev_is_cjk = false;
             }
         }
-        
+
+        // 对超长 CJK 连续句子进行“拆词”，防止整句当成 1 个词导致错误高分
+        if cjk_chars_in_part > 8 {
+            word_count_in_part += (cjk_chars_in_part / 4).max(1);
+        }
+
         total_words += word_count_in_part.max(1); // Each part is at least 1 word
     }
-    
+
     // Single word → 1.0 (meme), 2 words → 0.7, 3+ words → 0.3
     match total_words {
         0 => 0.5,
@@ -204,7 +233,7 @@ const PIXELS_1080P: f64 = (1920 * 1080) as f64;
 const PIXELS_SMALL: f64 = (200 * 200) as f64;
 /// pixel count below this → ultra tiny canvas (≤96×96), typical sticker/emote size
 const PIXELS_TINY: f64 = (96 * 96) as f64;
-/// duration below this → ultra-short loop often used by reaction stickers (秒)
+/// duration below this → ultra-short loop often used by reaction stickers (seconds)
 const DURATION_ULTRA_SHORT: f64 = 0.7;
 
 // ── Confidence thresholds ─────────────────────────────────────────────────────
@@ -246,6 +275,11 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
         return VetoVerdict::KeepGif;
     }
 
+    // Very low frame count (≤5) with decent compression → almost always simple sticker/reaction
+    if meta.frame_count > 0 && meta.frame_count <= 5 && bytes_per_pixel <= 0.20 {
+        return VetoVerdict::KeepGif;
+    }
+
     VetoVerdict::Undecided
 }
 
@@ -278,13 +312,19 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     // FPS: DEPRECATED - High frame rate memes (Live2D) exist.
     let fps_score = 0.5; // neutral
 
-    // Aspect ratio: square ≈ meme
+    // Aspect ratio: plateau around classic meme ratios (3:4 ~ 4:3), penalise extremes
     let ratio = if meta.height > 0 {
         meta.width as f64 / meta.height as f64
     } else {
         1.0
     };
-    let aspect_score = 1.0 - (ratio - 1.0).abs().min(1.0);
+    let aspect_score = if (0.75..=1.35).contains(&ratio) {
+        1.0
+    } else if ratio > 2.0 || ratio < 0.5 {
+        0.1
+    } else {
+        0.6
+    };
     
     // NEW: Filename linguistic analysis
     let filename_score = score_filename(meta.file_name.as_deref());
