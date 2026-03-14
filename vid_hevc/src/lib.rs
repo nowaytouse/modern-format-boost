@@ -21,7 +21,7 @@ pub mod detection_api;
 pub mod ffprobe;
 
 pub use conversion_api::{
-    auto_convert, determine_strategy, determine_strategy_with_apple_compat, simple_convert,
+    auto_convert, auto_convert_with_cache, determine_strategy, determine_strategy_with_apple_compat, simple_convert,
 };
 pub use detection_api::{
     detect_video, ColorSpace, CompressionType, DetectedCodec, VideoDetectionResult,

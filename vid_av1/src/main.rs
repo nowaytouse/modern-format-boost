@@ -2,7 +2,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 
-use vid_av1::{auto_convert, detect_video, determine_strategy, ConversionConfig};
+use vid_av1::{auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError};
+use shared_utils::analysis_cache::AnalysisCache;
 
 #[derive(Parser)]
 #[command(name = "vid-av1")]
@@ -170,6 +171,11 @@ fn main() -> anyhow::Result<()> {
             if force_ms_ssim_long {
                 info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
             }
+            let cache = AnalysisCache::default_local().ok();
+            if cache.is_some() {
+                info!("   💽 Persistent Cache: ENABLED");
+            }
+
             info!("");
 
             shared_utils::cli_runner::run_auto_command(
@@ -184,7 +190,7 @@ fn main() -> anyhow::Result<()> {
                         None
                     },
                 },
-                |file| auto_convert(file, &config).map_err(|e| e.into()),
+                |file| auto_convert_with_cache(file, &config, cache.as_ref()).map_err(|e: VidQualityError| anyhow::anyhow!(e)),
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
             shared_utils::progress_mode::flush_log_file();

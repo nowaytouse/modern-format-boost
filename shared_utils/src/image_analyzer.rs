@@ -891,7 +891,7 @@ fn deep_research_gif_animation(bytes: &[u8], gce_hints: u32) -> bool {
     let mut confirmed = 0;
     let mut i = 0;
     while i + 6 < bytes.len() {
-        if &bytes[i..i+3] == &[0x21, 0xF9, 0x04] && bytes[i+7] == 0x00 {
+        if bytes[i..i+3] == [0x21, 0xF9, 0x04] && bytes[i+7] == 0x00 {
             confirmed += 1;
         }
         i += 1;

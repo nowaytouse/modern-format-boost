@@ -5,9 +5,10 @@
 //! - Simple Mode: Always HEVC MP4
 //! - Size Exploration: Tries higher CRF if output is larger than input
 
-use crate::detection_api::{detect_video, CompressionType, VideoDetectionResult};
+use crate::detection_api::{CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
+use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
@@ -271,7 +272,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         return Err(VidQualityError::ConversionError(e));
     }
 
-    let detection = detect_video(input)?;
+    let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
     let output_dir = output_dir
         .map(|p| p.to_path_buf())
@@ -336,6 +337,14 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 }
 
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
+    auto_convert_with_cache(input, config, None)
+}
+
+pub fn auto_convert_with_cache(
+    input: &Path,
+    config: &ConversionConfig,
+    cache: Option<&AnalysisCache>,
+) -> Result<ConversionOutput> {
     // Pause if the user is being prompted to exit via Ctrl+C
     shared_utils::ctrlc_guard::wait_if_prompt_active();
 
@@ -388,7 +397,7 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         });
     }
 
-    let detection = detect_video(input)?;
+    let mut detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
     // Warn about dynamic HDR metadata that will be stripped during re-encode
     if detection.is_dolby_vision {
@@ -539,7 +548,14 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
                 }
 
                 let ultimate = flag_mode.is_ultimate();
-                let initial_crf = calculate_matched_crf(&detection)?;
+                
+                // 🚀 CRF Hint Logic: Use cached best CRF if available for "warm start"
+                let initial_crf = if let Some(hint) = detection.precision.last_best_crf {
+                    info!("   💡 Using cached CRF hint: {:.1} (warm start)", hint);
+                    hint
+                } else {
+                    calculate_matched_crf(&detection)?
+                };
                 info!(
                     "   {} {}: CRF {:.1}",
                     if ultimate { "🔥" } else { "🔬" },
@@ -779,6 +795,30 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         TargetVideoFormat::Skip => unreachable!(),
         _ => unreachable!("HEVC tool should not return AV1/FFV1 target"),
     };
+
+    // 💾 Update cache with the new best CRF
+    if let Some(cache) = cache {
+        if success_status_for_cache(strategy.target, &explore_result_opt) {
+            detection.precision.last_best_crf = Some(final_crf);
+            if let Err(e) = cache.store_video_analysis(input, &detection) {
+                tracing::debug!("Failed to update video cache: {}", e);
+            } else {
+                tracing::debug!("Updated video cache with best CRF: {:.1}", final_crf);
+            }
+        }
+    }
+
+    // 💾 Update cache with the new best CRF
+    if let Some(cache) = cache {
+        if success_status_for_cache(strategy.target, &explore_result_opt) {
+            detection.precision.last_best_crf = Some(final_crf);
+            if let Err(e) = cache.store_video_analysis(input, &detection) {
+                tracing::debug!("Failed to update video cache: {}", e);
+            } else {
+                tracing::debug!("Updated video cache with best CRF: {:.1}", final_crf);
+            }
+        }
+    }
 
     // Verify temp file exists before commit
     if !temp_path.exists() {
@@ -1100,6 +1140,10 @@ pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<Conversio
         final_crf,
         exploration_attempts: attempts,
     })
+}
+
+fn success_status_for_cache(target: TargetVideoFormat, explore_result: &Option<shared_utils::ExploreResult>) -> bool {
+    matches!(target, TargetVideoFormat::HevcMp4) && explore_result.as_ref().map(|r| r.quality_passed).unwrap_or(false)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {

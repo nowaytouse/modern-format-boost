@@ -1967,7 +1967,7 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
         // Peak into image data for PNG magic
         file.seek(SeekFrom::Start(img_offset)).map_err(ImgQualityError::IoError)?;
         let mut magic_peek = [0u8; 8];
-        if file.read_exact(&mut magic_peek).is_ok() && &magic_peek == png_magic {
+        if file.read_exact(&mut magic_peek).is_ok() && magic_peek == png_magic {
             // Seek back to start of image data for full analysis
             file.seek(SeekFrom::Start(img_offset)).map_err(ImgQualityError::IoError)?;
             let mut img_reader = (&file).take(img_size);

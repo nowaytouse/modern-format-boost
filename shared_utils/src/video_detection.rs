@@ -17,6 +17,8 @@ pub struct VideoPrecisionMetadata {
     pub original_encoder: Option<String>,
     pub original_max_b_frames: Option<u8>,
     pub is_lossless_deterministic: bool,
+    /// 🚀 Hint: The last successful CRF value found during exploration (stored in cache)
+    pub last_best_crf: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
