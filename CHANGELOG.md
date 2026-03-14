@@ -4,15 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.10.54] - 2026-03-15
+## [0.10.55] - 2026-03-15
 
 ### Added
-- **Performance-Optimized Joint Audit**: Restored batch processing speed by eliminating redundant `ffprobe` calls. Deep research is now only triggered as a "tie-breaker" when structural analysis and bitstream signals disagree.
-- **APNG Support**: Added animation detection and routing support for APNG files, ensuring they follow the animated media pipeline.
+- **Internal Deep Research (Tie-Breaker)**: Implemented granular byte-level validation for GIF, WebP, and APNG markers. This allows the system to settle disagreements between structural and feature-based scans internally, significantly reducing the necessity of launching external `ffprobe` processes.
 
 ### Fixed
-- **Critical GIF Parser Fix**: Resolved a bitstream desynchronization bug where the LZW minimum code size byte was not skipped, causing multi-frame GIFs to be miscounted as static.
-- **Improved Semantic Reliability**: Cross-validation now captures animations that fail structural walks due to minor file malformations.
+- **Compilation Reliability**: Fixed a visibility defect where `parse_apng_frames` was private, which caused workspace build failures in previously pushed code.
+- **Enhanced APNG Routing**: Integrated APNG into the Joint Audit pipeline, ensuring animated PNGs are correctly identified and handled.
+
+## [0.10.54] - 2026-03-15
+- Internal overhaul of Joint Audit mechanism.
 
 ## [0.10.53] - 2026-03-15 (Internal Fix)
 - Internal revisions for audit logic.
