@@ -606,7 +606,8 @@ fn auto_convert_single_file(
     }
 
     // 完整接入图像质量分析：静态图始终做像素级分析，用于路由 + 质量输出（自动写入 run log）
-    let pixel_analysis = if !analysis.is_animated {
+    // 针对性：JPEG 这种已经明确走 lossless transcode 到 JXL 的不需要开启昂贵的像素级分析
+    let pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
         shared_utils::image_quality_detector::analyze_image_quality_with_cache(input, config.cache.as_deref())
     } else {
         None

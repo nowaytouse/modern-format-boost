@@ -62,6 +62,12 @@ pub struct ImageQualityAnalysis {
     pub confidence: f64,
 
     pub precision: PrecisionMetadata,
+
+    /// 🛠️ New Dimension: Processing history for cache invalidation logic
+    pub history: crate::types::ProcessHistory,
+
+    /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
+    pub perception: crate::types::VisualPerception,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -265,6 +271,8 @@ pub fn analyze_image_quality(
         routing_decision,
         confidence,
         precision,
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
     })
 }
 
@@ -735,6 +743,16 @@ pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalys
 
 /// Analyzes image quality from a path with optional cache.
 pub fn analyze_image_quality_with_cache(path: &Path, cache: Option<&crate::analysis_cache::AnalysisCache>) -> Option<ImageQualityAnalysis> {
+    // Fast-path for JPEGs: Avoid pixel-level decoding and cache noise
+    let is_jpeg_hint = path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .map(|e| e == "jpg" || e == "jpeg")
+        .unwrap_or(false);
+
+    if is_jpeg_hint {
+        return None;
+    }
+
     if let Some(cache) = cache {
         if let Ok(Some(cached)) = cache.get_quality_analysis(path) {
             return Some(cached);

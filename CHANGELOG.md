@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.49] - 2026-03-14
+
+### Added
+- **Analysis Cache Enrichment**: Enhanced SQLite cache with new data dimensions for intelligent processing.
+  - **Process History**: Added fields to track software version and analysis timestamp for cache invalidation.
+  - **Visual Perception**: Added auxiliary metrics (Average/Peak Luma, Gray Center of Mass) for future HDR/SDR analysis.
+  - Integrated into `ImageAnalysis`, `ImageQualityAnalysis`, and `VideoDetectionResult`.
+- **Cache Management**:
+  - Added `scripts/cache_cleaner.sh` for easy cache maintenance.
+  - Added new menu option (4th) in `drag_and_drop_processor.sh` to trigger cache cleaning.
+- **JPEG Analysis Optimization**: Implemented a cache-bypass fast-path for JPEGs.
+  - Bypasses SQLite retrieval/hashing overhead as header-based DQT analysis is faster.
+  - Reduces cache pressure for routine JPEG-to-JXL lossless transcoding.
+
+### Fixed
+- **Misleading UI Labels**: Fixed `[GPU]` label appearing when GPU coarse search was skipped for low-complexity video.
+  - Now correctly displays `[Initial]` for Phase 1 verification in such cases.
+- **Terminal Silence**: Muted noisy `DEBUG` level cache hits from the terminal while preserving them in internal log files.
+- **Script Robustness**: Fixed a potential syntax error in the bash processor script and improved mode selection logic.
+
 ## [0.10.48] - 2026-03-14
 
 ### Fixed

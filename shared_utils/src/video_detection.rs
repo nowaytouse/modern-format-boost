@@ -210,6 +210,10 @@ pub struct VideoDetectionResult {
     pub precision: VideoPrecisionMetadata,
     /// Raw tags from format section
     pub tags: HashMap<String, String>,
+    /// 🛠️ New Dimension: Processing history for cache invalidation logic
+    pub history: crate::types::ProcessHistory,
+    /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
+    pub perception: crate::types::VisualPerception,
 }
 
 impl VideoDetectionResult {
@@ -415,6 +419,8 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         is_variable_frame_rate: probe.is_variable_frame_rate,
         precision,
         tags: probe.tags,
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
     })
 }
 

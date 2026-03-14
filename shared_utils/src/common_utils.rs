@@ -17,7 +17,9 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
+use crate::types::ProcessHistory;
 
 #[inline]
 pub fn get_extension_lowercase(path: &Path) -> String {
@@ -25,6 +27,17 @@ pub fn get_extension_lowercase(path: &Path) -> String {
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default()
+}
+
+/// Returns the current processing history (version and timestamp)
+pub fn get_current_history() -> ProcessHistory {
+    ProcessHistory {
+        software_version: env!("CARGO_PKG_VERSION").to_string(),
+        analysis_timestamp: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    }
 }
 
 #[inline]

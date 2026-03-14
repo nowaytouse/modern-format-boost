@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use crate::log_eprintln;
+use crate::types::{ProcessHistory, VisualPerception};
 
 /// Minimum duration (seconds) for converting animated images to HEVC video.
 /// Shorter animations are skipped (no conversion to video).
@@ -60,6 +61,12 @@ pub struct ImageAnalysis {
     pub hdr_info: Option<ColorInfo>,
 
     pub precision: PrecisionMetadata,
+
+    /// 🛠️ New Dimension: Processing history for cache invalidation logic
+    pub history: ProcessHistory,
+
+    /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
+    pub perception: VisualPerception,
 }
 
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
@@ -70,6 +77,20 @@ pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
 
 /// Analyzes an image file with optional SQLite caching.
 pub fn analyze_image_with_cache(path: &Path, cache: Option<&crate::analysis_cache::AnalysisCache>) -> Result<ImageAnalysis> {
+    // Fast-path for JPEGs: Bypass the SQLite cache entirely because:
+    // 1. JPEG analysis (DQT markers only) is faster than SQLite/Hashing overhead.
+    // 2. We don't need pixel-level features for JPEG->JXL lossless transcoding.
+    let is_jpeg_hint = path.extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .map(|e| e == "jpg" || e == "jpeg")
+        .unwrap_or(false);
+
+    if is_jpeg_hint && cache.is_some() {
+        if let Ok(analysis) = analyze_image_internal(path) {
+            return Ok(analysis);
+        }
+    }
+
     if let Some(cache) = cache {
         match cache.get_analysis(path) {
             Ok(Some(cached)) => {
@@ -172,6 +193,12 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     if let Some(ext) = path.extension() {
         let ext_str = ext.to_string_lossy().to_lowercase();
+        
+        // Fast-path: If it's a JPEG, skip decode() entirely.
+        if format == ImageFormat::Jpeg {
+            return analyze_jpeg_fast_path(path, file_size);
+        }
+
         let (is_valid, suggested) = match format {
             ImageFormat::Jpeg => (["jpg", "jpeg", "jpe"].contains(&ext_str.as_str()), "jpg"),
             ImageFormat::Png => (ext_str == "png", "png"),
@@ -285,6 +312,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         metadata,
         hdr_info,
         precision,
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
     })
 }
 
@@ -401,6 +430,69 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         metadata,
         hdr_info,
         precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
+    })
+}
+
+/// Specialized fast path for JPEG files to avoid expensive pixel decoding.
+/// JPEG->JXL transcoding only needs quantization tables, not raw pixels.
+fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+    let jpeg_analysis = analyze_jpeg_file(path).ok();
+    
+    // Use fast metadata parsing to get dimensions without decoding pixels
+    let (width, height) = if let Ok(reader) = image::ImageReader::open(path) {
+        if let Ok(dim) = reader.into_dimensions() {
+            dim
+        } else {
+            (0, 0)
+        }
+    } else {
+        (0, 0)
+    };
+
+    let metadata = extract_metadata(path).unwrap_or_default();
+    let jxl_indicator = generate_jxl_indicator(&ImageFormat::Jpeg, false, &jpeg_analysis, path);
+
+    let (psnr, ssim) = if let Some(ref jpeg) = jpeg_analysis {
+        (
+            Some(estimate_psnr_from_quality(jpeg.estimated_quality)),
+            Some(estimate_ssim_from_quality(jpeg.estimated_quality))
+        )
+    } else {
+        (None, None)
+    };
+
+    Ok(ImageAnalysis {
+        file_path: path.display().to_string(),
+        format: "JPEG".to_string(),
+        width,
+        height,
+        file_size,
+        color_depth: 8,
+        color_space: "sRGB".to_string(),
+        has_alpha: false,
+        is_animated: false,
+        duration_secs: None,
+        is_lossless: false,
+        jpeg_analysis,
+        heic_analysis: None,
+        features: ImageFeatures {
+            entropy: 0.0, // Skipped for performance
+            compression_ratio: 0.0,
+        },
+        jxl_indicator,
+        psnr,
+        ssim,
+        metadata,
+        hdr_info: extract_hdr_info(path),
+        precision: PrecisionMetadata {
+            bit_depth: Some(8),
+            is_lossless_deterministic: false,
+            ..Default::default()
+        },
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
     })
 }
 
@@ -1079,6 +1171,8 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         metadata,
         hdr_info,
         precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
     })
 }
 
@@ -1154,6 +1248,8 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         metadata,
         hdr_info,
         precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
+        history: crate::common_utils::get_current_history(),
+        perception: Default::default(),
     })
 }
 

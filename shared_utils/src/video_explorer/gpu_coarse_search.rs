@@ -170,7 +170,9 @@ pub fn explore_with_gpu_coarse_search(
     };
     let is_high_complexity = bitrate_bps > 5_000_000.0; // > 5 Mbps
 
+    let mut gpu_executed = false;
     let (cpu_min_crf, cpu_max_crf, cpu_center_crf) = if gpu.is_available() && has_gpu_encoder && is_high_complexity {
+        gpu_executed = true;
         crate::verbose_eprintln!();
         crate::verbose_eprintln!("Phase 1: GPU Coarse Search");
 
@@ -460,6 +462,7 @@ pub fn explore_with_gpu_coarse_search(
         probe_result.as_ref(),
         &mut best_vmaf_tracked,
         &mut best_psnr_uv_tracked,
+        gpu_executed,
     )?;
 
     result.log.clear();
@@ -982,6 +985,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     probe_info: Option<&crate::ffprobe::FFprobeResult>,
     best_vmaf_tracked: &mut Option<f64>,
     best_psnr_uv_tracked: &mut Option<(f64, f64)>,
+    gpu_executed: bool,
 ) -> Result<ExploreResult> {
     #[allow(unused_mut)]
     let mut log = Vec::new();
@@ -1372,7 +1376,8 @@ fn cpu_fine_tune_from_gpu_boundary(
         None
     };
 
-    crate::verbose_eprintln!("{}Phase 1: Verify GPU boundary{}", BRIGHT_CYAN, RESET);
+    let boundary_label = if gpu_executed { "GPU boundary" } else { "initial boundary" };
+    crate::verbose_eprintln!("{}Phase 1: Verify {}{}", BRIGHT_CYAN, boundary_label, RESET);
 
     let gpu_size = encode_cached(gpu_boundary_crf, &mut size_cache).map_err(|e| {
         crate::log_eprintln!(
@@ -1420,9 +1425,10 @@ fn cpu_fine_tune_from_gpu_boundary(
         };
 
         use crate::modern_ui::colors::*;
+        let source_label = if gpu_executed { "[GPU]" } else { "[Initial]" };
         crate::log_eprintln!(
-            "{}{}   {}✓{} [GPU] {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
-            RESET, RESET, BRIGHT_GREEN, RESET, CYAN, gpu_boundary_crf, RESET,
+            "{}{}   {}✓{} {} {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
+            RESET, RESET, BRIGHT_GREEN, RESET, source_label, CYAN, gpu_boundary_crf, RESET,
             BRIGHT_GREEN, gpu_pct, RESET, metrics_display
         );
         crate::log_eprintln!();

@@ -284,8 +284,8 @@ select_mode() {
     SELECTED=0
     hide_cursor
 
-    local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors")
-    local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import.")
+    local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors" "🧹 Clean Cache & Logs")
+    local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import." "Clear metadata cache and session logs to free disk space.")
     
     while true; do
         clear_screen
@@ -310,9 +310,9 @@ select_mode() {
         if [[ "$key" == $'\x1b' ]]; then
             read -rsn2 key
             if [[ "$key" == "[A" ]]; then
-                SELECTED=$(( (SELECTED - 1 + 3) % 3 ))
+                SELECTED=$(( (SELECTED - 1 + 4) % 4 ))
             elif [[ "$key" == "[B" ]]; then
-                SELECTED=$(( (SELECTED + 1) % 3 ))
+                SELECTED=$(( (SELECTED + 1) % 4 ))
             fi
         elif [[ "$key" == "" ]]; then
             break
@@ -341,11 +341,15 @@ select_mode() {
         drain_stdin
         read -r confirm
         [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
-    else
+    elif [[ $SELECTED -eq 2 ]]; then
         OUTPUT_MODE="brotli_fix_only"
         echo -e "\n${MAGENTA}🩹 ICLOUD IMPORT FIX MODE${RESET}"
         echo -e "${DIM}   Only files with corrupted Brotli EXIF will be fixed.${RESET}"
         echo -e "${DIM}   This resolves 'Unable to import to iCloud Photos' errors.${RESET}"
+        echo ""
+    else
+        OUTPUT_MODE="cache_clean"
+        echo -e "\n${CYAN}🧹 CACHE CLEANING MODE${RESET}"
         echo ""
     fi
 }
@@ -541,6 +545,9 @@ _main() {
         echo ""
         echo -e "${DIM}Press any key to exit...${RESET}"
         read -rsn1
+        exit 0
+    elif [[ "$OUTPUT_MODE" == "cache_clean" ]]; then
+        "$SCRIPT_DIR/cache_cleaner.sh"
         exit 0
     fi
 
