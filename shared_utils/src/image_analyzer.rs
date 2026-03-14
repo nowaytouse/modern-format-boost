@@ -762,30 +762,30 @@ fn check_gif_animation(path: &Path) -> Result<bool> {
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
     let bytes = std::fs::read(path)?;
     
-    // Signal A: Structural Frame Count (Primary)
-    let structural_count = crate::image_formats::gif::count_frames_from_bytes(&bytes);
-    if structural_count > 1 {
+    // Joint Audit Stage: Internal Bitstream Research
+    // count_frames_from_bytes now internalizes the "Structural vs Raw" disagreement check
+    // and performs a deep byte-level audit (validation of markers) before returning.
+    let verified_count = crate::image_formats::gif::count_frames_from_bytes(&bytes);
+    
+    if verified_count > 1 {
         return Ok(true);
     }
 
-    // Signal B: Loose Bitstream Check (Joint Audit)
-    // Check for "Graphic Control Extension" magic [0x21, 0xF9, 0x04]
-    // If we find more than one GCE but the structural scan missed them, we are "UNSURE".
+    // [Final Fallback] Only if the internal Deep Audit is still suspicious of malformation
+    // or if the bitstream hinting suggests something the auditor couldn't verify.
     let gce_marker = &[0x21, 0xF9, 0x04];
-    let gce_hints = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
+    let raw_hints = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
 
-    if gce_hints > structural_count {
-        // [Joint Audit: DISAGREEMENT]
-        // Bitstream hints suggest more frames than the structural walk found.
+    if raw_hints > verified_count {
         if let Some(duration) = try_ffprobe_json(path) {
             if duration > 0.0 {
-                log_eprintln!("🎞️  [Joint Audit: GIF] Structural scan saw {} frames, but bitstream hints showed {}. Deep verification confirmed duration ({:.2}s). Correcting.", structural_count, gce_hints, duration);
+                log_eprintln!("🎞️  [Joint Audit: GIF] Internal deep audit found {} frames, but bitstream hints ({}) and ffprobe duration ({:.2}s) suggest more. Correcting.", verified_count, raw_hints, duration);
                 return Ok(true);
             }
         }
     }
     
-    Ok(structural_count > 1)
+    Ok(verified_count > 1)
 }
 
 fn check_webp_animation(path: &Path) -> Result<bool> {
