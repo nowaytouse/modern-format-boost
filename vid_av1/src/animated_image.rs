@@ -527,9 +527,11 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                     reduction_pct
                 )
             } else {
+                let diff_bytes = output_size as i64 - input_size as i64;
+                let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
                 format!(
-                    "AV1 conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
-                    -reduction_pct
+                    "AV1 conversion successful: size increased \x1b[1;33m{}\x1b[0m",
+                    size_diff
                 )
             };
 
@@ -1130,7 +1132,9 @@ pub fn convert_to_av1_mkv_lossless(
             let message = if reduction >= 0.0 {
                 format!("Lossless AV1: size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
             } else {
-                format!("Lossless AV1: size increased \x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
+                let diff_bytes = output_size as i64 - input_size as i64;
+                let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
+                format!("Lossless AV1: size increased \x1b[1;33m{}\x1b[0m", size_diff)
             };
 
             Ok(ConversionResult {
@@ -1554,7 +1558,9 @@ pub fn convert_to_gif_apple_compat(
     let message = if reduction >= 0.0 {
         format!("GIF (Apple Compat): size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
     } else {
-        format!("GIF (Apple Compat): size increased \x1b[1;33m{:.1}%\x1b[0m", -reduction_pct)
+        let diff_bytes = output_size as i64 - input_size as i64;
+        let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
+        format!("GIF (Apple Compat): size increased \x1b[1;33m{}\x1b[0m", size_diff)
     };
 
     Ok(ConversionResult {

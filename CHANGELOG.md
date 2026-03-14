@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.50] - 2026-03-14
+
+### Changed
+- **Log Precision Improvement**: Replaced vague percentage-based logs (`+812.3%`) with explicit units (`+850KB`, `+1.2MB`) when file size increases during transcoding.
+  - Affects `img-hevc`, `vid-av1`, and `vid-hevc` success and skip messages.
+  - Provides clearer technical feedback for files within the 1MB size tolerance.
+
 ## [0.10.49] - 2026-03-14
 
 ### Added
