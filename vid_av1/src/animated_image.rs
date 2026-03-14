@@ -828,16 +828,24 @@ pub fn convert_to_av1_mp4_matched(
         eprintln!("   🖥️  CPU Mode: Using libx265 for higher SSIM (≥0.98)");
     }
 
+    let mut actual_initial_crf = initial_crf;
+    if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_av1() {
+        if options.verbose {
+            eprintln!("   💡 Using global last hit CRF: {:.1} (warm start)", hint);
+        }
+        actual_initial_crf = hint;
+    }
+
     if options.verbose {
         eprintln!(
-            "   {} Mode: CRF {:.1} (based on input analysis)",
+            "   {} Mode: CRF {:.1} (based on input analysis/cache)",
             flag_mode.description_en(),
-            initial_crf
+            actual_initial_crf
         );
     }
 
     let (_max_crf, _min_ssim) = shared_utils::video_explorer::calculate_smart_thresholds(
-        initial_crf,
+        actual_initial_crf,
         shared_utils::VideoEncoder::Av1,
     );
 
@@ -846,7 +854,7 @@ pub fn convert_to_av1_mp4_matched(
             &final_input,
             &temp_output,
             vf_args,
-            initial_crf,
+            actual_initial_crf,
             true,
             options.allow_size_tolerance,
             options.child_threads,
@@ -856,7 +864,7 @@ pub fn convert_to_av1_mp4_matched(
             &final_input,
             &temp_output,
             vf_args,
-            initial_crf,
+            actual_initial_crf,
             options.allow_size_tolerance,
             options.child_threads,
         )
@@ -1026,11 +1034,15 @@ pub fn convert_to_av1_mp4_matched(
     }
 
     let reduction_pct = -explore_result.size_change_pct;
-    let explored_msg = if (explore_result.optimal_crf - initial_crf).abs() > 0.1 {
-        format!(" (explored from CRF {:.1})", initial_crf)
+    let explored_msg = if (explore_result.optimal_crf - actual_initial_crf).abs() > 0.1 {
+        format!(" (explored from CRF {:.1})", actual_initial_crf)
     } else {
         String::new()
     };
+
+    if explore_result.quality_passed && explore_result.optimal_crf > 0.0 {
+        shared_utils::crf_constants::update_global_last_hit_crf_av1(explore_result.optimal_crf);
+    }
 
     let ssim_msg = explore_result
         .ssim
