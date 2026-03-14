@@ -305,7 +305,9 @@ pub fn execute_conversion(
     let message = if reduction >= 0.0 {
         format!("✅ JXL transcoding: -{:.1}%", reduction)
     } else {
-        format!("✅ JXL transcoding: +{:.1}%", -reduction)
+        let diff_bytes = output_size.unwrap_or(0) as i64 - detection.file_size as i64;
+        let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
+        format!("✅ JXL transcoding: {}", size_diff)
     };
 
     Ok(ConversionOutput {
