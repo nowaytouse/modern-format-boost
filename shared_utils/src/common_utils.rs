@@ -230,6 +230,83 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     Ok(output)
 }
 
+/// Recursively find a box by type and return its payload (excluding size + type).
+/// Used by ISO BMFF formats (AVIF, HEIC, JXL container).
+pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
+    let mut pos = 0;
+    while pos + 8 <= data.len() {
+        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let current_type = &data[pos + 4..pos + 8];
+        let (payload_start, next_pos) = if size == 0 {
+            break;
+        } else if size == 1 {
+            if pos + 16 > data.len() {
+                pos += 8;
+                continue;
+            }
+            let ext = u64::from_be_bytes([
+                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
+                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+            ]) as usize;
+            (pos + 16, (pos + ext).min(data.len()))
+        } else if size < 8 {
+            pos += 8;
+            continue;
+        } else {
+            (pos + 8, (pos + size).min(data.len()))
+        };
+        if current_type == box_type {
+            if next_pos <= data.len() && payload_start < next_pos {
+                return Some(&data[payload_start..next_pos]);
+            }
+            return None;
+        }
+        if next_pos > payload_start {
+            let sub = &data[payload_start..next_pos];
+            if let Some(payload) = find_box_data_recursive(sub, box_type) {
+                return Some(payload);
+            }
+        }
+        pos = next_pos;
+    }
+    None
+}
+
+/// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
+pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
+    let mut pos = 0;
+    while pos + 8 <= data.len() {
+        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let current_type = &data[pos + 4..pos + 8];
+        if current_type == box_type {
+            return true;
+        }
+        let (payload_start, next_pos) = if size == 0 {
+            break;
+        } else if size == 1 {
+            if pos + 16 > data.len() {
+                pos += 8;
+                continue;
+            }
+            let ext = u64::from_be_bytes([
+                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
+                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+            ]) as usize;
+            (pos + 16, (pos + ext).min(data.len()))
+        } else if size < 8 {
+            pos += 8;
+            continue;
+        } else {
+            (pos + 8, (pos + size).min(data.len()))
+        };
+        if next_pos > payload_start && find_any_box_recursive(&data[payload_start..next_pos], box_type) {
+            return true;
+        }
+        pos = next_pos;
+    }
+    false
+}
+
 pub fn is_command_available(command_name: &str) -> bool {
     Command::new(command_name)
         .arg("--version")

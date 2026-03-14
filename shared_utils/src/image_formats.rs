@@ -1,5 +1,88 @@
 //! Format-specific utilities and helpers
 
+pub mod tiff {
+    use std::fs;
+    use std::path::Path;
+    use crate::img_errors::{ImgQualityError, Result};
+
+    /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and BigTIFF.
+    pub fn is_lossless(path: &Path) -> Result<bool> {
+        crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
+            .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+
+        let data = fs::read(path)?;
+        if data.len() < 8 {
+            // Fallback to lossless for corrupted/truncated files (safe default for TIFF)
+            return Ok(true);
+        }
+
+        let is_little_endian = &data[0..2] == b"II";
+        if &data[0..2] != b"II" && &data[0..2] != b"MM" {
+            // Invalid byte order marker - fallback to lossless (safe default)
+            return Ok(true);
+        }
+
+        let version = if is_little_endian { u16::from_le_bytes([data[2], data[3]]) } else { u16::from_be_bytes([data[2], data[3]]) };
+        let is_bigtiff = version == 0x002B;
+
+        let read_u16 = |off: usize| -> u16 {
+            if is_little_endian { u16::from_le_bytes([data[off], data[off + 1]]) } else { u16::from_be_bytes([data[off], data[off + 1]]) }
+        };
+        let read_u32 = |off: usize| -> u32 {
+            if is_little_endian { u32::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3]]) } 
+            else { u32::from_be_bytes([data[off], data[off+1], data[off+2], data[off+3]]) }
+        };
+        let read_u64 = |off: usize| -> u64 {
+            if is_little_endian { u64::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3], data[off+4], data[off+5], data[off+6], data[off+7]]) }
+            else { u64::from_be_bytes([data[off], data[off+1], data[off+2], data[off+3], data[off+4], data[off+5], data[off+6], data[off+7]]) }
+        };
+
+        let mut ifd_offset: u64 = if is_bigtiff {
+            if data.len() < 16 {
+                // Fallback to lossless for corrupted BigTIFF files
+                return Ok(true);
+            }
+            read_u64(8)
+        } else {
+            read_u32(4) as u64
+        };
+
+        let mut ifd_count = 0u32;
+        while ifd_offset != 0 && ifd_count < 100 {
+            ifd_count += 1;
+            let ifd_pos = ifd_offset as usize;
+            let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
+                if ifd_pos + 8 > data.len() { break; }
+                let n = read_u64(ifd_pos) as usize;
+                (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
+            } else {
+                if ifd_pos + 2 > data.len() { break; }
+                let n = read_u16(ifd_pos) as usize;
+                (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
+            };
+
+            let mut pos = entries_start;
+            for _ in 0..num_entries {
+                if pos + entry_size > data.len() { break; }
+                if read_u16(pos) == 259 {
+                    let compression = if is_bigtiff { read_u16(pos + 12) } else { read_u16(pos + 8) };
+                    if compression == 6 || compression == 7 || compression == 50001 { return Ok(false); }
+                }
+                pos += entry_size;
+            }
+
+            if is_bigtiff {
+                if next_offset_pos + 8 > data.len() { break; }
+                ifd_offset = read_u64(next_offset_pos);
+            } else {
+                if next_offset_pos + 4 > data.len() { break; }
+                ifd_offset = read_u32(next_offset_pos) as u64;
+            }
+        }
+        Ok(true)
+    }
+}
+
 pub mod png {
     use std::fs;
     use std::io::Read;
@@ -72,6 +155,101 @@ pub mod jpeg {
 pub mod webp {
     use std::fs;
     use std::path::Path;
+    use crate::img_errors::{ImgQualityError, Result};
+
+    /// Detect WebP animated compression by traversing all ANMF (animation frame) chunks.
+    ///
+    /// WebP animation: RIFF header → VP8X → ANIM → ANMF* frames.
+    /// Each ANMF payload contains frame data starting with VP8/VP8L sub-chunk.
+    /// Any VP8 (lossy) frame → Lossy. All VP8L → Lossless.
+    pub fn detect_webp_animation_is_lossless(data: &[u8]) -> Result<bool> {
+        // WebP structure: RIFF[size]WEBP[chunks...]
+        // Walk top-level chunks to find ANMF frames
+        if data.len() < 12 {
+            // Fallback to lossy for corrupted/truncated files (safe default for animated WebP)
+            return Ok(false);
+        }
+
+        let mut pos = 12; // skip RIFF + size + WEBP
+        let mut found_any_frame = false;
+
+        while pos + 8 <= data.len() {
+            let chunk_id = &data[pos..pos + 4];
+            let chunk_size = u32::from_le_bytes([
+                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+            ]) as usize;
+            let payload_start = pos + 8;
+            let payload_end = (payload_start + chunk_size).min(data.len());
+
+            if chunk_id == b"ANMF" && payload_end > payload_start + 24 {
+                found_any_frame = true;
+                // ANMF payload: 24 bytes header, then frame data sub-chunk
+                let frame_data = &data[payload_start + 24..payload_end];
+                if frame_data.len() >= 4 {
+                    // Check sub-chunk type: VP8L = lossless, VP8 = lossy
+                    let sub_chunk = &frame_data[0..4];
+                    if sub_chunk == b"VP8 " {
+                        return Ok(false); // Lossy
+                    } else if sub_chunk != b"VP8L" {
+                        // Unknown frame type in animated WebP — ambiguous
+                        return Err(ImgQualityError::AnalysisError(
+                            format!("Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression", 
+                            String::from_utf8_lossy(sub_chunk), payload_start + 24)
+                        ));
+                    }
+                }
+            }
+
+            // Chunks are padded to even size
+            let padded = (chunk_size + 1) & !1;
+            pos = payload_start + padded;
+        }
+
+        if found_any_frame {
+            Ok(true) // All frames were VP8L (or skipped non-frame chunks)
+        } else {
+            // No ANMF frames found in animated WebP — ambiguous if VP8L also not found via window search
+            if data.windows(4).any(|w| w == b"VP8L") {
+                Ok(true)
+            } else if data.windows(4).any(|w| w == b"VP8 ") {
+                 Ok(false)
+            } else {
+                Err(ImgQualityError::AnalysisError(
+                    "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine compression".to_string()
+                ))
+            }
+        }
+    }
+
+    /// Estimate WebP VP8 quality by parsing the bitstream quantization index.
+    pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
+        let mut pos = 12; // skip RIFF + size + WEBP
+        while pos + 8 <= data.len() {
+            let chunk_id = &data[pos..pos + 4];
+            let chunk_size = u32::from_le_bytes([
+                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
+            ]) as usize;
+            let payload_start = pos + 8;
+            let payload_end = (payload_start + chunk_size).min(data.len());
+
+            if chunk_id == b"VP8 " && payload_end > payload_start + 10 {
+                let vp8_data = &data[payload_start..payload_end];
+                if vp8_data.len() >= 10 && vp8_data[3..6] == [0x9D, 0x01, 0x2A] {
+                    let y_ac_qi = (vp8_data[10] & 0x7F) as u8;
+                    let quality = ((127 - y_ac_qi) * 100 / 127).min(100);
+                    return Ok(quality);
+                }
+            }
+            let padded = (chunk_size + 1) & !1;
+            pos = payload_start + padded;
+        }
+        Err(ImgQualityError::AnalysisError("No VP8 chunk found".to_string()))
+    }
+
+    pub fn estimate_quality(path: &Path) -> Result<u8> {
+        fs::read(path).map_err(|e| ImgQualityError::IoError(e))
+            .and_then(|b| estimate_quality_from_bytes(&b))
+    }
 
     pub fn is_lossless_from_bytes(data: &[u8]) -> bool {
         data.windows(4).any(|w| w == b"VP8L")
@@ -236,9 +414,270 @@ pub mod gif {
     }
 }
 
+pub mod avif {
+    use std::fs;
+    use std::path::Path;
+    use crate::img_errors::{ImgQualityError, Result};
+    use crate::common_utils::find_box_data_recursive;
+
+    /// Detect AVIF lossless encoding — multi-dimension analysis.
+    ///
+    /// Dimensions checked (in priority order):
+    /// 1. **av1C chroma subsampling**: 4:2:0 / 4:2:2 → definitely lossy
+    /// 2. **av1C 4:4:4 + colr Identity matrix (MC=0)** → lossless
+    /// 3. **av1C 4:4:4 + high_bitdepth / twelve_bit** → lossless
+    /// 4. **av1C seq_profile**: Profile 0 + 4:4:4 → treat as lossless
+    /// 5. **pixi box**: bit depth ≥ 12 with 4:4:4 → lossless indicator
+    pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
+        if let Some(av1c_data) = find_box_data_recursive(data, b"av1C") {
+            if av1c_data.len() >= 4 {
+                let byte1 = av1c_data[1];
+                let byte2 = av1c_data[2];
+
+                let seq_profile = (byte1 >> 5) & 0x07;
+                let high_bitdepth = (byte2 >> 6) & 0x01;
+                let twelve_bit = (byte2 >> 5) & 0x01;
+                let monochrome = (byte2 >> 4) & 0x01;
+                let chroma_subsampling_x = (byte2 >> 3) & 0x01;
+                let chroma_subsampling_y = (byte2 >> 2) & 0x01;
+
+                let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
+                let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
+                let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
+
+                if is_420 || is_422 {
+                    return Ok(false);
+                }
+
+                if monochrome == 1 && !is_444 {
+                    return Ok(false);
+                }
+
+                // Dimension 2: colr Identity matrix (MC=0)
+                if let Some(colr_data) = find_box_data_recursive(data, b"colr") {
+                    if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
+                        let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
+                        if matrix_coefficients == 0 {
+                            return Ok(true);
+                        }
+                    }
+                }
+
+                // Dimension 3: high_bitdepth/twelve_bit
+                if is_444 && (twelve_bit == 1 || (high_bitdepth == 1 && seq_profile >= 1)) {
+                    return Ok(true);
+                }
+
+                // Dimension 4: Profile 0 + 4:4:4
+                if is_444 && seq_profile == 0 {
+                    return Ok(true);
+                }
+
+                // Dimension 5: pixi box
+                if is_444 {
+                    if let Some(pixi_data) = find_box_data_recursive(data, b"pixi") {
+                        if !pixi_data.is_empty() {
+                            let num_ch = pixi_data[0] as usize;
+                            if num_ch > 0 && pixi_data.len() > num_ch {
+                                let max_depth = pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
+                                if max_depth >= 12 {
+                                    return Ok(true);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if is_444 && monochrome == 1 {
+                    return Ok(true);
+                }
+
+                if is_444 {
+                    return Err(ImgQualityError::AnalysisError(format!(
+                        "AVIF: 4:4:4 without definitive lossless indicators; refusing to guess — {}",
+                        path.display()
+                    )));
+                }
+            }
+        }
+
+        Err(ImgQualityError::AnalysisError(format!(
+            "AVIF: no av1C box found; cannot determine compression — {}",
+            path.display()
+        )))
+    }
+
+    pub fn is_lossless(path: &Path) -> bool {
+        fs::read(path).ok()
+            .and_then(|b| is_lossless_from_bytes(&b, path).ok())
+            .unwrap_or(false)
+    }
+}
+
 pub mod jxl {
     use std::fs;
     use std::path::Path;
+    use crate::img_errors::{ImgQualityError, Result};
+    use crate::common_utils::{find_box_data_recursive, find_any_box_recursive};
+
+    /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
+    pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
+        if data.len() < 4 {
+            return Err(ImgQualityError::AnalysisError(format!("JXL: file too short — {}", path.display())));
+        }
+
+        let is_naked = data[0] == 0xFF && data[1] == 0x0A;
+
+        // Dimension 1: jbrd = JPEG bitstream reconstruction = lossless
+        if !is_naked && find_any_box_recursive(data, b"jbrd") {
+            return Ok(true);
+        }
+
+        // Dimension 2-4: Parse codestream header for xyb_encoded
+        let codestream: Option<&[u8]> = if is_naked {
+            Some(data)
+        } else {
+            find_box_data_recursive(data, b"jxlc")
+                .or_else(|| find_box_data_recursive(data, b"jxlp"))
+        };
+
+        if let Some(cs) = codestream {
+            match parse_jxl_xyb_encoded(cs) {
+                Some(true) => return Ok(false), // xyb_encoded=true -> lossy
+                Some(false) => return Ok(true),  // xyb_encoded=false -> lossless
+                None => {}
+            }
+        }
+
+        Err(ImgQualityError::AnalysisError(format!(
+            "JXL: no jbrd and codestream header unparseable — cannot determine — {}",
+            path.display()
+        )))
+    }
+
+    /// Minimal bit reader for parsing JXL codestream headers.
+    struct JxlBitReader<'a> {
+        data: &'a [u8],
+        byte_pos: usize,
+        bit_pos: u8,
+    }
+
+    impl<'a> JxlBitReader<'a> {
+        fn new(data: &'a [u8]) -> Self { Self { data, byte_pos: 0, bit_pos: 0 } }
+        fn read_bits(&mut self, n: u8) -> Option<u32> {
+            if n == 0 { return Some(0); }
+            let mut result: u32 = 0;
+            for i in 0..n {
+                if self.byte_pos >= self.data.len() { return None; }
+                let bit = (self.data[self.byte_pos] >> self.bit_pos) & 1;
+                result |= (bit as u32) << i;
+                self.bit_pos += 1;
+                if self.bit_pos == 8 { self.bit_pos = 0; self.byte_pos += 1; }
+            }
+            Some(result)
+        }
+        fn read_bool(&mut self) -> Option<bool> { self.read_bits(1).map(|v| v == 1) }
+        fn read_u32(&mut self, dists: [(u32, u8); 4]) -> Option<u32> {
+            let sel = self.read_bits(2)? as usize;
+            let (base, extra_bits) = dists[sel];
+            let extra = self.read_bits(extra_bits)?;
+            Some(base + extra)
+        }
+    }
+
+    fn parse_jxl_xyb_encoded(codestream: &[u8]) -> Option<bool> {
+        let start = if codestream.len() >= 2 && codestream[0] == 0xFF && codestream[1] == 0x0A { 2 } else { 0 };
+        if start >= codestream.len() { return None; }
+        let mut r = JxlBitReader::new(&codestream[start..]);
+
+        // --- SizeHeader ---
+        let small = r.read_bool()?;
+        if small {
+            let _ysize_div8_m1 = r.read_bits(5)?;
+            let ratio = r.read_bits(3)?;
+            if ratio == 0 {
+                let _xsize_div8_m1 = r.read_bits(5)?;
+            }
+        } else {
+            // ysize_minus1: U32(u(9), u(13), u(18), u(30))
+            r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
+            let ratio = r.read_bits(3)?;
+            if ratio == 0 {
+                r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?; // xsize_minus1
+            }
+        }
+
+        // --- ImageMetadata ---
+        let all_default = r.read_bool()?;
+        if all_default {
+            // all_default=true → xyb_encoded defaults to true → lossy
+            return Some(true);
+        }
+
+        let extra_fields = r.read_bool()?;
+        if extra_fields {
+            r.read_bits(3)?; // orientation - 1: u(3)
+
+            // have_intrinsic_size
+            if r.read_bool()? {
+                let small2 = r.read_bool()?;
+                if small2 {
+                    r.read_bits(5)?; // ysize
+                    let ratio2 = r.read_bits(3)?;
+                    if ratio2 == 0 { r.read_bits(5)?; } // xsize
+                } else {
+                    r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?; // ysize
+                    let ratio2 = r.read_bits(3)?;
+                    if ratio2 == 0 {
+                        r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?; // xsize
+                    }
+                }
+            }
+
+            // have_preview
+            if r.read_bool()? {
+                let div8 = r.read_bool()?;
+                if div8 {
+                    r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
+                } else {
+                    let div16 = r.read_bool()?;
+                    if !div16 {
+                        r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
+                        r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
+                    }
+                }
+            }
+
+            // have_animation
+            if r.read_bool()? {
+                r.read_u32([(100, 0), (1000, 0), (0, 10), (0, 30)])?; // tps_num
+                r.read_u32([(1, 0), (1001, 0), (0, 10), (0, 30)])?; // tps_den
+                r.read_u32([(0, 0), (0, 3), (0, 16), (0, 32)])?; // num_loops
+                r.read_bool()?; // have_timecodes
+            }
+        }
+
+        // bit_depth
+        let float_sample = r.read_bool()?;
+        if float_sample {
+            r.read_u32([(32, 0), (16, 0), (24, 0), (1, 6)])?; // bits_per_sample
+            r.read_bits(4)?; // exp_bits + 1
+        } else {
+            r.read_u32([(8, 0), (10, 0), (12, 0), (1, 6)])?; // bits_per_sample
+        }
+
+        // num_extra_channels
+        let num_extra = r.read_u32([(0, 0), (1, 0), (2, 0), (3, 12)])?;
+        for _ in 0..num_extra {
+            if !r.read_bool()? { // ec_default
+                // Detailed ExtraChannelInfo skip logic (complex, bail if not default)
+                return None;
+            }
+        }
+
+        // xyb_encoded: Bool — THE FINAL TARGET
+        r.read_bool()
+    }
 
     pub fn verify_signature(path: &Path) -> bool {
         if let Ok(mut file) = fs::File::open(path) {

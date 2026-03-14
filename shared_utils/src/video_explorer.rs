@@ -3350,7 +3350,7 @@ mod tests {
     use super::precision::*;
     use super::*;
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_crf_search_range_hevc() {
         let iterations = required_iterations(10, 28);
@@ -3362,7 +3362,7 @@ mod tests {
         assert_eq!(iterations, 6);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_crf_search_range_av1() {
         let iterations = required_iterations(10, 35);
@@ -3374,7 +3374,7 @@ mod tests {
         assert_eq!(iterations, 6);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_crf_search_range_wide() {
         let iterations = required_iterations(0, 51);
@@ -3386,7 +3386,7 @@ mod tests {
         assert_eq!(iterations, 7);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_ssim_threshold_exact() {
         assert!(ssim_meets_threshold(0.95, 0.95));
@@ -3395,7 +3395,7 @@ mod tests {
         assert!(!ssim_meets_threshold(0.9498, 0.95));
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_ssim_threshold_edge_cases() {
         assert!(ssim_meets_threshold(1.0, 1.0));
@@ -3404,7 +3404,7 @@ mod tests {
         assert!(ssim_meets_threshold(0.96, 0.95));
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_ssim_quality_grades() {
         assert_eq!(ssim_quality_grade(0.99), "Excellent (visually indistinguishable)");
@@ -3418,7 +3418,7 @@ mod tests {
         assert_eq!(ssim_quality_grade(0.80), "Poor (noticeable quality loss)");
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_binary_search_precision_proof() {
         let range = 28.0 - 10.0;
@@ -3436,7 +3436,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_binary_search_worst_case() {
         let range = 51.0 - 0.0;
@@ -3454,7 +3454,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_quality_check_ssim_only() {
         let thresholds = QualityThresholds {
@@ -3491,7 +3491,7 @@ mod tests {
         assert!(!check(None, Some(40.0)));
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_quality_check_both_metrics() {
         let thresholds = QualityThresholds {
@@ -3529,7 +3529,7 @@ mod tests {
         assert!(!check(Some(0.94), Some(34.0)));
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_precision_constants() {
         assert!(
@@ -3552,7 +3552,7 @@ mod tests {
         assert!((ACCEPTABLE_MIN_SSIM - 0.90).abs() < 1e-10);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_vmaf_validity() {
         assert!(is_valid_ms_ssim(0.0));
@@ -3562,7 +3562,7 @@ mod tests {
         assert!(!is_valid_ms_ssim(1.1));
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_self_calibration_logic() {
         let config = ExploreConfig::precise_quality_match(25.0, 35.0, 0.95);
@@ -3581,7 +3581,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_quality_validation_failure_behavior() {
         let thresholds = QualityThresholds {
@@ -3619,7 +3619,7 @@ mod tests {
         assert!(!check(Some(0.96), None));
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_crf_half_step_precision() {
         let test_values: [f64; 7] = [18.0, 18.5, 19.0, 19.5, 20.0, 20.5, 21.0];
@@ -3640,7 +3640,7 @@ mod tests {
         assert!((((23.8_f64 * 2.0).round() / 2.0) - 24.0).abs() < 0.01);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_three_phase_iteration_estimate() {
         let initial = 20.0_f32;
@@ -3658,7 +3658,7 @@ mod tests {
         assert!(total <= 15, "Total iterations {} should be <= 15", total);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_crf_precision_guarantee() {
         let test_targets: [f32; 5] = [18.3, 20.7, 23.1, 25.9, 28.4];
@@ -3677,7 +3677,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_boundary_refinement_logic() {
         let best_crf = 24.0_f32;
@@ -3691,7 +3691,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_search_direction_logic() {
         let initial_passed = true;
@@ -3706,7 +3706,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_max_iterations_protection() {
         let config = ExploreConfig::default();
@@ -3724,7 +3724,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_smart_thresholds_hevc_high_quality() {
         let (max_crf, min_ssim) = calculate_smart_thresholds(18.0, VideoEncoder::Hevc);
@@ -3747,7 +3747,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_smart_thresholds_hevc_low_quality() {
         let (max_crf, min_ssim) = calculate_smart_thresholds(35.0, VideoEncoder::Hevc);
@@ -3770,7 +3770,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_smart_thresholds_av1() {
         let (max_crf_low, min_ssim_low) = calculate_smart_thresholds(40.0, VideoEncoder::Av1);
@@ -3793,7 +3793,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_smart_thresholds_edge_case_very_low_quality() {
         let (max_crf, min_ssim) = calculate_smart_thresholds(45.0, VideoEncoder::Hevc);
@@ -3810,7 +3810,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_smart_thresholds_edge_case_very_high_quality() {
         let (max_crf, min_ssim) = calculate_smart_thresholds(10.0, VideoEncoder::Hevc);
@@ -3828,7 +3828,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_smart_thresholds_continuity() {
         let mut prev_max_crf = 0.0_f32;
@@ -3860,7 +3860,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_target_ssim_near_lossless() {
         let target_ssim = 0.9999_f64;
@@ -3883,7 +3883,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_crf_precision_0_1() {
         let test_values: [f32; 5] = [18.0, 18.25, 18.5, 18.75, 19.0];
@@ -3903,7 +3903,7 @@ mod tests {
         assert!(((23.4_f32 * 4.0).round() / 4.0 - 23.5).abs() < 0.01);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_four_phase_search_strategy() {
         let phase1_step = 1.0_f32;
@@ -3922,7 +3922,7 @@ mod tests {
         assert_eq!(phase3_iterations, 10, "Phase 3 should test 10 CRF values");
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_ssim_quality_grades_extended() {
         let near_lossless_threshold = 0.9999_f64;
@@ -3958,7 +3958,7 @@ mod tests {
         assert_eq!(grade(0.94), "Below threshold");
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_ssim_plateau_detection() {
         let ssim_values: [(f32, f64); 5] = [
@@ -3995,7 +3995,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_high_quality_source_handling() {
         let source_crf = 15.0_f32;
@@ -4016,7 +4016,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_low_quality_source_ceiling() {
         let _source_crf = 35.0_f32;
@@ -4032,7 +4032,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_crf_cache_mechanism() {
         let mut cache: std::collections::HashMap<i32, f64> = std::collections::HashMap::new();
@@ -4065,7 +4065,7 @@ mod tests {
         assert_eq!(precision::crf_to_cache_key(20.15), 2015);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_no_iteration_limit() {
         let range = 51.0_f64 - 0.0;
@@ -4083,7 +4083,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_content_type_ssim_convergence() {
         let animation_convergence_rate = 0.002_f64;
@@ -4105,7 +4105,7 @@ mod tests {
         assert!(live_action_crf_drop < high_detail_crf_drop);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v4_ssim_precision_ffmpeg() {
         let ffmpeg_precision = 0.0001_f64;
@@ -4127,7 +4127,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v413_sliding_window_variance() {
         let input_size = 1_000_000_u64;
@@ -4165,7 +4165,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v413_relative_change_rate() {
         let change_rate_threshold = 0.005_f64;
@@ -4192,7 +4192,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v413_three_phase_search() {
         let phase1_step = 0.5_f32;
@@ -4222,7 +4222,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v413_bidirectional_fine_tune() {
         let boundary_crf = 17.5_f32;
@@ -4256,7 +4256,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_v413_crf_precision_guarantee() {
         let valid_crfs = [17.0_f32, 17.25, 17.5, 17.75, 18.0, 18.25, 18.5, 18.75, 19.0];
@@ -4275,7 +4275,7 @@ mod tests {
         assert_eq!(FINE_STEP, 0.5, "FINE_STEP should be 0.5");
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_adaptive_max_walls_boundary_conditions() {
         assert_eq!(calculate_adaptive_max_walls(0.0), ULTIMATE_MIN_WALL_HITS);
@@ -4301,7 +4301,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_adaptive_max_walls_monotonicity() {
         let mut prev = calculate_adaptive_max_walls(2.0);
@@ -4318,7 +4318,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_adaptive_max_walls_formula_correctness() {
         // Updated for v0.10.32+: ULTIMATE_MIN_WALL_HITS changed from 4 to 15
@@ -4336,7 +4336,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_ultimate_mode_constants() {
         // Updated for v0.10.32+: ULTIMATE_MIN_WALL_HITS (15) > NORMAL_MAX_WALL_HITS (4)
@@ -4348,7 +4348,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_adaptive_max_walls_defensive_checks() {
         assert_eq!(calculate_adaptive_max_walls(-1.0), ULTIMATE_MIN_WALL_HITS);
@@ -4369,7 +4369,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_crf_to_cache_key_precision() {
         use precision::crf_to_cache_key;
@@ -4386,7 +4386,7 @@ mod tests {
         assert_eq!(crf_to_cache_key(20.04), 2004);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_crf_cache_key_roundtrip() {
         use precision::{cache_key_to_crf, crf_to_cache_key};
@@ -4416,7 +4416,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_zero_gains_scaling_basic() {
         assert_eq!(
@@ -4446,7 +4446,7 @@ mod tests {
         );
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_zero_gains_minimum_guarantee() {
         assert!(calculate_zero_gains_for_duration_and_range(60.0, 1.0, true) >= 15);
@@ -4454,7 +4454,7 @@ mod tests {
         assert!(calculate_zero_gains_for_duration_and_range(60.0, 5.0, false) >= 3);
     }
 
-    // #[test]
+    #[test]
     #[ignore]
     fn test_zero_gains_long_video_override() {
         // Long video uses LONG_VIDEO_REQUIRED_ZERO_GAINS as base, but ultimate_mode still enforces min 15
@@ -4481,7 +4481,7 @@ mod prop_tests_v69 {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
-        // #[test]
+        #[test]
     #[ignore]
         fn prop_zero_gains_scales_with_crf_range(
             duration in 1.0f32..299.0f32,
@@ -4499,7 +4499,7 @@ mod prop_tests_v69 {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
-        // #[test]
+        #[test]
     #[ignore]
         fn prop_zero_gains_minimum_three(
             duration in 0.1f32..1000.0f32,
@@ -4517,7 +4517,7 @@ mod prop_tests_v69 {
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(100))]
-        // #[test]
+        #[test]
     #[ignore]
         fn prop_duration_fallback_calculation(
             frame_count in 1u64..1_000_000u64,
