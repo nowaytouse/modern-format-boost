@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use img_hevc::lossless_converter::convert_to_gif_apple_compat;
-use img_hevc::analyze_image;
 use img_hevc::{
     calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
 };
@@ -8,8 +7,10 @@ use rayon::prelude::*;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use shared_utils::modern_ui::{colors, symbols};
+use shared_utils::analysis_cache::AnalysisCache;
 
 
 #[derive(Parser)]
@@ -106,8 +107,19 @@ fn main() -> anyhow::Result<()> {
         shared_utils::logging::LogConfig::default(),
     );
 
-    let cli = Cli::parse();
+    let cache = AnalysisCache::default_local()
+        .map(Arc::new)
+        .map_err(|e| {
+            shared_utils::log_eprintln!("⚠️  [Cache] Failed to initialize SQLite cache: {}", e);
+            e
+        })
+        .ok();
 
+    if let Some(ref cache) = cache {
+        let _ = cache.cleanup_old_records(30 * 24 * 3600); // 30 days
+    }
+
+    let cli = Cli::parse();
     match cli.command {
         Commands::Run {
             input,
@@ -189,6 +201,7 @@ fn main() -> anyhow::Result<()> {
                 allow_size_tolerance,
                 verbose,
                 child_threads: 0,
+                cache: cache.clone(),
             };
 
             let workload = if input.is_dir() {
@@ -235,13 +248,6 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Commands::Verify {
-            original,
-            converted,
-        } => {
-            verify_conversion(&original, &converted)?;
-        }
-
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
@@ -249,18 +255,22 @@ fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
+
+        Commands::Verify { original, converted } => {
+            verify_conversion(&original, &converted, cache.as_deref())?;
+        }
     }
 
     Ok(())
 }
 
-fn verify_conversion(original: &std::path::Path, converted: &std::path::Path) -> anyhow::Result<()> {
+fn verify_conversion(original: &std::path::Path, converted: &std::path::Path, cache: Option<&AnalysisCache>) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
     println!("   Converted: {}", converted.display());
 
-    let original_analysis = analyze_image(original)?;
-    let converted_analysis = analyze_image(converted)?;
+    let original_analysis = shared_utils::image_analyzer::analyze_image_with_cache(original, cache)?;
+    let converted_analysis = shared_utils::image_analyzer::analyze_image_with_cache(converted, cache)?;
 
     println!("\n📊 Size Comparison:");
     println!(
@@ -481,6 +491,7 @@ struct AutoConvertConfig {
     allow_size_tolerance: bool,
     verbose: bool,
     child_threads: usize,
+    cache: Option<Arc<AnalysisCache>>,
 }
 
 fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
@@ -552,7 +563,7 @@ fn auto_convert_single_file(
         });
     }
 
-    let analysis = analyze_image(input)?;
+    let analysis = shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
 
     // HEIC/HEIF: Skip lossy (avoid generational loss), but allow lossless → JXL.
     // This is handled by should_skip_image_format below based on analysis.is_lossless.
@@ -596,7 +607,7 @@ fn auto_convert_single_file(
 
     // 完整接入图像质量分析：静态图始终做像素级分析，用于路由 + 质量输出（自动写入 run log）
     let pixel_analysis = if !analysis.is_animated {
-        shared_utils::analyze_image_quality_from_path(input)
+        shared_utils::image_quality_detector::analyze_image_quality_with_cache(input, config.cache.as_deref())
     } else {
         None
     };

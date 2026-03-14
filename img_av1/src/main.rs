@@ -1,11 +1,12 @@
 use clap::{Parser, Subcommand};
-use img_av1::analyze_image;
 use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use rayon::prelude::*;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
+use shared_utils::analysis_cache::AnalysisCache;
 
 use img_av1::conversion_api::ConversionOutput;
 
@@ -26,6 +27,7 @@ struct AutoConvertConfig {
     base_dir: Option<PathBuf>,
     child_threads: usize,
     allow_size_tolerance: bool,
+    cache: Option<Arc<AnalysisCache>>,
 }
 
 #[derive(Parser)]
@@ -121,6 +123,18 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let _ =
         shared_utils::logging::init_logging("img_av1", shared_utils::logging::LogConfig::default());
+
+    let cache = AnalysisCache::default_local()
+        .map(Arc::new)
+        .map_err(|e| {
+            shared_utils::log_eprintln!("⚠️ [Cache] Failed to initialize SQLite cache: {}", e);
+            e
+        })
+        .ok();
+
+    if let Some(ref cache) = cache {
+        let _ = cache.cleanup_old_records(30 * 24 * 3600); // 30 days
+    }
 
     let cli = Cli::parse();
 
@@ -222,6 +236,7 @@ fn main() -> anyhow::Result<()> {
                     thread_config.child_threads
                 },
                 allow_size_tolerance,
+                cache: cache.clone(),
             };
 
             if input.is_file() {
@@ -259,7 +274,7 @@ fn main() -> anyhow::Result<()> {
             original,
             converted,
         } => {
-            verify_conversion(&original, &converted)?;
+            verify_conversion(&original, &converted, cache.as_deref())?;
         }
 
         Commands::RestoreTimestamps { source, output } => {
@@ -274,13 +289,13 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn verify_conversion(original: &Path, converted: &Path) -> anyhow::Result<()> {
+fn verify_conversion(original: &Path, converted: &Path, cache: Option<&AnalysisCache>) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
     println!("   Converted: {}", converted.display());
 
-    let original_analysis = analyze_image(original)?;
-    let converted_analysis = analyze_image(converted)?;
+    let original_analysis = shared_utils::image_analyzer::analyze_image_with_cache(original, cache)?;
+    let converted_analysis = shared_utils::image_analyzer::analyze_image_with_cache(converted, cache)?;
 
     println!("\n📊 Size Comparison:");
     println!(
@@ -529,7 +544,7 @@ fn auto_convert_single_file(
         });
     }
 
-    let analysis = analyze_image(input)?;
+    let analysis = shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
 
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
     if !analysis.is_animated {
@@ -553,7 +568,7 @@ fn auto_convert_single_file(
 
     // 完整接入图像质量分析：静态图始终做像素级分析，用于路由 + 质量输出（自动写入 run log）
     let pixel_analysis = if !analysis.is_animated {
-        shared_utils::analyze_image_quality_from_path(input)
+        shared_utils::image_quality_detector::analyze_image_quality_with_cache(input, config.cache.as_deref())
     } else {
         None
     };
