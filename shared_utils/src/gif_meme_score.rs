@@ -202,6 +202,10 @@ const BPP_LOW: f64 = 0.03;
 const PIXELS_1080P: f64 = (1920 * 1080) as f64;
 /// pixel count below this → very small canvas (≤200×200)
 const PIXELS_SMALL: f64 = (200 * 200) as f64;
+/// pixel count below this → ultra tiny canvas (≤96×96), typical sticker/emote size
+const PIXELS_TINY: f64 = (96 * 96) as f64;
+/// duration below this → ultra-short loop often used by reaction stickers (秒)
+const DURATION_ULTRA_SHORT: f64 = 0.7;
 
 // ── Confidence thresholds ─────────────────────────────────────────────────────
 /// Score above this → high-confidence meme → keep (tightened from 0.65 to 0.60)
@@ -227,6 +231,14 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
     // --- Hard KEEP vetos ------------------------------------------------------
     // Extremely compressed AND tiny canvas → almost certainly a meme/sticker
     if bytes_per_pixel < BPP_LOW && pixel_count < PIXELS_SMALL {
+        return VetoVerdict::KeepGif;
+    }
+    // Ultra tiny canvas + ultra-short loop + reasonably compressed → strongly meme-like
+    if pixel_count <= PIXELS_TINY
+        && meta.duration_secs <= DURATION_ULTRA_SHORT
+        && bytes_per_pixel <= 0.10
+        && meta.duration_secs > 0.01
+    {
         return VetoVerdict::KeepGif;
     }
     // Very short loop (≤1 s) → meme regardless of other dimensions
