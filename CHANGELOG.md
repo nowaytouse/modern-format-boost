@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.54] - 2026-03-15
+
+### Added
+- **Performance-Optimized Joint Audit**: Restored batch processing speed by eliminating redundant `ffprobe` calls. Deep research is now only triggered as a "tie-breaker" when structural analysis and bitstream signals disagree.
+- **APNG Support**: Added animation detection and routing support for APNG files, ensuring they follow the animated media pipeline.
+
+### Fixed
+- **Critical GIF Parser Fix**: Resolved a bitstream desynchronization bug where the LZW minimum code size byte was not skipped, causing multi-frame GIFs to be miscounted as static.
+- **Improved Semantic Reliability**: Cross-validation now captures animations that fail structural walks due to minor file malformations.
+
+## [0.10.53] - 2026-03-15 (Internal Fix)
+- Internal revisions for audit logic.
+
 ## [0.10.52] - 2026-03-15
 
 ### Added

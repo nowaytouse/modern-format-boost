@@ -339,11 +339,14 @@ pub mod gif {
         };
         pos += 7 + gct_size;
 
-        let mut frame_count = 0u32;
+        let mut image_descriptors = 0u32;
+        let mut gce_count = 0u32; // Graphic Control Extension count
+
         while pos < data.len() {
             match data[pos] {
                 0x2C => {
-                    frame_count += 1;
+                    // Image Descriptor
+                    image_descriptors += 1;
                     if pos + 10 > data.len() {
                         break;
                     }
@@ -355,10 +358,16 @@ pub mod gif {
                         0
                     };
                     pos += 10 + lct_size;
-                    if pos >= data.len() {
-                        break;
+                    
+                    // --- CRITICAL FIX ---
+                    // After Image Descriptor and optional Local Color Table,
+                    // there is exactly ONE byte for LZW Minimum Code Size.
+                    // We must skip it before reading the first data sub-block size.
+                    if pos < data.len() {
+                        pos += 1; 
                     }
-                    pos += 1;
+                    
+                    // Skip Image Data sub-blocks
                     while pos < data.len() {
                         let block_size = data[pos] as usize;
                         pos += 1;
@@ -366,35 +375,49 @@ pub mod gif {
                             break;
                         }
                         if pos + block_size > data.len() {
+                            // Malformed: block extends past EOF
                             break;
                         }
                         pos += block_size;
                     }
                 }
                 0x21 => {
+                    // Extension Block
                     if pos + 2 >= data.len() {
                         break;
                     }
+                    let label = data[pos + 1];
+                    if label == 0xF9 {
+                        gce_count += 1;
+                    }
+                    
                     pos += 2;
+                    // Skip Extension Data blocks
                     while pos < data.len() {
                         let block_size = data[pos] as usize;
                         pos += 1;
                         if block_size == 0 {
                             break;
                         }
-                        if pos + block_size > data.len() {
-                            break;
-                        }
                         pos += block_size;
                     }
                 }
-                0x3B => break,
+                0x3B => break, // Trailer
                 _ => {
+                    // Unknown byte, try to resync
                     pos += 1;
                 }
             }
         }
-        frame_count
+        
+        // A GIF is animated if it has more than one image descriptor
+        // OR if it has Graphic Control Extensions (usually one per frame)
+        // Correct for some GIFs having one GCE for a 1-frame static image:
+        if gce_count > 1 || image_descriptors > 1 {
+            image_descriptors.max(gce_count)
+        } else {
+            1
+        }
     }
 
     pub fn is_animated_from_bytes(data: &[u8]) -> bool {
