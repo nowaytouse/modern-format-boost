@@ -615,30 +615,6 @@ fn auto_convert_single_file(
     if let Some(ref q) = pixel_analysis {
         shared_utils::log_media_info_for_image_quality(q, input);
     }
-    // 路由：像素级建议跳过则跳过（与 format 级互补）
-    #[allow(deprecated)]
-    if let Some(ref q) = pixel_analysis {
-        let rd = &q.routing_decision;
-        if rd.should_skip {
-            let msg = rd
-                .skip_reason
-                .clone()
-                .unwrap_or_else(|| "Pixel-based: skip".to_string());
-            if config.verbose {
-                println!("⏭️ {}: {}", msg, input.display());
-            }
-            copy_original_if_adjacent_mode(input, config)?;
-            return Ok(ConversionOutput {
-                original_path: input.display().to_string(),
-                output_path: input.display().to_string(),
-                skipped: true,
-                message: msg,
-                original_size: analysis.file_size,
-                output_size: None,
-                size_reduction: None,
-            });
-        }
-    }
 
     let mut quality_label = analysis.quality_summary();
     if let Some(ref pa) = pixel_analysis {
@@ -868,25 +844,16 @@ fn auto_convert_single_file(
             // Modern lossy static already skipped above; only legacy lossy reach here.
             // All lossy sources (including palette-quantized PNG/GIF) use d=0.1 (Quality 100).
             // Size protection will skip automatically if output is larger.
-            #[allow(deprecated)]
-            let jxl_distance = match &pixel_analysis {
-                Some(q) => {
-                    let rd = &q.routing_decision;
-                    if rd.use_lossless { 0.0 } else { 0.1 }
-                }
-                None => 0.1,
-            };
             verbose_log!(
-                "🔄 {} Lossy→JXL ({}): {}",
+                "🔄 {} Lossy→JXL (Quality 100): {}",
                 match analysis.format.to_uppercase().as_str() {
                     "PNG" => "Quantized PNG",
                     "GIF" => "Static GIF",
                     _ => "Legacy",
                 },
-                if jxl_distance == 0.0 { "Lossless" } else { "Quality 100" },
                 input.display()
             );
-            convert_to_jxl(input, &options, jxl_distance, analysis.hdr_info.as_ref())?
+            convert_to_jxl(input, &options, 0.1, analysis.hdr_info.as_ref())?
         }
     };
 

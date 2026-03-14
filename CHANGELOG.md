@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.51] - 2026-03-14
+
+### Removed
+- **Dynamic Compression Adjustment (bonus field)**: Completely removed the weight-based adjustment system from `image_classifiers.json` and `image_quality_detector.rs`.
+  - Image categories (SCREENSHOT, ICON, PHOTO, etc.) no longer influence compression strength or routing decisions.
+  - JSON configuration is now strictly for image classification labels and rules.
+- **Legacy Routing Decisions**: Removed `RoutingDecision` and `compression_potential` calculation from the pixel-level analysis module.
+  - `img-hevc` and `img-av1` no longer use pixel-level analysis for skipping or distance routing; they rely on `image_analyzer` and `image_recommender` for all control flow.
+  - Pixel-level analysis is now purely for metadata extraction and UI labels.
+
 ## [0.10.50] - 2026-03-14
 
 ### Changed
