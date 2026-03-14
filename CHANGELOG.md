@@ -14,6 +14,11 @@ All notable changes to this project will be documented in this file.
   - `img-hevc` and `img-av1` no longer use pixel-level analysis for skipping or distance routing; they rely on `image_analyzer` and `image_recommender` for all control flow.
   - Pixel-level analysis is now purely for metadata extraction and UI labels.
 
+### Changed
+- **GIF Meme-Score Heuristic**: Refined animated GIF meme detection to better protect tiny ultra-short stickers:
+  - Added an additional KEEP veto for **ultra-tiny canvases** (≤96×96) with **sub‑second loops** and strong compression, ensuring classic聊天表情包优先保留为 GIF。
+  - Keeps the existing multi-dimensional score while tightening behavior on极低分辨率 / 极短循环的“电子包浆”梗图，减少误判为视频片段的概率。
+
 ## [0.10.50] - 2026-03-14
 
 ### Changed
