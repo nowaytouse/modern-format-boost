@@ -553,6 +553,9 @@ pub fn auto_convert_with_cache(
                 let initial_crf = if let Some(hint) = detection.precision.last_best_crf {
                     info!("   💡 Using cached CRF hint: {:.1} (warm start)", hint);
                     hint
+                } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
+                    info!("   💡 Using global last hit CRF: {:.1} (warm start)", hint);
+                    hint
                 } else {
                     calculate_matched_crf(&detection)?
                 };
@@ -797,6 +800,9 @@ pub fn auto_convert_with_cache(
     };
 
     // 💾 Update cache with the new best CRF
+    if success_status_for_cache(strategy.target, &explore_result_opt) && final_crf > 0.0 {
+        shared_utils::crf_constants::update_global_last_hit_crf_hevc(final_crf);
+    }
     if let Some(cache) = cache {
         if success_status_for_cache(strategy.target, &explore_result_opt) {
             detection.precision.last_best_crf = Some(final_crf);
@@ -809,6 +815,9 @@ pub fn auto_convert_with_cache(
     }
 
     // 💾 Update cache with the new best CRF
+    if success_status_for_cache(strategy.target, &explore_result_opt) && final_crf > 0.0 {
+        shared_utils::crf_constants::update_global_last_hit_crf_hevc(final_crf);
+    }
     if let Some(cache) = cache {
         if success_status_for_cache(strategy.target, &explore_result_opt) {
             detection.precision.last_best_crf = Some(final_crf);
