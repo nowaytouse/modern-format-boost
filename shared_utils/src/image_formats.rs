@@ -326,6 +326,8 @@ pub mod gif {
             return 0;
         }
 
+        // --- STAGE 1: Standard Structural Walk ---
+        // Fast, spec-compliant traversal of the block chain.
         let mut pos = 6;
         if pos + 7 > data.len() {
             return 0;
@@ -339,84 +341,98 @@ pub mod gif {
         };
         pos += 7 + gct_size;
 
-        let mut image_descriptors = 0u32;
-        let mut gce_count = 0u32; // Graphic Control Extension count
+        let mut structural_descriptors = 0u32;
+        let mut structural_gce = 0u32;
+        let mut current_pos = pos;
 
-        while pos < data.len() {
-            match data[pos] {
+        while current_pos < data.len() {
+            match data[current_pos] {
                 0x2C => {
-                    // Image Descriptor
-                    image_descriptors += 1;
-                    if pos + 10 > data.len() {
-                        break;
-                    }
-                    let img_packed = data[pos + 9];
+                    structural_descriptors += 1;
+                    if current_pos + 10 > data.len() { break; }
+                    let img_packed = data[current_pos + 9];
                     let has_lct = (img_packed & 0x80) != 0;
-                    let lct_size = if has_lct {
-                        3 * (1 << ((img_packed & 0x07) + 1))
-                    } else {
-                        0
-                    };
-                    pos += 10 + lct_size;
+                    let lct_size = if has_lct { 3 * (1 << ((img_packed & 0x07) + 1)) } else { 0 };
+                    current_pos += 10 + lct_size + 1; // +1 for LZW min code size
                     
-                    // --- CRITICAL FIX ---
-                    // After Image Descriptor and optional Local Color Table,
-                    // there is exactly ONE byte for LZW Minimum Code Size.
-                    // We must skip it before reading the first data sub-block size.
-                    if pos < data.len() {
-                        pos += 1; 
-                    }
-                    
-                    // Skip Image Data sub-blocks
-                    while pos < data.len() {
-                        let block_size = data[pos] as usize;
-                        pos += 1;
-                        if block_size == 0 {
-                            break;
-                        }
-                        if pos + block_size > data.len() {
-                            // Malformed: block extends past EOF
-                            break;
-                        }
-                        pos += block_size;
+                    while current_pos < data.len() {
+                        let block_size = data[current_pos] as usize;
+                        current_pos += 1;
+                        if block_size == 0 { break; }
+                        current_pos += block_size;
                     }
                 }
                 0x21 => {
-                    // Extension Block
-                    if pos + 2 >= data.len() {
-                        break;
-                    }
-                    let label = data[pos + 1];
-                    if label == 0xF9 {
-                        gce_count += 1;
-                    }
-                    
-                    pos += 2;
-                    // Skip Extension Data blocks
-                    while pos < data.len() {
-                        let block_size = data[pos] as usize;
-                        pos += 1;
-                        if block_size == 0 {
-                            break;
-                        }
-                        pos += block_size;
+                    if current_pos + 2 >= data.len() { break; }
+                    if data[current_pos + 1] == 0xF9 { structural_gce += 1; }
+                    current_pos += 2;
+                    while current_pos < data.len() {
+                        let block_size = data[current_pos] as usize;
+                        current_pos += 1;
+                        if block_size == 0 { break; }
+                        current_pos += block_size;
                     }
                 }
-                0x3B => break, // Trailer
-                _ => {
-                    // Unknown byte, try to resync
-                    pos += 1;
+                0x3B => break,
+                _ => current_pos += 1,
+            }
+        }
+
+        let structural_max = structural_descriptors.max(structural_gce);
+
+        // --- STAGE 2: Hedge Search (Internal Byte-Level Research) ---
+        // If structural walk says static, but we find "fingerprints" of frames 
+        // deeper in the bitstream, perform a deep byte-level audit.
+        let gce_marker = &[0x21, 0xF9, 0x04];
+        let raw_gce_count = data.windows(3).filter(|w| *w == gce_marker).count() as u32;
+
+        if raw_gce_count > structural_max {
+            // Disagreement! Map is broken. Investigation mode.
+            return deep_bitstream_audit_gif(data, structural_max, raw_gce_count);
+        }
+
+        structural_max.max(1)
+    }
+
+    /// Internal "Microscope" for GIF bitstream auditing.
+    /// Investigates every raw marker to confirm if it's a real frame or random collision.
+    fn deep_bitstream_audit_gif(data: &[u8], structural: u32, raw_hints: u32) -> u32 {
+        let gce_marker = &[0x21, 0xF9, 0x04];
+        let mut verified_frames = 0u32;
+        let mut last_verified_pos = 0;
+
+        for i in 6..data.len().saturating_sub(15) {
+            if &data[i..i+3] == gce_marker {
+                // A potential Graphic Control Extension (GCE). 
+                // To be valid, it MUST be followed by:
+                // [GCE Data (4 bytes)] + [Block Terminator (0x00)] + 
+                // [Optional Image Descriptor (0x2C)] OR [Another Extension (0x21)]
+                
+                // Let's verify the next few bytes:
+                let terminator_pos = i + 6; // marker(3) + data(3)
+                if terminator_pos < data.len() && data[terminator_pos] == 0x00 {
+                    let next_block = terminator_pos + 1;
+                    if next_block < data.len() {
+                        let tag = data[next_block];
+                        if tag == 0x2C || tag == 0x21 || tag == 0x3B {
+                            // High confidence: this is a legitimate control frame.
+                            if i > last_verified_pos + 8 { // Skip overlapping or duplicate markers
+                                verified_frames += 1;
+                                last_verified_pos = i;
+                            }
+                        }
+                    }
                 }
             }
         }
-        
-        // A GIF is animated if it has more than one image descriptor
-        // OR if it has Graphic Control Extensions (usually one per frame)
-        // Correct for some GIFs having one GCE for a 1-frame static image:
-        if gce_count > 1 || image_descriptors > 1 {
-            image_descriptors.max(gce_count)
+
+        if verified_frames > structural {
+             if structural == 1 && verified_frames > 1 {
+                 // Successfully rescued an animated GIF that was misjudged as static!
+             }
+             verified_frames
         } else {
-            1
+             structural.max(1)
         }
     }
 
