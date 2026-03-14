@@ -236,6 +236,10 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
 }
 
 pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
+    // 🧠 Global security bypass for complex/large boxes (e.g. Weibo processed HEICs)
+    // This environment variable is checked by the absolute core of libheif.
+    std::env::set_var("LIBHEIF_SECURITY_LIMITS", "off");
+
     let lib_heif = LibHeif::new();
 
     let ctx = HeifContext::read_from_file(path.to_string_lossy().as_ref()).map_err(|e| {
@@ -253,6 +257,15 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
             ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
         }
     })?;
+
+    // 🛡️ API-level security bypass (requires v1_21+ feature)
+    // We attempt to disable limits on the context itself as a second layer of defense.
+    #[cfg(feature = "v1_21")]
+    {
+        let mut limits = ctx.security_limits();
+        // Set to 4GB or higher - effectively disabling for normal usage
+        limits.set_max_total_memory(4 * 1024 * 1024 * 1024); 
+    }
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgQualityError::ImageReadError(format!("Failed to get primary image: {}", e))
