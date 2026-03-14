@@ -724,20 +724,94 @@ fn is_animated_format(path: &Path, format: &ImageFormat) -> Result<bool> {
     match format {
         ImageFormat::Gif => Ok(check_gif_animation(path)?),
         ImageFormat::WebP => Ok(check_webp_animation(path)?),
+        ImageFormat::Png => Ok(check_png_animation(path)?),
         _ => Ok(false),
     }
+}
+
+fn check_png_animation(path: &Path) -> Result<bool> {
+    let bytes = std::fs::read(path)?;
+    
+    // Signal A: Structural acTL search
+    // (Note: parse_apng_frames in image_detection already does this robustly)
+    let (structural_is_animated, frame_count) = crate::image_detection::parse_apng_frames(&bytes);
+    if structural_is_animated && frame_count > 1 {
+        return Ok(true);
+    }
+
+    // Signal B: Loose acTL/fcTL marker search (Joint Audit)
+    let has_actl = bytes.windows(4).any(|w| w == b"acTL");
+    let has_fctl = bytes.windows(4).any(|w| w == b"fcTL");
+
+    if (has_actl || has_fctl) && !structural_is_animated {
+        // [Joint Audit: DISAGREEMENT]
+        // Bitstream has APNG markers but structural walk missed them (maybe malformed/truncated).
+        if let Some(duration) = get_animation_duration(path) {
+            if duration > 0.0 {
+                 log_eprintln!("🎞️  [Joint Audit: PNG] acTL/fcTL hints found but structural scan missed them; ffprobe confirmed duration ({:.2}s). Correcting to ANIMATED.", duration);
+                 return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 fn check_gif_animation(path: &Path) -> Result<bool> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
     let bytes = std::fs::read(path)?;
-    Ok(crate::image_formats::gif::is_animated_from_bytes(&bytes))
+    
+    // Signal A: Structural Frame Count (Primary)
+    let structural_count = crate::image_formats::gif::count_frames_from_bytes(&bytes);
+    if structural_count > 1 {
+        return Ok(true);
+    }
+
+    // Signal B: Loose Bitstream Check (Joint Audit)
+    // Check for "Graphic Control Extension" magic [0x21, 0xF9, 0x04]
+    // If we find more than one GCE but the structural scan missed them, we are "UNSURE".
+    let gce_marker = &[0x21, 0xF9, 0x04];
+    let gce_hints = bytes.windows(3).filter(|w| *w == gce_marker).count() as u32;
+
+    if gce_hints > structural_count {
+        // [Joint Audit: DISAGREEMENT]
+        // Bitstream hints suggest more frames than the structural walk found.
+        if let Some(duration) = try_ffprobe_json(path) {
+            if duration > 0.0 {
+                log_eprintln!("🎞️  [Joint Audit: GIF] Structural scan saw {} frames, but bitstream hints showed {}. Deep verification confirmed duration ({:.2}s). Correcting.", structural_count, gce_hints, duration);
+                return Ok(true);
+            }
+        }
+    }
+    
+    Ok(structural_count > 1)
 }
 
 fn check_webp_animation(path: &Path) -> Result<bool> {
     let bytes = std::fs::read(path)?;
-    Ok(crate::image_formats::webp::is_animated_from_bytes(&bytes))
+    
+    // Signal A: Chunk-based Count
+    let structural_count = crate::image_formats::webp::count_frames_from_bytes(&bytes);
+    if structural_count > 1 {
+        return Ok(true);
+    }
+
+    // Signal B: Global Animation Header (ANIM chunk)
+    let has_anim_chunk = bytes.windows(4).any(|w| w == b"ANIM");
+
+    if has_anim_chunk && structural_count <= 1 {
+        // [Joint Audit: DISAGREEMENT]
+        // Header says animated, but no frames found.
+        if let Some(duration) = get_animation_duration(path) {
+            if duration > 0.01 {
+                log_eprintln!("🎞️  [Joint Audit: WebP] ANIM chunk present but 0 frames found; ffprobe confirmed duration ({:.2}s). Correcting.", duration);
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(structural_count > 1)
 }
 
 /// Public entry for retrying animation duration (e.g. from main when analysis.duration_secs is None).
