@@ -17,18 +17,23 @@ All notable changes to this project will be documented in this file.
 - **JPEG Analysis Optimization**: Implemented a cache-bypass fast-path for JPEGs.
   - Bypasses SQLite retrieval/hashing overhead as header-based DQT analysis is faster.
   - Reduces cache pressure for routine JPEG-to-JXL lossless transcoding.
-- **Media Detection & Logic Consolidation**:
-  - Refactored `image_analyzer.rs` to unify detection paths for HEIC, JXL, AVIF, and standard image formats.
-  - Standardized the use of `detect_compression`, `detect_animation`, and `detect_lossless` across all format handlers.
-  - **HDR Safety Guard**: Implemented manual interception for HEIC files with **Dolby Vision** or **HDR** metadata, triggering a mandatory skip to prevent high-dynamic-range data loss.
-  - **Precision Transmittance**: Successfully bridged `PrecisionMetadata` (bit-depth, deterministic lossless status) across all fast-paths and cache retrievals, ensuring analysis accuracy parity with the v3.7 detection engine.
+- **Technical Documentation Overhaul**:
+  - Restored the authoritative "Technical Masterpiece" README structure with bilingual precision.
+  - Formally documented the **3D Quality Gate** metrics (VMAF-Y ≥ 93.0, PSNR-UV ≥ 38.0).
+  - Explicitly defined the **1MB Size Tolerance** rule (discarding if increase ≥ 1,048,576 bytes).
+  - Detailed the **Physical Quality Wall** detection parameters (0.01-granularity search, 30-Iteration Plateau).
 
 ### Changed
 - **Refactoring & Maintainability**:
   - Consolidated scattered detection snippets into reusable modules, improving code quality and preventing "reinventing the wheel."
   - **JPEG Quality Bypass**: Optimized the quality detector to skip redundant score calculations for JPEGs, as their lossless-transcoding route is pre-determined.
+- **HEIC Analysis Engine**:
+  - Enabled `v1_21` feature for `libheif-rs` to unlock modern security limit controls.
 
 ### Fixed
+- **HEIC Security Limit Exceeded**:
+  - Fixed "ipco box limit" error for complex HEIC files (e.g., from Weibo) by programmatically disabling `libheif` security limits.
+  - Implemented both `LIBHEIF_SECURITY_LIMITS=off` environment bypass and API-level memory limit adjustments.
 - **Misleading UI Labels**: Fixed `[GPU]` label appearing when GPU coarse search was skipped for low-complexity video.
   - Now correctly displays `[Initial]` for Phase 1 verification in such cases.
 - **Terminal Noise Reduction (Muffling)**: 

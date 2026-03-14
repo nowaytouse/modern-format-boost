@@ -40,3 +40,4 @@ proptest = { workspace = true }
 
 [features]
 default = []
+v1_21 = ["libheif-rs/v1_21"]
