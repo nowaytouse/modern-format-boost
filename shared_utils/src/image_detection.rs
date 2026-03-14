@@ -410,60 +410,78 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
 }
 
 pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u32, Option<f32>)> {
+    let mut is_animated = false;
+    let mut frame_count = 1;
+    let mut fps = None;
+
     match format {
         DetectedFormat::GIF => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
-            let is_animated = frame_count > 1;
-            Ok((is_animated, frame_count, None))
+            frame_count = crate::image_formats::gif::count_frames_from_bytes(&data);
+            is_animated = frame_count > 1;
         }
         DetectedFormat::WebP => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
-            let frame_count = if is_animated {
-                crate::image_formats::webp::count_frames_from_bytes(&data)
-            } else {
-                1
-            };
-            Ok((is_animated, frame_count, None))
+            is_animated = crate::image_formats::webp::is_animated_from_bytes(&data);
+            if is_animated {
+                frame_count = crate::image_formats::webp::count_frames_from_bytes(&data);
+            }
         }
         DetectedFormat::PNG => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
                 .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
             let data = std::fs::read(path)?;
-            let (is_animated, frame_count) = parse_apng_frames(&data);
-            Ok((is_animated, frame_count, None))
+            let (anim, count) = parse_apng_frames(&data);
+            is_animated = anim;
+            frame_count = count;
         }
         DetectedFormat::AVIF => {
-            // Detect animated AVIF by checking ftyp major_brand / compatible_brands for
-            // sequence brand "avis" or "msf1".
-            // Note: HEIC/HEIF are Apple-native formats handled by is_apple_native routing;
-            // they are always skipped in apple_compat mode without needing animation detection.
-            // The is_isobmff_animated_sequence helper is available for future correctness
-            // validation of HEIC/HEIF if needed.
-            let is_animated = is_isobmff_animated_sequence(path);
-            if is_animated {
-                Ok((true, 0, None))
+            is_animated = is_isobmff_animated_sequence(path);
+            if !is_animated {
+                frame_count = 1;
             } else {
-                Ok((false, 1, None))
+                frame_count = 0;
             }
         }
         DetectedFormat::JXL => {
-            // JXL animation: use ffprobe to detect duration > 0 (JXL container stores
-            // animation frames natively; there's no magic-byte shortcut like ISOBMFF brands).
-            let is_animated = is_jxl_animated_via_ffprobe(path);
-            if is_animated {
-                Ok((true, 0, None))
+            is_animated = is_jxl_animated_via_ffprobe(path);
+            if !is_animated {
+                frame_count = 1;
             } else {
-                Ok((false, 1, None))
+                frame_count = 0;
             }
         }
-        _ => Ok((false, 1, None)),
+        _ => {}
     }
+
+    // 🚀 Robust Fallback: If native checks indicate static (or for unknown formats),
+    // we employ ffprobe / libavformat as a reliable tie-breaker.
+    // This safeguards against cases where byte-level heuristics might fail on complex
+    // or slightly malformed files.
+    if !is_animated && crate::ffprobe::is_ffprobe_available() {
+        if let Ok(probe) = crate::ffprobe::probe_video(path) {
+            let probe_frames = probe.frame_count as u32;
+            // Only trust ffprobe if it explicitly finds more than 1 frame.
+            if probe_frames > 1 {
+                is_animated = true;
+                frame_count = probe_frames;
+                if probe.frame_rate > 0.0 {
+                    fps = Some(probe.frame_rate as f32);
+                }
+            } else if probe_frames == 0 && probe.duration > 0.1 && probe.format_name.contains("video") {
+                 is_animated = true;
+                 if probe.frame_rate > 0.0 {
+                     fps = Some(probe.frame_rate as f32);
+                 }
+            }
+        }
+    }
+
+    Ok((is_animated, frame_count, fps))
 }
 
 /// Parse GIF palette size from Global Color Table (GCT) and Local Color Table (LCT)
