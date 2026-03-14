@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.52] - 2026-03-15
+
+### Added
+- **Perfected Meme Scoring Mechanism**: Integrated advanced signals for more resilient animated GIF detection:
+  - **Palette Entropy Analysis**: Identifies small power-of-two palettes (32/64 colors) as indicators of synthetic/meme content.
+  - **Application Extension Detection**: Cheap byte-scan for CDN markers (GIPHY, Tenor, Sticker) to automatically veto and keep verified memes.
+  - **Complexity-Hedged Filename Analysis**: Filename signals are now attenuated by physical resolution and duration to prevent "fake memes" (HD video clips) from bypassing conversion.
+  - **CJK Semantic Awareness**: Fixed misidentification of Chinese-named GIFs and improved machine-generated filename detection.
+
+### Fixed
+- **Clippy / Code Quality**: Fixed `empty-line-after-doc-comments` in `image_detection.rs` and missing test metadata in `shared_utils`.
+
 ## [0.10.51] - 2026-03-14
 
 ### Removed

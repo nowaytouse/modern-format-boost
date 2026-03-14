@@ -77,6 +77,8 @@ mod tests {
             metadata: HashMap::new(),
             hdr_info: None,
             precision: PrecisionMetadata::default(),
+            history: Default::default(),
+            perception: Default::default(),
         };
 
         let rec = get_recommendation(&analysis);

@@ -214,7 +214,12 @@ fn is_gif_meme(path: &Path) -> bool {
     }
     let file_size = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     if let Ok(probe) = shared_utils::probe_video(path) {
-        if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path) {
+        if let Some(mut meta) = shared_utils::gif_meta_from_probe_with_path(&probe, file_size, path) {
+            // ── NEW: Perform cheap GIF header scan for palette/CDN markers ──
+            if let Ok((pal, exts)) = shared_utils::scan_gif_headers(path) {
+                meta.palette_size = pal;
+                meta.app_extensions = exts;
+            }
             return shared_utils::should_keep_as_gif(&meta);
         }
     }
@@ -287,7 +292,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             input_size,
             output_size: None,
             size_reduction: None,
-            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.60 or veto)".to_string(),
             skipped: true,
             skip_reason: Some("gif_meme".to_string()),
         });
@@ -616,7 +621,7 @@ pub fn convert_to_hevc_mp4_matched(
             input_size,
             output_size: None,
             size_reduction: None,
-            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.50)".to_string(),
+            message: "Skipped: GIF identified as meme/sticker (meme-score ≥ 0.60 or veto)".to_string(),
             skipped: true,
             skip_reason: Some("gif_meme".to_string()),
         });
