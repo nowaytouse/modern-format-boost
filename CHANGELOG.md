@@ -16,8 +16,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **GIF Meme-Score Heuristic**: Refined animated GIF meme detection to better protect tiny ultra-short stickers:
-  - Added an additional KEEP veto for **ultra-tiny canvases** (≤96×96) with **sub‑second loops** and strong compression, ensuring classic聊天表情包优先保留为 GIF。
-  - Keeps the existing multi-dimensional score while tightening behavior on极低分辨率 / 极短循环的“电子包浆”梗图，减少误判为视频片段的概率。
+  - Added an additional KEEP veto for **ultra-tiny canvases** (≤96×96) with **sub‑second loops**, very low frame counts, and strong compression, ensuring classic聊天表情包优先保留为 GIF。
+  - Relaxed aspect-ratio scoring into a plateau around 3:4–4:3（而非只偏爱 1:1 正方形），并修复 CJK 文件名“整句被视作 1 词”的误判；同时加入常见社交软件缓存指纹（32位 hex / 时间戳式文件名）以提高 Meme 检测精度。
 
 ## [0.10.50] - 2026-03-14
 
