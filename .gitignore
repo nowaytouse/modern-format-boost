@@ -27,3 +27,11 @@ logs/
 # Local test data (user-specific paths)
 # /path/to/local/test/data
 .claude/
+.agent/
+.gemini/
+.cache/
+.cursor/
+.windsurf/
+.trae/
+.roo/
+.clippy.toml
