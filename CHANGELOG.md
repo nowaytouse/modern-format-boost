@@ -20,17 +20,20 @@ All notable changes to this project will be documented in this file.
 - **Media Detection & Logic Consolidation**:
   - Refactored `image_analyzer.rs` to unify detection paths for HEIC, JXL, AVIF, and standard image formats.
   - Standardized the use of `detect_compression`, `detect_animation`, and `detect_lossless` across all format handlers.
-  - Reduced redundant boilerplate and simplified the overall analysis flow.
+  - **HDR Safety Guard**: Implemented manual interception for HEIC files with **Dolby Vision** or **HDR** metadata, triggering a mandatory skip to prevent high-dynamic-range data loss.
+  - **Precision Transmittance**: Successfully bridged `PrecisionMetadata` (bit-depth, deterministic lossless status) across all fast-paths and cache retrievals, ensuring analysis accuracy parity with the v3.7 detection engine.
 
 ### Changed
 - **Refactoring & Maintainability**:
   - Consolidated scattered detection snippets into reusable modules, improving code quality and preventing "reinventing the wheel."
-  - Improved data flow from low-level magic byte detection to high-level quality analysis.
+  - **JPEG Quality Bypass**: Optimized the quality detector to skip redundant score calculations for JPEGs, as their lossless-transcoding route is pre-determined.
 
 ### Fixed
 - **Misleading UI Labels**: Fixed `[GPU]` label appearing when GPU coarse search was skipped for low-complexity video.
   - Now correctly displays `[Initial]` for Phase 1 verification in such cases.
-- **Terminal Silence**: Muted noisy `DEBUG` level cache hits from the terminal while preserving them in internal log files.
+- **Terminal Noise Reduction (Muffling)**: 
+  - Implemented a physical filter in `logging.rs` to mute `DEBUG` level cache hit logs from the terminal, even if global debug is enabled.
+  - Muted noisy `💾/📊` symbols from cache operations to maintain a professional, high-signal-to-noise terminal UI.
 - **Script Robustness**: Fixed a potential syntax error in the bash processor script and improved mode selection logic.
 
 ## [0.10.48] - 2026-03-14
