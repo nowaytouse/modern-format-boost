@@ -212,6 +212,30 @@ pub struct VideoDetectionResult {
     pub tags: HashMap<String, String>,
 }
 
+impl VideoDetectionResult {
+    /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    pub fn is_hdr(&self) -> bool {
+        self.is_dolby_vision
+            || self.is_hdr10_plus
+            || self.mastering_display.is_some()
+            || self.max_cll.is_some()
+            || matches!(
+                self.color_transfer.as_deref(),
+                Some("smpte2084") | Some("arib-std-b67")
+            )
+    }
+
+    /// Returns true for high-bitrate archival-grade content
+    pub fn is_high_fidelity(&self) -> bool {
+        self.bit_depth >= 10 && matches!(self.compression, CompressionType::Lossless | CompressionType::VisuallyLossless)
+    }
+
+    /// High-precision VFR detection including slow-motion recording analysis
+    pub fn is_apple_slow_mo(&self) -> bool {
+        self.tags.contains_key("com.apple.quicktime.fullframerate")
+    }
+}
+
 pub fn determine_compression_type(
     codec: &DetectedCodec,
     bitrate: u64,
@@ -224,7 +248,14 @@ pub fn determine_compression_type(
         return CompressionType::Lossless;
     }
     
-    // Use original CRF if available for more precise categorization
+    // HEVC/AV1 Lossless often uses specific profiles or encoder params
+    if let Some(ref settings) = precision.original_encoder {
+        if settings.contains("lossless=1") || settings.contains("qp=0") {
+            return CompressionType::Lossless;
+        }
+    }
+
+    // Use original CRF if available
     if let Some(crf) = precision.original_crf {
         if crf <= 15.0 {
             return CompressionType::VisuallyLossless;
@@ -240,6 +271,8 @@ pub fn determine_compression_type(
     if matches!(codec, DetectedCodec::ProRes | DetectedCodec::DNxHD) {
         return CompressionType::VisuallyLossless;
     }
+
+    // BPP (Bits Per Pixel) thresholding for generic streams
     let pixels_per_second = (width as f64) * (height as f64) * fps;
     if pixels_per_second > 0.0 {
         let bits_per_pixel = (bitrate as f64 * 8.0) / pixels_per_second;
@@ -275,6 +308,29 @@ pub fn calculate_quality_score(
         0
     };
     (base_score + depth_bonus + res_bonus).min(100)
+}
+
+/// Analyzes a video file with optional SQLite caching.
+pub fn detect_video_with_cache(
+    path: &Path,
+    cache: Option<&crate::analysis_cache::AnalysisCache>,
+) -> Result<VideoDetectionResult, FFprobeError> {
+    if let Some(cache) = cache {
+        if let Ok(Some(cached)) = cache.get_video_analysis(path) {
+            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+            }
+            return Ok(cached);
+        }
+    }
+
+    let result = detect_video(path)?;
+
+    if let Some(cache) = cache {
+        let _ = cache.store_video_analysis(path, &result);
+    }
+
+    Ok(result)
 }
 
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {

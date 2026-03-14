@@ -65,6 +65,42 @@ pub struct ImageAnalysis {
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
 /// Quality is then derived via detect_lossless / detect_compression per format; no conversion is done here.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
+    analyze_image_with_cache(path, None)
+}
+
+/// Analyzes an image file with optional SQLite caching.
+pub fn analyze_image_with_cache(path: &Path, cache: Option<&crate::analysis_cache::AnalysisCache>) -> Result<ImageAnalysis> {
+    if let Some(cache) = cache {
+        match cache.get_analysis(path) {
+            Ok(Some(cached)) => {
+                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                    log_eprintln!("🔍 [Cache] Hit: {}", path.display());
+                }
+                return Ok(cached);
+            },
+            Err(e) => {
+                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                    log_eprintln!("⚠️ [Cache] Retrieval error: {}", e);
+                }
+            },
+            _ => {}
+        }
+    }
+
+    let analysis = analyze_image_internal(path)?;
+    
+    if let Some(cache) = cache {
+        if let Err(e) = cache.store_analysis(path, &analysis) {
+            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                log_eprintln!("⚠️ [Cache] Store error: {}", e);
+            }
+        }
+    }
+    
+    Ok(analysis)
+}
+
+fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     if !path.exists() {
         return Err(ImgQualityError::ImageReadError(format!(
             "File not found: {}",

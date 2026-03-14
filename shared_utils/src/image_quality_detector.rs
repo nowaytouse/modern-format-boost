@@ -728,7 +728,29 @@ fn calculate_analysis_confidence(
 /// Load image from path, run pixel-based quality analysis. Returns `None` if the file cannot be
 /// decoded (e.g. HEIC/JXL without in-process decoder). Used for quality-dimension logging and
 /// quality judgment; not used for routing.
+/// Analyzes image quality from a path.
 pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalysis> {
+    analyze_image_quality_with_cache(path, None)
+}
+
+/// Analyzes image quality from a path with optional cache.
+pub fn analyze_image_quality_with_cache(path: &Path, cache: Option<&crate::analysis_cache::AnalysisCache>) -> Option<ImageQualityAnalysis> {
+    if let Some(cache) = cache {
+        if let Ok(Some(cached)) = cache.get_quality_analysis(path) {
+            return Some(cached);
+        }
+    }
+
+    let analysis = analyze_image_quality_from_path_internal(path)?;
+    
+    if let Some(cache) = cache {
+        let _ = cache.store_quality_analysis(path, &analysis);
+    }
+    
+    Some(analysis)
+}
+
+fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityAnalysis> {
     let img = open(path).ok()?;
     let (width, height) = img.dimensions();
     let rgba = img.to_rgba8();

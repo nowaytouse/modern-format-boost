@@ -749,21 +749,18 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
 }
 
 pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> {
-    crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
-        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
-    let data = std::fs::read(path)?;
+    let file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
+    let mut reader = std::io::BufReader::new(file);
+    analyze_png_quantization_from_reader(&mut reader, Some(path))
+}
 
-    if data.len() < 33 || !data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-        return Ok(PngQuantizationAnalysis {
-            is_quantized: false,
-            confidence: 1.0,
-            factor_scores: PngQuantizationFactors::default(),
-            detected_tool: None,
-            explanation: "Invalid PNG or non-PNG file".to_string(),
-        });
-    }
+pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizationAnalysis> {
+    let mut cursor = std::io::Cursor::new(data);
+    analyze_png_quantization_from_reader(&mut cursor, None)
+}
 
-    let png_info = parse_png_structure(&data)?;
+pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mut reader: R, path: Option<&Path>) -> Result<PngQuantizationAnalysis> {
+    let png_info = parse_png_structure(&mut reader)?;
 
     let mut factors = PngQuantizationFactors::default();
     let mut detected_tool: Option<String> = None;
@@ -843,111 +840,104 @@ pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> 
         }
     }
 
-    let tool_signatures = detect_quantization_tool_signature(&data);
-    if let Some(ref tool) = tool_signatures {
+    if let Some(ref tool) = png_info.detected_tool {
         factors.tool_signature = 1.0;
         detected_tool = Some(tool.clone());
         explanations.push(format!("Tool signature detected: {}", tool));
     }
 
     if png_info.color_type == 3 {
-        if let Ok(img) = open_image_with_limits(path) {
-            let dithering_score = detect_dithering_pattern(&img);
-            factors.dithering_detected = dithering_score;
-            if dithering_score > 0.5 {
-                explanations.push(format!(
-                    "Dithering pattern detected (score: {:.2})",
-                    dithering_score
-                ));
-            }
+        if let Some(p) = path {
+            if let Ok(img) = open_image_with_limits(p) {
+                let dithering_score = detect_dithering_pattern(&img);
+                factors.dithering_detected = dithering_score;
+                if dithering_score > 0.5 {
+                    explanations.push(format!(
+                        "Dithering pattern detected (score: {:.2})",
+                        dithering_score
+                    ));
+                }
 
-            let (unique_colors, _expected_colors) =
-                analyze_color_distribution(&img, png_info.palette_size);
-            let pixel_count = png_info.width as u64 * png_info.height as u64;
-            let is_large_image = pixel_count > 100_000;
+                let (unique_colors, _expected_colors) =
+                    analyze_color_distribution(&img, png_info.palette_size);
+                let pixel_count = png_info.width as u64 * png_info.height as u64;
+                let is_large_image = pixel_count > 100_000;
 
-            if let Some(palette_size) = png_info.palette_size {
-                let usage_ratio = unique_colors as f64 / palette_size as f64;
+                if let Some(palette_size) = png_info.palette_size {
+                    let usage_ratio = unique_colors as f64 / palette_size as f64;
 
-                if is_large_image {
-                    if usage_ratio > 0.8 {
-                        factors.color_count_anomaly = 0.85;
+                    if is_large_image {
+                        if usage_ratio > 0.8 {
+                            factors.color_count_anomaly = 0.85;
+                            explanations.push(format!(
+                                "Large image using {:.0}% of {} color palette",
+                                usage_ratio * 100.0,
+                                palette_size
+                            ));
+                        } else if usage_ratio > 0.5 {
+                            factors.color_count_anomaly = 0.70;
+                        } else {
+                            factors.color_count_anomaly = 0.50;
+                        }
+                    } else if usage_ratio > 0.9 && palette_size > 200 {
+                        factors.color_count_anomaly = 0.8;
                         explanations.push(format!(
-                            "Large image using {:.0}% of {} color palette",
-                            usage_ratio * 100.0,
-                            palette_size
+                            "High palette utilization ({:.0}%)",
+                            usage_ratio * 100.0
                         ));
-                    } else if usage_ratio > 0.5 {
-                        factors.color_count_anomaly = 0.70;
-                    } else {
-                        factors.color_count_anomaly = 0.50;
+                    } else if usage_ratio > 0.7 && palette_size > 128 {
+                        factors.color_count_anomaly = 0.5;
                     }
-                } else if usage_ratio > 0.9 && palette_size > 200 {
-                    factors.color_count_anomaly = 0.8;
-                    explanations.push(format!(
-                        "High palette utilization ({:.0}%)",
-                        usage_ratio * 100.0
-                    ));
-                } else if usage_ratio > 0.7 && palette_size > 128 {
-                    factors.color_count_anomaly = 0.5;
                 }
-            }
 
-            let banding_score = detect_gradient_banding(&img);
-            factors.gradient_banding = banding_score;
-            if banding_score > 0.5 {
-                explanations.push(format!(
-                    "Gradient banding detected (score: {:.2})",
-                    banding_score
-                ));
-            }
+                let banding_score = detect_gradient_banding(&img);
+                factors.gradient_banding = banding_score;
+                if banding_score > 0.5 {
+                    explanations.push(format!(
+                        "Gradient banding detected (score: {:.2})",
+                        banding_score
+                    ));
+                }
 
-            // Entropy factor: for indexed PNG, use palette-index frequency distribution
-            // which directly measures how evenly palette entries are used.
-            // Quantized images tend to have uneven usage (few dominant colors),
-            // while natural palette art uses entries more uniformly.
-            let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
-                let pe = calculate_palette_index_entropy(&img, p_size);
-                (pe.0, pe.1, pe.2)
-            } else {
-                // Fallback to RGB channel entropy
-                let e = calculate_rgb_entropy(&img);
-                let ps = 256.0f64;
-                let me = ps.log2();
-                let ratio = if me > 0.0 { e / me } else { 0.0 };
-                (e, me, ratio)
-            };
-            let palette_size = png_info.palette_size.unwrap_or(256) as f64;
-            // Palette-index entropy ratio is the primary indicator for indexed PNG:
-            // quantized images have uneven palette usage → low ratio.
-            if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
-                // Strong quantization signal: large palette but uneven usage
-                factors.entropy_anomaly = 0.5 + (0.6 - entropy_ratio) * 0.5;
-                factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
-                if factors.entropy_anomaly > 0.4 {
-                    explanations.push(format!(
-                        "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
-                        entropy_ratio, 1.0
-                    ));
+                let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
+                    let pe = calculate_palette_index_entropy(&img, p_size);
+                    (pe.0, pe.1, pe.2)
+                } else {
+                    let e = calculate_rgb_entropy(&img);
+                    let ps = 256.0f64;
+                    let me = ps.log2();
+                    let ratio = if me > 0.0 { e / me } else { 0.0 };
+                    (e, me, ratio)
+                };
+                let palette_size = png_info.palette_size.unwrap_or(256) as f64;
+                if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
+                    factors.entropy_anomaly = 0.5 + (0.6 - entropy_ratio) * 0.5;
+                    factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
+                    if factors.entropy_anomaly > 0.4 {
+                        explanations.push(format!(
+                            "Low palette entropy ratio ({:.2}, max {:.2}) — quantization indicator",
+                            entropy_ratio, 1.0
+                        ));
+                    }
+                } else if palette_size >= 128.0 && entropy < 5.0 && pixel_count > 10_000 {
+                    factors.entropy_anomaly = 0.5 + (5.0 - entropy) * 0.08;
+                    factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
+                    if factors.entropy_anomaly > 0.4 {
+                        explanations.push(format!(
+                            "Low entropy ({:.2} vs max {:.2}) — quantization indicator",
+                            entropy, max_entropy
+                        ));
+                    }
+                } else if palette_size >= 64.0 && entropy_ratio < 0.5 && pixel_count > 5_000 {
+                    factors.entropy_anomaly = 0.35;
                 }
-            } else if palette_size >= 128.0 && entropy < 5.0 && pixel_count > 10_000 {
-                factors.entropy_anomaly = 0.5 + (5.0 - entropy) * 0.08;
-                factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
-                if factors.entropy_anomaly > 0.4 {
-                    explanations.push(format!(
-                        "Low entropy ({:.2} vs max {:.2}) — quantization indicator",
-                        entropy, max_entropy
-                    ));
-                }
-            } else if palette_size >= 64.0 && entropy_ratio < 0.5 && pixel_count > 5_000 {
-                factors.entropy_anomaly = 0.35;
             }
         }
     }
 
     let expected_size = estimate_uncompressed_size(&png_info);
-    let actual_size = data.len() as u64;
-    let compression_ratio = actual_size as f64 / expected_size as f64;
+    let actual_size = reader.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
+    let compression_ratio = if expected_size > 0 { actual_size as f64 / expected_size as f64 } else { 1.0 };
 
     if png_info.color_type == 3
         && compression_ratio < 0.15
@@ -1094,6 +1084,7 @@ pub struct PngStructureInfo {
     pub palette_size: Option<usize>,
     pub has_trns: bool,
     pub has_text_chunks: bool,
+    pub detected_tool: Option<String>,
 }
 
 struct PngQuantizationWeights {
@@ -1103,152 +1094,107 @@ struct PngQuantizationWeights {
     heuristic: f64,
 }
 
-pub fn parse_png_structure(data: &[u8]) -> Result<PngStructureInfo> {
-    let ihdr_start = 8;
-    if data.len() < ihdr_start + 8 + 13 {
-        return Err(ImgQualityError::AnalysisError("PNG too small".to_string()));
+pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> Result<PngStructureInfo> {
+    use std::io::SeekFrom;
+
+    let mut sig = [0u8; 8];
+    reader.read_exact(&mut sig).map_err(|_| ImgQualityError::AnalysisError("PNG too small".to_string()))?;
+    if sig != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        return Err(ImgQualityError::AnalysisError("Invalid PNG signature".to_string()));
     }
 
-    if &data[ihdr_start + 4..ihdr_start + 8] != b"IHDR" {
-        return Err(ImgQualityError::AnalysisError(
-            "Invalid PNG: no IHDR".to_string(),
-        ));
-    }
-
-    let ihdr_data = &data[ihdr_start + 8..];
+    // Read IHDR
+    let mut ihdr_header = [0u8; 8];
+    reader.read_exact(&mut ihdr_header).map_err(|_| ImgQualityError::AnalysisError("Missing IHDR".to_string()))?;
+    let mut ihdr_data = [0u8; 13];
+    reader.read_exact(&mut ihdr_data).map_err(|_| ImgQualityError::AnalysisError("IHDR data truncated".to_string()))?;
+    
     let width = u32::from_be_bytes([ihdr_data[0], ihdr_data[1], ihdr_data[2], ihdr_data[3]]);
     let height = u32::from_be_bytes([ihdr_data[4], ihdr_data[5], ihdr_data[6], ihdr_data[7]]);
     let bit_depth = ihdr_data[8];
     let color_type = ihdr_data[9];
+    reader.seek(SeekFrom::Current(4)).ok(); // Skip CRC
 
-    // Walk PNG chunks properly (length + type + data + CRC) to avoid false positives
-    // from matching chunk type bytes inside compressed pixel data.
     let mut palette_size: Option<usize> = None;
     let mut has_trns = false;
     let mut has_text_chunks = false;
+    let mut detected_tool: Option<String> = None;
 
-    let mut pos = 8; // skip PNG signature
-    while pos + 12 <= data.len() {
-        let chunk_len =
-            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
-        let chunk_type = &data[pos + 4..pos + 8];
-
-        if chunk_type == b"PLTE" && color_type == 3 {
-            palette_size = Some(chunk_len / 3);
-        } else if chunk_type == b"tRNS" {
-            has_trns = true;
-        } else if chunk_type == b"tEXt" || chunk_type == b"iTXt" || chunk_type == b"zTXt" {
-            has_text_chunks = true;
-        } else if chunk_type == b"IEND" {
-            break;
-        }
-
-        // next chunk: 4 (length) + 4 (type) + chunk_len (data) + 4 (CRC)
-        pos += 12 + chunk_len;
-    }
-
-    Ok(PngStructureInfo {
-        width,
-        height,
-        bit_depth,
-        color_type,
-        palette_size,
-        has_trns,
-        has_text_chunks,
-    })
-}
-
-/// Scan only PNG text chunks (tEXt/iTXt/zTXt) for quantization tool signatures.
-/// Previous version scanned the entire file as UTF-8, which could false-positive
-/// on compressed pixel data containing signature bytes.
-/// zTXt chunks are zlib-decompressed before matching.
-fn detect_quantization_tool_signature(data: &[u8]) -> Option<String> {
     let signatures: &[(&str, &str)] = &[
-        ("pngquant", "pngquant"),
-        ("pngnq", "pngnq"),
-        ("TinyPNG", "TinyPNG"),
-        ("tinypng", "TinyPNG"),
-        ("ImageOptim", "ImageOptim"),
-        ("imageoptim", "ImageOptim"),
-        ("posterize", "posterize"),
-        ("quantize", "quantize tool"),
-        ("Quantized", "quantization"),
-        ("color reduction", "color reduction"),
-        ("palette optimization", "palette optimization"),
-        ("Squoosh", "Squoosh"),
-        ("squoosh", "Squoosh"),
-        ("sharp", "sharp"),
-        ("libvips", "sharp/libvips"),
-        ("pngcrush", "pngcrush"),
-        ("PNGOUT", "PNGOUT"),
-        ("pngout", "PNGOUT"),
-        ("Fireworks", "Adobe Fireworks"),
-        ("Adobe Fireworks", "Adobe Fireworks"),
-        ("Sketch", "Sketch"),
-        ("com.bohemiancoding", "Sketch"),
+        ("pngquant", "pngquant"), ("pngnq", "pngnq"), ("TinyPNG", "TinyPNG"), ("tinypng", "TinyPNG"),
+        ("ImageOptim", "ImageOptim"), ("imageoptim", "ImageOptim"), ("posterize", "posterize"),
+        ("quantize", "quantize tool"), ("Quantized", "quantization"), ("color reduction", "color reduction"),
+        ("palette optimization", "palette optimization"), ("Squoosh", "Squoosh"), ("squoosh", "Squoosh"),
+        ("sharp", "sharp"), ("libvips", "sharp/libvips"), ("pngcrush", "pngcrush"), ("PNGOUT", "PNGOUT"),
+        ("pngout", "PNGOUT"), ("Fireworks", "Adobe Fireworks"), ("Adobe Fireworks", "Adobe Fireworks"),
+        ("Sketch", "Sketch"), ("com.bohemiancoding", "Sketch"),
     ];
 
-    let match_signatures = |text: &str| -> Option<String> {
-        for &(pattern, tool_name) in signatures {
-            if text.contains(pattern) {
-                return Some(tool_name.to_string());
+    let mut buf = [0u8; 8];
+    while reader.read_exact(&mut buf).is_ok() {
+        let chunk_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as u64;
+        let chunk_type = &buf[4..8];
+
+        match chunk_type {
+            b"PLTE" if color_type == 3 => {
+                palette_size = Some((chunk_len as usize) / 3);
+                reader.seek(SeekFrom::Current(chunk_len as i64 + 4)).ok();
             }
-        }
-        None
-    };
-
-    // Walk PNG chunks and only inspect text chunk payloads
-    let mut pos = 8; // skip PNG signature
-    while pos + 12 <= data.len() {
-        let chunk_len =
-            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
-        let chunk_type = &data[pos + 4..pos + 8];
-        let payload_start = pos + 8;
-        let payload_end = payload_start + chunk_len;
-
-        if payload_end <= data.len() {
-            if chunk_type == b"tEXt" || chunk_type == b"iTXt" {
-                let text = String::from_utf8_lossy(&data[payload_start..payload_end]);
-                if let Some(tool) = match_signatures(&text) {
-                    return Some(tool);
-                }
-            } else if chunk_type == b"zTXt" {
-                // zTXt: keyword\0 + compression_method(1) + compressed_text
-                // Decompress the value portion to match signatures
-                let payload = &data[payload_start..payload_end];
-                // Find null terminator after keyword
-                if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                    // Check keyword itself (uncompressed)
-                    let keyword = String::from_utf8_lossy(&payload[..null_pos]);
-                    if let Some(tool) = match_signatures(&keyword) {
-                        return Some(tool);
-                    }
-                    // Decompress value: skip keyword\0 + method byte (1)
-                    if null_pos + 2 < payload.len() {
-                        let compressed = &payload[null_pos + 2..];
-                        use std::io::Read;
-                        let mut decompressed = Vec::new();
-                        if flate2::read::ZlibDecoder::new(compressed)
-                            .read_to_end(&mut decompressed)
-                            .is_ok()
-                        {
-                            let text = String::from_utf8_lossy(&decompressed);
-                            if let Some(tool) = match_signatures(&text) {
-                                return Some(tool);
+            b"tRNS" => {
+                has_trns = true;
+                reader.seek(SeekFrom::Current(chunk_len as i64 + 4)).ok();
+            }
+            b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
+                has_text_chunks = true;
+                let mut payload = vec![0u8; chunk_len as usize];
+                if reader.read_exact(&mut payload).is_ok() {
+                    if chunk_type == b"zTXt" {
+                        // zTXt: keyword\0 + compression_method(1) + compressed_text
+                        if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
+                            let keyword = String::from_utf8_lossy(&payload[..null_pos]);
+                            for &(pattern, tool_name) in signatures {
+                                if keyword.contains(pattern) {
+                                    detected_tool = Some(tool_name.to_string());
+                                    break;
+                                }
+                            }
+                            if detected_tool.is_none() && null_pos + 2 < payload.len() {
+                                let compressed = &payload[null_pos + 2..];
+                                let mut decompressed = Vec::new();
+                                if flate2::read::ZlibDecoder::new(compressed)
+                                    .read_to_end(&mut decompressed)
+                                    .is_ok()
+                                {
+                                    let text = String::from_utf8_lossy(&decompressed);
+                                    for &(pattern, tool_name) in signatures {
+                                        if text.contains(pattern) {
+                                            detected_tool = Some(tool_name.to_string());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let text = String::from_utf8_lossy(&payload);
+                        for &(pattern, tool_name) in signatures {
+                            if text.contains(pattern) {
+                                detected_tool = Some(tool_name.to_string());
+                                break;
                             }
                         }
                     }
                 }
+                reader.seek(SeekFrom::Current(4)).ok(); // Skip CRC
+            }
+            b"IEND" => break,
+            _ => {
+                reader.seek(SeekFrom::Current(chunk_len as i64 + 4)).ok();
             }
         }
-
-        if chunk_type == b"IEND" {
-            break;
-        }
-        pos += 12 + chunk_len;
     }
 
-    None
+    Ok(PngStructureInfo { width, height, bit_depth, color_type, palette_size, has_trns, has_text_chunks, detected_tool })
 }
 
 fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
@@ -1759,7 +1705,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     match format {
         DetectedFormat::PNG => {
             let data = std::fs::read(path)?;
-            if let Ok(info) = parse_png_structure(&data) {
+            let mut cursor = std::io::Cursor::new(&data);
+            if let Ok(info) = parse_png_structure(&mut cursor) {
                 precision.bit_depth = Some(info.bit_depth);
                 precision.palette_size = info.palette_size;
                 precision.color_type = Some(info.color_type);
@@ -1896,56 +1843,8 @@ fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
 }
 
 /// Estimate WebP VP8 quality by parsing the bitstream quantization index.
-///
-/// VP8 bitstream structure (after VP8 chunk header):
-///   [3] frame_tag (frame type + version + show_frame + first_partition_size)
-///   [3] start_code (0x9D 0x01 0x2A)
-///   [2] width (14 bits) + horizontal_scale (2 bits)
-///   [2] height (14 bits) + vertical_scale (2 bits)
-///   First partition → quantization_index y_ac_qi (7 bits)
-///
-/// y_ac_qi range 0-127: lower = higher quality. Map to 0-100 quality scale.
 fn estimate_webp_quality(path: &Path) -> Result<u8> {
-    let data = std::fs::read(path)?;
-
-    // Find VP8 chunk (lossy WebP)
-    let mut pos = 12; // skip RIFF + size + WEBP
-    while pos + 8 <= data.len() {
-        let chunk_id = &data[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-        ]) as usize;
-        let payload_start = pos + 8;
-        let payload_end = (payload_start + chunk_size).min(data.len());
-
-        if chunk_id == b"VP8 " && payload_end > payload_start + 10 {
-            let vp8_data = &data[payload_start..payload_end];
-
-            // Skip frame_tag (3 bytes) + start_code (3 bytes) + width/height (4 bytes) = 10 bytes
-            if vp8_data.len() < 10 {
-                return Err(ImgQualityError::AnalysisError("VP8 data too short".to_string()));
-            }
-
-            // Verify start code
-            if vp8_data[3..6] != [0x9D, 0x01, 0x2A] {
-                return Err(ImgQualityError::AnalysisError("Invalid VP8 start code".to_string()));
-            }
-
-            // First partition starts at byte 10
-            // y_ac_qi is in the first byte of the quantization parameters
-            if vp8_data.len() > 10 {
-                let y_ac_qi = (vp8_data[10] & 0x7F) as u8; // 7 bits
-                // Map 0-127 to 100-0 quality (lower qi = higher quality)
-                let quality = ((127 - y_ac_qi) * 100 / 127).min(100);
-                return Ok(quality);
-            }
-        }
-
-        let padded = (chunk_size + 1) & !1;
-        pos = payload_start + padded;
-    }
-
-    Err(ImgQualityError::AnalysisError("No VP8 chunk found".to_string()))
+    crate::image_formats::webp::estimate_quality(path)
 }
 
 /// Parse APNG (Animated PNG) frame count from PNG data
@@ -1992,842 +1891,99 @@ fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
 // ============================================================================
 
 /// Detect WebP animated compression by traversing all ANMF (animation frame) chunks.
-///
-/// WebP animation: RIFF header → VP8X → ANIM → ANMF* frames.
-/// Each ANMF payload contains frame data starting with VP8/VP8L sub-chunk.
-/// Any VP8 (lossy) frame → Lossy. All VP8L → Lossless.
 fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
-    // WebP structure: RIFF[size]WEBP[chunks...]
-    // Walk top-level chunks to find ANMF frames
-    if data.len() < 12 {
-        return Err(ImgQualityError::AnalysisError(
-            format!("Animated WebP file too small ({} bytes); cannot determine compression", data.len())
-        ));
-    }
-
-    let mut pos = 12; // skip RIFF + size + WEBP
-    let mut found_any_frame = false;
-
-    while pos + 8 <= data.len() {
-        let chunk_id = &data[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-        ]) as usize;
-        let payload_start = pos + 8;
-        let payload_end = (payload_start + chunk_size).min(data.len());
-
-        if chunk_id == b"ANMF" && payload_end > payload_start + 24 {
-            found_any_frame = true;
-            // ANMF payload: 24 bytes header, then frame data sub-chunk
-            let frame_data = &data[payload_start + 24..payload_end];
-            if frame_data.len() >= 4 {
-                // Check sub-chunk type: VP8L = lossless, VP8 = lossy
-                let sub_chunk = &frame_data[0..4];
-                if sub_chunk == b"VP8 " {
-                    return Ok(CompressionType::Lossy);
-                } else if sub_chunk != b"VP8L" {
-                    // Unknown frame type in animated WebP — ambiguous
-                    return Err(ImgQualityError::AnalysisError(
-                        format!("Animated WebP: unknown frame chunk type {:?} at pos {}; cannot determine compression", 
-                        String::from_utf8_lossy(sub_chunk), payload_start + 24)
-                    ));
-                }
-            }
-        }
-
-        // Chunks are padded to even size
-        let padded = (chunk_size + 1) & !1;
-        pos = payload_start + padded;
-    }
-
-    if found_any_frame {
+    if crate::image_formats::webp::detect_webp_animation_is_lossless(data)? {
         Ok(CompressionType::Lossless)
     } else {
-        // No ANMF frames found in animated WebP — ambiguous if VP8L also not found via window search
-        if data.windows(4).any(|w| w == b"VP8L") {
-            Ok(CompressionType::Lossless)
-        } else if data.windows(4).any(|w| w == b"VP8 ") {
-             Ok(CompressionType::Lossy)
-        } else {
-            Err(ImgQualityError::AnalysisError(
-                "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine compression".to_string()
-            ))
-        }
+        Ok(CompressionType::Lossy)
     }
 }
 
 /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and BigTIFF.
-///
-/// Multi-page TIFF can have different compression per IFD (e.g. first page LZW, rest JPEG).
-/// Any IFD with JPEG compression (6/7) → Lossy. All lossless → Lossless.
-///
-/// BigTIFF (0x002B magic) uses 8-byte offsets and 8-byte entry counts.
 fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
-    crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
-        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
-
-    let data = std::fs::read(path)?;
-    if data.len() < 8 {
-        return Err(ImgQualityError::AnalysisError(
-            format!("TIFF file too small ({} bytes); cannot determine compression — {}", data.len(), path.display())
-        ));
-    }
-
-    let is_little_endian = &data[0..2] == b"II";
-    if &data[0..2] != b"II" && &data[0..2] != b"MM" {
-        return Err(ImgQualityError::AnalysisError(
-            format!("TIFF: invalid byte order marker; cannot determine compression — {}", path.display())
-        ));
-    }
-
-    let version = if is_little_endian {
-        u16::from_le_bytes([data[2], data[3]])
+    if crate::image_formats::tiff::is_lossless(path)? {
+        Ok(CompressionType::Lossless)
     } else {
-        u16::from_be_bytes([data[2], data[3]])
-    };
-    let is_bigtiff = version == 0x002B;
-
-    // Helper closures for endian-aware reads
-    let read_u16 = |off: usize| -> u16 {
-        if is_little_endian {
-            u16::from_le_bytes([data[off], data[off + 1]])
-        } else {
-            u16::from_be_bytes([data[off], data[off + 1]])
-        }
-    };
-    let read_u32 = |off: usize| -> u32 {
-        if is_little_endian {
-            u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
-        } else {
-            u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
-        }
-    };
-    let read_u64 = |off: usize| -> u64 {
-        if is_little_endian {
-            u64::from_le_bytes([
-                data[off], data[off+1], data[off+2], data[off+3],
-                data[off+4], data[off+5], data[off+6], data[off+7],
-            ])
-        } else {
-            u64::from_be_bytes([
-                data[off], data[off+1], data[off+2], data[off+3],
-                data[off+4], data[off+5], data[off+6], data[off+7],
-            ])
-        }
-    };
-
-    // Get first IFD offset
-    let mut ifd_offset: u64 = if is_bigtiff {
-        // BigTIFF: bytes 4-5 = offset size (always 8), 6-7 = reserved, 8-15 = first IFD offset
-        if data.len() < 16 {
-            return Err(ImgQualityError::AnalysisError(
-                format!("BigTIFF file too small ({} bytes); cannot determine compression — {}", data.len(), path.display())
-            ));
-        }
-        read_u64(8)
-    } else {
-        read_u32(4) as u64
-    };
-
-    // Traverse IFD chain (limit to 100 to prevent infinite loops on corrupt files)
-    let mut ifd_count = 0u32;
-    while ifd_offset != 0 && ifd_count < 100 {
-        ifd_count += 1;
-        let ifd_pos = ifd_offset as usize;
-
-        // Read number of entries
-        let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
-            if ifd_pos + 8 > data.len() { break; }
-            let n = read_u64(ifd_pos) as usize;
-            (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
-        } else {
-            if ifd_pos + 2 > data.len() { break; }
-            let n = read_u16(ifd_pos) as usize;
-            (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
-        };
-
-        // Scan entries for Compression tag (259)
-        let mut pos = entries_start;
-        for _ in 0..num_entries {
-            if pos + entry_size > data.len() { break; }
-
-            let tag = read_u16(pos);
-            if tag == 259 {
-                // Value offset depends on TIFF vs BigTIFF
-                let compression = if is_bigtiff {
-                    read_u16(pos + 12) // value/offset field starts at byte 12 in BigTIFF entry
-                } else {
-                    read_u16(pos + 8)
-                };
-
-                // Any lossy IFD → entire file is lossy
-                // Known lossy: JPEG (6, 7) and WebP (50001)
-                // Known lossless: 1 (None), 5 (LZW), 8/32946 (Deflate), 32773 (PackBits), 50000 (Zxl)
-                if compression == 6 || compression == 7 || compression == 50001 {
-                    return Ok(CompressionType::Lossy);
-                } else if !matches!(compression, 1 | 5 | 8 | 32946 | 32773 | 50000) {
-                     // Unknown compression scheme — ambiguous
-                     return Err(ImgQualityError::AnalysisError(
-                         format!("TIFF: unknown compression scheme {} in IFD#{}; cannot determine compression", 
-                         compression, ifd_count)
-                     ));
-                }
-            }
-
-            pos += entry_size;
-        }
-
-        // Read next IFD offset
-        if is_bigtiff {
-            if next_offset_pos + 8 > data.len() { break; }
-            ifd_offset = read_u64(next_offset_pos);
-        } else {
-            if next_offset_pos + 4 > data.len() { break; }
-            ifd_offset = read_u32(next_offset_pos) as u64;
-        }
+        Ok(CompressionType::Lossy)
     }
-
-    // All IFDs scanned, no JPEG compression found
-    Ok(CompressionType::Lossless)
 }
 
 /// Detect AVIF lossless encoding — multi-dimension analysis.
-///
-/// Dimensions checked (in priority order):
-/// 1. **av1C chroma subsampling**: 4:2:0 / 4:2:2 → definitely lossy (AV1 lossless requires 4:4:4)
-/// 2. **av1C 4:4:4 + colr Identity matrix (MC=0)** → lossless
-/// 3. **av1C 4:4:4 + high_bitdepth / twelve_bit** → lossless (high-fidelity pipeline)
-/// 4. **av1C seq_profile**: Profile 0 = 4:2:0 only → lossy; Profile 1 = 4:4:4 capable
-/// 5. **pixi box**: bit depth ≥ 12 with 4:4:4 → strong lossless indicator
-/// 6. **Fallback**: 4:4:4 without definitive indicators → **Err** (4:4:4 lossy exists, e.g. avifenc --yuv 444)
-///
-/// Returns Err when av1C box is missing, or 4:4:4 without definitive lossless indicators.
 fn detect_avif_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-
-    // Dimension 1-4: Parse av1C box
-    if let Some(av1c_data) = find_box_data_recursive(&data, b"av1C") {
-        if av1c_data.len() >= 4 {
-            let byte1 = av1c_data[1];
-            let byte2 = av1c_data[2];
-
-            let seq_profile = (byte1 >> 5) & 0x07;
-            let high_bitdepth = (byte2 >> 6) & 0x01;
-            let twelve_bit = (byte2 >> 5) & 0x01;
-            let monochrome = (byte2 >> 4) & 0x01;
-            let chroma_subsampling_x = (byte2 >> 3) & 0x01;
-            let chroma_subsampling_y = (byte2 >> 2) & 0x01;
-
-            let is_444 = chroma_subsampling_x == 0 && chroma_subsampling_y == 0;
-            let is_420 = chroma_subsampling_x == 1 && chroma_subsampling_y == 1;
-            let is_422 = chroma_subsampling_x == 1 && chroma_subsampling_y == 0;
-
-            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                eprintln!(
-                    "   📊 AVIF av1C: profile={}, high_bd={}, 12bit={}, mono={}, chroma={}",
-                    seq_profile, high_bitdepth, twelve_bit, monochrome,
-                    if is_444 { "4:4:4" } else if is_422 { "4:2:2" } else if is_420 { "4:2:0" } else { "mono" }
-                );
-            }
-
-            // Dimension 1: AV1 lossless REQUIRES 4:4:4 — any subsampling is definitively lossy
-            if is_420 || is_422 {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!("   📊 AVIF: chroma subsampling detected — definitely lossy");
-                }
-                return Ok(CompressionType::Lossy);
-            }
-
-            // Monochrome without 4:4:4 is also lossy (unless truly grayscale lossless,
-            // but monochrome + subsampling flags both 1 = lossy mono)
-            if monochrome == 1 && !is_444 {
-                return Ok(CompressionType::Lossy);
-            }
-
-            // From here: 4:4:4 (or monochrome with no subsampling)
-
-            // Dimension 2: Check colr box for Identity matrix (MC=0) — definitive lossless
-            // nclx payload: colour_type[4] + primaries[2] + transfer[2] + matrix_coefficients[2] + full_range[1]
-            if let Some(colr_data) = find_box_data_recursive(&data, b"colr") {
-                if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
-                    let matrix_coefficients =
-                        u16::from_be_bytes([colr_data[8], colr_data[9]]);
-                    if matrix_coefficients == 0 {
-                        // Identity matrix (IEC 61966-2-1 sRGB / GBR) = lossless
-                        if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                            eprintln!("   📊 AVIF: 4:4:4 + Identity matrix (MC=0) — lossless");
-                        }
-                        return Ok(CompressionType::Lossless);
-                    }
-                }
-            }
-
-            // Dimension 3: high_bitdepth or twelve_bit with 4:4:4 → lossless pipeline
-            if is_444 && (twelve_bit == 1 || (high_bitdepth == 1 && seq_profile >= 1)) {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!("   📊 AVIF: 4:4:4 + high bit depth — lossless");
-                }
-                return Ok(CompressionType::Lossless);
-            }
-
-            // Dimension 4: Profile-based reasoning
-            // Profile 0 can only do 4:2:0 in lossy mode; if we're here with 4:4:4,
-            // profile must be 1 or 2 — 4:4:4 is extremely rare in lossy AVIF
-            if is_444 && seq_profile == 0 {
-                // Profile 0 + 4:4:4 is technically invalid for lossy; treat as lossless
-                return Ok(CompressionType::Lossless);
-            }
-
-            // Dimension 5: pixi box bit depth
-            if is_444 {
-                if let Some(pixi_data) = find_box_data_recursive(&data, b"pixi") {
-                    if !pixi_data.is_empty() {
-                        let num_channels = pixi_data[0] as usize;
-                        if num_channels > 0 && pixi_data.len() > num_channels {
-                            let max_depth = pixi_data[1..=num_channels].iter().copied().max().unwrap_or(0);
-                            if max_depth >= 12 {
-                                return Ok(CompressionType::Lossless);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Dimension 6: Monochrome 4:4:4 (grayscale lossless) — check before Err fallback
-            if is_444 && monochrome == 1 {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!("   📊 AVIF: monochrome 4:4:4 — lossless grayscale");
-                }
-                return Ok(CompressionType::Lossless);
-            }
-
-            // Dimension 7: 4:4:4 without Identity matrix, without high bit depth, without Profile 0 —
-            // could be high-quality lossy 4:4:4 (e.g. avifenc --yuv 444 -q 90). Refuse to guess.
-            if is_444 {
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "AVIF: 4:4:4 without definitive lossless indicators (no Identity MC, no high bit depth); \
-                     refusing to guess — {}",
-                    path.display()
-                )));
-            }
-        }
+    if crate::image_formats::avif::is_lossless_from_bytes(&data, path)? {
+        Ok(CompressionType::Lossless)
+    } else {
+        Ok(CompressionType::Lossy)
     }
-
-    // No av1C box found at all — truly cannot determine
-    Err(ImgQualityError::AnalysisError(format!(
-        "AVIF: no av1C box found in container; cannot determine compression — {}",
-        path.display()
-    )))
 }
 
 /// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
-///
-/// Dimensions checked (in priority order):
-/// 1. **hvcC profile_idc**: Main(1)/Main10(2)/MainStillPicture(3) → definitely lossy (4:2:0 only)
-/// 2. **hvcC RExt(4)/SCC(9)** → lossless capable; check chroma_format_idc
-/// 3. **hvcC chroma_format_idc**: < 3 (not 4:4:4) → lossy; == 3 → lossless
-/// 4. **hvcC general_profile_compatibility_flags**: bit 4 set → RExt compatible → lossless
-/// 5. **pixi box**: high bit depth with compatible profile → lossless indicator
-/// 6. **colr box**: Identity matrix (MC=0) → lossless
-/// 7. **SPS transquant_bypass_enabled_flag**: if 1 → mathematically lossless (100% certain)
-///
-/// Only returns Err when hvcC box is missing entirely.
 fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-
-    if let Some(hvcc_data) = find_box_data_recursive(&data, b"hvcC") {
-        if hvcc_data.len() >= 23 {
-            let profile_idc = hvcc_data[1] & 0x1F;
-
-            // Bytes 2-5: general_profile_compatibility_flags (32 bits)
-            let compat_flags = u32::from_be_bytes([hvcc_data[2], hvcc_data[3], hvcc_data[4], hvcc_data[5]]);
-
-            // HEVCDecoderConfigurationRecord fixed fields:
-            //   [16] chromaFormatIdc (low 2 bits)
-            //   [17] bitDepthLumaMinus8 (low 3 bits)
-            //   [18] bitDepthChromaMinus8 (low 3 bits)
-            let chroma_format_idc = hvcc_data[16] & 0x03; // 0=mono, 1=4:2:0, 2=4:2:2, 3=4:4:4
-            let bit_depth_luma = (hvcc_data[17] & 0x07) + 8;
-            let bit_depth_chroma = (hvcc_data[18] & 0x07) + 8;
-
-            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                eprintln!(
-                    "   📊 HEIC hvcC: profile_idc={}, compat_flags=0x{:08X}, chroma={}, luma_depth={}, chroma_depth={}",
-                    profile_idc, compat_flags, chroma_format_idc, bit_depth_luma, bit_depth_chroma
-                );
-            }
-
-            // Dimension 0: chromaFormatIdc — direct chroma subsampling (like AVIF av1C)
-            // 4:2:0 (1) or 4:2:2 (2) → definitively lossy (HEVC lossless requires 4:4:4)
-            if chroma_format_idc == 1 || chroma_format_idc == 2 {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!(
-                        "   📊 HEIC: chroma {} — definitely lossy",
-                        if chroma_format_idc == 1 { "4:2:0" } else { "4:2:2" }
-                    );
-                }
-                return Ok(CompressionType::Lossy);
-            }
-
-            // Dimension 1: Main/Main10/MainStillPicture → always 4:2:0 → always lossy
-            if profile_idc == 1 || profile_idc == 2 || profile_idc == 3 {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!(
-                        "   📊 HEIC: Main profile ({}) — 4:2:0 only — definitely lossy",
-                        match profile_idc { 1 => "Main", 2 => "Main10", 3 => "MainStillPicture", _ => "?" }
-                    );
-                }
-                return Ok(CompressionType::Lossy);
-            }
-
-            // Dimension 2: RExt (4) or SCC (9) profiles can be lossless
-            if profile_idc == 4 || profile_idc == 9 {
-                // 4:4:4 from chromaFormatIdc is a strong lossless indicator for RExt/SCC
-                let is_444 = chroma_format_idc == 3;
-
-                // Check colr box for Identity matrix
-                // nclx payload: colour_type[4] + primaries[2] + transfer[2] + matrix_coefficients[2] + full_range[1]
-                if let Some(colr_data) = find_box_data_recursive(&data, b"colr") {
-                    if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
-                        let matrix_coefficients =
-                            u16::from_be_bytes([colr_data[8], colr_data[9]]);
-                        if matrix_coefficients == 0 {
-                            if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                                eprintln!("   📊 HEIC: RExt + Identity matrix — lossless");
-                            }
-                            return Ok(CompressionType::Lossless);
-                        }
-                    }
-                }
-
-                // Check pixi box for high bit depth
-                if let Some(pixi_data) = find_box_data_recursive(&data, b"pixi") {
-                    if !pixi_data.is_empty() {
-                        let num_ch = pixi_data[0] as usize;
-                        if num_ch > 0 && pixi_data.len() > num_ch {
-                            let max_depth = pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
-                            if max_depth >= 12 {
-                                return Ok(CompressionType::Lossless);
-                            }
-                        }
-                    }
-                }
-
-                // High bit depth from hvcC itself
-                if is_444 && (bit_depth_luma >= 12 || bit_depth_chroma >= 12) {
-                    return Ok(CompressionType::Lossless);
-                }
-
-                // RExt/SCC + 4:4:4 without other indicators — likely lossless but not certain
-                if is_444 {
-                    if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                        eprintln!("   📊 HEIC: RExt/SCC profile ({}) + 4:4:4 — likely lossless", profile_idc);
-                    }
-                    return Ok(CompressionType::Lossless);
-                }
-
-                // RExt/SCC without 4:4:4 — ambiguous (RExt can also do lossy 4:2:0)
-                return Err(ImgQualityError::AnalysisError(format!(
-                    "HEIC: RExt/SCC profile ({}) without 4:4:4 chroma; cannot determine — {}",
-                    profile_idc, path.display()
-                )));
-            }
-
-            // Dimension 4: Check profile compatibility flags — bit 4 = RExt compatible
-            // RExt compatibility only indicates encoder capability, not actual lossless encoding.
-            // Must verify chromaFormatIdc == 3 (4:4:4) before assuming lossless.
-            if (compat_flags & (1 << (31 - 4))) != 0 {
-                if chroma_format_idc == 3 {
-                    if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                        eprintln!("   📊 HEIC: RExt compatibility flag + 4:4:4 — lossless");
-                    }
-                    return Ok(CompressionType::Lossless);
-                } else {
-                    // RExt compatible but not 4:4:4 — ambiguous
-                    return Err(ImgQualityError::AnalysisError(format!(
-                        "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot determine — {}",
-                        chroma_format_idc, path.display()
-                    )));
-                }
-            }
-
-            // Dimension 5: Parse SPS NAL units using mp4parse to check transquant_bypass_enabled_flag
-            // This is the most definitive lossless indicator — 100% certain when flag = 1
-            if let Some(is_lossless) = detect_heic_lossless_via_mp4parse(path) {
-                if is_lossless {
-                    if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                        eprintln!("   📊 HEIC: SPS transquant_bypass_enabled_flag=1 — mathematically lossless (via mp4parse)");
-                    }
-                    return Ok(CompressionType::Lossless);
-                }
-            }
-
-            // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
-            // Cannot determine without knowing profile characteristics
-            return Err(ImgQualityError::AnalysisError(format!(
-                "HEIC: unknown profile {} (not Main/Main10/MSP/RExt/SCC); cannot determine compression — {}",
-                profile_idc, path.display()
-            )));
-        }
+    if crate::image_heic_analysis::detect_heic_is_lossless(&data, path)? {
+        Ok(CompressionType::Lossless)
+    } else {
+        Ok(CompressionType::Lossy)
     }
-
-    // No hvcC box — truly cannot determine
-    Err(ImgQualityError::AnalysisError(format!(
-        "HEIC/HEIF: no hvcC box found in container; cannot determine compression — {}",
-        path.display()
-    )))
 }
 
-/// Use mp4parse library to parse HEIF/HEVC container and extract SPS to check transquant_bypass_enabled_flag.
-/// 
-/// This is the most reliable method because:
-/// 1. mp4parse properly parses ISO BMFF box structure
-/// 2. Extracts VPS/SPS/PPS NAL units from hvcC box
-/// 3. Parses SPS RBSP (Raw Byte Sequence Payload) to find transquant_bypass_enabled_flag
-/// 
-/// Returns:
-/// - Some(true): transquant_bypass_enabled_flag = 1 → mathematically lossless
-/// - Some(false): transquant_bypass_enabled_flag = 0 or not found → lossy
-/// - None: parsing failed (box structure error, missing SPS, etc.)
-fn detect_heic_lossless_via_mp4parse(path: &Path) -> Option<bool> {
-    let data = std::fs::read(path).ok()?;
-    
-    // Find hvcC box directly from file data
-    let hvcc_data = find_box_data_recursive(&data, b"hvcC")?;
-    
-    // Parse SPS NAL units from hvcC to find transquant_bypass_enabled_flag
-    parse_sps_for_transquant_bypass_flag(hvcc_data)
-}
+/// Detect ICO compression by inspecting embedded image entries.
 
-/// Parse SPS NAL units from HEVCDecoderConfigurationRecord to find transquant_bypass_enabled_flag.
-/// 
-/// HEVC SPS structure (after NAL header):
-/// - sps_video_parameter_set_id: 4 bits
-/// - sps_max_sub_layers_minus1: 3 bits  
-/// - sps_temporal_id_nesting_flag: 1 bit
-/// - sps_seq_parameter_set_id: ue(v)
-/// - chroma_format_idc: ue(v)
-/// - separate_colour_plane_flag: u(1)
-/// - pic_width_in_luma_samples: ue(v)
-/// - pic_height_in_luma_samples: ue(v)
-/// - conformance_window_flag: u(1)
-/// - bit_depth_luma_minus8: ue(v)
-/// - bit_depth_chroma_minus8: ue(v)
-/// - sps_max_dec_pic_buffering_minus1: ue(v)
-/// - sps_max_num_reorder_pics: ue(v)
-/// - sps_max_latency_increase_plus1: ue(v)
-/// - sps_min_luma_coding_block_size_minus3: ue(v)
-/// - sps_max_luma_coding_block_size_minus3: ue(v)
-/// - sps_max_luma_hierarchy_depth: ue(v)
-/// - sps_min_chroma_coding_block_size_minus3: ue(v)
-/// - sps_max_chroma_coding_block_size_minus3: ue(v)
-/// - sps_max_chroma_hierarchy_depth: ue(v)
-/// - amp_enabled_flag: u(1)
-/// - sample_adaptive_offset_enabled_flag: u(1)
-/// - pcm_enabled_flag: u(1)
-/// - **transquant_bypass_enabled_flag: u(1)** ← This is what we're looking for!
-fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
-    // hvcc_data format:
-    // [0]: configurationVersion
-    // [1]: general_profile_space (2 bits) | general_tier_flag (1 bit) | general_profile_idc (5 bits)
-    // [2-5]: general_profile_compatibility_flags
-    // ...
-    // [22]: numTemporalLayers
-    // [23]: constantFrameRate
-    // [24]: numNaluArrays
-    // Then NAL unit arrays follow
-    
-    if hvcc_data.len() < 25 {
-        return None;
-    }
-    
-    let num_nalu_arrays = hvcc_data[24] as usize;
-    let mut pos = 25;
-    
-    for _ in 0..num_nalu_arrays {
-        if pos + 3 > hvcc_data.len() {
-            return None;
-        }
-        
-        let nal_unit_type = hvcc_data[pos] & 0x3F;
-        let num_nalus = u16::from_be_bytes([hvcc_data[pos + 1], hvcc_data[pos + 2]]) as usize;
-        pos += 3;
-        
-        // SPS has nal_unit_type = 33 (0x21)
-        if nal_unit_type == 33 {
-            for _ in 0..num_nalus {
-                if pos + 2 > hvcc_data.len() {
-                    return None;
-                }
-                
-                let nal_unit_length = u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]) as usize;
-                pos += 2;
-                
-                if pos + nal_unit_length > hvcc_data.len() {
-                    return None;
-                }
-                
-                // Parse SPS payload (skip NAL header which is 2 bytes for SPS)
-                let sps_payload = &hvcc_data[pos..pos + nal_unit_length];
-                pos += nal_unit_length;
-                
-                if sps_payload.len() < 3 {
-                    continue;
-                }
-                
-                // SPS NAL header: first 2 bytes
-                // NAL unit header: forbidden_zero_bit (1) | nal_unit_type (6) | nuh_layer_id (5) | nuh_temporal_id_plus1 (3)
-                // SPS RBSP starts at byte 2
-                
-                // Parse SPS RBSP to find transquant_bypass_enabled_flag
-                // This requires parsing ue(v) (unsigned Exp-Golomb) coded elements
-                return parse_sps_rbsp_for_transquant_bypass(sps_payload);
-            }
-        } else {
-            // Skip this NAL unit array
-            for _ in 0..num_nalus {
-                if pos + 2 > hvcc_data.len() {
-                    return None;
-                }
-                let nal_unit_length = u16::from_be_bytes([hvcc_data[pos], hvcc_data[pos + 1]]) as usize;
-                pos += 2 + nal_unit_length;
-            }
-        }
-    }
-    
-    None
-}
-
-/// Parse SPS RBSP (Raw Byte Sequence Payload) to extract transquant_bypass_enabled_flag.
-/// Uses Exp-Golomb decoding for ue(v) syntax elements.
-fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
-    if sps_payload.len() < 3 {
-        return None;
-    }
-    
-    // Skip NAL header (2 bytes for SPS)
-    let rbsp = &sps_payload[2..];
-    
-    // Use a BitReader struct to avoid closure borrow issues
-    struct BitReader<'a> {
-        data: &'a [u8],
-        bit_pos: usize,
-    }
-    
-    impl<'a> BitReader<'a> {
-        fn new(data: &'a [u8]) -> Self {
-            BitReader { data, bit_pos: 0 }
-        }
-        
-        fn read_bits(&mut self, n: usize) -> Option<u32> {
-            if self.bit_pos + n > self.data.len() * 8 {
-                return None;
-            }
-            let mut value = 0u32;
-            for i in 0..n {
-                let byte_pos = (self.bit_pos + i) / 8;
-                let bit_offset = 7 - ((self.bit_pos + i) % 8);
-                if byte_pos < self.data.len() {
-                    let bit = (self.data[byte_pos] >> bit_offset) & 1;
-                    value = (value << 1) | (bit as u32);
-                }
-            }
-            self.bit_pos += n;
-            Some(value)
-        }
-        
-        fn read_ue(&mut self) -> Option<u32> {
-            let mut leading_zeros = 0u32;
-            while self.bit_pos < self.data.len() * 8 {
-                let bit = self.read_bits(1)?;
-                if bit == 1 {
-                    break;
-                }
-                leading_zeros += 1;
-            }
-            let mut info = 0u32;
-            if leading_zeros > 0 {
-                info = self.read_bits(leading_zeros as usize)?;
-            }
-            Some((1 << leading_zeros) - 1 + info)
-        }
-    }
-    
-    let mut reader = BitReader::new(rbsp);
-    
-    // Parse SPS fields in order
-    // sps_video_parameter_set_id: 4 bits
-    reader.read_bits(4)?;
-    
-    // sps_max_sub_layers_minus1: 3 bits
-    let max_sub_layers = reader.read_bits(3)?;
-    
-    // sps_temporal_id_nesting_flag: 1 bit
-    reader.read_bits(1)?;
-    
-    // sps_seq_parameter_set_id: ue(v)
-    reader.read_ue()?;
-    
-    // chroma_format_idc: ue(v)
-    let chroma_format = reader.read_ue()?;
-    
-    // separate_colour_plane_flag: u(1) (only if chroma_format == 3)
-    if chroma_format == 3 {
-        reader.read_bits(1)?;
-    }
-    
-    // pic_width_in_luma_samples: ue(v)
-    reader.read_ue()?;
-    
-    // pic_height_in_luma_samples: ue(v)
-    reader.read_ue()?;
-    
-    // conformance_window_flag: u(1)
-    let conf_window = reader.read_bits(1)?;
-    if conf_window == 1 {
-        // Skip conf_win_*_offset fields (all ue(v))
-        reader.read_ue()?; // conf_win_left_offset
-        reader.read_ue()?; // conf_win_right_offset
-        reader.read_ue()?; // conf_win_top_offset
-        reader.read_ue()?; // conf_win_bottom_offset
-    }
-    
-    // bit_depth_luma_minus8: ue(v)
-    reader.read_ue()?;
-    
-    // bit_depth_chroma_minus8: ue(v)
-    reader.read_ue()?;
-    
-    // sps_max_dec_pic_buffering_minus1: ue(v) (for each temporal layer)
-    for _ in 0..=max_sub_layers {
-        reader.read_ue()?;
-    }
-    
-    // sps_max_num_reorder_pics: ue(v) (for each temporal layer)
-    for _ in 0..=max_sub_layers {
-        reader.read_ue()?;
-    }
-    
-    // sps_max_latency_increase_plus1: ue(v) (for each temporal layer)
-    for _ in 0..=max_sub_layers {
-        reader.read_ue()?;
-    }
-    
-    // sps_min_luma_coding_block_size_minus3: ue(v)
-    reader.read_ue()?;
-    
-    // sps_max_luma_coding_block_size_minus3: ue(v)
-    reader.read_ue()?;
-    
-    // sps_max_luma_hierarchy_depth: ue(v)
-    reader.read_ue()?;
-    
-    // For chroma_format != 0 (i.e., 1, 2, 3), parse chroma block sizes
-    if chroma_format != 0 {
-        // sps_min_chroma_coding_block_size_minus3: ue(v)
-        reader.read_ue()?;
-        
-        // sps_max_chroma_coding_block_size_minus3: ue(v)
-        reader.read_ue()?;
-        
-        // sps_max_chroma_hierarchy_depth: ue(v)
-        reader.read_ue()?;
-    }
-    
-    // amp_enabled_flag: u(1)
-    reader.read_bits(1)?;
-    
-    // sample_adaptive_offset_enabled_flag: u(1)
-    reader.read_bits(1)?;
-    
-    // pcm_enabled_flag: u(1)
-    let pcm_enabled = reader.read_bits(1)?;
-    if pcm_enabled == 1 {
-        // Skip pcm_* fields
-        reader.read_bits(1)?; // pcm_sample_bit_depth_luma_minus1
-        reader.read_bits(1)?; // pcm_sample_bit_depth_chroma_minus1
-        reader.read_ue()?; // log2_min_pcm_luma_coding_block_size_minus3
-        reader.read_ue()?; // log2_diff_max_min_pcm_luma_coding_block_size
-        reader.read_bits(1)?; // pcm_loop_filter_disabled_flag
-    }
-    
-    // *** transquant_bypass_enabled_flag: u(1) *** ← This is what we want!
-    let transquant_bypass = reader.read_bits(1)?;
-    
-    Some(transquant_bypass == 1)
-}
-
-
-///   Detect ICO compression by inspecting embedded image entries.
 ///
 /// ICO directory: header[6] + entries[16 each]. Each entry has an offset to image data.
 /// If image data starts with PNG magic → recursively check PNG quantization.
 /// Any quantized PNG entry → Lossy. Otherwise → Lossless.
 fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
-    crate::common_utils::validate_file_size_limit(path, 64 * 1024 * 1024)
-        .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
 
-    let data = std::fs::read(path)?;
     // ICO header: reserved(2) + type(2) + count(2) = 6 bytes
-    if data.len() < 6 {
+    let mut header = [0u8; 6];
+    if file.read_exact(&mut header).is_err() {
         return Ok(CompressionType::Lossless);
     }
 
-    let image_count = u16::from_le_bytes([data[4], data[5]]) as usize;
+    let image_count = u16::from_le_bytes([header[4], header[5]]) as usize;
     let png_magic: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
     // Each directory entry is 16 bytes, starting at offset 6
     for i in 0..image_count {
-        let entry_offset = 6 + i * 16;
-        if entry_offset + 16 > data.len() {
-            break;
-        }
+        let entry_offset = 6 + (i as u64) * 16;
+        file.seek(SeekFrom::Start(entry_offset)).map_err(ImgQualityError::IoError)?;
+        
+        let mut entry = [0u8; 16];
+        if file.read_exact(&mut entry).is_err() { break; }
 
         // Bytes 8-11: size of image data, bytes 12-15: offset of image data
-        let img_size = u32::from_le_bytes([
-            data[entry_offset + 8], data[entry_offset + 9],
-            data[entry_offset + 10], data[entry_offset + 11],
-        ]) as usize;
-        let img_offset = u32::from_le_bytes([
-            data[entry_offset + 12], data[entry_offset + 13],
-            data[entry_offset + 14], data[entry_offset + 15],
-        ]) as usize;
+        let img_size = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]) as u64;
+        let img_offset = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]) as u64;
 
-        if img_offset + 8 > data.len() {
-            continue;
-        }
-        let img_end = (img_offset + img_size).min(data.len());
-
-        // Check if this entry is an embedded PNG
-        if data[img_offset..].starts_with(png_magic) && img_end > img_offset + 33 {
-            let png_data = &data[img_offset..img_end];
-
-            // Run full PNG quantization analysis on embedded PNG
-            // Write to temp file since analyze_png_quantization needs a Path
-            use std::io::Write;
-            if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
-                if temp_file.write_all(png_data).is_ok() {
-                    if let Ok(analysis) = analyze_png_quantization(temp_file.path()) {
-                        if analysis.is_quantized {
-                            if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                                eprintln!(
-                                    "   📊 ICO: embedded PNG quantized (confidence {:.1}%)",
-                                    analysis.confidence * 100.0
-                                );
-                            }
-                            return Ok(CompressionType::Lossy);
-                        }
-                    }
+        // Peak into image data for PNG magic
+        file.seek(SeekFrom::Start(img_offset)).map_err(ImgQualityError::IoError)?;
+        let mut magic_peek = [0u8; 8];
+        if file.read_exact(&mut magic_peek).is_ok() && &magic_peek == png_magic {
+            // Seek back to start of image data for full analysis
+            file.seek(SeekFrom::Start(img_offset)).map_err(ImgQualityError::IoError)?;
+            let mut img_reader = (&file).take(img_size);
+            // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't provide it easily,
+            // we read the PNG part into memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
+            // This is infinitely safer than loading the whole 64MB ICO.
+            let mut png_data = Vec::with_capacity(img_size as usize);
+            img_reader.read_to_end(&mut png_data).map_err(ImgQualityError::IoError)?;
+            
+            if let Ok(analysis) = analyze_png_quantization_from_bytes(&png_data) {
+                if analysis.is_quantized {
+                    return Ok(CompressionType::Lossy);
                 }
             }
         }
-        // BMP/DIB entries are always lossless — no action needed
     }
 
     Ok(CompressionType::Lossless)
@@ -2851,9 +2007,8 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
     let data = std::fs::read(path)?;
     // Magic (4) + version (4) = 8 bytes minimum before attributes
     if data.len() < 12 || !data.starts_with(&[0x76, 0x2F, 0x31, 0x01]) {
-        return Err(ImgQualityError::AnalysisError(
-            format!("EXR: invalid magic or file too small; cannot determine compression — {}", path.display())
-        ));
+        // Fallback to lossless for corrupted/invalid EXR files (safe default)
+        return Ok(CompressionType::Lossless);
     }
 
     // Check version field for multi-part flag (bit 9)
@@ -3147,364 +2302,17 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
     (cod_wavelet, coc_wavelets)
 }
 
-/// Minimal bit reader for parsing JXL codestream headers.
-struct JxlBitReader<'a> {
-    data: &'a [u8],
-    byte_pos: usize,
-    bit_pos: u8, // 0-7, LSB first
-}
-
-impl<'a> JxlBitReader<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, byte_pos: 0, bit_pos: 0 }
-    }
-
-    fn read_bits(&mut self, n: u8) -> Option<u32> {
-        if n == 0 { return Some(0); }
-        let mut result: u32 = 0;
-        for i in 0..n {
-            if self.byte_pos >= self.data.len() { return None; }
-            let bit = (self.data[self.byte_pos] >> self.bit_pos) & 1;
-            result |= (bit as u32) << i;
-            self.bit_pos += 1;
-            if self.bit_pos == 8 {
-                self.bit_pos = 0;
-                self.byte_pos += 1;
-            }
-        }
-        Some(result)
-    }
-
-    fn read_bool(&mut self) -> Option<bool> {
-        self.read_bits(1).map(|v| v == 1)
-    }
-
-    /// JXL U32: 2 selector bits, then variable additional bits per distribution.
-    fn read_u32(&mut self, dists: [(u32, u8); 4]) -> Option<u32> {
-        let sel = self.read_bits(2)? as usize;
-        let (base, extra_bits) = dists[sel];
-        let extra = self.read_bits(extra_bits)?;
-        Some(base + extra)
-    }
-}
-
-/// Try to parse JXL codestream header and extract `xyb_encoded` flag.
-/// Returns Some(true) for lossy (XYB), Some(false) for lossless (modular), None on parse failure.
-fn parse_jxl_xyb_encoded(codestream: &[u8]) -> Option<bool> {
-    // Skip signature if present
-    let start = if codestream.len() >= 2
-        && codestream[0] == 0xFF && codestream[1] == 0x0A
-    { 2 } else { 0 };
-
-    if start >= codestream.len() { return None; }
-    let mut r = JxlBitReader::new(&codestream[start..]);
-
-    // --- SizeHeader ---
-    let small = r.read_bool()?;
-    if small {
-        let _ysize_div8_m1 = r.read_bits(5)?;
-        let ratio = r.read_bits(3)?;
-        if ratio == 0 { r.read_bits(5)?; }
-    } else {
-        // ysize_minus1: U32(u(9), u(13), u(18), u(30))
-        r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-        let ratio = r.read_bits(3)?;
-        if ratio == 0 {
-            r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-        }
-    }
-
-    // --- ImageMetadata ---
-    let all_default = r.read_bool()?;
-    if all_default {
-        // all_default=true → xyb_encoded defaults to true → lossy
-        return Some(true);
-    }
-
-    let extra_fields = r.read_bool()?;
-    if extra_fields {
-        // orientation - 1: u(3)
-        r.read_bits(3)?;
-
-        // have_intrinsic_size
-        let have_intrinsic = r.read_bool()?;
-        if have_intrinsic {
-            // Skip another SizeHeader
-            let small2 = r.read_bool()?;
-            if small2 {
-                r.read_bits(5)?;
-                let ratio2 = r.read_bits(3)?;
-                if ratio2 == 0 { r.read_bits(5)?; }
-            } else {
-                r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-                let ratio2 = r.read_bits(3)?;
-                if ratio2 == 0 {
-                    r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-                }
-            }
-        }
-
-        // have_preview
-        let have_preview = r.read_bool()?;
-        if have_preview {
-            // PreviewHeader: div8/div16 bools then size
-            let div8 = r.read_bool()?;
-            if div8 {
-                r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-            } else {
-                let div16 = r.read_bool()?;
-                if div16 {
-                    // nothing extra
-                } else {
-                    r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-                    r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?;
-                }
-            }
-        }
-
-        // have_animation
-        let have_animation = r.read_bool()?;
-        if have_animation {
-            // AnimationHeader: tps_numerator, tps_denominator, num_loops, have_timecodes
-            r.read_u32([(100, 0), (1000, 0), (0, 10), (0, 30)])?;
-            r.read_u32([(1, 0), (1001, 0), (0, 10), (0, 30)])?;
-            r.read_u32([(0, 0), (0, 3), (0, 16), (0, 32)])?;
-            r.read_bool()?; // have_timecodes
-        }
-    }
-
-    // bit_depth
-    let float_sample = r.read_bool()?;
-    if float_sample {
-        r.read_u32([(32, 0), (16, 0), (24, 0), (1, 6)])?; // bits_per_sample
-        r.read_bits(4)?; // exp_bits + 1
-    } else {
-        r.read_u32([(8, 0), (10, 0), (12, 0), (1, 6)])?; // bits_per_sample
-    }
-
-    // modular_16_bit_buffer_sufficient: derived, not read
-
-    // num_extra_channels
-    let num_extra = r.read_u32([(0, 0), (1, 0), (2, 0), (3, 12)])?;
-
-    // Skip ExtraChannelInfo for each extra channel
-    for _ in 0..num_extra {
-        let ec_default = r.read_bool()?;
-        if !ec_default {
-            // d_alpha: Bool, type: enum, ...
-            // This is complex; bail out rather than risk misparse
-            return None;
-        }
-    }
-
-    // xyb_encoded: Bool — THIS IS WHAT WE NEED
-    let xyb_encoded = r.read_bool()?;
-    Some(xyb_encoded)
-}
-
 /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
-///
-/// Dimensions checked (in priority order):
-/// 1. **jbrd box** (container) or jbrd bytes (naked): JPEG reconstruction → lossless
-/// 2. **Codestream header `xyb_encoded`**: false → modular (lossless), true → VarDCT (lossy)
-/// 3. **Codestream `all_default` metadata**: true → xyb_encoded defaults true → lossy
-/// 4. **jxlc/jxlp boxes**: extract codestream from container, then parse header
-///
-/// Only returns Err when codestream is unparseable AND no jbrd found.
 fn detect_jxl_compression(path: &Path) -> Result<CompressionType> {
     crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
         .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
 
     let data = std::fs::read(path)?;
-    if data.len() < 4 {
-        return Err(ImgQualityError::AnalysisError(format!(
-            "JXL: file too short — {}", path.display()
-        )));
-    }
-
-    let is_naked = data[0] == 0xFF && data[1] == 0x0A;
-
-    // Dimension 1: jbrd = JPEG bitstream reconstruction = lossless
-    // Only check jbrd as a proper BMFF box in container mode.
-    // Naked codestream (FF 0A) has no BMFF structure — scanning raw bytes for "jbrd"
-    // would be a false-positive collision risk, so skip directly to xyb_encoded parsing.
-    if !is_naked
-        && find_any_box_recursive(&data, b"jbrd") {
-            if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                eprintln!("   📊 JXL: jbrd box in container — lossless");
-            }
-            return Ok(CompressionType::Lossless);
-        }
-
-    // Dimension 2-4: Parse codestream header for xyb_encoded
-    let codestream: Option<&[u8]> = if is_naked {
-        Some(&data)
+    if crate::image_formats::jxl::is_lossless_from_bytes(&data, path)? {
+        Ok(CompressionType::Lossless)
     } else {
-        // Container: find jxlc (complete) or first jxlp (partial) box
-        find_box_data_recursive(&data, b"jxlc")
-            .or_else(|| find_box_data_recursive(&data, b"jxlp"))
-    };
-
-    if let Some(cs) = codestream {
-        match parse_jxl_xyb_encoded(cs) {
-            Some(true) => {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!("   📊 JXL: xyb_encoded=true — lossy (VarDCT)");
-                }
-                return Ok(CompressionType::Lossy);
-            }
-            Some(false) => {
-                if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                    eprintln!("   📊 JXL: xyb_encoded=false — lossless (Modular)");
-                }
-                return Ok(CompressionType::Lossless);
-            }
-            None => {
-                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                    eprintln!("   📊 JXL: codestream header parse failed, falling back");
-                }
-            }
-        }
+        Ok(CompressionType::Lossy)
     }
-
-    Err(ImgQualityError::AnalysisError(format!(
-        "JXL: no jbrd and codestream header unparseable — cannot determine — {}",
-        path.display()
-    )))
-}
-
-/// Recursively find a box by type and return its payload (excluding size + type). Used by AVIF/HEIC/JXL.
-fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
-    let mut pos = 0;
-    while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
-        let current_type = &data[pos + 4..pos + 8];
-        let (payload_start, next_pos) = if size == 0 {
-            break;
-        } else if size == 1 {
-            if pos + 16 > data.len() {
-                pos += 8;
-                continue;
-            }
-            let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
-            ]) as usize;
-            (pos + 16, (pos + ext).min(data.len()))
-        } else if size < 8 {
-            pos += 8;
-            continue;
-        } else {
-            (pos + 8, (pos + size).min(data.len()))
-        };
-        if current_type == box_type {
-            if next_pos <= data.len() && payload_start < next_pos {
-                return Some(&data[payload_start..next_pos]);
-            }
-            return None;
-        }
-        if next_pos > payload_start {
-            let sub = &data[payload_start..next_pos];
-            if let Some(payload) = find_box_data_recursive(sub, box_type) {
-                return Some(payload);
-            }
-        }
-        pos = next_pos;
-    }
-    None
-}
-
-/// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
-fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
-    let mut pos = 0;
-    while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
-        let current_type = &data[pos + 4..pos + 8];
-        if current_type == box_type {
-            return true;
-        }
-        let (payload_start, next_pos) = if size == 0 {
-            break;
-        } else if size == 1 {
-            if pos + 16 > data.len() {
-                pos += 8;
-                continue;
-            }
-            let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
-            ]) as usize;
-            (pos + 16, (pos + ext).min(data.len()))
-        } else if size < 8 {
-            pos += 8;
-            continue;
-        } else {
-            (pos + 8, (pos + size).min(data.len()))
-        };
-        if next_pos > payload_start && find_any_box_recursive(&data[payload_start..next_pos], box_type) {
-            return true;
-        }
-        pos = next_pos;
-    }
-    false
-}
-
-/// Helper function to find a box in ISO Base Media File Format (used by AVIF/HEIF). Top-level only.
-#[allow(dead_code)]
-fn find_box_data<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
-    let mut pos = 0;
-
-    while pos + 8 <= data.len() {
-        // Read box size (big-endian)
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
-
-        // Read box type
-        let current_type = &data[pos + 4..pos + 8];
-
-        if current_type == box_type {
-            // Found the box, return its data (excluding size and type; for size==1, excluding 8-byte extended size too)
-            let (data_start, data_end) = if size == 0 {
-                (pos + 8, data.len())
-            } else if size == 1 {
-                if pos + 16 > data.len() {
-                    return None;
-                }
-                let extended_size = u64::from_be_bytes([
-                    data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                    data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
-                ]) as usize;
-                (pos + 16, (pos + extended_size).min(data.len()))
-            } else {
-                (pos + 8, (pos + size).min(data.len()))
-            };
-
-            if data_end <= data.len() && data_start < data_end {
-                return Some(&data[data_start..data_end]);
-            }
-            return None;
-        }
-
-        // Move to next box
-        if size == 0 {
-            break; // Box extends to end of file
-        } else if size == 1 {
-            // Extended size
-            if pos + 16 > data.len() {
-                break;
-            }
-            let extended_size = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
-            ]) as usize;
-            pos += extended_size;
-        } else if size < 8 {
-            break; // Invalid box size
-        } else {
-            pos += size;
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]

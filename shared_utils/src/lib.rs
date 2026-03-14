@@ -13,6 +13,7 @@
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 
+pub mod analysis_cache;
 pub mod batch;
 pub mod checkpoint;
 pub mod codecs;
