@@ -419,7 +419,11 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
         .event_format(ModernFormatter)
-        .with_filter(FilterFn::new(|m: &tracing::Metadata| m.target() != "gpu_detection"));
+        .with_filter(FilterFn::new(|m: &tracing::Metadata| {
+            m.target() != "gpu_detection"
+                && !(m.target() == "shared_utils::analysis_cache"
+                    && m.level() == &tracing::Level::DEBUG)
+        }));
 
     tracing_subscriber::registry()
         .with(registry_filter)
