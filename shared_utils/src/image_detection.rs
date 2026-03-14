@@ -1935,7 +1935,6 @@ fn detect_heic_compression(path: &Path) -> Result<CompressionType> {
 }
 
 /// Detect ICO compression by inspecting embedded image entries.
-
 ///
 /// ICO directory: header[6] + entries[16 each]. Each entry has an offset to image data.
 /// If image data starts with PNG magic → recursively check PNG quantization.
