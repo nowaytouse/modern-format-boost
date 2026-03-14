@@ -787,7 +787,13 @@ fn auto_convert_single_file(
                 // Force video mode: always convert to video, skip meme-score
                 false
             } else if let Some(ref p) = probe {
-                if let Some(meta) = shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input) {
+                if let Some(mut meta) = shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input) {
+                    // ── NEW: Perform cheap GIF header scan for palette/CDN markers ──
+                    if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
+                        meta.palette_size = pal;
+                        meta.app_extensions = exts;
+                    }
+
                     shared_utils::should_keep_as_gif(&meta)
                 } else {
                     // Cannot build GifMeta (no dimensions) → keep as GIF
