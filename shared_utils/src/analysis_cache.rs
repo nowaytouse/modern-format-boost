@@ -760,6 +760,22 @@ impl AnalysisCache {
         Ok(())
     }
 }
+
+fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Hasher::new();
+    
+    // Efficiency: Use chunked reading for hash
+    let mut buffer = [0u8; 65536]; // 64KB
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 { break; }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    
+    Ok(hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,19 +838,4 @@ mod tests {
         
         Ok(())
     }
-}
-
-fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Hasher::new();
-    
-    // Efficiency: Use chunked reading for hash
-    let mut buffer = [0u8; 65536]; // 64KB
-    loop {
-        let bytes_read = file.read(&mut buffer)?;
-        if bytes_read == 0 { break; }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    
-    Ok(hasher.finalize())
 }
