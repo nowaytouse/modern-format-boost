@@ -1,5 +1,5 @@
 use crate::ffprobe_json::ColorInfo;
-use crate::image_heic_analysis::{analyze_heic_file, is_heic_file, HeicAnalysis};
+use crate::image_heic_analysis::{analyze_heic_file_v4, is_heic_file, HeicAnalysis};
 use crate::image_jpeg_analysis::{analyze_jpeg_file, JpegQualityAnalysis};
 use crate::image_detection::{PrecisionMetadata, detect_image};
 use crate::img_errors::{ImgQualityError, Result};
@@ -398,7 +398,7 @@ impl ImageAnalysis {
 
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     let (width, height, has_alpha, color_depth, is_lossless, codec, features, heic_analysis_opt, analysis_error) =
-        match analyze_heic_file(path) {
+        match analyze_heic_file_v4(path) {
             Ok((img, heic_analysis)) => {
                 // Skip HEIC files with HDR or Dolby Vision
                 if heic_analysis.is_hdr || heic_analysis.is_dolby_vision {

@@ -235,7 +235,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
     Some(transquant_bypass == 1)
 }
 
-pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
+pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     // 🧠 Global security bypass for complex/large boxes (e.g. Weibo processed HEICs)
     // This environment variable is checked by the absolute core of libheif.
     // Setting it to a large numeric value instead of "off" to avoid NoFtypBox errors.
@@ -243,7 +243,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     
     if std::env::var("IMGQUALITY_DEBUG").is_ok() {
         let current_limit = std::env::var("LIBHEIF_SECURITY_LIMITS").unwrap_or_else(|_| "NOT SET".to_string());
-        eprintln!("   🔍 [HEIC Debug] LIBHEIF_SECURITY_LIMITS = {}", current_limit);
+        eprintln!("   🔍 [HEIC-V4-DEBUG] LIBHEIF_SECURITY_LIMITS = {}", current_limit);
     }
 
     let lib_heif = LibHeif::new();
@@ -253,25 +253,17 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
         let error_msg = format!("{}", e);
         if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
             // Robust fallback 1: Scan for 'ftyp' manually.
-            // Some HEIC files (e.g. from specific cameras or recovery tools) might have a prefix.
             if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                 if pos >= 4 {
                     let sliced_data = &data[pos - 4..];
                     if let Ok(new_ctx) = HeifContext::read_from_bytes(sliced_data) {
-                        if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                            eprintln!("   🩹 HEIC: Recovered by slicing buffer at offset {}", pos - 4);
-                        }
                         return Ok(new_ctx);
                     }
                 }
             }
             
             // Robust fallback 2: Use file-based interface directly if memory-based fails.
-            // This bypasses any issues with pointer offsets or slice passing in the Rust binding.
             if let Ok(file_ctx) = HeifContext::read_from_file(path.to_str().unwrap_or_default()) {
-                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                    eprintln!("   📂 HEIC: Recovered using direct file-based interface: {}", path.display());
-                }
                 return Ok(file_ctx);
             }
         }
@@ -279,16 +271,12 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     }).map_err(|e| {
         let error_msg = format!("{}", e);
         if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
-            eprintln!(
-                "⚠️  HEIC SecurityLimitExceeded: {} - using fallback analysis",
-                path.display()
-            );
             ImgQualityError::ImageReadError(format!(
                 "HEIC security limit exceeded (ipco box limit): {}",
                 e
             ))
         } else {
-            ImgQualityError::ImageReadError(format!("[HEIC-FIX-V3] Failed to read HEIC: {}", e))
+            ImgQualityError::ImageReadError(format!("[CRITICAL-HEIC-V4-FAIL] {}", e))
         }
     })?;
 
