@@ -1483,6 +1483,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let strategy = determine_strategy(&detection);
@@ -1534,6 +1535,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let strategy = determine_strategy_with_apple_compat(&detection, true);
@@ -1590,6 +1592,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let normal = determine_strategy(&detection);
@@ -1648,6 +1651,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
 
         let normal = determine_strategy(&detection);
@@ -1709,6 +1713,7 @@ mod tests {
                 is_variable_frame_rate: false,
                 precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
                 tags: std::collections::HashMap::new(),
+            ..Default::default()
             }
         };
 
@@ -1784,6 +1789,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -1832,6 +1838,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(
@@ -1883,6 +1890,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let crf = calculate_matched_crf(&det).unwrap();
         assert!(
@@ -1939,6 +1947,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let crf = calculate_matched_crf(&det).unwrap();
         assert!(
@@ -1990,6 +1999,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(
@@ -2042,6 +2052,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let s = determine_strategy_with_apple_compat(&det, true);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
@@ -2094,6 +2105,7 @@ mod tests {
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
+            ..Default::default()
         };
         let normal = determine_strategy(&det);
         assert_eq!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") skipped in normal mode");
