@@ -238,11 +238,31 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
 pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     // 🧠 Global security bypass for complex/large boxes (e.g. Weibo processed HEICs)
     // This environment variable is checked by the absolute core of libheif.
-    std::env::set_var("LIBHEIF_SECURITY_LIMITS", "off");
+    // Setting it to a large numeric value instead of "off" to avoid NoFtypBox errors.
+    std::env::set_var("LIBHEIF_SECURITY_LIMITS", "2147483647");
 
     let lib_heif = LibHeif::new();
 
-    let ctx = HeifContext::read_from_file(path.to_string_lossy().as_ref()).map_err(|e| {
+    let data = std::fs::read(path)?;
+    let ctx = HeifContext::read_from_bytes(&data).or_else(|e| {
+        let error_msg = format!("{}", e);
+        if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
+            // Robust fallback: Scan for 'ftyp' manually.
+            // Some HEIC files (e.g. from specific cameras or recovery tools) might have a prefix.
+            if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
+                if pos >= 4 {
+                    let sliced_data = &data[pos - 4..];
+                    if let Ok(new_ctx) = HeifContext::read_from_bytes(sliced_data) {
+                        if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                            eprintln!("   🩹 HEIC: Recovered by slicing buffer at offset {}", pos - 4);
+                        }
+                        return Ok(new_ctx);
+                    }
+                }
+            }
+        }
+        Err(e)
+    }).map_err(|e| {
         let error_msg = format!("{}", e);
         if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
             eprintln!(
@@ -254,7 +274,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
                 e
             ))
         } else {
-            ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
+            ImgQualityError::ImageReadError(format!("Failed to read HEIC from memory: {}", e))
         }
     })?;
 
@@ -276,7 +296,6 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let has_alpha = handle.has_alpha_channel();
     let bit_depth = handle.luma_bits_per_pixel();
 
-    let data = std::fs::read(path)?;
     let is_lossless = detect_heic_is_lossless(&data, path).unwrap_or(false);
 
     // Detect HDR and Dolby Vision

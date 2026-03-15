@@ -41,6 +41,7 @@ pub struct ImageFeatures {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageAnalysis {
+    pub cache_version: u16,
     pub file_path: String,
     pub format: String,
     pub width: u32,
@@ -78,11 +79,15 @@ pub struct ImageAnalysis {
 
     /// 🔬 New Dimension: Visual perception data (Auxiliary analysis)
     pub perception: VisualPerception,
+
+    /// ⚠️ Optional: Store error message if deep analysis failed but we fell back to basic info
+    pub analysis_error: Option<String>,
 }
 
 impl Default for ImageAnalysis {
     fn default() -> Self {
         Self {
+            cache_version: 1,
             file_path: String::new(),
             format: "unknown".into(),
             width: 0,
@@ -105,6 +110,7 @@ impl Default for ImageAnalysis {
             precision: PrecisionMetadata::default(),
             history: ProcessHistory::default(),
             perception: VisualPerception::default(),
+            analysis_error: None,
         }
     }
 }
@@ -344,6 +350,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     };
 
     Ok(ImageAnalysis {
+        cache_version: 1,
         file_path: path.display().to_string(),
         format: format_str,
         width,
@@ -366,6 +373,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         precision,
         history: crate::common_utils::get_current_history(),
         perception: Default::default(),
+        analysis_error: None,
     })
 }
 
@@ -389,7 +397,7 @@ impl ImageAnalysis {
 }
 
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
-    let (width, height, has_alpha, color_depth, is_lossless, codec, features, heic_analysis_opt) =
+    let (width, height, has_alpha, color_depth, is_lossless, codec, features, heic_analysis_opt, analysis_error) =
         match analyze_heic_file(path) {
             Ok((img, heic_analysis)) => {
                 // Skip HEIC files with HDR or Dolby Vision
@@ -419,12 +427,14 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                     heic_analysis.codec.clone(),
                     feats,
                     Some(heic_analysis),
+                    None,
                 )
             }
             Err(e) => {
+                let error_msg = format!("{}", e);
                 log_eprintln!(
                     "⚠️ Deep HEIC analysis failed (skipping to basic info): {}",
-                    e
+                    error_msg
                 );
                 (
                     0,
@@ -435,6 +445,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
                     "unknown".to_string(),
                     ImageFeatures::default(),
                     None,
+                    Some(error_msg),
                 )
             }
         };
@@ -462,6 +473,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     };
 
     Ok(ImageAnalysis {
+        cache_version: 1,
         file_path: path.display().to_string(),
         format: "HEIC".to_string(),
         width,
@@ -484,6 +496,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
         history: crate::common_utils::get_current_history(),
         perception: Default::default(),
+        analysis_error,
     })
 }
 
@@ -516,6 +529,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
     };
 
     Ok(ImageAnalysis {
+        cache_version: 1,
         file_path: path.display().to_string(),
         format: "JPEG".to_string(),
         width,
@@ -545,6 +559,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
         },
         history: crate::common_utils::get_current_history(),
         perception: Default::default(),
+        analysis_error: None,
     })
 }
 
@@ -1378,6 +1393,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     };
 
     Ok(ImageAnalysis {
+        cache_version: 1,
         file_path: path.display().to_string(),
         format: "JXL".to_string(),
         width,
@@ -1408,6 +1424,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
         history: crate::common_utils::get_current_history(),
         perception: Default::default(),
+        analysis_error: None,
     })
 }
 
@@ -1455,6 +1472,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     let metadata = extract_metadata(path).unwrap_or_default();
     Ok(ImageAnalysis {
+        cache_version: 1,
         file_path: path.display().to_string(),
         format: "AVIF".to_string(),
         width,
@@ -1485,6 +1503,7 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         precision: if let Ok(d) = detect_image(path) { d.precision } else { PrecisionMetadata::default() },
         history: crate::common_utils::get_current_history(),
         perception: Default::default(),
+        analysis_error: None,
     })
 }
 

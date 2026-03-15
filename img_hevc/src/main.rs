@@ -550,13 +550,15 @@ fn auto_convert_single_file(
 
     // Check for Live Photos first (before any analysis)
     if shared_utils::is_live_photo(input) {
+        let reason = "Live Photo detected, skipping in Apple compat mode";
+        shared_utils::progress_mode::image_skipped(reason);
         let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
             skipped: true,
-            message: "Live Photo detected, skipping in Apple compat mode".to_string(),
+            message: reason.to_string(),
             original_size: file_size,
             output_size: None,
             size_reduction: None,
@@ -572,15 +574,14 @@ fn auto_convert_single_file(
     if !analysis.is_animated {
         // Always skip static JXL (already optimal format)
         if analysis.format.to_uppercase() == "JXL" {
-            if config.verbose {
-                println!("⏭️ Source is static JPEG XL (already optimal) - skipping to avoid generational loss: {}", input.display());
-            }
+            let reason = "Source is static JPEG XL (already optimal) - skipping to avoid generational loss";
+            shared_utils::progress_mode::image_skipped(reason);
             copy_original_if_adjacent_mode(input, config)?;
             return Ok(ConversionOutput {
                 original_path: input.display().to_string(),
                 output_path: input.display().to_string(),
                 skipped: true,
-                message: "Source is static JPEG XL (already optimal) - skipping to avoid generational loss".to_string(),
+                message: reason.to_string(),
                 original_size: analysis.file_size,
                 output_size: None,
                 size_reduction: None,
@@ -589,15 +590,18 @@ fn auto_convert_single_file(
         
         let skip = shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
         if skip.should_skip {
-            if config.verbose {
-                println!("⏭️ {}: {}", skip.reason, input.display());
-            }
+            let reason = if let Some(err) = &analysis.analysis_error {
+                format!("Analysis failed ({}) - skipping to avoid generational loss", err)
+            } else {
+                skip.reason
+            };
+            shared_utils::progress_mode::image_skipped(&reason);
             copy_original_if_adjacent_mode(input, config)?;
             return Ok(ConversionOutput {
                 original_path: input.display().to_string(),
                 output_path: input.display().to_string(),
                 skipped: true,
-                message: skip.reason,
+                message: reason,
                 original_size: analysis.file_size,
                 output_size: None,
                 size_reduction: None,
@@ -659,6 +663,7 @@ fn auto_convert_single_file(
     }
 
     let make_skipped = |msg: &str| -> ConversionOutput {
+        shared_utils::progress_mode::image_skipped(msg);
         ConversionOutput {
             original_path: input.display().to_string(),
             output_path: input.display().to_string(),
