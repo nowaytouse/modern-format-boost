@@ -288,7 +288,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
                 e
             ))
         } else {
-            ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
+            ImgQualityError::ImageReadError(format!("[HEIC-FIX-V3] Failed to read HEIC: {}", e))
         }
     })?;
 
@@ -374,15 +374,15 @@ pub fn is_heic_file(path: &Path) -> bool {
                 let brand = &buffer[8..12];
                 if matches!(
                     brand,
-                    b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1"
+                    b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"hev1" | b"mif1" | b"msf1"
                 ) {
                     return true;
                 }
             }
     }
-
     false
 }
+
 
 #[cfg(test)]
 mod tests {
