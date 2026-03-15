@@ -99,6 +99,9 @@ enum Commands {
         #[arg(value_name = "OUTPUT_DIR")]
         output: PathBuf,
     },
+
+    /// Display cache statistics
+    CacheStats,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -261,6 +264,63 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Verify { original, converted } => {
             verify_conversion(&original, &converted, cache.as_deref())?;
+        }
+
+        Commands::CacheStats => {
+            if let Some(cache) = cache {
+                match cache.get_statistics() {
+                    Ok(stats) => {
+                        println!("\n📊 Cache Statistics");
+                        println!("═══════════════════════════════════════");
+                        println!("📁 Database Size: {:.2} MB ({:.3} GB)", stats.db_size_mb(), stats.db_size_gb());
+                        println!("📦 Total Records: {}", stats.total_records());
+                        println!("   ├─ Analysis: {}", stats.analysis_records);
+                        println!("   ├─ Quality: {}", stats.quality_records);
+                        println!("   └─ Video: {}", stats.video_records);
+                        println!("🔗 Path Index Entries: {}", stats.path_index_entries);
+                        println!("\n🔢 Version Information:");
+                        println!("   ├─ Schema Version: v{}", stats.schema_version);
+                        println!("   └─ Current Algorithm: v{}", stats.current_algorithm_version);
+                        
+                        if !stats.algorithm_version_distribution.is_empty() {
+                            println!("\n📈 Algorithm Version Distribution:");
+                            let mut versions: Vec<_> = stats.algorithm_version_distribution.iter().collect();
+                            versions.sort_by_key(|(v, _)| *v);
+                            for (version, count) in versions {
+                                let marker = if *version < stats.current_algorithm_version {
+                                    "⚠️  (stale)"
+                                } else if *version == stats.current_algorithm_version {
+                                    "✅ (current)"
+                                } else {
+                                    "❓ (future)"
+                                };
+                                println!("   v{}: {} records {}", version, count, marker);
+                            }
+                            
+                            let stale = stats.stale_records();
+                            if stale > 0 {
+                                println!("\n⚠️  {} stale records detected (will be auto-invalidated on next run)", stale);
+                            }
+                        }
+                        
+                        let usage_percent = (stats.db_size_bytes as f64 / shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES as f64) * 100.0;
+                        println!("\n💾 Storage Usage: {:.1}% of 85 GB limit", usage_percent);
+                        
+                        if usage_percent > 80.0 {
+                            println!("⚠️  Cache is approaching size limit!");
+                        }
+                        
+                        println!("═══════════════════════════════════════\n");
+                    }
+                    Err(e) => {
+                        shared_utils::log_eprintln!("❌ Failed to get cache statistics: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                shared_utils::log_eprintln!("❌ Cache is not initialized");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -569,6 +629,10 @@ fn auto_convert_single_file(
     }
 
     let analysis = shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
+
+    eprintln!("   🔍 [DEBUG] analysis.format={}, analysis.is_lossless={}, analysis.heic_analysis.is_lossless={:?}",
+        analysis.format, analysis.is_lossless,
+        analysis.heic_analysis.as_ref().map(|h| h.is_lossless));
 
     // HEIC/HEIF: Skip lossy (avoid generational loss), but allow lossless → JXL.
     // This is handled by should_skip_image_format below based on analysis.is_lossless.

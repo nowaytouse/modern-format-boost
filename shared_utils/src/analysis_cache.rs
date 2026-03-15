@@ -1,6 +1,6 @@
 //! 🗄️ Image Analysis Cache - Persistent SQLite Backend
 //!
-//! 🔥 v1.0: 极致复用化检测机制
+//! 🔥 v2.0: 版本化缓存机制 + 精确失效策略
 //!
 //! Provides a highly efficient, persistent cache for image analysis results using SQLite and MessagePack.
 //! This ensures that expensive operations like pixel-based entropy calculation, deep HEIC/AVIF parsing,
@@ -10,6 +10,11 @@
 //! 1. **Path-Metadata Check**: Fast lookup by (path, mtime, size).
 //! 2. **Content Hash (BLAKE3)**: If path-metadata fails, calculate BLAKE3 hash to find matches by content.
 //! 3. **Binary Storage**: Analysis results are packed using MessagePack (rmp-serde) for minimal disk footprint and maximum speed.
+//! 4. **Version Control**: Algorithm version tracking to auto-invalidate stale cache entries.
+//!
+//! ## Version History
+//! - v1: Initial implementation
+//! - v2: Added HEIC lossless detection fix + algorithm versioning
 
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
@@ -22,7 +27,52 @@ use crate::video_detection::VideoDetectionResult;
 use tracing::{debug, info, warn};
 use blake3::Hasher;
 
-const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
+/// 📊 Cache Statistics
+#[derive(Debug, Clone)]
+pub struct CacheStatistics {
+    pub db_size_bytes: u64,
+    pub analysis_records: usize,
+    pub quality_records: usize,
+    pub video_records: usize,
+    pub path_index_entries: usize,
+    pub schema_version: i32,
+    pub algorithm_version_distribution: std::collections::HashMap<i32, i64>,
+    pub current_algorithm_version: i32,
+}
+
+impl CacheStatistics {
+    pub fn total_records(&self) -> usize {
+        self.analysis_records + self.quality_records + self.video_records
+    }
+    
+    pub fn db_size_mb(&self) -> f64 {
+        self.db_size_bytes as f64 / 1024.0 / 1024.0
+    }
+    
+    pub fn db_size_gb(&self) -> f64 {
+        self.db_size_bytes as f64 / 1024.0 / 1024.0 / 1024.0
+    }
+    
+    pub fn stale_records(&self) -> i64 {
+        self.algorithm_version_distribution
+            .iter()
+            .filter(|(&v, _)| v < self.current_algorithm_version)
+            .map(|(_, &count)| count)
+            .sum()
+    }
+}
+
+pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
+
+/// 🔢 Cache Schema Version - Increment when database structure changes
+const CACHE_SCHEMA_VERSION: i32 = 2;
+
+/// 🧬 Analysis Algorithm Version - Increment when detection logic changes
+/// 
+/// Version History:
+/// - v1: Original HEIC lossless detection
+/// - v2: Fixed HEIC lossless detection + improved box parsing
+const ANALYSIS_ALGORITHM_VERSION: i32 = 2;
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
@@ -84,13 +134,17 @@ impl AnalysisCache {
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
         ).context("Failed to open SQLite cache")?;
 
-        // Initialize schema
+        // Check and handle schema version
+        Self::check_and_migrate_schema(&conn, cache_path)?;
+
+        // Initialize schema with algorithm_version column
         conn.execute(
             "CREATE TABLE IF NOT EXISTS analysis_records (
                 content_hash BLOB PRIMARY KEY,
                 file_size INTEGER NOT NULL,
                 analysis_data BLOB NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                algorithm_version INTEGER DEFAULT 1
             )",
             [],
         )?;
@@ -100,7 +154,8 @@ impl AnalysisCache {
                 content_hash BLOB PRIMARY KEY,
                 file_size INTEGER NOT NULL,
                 analysis_data BLOB NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                algorithm_version INTEGER DEFAULT 1
             )",
             [],
         )?;
@@ -110,7 +165,8 @@ impl AnalysisCache {
                 content_hash BLOB PRIMARY KEY,
                 file_size INTEGER NOT NULL,
                 analysis_data BLOB NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                algorithm_version INTEGER DEFAULT 1
             )",
             [],
         )?;
@@ -128,6 +184,20 @@ impl AnalysisCache {
             [],
         )?;
 
+        // Store schema version metadata
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cache_metadata (
+                key TEXT PRIMARY KEY,
+                value INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('schema_version', ?)",
+            params![CACHE_SCHEMA_VERSION],
+        )?;
+
         // --- MIGRATION: Add new columns if they don't exist in an old DB ---
         let existing_columns: std::collections::HashSet<String> = conn
             .prepare("PRAGMA table_info(path_index)")?
@@ -141,6 +211,22 @@ impl AnalysisCache {
             }
         }
 
+        // Add algorithm_version column to existing tables if missing
+        for table in &["analysis_records", "quality_records", "video_records"] {
+            let existing_columns: std::collections::HashSet<String> = conn
+                .prepare(&format!("PRAGMA table_info({})", table))?
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<_, _>>()?;
+
+            if !existing_columns.contains("algorithm_version") {
+                info!("🛠️  [Cache] Migrating {}: adding algorithm_version column", table);
+                conn.execute(
+                    &format!("ALTER TABLE {} ADD COLUMN algorithm_version INTEGER DEFAULT 1", table),
+                    [],
+                )?;
+            }
+        }
+
         // Index for cleaning up old records
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_records_created ON analysis_records(created_at)",
@@ -151,6 +237,76 @@ impl AnalysisCache {
             conn: std::sync::Mutex::new(conn),
             cache_path: cache_path.to_path_buf(),
         })
+    }
+
+    /// Check schema version and handle migration/invalidation
+    fn check_and_migrate_schema(conn: &Connection, _cache_path: &Path) -> Result<()> {
+        // Try to get current schema version
+        let current_version: Option<i32> = conn
+            .query_row(
+                "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        match current_version {
+            Some(v) if v == CACHE_SCHEMA_VERSION => {
+                // Schema version matches, check algorithm version
+                Self::invalidate_old_algorithm_entries(conn)?;
+            }
+            Some(v) if v < CACHE_SCHEMA_VERSION => {
+                info!("🔄 [Cache] Schema version mismatch (current: {}, expected: {}). Migrating...", v, CACHE_SCHEMA_VERSION);
+                // Schema changed - migration will be handled by ALTER TABLE statements
+            }
+            Some(v) => {
+                warn!("⚠️  [Cache] Schema version {} is newer than expected {}. Cache may be incompatible.", v, CACHE_SCHEMA_VERSION);
+            }
+            None => {
+                info!("🆕 [Cache] Initializing new cache database");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Invalidate cache entries created with old algorithm versions
+    fn invalidate_old_algorithm_entries(conn: &Connection) -> Result<()> {
+        let tables = ["analysis_records", "quality_records", "video_records"];
+        let mut total_invalidated = 0;
+
+        for table in &tables {
+            let count: i32 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM {} WHERE algorithm_version < ?", table),
+                params![ANALYSIS_ALGORITHM_VERSION],
+                |row| row.get(0),
+            )?;
+
+            if count > 0 {
+                conn.execute(
+                    &format!("DELETE FROM {} WHERE algorithm_version < ?", table),
+                    params![ANALYSIS_ALGORITHM_VERSION],
+                )?;
+                total_invalidated += count;
+            }
+        }
+
+        if total_invalidated > 0 {
+            info!("🔄 [Cache] Invalidated {} entries due to algorithm version upgrade (v{} → v{})", 
+                total_invalidated, ANALYSIS_ALGORITHM_VERSION - 1, ANALYSIS_ALGORITHM_VERSION);
+            
+            // Clean up orphaned path_index entries
+            conn.execute(
+                "DELETE FROM path_index WHERE content_hash NOT IN (
+                    SELECT content_hash FROM analysis_records 
+                    UNION SELECT content_hash FROM quality_records 
+                    UNION SELECT content_hash FROM video_records
+                )",
+                [],
+            )?;
+        }
+
+        Ok(())
     }
 
     /// Default project-local cache location
@@ -172,42 +328,60 @@ impl AnalysisCache {
 
         // 1. Try path index first (FASTEST)
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, p.atime, p.ctime, p.btime FROM path_index p 
+            "SELECT r.analysis_data, r.algorithm_version, p.atime, p.ctime, p.btime FROM path_index p 
              JOIN analysis_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
         
         let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
         if let Some(row) = rows.next()? {
-            // Strict Invalidation: Check ctime and btime too
-            let _cached_atime: i64 = row.get(1)?;
-            let cached_ctime: i64 = row.get(2)?;
-            let cached_btime: i64 = row.get(3)?;
-
-            // Use XOR or direct compare for maximum rigor
-            let strict_match = (cached_ctime == 0 || cached_ctime == sig.ctime) && 
-                               (cached_btime == 0 || cached_btime == sig.btime);
-
-            if !strict_match {
-                warn!("⚠️  [Cache] Path Match but Metadata Discrepancy (ctime/btime changed). Invalidating entry for {}", path.display());
+            let algorithm_version: i32 = row.get(1)?;
+            
+            // Check if algorithm version is current
+            if algorithm_version < ANALYSIS_ALGORITHM_VERSION {
+                debug!("🔄 [Cache] Stale algorithm version (v{} < v{}) for {}", 
+                    algorithm_version, ANALYSIS_ALGORITHM_VERSION, path.display());
+                // Fall through to recompute
             } else {
-                let data: Vec<u8> = row.get(0)?;
-                let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
-                    .context("Failed to unpack cached analysis data (path hit)")?;
-                analysis.file_path = path.display().to_string();
-                debug!("🚀 [Cache] HIT (Path) - {}", path.display());
-                return Ok(Some(analysis));
+                // Strict Invalidation: Check ctime and btime too
+                let _cached_atime: i64 = row.get(2)?;
+                let cached_ctime: i64 = row.get(3)?;
+                let cached_btime: i64 = row.get(4)?;
+
+                // Use XOR or direct compare for maximum rigor
+                let strict_match = (cached_ctime == 0 || cached_ctime == sig.ctime) && 
+                                   (cached_btime == 0 || cached_btime == sig.btime);
+
+                if !strict_match {
+                    warn!("⚠️  [Cache] Path Match but Metadata Discrepancy (ctime/btime changed). Invalidating entry for {}", path.display());
+                } else {
+                    let data: Vec<u8> = row.get(0)?;
+                    let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
+                        .context("Failed to unpack cached analysis data (path hit)")?;
+                    analysis.file_path = path.display().to_string();
+                    debug!("🚀 [Cache] HIT (Path) - {}", path.display());
+                    return Ok(Some(analysis));
+                }
             }
         }
 
         // 2. Fallback to Content Hash (BLAKE3)
         let content_hash = calculate_blake3(path)?;
         let mut stmt = conn.prepare(
-            "SELECT analysis_data FROM analysis_records WHERE content_hash = ?"
+            "SELECT analysis_data, algorithm_version FROM analysis_records WHERE content_hash = ?"
         )?;
         
         let mut rows = stmt.query(params![content_hash.as_bytes()])?;
         if let Some(row) = rows.next()? {
+            let algorithm_version: i32 = row.get(1)?;
+            
+            // Check algorithm version
+            if algorithm_version < ANALYSIS_ALGORITHM_VERSION {
+                debug!("🔄 [Cache] Stale algorithm version (v{} < v{}) for {}", 
+                    algorithm_version, ANALYSIS_ALGORITHM_VERSION, path.display());
+                return Ok(None); // Force recompute
+            }
+            
             let data: Vec<u8> = row.get(0)?;
             let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
                 .context("Failed to unpack cached analysis data (hash hit)")?;
@@ -282,6 +456,12 @@ impl AnalysisCache {
 
     /// Stores an analysis result in the cache.
     pub fn store_analysis(&self, path: &Path, analysis: &ImageAnalysis) -> Result<()> {
+        // 🧠 Smart Cache: Never store results that failed analysis.
+        // This prevents "ghost errors" from persisting after a code fix.
+        if analysis.analysis_error.is_some() {
+            return Ok(());
+        }
+
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
         
@@ -300,9 +480,9 @@ impl AnalysisCache {
 
         // Perform in transaction for atomicity
         conn.execute(
-            "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at) 
-             VALUES (?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now],
+            "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version) 
+             VALUES (?, ?, ?, ?, ?)",
+            params![content_hash.as_bytes(), sig.size, packed_data, now, ANALYSIS_ALGORITHM_VERSION],
         )?;
 
         conn.execute(
@@ -331,9 +511,9 @@ impl AnalysisCache {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at) 
-             VALUES (?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now],
+            "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version) 
+             VALUES (?, ?, ?, ?, ?)",
+            params![content_hash.as_bytes(), sig.size, packed_data, now, ANALYSIS_ALGORITHM_VERSION],
         )?;
 
         conn.execute(
@@ -412,9 +592,9 @@ impl AnalysisCache {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at) 
-             VALUES (?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now],
+            "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version) 
+             VALUES (?, ?, ?, ?, ?)",
+            params![content_hash.as_bytes(), sig.size, packed_data, now, ANALYSIS_ALGORITHM_VERSION],
         )?;
 
         conn.execute(
@@ -448,6 +628,75 @@ impl AnalysisCache {
         }
         
         Ok(removed)
+    }
+
+    /// 📊 Get cache statistics
+    pub fn get_statistics(&self) -> Result<CacheStatistics> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        
+        let db_size = std::fs::metadata(&self.cache_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        
+        let analysis_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM analysis_records",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        let quality_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM quality_records",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        let video_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM video_records",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        let path_index_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM path_index",
+            [],
+            |row| row.get(0),
+        )?;
+        
+        // Get version distribution
+        let mut version_dist = std::collections::HashMap::new();
+        
+        for table in &["analysis_records", "quality_records", "video_records"] {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT algorithm_version, COUNT(*) FROM {} GROUP BY algorithm_version",
+                table
+            ))?;
+            
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            
+            for row in rows {
+                let (version, count) = row?;
+                *version_dist.entry(version).or_insert(0) += count;
+            }
+        }
+        
+        let current_schema_version: i32 = conn.query_row(
+            "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(1);
+        
+        Ok(CacheStatistics {
+            db_size_bytes: db_size,
+            analysis_records: analysis_count as usize,
+            quality_records: quality_count as usize,
+            video_records: video_count as usize,
+            path_index_entries: path_index_count as usize,
+            schema_version: current_schema_version,
+            algorithm_version_distribution: version_dist,
+            current_algorithm_version: ANALYSIS_ALGORITHM_VERSION,
+        })
     }
 
     /// ⚖️ Enforce size limit (85GB). 
