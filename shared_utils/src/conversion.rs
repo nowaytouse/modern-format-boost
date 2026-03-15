@@ -30,7 +30,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use crate::modern_ui::{colors, symbols};
 use std::sync::{LazyLock, Mutex};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
