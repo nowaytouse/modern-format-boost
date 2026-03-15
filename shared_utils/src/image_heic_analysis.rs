@@ -312,8 +312,18 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     #[cfg(feature = "v1_21")]
     {
         let mut limits = ctx.security_limits();
-        // Set to 4GB or higher - effectively disabling for normal usage
-        limits.set_max_total_memory(4 * 1024 * 1024 * 1024); 
+        
+        // Set to 6GB memory limit for large/complex HEIC files
+        limits.set_max_total_memory(6 * 1024 * 1024 * 1024);
+        
+        // Increase ipco box child limit from default 100 to 10000
+        // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors
+        limits.set_max_children_per_box(10000);
+        
+        // Increase other limits for complex HEIC files
+        limits.set_max_items(100000);
+        limits.set_max_components(10000);
+        limits.set_max_iloc_extents_per_item(10000);
     }
 
     let handle = ctx.primary_image_handle().map_err(|e| {
