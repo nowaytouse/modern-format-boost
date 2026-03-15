@@ -427,12 +427,11 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 }
 
 fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Option<&str>, max_b_frames: u8) -> VideoPrecisionMetadata {
-    let mut precision = VideoPrecisionMetadata::default();
-    precision.original_max_b_frames = Some(max_b_frames);
-    
-    if let Some(encoder) = tags.get("encoder") {
-        precision.original_encoder = Some(encoder.clone());
-    }
+    let mut precision = VideoPrecisionMetadata {
+        original_max_b_frames: Some(max_b_frames),
+        original_encoder: tags.get("encoder").cloned(),
+        ..Default::default()
+    };
 
     // Prioritize explicit encoder_settings (x264-params/x265-params) over generic tags
     let search_string = if let Some(settings) = encoder_settings {

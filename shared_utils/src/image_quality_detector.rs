@@ -414,6 +414,7 @@ fn calculate_overall_complexity(
     (edge_density * 0.35 + color_diversity * 0.25 + texture_variance * 0.25 + noise_level * 0.15).clamp(0.0, 1.0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn classify_content_type(
     complexity: f64,
     edge_density: f64,
