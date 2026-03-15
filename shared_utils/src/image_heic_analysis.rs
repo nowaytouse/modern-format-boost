@@ -8,6 +8,7 @@ use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use crate::common_utils::find_box_data_recursive;
+use tracing::debug;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeicAnalysis {
@@ -32,20 +33,36 @@ pub struct HeicAnalysis {
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
 /// 7. **SPS transquant_bypass_enabled_flag**: if 1 → mathematically lossless (100% certain)
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
-    if let Some(hvcc_data) = find_box_data_recursive(data, b"hvcC") {
-        if hvcc_data.len() >= 23 {
+    // Try find_box_data_recursive first, then fallback to direct magic byte search
+    // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
+    let hvcc_from_recursive = find_box_data_recursive(data, b"hvcC");
+    let hvcc_from_magic = find_box_payload_by_magic(data, b"hvcC");
+    
+    debug!("detect_heic_is_lossless for {}", path.display());
+    debug!("   hvcc_from_recursive: {}", if hvcc_from_recursive.is_some() { "found" } else { "not found" });
+    debug!("   hvcc_from_magic: {}", if hvcc_from_magic.is_some() { "found" } else { "not found" });
+    
+    let hvcc_data = hvcc_from_recursive
+        .or_else(|| hvcc_from_magic);
+    
+    if let Some(hvcc_data) = hvcc_data {
+        debug!("   hvcc_data.len: {}", hvcc_data.len());
+        
+        if hvcc_data.len() >= 20 {
             let profile_idc = hvcc_data[1] & 0x1F;
+            let chroma_format_idc = hvcc_data[16] & 0x03;
+            
+            debug!("   profile_idc: {}, chroma_format_idc: {}", profile_idc, chroma_format_idc);
 
             // Bytes 2-5: general_profile_compatibility_flags (32 bits)
             let compat_flags = u32::from_be_bytes([hvcc_data[2], hvcc_data[3], hvcc_data[4], hvcc_data[5]]);
 
             // HEVCDecoderConfigurationRecord fixed fields:
             //   [16] chromaFormatIdc (low 2 bits)
-            //   [17] bitDepthLumaMinus8 (low 3 bits)
-            //   [18] bitDepthChromaMinus8 (low 3 bits)
+            //   [17] bitDepthLumaMinus8 (high 3 bits) + reserved (2 bits) + bitDepthChromaMinus8 (low 3 bits)
             let chroma_format_idc = hvcc_data[16] & 0x03; // 0=mono, 1=4:2:0, 2=4:2:2, 3=4:4:4
-            let bit_depth_luma = (hvcc_data[17] & 0x07) + 8;
-            let bit_depth_chroma = (hvcc_data[18] & 0x07) + 8;
+            let bit_depth_luma = ((hvcc_data[17] >> 5) & 0x07) + 8;
+            let bit_depth_chroma = (hvcc_data[17] & 0x07) + 8;
 
             // Dimension 0: chromaFormatIdc — direct chroma subsampling
             // 4:2:0 (1) or 4:2:2 (2) → definitively lossy (HEVC lossless requires 4:4:4)
@@ -62,27 +79,43 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             if profile_idc == 4 || profile_idc == 9 {
                 let is_444 = chroma_format_idc == 3;
 
-                // Check colr box for Identity matrix
-                if let Some(colr_data) = find_box_data_recursive(data, b"colr") {
-                    if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
-                        let matrix_coefficients = u16::from_be_bytes([colr_data[8], colr_data[9]]);
-                        if matrix_coefficients == 0 {
-                            return Ok(true);
+                // Check colr box for Identity matrix (RGB = lossless indicator for RExt)
+                let has_rgb_identity_matrix = find_box_payload_by_magic(data, b"colr")
+                    .or_else(|| find_box_data_recursive(data, b"colr"))
+                    .and_then(|colr_data| {
+                        if colr_data.len() >= 11 && &colr_data[0..4] == b"nclx" {
+                            Some(u16::from_be_bytes([colr_data[8], colr_data[9]]))
+                        } else {
+                            None
                         }
-                    }
+                    })
+                    .map(|matrix| matrix == 0)
+                    .unwrap_or(false);
+
+                if has_rgb_identity_matrix {
+                    return Ok(true);
                 }
 
                 // Check pixi box for high bit depth
-                if let Some(pixi_data) = find_box_data_recursive(data, b"pixi") {
-                    if !pixi_data.is_empty() {
-                        let num_ch = pixi_data[0] as usize;
-                        if num_ch > 0 && pixi_data.len() > num_ch {
-                            let max_depth = pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
-                            if max_depth >= 12 {
-                                return Ok(true);
+                let has_high_bitdepth = find_box_payload_by_magic(data, b"pixi")
+                    .or_else(|| find_box_data_recursive(data, b"pixi"))
+                    .and_then(|pixi_data| {
+                        if !pixi_data.is_empty() {
+                            let num_ch = pixi_data[0] as usize;
+                            if num_ch > 0 && pixi_data.len() > num_ch {
+                                Some(pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0))
+                            } else {
+                                None
                             }
+                        } else {
+                            None
                         }
-                    }
+                    })
+                    .map(|max_depth| max_depth >= 12)
+                    .unwrap_or(false);
+
+                if has_high_bitdepth {
+                    return Ok(true);
                 }
 
                 // High bit depth from hvcC itself
@@ -240,10 +273,6 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     // Setting it to a large numeric value instead of "off" to avoid NoFtypBox errors.
     std::env::set_var("LIBHEIF_SECURITY_LIMITS", "2147483647");
 
-    if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-        eprintln!("   🚀 [MFB-V4-ACTIVE] Analyzing: {}", path.display());
-    }
-
     let lib_heif = LibHeif::new();
 
     let data = std::fs::read(path)?;
@@ -296,7 +325,11 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let has_alpha = handle.has_alpha_channel();
     let bit_depth = handle.luma_bits_per_pixel();
 
-    let is_lossless = detect_heic_is_lossless(&data, path).unwrap_or(false);
+    let is_lossless_result = detect_heic_is_lossless(&data, path);
+    if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
+        eprintln!("   📊 HEIC detect_heic_is_lossless result: {:?}", is_lossless_result);
+    }
+    let is_lossless = is_lossless_result.unwrap_or(false);
 
     // Detect HDR and Dolby Vision
     let mut is_hdr = false;
@@ -367,6 +400,21 @@ pub fn is_heic_file(path: &Path) -> bool {
             }
     }
     false
+}
+
+/// Fallback: find box payload by direct magic byte search.
+/// This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
+/// that find_box_data_recursive may not handle correctly.
+fn find_box_payload_by_magic<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
+    if let Some(pos) = data.windows(4).position(|w| w == box_type) {
+        if pos >= 4 {
+            let size = u32::from_be_bytes([data[pos - 4], data[pos - 3], data[pos - 2], data[pos - 1]]) as usize;
+            if size >= 8 && pos + size - 4 <= data.len() {
+                return Some(&data[pos + 4..pos - 4 + size]);
+            }
+        }
+    }
+    None
 }
 
 

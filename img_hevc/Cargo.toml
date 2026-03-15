@@ -25,5 +25,6 @@ shared_utils = { workspace = true }
 vid-hevc = { path = "../vid_hevc" }
 tempfile = { workspace = true }
 console = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
