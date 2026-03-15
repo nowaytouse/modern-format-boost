@@ -81,7 +81,8 @@ const CACHE_SCHEMA_VERSION: i32 = 2;
 /// - v10063: HEIC security limits increased (6GB, 10k ipco children)
 /// - v10064: Git history cleanup (AI tool configs removed for privacy)
 /// - v10065: HEIC security limits fix (apply before reading, 7GB memory)
-const ANALYSIS_ALGORITHM_VERSION: i32 = 10065;
+/// - v10066: HEIC security limits increased to 15GB + feature flag fix
+const ANALYSIS_ALGORITHM_VERSION: i32 = 10066;
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]

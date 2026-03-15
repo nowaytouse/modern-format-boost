@@ -277,17 +277,17 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     
     #[cfg(feature = "v1_21")]
     {
-        // Set to 7GB memory limit for large/complex HEIC files
-        limits.set_max_total_memory(7 * 1024 * 1024 * 1024);
+        // Set to 15GB memory limit for large/complex HEIC files (e.g., from Weibo)
+        limits.set_max_total_memory(15 * 1024 * 1024 * 1024);
         
-        // Increase ipco box child limit from default 100 to 10000
+        // Increase ipco box child limit from default 100 to 50000
         // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors
-        limits.set_max_children_per_box(10000);
+        limits.set_max_children_per_box(50000);
         
         // Increase other limits for complex HEIC files
-        limits.set_max_items(100000);
-        limits.set_max_components(10000);
-        limits.set_max_iloc_extents_per_item(10000);
+        limits.set_max_items(500000);
+        limits.set_max_components(50000);
+        limits.set_max_iloc_extents_per_item(50000);
     }
 
     let data = std::fs::read(path)?;
