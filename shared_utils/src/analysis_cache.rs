@@ -80,7 +80,8 @@ const CACHE_SCHEMA_VERSION: i32 = 2;
 /// - v10062: Dependency unification (GitHub nightly sources)
 /// - v10063: HEIC security limits increased (6GB, 10k ipco children)
 /// - v10064: Git history cleanup (AI tool configs removed for privacy)
-const ANALYSIS_ALGORITHM_VERSION: i32 = 10064;
+/// - v10065: HEIC security limits fix (apply before reading, 7GB memory)
+const ANALYSIS_ALGORITHM_VERSION: i32 = 10065;
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]

@@ -275,23 +275,73 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     let lib_heif = LibHeif::new();
 
+    // 🛡️ Create security limits BEFORE reading the file
+    #[cfg(feature = "v1_21")]
+    let mut limits = libheif_rs::SecurityLimits::default();
+    
+    #[cfg(feature = "v1_21")]
+    {
+        // Set to 7GB memory limit for large/complex HEIC files
+        limits.set_max_total_memory(7 * 1024 * 1024 * 1024);
+        
+        // Increase ipco box child limit from default 100 to 10000
+        // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors
+        limits.set_max_children_per_box(10000);
+        
+        // Increase other limits for complex HEIC files
+        limits.set_max_items(100000);
+        limits.set_max_components(10000);
+        limits.set_max_iloc_extents_per_item(10000);
+    }
+
     let data = std::fs::read(path)?;
-    let ctx = HeifContext::read_from_bytes(&data).or_else(|e| {
+    
+    let ctx = {
+        #[cfg(feature = "v1_21")]
+        {
+            HeifContext::read_from_bytes_with_security_limits(&data, &limits)
+        }
+        #[cfg(not(feature = "v1_21"))]
+        {
+            HeifContext::read_from_bytes(&data)
+        }
+    }.or_else(|e| {
         let error_msg = format!("{}", e);
         if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
             // Robust fallback 1: Scan for 'ftyp' manually.
             if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                 if pos >= 4 {
                     let sliced_data = &data[pos - 4..];
-                    if let Ok(new_ctx) = HeifContext::read_from_bytes(sliced_data) {
-                        return Ok(new_ctx);
+                    #[cfg(feature = "v1_21")]
+                    {
+                        if let Ok(new_ctx) = HeifContext::read_from_bytes_with_security_limits(sliced_data, &limits) {
+                            return Ok(new_ctx);
+                        }
+                    }
+                    #[cfg(not(feature = "v1_21"))]
+                    {
+                        if let Ok(new_ctx) = HeifContext::read_from_bytes(sliced_data) {
+                            return Ok(new_ctx);
+                        }
                     }
                 }
             }
             
             // Robust fallback 2: Use file-based interface directly if memory-based fails.
-            if let Ok(file_ctx) = HeifContext::read_from_file(path.to_str().unwrap_or_default()) {
-                return Ok(file_ctx);
+            #[cfg(feature = "v1_21")]
+            {
+                // Try to read file and apply security limits
+                if let Ok(file_data) = std::fs::read(path) {
+                    if let Ok(file_ctx) = HeifContext::read_from_bytes_with_security_limits(&file_data, &limits) {
+                        return Ok(file_ctx);
+                    }
+                }
+            }
+            #[cfg(not(feature = "v1_21"))]
+            {
+                if let Ok(file_ctx) = HeifContext::read_from_file(path.to_str().unwrap_or_default()) {
+                    return Ok(file_ctx);
+                }
             }
         }
         Err(e)
@@ -306,25 +356,6 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
             ImgQualityError::ImageReadError(format!("[CRITICAL-HEIC-V4-FAIL] {}", e))
         }
     })?;
-
-    // 🛡️ API-level security bypass (requires v1_21+ feature)
-    // We attempt to disable limits on the context itself as a second layer of defense.
-    #[cfg(feature = "v1_21")]
-    {
-        let mut limits = ctx.security_limits();
-        
-        // Set to 6GB memory limit for large/complex HEIC files
-        limits.set_max_total_memory(6 * 1024 * 1024 * 1024);
-        
-        // Increase ipco box child limit from default 100 to 10000
-        // This fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors
-        limits.set_max_children_per_box(10000);
-        
-        // Increase other limits for complex HEIC files
-        limits.set_max_items(100000);
-        limits.set_max_components(10000);
-        limits.set_max_iloc_extents_per_item(10000);
-    }
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgQualityError::ImageReadError(format!("Failed to get primary image: {}", e))
