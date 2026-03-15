@@ -28,3 +28,7 @@ console = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+
+[features]
+default = ["v1_21"]
+v1_21 = ["shared_utils/v1_21"]
