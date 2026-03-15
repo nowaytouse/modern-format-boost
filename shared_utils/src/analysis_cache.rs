@@ -79,7 +79,8 @@ const CACHE_SCHEMA_VERSION: i32 = 2;
 /// - v10061: Cache version binding mechanism
 /// - v10062: Dependency unification (GitHub nightly sources)
 /// - v10063: HEIC security limits increased (6GB, 10k ipco children)
-const ANALYSIS_ALGORITHM_VERSION: i32 = 10063;
+/// - v10064: Git history cleanup (AI tool configs removed for privacy)
+const ANALYSIS_ALGORITHM_VERSION: i32 = 10064;
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
