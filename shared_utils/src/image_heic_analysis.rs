@@ -240,6 +240,11 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     // This environment variable is checked by the absolute core of libheif.
     // Setting it to a large numeric value instead of "off" to avoid NoFtypBox errors.
     std::env::set_var("LIBHEIF_SECURITY_LIMITS", "2147483647");
+    
+    if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+        let current_limit = std::env::var("LIBHEIF_SECURITY_LIMITS").unwrap_or_else(|_| "NOT SET".to_string());
+        eprintln!("   🔍 [HEIC Debug] LIBHEIF_SECURITY_LIMITS = {}", current_limit);
+    }
 
     let lib_heif = LibHeif::new();
 
@@ -247,7 +252,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let ctx = HeifContext::read_from_bytes(&data).or_else(|e| {
         let error_msg = format!("{}", e);
         if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
-            // Robust fallback: Scan for 'ftyp' manually.
+            // Robust fallback 1: Scan for 'ftyp' manually.
             // Some HEIC files (e.g. from specific cameras or recovery tools) might have a prefix.
             if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                 if pos >= 4 {
@@ -259,6 +264,15 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
                         return Ok(new_ctx);
                     }
                 }
+            }
+            
+            // Robust fallback 2: Use file-based interface directly if memory-based fails.
+            // This bypasses any issues with pointer offsets or slice passing in the Rust binding.
+            if let Ok(file_ctx) = HeifContext::read_from_file(path.to_str().unwrap_or_default()) {
+                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                    eprintln!("   📂 HEIC: Recovered using direct file-based interface: {}", path.display());
+                }
+                return Ok(file_ctx);
             }
         }
         Err(e)
@@ -274,7 +288,7 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
                 e
             ))
         } else {
-            ImgQualityError::ImageReadError(format!("Failed to read HEIC from memory: {}", e))
+            ImgQualityError::ImageReadError(format!("Failed to read HEIC: {}", e))
         }
     })?;
 
