@@ -39,5 +39,5 @@ rmp-serde = { workspace = true }
 proptest = { workspace = true }
 
 [features]
-default = []
+default = ["v1_21"]
 v1_21 = ["libheif-rs/v1_21"]
