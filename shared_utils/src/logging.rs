@@ -415,14 +415,13 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         .with_thread_ids(false)
         .with_line_number(false);
 
-    // Stderr (terminal): filtered for display — exclude gpu_detection, no level/target in message.
+    // Stderr (terminal): filtered for display — exclude DEBUG level, no level/target in message.
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
         .event_format(ModernFormatter)
         .with_filter(FilterFn::new(|m: &tracing::Metadata| {
-            m.target() != "gpu_detection"
-                && !(m.target() == "shared_utils::analysis_cache"
-                    && m.level() == &tracing::Level::DEBUG)
+            // Only show INFO, WARN, ERROR in terminal (no DEBUG or TRACE)
+            m.level() <= &tracing::Level::INFO
         }));
 
     tracing_subscriber::registry()

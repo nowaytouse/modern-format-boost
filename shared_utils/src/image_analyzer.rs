@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use crate::log_eprintln;
 use crate::types::{ProcessHistory, VisualPerception};
+use tracing::debug;
 
 /// Minimum duration (seconds) for converting animated images to HEVC video.
 /// Shorter animations are skipped (no conversion to video).
@@ -140,17 +141,21 @@ pub fn analyze_image_with_cache(path: &Path, cache: Option<&crate::analysis_cach
     if let Some(cache) = cache {
         match cache.get_analysis(path) {
             Ok(Some(cached)) => {
+                debug!("CACHE HIT: {} - is_lossless={}", path.display(), cached.is_lossless);
                 if std::env::var("IMGQUALITY_DEBUG").is_ok() {
                     log_eprintln!("🔍 [Cache] Hit: {}", path.display());
                 }
                 return Ok(cached);
             },
+            Ok(None) => {
+                debug!("CACHE MISS: {} - not in cache", path.display());
+            }
             Err(e) => {
+                debug!("CACHE ERROR: {} - {}", path.display(), e);
                 if std::env::var("IMGQUALITY_DEBUG").is_ok() {
                     log_eprintln!("⚠️ [Cache] Retrieval error: {}", e);
                 }
             },
-            _ => {}
         }
     }
 
@@ -177,7 +182,11 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     let file_size = std::fs::metadata(path)?.len();
 
+    debug!("analyze_image_internal: checking {}", path.display());
+    debug!("is_heic_file result: {}", is_heic_file(path));
+
     if is_heic_file(path) {
+        debug!("is_heic_file returned true for {}", path.display());
         if let Some(ext) = path.extension() {
             let ext_str = ext.to_string_lossy().to_lowercase();
             if !["heic", "heif", "hif"].contains(&ext_str.as_str()) {
@@ -397,9 +406,11 @@ impl ImageAnalysis {
 }
 
 fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
+    debug!("analyze_heic_image called for {}", path.display());
     let (width, height, has_alpha, color_depth, is_lossless, codec, features, heic_analysis_opt, analysis_error) =
         match analyze_heic_file_v4(path) {
             Ok((img, heic_analysis)) => {
+                debug!("analyze_heic_file_v4 OK, is_lossless={}", heic_analysis.is_lossless);
                 // Skip HEIC files with HDR or Dolby Vision
                 if heic_analysis.is_hdr || heic_analysis.is_dolby_vision {
                     let reason = if heic_analysis.is_dolby_vision {
@@ -412,12 +423,11 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
                 let (w, h) = img.dimensions();
                 let feats = calculate_image_features(&img, file_size);
-                let is_lossless = crate::image_detection::detect_compression(
-                    &crate::image_detection::DetectedFormat::HEIC,
-                    path,
-                )
-                .map(|c| c == crate::image_detection::CompressionType::Lossless)
-                .unwrap_or_else(|_| pixel_fallback_lossless(path));
+                
+                // Deep analysis succeeded — use its is_lossless result (most thorough analysis)
+                // This is the "most in-depth analysis measure" when there's no ambiguity
+                let is_lossless = heic_analysis.is_lossless;
+                
                 (
                     w,
                     h,
@@ -433,15 +443,24 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             Err(e) => {
                 let error_msg = format!("{}", e);
                 log_eprintln!(
-                    "⚠️ Deep HEIC analysis failed (skipping to basic info): {}",
+                    "⚠️ Deep HEIC analysis failed (falling back to detect_compression): {}",
                     error_msg
                 );
+                
+                // Deep analysis failed — fallback to detect_compression (less thorough but still useful)
+                let is_lossless_fallback = crate::image_detection::detect_compression(
+                    &crate::image_detection::DetectedFormat::HEIC,
+                    path,
+                )
+                .map(|c| c == crate::image_detection::CompressionType::Lossless)
+                .unwrap_or_else(|_| pixel_fallback_lossless(path));
+                
                 (
                     0,
                     0,
                     false,
                     8,
-                    false,
+                    is_lossless_fallback,
                     "unknown".to_string(),
                     ImageFeatures::default(),
                     None,
@@ -746,7 +765,6 @@ fn format_to_string(format: &ImageFormat) -> String {
         ImageFormat::Hdr => "HDR".to_string(),
         ImageFormat::Farbfeld => "Farbfeld".to_string(),
         ImageFormat::OpenExr => "OpenEXR".to_string(),
-        ImageFormat::Dds => "DDS".to_string(),
         ImageFormat::Qoi => "QOI".to_string(),
         _ => format!("{:?}", format),
     }
@@ -1286,7 +1304,6 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
         | ImageFormat::Hdr
         | ImageFormat::Farbfeld
         | ImageFormat::OpenExr
-        | ImageFormat::Dds
         | ImageFormat::Qoi => Ok(true),
         // Any unknown future format: be conservative — don't assume lossless.
         _ => Ok(false),

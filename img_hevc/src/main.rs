@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::analysis_cache::AnalysisCache;
+use tracing::debug;
 
 
 #[derive(Parser)]
@@ -630,7 +631,7 @@ fn auto_convert_single_file(
 
     let analysis = shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
 
-    eprintln!("   🔍 [DEBUG] analysis.format={}, analysis.is_lossless={}, analysis.heic_analysis.is_lossless={:?}",
+    debug!("analysis.format={}, analysis.is_lossless={}, analysis.heic_analysis.is_lossless={:?}",
         analysis.format, analysis.is_lossless,
         analysis.heic_analysis.as_ref().map(|h| h.is_lossless));
 
