@@ -20,18 +20,27 @@ Cargo.lock
 .DS_Store
 Thumbs.db
 
+# AI Tools & IDE Configuration (Privacy - Never commit)
+.agent/
+.cache/
+.claude/
+.clippy.toml
+.codebuddy/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.kiro/
+.opencode/
+.qoder/
+.reuse/
+.roo/
+.trae/
+.windsurf/
+
 # Session / drag-and-drop logs and default run logs
 logs/
 *_run.log
 
 # Local test data (user-specific paths)
 # /path/to/local/test/data
-.claude/
-.agent/
-.gemini/
-.cache/
-.cursor/
-.windsurf/
-.trae/
-.roo/
-.clippy.toml
