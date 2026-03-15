@@ -106,9 +106,6 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    // 🧠 Global security bypass for complex/large boxes (e.g. Weibo processed HEICs)
-    // This must be set before any LibHeif initialization.
-    std::env::set_var("LIBHEIF_SECURITY_LIMITS", "2147483647");
     let _ = shared_utils::logging::init_logging(
         "img_hevc",
         shared_utils::logging::LogConfig::default(),
