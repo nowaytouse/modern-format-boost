@@ -79,6 +79,8 @@ mod tests {
             precision: PrecisionMetadata::default(),
             history: Default::default(),
             perception: Default::default(),
+            analysis_error: None,
+            cache_version: 0,
         };
 
         let rec = get_recommendation(&analysis);

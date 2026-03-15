@@ -43,7 +43,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     debug!("   hvcc_from_magic: {}", if hvcc_from_magic.is_some() { "found" } else { "not found" });
     
     let hvcc_data = hvcc_from_recursive
-        .or_else(|| hvcc_from_magic);
+        .or(hvcc_from_magic);
     
     if let Some(hvcc_data) = hvcc_data {
         debug!("   hvcc_data.len: {}", hvcc_data.len());

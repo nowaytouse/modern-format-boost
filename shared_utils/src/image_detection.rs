@@ -1735,6 +1735,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     let entropy = calculate_entropy(&img);
 
+    #[allow(clippy::field_reassign_with_default)]
     let mut precision = PrecisionMetadata::default();
     
     match format {

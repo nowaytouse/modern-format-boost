@@ -526,11 +526,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
     
     // Use fast metadata parsing to get dimensions without decoding pixels
     let (width, height) = if let Ok(reader) = image::ImageReader::open(path) {
-        if let Ok(dim) = reader.into_dimensions() {
-            dim
-        } else {
-            (0, 0)
-        }
+        reader.into_dimensions().unwrap_or_default()
     } else {
         (0, 0)
     };

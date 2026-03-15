@@ -303,20 +303,20 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
         
         // Recursively search in container boxes
         // Common container boxes in HEIC: moov, trak, mdia, minf, stbl, meta, iprp, ipco
-        if matches!(current_type, b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"meta" | b"iprp" | b"ipco" | b"moof" | b"traf") {
-            if next_pos > payload_start {
-                // For 'meta' box, skip version/flags (4 bytes) if present
-                let sub_start = if current_type == b"meta" && payload_start + 4 <= next_pos {
-                    payload_start + 4
-                } else {
-                    payload_start
-                };
-                
-                if sub_start < next_pos {
-                    let sub = &data[sub_start..next_pos];
-                    if let Some(payload) = find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth) {
-                        return Some(payload);
-                    }
+        if matches!(current_type, b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"meta" | b"iprp" | b"ipco" | b"moof" | b"traf")
+            && next_pos > payload_start
+        {
+            // For 'meta' box, skip version/flags (4 bytes) if present
+            let sub_start = if current_type == b"meta" && payload_start + 4 <= next_pos {
+                payload_start + 4
+            } else {
+                payload_start
+            };
+            
+            if sub_start < next_pos {
+                let sub = &data[sub_start..next_pos];
+                if let Some(payload) = find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth) {
+                    return Some(payload);
                 }
             }
         }

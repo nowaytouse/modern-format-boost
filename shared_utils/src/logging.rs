@@ -108,9 +108,7 @@ impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
             let _ = write!(self.writer, "{}", msg);
             self.has_message = true;
         } else {
-            if self.is_first && self.has_message {
-                let _ = write!(self.writer, " ");
-            } else if !self.is_first {
+            if !self.is_first || self.has_message {
                 let _ = write!(self.writer, " ");
             }
             
