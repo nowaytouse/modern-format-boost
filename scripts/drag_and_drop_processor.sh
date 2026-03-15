@@ -1,334 +1,254 @@
-#!/opt/homebrew/bin/bash
-# Modern Format Boost - Drag & Drop Processor v6.2
+#!/usr/bin/env bash
+# Modern Format Boost - Drag & Drop Processor v7.0
 # 
-# 🔥 v6.2: 极限探索模式 - --ultimate flag 持续搜索直到 SSIM 完全饱和
-#          删除 --cpu flag（已无实际作用），完善 flag 组合验证
-# 🔥 v6.1: 边界精细调整 - 到达min_crf边界时自动切换到0.1精细阶段
-# 🔥 v6.0: GPU曲线模型策略 - GPU阶段也使用激进撞墙+精细回退
-# 🔥 v5.99: CPU曲线模型 + 精细调整阶段 - 当曲线步长<1.0时切换到0.1精细搜索
-# 🔥 v5.98: 曲线模型超激进策略 - 全程激进，4次撞墙即停
-# 🔥 v5.97: 超激进CPU步进策略 - 早期大跨步，快速撞墙
-# 🔥 v5.96: 更激进的CPU步进策略 - 更快触墙，减少迭代次数
-# 🔥 v5.95: 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)，让算法真正撞墙
-# 🔥 v5.94: 修复VMAF质量评级阈值 + 清理编译警告
-# 🔥 v5.78: 默认显示详细输出
-# - 移除 >/dev/null 2>&1，显示转换工具的完整输出
-# - 用户可以看到CRF搜索过程、SSIM验证、错误信息等
-# 
-# 🔥 v5.77: 修复子shell循环问题
-# - 使用数组收集文件列表，避免管道子shell问题
-# - 修复进度计数器和循环提前退出
-# 
-# 🔥 v5.76: XMP边车自动合并
-# - 转换工具内置XMP合并，无需独立调用xmp-merge
-# - 支持 photo.jpg.xmp / photo.xmp / 大小写不敏感
-# 
-# 🔥 v5.70: 智能编译系统
-# - 时间戳比对：只在源代码更新时重新编译
-# - 版本号识别：检测版本不匹配
-# - 依赖传播：shared_utils 修改触发全部重编译
-# 
-# 使用方法：将文件夹拖拽到此脚本上，或双击后选择文件夹
-# 默认参数：--explore --match-quality --compress --apple-compat --in-place
+# Usage: Drag folder onto this script or double-click to select
 
-# 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
-# 工具路径
-IMGQUALITY_HEVC="$PROJECT_ROOT/imgquality_hevc/target/release/imgquality-hevc"
-VIDQUALITY_HEVC="$PROJECT_ROOT/vidquality_hevc/target/release/vidquality-hevc"
-XMP_MERGER="$PROJECT_ROOT/xmp_merger/target/release/xmp-merge"
+# Tool Paths
+IMGQUALITY_HEVC="$PROJECT_ROOT/target/release/img-hevc"
+VIDQUALITY_HEVC="$PROJECT_ROOT/target/release/vid-hevc"
 
-# 模式设置
+# Configuration
 OUTPUT_MODE="inplace"
 OUTPUT_DIR=""
 SELECTED=0
+ULTIMATE_MODE=true
+VERBOSE_MODE=false
 
-# 终端颜色
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m'
+# 🛠️  Helper Functions
 
-# 🔥 v5.5: 进度条辅助函数
-TERM_WIDTH=$(tput cols 2>/dev/null || echo 80)
-PROGRESS_LINE=""
+hide_cursor() { printf '\033[?25l'; }
+show_cursor() { printf '\033[?25h'; }
+clear_screen() { printf '\033[2J\033[H'; }
 
-# 清除当前行并打印
-print_progress() {
-    printf '\r\033[K%s' "$1"
+SPINNER_PID=""
+ELAPSED_START=0
+
+# Format seconds matching Rust format_duration_compact() style (without ms).
+# Bash only has second precision, so ms is omitted.
+# Short: 45s | Medium: 05m00s | Long: 01h  00m00s
+# Day+: 01D   01h  00m00s | Week+: 01W   01D   01h  00m00s
+_fmt_elapsed() {
+    local t=$1
+    [[ "$t" -lt 0 ]] && t=0
+    local Y M W D h m s
+    Y=$(( t / (365*86400) )); t=$(( t % (365*86400) ))
+    M=$(( t / (30*86400) ));  t=$(( t % (30*86400) ))
+    W=$(( t / (7*86400) ));   t=$(( t % (7*86400) ))
+    D=$(( t / 86400 ));       t=$(( t % 86400 ))
+    h=$(( t / 3600 ));        t=$(( t % 3600 ))
+    m=$(( t / 60 ));          s=$(( t % 60 ))
+
+    if [[ $Y -gt 0 ]]; then
+        printf '%02dY   %02dM   %02dW   %02dD   %02dh  %02dm%02ds' "$Y" "$M" "$W" "$D" "$h" "$m" "$s"
+    elif [[ $M -gt 0 ]]; then
+        printf '%02dM   %02dW   %02dD   %02dh  %02dm%02ds' "$M" "$W" "$D" "$h" "$m" "$s"
+    elif [[ $W -gt 0 ]]; then
+        printf '%02dW   %02dD   %02dh  %02dm%02ds' "$W" "$D" "$h" "$m" "$s"
+    elif [[ $D -gt 0 ]]; then
+        printf '%02dD   %02dh  %02dm%02ds' "$D" "$h" "$m" "$s"
+    elif [[ $h -gt 0 ]]; then
+        printf '%02dh  %02dm%02ds' "$h" "$m" "$s"
+    elif [[ $m -gt 0 ]]; then
+        printf '%02dm%02ds' "$m" "$s"
+    else
+        printf '%02ds' "$s"
+    fi
 }
 
-# 打印固定底部进度框
-print_progress_box() {
-    local stage="$1"
-    local current="$2"
-    local total="$3"
-    local file="$4"
-    local extra="$5"
+# Write elapsed time to terminal TITLE BAR (OSC escape), not content area.
+# This completely avoids collision with binary output in the content area.
+# No padding needed - terminal will clear the rest automatically.
+_tty_title() { [[ -c /dev/tty ]] && printf '\033]0;⏱ %s\007' "$1" > /dev/tty 2>/dev/null; }
+start_elapsed_spinner() {
+    ELAPSED_START=$(date +%s)
+    [[ -n "$SPINNER_PID" ]] && return
+    (
+        local start=$ELAPSED_START
+        while true; do
+            now=$(date +%s)
+            elapsed_sec=$(( now - start ))
+            _tty_title "$(_fmt_elapsed "$elapsed_sec")"
+            sleep 0.15
+        done
+    ) 2>/dev/null &
+    SPINNER_PID=$!
+    disown "$SPINNER_PID" 2>/dev/null || true
     
-    local pct=$((current * 100 / total))
-    local bar_width=30
-    local filled=$((pct * bar_width / 100))
-    local empty=$((bar_width - filled))
-    
-    local bar=""
-    for ((i=0; i<filled; i++)); do bar+="━"; done
-    for ((i=0; i<empty; i++)); do bar+="─"; done
-    
-    printf '\r\033[K'
-    printf "${CYAN}│${NC} %s ${CYAN}│${NC} [${GREEN}%s${NC}] %d/%d (%d%%) ${CYAN}│${NC} %s ${CYAN}│${NC}" \
-        "$stage" "$bar" "$current" "$total" "$pct" "${file:0:30}"
-    [[ -n "$extra" ]] && printf " %s" "$extra"
+    # Ensure spinner is killed when bash exits (including on Ctrl+C)
+    trap 'stop_elapsed_spinner' EXIT
+}
+stop_elapsed_spinner() {
+    if [[ -n "$SPINNER_PID" ]]; then
+        ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
+        SPINNER_PID=""
+    fi
+    [[ "$ELAPSED_START" -eq 0 ]] && return
+    local end
+    end=$(date +%s)
+    local elapsed_sec=$(( end - ELAPSED_START ))
+    [[ "$elapsed_sec" -lt 0 ]] && elapsed_sec=0
+    local elapsed_str
+    elapsed_str=$(_fmt_elapsed "$elapsed_sec")
+
+    echo "   Total time: $elapsed_str"
+    # Clear title bar
+    [[ -c /dev/tty ]] && printf '\033]0;\007' > /dev/tty 2>/dev/null
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 方向键选择菜单 (v5.2)
-# 使用全局变量 SELECTED 返回结果，避免 set -e 问题
-# ═══════════════════════════════════════════════════════════════
-select_menu() {
-    local opt1="$1"
-    local opt2="$2"
-    SELECTED=0
-    
-    # 隐藏光标
-    printf '\033[?25l'
-    
-    # 绘制函数
-    draw() {
-        if [[ $SELECTED -eq 0 ]]; then
-            printf "  \033[32m▶ \033[1m%s\033[0m\n" "$opt1"
-            printf "    \033[2m%s\033[0m\n" "$opt2"
-        else
-            printf "    \033[2m%s\033[0m\n" "$opt1"
-            printf "  \033[32m▶ \033[1m%s\033[0m\n" "$opt2"
-        fi
-    }
-    
-    # 清除两行
-    clear2() {
-        printf '\033[A\033[2K\033[A\033[2K'
-    }
-    
-    draw
-    
-    while true; do
-        # 读取一个字符
-        local c
-        IFS= read -rsn1 c 2>/dev/null || c=""
-        
-        # 检查 ESC 序列
-        if [[ "$c" == $'\033' ]]; then
-            local c2 c3
-            IFS= read -rsn1 -t 0.1 c2 2>/dev/null || c2=""
-            IFS= read -rsn1 -t 0.1 c3 2>/dev/null || c3=""
-            # 上箭头: ESC [ A 或 ESC O A
-            if [[ "$c2" == "[" && "$c3" == "A" ]] || [[ "$c2" == "O" && "$c3" == "A" ]]; then
-                SELECTED=$((1 - SELECTED))
-                clear2; draw
-            # 下箭头: ESC [ B 或 ESC O B
-            elif [[ "$c2" == "[" && "$c3" == "B" ]] || [[ "$c2" == "O" && "$c3" == "B" ]]; then
-                SELECTED=$((1 - SELECTED))
-                clear2; draw
+# (Ctrl+C confirmation is now exclusively handled by the Rust binaries)
+
+
+LOG_DIR="$PROJECT_ROOT/logs"
+LOG_FILE=""
+VERBOSE_LOG_FILE=""
+SESSION_START_TIME=""
+
+init_log() {
+    SESSION_START_TIME=$(date +"%Y-%m-%d_%H-%M-%S")
+    mkdir -p "$LOG_DIR"
+    LOG_FILE="$LOG_DIR/drag_drop_${SESSION_START_TIME}.log"
+    VERBOSE_LOG_FILE="$LOG_DIR/verbose_${SESSION_START_TIME}.log"
+}
+
+merge_run_logs() {
+    [[ -z "$LOG_FILE" ]] && return
+    [[ -z "$SESSION_START_TIME" ]] && return
+
+    # Only merge if running via app
+    if [[ -n "$FROM_APP" ]]; then
+        local merged_log="$LOG_DIR/merged_${SESSION_START_TIME}.log"
+
+        # Find the most recent img and vid logs (they may have slightly different timestamps)
+        local img_log=$(ls -t "$LOG_DIR"/img_hevc_run_*.log 2>/dev/null | head -1)
+        local vid_log=$(ls -t "$LOG_DIR"/vid_hevc_run_*.log 2>/dev/null | head -1)
+
+        {
+            echo "========================================"
+            echo "📋 MERGED LOG - Modern Format Boost"
+            echo "========================================"
+            echo "Session: $SESSION_START_TIME"
+            echo ""
+
+            if [[ -f "$LOG_FILE" ]]; then
+                echo "========================================"
+                echo "🔧 Drag & Drop Script Log"
+                echo "========================================"
+                cat "$LOG_FILE"
+                echo ""
             fi
-        # Enter
-        elif [[ "$c" == "" ]]; then
-            break
-        # j/k vim 风格
-        elif [[ "$c" == "j" || "$c" == "k" ]]; then
-            SELECTED=$((1 - SELECTED))
-            clear2; draw
-        # 数字 1/2
-        elif [[ "$c" == "1" ]]; then
-            SELECTED=0; clear2; draw
-        elif [[ "$c" == "2" ]]; then
-            SELECTED=1; clear2; draw
-        # q 退出
-        elif [[ "$c" == "q" || "$c" == "Q" ]]; then
-            printf '\033[?25h'
-            echo -e "\n${RED}❌ 用户取消${NC}"
-            exit 0
-        fi
-    done
-    
-    printf '\033[?25h'
+
+            if [[ -n "$img_log" && -f "$img_log" ]]; then
+                echo "========================================"
+                echo "🖼️  Image Processing Log"
+                echo "========================================"
+                cat "$img_log"
+                echo ""
+            fi
+
+            if [[ -n "$vid_log" && -f "$vid_log" ]]; then
+                echo "========================================"
+                echo "🎬 Video Processing Log"
+                echo "========================================"
+                cat "$vid_log"
+                echo ""
+            fi
+
+            echo "========================================"
+            echo "✅ Log Merge Complete"
+            echo "========================================"
+        } > "$merged_log"
+
+        # Remove individual logs after merge
+        [[ -f "$LOG_FILE" ]] && rm -f "$LOG_FILE"
+        [[ -n "$img_log" && -f "$img_log" ]] && rm -f "$img_log"
+        [[ -n "$vid_log" && -f "$vid_log" ]] && rm -f "$vid_log"
+    fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 检查工具
-# ═══════════════════════════════════════════════════════════════
+save_log() {
+    [[ -z "$LOG_FILE" ]] && return
+    [[ ! -f "$LOG_FILE" ]] && return
+
+    if [[ -n "$VERBOSE_LOG_FILE" && -f "$VERBOSE_LOG_FILE" ]]; then
+        {
+            echo ""
+            echo "========================================"
+            echo "📋 Full internal tool log"
+            echo "========================================"
+            cat "$VERBOSE_LOG_FILE"
+            echo ""
+        } >> "$LOG_FILE"
+    fi
+
+    {
+        echo ""
+        echo "========================================"
+        echo "📊 Final Statistics"
+        echo "========================================"
+        echo "End Time: $(date +"%Y-%m-%d_%H-%M-%S")"
+        echo ""
+        echo "Images:  $IMG_SUCCEEDED succeeded, $IMG_SKIPPED skipped, $IMG_FAILED failed"
+        echo "Videos:  $VID_SUCCEEDED succeeded, $VID_SKIPPED skipped, $VID_FAILED failed"
+        echo ""
+        local total_succeeded=$((IMG_SUCCEEDED + VID_SUCCEEDED))
+        local total_skipped=$((IMG_SKIPPED + VID_SKIPPED))
+        local total_failed=$((IMG_FAILED + VID_FAILED))
+        local total_processed=$((total_succeeded + total_skipped + total_failed))
+        echo "Total:   $total_succeeded succeeded, $total_skipped skipped, $total_failed failed"
+        if [[ $total_processed -gt 0 ]]; then
+            local success_rate=$(( (total_succeeded * 100) / total_processed ))
+            echo "Success Rate: ${success_rate}%"
+        fi
+        echo ""
+        echo "========================================"
+        echo "Session completed."
+        echo "========================================"
+    } >> "$LOG_FILE"
+    
+    echo -e "   ${DIM}📝 Session log:  $LOG_FILE${RESET}"
+}
+
+draw_header() {
+    local width=70
+    local title="🚀 MODERN FORMAT BOOST v7.0"
+    local padding=$(( (width - ${#title}) / 2 ))
+    
+    echo ""
+    echo -e "${BLUE}╭$(printf '─%.0s' {1..70})╮${RESET}"
+    printf "${BLUE}│${RESET}${BG_HEADER}%*s${BOLD}${WHITE}%s${RESET}${BG_HEADER}%*s${RESET}${BLUE}│${RESET}\n" $padding "" "$title" $padding ""
+    echo -e "${BLUE}│$(printf '─%.0s' {1..70})│${RESET}"
+    echo -e "${BLUE}│${RESET}  ${DIM}PREMIUM MEDIA OPTIMIZER${RESET}               ${BLUE}│${RESET}"
+    echo -e "${BLUE}│${RESET}  ${GREEN}●${RESET} ${DIM}No Data Loss${RESET}   ${GREEN}●${RESET} ${DIM}Smart Conversion${RESET}   ${GREEN}●${RESET} ${DIM}Auto-Repair${RESET}               ${BLUE}│${RESET}"
+    echo -e "${BLUE}╰$(printf '─%.0s' {1..70})╯${RESET}"
+    echo ""
+}
+
+draw_separator() {
+    local title="$1"
+    echo -e "${DIM}── ${BOLD}${WHITE}${title}${RESET} ${DIM}$(printf '─%.0s' {1..50})${RESET}"
+    echo ""
+}
+
 check_tools() {
-    # 🔥 v5.70: 智能编译 - 只在源代码更新时重新编译
-    "$PROJECT_ROOT/smart_build.sh" || {
-        echo -e "${RED}❌ Build failed${NC}"
+    "$SCRIPT_DIR/smart_build.sh" || {
+        echo -e "${RED}❌ Build failed. Please check the logs.${RESET}"
+        drain_stdin
+        read -rsp "Press any key to exit..." -n1
         exit 1
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 显示欢迎信息
-# ═══════════════════════════════════════════════════════════════
-show_welcome() {
-    printf '\033[2J\033[H'
-    echo ""
-    echo -e "${CYAN}${BOLD}"
-    echo "  ╔══════════════════════════════════════════════════════════════════════════╗"
-    echo "  ║     🚀 Modern Format Boost v5.98                                         ║"
-    echo "  ║     XMP边车自动合并 + 智能质量匹配 + SSIM验证                            ║"
-    echo "  ╚══════════════════════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BLUE}📋${NC} XMP自动合并  ${BLUE}🍎${NC} Apple兼容  ${BLUE}🔄${NC} 断点续传  ${BLUE}🎯${NC} SSIM验证  ${MAGENTA}📊${NC} 实时进度"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 创建目录结构（保持原始层级）
-# ═══════════════════════════════════════════════════════════════
-create_directory_structure() {
-    local source_dir="$1"
-    local target_dir="$2"
-    
-    # 创建根目录
-    mkdir -p "$target_dir"
-    
-    # 递归复制目录结构（只复制目录，不复制文件）
-    find "$source_dir" -type d -print0 | while IFS= read -r -d '' dir; do
-        # 计算相对路径
-        local rel_path="${dir#$source_dir}"
-        rel_path="${rel_path#/}"  # 移除开头的斜杠
-        
-        # 在目标目录中创建对应的子目录
-        if [[ -n "$rel_path" ]]; then
-            mkdir -p "$target_dir/$rel_path"
-        fi
-    done
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 保持目录结构的图像处理
-# 🔥 v5.77: 修复子shell问题，使用数组而非管道
-# ═══════════════════════════════════════════════════════════════
-process_images_with_structure() {
-    # 🔥 关键：使用数组收集文件，避免子shell问题
-    local -a files=()
-    while IFS= read -r -d '' file; do
-        files+=("$file")
-    done < <(find "$TARGET_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" \
-        -o -iname "*.bmp" -o -iname "*.tiff" -o -iname "*.webp" -o -iname "*.heic" \
-    \) -print0)
-    
-    local total=${#files[@]}
-    local current=0
-    
-    for file in "${files[@]}"; do
-        ((current++))
-        
-        # 计算相对路径
-        local rel_path="${file#$TARGET_DIR}"
-        rel_path="${rel_path#/}"
-        
-        # 计算输出目录（保持目录结构）
-        local output_file="$OUTPUT_DIR/$rel_path"
-        local out_dir
-        out_dir="$(dirname "$output_file")"
-        mkdir -p "$out_dir"
-        
-        # 显示进度
-        print_progress_box "图像" "$current" "$total" "$(basename "$file")" ""
-        
-        # 执行转换（显示详细输出）
-        "$IMGQUALITY_HEVC" auto "$file" --explore --match-quality --compress --apple-compat --output "$out_dir" </dev/null || true
-    done
-    
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 保持目录结构的视频处理
-# 🔥 v5.77: 修复子shell问题，使用数组而非管道
-# ═══════════════════════════════════════════════════════════════
-process_videos_with_structure() {
-    # 🔥 关键：使用数组收集文件，避免子shell问题
-    local -a files=()
-    while IFS= read -r -d '' file; do
-        files+=("$file")
-    done < <(find "$TARGET_DIR" -type f \( \
-        -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" \
-    \) -print0)
-    
-    local total=${#files[@]}
-    local current=0
-    
-    for file in "${files[@]}"; do
-        ((current++))
-        
-        # 计算相对路径
-        local rel_path="${file#$TARGET_DIR}"
-        rel_path="${rel_path#/}"
-        
-        # 计算输出目录（保持目录结构）
-        local output_file="$OUTPUT_DIR/$rel_path"
-        local out_dir
-        out_dir="$(dirname "$output_file")"
-        mkdir -p "$out_dir"
-        
-        # 显示进度
-        print_progress_box "视频" "$current" "$total" "$(basename "$file")" ""
-        
-        # 执行转换（显示详细输出）
-        "$VIDQUALITY_HEVC" auto "$file" --explore --match-quality true --compress --apple-compat --output "$out_dir" </dev/null || true
-    done
-    
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 选择运行模式
-# ═══════════════════════════════════════════════════════════════
-select_mode() {
-    echo -e "${BOLD}请选择输出模式：${NC} ${DIM}(↑↓/jk 选择, Enter 确认, Q 退出)${NC}"
-    echo ""
-    
-    select_menu "🚀 原地转换 - 删除原文件，节省空间" "📂 输出到相邻目录 - 保留原文件，安全预览"
-    
-    echo ""
-    if [[ $SELECTED -eq 0 ]]; then
-        OUTPUT_MODE="inplace"
-        echo -e "${GREEN}✅ 已选择：原地转换模式${NC}"
-    else
-        OUTPUT_MODE="adjacent"
-        local base_name
-        base_name=$(basename "$TARGET_DIR")
-        OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_converted"
-        
-        # 🔥 v5.76: 创建输出目录并复制原始目录结构
-        echo -e "${CYAN}📁 创建输出目录结构...${NC}"
-        create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
-        
-        echo -e "${GREEN}✅ 已选择：输出到相邻目录（保持原始结构）${NC}"
-        echo -e "   ${DIM}→ $OUTPUT_DIR${NC}"
-    fi
-    echo ""
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 获取目标目录
-# ═══════════════════════════════════════════════════════════════
 get_target_directory() {
-    if [[ $# -gt 0 ]]; then
-        TARGET_DIR="$1"
-    else
-        echo -e "${BOLD}请将要处理的文件夹拖拽到此窗口，然后按回车：${NC}"
+    if [[ -z "$TARGET_DIR" ]]; then
+        draw_header
+        echo -e "${CYAN}📂 Waiting for input...${RESET}"
+        echo -e "${DIM}   Please drag and drop a folder here, then press Enter.${RESET}"
+        echo -ne "   ${BOLD}> ${RESET}"
+        drain_stdin
         read -r TARGET_DIR
         TARGET_DIR="${TARGET_DIR%\"}"
         TARGET_DIR="${TARGET_DIR#\"}"
@@ -339,198 +259,353 @@ get_target_directory() {
     fi
     
     if [[ ! -d "$TARGET_DIR" ]]; then
-        echo -e "${RED}❌ 错误：目录不存在: $TARGET_DIR${NC}"
+        echo -e "\n${RED}❌ Error: Directory not found.${RESET}"
+        echo -e "${DIM}   Path: $TARGET_DIR${RESET}"
         exit 1
     fi
-    
-    echo -e "${BLUE}📂${NC} 目标目录: ${BOLD}$TARGET_DIR${NC}"
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 安全检查
-# ═══════════════════════════════════════════════════════════════
 safety_check() {
     case "$TARGET_DIR" in
         "/"|"/System"*|"/usr"*|"/bin"*|"/sbin"*|"$HOME"|"$HOME/Desktop"|"$HOME/Documents")
-            echo -e "${RED}❌ 危险目录，拒绝处理: $TARGET_DIR${NC}"
+            echo -e "\n${RED}⚠️  SAFETY BLOCK${RESET}"
+            echo -e "   System or root directories cannot be processed directly."
             exit 1
             ;;
     esac
+}
+
+drain_stdin() {
+    while read -rsn1 -t 0.01 _ 2>/dev/null; do :; done
+}
+
+select_mode() {
+    drain_stdin
+    SELECTED=0
+    hide_cursor
+
+    local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors" "🧹 Clean Cache & Logs")
+    local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import." "Clear metadata cache and session logs to free disk space.")
     
-    if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        echo -e "${YELLOW}⚠️  即将开始原地处理（会删除原文件）${NC}"
-        echo -ne "${BOLD}确认继续？${NC} ${DIM}(y/N)${NC}: "
-        read -r CONFIRM
-        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-            echo -e "${RED}❌ 用户取消${NC}"
+    while true; do
+        clear_screen
+        draw_header
+        echo -e "${BOLD}Select Operation Mode:${RESET}"
+        echo ""
+        
+        for i in "${!options[@]}"; do
+            if [[ $i -eq $SELECTED ]]; then
+                echo -e "  ${CYAN}➜ ${BOLD}${options[$i]}${RESET}"
+                echo -e "    ${CYAN}${DIM}${descriptions[$i]}${RESET}"
+            else
+                echo -e "    ${DIM}${options[$i]}${RESET}"
+                echo -e "    ${DIM}${descriptions[$i]}${RESET}"
+            fi
+            echo ""
+        done
+        
+        echo -e "${DIM}(Use ↑/↓ to navigate, Enter to select, q to quit)${RESET}"
+        
+        read -rsn1 key
+        if [[ "$key" == $'\x1b' ]]; then
+            read -rsn2 key
+            if [[ "$key" == "[A" ]]; then
+                SELECTED=$(( (SELECTED - 1 + 4) % 4 ))
+            elif [[ "$key" == "[B" ]]; then
+                SELECTED=$(( (SELECTED + 1) % 4 ))
+            fi
+        elif [[ "$key" == "" ]]; then
+            break
+        elif [[ "$key" == "q" ]]; then
+            show_cursor
             exit 0
         fi
+    done
+    
+    show_cursor
+    
+    if [[ $SELECTED -eq 0 ]]; then
+        OUTPUT_MODE="adjacent"
+        local base_name=$(basename "$TARGET_DIR")
+        OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_optimized"
+        
+        echo -e "\n${GREEN}✅ ADJACENT MODE SELECTED${RESET}"
+        echo -e "   Output: ${DIM}$OUTPUT_DIR${RESET}"
+        echo -e "   ${DIM}Creating directory structure...${RESET}"
+        create_directory_structure "$TARGET_DIR" "$OUTPUT_DIR"
+    elif [[ $SELECTED -eq 1 ]]; then
+        OUTPUT_MODE="inplace"
+        echo -e "\n${YELLOW}⚠️  IN-PLACE MODE SELECTED${RESET}"
+        echo -e "${DIM}   Original files will be replaced after successful conversion.${RESET}"
+        echo -ne "   ${BOLD}Are you sure? (y/N): ${RESET}"
+        drain_stdin
+        read -r confirm
+        [[ ! "$confirm" =~ ^[Yy]$ ]] && exit 0
+    elif [[ $SELECTED -eq 2 ]]; then
+        OUTPUT_MODE="brotli_fix_only"
+        echo -e "\n${MAGENTA}🩹 ICLOUD IMPORT FIX MODE${RESET}"
+        echo -e "${DIM}   Only files with corrupted Brotli EXIF will be fixed.${RESET}"
+        echo -e "${DIM}   This resolves 'Unable to import to iCloud Photos' errors.${RESET}"
+        echo ""
+    else
+        OUTPUT_MODE="cache_clean"
+        echo -e "\n${CYAN}🧹 CACHE CLEANING MODE${RESET}"
+        echo ""
     fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 统计文件数量
-# ═══════════════════════════════════════════════════════════════
+create_directory_structure() {
+    local src="$1"
+    local dest="$2"
+    mkdir -p "$dest"
+    touch -r "$src" "$dest"
+    
+    find "$src" -type d -print0 | while IFS= read -r -d '' dir; do
+        local rel="${dir#$src}"
+        rel="${rel#/}"
+        if [[ -n "$rel" ]]; then
+            mkdir -p "$dest/$rel"
+            touch -r "$dir" "$dest/$rel"
+        fi
+    done
+}
+
 count_files() {
-    echo -e "${CYAN}📊 统计文件...${NC}"
+    draw_separator "Scanning Content"
+    printf "${DIM}   Analyzing directory structure...${RESET}\n"
     
-    XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" 2>/dev/null | wc -l | tr -d ' ')
-    IMG_COUNT=$(find "$TARGET_DIR" -type f \( \
-        -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" -o -iname "*.gif" \
-        -o -iname "*.bmp" -o -iname "*.tiff" -o -iname "*.webp" -o -iname "*.heic" \
-    \) 2>/dev/null | wc -l | tr -d ' ')
-    VID_COUNT=$(find "$TARGET_DIR" -type f \( \
-        -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \
-        -o -iname "*.webm" -o -iname "*.m4v" \
-    \) 2>/dev/null | wc -l | tr -d ' ')
+    TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" | wc -l | tr -d ' ')
+    IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" \) | wc -l | tr -d ' ')
+    VID_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \) | wc -l | tr -d ' ')
+    XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" | wc -l | tr -d ' ')
+    OTHER_COUNT=$((TOTAL_FILES - IMG_COUNT - VID_COUNT - XMP_COUNT))
     
-    echo -e "  📋 XMP: ${BOLD}$XMP_COUNT${NC}  🖼️ 图像: ${BOLD}$IMG_COUNT${NC}  🎬 视频: ${BOLD}$VID_COUNT${NC}"
-    
-    if [[ $((IMG_COUNT + VID_COUNT)) -eq 0 ]]; then
-        echo -e "${RED}❌ 未找到支持的媒体文件${NC}"
-        exit 1
-    fi
+    echo -e "   📁 Total Files: ${BOLD}$TOTAL_FILES${RESET}"
+    echo -e "   🖼️  Images:      ${BOLD}${CYAN}$IMG_COUNT${RESET}"
+    echo -e "   🎬 Videos:      ${BOLD}${MAGENTA}$VID_COUNT${RESET}"
+    echo -e "   📋 Metadata:    ${BOLD}${DIM}$XMP_COUNT${RESET}"
+    echo -e "   📦 Others:      ${BOLD}${DIM}$OTHER_COUNT${RESET} (Copy only)"
+    echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
-# XMP 合并 (v5.76: 已整合到转换工具中，此函数仅用于独立合并)
-# 🔥 注意：imgquality-hevc/vidquality-hevc 的 copy_metadata() 已自动合并XMP
-# 此函数现在只在用户明确需要独立合并时使用
-# ═══════════════════════════════════════════════════════════════
-merge_xmp_files() {
-    # 🔥 v5.76: 转换工具已自动合并XMP，跳过独立合并避免重复
-    # 如果用户只想合并XMP而不转换，可以直接运行 xmp-merge 命令
-    [[ $XMP_COUNT -gt 0 ]] && echo -e "${DIM}📋 XMP边车将在转换时自动合并${NC}"
-    return 0
-}
-
-# ═══════════════════════════════════════════════════════════════
-# 处理图像
-# ═══════════════════════════════════════════════════════════════
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
-
-    echo ""
-    echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC} ${BOLD}🖼️  处理图像${NC} │ $IMG_COUNT 个文件 │ --explore --match-quality --compress │"
-    echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────╯${NC}"
-    echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
-    echo ""
+    draw_separator "Processing Images ($IMG_COUNT)"
+    local args=(run --recursive --allow-size-tolerance)
+    [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
+    [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
 
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        # 原地转换模式
-        local args=(auto "$TARGET_DIR" --recursive --explore --match-quality --compress --apple-compat --in-place)
-        
-        # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
-        local original_stty
-        original_stty=$(stty -g 2>/dev/null) || original_stty=""
-        exec 0</dev/null
-        if [[ -t 1 ]]; then
-            stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
-            stty min 0 time 0 2>/dev/null || true
-        fi
-        
-        # 执行转换
-        TERM=dumb LANG=C LC_ALL=C "$IMGQUALITY_HEVC" "${args[@]}" || true
-        
-        # 恢复原始终端设置
-        if [[ -n "$original_stty" ]]; then
-            stty "$original_stty" 2>/dev/null || true
-        else
-            stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
-        fi
+        args+=(--in-place "$TARGET_DIR")
     else
-        # 相邻目录模式：逐个处理文件以保持目录结构
-        process_images_with_structure
+        args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
     fi
+
+    # Run the tool streaming directly to the terminal (no $() capture).
+    # Capturing into $() causes the TTY title-bar escape sequence (thousands of
+    # spaces from _tty_title) to leak into the captured string, which is then
+    # dumped back to the terminal all at once at subshell exit — causing the
+    # periodic "clear" / macOS Terminal notification badge.
+    local tmp_out
+    tmp_out=$(mktemp)
+    if [[ -n "$LOG_FILE" ]]; then
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out") | (trap '' INT; tee -a "$LOG_FILE")
+    else
+        "$IMGQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out")
+    fi
+    local rust_exit="${PIPESTATUS[0]}"
+    if [[ $rust_exit -eq 130 ]]; then
+        rm -f "$tmp_out"
+        exit 130
+    fi
+    parse_tool_stats "$(cat "$tmp_out")" "img"
+    rm -f "$tmp_out"
+    echo ""
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 处理视频
-# ═══════════════════════════════════════════════════════════════
 process_videos() {
     [[ $VID_COUNT -eq 0 ]] && return 0
-
-    echo ""
-    echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${NC} ${BOLD}🎬 处理视频${NC} │ $VID_COUNT 个文件 │ --explore --match-quality --compress │"
-    echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────╯${NC}"
-    echo -e "${DIM}   进度条将显示: CRF 值 | SSIM | 大小变化 | 迭代次数 | 耗时${NC}"
-    echo ""
+    draw_separator "Processing Videos ($VID_COUNT)"
+    local args=(run --recursive --allow-size-tolerance)
+    [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
+    [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
 
     if [[ "$OUTPUT_MODE" == "inplace" ]]; then
-        # 原地转换模式
-        local args=(auto "$TARGET_DIR" --recursive --explore --match-quality true --compress --apple-compat --in-place)
-        
-        # 🔥 v5.41: 激进的键盘输入防护（完全禁用终端输入）
-        local original_stty
-        original_stty=$(stty -g 2>/dev/null) || original_stty=""
-        exec 0</dev/null
-        if [[ -t 1 ]]; then
-            stty -echo -icanon -isig -iexten -onlcr -ixon -ixoff 2>/dev/null || true
-            stty min 0 time 0 2>/dev/null || true
-        fi
-        
-        # 执行转换
-        TERM=dumb LANG=C LC_ALL=C "$VIDQUALITY_HEVC" "${args[@]}" || true
-        
-        # 恢复原始终端设置
-        if [[ -n "$original_stty" ]]; then
-            stty "$original_stty" 2>/dev/null || true
-        else
-            stty echo icanon isig iexten onlcr ixon ixoff 2>/dev/null || true
-        fi
+        args+=(--in-place "$TARGET_DIR")
     else
-        # 相邻目录模式：逐个处理文件以保持目录结构
-        process_videos_with_structure
+        args+=("$TARGET_DIR" --output "$OUTPUT_DIR")
+    fi
+
+    local tmp_out
+    tmp_out=$(mktemp)
+    if [[ -n "$LOG_FILE" ]]; then
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out") | (trap '' INT; tee -a "$LOG_FILE")
+    else
+        "$VIDQUALITY_HEVC" "${args[@]}" 2>&1 | (trap '' INT; tee "$tmp_out")
+    fi
+    local rust_exit="${PIPESTATUS[0]}"
+    if [[ $rust_exit -eq 130 ]]; then
+        rm -f "$tmp_out"
+        exit 130
+    fi
+    parse_tool_stats "$(cat "$tmp_out")" "vid"
+    rm -f "$tmp_out"
+    echo ""
+}
+
+IMG_SUCCEEDED=0
+IMG_SKIPPED=0
+IMG_FAILED=0
+VID_SUCCEEDED=0
+VID_SKIPPED=0
+VID_FAILED=0
+
+parse_tool_stats() {
+    local output="$1"
+    local tool_type="$2"
+    local succeeded=$(echo "$output" | grep -oE 'Succeeded:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    local skipped=$(echo "$output" | grep -oE 'Skipped:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    local failed=$(echo "$output" | grep -oE 'Failed:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+    
+    if [[ "$tool_type" == "img" ]]; then
+        IMG_SUCCEEDED=${succeeded:-0}
+        IMG_SKIPPED=${skipped:-0}
+        IMG_FAILED=${failed:-0}
+    else
+        VID_SUCCEEDED=${succeeded:-0}
+        VID_SKIPPED=${skipped:-0}
+        VID_FAILED=${failed:-0}
     fi
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 完成信息
-# ═══════════════════════════════════════════════════════════════
-show_completion() {
-    echo ""
-    echo -e "${GREEN}${BOLD}╭─────────────────────────────────────────────────────────────────────────╮"
-    echo -e "│     🎉 处理完成！                                                       │"
-    echo -e "╰─────────────────────────────────────────────────────────────────────────╯${NC}"
+show_summary() {
+    draw_separator "Task Completed"
+    local total_succeeded=$((IMG_SUCCEEDED + VID_SUCCEEDED))
+    local total_skipped=$((IMG_SKIPPED + VID_SKIPPED))
+    local total_failed=$((IMG_FAILED + VID_FAILED))
+    local total_processed=$((total_succeeded + total_skipped + total_failed))
     
-    # 显示处理摘要
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  📊 处理摘要:"
-    echo -e "     🖼️  图像: $IMG_COUNT 个"
-    echo -e "     🎬 视频: $VID_COUNT 个"
-    echo -e "     📋 XMP:  $XMP_COUNT 个"
-    echo -e "  ${DIM}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "   ${GREEN}✅ Optimization Finished Successfully${RESET}"
+    echo ""
+    echo -e "   ${BOLD}📊 Merged Statistics Report${RESET}"
+    echo -e "   ${DIM}───────────────────────────────────${RESET}"
+    if [[ $IMG_COUNT -gt 0 ]]; then
+        echo -e "   ${CYAN}🖼️  Images:${RESET} ${GREEN}$IMG_SUCCEEDED${RESET} succeeded, ${YELLOW}$IMG_SKIPPED${RESET} skipped, ${RED}$IMG_FAILED${RESET} failed"
+    fi
+    if [[ $VID_COUNT -gt 0 ]]; then
+        echo -e "   ${MAGENTA}🎬 Videos:${RESET} ${GREEN}$VID_SUCCEEDED${RESET} succeeded, ${YELLOW}$VID_SKIPPED${RESET} skipped, ${RED}$VID_FAILED${RESET} failed"
+    fi
+    echo -e "   ${DIM}───────────────────────────────────${RESET}"
+    echo -e "   ${WHITE}📦 Total:${RESET}  ${GREEN}$total_succeeded${RESET} succeeded, ${YELLOW}$total_skipped${RESET} skipped, ${RED}$total_failed${RESET} failed"
+    
+    if [[ $total_processed -gt 0 ]]; then
+        local success_rate=$(( (total_succeeded * 100) / total_processed ))
+        echo -e "   ${WHITE}📈 Success Rate:${RESET} ${GREEN}${success_rate}%${RESET}"
+    fi
+    echo ""
+    if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
+        echo -e "   ${BLUE}📂 Output: $OUTPUT_DIR${RESET}"
+        open "$OUTPUT_DIR" 2>/dev/null
+    fi
+    echo ""
+    echo -e "${DIM}Press any key to exit...${RESET}"
+    drain_stdin
+    read -rsn1
+    save_log
+    merge_run_logs
+}
+
+_main() {
+    for arg in "$@"; do
+        if [[ "$arg" == "--ultimate" ]]; then
+            ULTIMATE_MODE=true
+        elif [[ "$arg" == "--verbose" ]] || [[ "$arg" == "-v" ]]; then
+            VERBOSE_MODE=true
+        elif [[ -d "$arg" ]]; then
+            TARGET_DIR="$arg"
+        fi
+    done
+
+    check_tools
+    get_target_directory
+    echo ""
+    echo -e "${CYAN}📋 Configuration:${RESET}"
+    echo -e "   ${DIM}Target: ${RESET}${BOLD}$TARGET_DIR${RESET}"
+    [[ "$ULTIMATE_MODE" == true ]] && echo -e "   ${MAGENTA}🔥 Ultimate Mode: ${RESET}${GREEN}ENABLED${RESET}"
+    [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}"
+    echo ""
+
+    safety_check
+    select_mode
+
+    if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
+        "$SCRIPT_DIR/repair_apple_photos.sh" "$TARGET_DIR"
+        echo ""
+        echo -e "${GREEN}✅ Brotli EXIF Fix Completed${RESET}"
+        echo ""
+        echo -e "${DIM}Press any key to exit...${RESET}"
+        read -rsn1
+        exit 0
+    elif [[ "$OUTPUT_MODE" == "cache_clean" ]]; then
+        "$SCRIPT_DIR/cache_cleaner.sh"
+        exit 0
+    fi
+
+    count_files
+    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
+        start_elapsed_spinner
+    fi
+    if [[ $IMG_COUNT -gt 0 ]]; then
+        process_images
+    fi
+    if [[ $VID_COUNT -gt 0 ]]; then
+        process_videos
+    fi
+    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
+        stop_elapsed_spinner
+    fi
     
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
-        echo -e "  ${BLUE}📂${NC} 输出目录: ${BOLD}$OUTPUT_DIR${NC}"
-        echo -ne "  是否打开？ ${DIM}(y/N)${NC}: "
-        read -r ans
-        [[ "$ans" =~ ^[Yy]$ ]] && open "$OUTPUT_DIR" 2>/dev/null
+        draw_separator "Syncing Non-Media Files"
+        local excludes=(
+            --exclude="*.[jJ][pP][gG]" --exclude="*.[jJ][pP][eE][gG]" --exclude="*.[pP][nN][gG]" --exclude="*.[wW][eE][bB][pP]"
+            --exclude="*.[hH][eE][iI][cC]" --exclude="*.[hH][eE][iI][fF]" --exclude="*.[aA][vV][iI][fF]" --exclude="*.[gG][iI][fF]"
+            --exclude="*.[tT][iI][fF]" --exclude="*.[tT][iI][fF][fF]" --exclude="*.[jJ][pP][eE]" --exclude="*.[jJ][fF][iI][fF]"
+            --exclude="*.[bB][mM][pP]" --exclude="*.[jJ][xX][lL]"
+            --exclude="*.[mM][pP]4" --exclude="*.[mM][oO][vV]" --exclude="*.[mM][kK][vV]" --exclude="*.[aA][vV][iI]"
+            --exclude="*.[wW][eE][bB][mM]" --exclude="*.[mM]4[vV]" --exclude="*.[wW][mM][vV]" --exclude="*.[fF][lL][vV]"
+            --exclude="*.[xX][mM][pP]"
+        )
+        RSYNC_CMD="rsync"
+        if [ -x "/opt/homebrew/opt/rsync/bin/rsync" ]; then RSYNC_CMD="/opt/homebrew/opt/rsync/bin/rsync"; fi
+        "$RSYNC_CMD" -av --ignore-existing "${excludes[@]}" "$TARGET_DIR/" "$OUTPUT_DIR/" >/dev/null 2>&1
+        echo -e "   ${GREEN}✅ Non-media files synced.${RESET}"
+        "$IMGQUALITY_HEVC" restore-timestamps "$TARGET_DIR" "$OUTPUT_DIR" 2>/dev/null && echo -e "   ${GREEN}✅ Timestamps restored.${RESET}" || true
     fi
-    
-    echo ""
-    echo -e "  ${DIM}按任意键退出...${NC}"
-    read -rsn1
+
+    show_summary
 }
 
-# ═══════════════════════════════════════════════════════════════
-# 主函数
-# ═══════════════════════════════════════════════════════════════
+if [[ "$1" == "--internal-worker" ]]; then
+    shift
+    _main "$@"
+    exit $?
+fi
+
 main() {
-    trap 'printf "\033[?25h"; echo -e "\n${YELLOW}⚠️ 中断${NC}"' INT TERM
-    
-    check_tools
-    get_target_directory "$@"
-    show_welcome
-    select_mode
-    safety_check
-    count_files
-    merge_xmp_files
-    process_images
-    process_videos
-    show_completion
+    export FORCE_COLOR=1
+    init_log
+    export LOG_FILE
+    export VERBOSE_LOG_FILE
+    # Wrap tee to ignore SIGINT so it doesn't break the pipe when the user presses Ctrl+C
+    # while the Rust Universal Heartbeat is prompting for confirmation.
+    ( "$BASH" "$0" --internal-worker "$@" ) 2>&1 | (trap '' INT; tee "$LOG_FILE")
+    # Ensure Bash exits correctly if Rust triggers exit 130
+    local exit_status="${PIPESTATUS[0]:-$?}"
+    if [[ $exit_status -eq 130 ]]; then
+        exit 130
+    fi
+    exit $exit_status
 }
 
 main "$@"

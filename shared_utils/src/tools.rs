@@ -5,7 +5,6 @@
 
 use std::process::Command;
 
-/// Tool availability result
 #[derive(Debug, Clone)]
 pub struct ToolCheck {
     pub name: &'static str,
@@ -14,7 +13,6 @@ pub struct ToolCheck {
     pub install_hint: &'static str,
 }
 
-/// Check if a tool is available in PATH
 pub fn check_tool(name: &str) -> bool {
     Command::new(name)
         .arg("--version")
@@ -23,7 +21,6 @@ pub fn check_tool(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if a tool is available (alternative with -version flag)
 pub fn check_tool_alt(name: &str) -> bool {
     Command::new(name)
         .arg("-version")
@@ -32,24 +29,21 @@ pub fn check_tool_alt(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Get tool version string
 pub fn get_tool_version(name: &str) -> Option<String> {
     let output = Command::new(name)
         .arg("--version")
         .output()
         .or_else(|_| Command::new(name).arg("-version").output())
         .ok()?;
-    
+
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        // Get first line of version output
         stdout.lines().next().map(|s| s.to_string())
     } else {
         None
     }
 }
 
-/// Check all required tools for image processing
 pub fn check_image_tools() -> Vec<ToolCheck> {
     vec![
         ToolCheck {
@@ -85,7 +79,6 @@ pub fn check_image_tools() -> Vec<ToolCheck> {
     ]
 }
 
-/// Check all required tools for video processing
 pub fn check_video_tools() -> Vec<ToolCheck> {
     vec![
         ToolCheck {
@@ -106,14 +99,19 @@ pub fn check_video_tools() -> Vec<ToolCheck> {
             version: get_tool_version("exiftool"),
             install_hint: "brew install exiftool",
         },
+        ToolCheck {
+            name: "dovi_tool",
+            available: check_tool("dovi_tool"),
+            version: get_tool_version("dovi_tool"),
+            install_hint: "cargo install dovi_tool",
+        },
     ]
 }
 
-/// Print tool availability report
 pub fn print_tool_report(tools: &[ToolCheck]) {
     println!("🔧 External Tools Check");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
+
     let mut all_available = true;
     for tool in tools {
         if tool.available {
@@ -125,9 +123,9 @@ pub fn print_tool_report(tools: &[ToolCheck]) {
             all_available = false;
         }
     }
-    
+
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    
+
     if all_available {
         println!("   ✅ All required tools are available!");
     } else {
@@ -135,16 +133,15 @@ pub fn print_tool_report(tools: &[ToolCheck]) {
     }
 }
 
-/// Check required tools and exit if any are missing
 pub fn require_tools(tool_names: &[&str]) -> Result<(), String> {
     let mut missing = Vec::new();
-    
+
     for name in tool_names {
         if !check_tool(name) && !check_tool_alt(name) {
             missing.push(*name);
         }
     }
-    
+
     if missing.is_empty() {
         Ok(())
     } else {
@@ -162,7 +159,6 @@ mod tests {
 
     #[test]
     fn test_check_tool() {
-        // These should exist on most systems
         assert!(check_tool("ls") || check_tool_alt("ls"));
     }
 }

@@ -1,0 +1,45 @@
+# Rust
+target/
+Cargo.lock
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI Tools & IDE Configuration (Privacy - Never commit)
+.agent/
+.cache/
+.claude/
+.codebuddy/
+.codex/
+.continue/
+.cursor/
+.gemini/
+.kiro/
+.opencode/
+.qoder/
+.reuse/
+.roo/
+.trae/
+.windsurf/
+
+# Session / drag-and-drop logs and default run logs
+logs/
+*_run.log
+
+# Local test data (user-specific paths)
+# /path/to/local/test/data

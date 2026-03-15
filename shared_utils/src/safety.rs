@@ -1,11 +1,10 @@
 //! Safety Module
-//! 
+//!
 //! Provides safety checks to prevent accidental damage to system directories
 //! Reference: media/CONTRIBUTING.md - Robust Safety & Loud Errors requirement
 
 use std::path::Path;
 
-/// List of dangerous directories that should never be modified
 const DANGEROUS_DIRS: &[&str] = &[
     "/",
     "/System",
@@ -17,9 +16,9 @@ const DANGEROUS_DIRS: &[&str] = &[
     "/private",
     "/Library",
     "/Applications",
-    "/Users",  // Root of all user directories
-    "/home",   // Linux home root
-    "/root",   // Root user home
+    "/Users",
+    "/home",
+    "/root",
     "/boot",
     "/dev",
     "/proc",
@@ -28,30 +27,9 @@ const DANGEROUS_DIRS: &[&str] = &[
     "/opt",
 ];
 
-/// Check if a path is within a dangerous directory
-/// 
-/// # Arguments
-/// * `path` - The path to check
-/// 
-/// # Returns
-/// * `Ok(())` if the path is safe
-/// * `Err(String)` with a descriptive error message if dangerous
-/// 
-/// # Example
-/// ```
-/// use shared_utils::check_dangerous_directory;
-/// use std::path::Path;
-/// 
-/// // Safe path
-/// assert!(check_dangerous_directory(Path::new("/Users/me/Documents/photos")).is_ok());
-/// 
-/// // Dangerous path
-/// assert!(check_dangerous_directory(Path::new("/System")).is_err());
-/// ```
 pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     let path_str = path.to_string_lossy();
-    
-    // Check exact matches
+
     for dangerous in DANGEROUS_DIRS {
         if path_str == *dangerous {
             return Err(format!(
@@ -66,23 +44,14 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
             ));
         }
     }
-    
-    // Check if path is a direct child of dangerous directories (e.g., /Users/username)
-    // Allow deeper paths like /Users/username/Documents
-    // 
-    // 注意：这里使用 unwrap_or_else 是合理的，因为：
-    // 1. canonicalize 失败通常意味着路径不存在（新文件）
-    // 2. 使用原路径进行安全检查是保守的策略
-    // 3. 如果路径真的危险，后续检查仍会捕获
+
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let components: Vec<_> = canonical.components().collect();
-    
-    // Special handling for user home directories
+
     if components.len() <= 3 {
         let path_str = canonical.to_string_lossy();
-        if path_str.starts_with("/Users/") || path_str.starts_with("/home/") {
-            // Only allow if it's deeper than /Users/username
-            if components.len() <= 3 {
+        if (path_str.starts_with("/Users/") || path_str.starts_with("/home/"))
+            && components.len() <= 3 {
                 return Err(format!(
                     "🚨 DANGEROUS OPERATION BLOCKED!\n\
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
@@ -94,42 +63,79 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
                     path.display()
                 ));
             }
-        }
     }
-    
+
     Ok(())
 }
 
-/// Check if a path is safe for destructive operations (delete, in-place replace)
-/// This is more strict than check_dangerous_directory
 pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), String> {
-    // First do the basic dangerous directory check
     check_dangerous_directory(path)?;
-    
-    // Additional checks for destructive operations
-    // 注意：同上，canonicalize 失败时使用原路径是安全的
+
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let path_str = canonical.to_string_lossy();
-    
-    // Warn about Desktop and Downloads (common accident locations)
+
     if path_str.contains("/Desktop") || path_str.contains("/Downloads") {
         eprintln!(
             "⚠️  WARNING: You are about to {} files in '{}'.\n\
              ⚠️  This is a common location for important files.\n\
              ⚠️  Make sure you have backups before proceeding.",
-            operation, path.display()
+            operation,
+            path.display()
         );
     }
-    
+
     Ok(())
 }
 
-/// Validate that a file extension is in the allowed whitelist
 pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| whitelist.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
+}
+
+/// Check if a path is inside an Apple Photos library package
+///
+/// Apple Photos libraries are special package directories (*.photoslibrary) that contain
+/// a complex internal structure managed by Photos.app. Direct manipulation of files
+/// inside these packages can corrupt the library database and cause data loss.
+///
+/// This function checks if the given path is:
+/// 1. Inside a directory ending with .photoslibrary
+/// 2. Inside a directory ending with .photolibrary (older format)
+///
+/// Returns an error if the path is inside a Photos library.
+pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    // Check each component of the path
+    for ancestor in canonical.ancestors() {
+        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".photoslibrary") || name.ends_with(".photolibrary") {
+                return Err(format!(
+                    "🚨 APPLE PHOTOS LIBRARY DETECTED!\n\
+                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+                     ❌ Target path '{}' is inside an Apple Photos library:\n\
+                     ❌ '{}'\n\
+                     \n\
+                     ⚠️  Direct manipulation of files inside Photos libraries can:\n\
+                     ⚠️  • Corrupt the Photos database\n\
+                     ⚠️  • Break photo organization and metadata\n\
+                     ⚠️  • Cause permanent data loss\n\
+                     \n\
+                     💡 To process photos from your Photos library:\n\
+                     💡 1. Export photos from Photos.app to a separate folder\n\
+                     💡 2. Run this tool on the exported folder\n\
+                     💡 3. Import the converted photos back into Photos if needed\n\
+                     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    path.display(),
+                    ancestor.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -145,7 +151,6 @@ mod tests {
 
     #[test]
     fn test_safe_directories() {
-        // Deep paths should be safe
         assert!(check_dangerous_directory(Path::new("/Users/test/Documents/photos")).is_ok());
     }
 
@@ -155,5 +160,26 @@ mod tests {
         assert!(check_extension_whitelist(Path::new("test.png"), whitelist));
         assert!(check_extension_whitelist(Path::new("test.PNG"), whitelist));
         assert!(!check_extension_whitelist(Path::new("test.exe"), whitelist));
+    }
+
+    #[test]
+    fn test_apple_photos_library_detection() {
+        // Test .photoslibrary detection
+        assert!(check_apple_photos_library(Path::new(
+            "/Users/test/Pictures/My Library.photoslibrary/Masters/2024/01/01/IMG_1234.jpg"
+        ))
+        .is_err());
+
+        // Test .photolibrary detection (older format)
+        assert!(check_apple_photos_library(Path::new(
+            "/Users/test/Pictures/My Library.photolibrary/Masters/2024/01/01/IMG_1234.jpg"
+        ))
+        .is_err());
+
+        // Test safe paths
+        assert!(check_apple_photos_library(Path::new("/Users/test/Pictures/Exports/IMG_1234.jpg"))
+            .is_ok());
+        assert!(check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
+            .is_ok());
     }
 }

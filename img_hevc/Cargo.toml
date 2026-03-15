@@ -1,0 +1,34 @@
+[package]
+name = "img-hevc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "High-performance image quality analyzer - HEVC version for animated images"
+
+[dependencies]
+clap = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+indicatif = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+which = { workspace = true }
+walkdir = { workspace = true }
+filetime = { workspace = true }
+libc = { workspace = true }
+xattr = { workspace = true }
+libheif-rs = { workspace = true }
+shared_utils = { workspace = true }
+vid-hevc = { path = "../vid_hevc" }
+tempfile = { workspace = true }
+console = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+
+[features]
+default = ["v1_21"]
+v1_21 = ["shared_utils/v1_21"]

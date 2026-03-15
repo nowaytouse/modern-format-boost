@@ -1,84 +1,186 @@
 //! ExifTool wrapper for internal metadata preservation
-//! 
+//!
 //! Performance optimizations:
 //! - Cached exiftool availability check
 //! - Minimal argument set for common cases
 //! - Fast path for same-format conversions
-//! 
+//!
 //! 🔥 视频元数据特殊处理：
 //! - QuickTime Create Date / Modify Date 需要从源文件日期推断
 //! - GIF/PNG 等图像格式转视频时，源文件没有 QuickTime 元数据
 //! - 需要从 XMP:DateCreated 或文件修改时间设置 QuickTime 日期
 
+use std::io;
 use std::path::Path;
 use std::process::Command;
-use std::io;
 use std::sync::OnceLock;
 
-/// Cached exiftool availability (checked once per process)
 static EXIFTOOL_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
-/// Check if exiftool is available (cached)
 fn is_exiftool_available() -> bool {
     *EXIFTOOL_AVAILABLE.get_or_init(|| which::which("exiftool").is_ok())
 }
 
-/// 视频文件扩展名
-const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "mkv", "webm", "avi"];
-
-/// 检查是否是视频文件
 fn is_video_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        .map(|e| crate::SUPPORTED_VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
         .unwrap_or(false)
 }
 
-/// 从源文件获取最佳日期（用于设置 QuickTime 日期）
-/// 优先级：XMP:DateCreated > EXIF:DateTimeOriginal > File Modification Date
 fn get_best_date_from_source(src: &Path) -> Option<String> {
     let output = Command::new("exiftool")
-        .arg("-s3")  // 只输出值
-        .arg("-d").arg("%Y:%m:%d %H:%M:%S")  // 日期格式
+        .arg("-s3")
+        .arg("-d")
+        .arg("%Y:%m:%d %H:%M:%S")
         .arg("-XMP-photoshop:DateCreated")
         .arg("-XMP-xmp:CreateDate")
         .arg("-EXIF:DateTimeOriginal")
         .arg("-EXIF:CreateDate")
-        .arg(src)
+        .arg(crate::safe_path_arg(src).as_ref())
         .output()
         .ok()?;
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    // 返回第一个非空日期
+
     for line in stdout.lines() {
         let trimmed = line.trim();
         if !trimmed.is_empty() && !trimmed.contains("0000:00:00") {
             return Some(trimmed.to_string());
         }
     }
-    
-    // 如果没有内部日期，使用文件修改时间
+
     if let Ok(metadata) = std::fs::metadata(src) {
         if let Ok(mtime) = metadata.modified() {
             let datetime: chrono::DateTime<chrono::Local> = mtime.into();
             return Some(datetime.format("%Y:%m:%d %H:%M:%S").to_string());
         }
     }
-    
+
     None
 }
 
-/// Preserve internal metadata via ExifTool
-/// 
-/// Performance: ~50-200ms per file depending on metadata complexity
-/// 
-/// 🔥 视频文件特殊处理：
-/// - 复制所有元数据后，检查 QuickTime 日期是否为空
-/// - 如果为空，从源文件的 XMP/EXIF 日期或文件修改时间设置
 pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
+    match preserve_internal_metadata_core(src, dst) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains("Not a valid") || err_str.contains("looks more like") {
+                eprintln!("⚠️ Metadata preservation failed: {}", err_str);
+                eprintln!("⚠️ Attempting content-aware fallback...");
+
+                let hint = crate::extract_suggested_extension(&err_str);
+                if let Some(ref h) = hint {
+                    eprintln!("💡 ExifTool suggests content is: {}", h);
+                }
+
+                match preserve_internal_metadata_fallback(src, dst, hint.as_deref()) {
+                    Ok(_) => {
+                        eprintln!("✅ Metadata fallback successful for {}", dst.display());
+                        return Ok(());
+                    }
+                    Err(fallback_err) => {
+                        eprintln!("❌ Metadata fallback failed: {}", fallback_err);
+                    }
+                }
+            }
+            Err(e)
+        }
+    }
+}
+
+fn preserve_internal_metadata_fallback(
+    src: &Path,
+    dst: &Path,
+    hint_ext: Option<&str>,
+) -> io::Result<()> {
+    let detected_ext = if let Some(hint) = hint_ext {
+        hint.to_string()
+    } else {
+        crate::common_utils::detect_real_extension(dst)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "Cannot detect file content")
+            })?
+            .to_string()
+    };
+
+    let current_ext = crate::common_utils::get_extension_lowercase(dst);
+
+    if detected_ext.eq_ignore_ascii_case(&current_ext) {
+        return Err(io::Error::other(format!(
+            "Extension matches content ({}), fallback skipped",
+            detected_ext
+        )));
+    }
+
+    eprintln!(
+        "⚠️ Temporary rename to .{} for metadata preservation...",
+        detected_ext
+    );
+
+    let temp_path = dst.with_extension(&detected_ext);
+    if temp_path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("Temporary fallback path exists: {}", temp_path.display()),
+        ));
+    }
+
+    std::fs::rename(dst, &temp_path)?;
+
+    let result = preserve_internal_metadata_core(src, &temp_path);
+
+    if let Err(e) = std::fs::rename(&temp_path, dst) {
+        eprintln!(
+            "❌ CRITICAL: Failed to restore filename from {} to {}: {}",
+            temp_path.display(),
+            dst.display(),
+            e
+        );
+        if temp_path.exists() && !dst.exists() {
+            eprintln!("   🔧 Attempting emergency recovery via copy...");
+            if let Ok(()) = std::fs::copy(&temp_path, dst).map(|_| ()) {
+                let _ = std::fs::remove_file(&temp_path);
+                eprintln!("   ✅ Emergency recovery succeeded");
+            } else {
+                eprintln!(
+                    "   ❌ Emergency recovery FAILED. File stranded at: {}",
+                    temp_path.display()
+                );
+            }
+        }
+        return Err(e);
+    }
+
+    result
+}
+
+/// Extract a meaningful error message from an ExifTool output.
+/// ExifTool with `-q` writes errors to stdout (not stderr); stderr is often empty on failure.
+/// Returns Some(msg) only when there is a real actionable error (not just warnings or empty output).
+fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Collect non-Warning lines from both streams
+    let error_lines: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|l| {
+            let l = l.trim();
+            !l.is_empty() && !l.starts_with("Warning") && !l.starts_with("  ") && l.contains("Error")
+        })
+        .collect();
+
+    if error_lines.is_empty() {
+        None
+    } else {
+        Some(error_lines.join("; "))
+    }
+}
+
+fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     if !is_exiftool_available() {
-        // Only warn once per process
         static WARNED: OnceLock<()> = OnceLock::new();
         WARNED.get_or_init(|| {
             eprintln!("⚠️ [metadata] ExifTool not found. EXIF/IPTC will NOT be preserved.");
@@ -86,57 +188,141 @@ pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    // 🚀 Performance: Use minimal argument set
-    // -all:all copies everything, individual date tags are redundant
-    let output = Command::new("exiftool")
-        .arg("-tagsfromfile").arg(src)
-        .arg("-all:all")              // Copy all metadata
-        .arg("-ICC_Profile<ICC_Profile") // Ensure ICC is copied
-        .arg("-use").arg("MWG")       // Metadata Working Group standard
-        .arg("-api").arg("LargeFileSupport=1")
-        .arg("-overwrite_original")   // Don't create backup
-        .arg("-q")                    // Quiet mode
-        .arg("-m")                    // Ignore minor errors (faster)
-        .arg(dst)
+    // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
+    if let Some(name) = dst.file_name() {
+        let tmp_path = dst.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+
+    let ext = dst
+        .extension()
+        .map_or(String::new(), |e| e.to_string_lossy().to_lowercase());
+    let is_nuclear_format = ext == "jxl" || ext == "jpg" || ext == "jpeg" || ext == "webp";
+    let apple_compat = std::env::var("MODERN_FORMAT_BOOST_APPLE_COMPAT").is_ok();
+
+    let mut output = Command::new("exiftool")
+        .arg("-tagsfromfile")
+        .arg(crate::safe_path_arg(src).as_ref())
+        .arg("-all:all")
+        .arg("-unsafe")
+        .arg("-ICC_Profile<ICC_Profile")
+        .arg("-use")
+        .arg("MWG")
+        .arg("-api")
+        .arg("LargeFileSupport=1")
+        .arg("-q")
+        .arg("-m")
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Don't fail on minor warnings
-        if !stderr.contains("Warning") {
-            return Err(io::Error::other(format!("ExifTool failed: {}", stderr)));
+    let needs_repair = apple_compat && is_nuclear_format && {
+        if output.status.success() {
+            false
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let is_corrupt = stderr.contains("Error")
+                || stderr.contains("corrupt")
+                || stderr.contains("invalid")
+                || stderr.contains("truncated")
+                || stderr.contains("Not a valid");
+
+            if is_corrupt {
+                eprintln!(
+                    "⚠️  [Structural Repair] {} detected metadata corruption：{}",
+                    dst.display(),
+                    stderr.lines().next().unwrap_or("unknown error")
+                );
+            }
+
+            is_corrupt
+        }
+    };
+
+    if needs_repair {
+        eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
+
+        let magick_result = Command::new("magick")
+            .arg("--")
+            .arg(crate::safe_path_arg(dst).as_ref())
+            .arg(crate::safe_path_arg(dst).as_ref())
+            .output();
+
+        match magick_result {
+            Ok(out) => {
+                if out.status.success() {
+                    eprintln!("✅  [Structural Repair] Complete：{}", dst.display());
+
+                    output = Command::new("exiftool")
+                        .arg("-all=")
+                        .arg("-tagsfromfile")
+                        .arg("@")
+                        .arg("-all:all")
+                        .arg("-unsafe")
+                        .arg("-icc_profile")
+                        .arg("-tagsfromfile")
+                        .arg(crate::safe_path_arg(src).as_ref())
+                        .arg("-all:all")
+                        .arg("-unsafe")
+                        .arg("-icc_profile")
+                        .arg("-use")
+                        .arg("MWG")
+                        .arg("-api")
+                        .arg("LargeFileSupport=1")
+                        .arg("-q")
+                        .arg("-m")
+                        .arg(crate::safe_path_arg(dst).as_ref())
+                        .output()?;
+                } else {
+                    eprintln!(
+                        "⚠️  [Structural Repair] magick failed：{}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    if let Some(msg) = exiftool_error_message(&output) {
+                        return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("⚠️  [Structural Repair] magick unavailable：{}", e);
+                if let Some(msg) = exiftool_error_message(&output) {
+                    return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
+                }
+            }
         }
     }
-    
-    // 🔥 视频文件特殊处理：修复 QuickTime 日期
+
+    if !output.status.success() {
+        if let Some(msg) = exiftool_error_message(&output) {
+            return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
+        }
+    }
+
+    let mut backup_name = dst.file_name().unwrap_or_default().to_os_string();
+    backup_name.push("_original");
+    let backup_path = dst.with_file_name(backup_name);
+    let _ = std::fs::remove_file(&backup_path);
+
     if is_video_file(dst) {
         fix_quicktime_dates(src, dst)?;
     }
-    
+
     Ok(())
 }
 
-/// 修复视频文件的 QuickTime 日期
-/// 
-/// 问题：FFmpeg 转换时会将 QuickTime Create Date 设置为 0000:00:00 00:00:00
-/// 解决：从源文件的 XMP/EXIF 日期或文件修改时间设置
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
-    // 检查 QuickTime 日期是否为空
     let check_output = Command::new("exiftool")
         .arg("-s3")
         .arg("-QuickTime:CreateDate")
-        .arg(dst)
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
-    
+
     let current_date = String::from_utf8_lossy(&check_output.stdout);
     let current_date = current_date.trim();
-    
-    // 如果日期已经有效，不需要修复
+
     if !current_date.is_empty() && !current_date.contains("0000:00:00") {
         return Ok(());
     }
-    
-    // 获取源文件的最佳日期
+
     let best_date = match get_best_date_from_source(src) {
         Some(date) => date,
         None => {
@@ -144,8 +330,7 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
             return Ok(());
         }
     };
-    
-    // 设置 QuickTime 日期
+
     let output = Command::new("exiftool")
         .arg(format!("-QuickTime:CreateDate={}", best_date))
         .arg(format!("-QuickTime:ModifyDate={}", best_date))
@@ -156,15 +341,56 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg("-overwrite_original")
         .arg("-q")
         .arg("-m")
-        .arg(dst)
+        .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !stderr.contains("Warning") && !stderr.is_empty() {
             eprintln!("⚠️ [metadata] Failed to set QuickTime dates: {}", stderr);
         }
     }
-    
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_preserve_metadata_mismatch() {
+        if !is_exiftool_available() {
+            eprintln!("ExifTool not available, skipping test");
+            return;
+        }
+        let temp = TempDir::new().unwrap();
+        let complex_dir = temp.path().join("测试 dir/来源/小红书");
+        fs::create_dir_all(&complex_dir).unwrap();
+
+        let src_path = complex_dir.join("src_image.png");
+        let png_data = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
+            0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+            0xB0, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&src_path, png_data).unwrap();
+
+        let dst_path = complex_dir.join("dst_image.jpeg");
+        fs::write(&dst_path, png_data).unwrap();
+
+        let result = preserve_internal_metadata(&src_path, &dst_path);
+
+        if let Err(e) = &result {
+            println!("Test failed with error: {}", e);
+        }
+        assert!(
+            result.is_ok(),
+            "Metadata preservation failed for mismatched extension with complex path"
+        );
+    }
 }
