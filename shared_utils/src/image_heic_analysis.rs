@@ -292,66 +292,65 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     let data = std::fs::read(path)?;
     
-    let ctx = {
-        #[cfg(feature = "v1_21")]
-        {
-            HeifContext::read_from_bytes_with_security_limits(&data, &limits)
-        }
-        #[cfg(not(feature = "v1_21"))]
-        {
-            HeifContext::read_from_bytes(&data)
-        }
-    }.or_else(|e| {
-        let error_msg = format!("{}", e);
-        if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
-            // Robust fallback 1: Scan for 'ftyp' manually.
-            if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
-                if pos >= 4 {
-                    let sliced_data = &data[pos - 4..];
-                    #[cfg(feature = "v1_21")]
-                    {
-                        if let Ok(new_ctx) = HeifContext::read_from_bytes_with_security_limits(sliced_data, &limits) {
-                            return Ok(new_ctx);
-                        }
-                    }
-                    #[cfg(not(feature = "v1_21"))]
-                    {
-                        if let Ok(new_ctx) = HeifContext::read_from_bytes(sliced_data) {
-                            return Ok(new_ctx);
+    // Create empty context first
+    let mut ctx = HeifContext::new()
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to create HEIC context: {}", e)))?;
+    
+    // Set security limits BEFORE reading data
+    #[cfg(feature = "v1_21")]
+    {
+        ctx.set_security_limits(&limits)
+            .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to set security limits: {}", e)))?;
+    }
+    
+    // Now read the data with security limits applied
+    ctx.read_bytes(&data)
+        .or_else(|e| {
+            let error_msg = format!("{}", e);
+            // Fallback: Scan for 'ftyp' manually if NoFtypBox error
+            if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
+                // Fallback 1: Try to find ftyp box manually
+                if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
+                    if pos >= 4 {
+                        let sliced_data = &data[pos - 4..];
+                        if let Ok(()) = ctx.read_bytes(sliced_data) {
+                            return Ok(());
                         }
                     }
                 }
-            }
-            
-            // Robust fallback 2: Use file-based interface directly if memory-based fails.
-            #[cfg(feature = "v1_21")]
-            {
-                // Try to read file and apply security limits
-                if let Ok(file_data) = std::fs::read(path) {
-                    if let Ok(file_ctx) = HeifContext::read_from_bytes_with_security_limits(&file_data, &limits) {
-                        return Ok(file_ctx);
+                
+                // Fallback 2: Try file-based reading (doesn't require holding data reference)
+                if let Some(path_str) = path.to_str() {
+                    // Create a new context for file-based reading
+                    if let Ok(mut file_ctx) = HeifContext::new() {
+                        // Set security limits on the new context
+                        #[cfg(feature = "v1_21")]
+                        {
+                            let _ = file_ctx.set_security_limits(&limits);
+                        }
+                        
+                        // Try to read from file path
+                        if let Ok(()) = file_ctx.read_file(path_str) {
+                            // Replace ctx with the successfully loaded file_ctx
+                            ctx = file_ctx;
+                            return Ok(());
+                        }
                     }
                 }
             }
-            #[cfg(not(feature = "v1_21"))]
-            {
-                if let Ok(file_ctx) = HeifContext::read_from_file(path.to_str().unwrap_or_default()) {
-                    return Ok(file_ctx);
-                }
+            Err(e)
+        })
+        .map_err(|e| {
+            let error_msg = format!("{}", e);
+            if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
+                ImgQualityError::ImageReadError(format!(
+                    "HEIC security limit exceeded (ipco box limit): {}",
+                    e
+                ))
+            } else {
+                ImgQualityError::ImageReadError(format!("[CRITICAL-HEIC-V4-FAIL] {}", e))
             }
-        }
-        Err(e)
-    }).map_err(|e| {
-        let error_msg = format!("{}", e);
-        if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
-            ImgQualityError::ImageReadError(format!(
-                "HEIC security limit exceeded (ipco box limit): {}",
-                e
-            ))
-        } else {
-            ImgQualityError::ImageReadError(format!("[CRITICAL-HEIC-V4-FAIL] {}", e))
-        }
-    })?;
+        })?;
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgQualityError::ImageReadError(format!("Failed to get primary image: {}", e))
