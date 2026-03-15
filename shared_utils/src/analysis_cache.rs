@@ -76,7 +76,9 @@ const CACHE_SCHEMA_VERSION: i32 = 2;
 /// - v1: Original HEIC lossless detection
 /// - v2: Fixed HEIC lossless detection + improved box parsing
 /// - v10060: Bound to program version 0.10.60 (automatic invalidation on updates)
-const ANALYSIS_ALGORITHM_VERSION: i32 = 10060;
+/// - v10061: Cache version binding mechanism
+/// - v10062: Dependency unification (GitHub nightly sources)
+const ANALYSIS_ALGORITHM_VERSION: i32 = 10062;
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
