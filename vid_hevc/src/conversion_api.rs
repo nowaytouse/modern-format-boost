@@ -363,8 +363,8 @@ pub fn auto_convert_with_cache(
 
     // Skip Live Photos in Apple compat mode
     if config.apple_compat && shared_utils::is_live_photo(input) {
-        info!("🎬 Auto Mode: {} → SKIP (Live Photo)", input.display());
-        info!("   Reason: Live Photo detected in Apple compat mode");
+        let reason = "Live Photo detected in Apple compat mode";
+        shared_utils::progress_mode::video_skipped(reason);
 
         let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
 
@@ -415,8 +415,7 @@ pub fn auto_convert_with_cache(
     let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat);
 
     if strategy.target == TargetVideoFormat::Skip {
-        info!("🎬 Auto Mode: {} → SKIP", input.display());
-        info!("   Reason: {}", strategy.reason);
+        shared_utils::progress_mode::video_skipped(&strategy.reason);
 
         shared_utils::copy_on_skip_or_fail(
             input,
@@ -482,7 +481,7 @@ pub fn auto_convert_with_cache(
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
     if output_path.exists() && !config.force {
-        info!("⏭️ Output exists, skipping: {}", output_path.display());
+        shared_utils::progress_mode::video_skipped(&format!("Output exists: {}", output_path.display()));
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: String::new(),
@@ -713,7 +712,8 @@ pub fn auto_convert_with_cache(
                             )
                         };
                     // Combine protection message with the main warning in a beautiful single line
-                    warn!("   ⚠️  {} │ 🛡️  {} │ 🗑️  {}", fail_message, protect_msg, delete_msg);
+                    shared_utils::progress_mode::video_skipped(&fail_message);
+                    warn!("   🛡️  {} │ 🗑️  {}", protect_msg, delete_msg);
 
                     // Keep/discard by total file size only (video stream is internal metric).
                     if shared_utils::should_keep_apple_fallback_hevc_output(

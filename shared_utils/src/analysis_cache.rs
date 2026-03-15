@@ -22,6 +22,8 @@ use crate::video_detection::VideoDetectionResult;
 use tracing::{debug, info, warn};
 use blake3::Hasher;
 
+const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
+
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
 struct FileSignature {
@@ -71,6 +73,7 @@ impl FileSignature {
 
 pub struct AnalysisCache {
     conn: std::sync::Mutex<Connection>,
+    cache_path: std::path::PathBuf,
 }
 
 impl AnalysisCache {
@@ -144,7 +147,10 @@ impl AnalysisCache {
             [],
         )?;
 
-        Ok(Self { conn: std::sync::Mutex::new(conn) })
+        Ok(Self { 
+            conn: std::sync::Mutex::new(conn),
+            cache_path: cache_path.to_path_buf(),
+        })
     }
 
     /// Default project-local cache location
@@ -305,6 +311,7 @@ impl AnalysisCache {
             params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
 
+        let _ = self.enforce_size_limit();
         Ok(())
     }
 
@@ -335,6 +342,7 @@ impl AnalysisCache {
             params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
 
+        let _ = self.enforce_size_limit();
         Ok(())
     }
 
@@ -415,6 +423,7 @@ impl AnalysisCache {
             params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
 
+        let _ = self.enforce_size_limit();
         Ok(())
     }
 
@@ -439,6 +448,57 @@ impl AnalysisCache {
         }
         
         Ok(removed)
+    }
+
+    /// ⚖️ Enforce size limit (85GB). 
+    /// If DB exceeds limit, prune oldest records until it's back under 90% of limit.
+    pub fn enforce_size_limit(&self) -> Result<()> {
+        let current_size = match std::fs::metadata(&self.cache_path) {
+            Ok(m) => m.len(),
+            Err(_) => return Ok(()),
+        };
+
+        if current_size < CACHE_SIZE_LIMIT_BYTES {
+            return Ok(());
+        }
+
+        info!("⚖️  [Cache] Size limit reached ({} / {} GB). Pruning...", 
+            current_size / 1024 / 1024 / 1024,
+            CACHE_SIZE_LIMIT_BYTES / 1024 / 1024 / 1024
+        );
+
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+        
+        // Prune 15% of the oldest records to provide headroom
+        let total_records: i64 = conn.query_row("SELECT COUNT(*) FROM analysis_records", [], |r| r.get(0))?;
+        let to_remove = (total_records / 7).max(1); // approx 15%
+
+        // Delete from all record tables
+        conn.execute(
+            "DELETE FROM analysis_records WHERE content_hash IN (SELECT content_hash FROM analysis_records ORDER BY created_at LIMIT ?)",
+            params![to_remove],
+        )?;
+        conn.execute(
+            "DELETE FROM quality_records WHERE content_hash IN (SELECT content_hash FROM quality_records ORDER BY created_at LIMIT ?)",
+            params![to_remove],
+        )?;
+        conn.execute(
+            "DELETE FROM video_records WHERE content_hash IN (SELECT content_hash FROM video_records ORDER BY created_at LIMIT ?)",
+            params![to_remove],
+        )?;
+
+        // Cleanup path_index orphans (those pointing to deleted content_hashes)
+        conn.execute(
+            "DELETE FROM path_index WHERE content_hash NOT IN (SELECT content_hash FROM analysis_records UNION SELECT content_hash FROM quality_records UNION SELECT content_hash FROM video_records)",
+            []
+        )?;
+
+        info!("🧹 [Cache] Pruned {} old records to maintain size limit", to_remove);
+        
+        // Vacuum to actually shrink the file
+        conn.execute("VACUUM", [])?;
+        
+        Ok(())
     }
 }
 #[cfg(test)]

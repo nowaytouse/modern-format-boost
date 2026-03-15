@@ -550,8 +550,10 @@ static XMP_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static JXL_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static IMAGE_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static IMAGE_FAIL_COUNT: AtomicU64 = AtomicU64::new(0);
+static IMAGE_SKIP_COUNT: AtomicU64 = AtomicU64::new(0);
 static VIDEO_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 static VIDEO_FAIL_COUNT: AtomicU64 = AtomicU64::new(0);
+static VIDEO_SKIP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PREPROCESSING_COUNT: AtomicU64 = AtomicU64::new(0);
 static FALLBACK_SUCCESS_COUNT: AtomicU64 = AtomicU64::new(0);
 
@@ -579,10 +581,18 @@ pub fn image_processed_success() {
     emit_combined_status_line(img_ok, img_fail);
 }
 
-/// Call when an image conversion fails. Prints milestone line on EVERY failure (persistent display).
-/// Same line shows XMP count and Images OK/failed (JXL merged into Images) when non-zero.
 pub fn image_processed_failure() {
     let _ = IMAGE_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Call when an image is skipped (e.g. source is already lossy modern format).
+/// Logs a prominent message to stderr and increments the skip counter.
+pub fn image_skipped(reason: &str) {
+    let _img_skip = IMAGE_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let line = format!("{}⏭️  {}  {}{}{}", colors::MFB_YELLOW, "[SKIP]", colors::RESET, colors::DIM, reason);
+    log_eprintln!("{}", line);
+    // Force a status line update so the skip count is visible immediately
+    emit_combined_status_line(IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed), IMAGE_FAIL_COUNT.load(Ordering::Relaxed));
 }
 
 pub fn video_processed_success() {
@@ -591,6 +601,14 @@ pub fn video_processed_success() {
 
 pub fn video_processed_failure() {
     VIDEO_FAIL_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Call when a video is skipped.
+/// Logs a prominent message to stderr and increments the skip counter.
+pub fn video_skipped(reason: &str) {
+    let _ = VIDEO_SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
+    let line = format!("{}⏭️  {}  {}{}{}", colors::MFB_YELLOW, "[SKIP]", colors::RESET, colors::DIM, reason);
+    log_eprintln!("{}", line);
 }
 
 /// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
@@ -631,6 +649,7 @@ pub fn append_stats_to_line(line: &str) -> String {
 pub fn get_current_stats_string() -> String {
     let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    let img_skip = IMAGE_SKIP_COUNT.load(Ordering::Relaxed);
     let xmp_ok = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
     let xmp_total = XMP_ATTEMPT_COUNT.load(Ordering::Relaxed);
     let xmp_done = false;
@@ -640,13 +659,14 @@ pub fn get_current_stats_string() -> String {
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     let vid_ok = VIDEO_SUCCESS_COUNT.load(Ordering::Relaxed);
     let vid_fail = VIDEO_FAIL_COUNT.load(Ordering::Relaxed);
+    let vid_skip = VIDEO_SKIP_COUNT.load(Ordering::Relaxed);
     
     let is_video = IS_VIDEO_MODE.load(Ordering::Relaxed);
     
     let msg = if is_video {
-        format_video_stats_line(vid_ok, vid_fail, xmp_ok, xmp_failed, preprocess_ok, fallback_ok)
+        format_video_stats_line(vid_ok, vid_fail, vid_skip, xmp_ok, xmp_failed, preprocess_ok, fallback_ok)
     } else {
-        format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok)
+        format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, img_skip, preprocess_ok, fallback_ok)
     };
     
     // Very minimalist separator for video
@@ -662,6 +682,7 @@ pub fn get_current_stats_string() -> String {
 fn format_video_stats_line(
     vid_ok: u64,
     vid_fail: u64,
+    vid_skip: u64,
     xmp_ok: u64,
     xmp_failed: u64,
     preprocess_ok: u64,
@@ -680,8 +701,16 @@ fn format_video_stats_line(
     }
 
     // Video Stats: V: 12✓
-    let vid_msg = if vid_fail > 0 {
-        format!("{}V:{}{}✓{}{}{}✗{}", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok, colors::DIM, colors::MFB_RED, vid_fail, colors::RESET)
+    let vid_msg = if vid_fail > 0 || vid_skip > 0 {
+        let mut v_stat = format!("{}V:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok);
+        if vid_skip > 0 {
+            v_stat.push_str(&format!("{}{}{}s", colors::DIM, colors::MFB_YELLOW, vid_skip));
+        }
+        if vid_fail > 0 {
+            v_stat.push_str(&format!("{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail));
+        }
+        v_stat.push_str(colors::RESET);
+        v_stat
     } else {
         format!("{}V:{}{}✓{}", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok, colors::RESET)
     };
@@ -706,6 +735,7 @@ fn format_xmp_jxl_images_line(
     jxl_ok: u64,
     img_ok: u64,
     img_fail: u64,
+    img_skip: u64,
     preprocess_ok: u64,
     _fallback_ok: u64,
 ) -> String {
@@ -721,8 +751,16 @@ fn format_xmp_jxl_images_line(
     parts.push(xmp_msg);
 
     // Image Stats: I: 123✓
-    let img_msg = if img_fail > 0 {
-        format!("{}I:{}{}✓{}{}{}✗{}", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok, colors::DIM, colors::MFB_RED, img_fail, colors::RESET)
+    let img_msg = if img_fail > 0 || img_skip > 0 {
+        let mut i_stat = format!("{}I:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok);
+        if img_skip > 0 {
+            i_stat.push_str(&format!("{}{}{}s", colors::DIM, colors::MFB_YELLOW, img_skip));
+        }
+        if img_fail > 0 {
+            i_stat.push_str(&format!("{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail));
+        }
+        i_stat.push_str(colors::RESET);
+        i_stat
     } else {
         format!("{}I:{}{}✓{}", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok, colors::RESET)
     };
@@ -768,6 +806,8 @@ pub fn xmp_merge_finalize() {
     let jxl_ok = JXL_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_ok = IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed);
     let img_fail = IMAGE_FAIL_COUNT.load(Ordering::Relaxed);
+    let img_skip = IMAGE_SKIP_COUNT.load(Ordering::Relaxed);
+    let vid_skip = VIDEO_SKIP_COUNT.load(Ordering::Relaxed);
     let preprocess_ok = PREPROCESSING_COUNT.load(Ordering::Relaxed);
     let fallback_ok = FALLBACK_SUCCESS_COUNT.load(Ordering::Relaxed);
     let vid_ok = VIDEO_SUCCESS_COUNT.load(Ordering::Relaxed);
@@ -785,12 +825,15 @@ pub fn xmp_merge_finalize() {
                     format!("XMP: {} OK", success)
                 });
             }
-            if vid_ok > 0 || vid_fail > 0 {
-                let vid_part = if vid_fail > 0 {
+            if vid_ok > 0 || vid_fail > 0 || vid_skip > 0 {
+                let mut vid_part = if vid_fail > 0 {
                     format!("Videos: {} OK, {} failed", vid_ok, vid_fail)
                 } else {
                     format!("Videos: {} OK", vid_ok)
                 };
+                if vid_skip > 0 {
+                    vid_part.push_str(&format!(" ({} skipped)", vid_skip));
+                }
                 parts.push(vid_part);
             }
             if preprocess_ok > 0 {
@@ -808,19 +851,22 @@ pub fn xmp_merge_finalize() {
     if xmp_total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
         let failed = xmp_total.saturating_sub(success);
-        let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail, preprocess_ok, fallback_ok);
+        let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail, img_skip, preprocess_ok, fallback_ok);
         let line = fmt_stats_line_final(&msg);
         emit_stderr(&line);
     } else {
-        if jxl_ok > 0 || img_ok > 0 || img_fail > 0 || preprocess_ok > 0 || fallback_ok > 0 {
+        if jxl_ok > 0 || img_ok > 0 || img_fail > 0 || img_skip > 0 || preprocess_ok > 0 || fallback_ok > 0 {
             let mut parts = Vec::new();
             let images_ok = img_ok + jxl_ok;
-            if images_ok > 0 || img_fail > 0 {
-                let img_part = if img_fail > 0 {
+            if images_ok > 0 || img_fail > 0 || img_skip > 0 {
+                let mut img_part = if img_fail > 0 {
                     format!("Images: {} OK, {} failed", images_ok, img_fail)
                 } else {
                     format!("Images: {} OK", images_ok)
                 };
+                if img_skip > 0 {
+                    img_part.push_str(&format!(" ({} skipped)", img_skip));
+                }
                 parts.push(img_part);
             }
             if preprocess_ok > 0 {
