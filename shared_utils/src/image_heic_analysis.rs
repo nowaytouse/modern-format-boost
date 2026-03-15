@@ -269,10 +269,6 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
 }
 
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
-    // 🧠 Global security bypass for complex/large boxes (e.g. Weibo processed HEICs)
-    // Setting it to a large numeric value instead of "off" to avoid NoFtypBox errors.
-    std::env::set_var("LIBHEIF_SECURITY_LIMITS", "2147483647");
-
     let lib_heif = LibHeif::new();
 
     // 🛡️ Create security limits BEFORE reading the file
