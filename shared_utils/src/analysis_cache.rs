@@ -67,12 +67,16 @@ pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
 /// 🔢 Cache Schema Version - Increment when database structure changes
 const CACHE_SCHEMA_VERSION: i32 = 2;
 
-/// 🧬 Analysis Algorithm Version - Increment when detection logic changes
+/// 🧬 Analysis Algorithm Version - Bound to program version for automatic cache invalidation
+/// 
+/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.60 → 10060)
+/// This ensures cache is regenerated on ANY program update, maintaining consistency.
 /// 
 /// Version History:
 /// - v1: Original HEIC lossless detection
 /// - v2: Fixed HEIC lossless detection + improved box parsing
-const ANALYSIS_ALGORITHM_VERSION: i32 = 2;
+/// - v10060: Bound to program version 0.10.60 (automatic invalidation on updates)
+const ANALYSIS_ALGORITHM_VERSION: i32 = 10060;
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
