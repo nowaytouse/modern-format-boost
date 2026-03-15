@@ -331,13 +331,8 @@ pub fn analyze_heic_file(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
 }
 
 pub fn is_heic_file(path: &Path) -> bool {
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        let ext = ext.to_lowercase();
-        if matches!(ext.as_str(), "heic" | "heif" | "hif") {
-            return true;
-        }
-    }
-
+    // Rely strictly on magic bytes, NOT extensions, to avoid deep analysis failures (e.g. NoFtypBox)
+    // on files that just happen to have a .heic extension but contain different format data.
     if let Ok(mut file) = std::fs::File::open(path) {
         use std::io::Read;
         let mut buffer = [0u8; 12];

@@ -200,11 +200,23 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     }
 
     // AVIF: image crate fails on some variants (e.g. tachimanga output); fall back to ffprobe
-    if path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase() == "avif")
-        .unwrap_or(false)
-    {
+    let is_avif = if let Ok(format) = crate::image_detection::detect_format_from_bytes(path) {
+        format == crate::image_detection::DetectedFormat::AVIF
+    } else {
+        false
+    };
+
+    if is_avif {
+        if let Some(ext) = path.extension() {
+            let ext_str = ext.to_string_lossy().to_lowercase();
+            if ext_str != "avif" {
+                log_eprintln!(
+                    "⚠️  [Smart Fix] Extension mismatch: '{}' (disguised as .{}) -> actually AVIF, will process as actual format",
+                    path.display(),
+                    ext_str
+                );
+            }
+        }
         return analyze_avif_image(path, file_size);
     }
 
@@ -1303,12 +1315,7 @@ fn pixel_fallback_lossless(path: &Path) -> bool {
 }
 
 fn is_jxl_file(path: &Path) -> bool {
-    if let Some(ext) = path.extension() {
-        if ext.to_str().unwrap_or("").to_lowercase() == "jxl" {
-            return true;
-        }
-    }
-
+    // Rely strictly on magic bytes to avoid extension mismatch false positives
     if let Ok(bytes) = std::fs::read(path) {
         if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0x0A {
             return true;
