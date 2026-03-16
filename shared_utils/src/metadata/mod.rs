@@ -19,7 +19,7 @@ mod windows;
 
 pub use exif::preserve_internal_metadata;
 
-fn apply_file_timestamps(src: &Path, dst: &Path) {
+pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     let Ok(m) = std::fs::metadata(src) else {
         return;
     };

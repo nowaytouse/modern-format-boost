@@ -101,7 +101,13 @@ struct FieldVisitor<'a, 'b> {
 
 impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
+        // Filter out tracing internal metadata fields
+        let field_name = field.name();
+        if field_name.starts_with("log.") {
+            return;
+        }
+        
+        if field_name == "message" {
             let msg = format!("{:?}", value);
             // Strip quotes from Debug format of string
             let msg = msg.trim_start_matches('"').trim_end_matches('"');
