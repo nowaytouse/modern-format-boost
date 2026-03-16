@@ -78,7 +78,7 @@ pub fn convert_to_jxl(
                         let _ = fs::remove_file(&temp_output);
                         return Err(e);
                     }
-                    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                         return Ok(ConversionResult::skipped_exists(input, &output));
                     }
                     if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
@@ -104,7 +104,7 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                 return Ok(ConversionResult::skipped_exists(input, &output));
             }
 
@@ -193,7 +193,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             let _ = fs::remove_file(&temp_output);
             return Err(e);
         }
-        if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+        if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
             return Ok(ConversionResult::skipped_exists(input, &output));
         }
         return finalize_conversion(
@@ -226,7 +226,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                     let _ = fs::remove_file(&temp_output);
                     return Err(e);
                 }
-                if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                     return Ok(ConversionResult::skipped_exists(input, &output));
                 }
                 let label = if source_to_use != input {
@@ -248,7 +248,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
                     let _ = fs::remove_file(&temp_output);
                     return Err(e);
                 }
-                if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+                if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                     return Ok(ConversionResult::skipped_exists(input, &output));
                 }
                 return finalize_conversion(
@@ -312,7 +312,7 @@ pub fn convert_to_avif(
                 let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
             }
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                 return Ok(ConversionResult::skipped_exists(input, &output));
             }
             finalize_conversion(input, &output, input_size, "AVIF", None, options)
@@ -378,7 +378,7 @@ pub fn convert_to_avif_lossless(
                 let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
             }
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                 return Ok(ConversionResult::skipped_exists(input, &output));
             }
             finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
@@ -544,7 +544,7 @@ pub fn convert_to_jxl_matched(
                 return Err(e);
             }
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                 return Ok(ConversionResult::skipped_exists(input, &output));
             }
 

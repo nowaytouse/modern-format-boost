@@ -483,10 +483,8 @@ pub fn finalize_conversion(
 ) -> std::io::Result<ConversionResult> {
     let output_size = std::fs::metadata(output)?.len();
 
-    if let Err(e) = crate::preserve_metadata(input, output) {
-        eprintln!("\u{26a0}\u{fe0f} Failed to preserve metadata: {}", e);
-    }
-    crate::metadata::merge_xmp_sidecar_into_dest(input, output);
+    // Metadata already preserved by commit_temp_to_output_with_metadata
+    // (includes EXIF, XMP, xattrs, permissions, and timestamps)
 
     mark_as_processed(input);
 
@@ -621,8 +619,17 @@ pub fn commit_temp_to_output_with_metadata(
     
     // Preserve complete metadata from original file if provided
     if let Some(src) = original {
-        // Use copy_metadata which includes: timestamps, xattrs, permissions, EXIF, XMP
-        crate::metadata::copy_metadata(src, output);
+        // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
+        // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes timestamps
+        if let Err(e) = crate::metadata::preserve_metadata(src, output) {
+            eprintln!("⚠️ Failed to preserve metadata: {}", e);
+        }
+        crate::metadata::merge_xmp_sidecar_into_dest(src, output);
+        
+        // Step 2: Apply timestamps AFTER all file modifications
+        // This is critical because ExifTool and other tools reset creation time to current time
+        // We must reapply timestamps as the final step to preserve original creation time
+        crate::metadata::apply_file_timestamps(src, output);
     }
     
     Ok(true)

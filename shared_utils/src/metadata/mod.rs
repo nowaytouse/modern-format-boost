@@ -20,23 +20,46 @@ mod windows;
 pub use exif::preserve_internal_metadata;
 
 pub fn apply_file_timestamps(src: &Path, dst: &Path) {
+    use tracing::debug;
+    
+    debug!("apply_file_timestamps: {} → {}", src.display(), dst.display());
     let Ok(m) = std::fs::metadata(src) else {
+        debug!("Failed to read source metadata");
         return;
     };
     let atime = filetime::FileTime::from_last_access_time(&m);
     let mtime = filetime::FileTime::from_last_modification_time(&m);
     if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
         eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
+    } else {
+        debug!("Set atime/mtime successfully");
     }
     
     // Platform-specific creation time preservation
     #[cfg(target_os = "macos")]
     {
         if let Ok(created) = m.created() {
-            let _ = macos::set_creation_time(dst, created);
+            debug!("Original creation time: {:?}", created);
+            if let Err(e) = macos::set_creation_time(dst, created) {
+                eprintln!("⚠️ [metadata] Failed to set creation time: {}", e);
+            } else {
+                debug!("Set creation time successfully");
+                // Verify it was set (debug only)
+                if let Ok(dst_meta) = std::fs::metadata(dst) {
+                    if let Ok(dst_created) = dst_meta.created() {
+                        debug!("Verified creation time: {:?}", dst_created);
+                    }
+                }
+            }
+        } else {
+            debug!("Failed to read original creation time");
         }
         if let Ok(added) = macos::get_added_time(src) {
-            let _ = macos::set_added_time(dst, added);
+            if let Err(e) = macos::set_added_time(dst, added) {
+                debug!("Failed to set added time: {}", e);
+            } else {
+                debug!("Set added time successfully");
+            }
         }
     }
     

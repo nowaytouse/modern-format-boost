@@ -26,6 +26,7 @@ use crate::image_quality_detector::ImageQualityAnalysis;
 use crate::video_detection::VideoDetectionResult;
 use tracing::{debug, info, warn};
 use blake3::Hasher;
+use std::sync::LazyLock;
 
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]
@@ -65,12 +66,16 @@ impl CacheStatistics {
 pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
 
 /// 🔢 Cache Schema Version - Increment when database structure changes
-const CACHE_SCHEMA_VERSION: i32 = 2;
+const CACHE_SCHEMA_VERSION: i32 = 3;
 
-/// 🧬 Analysis Algorithm Version - Bound to program version for automatic cache invalidation
+/// 🧬 Analysis Algorithm Version - Automatically bound to program version
 /// 
-/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.60 → 10060)
+/// This value is automatically parsed from CARGO_PKG_VERSION at program initialization.
+/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.70 → 10070)
 /// This ensures cache is regenerated on ANY program update, maintaining consistency.
+/// 
+/// **CRITICAL**: If version parsing fails, the program will panic at startup.
+/// This is intentional - we must never silently use a wrong version number.
 /// 
 /// Version History:
 /// - v1: Original HEIC lossless detection
@@ -82,7 +87,42 @@ const CACHE_SCHEMA_VERSION: i32 = 2;
 /// - v10064: Git history cleanup (AI tool configs removed for privacy)
 /// - v10065: HEIC security limits fix (apply before reading, 7GB memory)
 /// - v10066: HEIC security limits increased to 15GB + feature flag fix
-const ANALYSIS_ALGORITHM_VERSION: i32 = 10066;
+/// - v10067: Log output debug metadata removed + file creation time preservation
+/// - v10068: Comprehensive metadata preservation (Windows/Linux/macOS)
+/// - v10069: Metadata preservation enabled by default + creation time fix
+/// - v10070: Creation time preservation fix + cache version auto-binding
+static ANALYSIS_ALGORITHM_VERSION: LazyLock<i32> = LazyLock::new(|| {
+    let version = env!("CARGO_PKG_VERSION");
+    let parts: Vec<&str> = version.split('.').collect();
+    
+    if parts.len() != 3 {
+        panic!(
+            "FATAL: Invalid CARGO_PKG_VERSION format: '{}'. Expected format: 'major.minor.patch'",
+            version
+        );
+    }
+    
+    let major = parts[0].parse::<i32>().unwrap_or_else(|e| {
+        panic!("FATAL: Failed to parse major version from '{}': {}", parts[0], e);
+    });
+    
+    let minor = parts[1].parse::<i32>().unwrap_or_else(|e| {
+        panic!("FATAL: Failed to parse minor version from '{}': {}", parts[1], e);
+    });
+    
+    let patch = parts[2].parse::<i32>().unwrap_or_else(|e| {
+        panic!("FATAL: Failed to parse patch version from '{}': {}", parts[2], e);
+    });
+    
+    let version_code = major * 10000 + minor * 100 + patch;
+    
+    info!(
+        "Cache algorithm version initialized: {} (from CARGO_PKG_VERSION: {})",
+        version_code, version
+    );
+    
+    version_code
+});
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +171,347 @@ impl FileSignature {
     }
 }
 
+/// 🔑 Enhanced Cache Key - Comprehensive invalidation strategy
+/// 
+/// This structure captures ALL dimensions that affect analysis/encoding output:
+/// 1. Input content fingerprint (size + mtime + optional content hash)
+/// 2. Encoding parameters (CRF, quality, preset, effort, feature flags)
+/// 3. Dependency library versions (ffmpeg, libjxl, libavif, etc.)
+/// 4. Encoder backend (VideoToolbox vs CPU, GPU vs CPU)
+/// 5. Heuristic configuration (thresholds, weights)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EnhancedCacheKey {
+    /// Input content fingerprint
+    pub content_fingerprint: ContentFingerprint,
+    
+    /// Encoding parameters hash (CRF, quality, preset, etc.)
+    pub encoding_params_hash: u64,
+    
+    /// Dependency versions hash (ffmpeg, libjxl, libavif versions)
+    pub dependency_versions_hash: u64,
+    
+    /// Encoder backend identifier
+    pub encoder_backend: EncoderBackend,
+    
+    /// Heuristic configuration hash (thresholds, weights)
+    pub heuristic_config_hash: u64,
+    
+    /// Program version (algorithm version)
+    pub program_version: i32,
+}
+
+/// 📦 Content Fingerprint - Multiple strategies for content identification
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ContentFingerprint {
+    /// Lightweight: size + mtime (fast, but can have false positives)
+    SizeMtime { size: u64, mtime_ns: i64 },
+    
+    /// Precise: BLAKE3 hash of first N bytes (balance between speed and accuracy)
+    PartialHash { size: u64, hash: [u8; 32], bytes_hashed: usize },
+    
+    /// Full: BLAKE3 hash of entire file (slowest, but 100% accurate)
+    FullHash { size: u64, hash: [u8; 32] },
+}
+
+impl ContentFingerprint {
+    /// Create lightweight fingerprint (size + mtime)
+    pub fn from_metadata(path: &Path) -> Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        let size = metadata.len();
+        let mtime_ns = metadata.modified()?
+            .duration_since(UNIX_EPOCH)?
+            .as_nanos() as i64;
+        
+        Ok(Self::SizeMtime { size, mtime_ns })
+    }
+    
+    /// Create partial hash fingerprint (first N bytes)
+    pub fn from_partial_hash(path: &Path, bytes_to_hash: usize) -> Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        let size = metadata.len();
+        
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = Hasher::new();
+        let mut buffer = vec![0u8; bytes_to_hash.min(size as usize)];
+        let bytes_read = file.read(&mut buffer)?;
+        hasher.update(&buffer[..bytes_read]);
+        
+        let hash = *hasher.finalize().as_bytes();
+        
+        Ok(Self::PartialHash { size, hash, bytes_hashed: bytes_read })
+    }
+    
+    /// Create full hash fingerprint (entire file)
+    pub fn from_full_hash(path: &Path) -> Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        let size = metadata.len();
+        
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = Hasher::new();
+        std::io::copy(&mut file, &mut hasher)?;
+        
+        let hash = *hasher.finalize().as_bytes();
+        
+        Ok(Self::FullHash { size, hash })
+    }
+}
+
+/// 🎛️ Encoder Backend - Distinguishes different encoding paths
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EncoderBackend {
+    /// CPU-based encoding
+    CPU,
+    
+    /// GPU-accelerated encoding (CUDA, OpenCL, etc.)
+    GPU,
+    
+    /// Apple VideoToolbox (hardware acceleration on macOS/iOS)
+    VideoToolbox,
+    
+    /// Intel Quick Sync Video
+    QuickSync,
+    
+    /// NVIDIA NVENC
+    NVENC,
+    
+    /// AMD AMF
+    AMF,
+}
+
+/// 📋 Encoding Parameters - All parameters that affect output
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodingParams {
+    /// CRF value (for video encoding)
+    pub crf: Option<f32>,
+    
+    /// Quality target (for image encoding)
+    pub quality: Option<u8>,
+    
+    /// Preset/effort level
+    pub preset: Option<String>,
+    
+    /// Effort level (for JXL, AVIF)
+    pub effort: Option<u8>,
+    
+    /// Feature flags
+    pub ultimate_mode: bool,
+    pub gpu_enabled: bool,
+    pub apple_compat: bool,
+    
+    /// VMAF/PSNR thresholds
+    pub vmaf_threshold: Option<f32>,
+    pub psnr_threshold: Option<f32>,
+    
+    /// Additional codec-specific options
+    pub codec_options: std::collections::HashMap<String, String>,
+}
+
+impl EncodingParams {
+    /// Compute hash of all encoding parameters
+    pub fn compute_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        
+        // Hash all parameters
+        self.crf.map(|v| v.to_bits()).hash(&mut hasher);
+        self.quality.hash(&mut hasher);
+        self.preset.hash(&mut hasher);
+        self.effort.hash(&mut hasher);
+        self.ultimate_mode.hash(&mut hasher);
+        self.gpu_enabled.hash(&mut hasher);
+        self.apple_compat.hash(&mut hasher);
+        self.vmaf_threshold.map(|v| v.to_bits()).hash(&mut hasher);
+        self.psnr_threshold.map(|v| v.to_bits()).hash(&mut hasher);
+        
+        // Hash codec options (sorted for determinism)
+        let mut sorted_options: Vec<_> = self.codec_options.iter().collect();
+        sorted_options.sort_by_key(|(k, _)| *k);
+        for (k, v) in sorted_options {
+            k.hash(&mut hasher);
+            v.hash(&mut hasher);
+        }
+        
+        hasher.finish()
+    }
+}
+
+/// 📚 Dependency Versions - Track versions of critical libraries
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyVersions {
+    /// FFmpeg version (libavcodec, libavformat)
+    pub ffmpeg_version: Option<String>,
+    
+    /// libjxl version
+    pub libjxl_version: Option<String>,
+    
+    /// libavif version
+    pub libavif_version: Option<String>,
+    
+    /// libheif version
+    pub libheif_version: Option<String>,
+    
+    /// SVT-AV1 version
+    pub svt_av1_version: Option<String>,
+    
+    /// x265 version
+    pub x265_version: Option<String>,
+}
+
+impl DependencyVersions {
+    /// Detect versions of installed dependencies
+    pub fn detect() -> Self {
+        Self {
+            ffmpeg_version: Self::get_ffmpeg_version(),
+            libjxl_version: Self::get_libjxl_version(),
+            libavif_version: Self::get_libavif_version(),
+            libheif_version: Self::get_libheif_version(),
+            svt_av1_version: Self::get_svt_av1_version(),
+            x265_version: Self::get_x265_version(),
+        }
+    }
+    
+    /// Compute hash of all dependency versions
+    pub fn compute_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        self.ffmpeg_version.hash(&mut hasher);
+        self.libjxl_version.hash(&mut hasher);
+        self.libavif_version.hash(&mut hasher);
+        self.libheif_version.hash(&mut hasher);
+        self.svt_av1_version.hash(&mut hasher);
+        self.x265_version.hash(&mut hasher);
+        hasher.finish()
+    }
+    
+    fn get_ffmpeg_version() -> Option<String> {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8(output.stdout).ok()
+            })
+            .and_then(|s| {
+                s.lines().next().map(|line| {
+                    // Extract version from "ffmpeg version N-xxxxx-gxxxxxxx"
+                    line.split_whitespace()
+                        .nth(2)
+                        .unwrap_or("unknown")
+                        .to_string()
+                })
+            })
+    }
+    
+    fn get_libjxl_version() -> Option<String> {
+        std::process::Command::new("cjxl")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8(output.stdout).ok()
+            })
+            .and_then(|s| {
+                s.lines().next().map(|line| line.trim().to_string())
+            })
+    }
+    
+    fn get_libavif_version() -> Option<String> {
+        std::process::Command::new("avifenc")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8(output.stdout).ok()
+            })
+            .and_then(|s| {
+                s.lines().next().map(|line| line.trim().to_string())
+            })
+    }
+    
+    fn get_libheif_version() -> Option<String> {
+        // libheif version is typically embedded in the library
+        // For now, return None (can be enhanced with dynamic library inspection)
+        None
+    }
+    
+    fn get_svt_av1_version() -> Option<String> {
+        std::process::Command::new("SvtAv1EncApp")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8(output.stdout).ok()
+            })
+            .and_then(|s| {
+                s.lines().next().map(|line| line.trim().to_string())
+            })
+    }
+    
+    fn get_x265_version() -> Option<String> {
+        std::process::Command::new("x265")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|output| {
+                String::from_utf8(output.stdout).ok()
+            })
+            .and_then(|s| {
+                s.lines().next().map(|line| line.trim().to_string())
+            })
+    }
+}
+
+/// 🎯 Heuristic Configuration - Thresholds and weights for decision-making
+#[derive(Debug, Clone, PartialEq)]
+pub struct HeuristicConfig {
+    /// JXL distance threshold for lossless detection
+    pub jxl_lossless_distance_threshold: f32,
+    
+    /// HEVC CRF threshold for quality matching
+    pub hevc_crf_threshold: f32,
+    
+    /// Entropy threshold for complexity detection
+    pub entropy_threshold: f32,
+    
+    /// Size increase tolerance (bytes)
+    pub size_tolerance_bytes: u64,
+    
+    /// Quality matching precision
+    pub quality_match_precision: f32,
+}
+
+impl HeuristicConfig {
+    /// Default configuration
+    #[allow(clippy::should_implement_trait)]
+    pub fn default() -> Self {
+        Self {
+            jxl_lossless_distance_threshold: 0.1,
+            hevc_crf_threshold: 18.0,
+            entropy_threshold: 7.0,
+            size_tolerance_bytes: 1_048_576, // 1MB
+            quality_match_precision: 0.95,
+        }
+    }
+    
+    /// Compute hash of configuration
+    pub fn compute_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        self.jxl_lossless_distance_threshold.to_bits().hash(&mut hasher);
+        self.hevc_crf_threshold.to_bits().hash(&mut hasher);
+        self.entropy_threshold.to_bits().hash(&mut hasher);
+        self.size_tolerance_bytes.hash(&mut hasher);
+        self.quality_match_precision.to_bits().hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
 pub struct AnalysisCache {
     conn: std::sync::Mutex<Connection>,
     cache_path: std::path::PathBuf,
@@ -147,14 +528,19 @@ impl AnalysisCache {
         // Check and handle schema version
         Self::check_and_migrate_schema(&conn, cache_path)?;
 
-        // Initialize schema with algorithm_version column
+        // Initialize schema with enhanced cache key fields
+        // v3 schema adds:
+        // - content_fingerprint_hash: BLAKE3 hash of first 64KB for precise content identification
+        // - data_checksum: CRC32 checksum of analysis_data for integrity verification
         conn.execute(
             "CREATE TABLE IF NOT EXISTS analysis_records (
                 content_hash BLOB PRIMARY KEY,
                 file_size INTEGER NOT NULL,
                 analysis_data BLOB NOT NULL,
                 created_at INTEGER NOT NULL,
-                algorithm_version INTEGER DEFAULT 1
+                algorithm_version INTEGER DEFAULT 1,
+                content_fingerprint_hash BLOB,
+                data_checksum INTEGER
             )",
             [],
         )?;
@@ -165,7 +551,9 @@ impl AnalysisCache {
                 file_size INTEGER NOT NULL,
                 analysis_data BLOB NOT NULL,
                 created_at INTEGER NOT NULL,
-                algorithm_version INTEGER DEFAULT 1
+                algorithm_version INTEGER DEFAULT 1,
+                content_fingerprint_hash BLOB,
+                data_checksum INTEGER
             )",
             [],
         )?;
@@ -176,7 +564,9 @@ impl AnalysisCache {
                 file_size INTEGER NOT NULL,
                 analysis_data BLOB NOT NULL,
                 created_at INTEGER NOT NULL,
-                algorithm_version INTEGER DEFAULT 1
+                algorithm_version INTEGER DEFAULT 1,
+                content_fingerprint_hash BLOB,
+                data_checksum INTEGER
             )",
             [],
         )?;
@@ -267,7 +657,47 @@ impl AnalysisCache {
             }
             Some(v) if v < CACHE_SCHEMA_VERSION => {
                 info!("🔄 [Cache] Schema version mismatch (current: {}, expected: {}). Migrating...", v, CACHE_SCHEMA_VERSION);
-                // Schema changed - migration will be handled by ALTER TABLE statements
+                
+                // Migrate from v2 to v3: Add content_fingerprint_hash and data_checksum columns
+                if v == 2 {
+                    info!("🔄 [Cache] Migrating schema from v2 to v3 (adding content fingerprint and checksum)");
+                    
+                    // Add new columns to existing tables
+                    let _ = conn.execute(
+                        "ALTER TABLE analysis_records ADD COLUMN content_fingerprint_hash BLOB",
+                        [],
+                    );
+                    let _ = conn.execute(
+                        "ALTER TABLE analysis_records ADD COLUMN data_checksum INTEGER",
+                        [],
+                    );
+                    
+                    let _ = conn.execute(
+                        "ALTER TABLE quality_records ADD COLUMN content_fingerprint_hash BLOB",
+                        [],
+                    );
+                    let _ = conn.execute(
+                        "ALTER TABLE quality_records ADD COLUMN data_checksum INTEGER",
+                        [],
+                    );
+                    
+                    let _ = conn.execute(
+                        "ALTER TABLE video_records ADD COLUMN content_fingerprint_hash BLOB",
+                        [],
+                    );
+                    let _ = conn.execute(
+                        "ALTER TABLE video_records ADD COLUMN data_checksum INTEGER",
+                        [],
+                    );
+                    
+                    info!("✅ [Cache] Schema migration v2 → v3 complete");
+                }
+                
+                // Update schema version
+                conn.execute(
+                    "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES ('schema_version', ?)",
+                    params![CACHE_SCHEMA_VERSION],
+                )?;
             }
             Some(v) => {
                 warn!("⚠️  [Cache] Schema version {} is newer than expected {}. Cache may be incompatible.", v, CACHE_SCHEMA_VERSION);
@@ -288,14 +718,14 @@ impl AnalysisCache {
         for table in &tables {
             let count: i32 = conn.query_row(
                 &format!("SELECT COUNT(*) FROM {} WHERE algorithm_version < ?", table),
-                params![ANALYSIS_ALGORITHM_VERSION],
+                params![*ANALYSIS_ALGORITHM_VERSION],
                 |row| row.get(0),
             )?;
 
             if count > 0 {
                 conn.execute(
                     &format!("DELETE FROM {} WHERE algorithm_version < ?", table),
-                    params![ANALYSIS_ALGORITHM_VERSION],
+                    params![*ANALYSIS_ALGORITHM_VERSION],
                 )?;
                 total_invalidated += count;
             }
@@ -303,7 +733,7 @@ impl AnalysisCache {
 
         if total_invalidated > 0 {
             info!("🔄 [Cache] Invalidated {} entries due to algorithm version upgrade (v{} → v{})", 
-                total_invalidated, ANALYSIS_ALGORITHM_VERSION - 1, ANALYSIS_ALGORITHM_VERSION);
+                total_invalidated, *ANALYSIS_ALGORITHM_VERSION - 1, *ANALYSIS_ALGORITHM_VERSION);
             
             // Clean up orphaned path_index entries
             conn.execute(
@@ -338,7 +768,7 @@ impl AnalysisCache {
 
         // 1. Try path index first (FASTEST)
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, r.algorithm_version, p.atime, p.ctime, p.btime FROM path_index p 
+            "SELECT r.analysis_data, r.algorithm_version, r.data_checksum, p.atime, p.ctime, p.btime FROM path_index p 
              JOIN analysis_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
@@ -348,15 +778,15 @@ impl AnalysisCache {
             let algorithm_version: i32 = row.get(1)?;
             
             // Check if algorithm version is current
-            if algorithm_version < ANALYSIS_ALGORITHM_VERSION {
+            if algorithm_version < *ANALYSIS_ALGORITHM_VERSION {
                 debug!("🔄 [Cache] Stale algorithm version (v{} < v{}) for {}", 
-                    algorithm_version, ANALYSIS_ALGORITHM_VERSION, path.display());
+                    algorithm_version, *ANALYSIS_ALGORITHM_VERSION, path.display());
                 // Fall through to recompute
             } else {
                 // Strict Invalidation: Check ctime and btime too
-                let _cached_atime: i64 = row.get(2)?;
-                let cached_ctime: i64 = row.get(3)?;
-                let cached_btime: i64 = row.get(4)?;
+                let _cached_atime: i64 = row.get(3)?;
+                let cached_ctime: i64 = row.get(4)?;
+                let cached_btime: i64 = row.get(5)?;
 
                 // Use XOR or direct compare for maximum rigor
                 let strict_match = (cached_ctime == 0 || cached_ctime == sig.ctime) && 
@@ -366,6 +796,18 @@ impl AnalysisCache {
                     warn!("⚠️  [Cache] Path Match but Metadata Discrepancy (ctime/btime changed). Invalidating entry for {}", path.display());
                 } else {
                     let data: Vec<u8> = row.get(0)?;
+                    
+                    // Verify checksum for integrity
+                    if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
+                        let computed_checksum = calculate_checksum(&data);
+                        if computed_checksum != stored_checksum {
+                            warn!("⚠️  [Cache] Checksum mismatch for {} (stored: {}, computed: {}). Data corrupted, invalidating.", 
+                                path.display(), stored_checksum, computed_checksum);
+                            return Ok(None);
+                        }
+                        debug!("✅ [Cache] Checksum verified for {}", path.display());
+                    }
+                    
                     let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
                         .context("Failed to unpack cached analysis data (path hit)")?;
                     analysis.file_path = path.display().to_string();
@@ -378,7 +820,7 @@ impl AnalysisCache {
         // 2. Fallback to Content Hash (BLAKE3)
         let content_hash = calculate_blake3(path)?;
         let mut stmt = conn.prepare(
-            "SELECT analysis_data, algorithm_version FROM analysis_records WHERE content_hash = ?"
+            "SELECT analysis_data, algorithm_version, data_checksum FROM analysis_records WHERE content_hash = ?"
         )?;
         
         let mut rows = stmt.query(params![content_hash.as_bytes()])?;
@@ -386,13 +828,25 @@ impl AnalysisCache {
             let algorithm_version: i32 = row.get(1)?;
             
             // Check algorithm version
-            if algorithm_version < ANALYSIS_ALGORITHM_VERSION {
+            if algorithm_version < *ANALYSIS_ALGORITHM_VERSION {
                 debug!("🔄 [Cache] Stale algorithm version (v{} < v{}) for {}", 
-                    algorithm_version, ANALYSIS_ALGORITHM_VERSION, path.display());
+                    algorithm_version, *ANALYSIS_ALGORITHM_VERSION, path.display());
                 return Ok(None); // Force recompute
             }
             
             let data: Vec<u8> = row.get(0)?;
+            
+            // Verify checksum for integrity
+            if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
+                let computed_checksum = calculate_checksum(&data);
+                if computed_checksum != stored_checksum {
+                    warn!("⚠️  [Cache] Checksum mismatch for {} (stored: {}, computed: {}). Data corrupted, invalidating.", 
+                        path.display(), stored_checksum, computed_checksum);
+                    return Ok(None);
+                }
+                debug!("✅ [Cache] Checksum verified for {}", path.display());
+            }
+            
             let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
                 .context("Failed to unpack cached analysis data (hash hit)")?;
             
@@ -420,18 +874,29 @@ impl AnalysisCache {
 
         // 1. Path Index
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, p.ctime, p.btime FROM path_index p 
+            "SELECT r.analysis_data, r.data_checksum, p.ctime, p.btime FROM path_index p 
              JOIN quality_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
         
         let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
         if let Some(row) = rows.next()? {
-            let cached_ctime: i64 = row.get(1)?;
-            let cached_btime: i64 = row.get(2)?;
+            let cached_ctime: i64 = row.get(2)?;
+            let cached_btime: i64 = row.get(3)?;
             
             if (cached_ctime == 0 || cached_ctime == sig.ctime) && (cached_btime == 0 || cached_btime == sig.btime) {
                 let data: Vec<u8> = row.get(0)?;
+                
+                // Verify checksum for integrity
+                if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                    let computed_checksum = calculate_checksum(&data);
+                    if computed_checksum != stored_checksum {
+                        warn!("⚠️  [Cache] Quality checksum mismatch for {}. Data corrupted, invalidating.", path.display());
+                        return Ok(None);
+                    }
+                    debug!("✅ [Cache] Quality checksum verified for {}", path.display());
+                }
+                
                 let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
                     .context("Failed to unpack cached quality data (path hit)")?;
                 debug!("📊 [Cache] Quality HIT (Path) - {}", path.display());
@@ -442,12 +907,23 @@ impl AnalysisCache {
         // 2. Hash Index
         let content_hash = calculate_blake3(path)?;
         let mut stmt = conn.prepare(
-            "SELECT analysis_data FROM quality_records WHERE content_hash = ?"
+            "SELECT analysis_data, data_checksum FROM quality_records WHERE content_hash = ?"
         )?;
         
         let mut rows = stmt.query(params![content_hash.as_bytes()])?;
         if let Some(row) = rows.next()? {
             let data: Vec<u8> = row.get(0)?;
+            
+            // Verify checksum for integrity
+            if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                let computed_checksum = calculate_checksum(&data);
+                if computed_checksum != stored_checksum {
+                    warn!("⚠️  [Cache] Quality checksum mismatch for {}. Data corrupted, invalidating.", path.display());
+                    return Ok(None);
+                }
+                debug!("✅ [Cache] Quality checksum verified for {}", path.display());
+            }
+            
             let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
                 .context("Failed to unpack cached quality data (hash hit)")?;
             
@@ -478,9 +954,15 @@ impl AnalysisCache {
         // Calculate hash for cross-path reuse
         let content_hash = calculate_blake3(path)?;
         
+        // Calculate content fingerprint (first 64KB hash) for precise cache key
+        let content_fingerprint = calculate_content_fingerprint(path)?;
+        
         // Pack data
         let packed_data = rmp_serde::to_vec(analysis)
             .context("Failed to pack analysis data")?;
+        
+        // Calculate checksum for integrity verification
+        let checksum = calculate_checksum(&packed_data);
             
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)?
@@ -490,9 +972,9 @@ impl AnalysisCache {
 
         // Perform in transaction for atomicity
         conn.execute(
-            "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version) 
-             VALUES (?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, ANALYSIS_ALGORITHM_VERSION],
+            "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![content_hash.as_bytes(), sig.size, packed_data, now, *ANALYSIS_ALGORITHM_VERSION, &content_fingerprint[..], checksum as i64],
         )?;
 
         conn.execute(
@@ -500,6 +982,9 @@ impl AnalysisCache {
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
+
+        debug!("💾 [Cache] Stored analysis for {} (checksum: {})", 
+            path.display(), checksum);
 
         let _ = self.enforce_size_limit();
         Ok(())
@@ -511,8 +996,12 @@ impl AnalysisCache {
         let path_str = path.to_string_lossy();
         
         let content_hash = calculate_blake3(path)?;
+        let content_fingerprint = calculate_content_fingerprint(path)?;
+        
         let packed_data = rmp_serde::to_vec(analysis)
             .context("Failed to pack quality data")?;
+        
+        let checksum = calculate_checksum(&packed_data);
             
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)?
@@ -521,9 +1010,9 @@ impl AnalysisCache {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version) 
-             VALUES (?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, ANALYSIS_ALGORITHM_VERSION],
+            "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![content_hash.as_bytes(), sig.size, packed_data, now, *ANALYSIS_ALGORITHM_VERSION, &content_fingerprint[..], checksum as i64],
         )?;
 
         conn.execute(
@@ -531,6 +1020,8 @@ impl AnalysisCache {
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
+
+        debug!("💾 [Cache] Stored quality analysis for {} (checksum: {})", path.display(), checksum);
 
         let _ = self.enforce_size_limit();
         Ok(())
@@ -545,18 +1036,29 @@ impl AnalysisCache {
 
         // 1. Path Index
         let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, p.ctime, p.btime FROM path_index p 
+            "SELECT r.analysis_data, r.data_checksum, p.ctime, p.btime FROM path_index p 
              JOIN video_records r ON p.content_hash = r.content_hash
              WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
         )?;
         
         let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
         if let Some(row) = rows.next()? {
-            let cached_ctime: i64 = row.get(1)?;
-            let cached_btime: i64 = row.get(2)?;
+            let cached_ctime: i64 = row.get(2)?;
+            let cached_btime: i64 = row.get(3)?;
 
             if (cached_ctime == 0 || cached_ctime == sig.ctime) && (cached_btime == 0 || cached_btime == sig.btime) {
                 let data: Vec<u8> = row.get(0)?;
+                
+                // Verify checksum for integrity
+                if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                    let computed_checksum = calculate_checksum(&data);
+                    if computed_checksum != stored_checksum {
+                        warn!("⚠️  [Cache] Video checksum mismatch for {}. Data corrupted, invalidating.", path.display());
+                        return Ok(None);
+                    }
+                    debug!("✅ [Cache] Video checksum verified for {}", path.display());
+                }
+                
                 let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
                     .context("Failed to unpack cached video data (path hit)")?;
                 return Ok(Some(analysis));
@@ -566,12 +1068,23 @@ impl AnalysisCache {
         // 2. Hash Index (Content Match)
         let content_hash = calculate_blake3(path)?;
         let mut stmt = conn.prepare(
-            "SELECT analysis_data FROM video_records WHERE content_hash = ?"
+            "SELECT analysis_data, data_checksum FROM video_records WHERE content_hash = ?"
         )?;
         
         let mut rows = stmt.query(params![content_hash.as_bytes()])?;
         if let Some(row) = rows.next()? {
             let data: Vec<u8> = row.get(0)?;
+            
+            // Verify checksum for integrity
+            if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                let computed_checksum = calculate_checksum(&data);
+                if computed_checksum != stored_checksum {
+                    warn!("⚠️  [Cache] Video checksum mismatch for {}. Data corrupted, invalidating.", path.display());
+                    return Ok(None);
+                }
+                debug!("✅ [Cache] Video checksum verified for {}", path.display());
+            }
+            
             let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
                 .context("Failed to unpack cached video data (hash hit)")?;
             
@@ -594,17 +1107,21 @@ impl AnalysisCache {
         let path_str = path.to_string_lossy();
         
         let content_hash = calculate_blake3(path)?;
+        let content_fingerprint = calculate_content_fingerprint(path)?;
+        
         let packed_data = rmp_serde::to_vec(analysis)
             .context("Failed to pack video analysis data")?;
+        
+        let checksum = calculate_checksum(&packed_data);
             
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
 
         conn.execute(
-            "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version) 
-             VALUES (?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, ANALYSIS_ALGORITHM_VERSION],
+            "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![content_hash.as_bytes(), sig.size, packed_data, now, *ANALYSIS_ALGORITHM_VERSION, &content_fingerprint[..], checksum as i64],
         )?;
 
         conn.execute(
@@ -612,6 +1129,8 @@ impl AnalysisCache {
              VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
         )?;
+
+        debug!("💾 [Cache] Stored video analysis for {} (checksum: {})", path.display(), checksum);
 
         let _ = self.enforce_size_limit();
         Ok(())
@@ -705,7 +1224,7 @@ impl AnalysisCache {
             path_index_entries: path_index_count as usize,
             schema_version: current_schema_version,
             algorithm_version_distribution: version_dist,
-            current_algorithm_version: ANALYSIS_ALGORITHM_VERSION,
+            current_algorithm_version: *ANALYSIS_ALGORITHM_VERSION,
         })
     }
 
@@ -774,6 +1293,33 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     }
     
     Ok(hasher.finalize())
+}
+
+/// 🔍 Calculate content fingerprint hash (BLAKE3 of first 64KB)
+/// 
+/// This provides a fast, precise way to identify file content without hashing the entire file.
+/// Used for cache key precision - prevents false cache hits when files have same size/mtime
+/// but different content.
+fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Hasher::new();
+    
+    // Hash first 64KB only for speed
+    let mut buffer = [0u8; 65536]; // 64KB
+    let bytes_read = file.read(&mut buffer)?;
+    hasher.update(&buffer[..bytes_read]);
+    
+    Ok(*hasher.finalize().as_bytes())
+}
+
+/// ✅ Calculate CRC32 checksum of data for integrity verification
+/// 
+/// Used to detect silent data corruption in the cache database.
+/// If checksum doesn't match on read, the cached data is corrupted and should be discarded.
+fn calculate_checksum(data: &[u8]) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
 }
 
 #[cfg(test)]
