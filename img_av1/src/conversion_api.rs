@@ -569,8 +569,8 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
         base_dir: None,
         force: false,
         delete_original: false,
-        preserve_timestamps: false,
-        preserve_metadata: false,
+        preserve_timestamps: true,  // Changed: Always preserve timestamps by default
+        preserve_metadata: true,     // Changed: Always preserve metadata by default
         compress: false,
         apple_compat: false,
     };
