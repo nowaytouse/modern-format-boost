@@ -28,3 +28,12 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Try to set birth time on Linux (best-effort, will silently fail on most systems)
+/// Linux typically doesn't support setting birth time, but we try anyway for completeness
+pub fn try_set_birth_time(_path: &Path, _time: std::time::SystemTime) -> io::Result<()> {
+    // Linux doesn't provide a standard way to set birth time (btime)
+    // Most filesystems (ext4, xfs, btrfs) track it but don't allow modification
+    // This is a no-op placeholder for API consistency
+    Ok(())
+}

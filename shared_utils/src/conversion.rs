@@ -581,12 +581,13 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
 /// - Rejects empty output: if `temp` exists and has size 0, returns `Err` (caller must not commit or delete original).
 /// - If `!force` and `output` already exists: removes `temp` and returns `Ok(false)` (caller should treat as skip).
 /// - Otherwise: renames `temp` → `output` (overwriting if `force` and target exists on Unix) and returns `Ok(true)`.
-/// - If `original` is provided, preserves file timestamps (atime, mtime) and creation time (macOS) from original to output.
+/// - If `original` is provided, preserves complete metadata (timestamps, xattrs, permissions, EXIF) from original to output.
 pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io::Result<bool> {
     commit_temp_to_output_with_metadata(temp, output, force, None)
 }
 
-/// Commits a temp file with metadata preservation from the original file.
+/// Commits a temp file with complete metadata preservation from the original file.
+/// Preserves: timestamps (atime, mtime, btime), xattrs, permissions, EXIF data, XMP sidecars.
 pub fn commit_temp_to_output_with_metadata(
     temp: &Path,
     output: &Path,
@@ -618,9 +619,10 @@ pub fn commit_temp_to_output_with_metadata(
         fs::rename(temp, output)?;
     }
     
-    // Preserve metadata from original file if provided
+    // Preserve complete metadata from original file if provided
     if let Some(src) = original {
-        crate::metadata::apply_file_timestamps(src, output);
+        // Use copy_metadata which includes: timestamps, xattrs, permissions, EXIF, XMP
+        crate::metadata::copy_metadata(src, output);
     }
     
     Ok(true)
