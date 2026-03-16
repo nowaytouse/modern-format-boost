@@ -581,7 +581,18 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
 /// - Rejects empty output: if `temp` exists and has size 0, returns `Err` (caller must not commit or delete original).
 /// - If `!force` and `output` already exists: removes `temp` and returns `Ok(false)` (caller should treat as skip).
 /// - Otherwise: renames `temp` → `output` (overwriting if `force` and target exists on Unix) and returns `Ok(true)`.
+/// - If `original` is provided, preserves file timestamps (atime, mtime) and creation time (macOS) from original to output.
 pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io::Result<bool> {
+    commit_temp_to_output_with_metadata(temp, output, force, None)
+}
+
+/// Commits a temp file with metadata preservation from the original file.
+pub fn commit_temp_to_output_with_metadata(
+    temp: &Path,
+    output: &Path,
+    force: bool,
+    original: Option<&Path>,
+) -> std::io::Result<bool> {
     if temp.exists() {
         let size = fs::metadata(temp)?.len();
         if size == 0 {
@@ -598,7 +609,6 @@ pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io
     #[cfg(unix)]
     {
         fs::rename(temp, output)?;
-        Ok(true)
     }
     #[cfg(not(unix))]
     {
@@ -606,8 +616,14 @@ pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io
             fs::remove_file(output)?;
         }
         fs::rename(temp, output)?;
-        Ok(true)
     }
+    
+    // Preserve metadata from original file if provided
+    if let Some(src) = original {
+        crate::metadata::apply_file_timestamps(src, output);
+    }
+    
+    Ok(true)
 }
 
 /// Get image/video dimensions using ffprobe → image crate → ImageMagick fallback chain.
