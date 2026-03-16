@@ -8,7 +8,14 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-const COPYFILE_FLAGS: u32 = (1 << 0) | (1 << 1) | (1 << 2);
+// copyfile.h constants
+const COPYFILE_ACL: u32 = 1 << 0;      // 0x1
+const COPYFILE_STAT: u32 = 1 << 1;     // 0x2
+const COPYFILE_XATTR: u32 = 1 << 2;    // 0x4
+const COPYFILE_RECURSIVE: u32 = 1 << 15; // 0x8000
+
+// COPYFILE_METADATA = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR
+const COPYFILE_FLAGS: u32 = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR | COPYFILE_RECURSIVE;
 
 pub fn copy_native_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     extern "C" {

@@ -615,10 +615,11 @@ pub fn auto_convert_with_cache(
                             explore_result.optimal_crf,
                             explore_result.iterations
                         );
-                        shared_utils::conversion::commit_temp_to_output(
+                        shared_utils::conversion::commit_temp_to_output_with_metadata(
                             &temp_path,
                             &output_path,
                             config.force,
+                            Some(input),
                         )
                         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
                         return Ok(ConversionOutput {

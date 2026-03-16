@@ -23,6 +23,7 @@ pub struct VideoPrecisionMetadata {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectedCodec {
+    Unknown(String),
     FFV1,
     H264,
     H265,
@@ -36,7 +37,12 @@ pub enum DetectedCodec {
     Uncompressed,
     HuffYUV,
     UTVideo,
-    Unknown(String),
+}
+
+impl Default for DetectedCodec {
+    fn default() -> Self {
+        DetectedCodec::Unknown(String::new())
+    }
 }
 
 impl DetectedCodec {
@@ -105,11 +111,12 @@ impl DetectedCodec {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CompressionType {
     Lossless,
     VisuallyLossless,
     HighQuality,
+    #[default]
     Standard,
     LowQuality,
 }
@@ -128,11 +135,17 @@ impl CompressionType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorSpace {
+    Unknown(String),
     BT709,
     BT2020,
     SRGB,
     AdobeRGB,
-    Unknown(String),
+}
+
+impl Default for ColorSpace {
+    fn default() -> Self {
+        ColorSpace::Unknown(String::new())
+    }
 }
 
 impl ColorSpace {
@@ -157,7 +170,7 @@ impl ColorSpace {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct VideoDetectionResult {
     pub file_path: String,
     pub format: String,

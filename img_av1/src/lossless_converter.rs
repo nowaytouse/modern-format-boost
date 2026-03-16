@@ -38,6 +38,10 @@ pub fn convert_to_jxl(
 
     let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
 
+    // Extract ICC Profile from original input for preservation
+    let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
+    let icc_path = _icc_temp.as_ref().map(|t| t.path());
+
     let max_threads = if options.child_threads > 0 {
         options.child_threads
     } else {
@@ -54,6 +58,8 @@ pub fn convert_to_jxl(
     if options.apple_compat {
         cmd.arg("--compress_boxes=0");
     }
+
+    shared_utils::jxl_utils::add_icc_to_cjxl(&mut cmd, icc_path);
 
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
@@ -144,6 +150,9 @@ fn run_cjxl_jpeg_transcode(
     options: &ConvertOptions,
     allow_jpeg_reconstruction: Option<u8>,
 ) -> std::io::Result<std::process::Output> {
+    let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
+    let icc_path = _icc_temp.as_ref().map(|t| t.path());
+
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let mut cmd = Command::new("cjxl");
     cmd.arg("--lossless_jpeg=1")
@@ -155,6 +164,9 @@ fn run_cjxl_jpeg_transcode(
     if options.apple_compat {
         cmd.arg("--compress_boxes=0");
     }
+
+    shared_utils::jxl_utils::add_icc_to_cjxl(&mut cmd, icc_path);
+
     cmd.arg("--")
         .arg(shared_utils::safe_path_arg(input).as_ref())
         .arg(shared_utils::safe_path_arg(temp_output).as_ref());
