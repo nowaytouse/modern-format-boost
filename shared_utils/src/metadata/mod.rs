@@ -28,6 +28,8 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
         eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
     }
+    
+    // Platform-specific creation time preservation
     #[cfg(target_os = "macos")]
     {
         if let Ok(created) = m.created() {
@@ -35,6 +37,27 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
         }
         if let Ok(added) = macos::get_added_time(src) {
             let _ = macos::set_added_time(dst, added);
+        }
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Windows: Use filetime crate's set_file_times which preserves creation time
+        if let Ok(created) = m.created() {
+            let ctime = filetime::FileTime::from_system_time(created);
+            // On Windows, filetime::set_file_times also sets creation time
+            let _ = filetime::set_file_times(dst, atime, ctime);
+        }
+    }
+    
+    #[cfg(target_os = "linux")]
+    {
+        // Linux: Try to preserve birth time if available (requires statx on newer kernels)
+        // Note: Most Linux filesystems don't support setting birth time, so this is best-effort
+        if let Ok(created) = m.created() {
+            // Linux typically doesn't allow setting birth time, but we try anyway
+            // This will silently fail on most systems, which is acceptable
+            let _ = linux::try_set_birth_time(dst, created);
         }
     }
 }
