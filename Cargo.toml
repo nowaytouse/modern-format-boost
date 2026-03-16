@@ -51,7 +51,7 @@ log   = "0.4.29"
 console = "0.16.2"
 chrono  = { version = "0.4.44", features = ["serde"] }
 
-# Image processing - Using GitHub sources for latest iterations
+# Image processing - NIGHTLY: Using GitHub sources for latest iterations
 image       = { git = "https://github.com/image-rs/image", features = ["png", "jpeg", "webp", "gif", "tiff", "avif", "avif-native"] }
 libheif-rs  = { version = "2.7.0", features = ["v1_21"] }
 mp4parse    = { git = "https://github.com/mozilla/mp4parse-rust" }
@@ -67,14 +67,14 @@ ctrlc = "3.4.5"
 # Randomization
 rand = "0.10"
 
-# Database and Caching - Using GitHub sources for latest iterations
+# Database and Caching - NIGHTLY: Using GitHub sources for latest iterations
 rusqlite = { git = "https://github.com/rusqlite/rusqlite", features = ["bundled"] }
 blake3   = { git = "https://github.com/BLAKE3-team/BLAKE3" }
 rmp-serde = "1.3.0"
 
 shared_utils = { path = "shared_utils" }
 
-# Patch section to unify duplicate dependencies and use GitHub nightly sources
+# NIGHTLY ONLY: Patch section to unify duplicate dependencies and use GitHub nightly sources
 [patch.crates-io]
 # Core dependencies from GitHub for latest iterations
 image = { git = "https://github.com/image-rs/image" }
