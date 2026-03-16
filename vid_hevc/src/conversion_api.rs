@@ -303,7 +303,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     let output_size = execute_hevc_conversion(&detection, &temp_path, 18, max_threads)?;
 
-    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, true)
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, true, Some(input))
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
     {
         return Err(VidQualityError::ConversionError("Failed to commit temporary file to output".to_string()));
@@ -837,7 +837,7 @@ pub fn auto_convert_with_cache(
         ));
     }
 
-    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, config.force, Some(input))
         .map_err(|e| VidQualityError::ConversionError(format!("Commit failed: {} (temp: {}, output: {})", e, temp_path.display(), output_path.display())))?
     {
         info!("⏭️ Output was created concurrently, skipping overwrite");

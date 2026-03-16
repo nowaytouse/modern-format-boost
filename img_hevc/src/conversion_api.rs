@@ -233,7 +233,7 @@ pub fn execute_conversion(
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
 
-    if !shared_utils::conversion::commit_temp_to_output(&temp_path, &output_path, config.force)
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, config.force, Some(input_path))
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
     {
         return Ok(ConversionOutput {

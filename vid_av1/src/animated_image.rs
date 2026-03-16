@@ -503,7 +503,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 });
             }
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
@@ -1018,7 +1018,7 @@ pub fn convert_to_av1_mp4_matched(
         });
     }
 
-    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
@@ -1123,7 +1123,7 @@ pub fn convert_to_av1_mkv_lossless(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&temp_output)?.len();
 
-            if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
@@ -1541,7 +1541,7 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
-    if !shared_utils::conversion::commit_temp_to_output(&temp_output, &output, options.force)? {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
         return Ok(ConversionResult {
             success: true,
             input_path: input.display().to_string(),
