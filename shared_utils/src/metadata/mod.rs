@@ -27,29 +27,18 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
         debug!("Failed to read source metadata");
         return;
     };
-    let atime = filetime::FileTime::from_last_access_time(&m);
-    let mtime = filetime::FileTime::from_last_modification_time(&m);
-    if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
-        eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
-    } else {
-        debug!("Set atime/mtime successfully");
-    }
     
-    // Platform-specific creation time preservation
+    // Platform-specific creation time preservation FIRST (before atime/mtime)
+    // This is critical because filetime::set_file_times may reset creation time on some systems
     #[cfg(target_os = "macos")]
     {
         if let Ok(created) = m.created() {
             debug!("Original creation time: {:?}", created);
             if let Err(e) = macos::set_creation_time(dst, created) {
                 eprintln!("⚠️ [metadata] Failed to set creation time: {}", e);
+                debug!("Creation time error details: {:?}", e);
             } else {
                 debug!("Set creation time successfully");
-                // Verify it was set (debug only)
-                if let Ok(dst_meta) = std::fs::metadata(dst) {
-                    if let Ok(dst_created) = dst_meta.created() {
-                        debug!("Verified creation time: {:?}", dst_created);
-                    }
-                }
             }
         } else {
             debug!("Failed to read original creation time");
@@ -68,6 +57,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
         // Windows: Use filetime crate's set_file_times which preserves creation time
         if let Ok(created) = m.created() {
             let ctime = filetime::FileTime::from_system_time(created);
+            let atime = filetime::FileTime::from_last_access_time(&m);
             // On Windows, filetime::set_file_times also sets creation time
             let _ = filetime::set_file_times(dst, atime, ctime);
         }
@@ -81,6 +71,49 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             // Linux typically doesn't allow setting birth time, but we try anyway
             // This will silently fail on most systems, which is acceptable
             let _ = linux::try_set_birth_time(dst, created);
+        }
+    }
+    
+    // Set atime/mtime AFTER creation time
+    let atime = filetime::FileTime::from_last_access_time(&m);
+    let mtime = filetime::FileTime::from_last_modification_time(&m);
+    if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
+        eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
+    } else {
+        debug!("Set atime/mtime successfully");
+    }
+    
+    // RE-APPLY creation time on macOS after setting atime/mtime
+    // This is necessary because filetime::set_file_times may reset creation time
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(created) = m.created() {
+            debug!("Re-applying creation time after atime/mtime: {:?}", created);
+            if let Err(e) = macos::set_creation_time(dst, created) {
+                eprintln!("⚠️ [metadata] Failed to re-set creation time: {}", e);
+            }
+        }
+    }
+    
+    // Verify creation time was preserved (macOS only)
+    #[cfg(target_os = "macos")]
+    {
+        if let (Ok(expected_created), Ok(dst_meta)) = (m.created(), std::fs::metadata(dst)) {
+            if let Ok(actual_created) = dst_meta.created() {
+                debug!("Verified creation time: {:?}", actual_created);
+                // Check if it matches (allow 1 second tolerance for filesystem precision)
+                let diff = if actual_created > expected_created {
+                    actual_created.duration_since(expected_created).unwrap_or_default()
+                } else {
+                    expected_created.duration_since(actual_created).unwrap_or_default()
+                };
+                if diff.as_secs() > 1 {
+                    eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
+                    eprintln!("   Expected: {:?}", expected_created);
+                    eprintln!("   Got:      {:?}", actual_created);
+                    eprintln!("   Diff:     {:?}", diff);
+                }
+            }
         }
     }
 }
