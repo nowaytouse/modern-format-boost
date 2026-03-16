@@ -1,6 +1,6 @@
 //! 🗄️ Image Analysis Cache - Persistent SQLite Backend
 //!
-//! 🔥 v2.0: 版本化缓存机制 + 精确失效策略
+//! 🔥 v3.0: Enhanced cache with content fingerprint + integrity verification
 //!
 //! Provides a highly efficient, persistent cache for image analysis results using SQLite and MessagePack.
 //! This ensures that expensive operations like pixel-based entropy calculation, deep HEIC/AVIF parsing,
@@ -11,10 +11,12 @@
 //! 2. **Content Hash (BLAKE3)**: If path-metadata fails, calculate BLAKE3 hash to find matches by content.
 //! 3. **Binary Storage**: Analysis results are packed using MessagePack (rmp-serde) for minimal disk footprint and maximum speed.
 //! 4. **Version Control**: Algorithm version tracking to auto-invalidate stale cache entries.
+//! 5. **Integrity Verification**: CRC32 checksum for all cached data to detect corruption.
 //!
 //! ## Version History
 //! - v1: Initial implementation
 //! - v2: Added HEIC lossless detection fix + algorithm versioning
+//! - v3: Added content fingerprint (BLAKE3 of first 64KB) + CRC32 integrity verification
 
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
@@ -26,7 +28,9 @@ use crate::image_quality_detector::ImageQualityAnalysis;
 use crate::video_detection::VideoDetectionResult;
 use tracing::{debug, info, warn};
 use blake3::Hasher;
-use std::sync::LazyLock;
+
+// Import unified version management
+use crate::version::{CACHE_SCHEMA_VERSION, cache_algorithm_version};
 
 /// 📊 Cache Statistics
 #[derive(Debug, Clone)]
@@ -64,65 +68,6 @@ impl CacheStatistics {
 }
 
 pub const CACHE_SIZE_LIMIT_BYTES: u64 = 85 * 1024 * 1024 * 1024; // 85 GB
-
-/// 🔢 Cache Schema Version - Increment when database structure changes
-const CACHE_SCHEMA_VERSION: i32 = 3;
-
-/// 🧬 Analysis Algorithm Version - Automatically bound to program version
-/// 
-/// This value is automatically parsed from CARGO_PKG_VERSION at program initialization.
-/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.70 → 10070)
-/// This ensures cache is regenerated on ANY program update, maintaining consistency.
-/// 
-/// **CRITICAL**: If version parsing fails, the program will panic at startup.
-/// This is intentional - we must never silently use a wrong version number.
-/// 
-/// Version History:
-/// - v1: Original HEIC lossless detection
-/// - v2: Fixed HEIC lossless detection + improved box parsing
-/// - v10060: Bound to program version 0.10.60 (automatic invalidation on updates)
-/// - v10061: Cache version binding mechanism
-/// - v10062: Dependency unification (GitHub nightly sources)
-/// - v10063: HEIC security limits increased (6GB, 10k ipco children)
-/// - v10064: Git history cleanup (AI tool configs removed for privacy)
-/// - v10065: HEIC security limits fix (apply before reading, 7GB memory)
-/// - v10066: HEIC security limits increased to 15GB + feature flag fix
-/// - v10067: Log output debug metadata removed + file creation time preservation
-/// - v10068: Comprehensive metadata preservation (Windows/Linux/macOS)
-/// - v10069: Metadata preservation enabled by default + creation time fix
-/// - v10070: Creation time preservation fix + cache version auto-binding
-static ANALYSIS_ALGORITHM_VERSION: LazyLock<i32> = LazyLock::new(|| {
-    let version = env!("CARGO_PKG_VERSION");
-    let parts: Vec<&str> = version.split('.').collect();
-    
-    if parts.len() != 3 {
-        panic!(
-            "FATAL: Invalid CARGO_PKG_VERSION format: '{}'. Expected format: 'major.minor.patch'",
-            version
-        );
-    }
-    
-    let major = parts[0].parse::<i32>().unwrap_or_else(|e| {
-        panic!("FATAL: Failed to parse major version from '{}': {}", parts[0], e);
-    });
-    
-    let minor = parts[1].parse::<i32>().unwrap_or_else(|e| {
-        panic!("FATAL: Failed to parse minor version from '{}': {}", parts[1], e);
-    });
-    
-    let patch = parts[2].parse::<i32>().unwrap_or_else(|e| {
-        panic!("FATAL: Failed to parse patch version from '{}': {}", parts[2], e);
-    });
-    
-    let version_code = major * 10000 + minor * 100 + patch;
-    
-    info!(
-        "Cache algorithm version initialized: {} (from CARGO_PKG_VERSION: {})",
-        version_code, version
-    );
-    
-    version_code
-});
 
 /// 🏷️ File Signature for robust change detection
 #[derive(Debug, Clone, PartialEq)]
@@ -714,18 +659,19 @@ impl AnalysisCache {
     fn invalidate_old_algorithm_entries(conn: &Connection) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut total_invalidated = 0;
+        let current_version = cache_algorithm_version();
 
         for table in &tables {
             let count: i32 = conn.query_row(
                 &format!("SELECT COUNT(*) FROM {} WHERE algorithm_version < ?", table),
-                params![*ANALYSIS_ALGORITHM_VERSION],
+                params![current_version],
                 |row| row.get(0),
             )?;
 
             if count > 0 {
                 conn.execute(
                     &format!("DELETE FROM {} WHERE algorithm_version < ?", table),
-                    params![*ANALYSIS_ALGORITHM_VERSION],
+                    params![current_version],
                 )?;
                 total_invalidated += count;
             }
@@ -733,7 +679,7 @@ impl AnalysisCache {
 
         if total_invalidated > 0 {
             info!("🔄 [Cache] Invalidated {} entries due to algorithm version upgrade (v{} → v{})", 
-                total_invalidated, *ANALYSIS_ALGORITHM_VERSION - 1, *ANALYSIS_ALGORITHM_VERSION);
+                total_invalidated, current_version - 1, current_version);
             
             // Clean up orphaned path_index entries
             conn.execute(
@@ -778,9 +724,9 @@ impl AnalysisCache {
             let algorithm_version: i32 = row.get(1)?;
             
             // Check if algorithm version is current
-            if algorithm_version < *ANALYSIS_ALGORITHM_VERSION {
+            if algorithm_version < cache_algorithm_version() {
                 debug!("🔄 [Cache] Stale algorithm version (v{} < v{}) for {}", 
-                    algorithm_version, *ANALYSIS_ALGORITHM_VERSION, path.display());
+                    algorithm_version, cache_algorithm_version(), path.display());
                 // Fall through to recompute
             } else {
                 // Strict Invalidation: Check ctime and btime too
@@ -828,9 +774,9 @@ impl AnalysisCache {
             let algorithm_version: i32 = row.get(1)?;
             
             // Check algorithm version
-            if algorithm_version < *ANALYSIS_ALGORITHM_VERSION {
+            if algorithm_version < cache_algorithm_version() {
                 debug!("🔄 [Cache] Stale algorithm version (v{} < v{}) for {}", 
-                    algorithm_version, *ANALYSIS_ALGORITHM_VERSION, path.display());
+                    algorithm_version, cache_algorithm_version(), path.display());
                 return Ok(None); // Force recompute
             }
             
@@ -974,7 +920,7 @@ impl AnalysisCache {
         conn.execute(
             "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, *ANALYSIS_ALGORITHM_VERSION, &content_fingerprint[..], checksum as i64],
+            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], checksum as i64],
         )?;
 
         conn.execute(
@@ -1012,7 +958,7 @@ impl AnalysisCache {
         conn.execute(
             "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, *ANALYSIS_ALGORITHM_VERSION, &content_fingerprint[..], checksum as i64],
+            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], checksum as i64],
         )?;
 
         conn.execute(
@@ -1121,7 +1067,7 @@ impl AnalysisCache {
         conn.execute(
             "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, *ANALYSIS_ALGORITHM_VERSION, &content_fingerprint[..], checksum as i64],
+            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], checksum as i64],
         )?;
 
         conn.execute(
@@ -1224,7 +1170,7 @@ impl AnalysisCache {
             path_index_entries: path_index_count as usize,
             schema_version: current_schema_version,
             algorithm_version_distribution: version_dist,
-            current_algorithm_version: *ANALYSIS_ALGORITHM_VERSION,
+            current_algorithm_version: cache_algorithm_version(),
         })
     }
 

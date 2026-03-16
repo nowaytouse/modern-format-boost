@@ -12,7 +12,9 @@
 //! - Conversion utilities (ConversionResult, ConvertOptions, anti-duplicate)
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
+//! - Unified version management (program, cache, schema versions)
 
+pub mod version;
 pub mod analysis_cache;
 pub mod batch;
 pub mod checkpoint;
@@ -348,4 +350,8 @@ pub use thread_manager::{
     get_ffmpeg_threads, get_optimal_threads, get_rsync_path, get_rsync_version, is_multi_instance,
     memory_cap_hint,
     ThreadConfig,
+};
+
+pub use version::{
+    PROGRAM_VERSION, CACHE_SCHEMA_VERSION, cache_algorithm_version, VersionInfo,
 };
