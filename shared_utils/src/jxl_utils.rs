@@ -4,9 +4,39 @@
 //! - JXL file health verification
 //! - Image format preprocessing for cjxl compatibility
 //! - Fallback encoding pipelines (ImageMagick, FFmpeg)
+//! - ICC Profile extraction and preservation
 
 use std::path::Path;
 use std::process::Command;
+
+/// Extract ICC Profile from source image and return temp file path
+pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
+    if !which::which("exiftool").is_ok() {
+        return None;
+    }
+
+    let temp_icc = tempfile::Builder::new().suffix(".icc").tempfile().ok()?;
+    let output = Command::new("exiftool")
+        .arg("-icc_profile")
+        .arg("-b")
+        .arg(crate::safe_path_arg(src).as_ref())
+        .output()
+        .ok()?;
+
+    if output.status.success() && !output.stdout.is_empty() {
+        std::fs::write(temp_icc.path(), &output.stdout).ok()?;
+        Some(temp_icc)
+    } else {
+        None
+    }
+}
+
+/// Add ICC Profile argument to cjxl command if available
+pub fn add_icc_to_cjxl(cmd: &mut Command, icc_file: Option<&Path>) {
+    if let Some(icc_path) = icc_file {
+        cmd.arg("-x").arg(format!("icc_pathname={}", icc_path.display()));
+    }
+}
 
 /// Verify that a JXL file is valid by checking its signature and optionally running jxlinfo.
 pub fn verify_jxl_health(path: &Path) -> Result<(), String> {

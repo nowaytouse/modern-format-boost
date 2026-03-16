@@ -725,10 +725,11 @@ pub fn auto_convert_with_cache(
                         source_is_gif,
                     ) {
                         warn!("   ⚠️  APPLE COMPAT FALLBACK: keeping best-effort HEVC output (CRF {:.1}, {} iters) to ensure iOS importability, despite missing quality/size targets", explore_result.optimal_crf, explore_result.iterations);
-                        shared_utils::conversion::commit_temp_to_output(
+                        shared_utils::conversion::commit_temp_to_output_with_metadata(
                             &temp_path,
                             &output_path,
                             config.force,
+                            Some(input),
                         )?;
                         return Ok(ConversionOutput {
                             input_path: input.display().to_string(),

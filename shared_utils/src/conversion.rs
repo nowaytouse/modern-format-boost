@@ -575,13 +575,18 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
     parent.join(format!("{}.tmp.{}.{}", stem, random_id, ext))
 }
 
-/// Commits a temp file to the final output path. Reduces TOCTOU window to the instant before rename.
-/// - Rejects empty output: if `temp` exists and has size 0, returns `Err` (caller must not commit or delete original).
-/// - If `!force` and `output` already exists: removes `temp` and returns `Ok(false)` (caller should treat as skip).
-/// - Otherwise: renames `temp` → `output` (overwriting if `force` and target exists on Unix) and returns `Ok(true)`.
-/// - If `original` is provided, preserves complete metadata (timestamps, xattrs, permissions, EXIF) from original to output.
-pub fn commit_temp_to_output(temp: &Path, output: &Path, force: bool) -> std::io::Result<bool> {
-    commit_temp_to_output_with_metadata(temp, output, force, None)
+/// **DEPRECATED AND REMOVED**: This function has been removed.
+/// 
+/// All conversions MUST preserve metadata. Use `commit_temp_to_output_with_metadata` instead.
+/// 
+/// This function previously did NOT preserve metadata (timestamps, EXIF, XMP, xattrs, permissions),
+/// which violated the program's core requirement of comprehensive metadata preservation.
+#[deprecated(since = "0.10.71", note = "Removed. Use commit_temp_to_output_with_metadata instead.")]
+pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std::io::Result<bool> {
+    panic!(
+        "commit_temp_to_output has been removed. Use commit_temp_to_output_with_metadata instead.\n\
+         All conversions MUST preserve metadata from the original file."
+    );
 }
 
 /// Commits a temp file with complete metadata preservation from the original file.
