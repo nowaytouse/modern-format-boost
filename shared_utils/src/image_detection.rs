@@ -137,6 +137,8 @@ pub struct PngQuantizationFactors {
     pub size_efficiency_anomaly: f64,
 
     pub entropy_anomaly: f64,
+
+    pub color_frequency_distribution: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -830,6 +832,11 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
         let colors_per_megapixel =
             (palette_size as f64 / (pixel_count as f64 / 1_000_000.0)).min(1000.0);
 
+        // Palette density: entries per sqrt(pixel_count).
+        // Small image + small palette = normal (icon, pixel art).
+        // Large image + small palette = quantization indicator.
+        let palette_density = palette_size as f64 / (pixel_count as f64).sqrt();
+
         if palette_size > 240 {
             factors.large_palette = 0.95;
             explanations.push(format!(
@@ -856,12 +863,13 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
             ));
         } else if is_medium_image && palette_size > 128 {
             factors.large_palette = 0.50;
-        } else if palette_size <= 16 && !is_large_image {
+        } else if palette_size <= 16 && palette_density > 0.5 {
+            // Small palette on small image — likely intentional (pixel art, icon)
             factors.large_palette = 0.0;
-        } else if palette_size <= 32 && !is_medium_image {
+        } else if palette_size <= 32 && palette_density > 0.3 {
             factors.large_palette = 0.1;
         } else {
-            factors.large_palette = 0.3;
+            factors.large_palette = if palette_density < 0.5 { 0.3 } else { 0.15 };
         }
 
         if is_large_image && colors_per_megapixel < 50.0 {
@@ -934,6 +942,15 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
                     ));
                 }
 
+                let freq_score = detect_color_frequency_distribution(&img);
+                factors.color_frequency_distribution = freq_score;
+                if freq_score > 0.5 {
+                    explanations.push(format!(
+                        "Color frequency concentrated (score: {:.2}) — quantization indicator",
+                        freq_score
+                    ));
+                }
+
                 let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
                     let pe = calculate_palette_index_entropy(&img, p_size);
                     (pe.0, pe.1, pe.2)
@@ -986,8 +1003,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
     }
 
     let weights = PngQuantizationWeights {
-        structural: 0.55,
-        metadata: 0.10,
+        structural: 0.50,
+        metadata: 0.15,
         statistical: 0.25,
         heuristic: 0.10,
     };
@@ -997,7 +1014,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
     let metadata_score = factors.tool_signature;
 
     let statistical_score =
-        (factors.dithering_detected + factors.color_count_anomaly + factors.gradient_banding) / 3.0;
+        (factors.dithering_detected + factors.color_count_anomaly + factors.gradient_banding + factors.color_frequency_distribution) / 4.0;
 
     let heuristic_score = (factors.size_efficiency_anomaly + factors.entropy_anomaly) / 2.0;
 
@@ -1026,11 +1043,12 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
             metadata_score * weights.metadata
         );
         eprintln!(
-            "         Statistical: {:.2} (dither={:.2}, color={:.2}, band={:.2}) × {:.2} = {:.3}",
+            "         Statistical: {:.2} (dither={:.2}, color={:.2}, band={:.2}, freq={:.2}) × {:.2} = {:.3}",
             statistical_score,
             factors.dithering_detected,
             factors.color_count_anomaly,
             factors.gradient_banding,
+            factors.color_frequency_distribution,
             weights.statistical,
             statistical_score * weights.statistical
         );
@@ -1057,9 +1075,67 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
     }
 
     if (png_info.color_type == 2 || png_info.color_type == 6) && detected_tool.is_none() {
+        // Analyze truecolor for quantization signals (conservative: need 2+ strong signals)
+        if let Some(p) = path {
+            if let Ok(img) = open_image_with_limits(p) {
+                let pixel_count = png_info.width as u64 * png_info.height as u64;
+
+                // Signal 1: color frequency concentration
+                let freq_signal = detect_color_frequency_distribution(&img);
+
+                // Signal 2: per-channel entropy
+                let rgb_entropy = calculate_rgb_entropy(&img);
+                let max_entropy = 8.0f64;
+                let entropy_ratio = rgb_entropy / max_entropy;
+                let entropy_signal = if entropy_ratio < 0.55 && pixel_count > 10_000 {
+                    0.70
+                } else if entropy_ratio < 0.65 && pixel_count > 10_000 {
+                    0.40
+                } else {
+                    0.0
+                };
+
+                // Signal 3: gradient banding
+                let banding_signal = detect_gradient_banding(&img);
+
+                let strong_signals = [freq_signal, entropy_signal, banding_signal]
+                    .iter()
+                    .filter(|&&s| s >= 0.50)
+                    .count();
+
+                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                    eprintln!(
+                        "      🎨 Truecolor analysis: freq={:.2}, entropy={:.2} (raw={:.2}), band={:.2}, strong={}",
+                        freq_signal, entropy_signal, rgb_entropy, banding_signal, strong_signals
+                    );
+                }
+
+                if strong_signals >= 2 {
+                    let tc_score = (freq_signal + entropy_signal + banding_signal) / 3.0;
+                    return Ok(PngQuantizationAnalysis {
+                        is_quantized: true,
+                        confidence: 0.70 + tc_score * 0.15,
+                        factor_scores: factors,
+                        detected_tool: None,
+                        explanation: format!(
+                            "Truecolor quantization detected (freq={:.2}, entropy={:.2}, band={:.2})",
+                            freq_signal, entropy_signal, banding_signal
+                        ),
+                    });
+                } else if strong_signals == 1 {
+                    return Ok(PngQuantizationAnalysis {
+                        is_quantized: false,
+                        confidence: 0.65,
+                        factor_scores: factors,
+                        detected_tool: None,
+                        explanation: "Truecolor PNG — weak quantization signal, treating as lossless".to_string(),
+                    });
+                }
+            }
+        }
         return Ok(PngQuantizationAnalysis {
             is_quantized: false,
-            confidence: 0.95,
+            confidence: 0.90,
             factor_scores: factors,
             detected_tool: None,
             explanation: "Truecolor PNG without quantization indicators".to_string(),
@@ -1285,7 +1361,35 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
 
     let dithering_ratio = high_freq_count as f64 / total_comparisons as f64;
 
-    (dithering_ratio * 5.0).min(1.0)
+    let floyd_steinberg_score = (dithering_ratio * 5.0).min(1.0);
+
+    // Bayer/ordered dithering: 2x2 checkerboard — diagonal pairs similar, cross pairs differ
+    let mut bayer_count = 0u64;
+    let mut bayer_total = 0u64;
+    for y in (1..height.saturating_sub(1)).step_by(2) {
+        for x in (1..width.saturating_sub(1)).step_by(2) {
+            if (x + y * width) % step != 0 {
+                continue;
+            }
+            let c00 = rgba.get_pixel(x, y);
+            let c10 = rgba.get_pixel(x + 1, y);
+            let c01 = rgba.get_pixel(x, y + 1);
+            let c11 = rgba.get_pixel(x + 1, y + 1);
+            let diag_diff = color_difference(c00, c11) + color_difference(c10, c01);
+            let cross_diff = color_difference(c00, c10) + color_difference(c00, c01);
+            if cross_diff > 40.0 && diag_diff < cross_diff * 0.5 {
+                bayer_count += 1;
+            }
+            bayer_total += 1;
+        }
+    }
+    let bayer_score = if bayer_total > 0 {
+        ((bayer_count as f64 / bayer_total as f64) * 4.0).min(1.0)
+    } else {
+        0.0
+    };
+
+    floyd_steinberg_score.max(bayer_score)
 }
 
 /// Perceptually weighted color difference (Compuphase approximation).
@@ -1367,231 +1471,191 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     (unique_colors, expected)
 }
 
+/// Color frequency concentration — quantized images have a few dominant colors
+/// covering most pixels. Natural palette art distributes more evenly.
+/// Returns score in [0.0, 1.0] where high = likely quantized.
+fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let total_pixels = (width as usize) * (height as usize);
+    if total_pixels < 100 {
+        return 0.0;
+    }
+
+    let mut color_freq: std::collections::HashMap<[u8; 4], u32> =
+        std::collections::HashMap::new();
+    let step = ((total_pixels as f64 / 50_000.0).max(1.0)) as usize;
+    let mut sampled = 0u64;
+
+    for (i, pixel) in rgba.pixels().enumerate() {
+        if i % step == 0 {
+            let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
+            *color_freq.entry(key).or_insert(0) += 1;
+            sampled += 1;
+        }
+    }
+
+    if sampled == 0 || color_freq.len() < 2 {
+        return 0.0;
+    }
+
+    let mut freqs: Vec<u32> = color_freq.values().copied().collect();
+    freqs.sort_unstable_by(|a, b| b.cmp(a));
+
+    // How many distinct colors cover 85% of sampled pixels?
+    let target = (sampled as f64 * 0.85) as u64;
+    let mut cumulative = 0u64;
+    let mut colors_for_85pct = 0usize;
+    for &f in &freqs {
+        cumulative += f as u64;
+        colors_for_85pct += 1;
+        if cumulative >= target {
+            break;
+        }
+    }
+
+    // Low ratio = few colors dominate = quantized
+    let coverage_ratio = colors_for_85pct as f64 / freqs.len() as f64;
+
+    if coverage_ratio < 0.05 {
+        0.85
+    } else if coverage_ratio < 0.10 {
+        0.70
+    } else if coverage_ratio < 0.20 {
+        0.50
+    } else if coverage_ratio < 0.35 {
+        0.25
+    } else {
+        0.0
+    }
+}
+
 fn detect_gradient_banding(img: &DynamicImage) -> f64 {
-    let gray = img.to_luma8();
-    let (width, height) = gray.dimensions();
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
 
     if width < 16 || height < 16 {
         return 0.0;
     }
 
-    let mut banding_score = 0.0;
-    let mut gradient_regions = 0;
+    // Per-channel detection weighted by human visual sensitivity (G > R > B).
+    // Grayscale projection loses hue info — red vs blue map to similar luma,
+    // causing missed banding in single-channel gradients.
+    let channel_weights = [0.30f64, 0.59, 0.11]; // R, G, B
+    let mut total_score = 0.0f64;
 
-    // Horizontal scan (existing)
-    for y in (0..height).step_by(4) {
-        let mut prev_val = gray.get_pixel(0, y)[0];
-        let mut gradient_length = 0;
-        let mut step_count = 0;
+    for (ch, &weight) in channel_weights.iter().enumerate() {
+        let mut banding_score = 0.0f64;
+        let mut gradient_regions = 0u32;
 
-        for x in 1..width {
-            let val = gray.get_pixel(x, y)[0];
-            let diff = (val as i16 - prev_val as i16).abs();
+        for y in (0..height).step_by(4) {
+            let mut prev_val = rgba.get_pixel(0, y)[ch] as i16;
+            let mut gradient_length = 0u32;
+            let mut step_count = 0u32;
+            let mut last_step_x = 0u32;
 
-            if diff > 0 && diff < 20 {
-                gradient_length += 1;
-                if diff > 3 {
-                    step_count += 1;
-                }
-            } else if gradient_length > 20 {
-                if step_count > 0 {
-                    let step_ratio = step_count as f64 / gradient_length as f64;
-                    if step_ratio > 0.1 && step_ratio < 0.5 {
-                        banding_score += step_ratio;
-                        gradient_regions += 1;
+            for x in 1..width {
+                let val = rgba.get_pixel(x, y)[ch] as i16;
+                let diff = (val - prev_val).abs();
+
+                if diff > 0 && diff < 20 {
+                    gradient_length += 1;
+                    // Require step width > 3px to reduce false positives on natural gradients
+                    if diff > 3 && x - last_step_x > 3 {
+                        step_count += 1;
+                        last_step_x = x;
                     }
+                } else if gradient_length > 20 {
+                    if step_count > 0 {
+                        let step_ratio = step_count as f64 / gradient_length as f64;
+                        if step_ratio > 0.08 && step_ratio < 0.5 {
+                            banding_score += step_ratio;
+                            gradient_regions += 1;
+                        }
+                    }
+                    gradient_length = 0;
+                    step_count = 0;
+                    last_step_x = x;
                 }
-                gradient_length = 0;
-                step_count = 0;
+                prev_val = val;
             }
-
-            prev_val = val;
         }
+
+        let ch_score = if gradient_regions > 0 {
+            (banding_score / gradient_regions as f64).min(1.0)
+        } else {
+            0.0
+        };
+        total_score += ch_score * weight;
     }
 
-    // Vertical scan — catches vertical gradients that horizontal scan misses
-    for x in (0..width).step_by(4) {
-        let mut prev_val = gray.get_pixel(x, 0)[0];
-        let mut gradient_length = 0;
-        let mut step_count = 0;
+    // Diagonal scan on luma for efficiency — catches diagonal gradients
+    let gray = img.to_luma8();
+    let mut diag_banding = 0.0f64;
+    let mut diag_regions = 0u32;
+    let diag_step: usize = 8;
 
-        for y in 1..height {
-            let val = gray.get_pixel(x, y)[0];
-            let diff = (val as i16 - prev_val as i16).abs();
-
-            if diff > 0 && diff < 20 {
-                gradient_length += 1;
-                if diff > 3 {
-                    step_count += 1;
-                }
-            } else if gradient_length > 20 {
-                if step_count > 0 {
-                    let step_ratio = step_count as f64 / gradient_length as f64;
-                    if step_ratio > 0.1 && step_ratio < 0.5 {
-                        banding_score += step_ratio;
-                        gradient_regions += 1;
-                    }
-                }
-                gradient_length = 0;
-                step_count = 0;
-            }
-
-            prev_val = val;
-        }
-    }
-
-    // Diagonal scan (top-left to bottom-right) — catches diagonal gradients
-    let diag_step = 8; // Sample every 8th diagonal to balance coverage vs performance
     for start_offset in (0..width.max(height)).step_by(diag_step) {
-        // Diagonals starting from top edge
+        // Top-left to bottom-right diagonals from top edge
         if start_offset < width {
             let mut x = start_offset;
             let mut y = 0u32;
-            let mut prev_val = gray.get_pixel(x, y)[0];
-            let mut gradient_length = 0;
-            let mut step_count = 0;
+            let mut prev_val = gray.get_pixel(x, y)[0] as i16;
+            let mut grad_len = 0u32;
+            let mut steps = 0u32;
 
-            while x < width && y < height {
-                let val = gray.get_pixel(x, y)[0];
-                let diff = (val as i16 - prev_val as i16).abs();
-
+            while { x += 1; y += 1; x < width && y < height } {
+                let val = gray.get_pixel(x, y)[0] as i16;
+                let diff = (val - prev_val).abs();
                 if diff > 0 && diff < 20 {
-                    gradient_length += 1;
-                    if diff > 3 {
-                        step_count += 1;
-                    }
-                } else if gradient_length > 20 {
-                    if step_count > 0 {
-                        let step_ratio = step_count as f64 / gradient_length as f64;
-                        if step_ratio > 0.1 && step_ratio < 0.5 {
-                            banding_score += step_ratio;
-                            gradient_regions += 1;
-                        }
-                    }
-                    gradient_length = 0;
-                    step_count = 0;
+                    grad_len += 1;
+                    if diff > 3 { steps += 1; }
+                } else if grad_len > 20 && steps > 0 {
+                    let r = steps as f64 / grad_len as f64;
+                    if r > 0.08 && r < 0.5 { diag_banding += r; diag_regions += 1; }
+                    grad_len = 0; steps = 0;
+                } else {
+                    grad_len = 0; steps = 0;
                 }
-
                 prev_val = val;
-                x += 1;
-                y += 1;
             }
         }
 
-        // Diagonals starting from left edge
-        if start_offset > 0 && start_offset < height {
-            let mut x = 0u32;
-            let mut y = start_offset;
-            let mut prev_val = gray.get_pixel(x, y)[0];
-            let mut gradient_length = 0;
-            let mut step_count = 0;
-
-            while x < width && y < height {
-                let val = gray.get_pixel(x, y)[0];
-                let diff = (val as i16 - prev_val as i16).abs();
-
-                if diff > 0 && diff < 20 {
-                    gradient_length += 1;
-                    if diff > 3 {
-                        step_count += 1;
-                    }
-                } else if gradient_length > 20 {
-                    if step_count > 0 {
-                        let step_ratio = step_count as f64 / gradient_length as f64;
-                        if step_ratio > 0.1 && step_ratio < 0.5 {
-                            banding_score += step_ratio;
-                            gradient_regions += 1;
-                        }
-                    }
-                    gradient_length = 0;
-                    step_count = 0;
-                }
-
-                prev_val = val;
-                x += 1;
-                y += 1;
-            }
-        }
-    }
-
-    // Diagonal scan (top-right to bottom-left) — catches opposite diagonal gradients
-    for start_offset in (0..width.max(height)).step_by(diag_step) {
-        // Diagonals starting from top edge
-        if start_offset < width {
+        // Top-right to bottom-left diagonals from top edge
+        if start_offset < width && start_offset > 0 {
             let mut x = start_offset;
             let mut y = 0u32;
-            let mut prev_val = gray.get_pixel(x, y)[0];
-            let mut gradient_length = 0;
-            let mut step_count = 0;
+            let mut prev_val = gray.get_pixel(x, y)[0] as i16;
+            let mut grad_len = 0u32;
+            let mut steps = 0u32;
 
-            while x > 0 && y < height {
-                let val = gray.get_pixel(x, y)[0];
-                let diff = (val as i16 - prev_val as i16).abs();
-
+            while x > 0 && y + 1 < height {
+                x -= 1; y += 1;
+                let val = gray.get_pixel(x, y)[0] as i16;
+                let diff = (val - prev_val).abs();
                 if diff > 0 && diff < 20 {
-                    gradient_length += 1;
-                    if diff > 3 {
-                        step_count += 1;
-                    }
-                } else if gradient_length > 20 {
-                    if step_count > 0 {
-                        let step_ratio = step_count as f64 / gradient_length as f64;
-                        if step_ratio > 0.1 && step_ratio < 0.5 {
-                            banding_score += step_ratio;
-                            gradient_regions += 1;
-                        }
-                    }
-                    gradient_length = 0;
-                    step_count = 0;
+                    grad_len += 1;
+                    if diff > 3 { steps += 1; }
+                } else if grad_len > 20 && steps > 0 {
+                    let r = steps as f64 / grad_len as f64;
+                    if r > 0.08 && r < 0.5 { diag_banding += r; diag_regions += 1; }
+                    grad_len = 0; steps = 0;
+                } else {
+                    grad_len = 0; steps = 0;
                 }
-
                 prev_val = val;
-                x = x.saturating_sub(1);
-                y += 1;
-            }
-        }
-
-        // Diagonals starting from right edge
-        if start_offset > 0 && start_offset < height {
-            let mut x = width - 1;
-            let mut y = start_offset;
-            let mut prev_val = gray.get_pixel(x, y)[0];
-            let mut gradient_length = 0;
-            let mut step_count = 0;
-
-            while x > 0 && y < height {
-                let val = gray.get_pixel(x, y)[0];
-                let diff = (val as i16 - prev_val as i16).abs();
-
-                if diff > 0 && diff < 20 {
-                    gradient_length += 1;
-                    if diff > 3 {
-                        step_count += 1;
-                    }
-                } else if gradient_length > 20 {
-                    if step_count > 0 {
-                        let step_ratio = step_count as f64 / gradient_length as f64;
-                        if step_ratio > 0.1 && step_ratio < 0.5 {
-                            banding_score += step_ratio;
-                            gradient_regions += 1;
-                        }
-                    }
-                    gradient_length = 0;
-                    step_count = 0;
-                }
-
-                prev_val = val;
-                x = x.saturating_sub(1);
-                y += 1;
             }
         }
     }
 
-    if gradient_regions == 0 {
-        return 0.0;
-    }
+    let diag_score = if diag_regions > 0 {
+        (diag_banding / diag_regions as f64).min(1.0)
+    } else {
+        0.0
+    };
 
-    (banding_score / gradient_regions as f64).min(1.0)
+    // Combine: per-channel horizontal (70%) + diagonal luma (30%)
+    (total_score * 0.70 + diag_score * 0.30).min(1.0)
 }
 
 fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
