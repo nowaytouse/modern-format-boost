@@ -813,6 +813,39 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         println!("📂 Found {} files to process", total);
     }
 
+    // Pre-flight disk space check: require at least the total input size free on the output volume.
+    // This catches "No space left on device" before encoding starts rather than mid-encode.
+    {
+        let total_input_size: u64 = files.iter()
+            .filter_map(|f| std::fs::metadata(f).ok())
+            .map(|m| m.len())
+            .sum();
+        let check_path = config.output_dir.as_deref().unwrap_or(input);
+        if let Some(avail) = shared_utils::system_memory::get_available_disk_bytes(check_path) {
+            // Reserve 1 GB headroom on top of total input size (temp files, partial encodes, etc.)
+            let required = total_input_size.saturating_add(1024 * 1024 * 1024);
+            if avail < required {
+                let avail_gb = avail as f64 / (1024.0 * 1024.0 * 1024.0);
+                let required_gb = required as f64 / (1024.0 * 1024.0 * 1024.0);
+                eprintln!(
+                    "❌ Insufficient disk space on output volume.\n\
+                     💾 Available: {:.2} GB\n\
+                     💾 Required:  {:.2} GB (input size + 1 GB headroom)\n\
+                     💡 Free up space or choose a different output location.",
+                    avail_gb, required_gb
+                );
+                std::process::exit(1);
+            }
+            if config.verbose {
+                println!(
+                    "💾 Disk space OK: {:.2} GB available, {:.2} GB required",
+                    avail as f64 / (1024.0 * 1024.0 * 1024.0),
+                    required as f64 / (1024.0 * 1024.0 * 1024.0)
+                );
+            }
+        }
+    }
+
     let success = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
