@@ -373,19 +373,46 @@ create_directory_structure() {
 count_files() {
     draw_separator "Scanning Content"
     printf "${DIM}   Analyzing directory structure...${RESET}\n"
-    
+
     TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" | wc -l | tr -d ' ')
     IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" \) | wc -l | tr -d ' ')
     VID_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \) | wc -l | tr -d ' ')
     XMP_COUNT=$(find "$TARGET_DIR" -type f -iname "*.xmp" | wc -l | tr -d ' ')
     OTHER_COUNT=$((TOTAL_FILES - IMG_COUNT - VID_COUNT - XMP_COUNT))
-    
+
     echo -e "   📁 Total Files: ${BOLD}$TOTAL_FILES${RESET}"
     echo -e "   🖼️  Images:      ${BOLD}${CYAN}$IMG_COUNT${RESET}"
     echo -e "   🎬 Videos:      ${BOLD}${MAGENTA}$VID_COUNT${RESET}"
     echo -e "   📋 Metadata:    ${BOLD}${DIM}$XMP_COUNT${RESET}"
     echo -e "   📦 Others:      ${BOLD}${DIM}$OTHER_COUNT${RESET} (Copy only)"
     echo ""
+}
+
+check_disk_space() {
+    local target="$1"
+    local output_path="${2:-$target}"
+
+    # Calculate total input size
+    local total_bytes
+    total_bytes=$(find "$target" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \) -print0 2>/dev/null | xargs -0 stat -f%z 2>/dev/null | awk '{s+=$1} END{print s+0}')
+
+    # Get available space
+    local avail_bytes
+    avail_bytes=$(df -k "$output_path" 2>/dev/null | awk 'NR==2{print $4 * 1024}')
+
+    # Need: input size + 1GB headroom
+    local required=$(( total_bytes + 1024 * 1024 * 1024 ))
+
+    if [[ $avail_bytes -lt $required ]]; then
+        echo -e "${RED}❌ Insufficient disk space${RESET}"
+        echo -e "   Available: $(( avail_bytes / 1024 / 1024 / 1024 )) GB"
+        echo -e "   Required:  $(( required / 1024 / 1024 / 1024 )) GB"
+        drain_stdin
+        read -rsp "Press any key to exit..." -n1
+        exit 1
+    fi
+
+    export MFB_SKIP_DISK_PRECHECK=1
 }
 
 process_images() {
@@ -417,6 +444,9 @@ process_images() {
     if [[ $rust_exit -eq 130 ]]; then
         rm -f "$tmp_out"
         exit 130
+    elif [[ $rust_exit -ne 0 ]]; then
+        rm -f "$tmp_out"
+        exit "$rust_exit"
     fi
     parse_tool_stats "$(cat "$tmp_out")" "img"
     rm -f "$tmp_out"
@@ -447,6 +477,9 @@ process_videos() {
     if [[ $rust_exit -eq 130 ]]; then
         rm -f "$tmp_out"
         exit 130
+    elif [[ $rust_exit -ne 0 ]]; then
+        rm -f "$tmp_out"
+        exit "$rust_exit"
     fi
     parse_tool_stats "$(cat "$tmp_out")" "vid"
     rm -f "$tmp_out"
@@ -536,22 +569,41 @@ _main() {
     echo ""
 
     safety_check
-    select_mode
 
-    if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
-        "$SCRIPT_DIR/repair_apple_photos.sh" "$TARGET_DIR"
-        echo ""
-        echo -e "${GREEN}✅ Brotli EXIF Fix Completed${RESET}"
-        echo ""
-        echo -e "${DIM}Press any key to exit...${RESET}"
-        read -rsn1
-        exit 0
-    elif [[ "$OUTPUT_MODE" == "cache_clean" ]]; then
-        "$SCRIPT_DIR/cache_cleaner.sh"
-        exit 0
-    fi
+    # Loop for mode selection - allows returning to menu after cache clean or repair
+    while true; do
+        select_mode
+
+        if [[ "$OUTPUT_MODE" == "brotli_fix_only" ]]; then
+            "$SCRIPT_DIR/repair_apple_photos.sh" "$TARGET_DIR"
+            echo ""
+            echo -e "${GREEN}✅ Brotli EXIF Fix Completed${RESET}"
+            echo ""
+            echo -e "${DIM}Press any key to return to menu...${RESET}"
+            read -rsn1
+            # Loop back to select_mode
+            continue
+        elif [[ "$OUTPUT_MODE" == "cache_clean" ]]; then
+            "$SCRIPT_DIR/cache_cleaner.sh"
+            # Loop back to select_mode
+            continue
+        fi
+
+        # If we reach here, we're in a processing mode (adjacent or inplace)
+        break
+    done
 
     count_files
+
+    # Perform disk space check before processing
+    if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
+        local check_output_path="$TARGET_DIR"
+        if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
+            check_output_path="$OUTPUT_DIR"
+        fi
+        check_disk_space "$TARGET_DIR" "$check_output_path"
+    fi
+
     if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
         start_elapsed_spinner
     fi
@@ -564,7 +616,7 @@ _main() {
     if [[ $IMG_COUNT -gt 0 || $VID_COUNT -gt 0 ]]; then
         stop_elapsed_spinner
     fi
-    
+
     if [[ "$OUTPUT_MODE" == "adjacent" ]]; then
         draw_separator "Syncing Non-Media Files"
         local excludes=(
