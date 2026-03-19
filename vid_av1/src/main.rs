@@ -79,6 +79,8 @@ fn main() -> anyhow::Result<()> {
     let _ =
         shared_utils::logging::init_logging("vid_av1", shared_utils::logging::LogConfig::default());
 
+    shared_utils::ctrlc_guard::init();
+
     let cli = Cli::parse();
 
     match cli.command {
