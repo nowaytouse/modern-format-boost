@@ -57,7 +57,7 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {
     let filters: &[(&str, &str)] = &[
         ("standard", "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim"),
-        ("format_convert", "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p[cmp];[ref][cmp]ssim"),
+        ("format_convert", "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim"),
         ("simple", "ssim"),
     ];
 
