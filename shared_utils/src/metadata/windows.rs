@@ -5,8 +5,8 @@ use std::path::Path;
 use std::process::Command;
 
 pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
+    // ACL via PowerShell
     if which::which("powershell").is_ok() {
-        // Use -LiteralPath to avoid command injection via filenames containing quotes
         let ps_script = format!(
             "Get-Acl -LiteralPath '{}' | Set-Acl -LiteralPath '{}'",
             src.to_string_lossy().replace('\'', "''"),
@@ -27,15 +27,60 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             let is_hidden = (file_attrs & 0x2) != 0;
             let is_system = (file_attrs & 0x4) != 0;
             let mut cmd = Command::new("attrib");
-            if is_hidden {
-                cmd.arg("+h");
-            }
-            if is_system {
-                cmd.arg("+s");
-            }
+            if is_hidden { cmd.arg("+h"); }
+            if is_system { cmd.arg("+s"); }
             cmd.arg(dst);
             let _ = cmd.output();
         }
+
+        // Alternate Data Streams (ADS) — enumerate via PowerShell and copy each stream
+        preserve_alternate_data_streams(src, dst);
     }
+
     Ok(())
+}
+
+#[cfg(windows)]
+fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
+    if !which::which("powershell").is_ok() {
+        return;
+    }
+    // List all ADS names (excludes the default :$DATA stream)
+    let list_script = format!(
+        "Get-Item -LiteralPath '{}' -Stream * | Where-Object {{ $_.Stream -ne ':$DATA' }} | Select-Object -ExpandProperty Stream",
+        src.to_string_lossy().replace('\'', "''")
+    );
+    let out = Command::new("powershell")
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg(&list_script)
+        .output();
+    let Ok(out) = out else { return };
+    if !out.status.success() { return }
+
+    let streams = String::from_utf8_lossy(&out.stdout);
+    for stream_name in streams.lines().map(str::trim).filter(|s| !s.is_empty()) {
+        // Read stream content and write to dst
+        let copy_script = format!(
+            "Get-Content -LiteralPath '{}' -Stream '{}' -Raw | Set-Content -LiteralPath '{}' -Stream '{}'",
+            src.to_string_lossy().replace('\'', "''"),
+            stream_name.replace('\'', "''"),
+            dst.to_string_lossy().replace('\'', "''"),
+            stream_name.replace('\'', "''"),
+        );
+        let result = Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(&copy_script)
+            .output();
+        if let Ok(r) = result {
+            if !r.status.success() {
+                eprintln!(
+                    "⚠️ [metadata] Failed to copy ADS stream '{}': {}",
+                    stream_name,
+                    String::from_utf8_lossy(&r.stderr)
+                );
+            }
+        }
+    }
 }

@@ -310,19 +310,8 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 }
 
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
-    let check_output = Command::new("exiftool")
-        .arg("-s3")
-        .arg("-QuickTime:CreateDate")
-        .arg(crate::safe_path_arg(dst).as_ref())
-        .output()?;
-
-    let current_date = String::from_utf8_lossy(&check_output.stdout);
-    let current_date = current_date.trim();
-
-    if !current_date.is_empty() && !current_date.contains("0000:00:00") {
-        return Ok(());
-    }
-
+    // Always sync all QuickTime date fields from source — don't skip if dst already has a date,
+    // because the date may have been reset to encode time rather than original capture time.
     let best_date = match get_best_date_from_source(src) {
         Some(date) => date,
         None => {
@@ -338,6 +327,11 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         .arg(format!("-QuickTime:TrackModifyDate={}", best_date))
         .arg(format!("-QuickTime:MediaCreateDate={}", best_date))
         .arg(format!("-QuickTime:MediaModifyDate={}", best_date))
+        // Also sync EXIF/XMP date fields for maximum compatibility
+        .arg(format!("-EXIF:DateTimeOriginal={}", best_date))
+        .arg(format!("-EXIF:CreateDate={}", best_date))
+        .arg(format!("-XMP:DateCreated={}", best_date))
+        .arg(format!("-XMP:CreateDate={}", best_date))
         .arg("-overwrite_original")
         .arg("-q")
         .arg("-m")
@@ -346,8 +340,9 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("Warning") && !stderr.is_empty() {
-            eprintln!("⚠️ [metadata] Failed to set QuickTime dates: {}", stderr);
+        // Warnings are non-fatal (e.g. tag not writable for this format)
+        if !stderr.trim().is_empty() && !stderr.contains("Warning") {
+            eprintln!("⚠️ [metadata] Failed to set QuickTime/EXIF dates: {}", stderr.trim());
         }
     }
 

@@ -68,6 +68,8 @@ fn main() -> anyhow::Result<()> {
         shared_utils::logging::LogConfig::default(),
     );
 
+    shared_utils::ctrlc_guard::init();
+
     let cli = Cli::parse();
 
     match cli.command {

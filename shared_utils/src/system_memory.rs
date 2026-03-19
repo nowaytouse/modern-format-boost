@@ -145,6 +145,43 @@ fn get_memory_linux() -> (u64, u64) {
     (available, total)
 }
 
+/// Returns available bytes on the filesystem containing `path`. None if detection fails.
+pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
+    // Resolve to an existing ancestor (the path itself may not exist yet, e.g. output dir).
+    let existing = {
+        let mut p = path;
+        loop {
+            if p.exists() {
+                break p.to_path_buf();
+            }
+            match p.parent() {
+                Some(parent) => p = parent,
+                None => return None,
+            }
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        let c_path = CString::new(existing.to_string_lossy().as_bytes()).ok()?;
+        let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+        let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
+        if ret == 0 {
+            // f_bavail: blocks available to unprivileged processes; f_frsize: fundamental block size
+            let avail = stat.f_bavail as u64 * stat.f_frsize as u64;
+            return Some(avail);
+        }
+        None
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = existing;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -121,36 +121,52 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
 pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
+        // copyfile: copies ACL + STAT + xattr in one syscall
         if let Err(e) = macos::copy_native_metadata(src, dst) {
             eprintln!("⚠️ [metadata] macOS native copy failed: {}", e);
+            // Fallback: manual xattr copy if copyfile failed
+            copy_xattrs_manual(src, dst);
         }
+        // ExifTool: EXIF/IPTC/XMP internal tags
         if let Err(e) = exif::preserve_internal_metadata(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
         }
-        let _ = network::verify_network_metadata(src, dst);
+        // Network xattrs (WhereFroms, UserTags) — copy + verify
+        let _ = network::preserve_network_metadata(src, dst);
+        // Unix permission bits (copyfile covers STAT but be explicit)
+        if let Ok(meta) = std::fs::metadata(src) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode();
+            let _ = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode));
+        }
+        // Timestamps last (ExifTool rewrites file, so must come after)
         apply_file_timestamps(src, dst);
         Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
     {
+        // ExifTool: EXIF/IPTC/XMP internal tags
         if let Err(e) = exif::preserve_internal_metadata(src, dst) {
             eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
         }
-        let _ = network::verify_network_metadata(src, dst);
+        // Network xattrs — copy + verify
+        let _ = network::preserve_network_metadata(src, dst);
+        // Platform-specific attributes
         #[cfg(target_os = "linux")]
         let _ = linux::preserve_linux_attributes(src, dst);
         #[cfg(target_os = "windows")]
         let _ = windows::preserve_windows_attributes(src, dst);
+        // Generic xattr copy (covers any remaining xattrs not handled above)
         copy_xattrs_manual(src, dst);
-        if let Ok(metadata) = std::fs::metadata(src) {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mode = metadata.permissions().mode();
-                let _ = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode));
-            }
+        // Unix permission bits
+        #[cfg(unix)]
+        if let Ok(meta) = std::fs::metadata(src) {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = meta.permissions().mode();
+            let _ = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode));
         }
+        // Timestamps last
         apply_file_timestamps(src, dst);
         Ok(())
     }
@@ -216,6 +232,14 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
             }
         }
 
+        // macOS: set creation time BEFORE atime/mtime (will re-apply after)
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(created) = metadata.created() {
+                let _ = macos::set_creation_time(&dst_path, created);
+            }
+        }
+
         let atime = filetime::FileTime::from_last_access_time(metadata);
         let mtime = filetime::FileTime::from_last_modification_time(metadata);
         if let Err(e) = filetime::set_file_times(&dst_path, atime, mtime) {
@@ -226,6 +250,7 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
             );
         }
 
+        // macOS: re-apply creation time AFTER atime/mtime (filetime may reset it)
         #[cfg(target_os = "macos")]
         {
             if let Ok(created) = metadata.created() {
@@ -236,6 +261,10 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
                         e
                     );
                 }
+            }
+            // Also preserve added time for directories
+            if let Ok(added) = macos::get_added_time(src_path) {
+                let _ = macos::set_added_time(&dst_path, added);
             }
         }
 
@@ -564,7 +593,6 @@ fn find_xmp_sidecar(src: &Path) -> Option<std::path::PathBuf> {
     None
 }
 
-#[cfg(not(target_os = "macos"))]
 fn copy_xattrs_manual(src: &Path, dst: &Path) {
     if let Ok(iter) = xattr::list(src) {
         for name in iter {
