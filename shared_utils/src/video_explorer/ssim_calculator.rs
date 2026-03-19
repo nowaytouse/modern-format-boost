@@ -148,7 +148,7 @@ fn calculate_ms_ssim_channel_sampled(
     };
 
     let filter = format!(
-        "[0:v]{}format=yuv420p,extractplanes={}[c0];[1:v]{}format=yuv420p,extractplanes={}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
+        "[0:v]{}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={}[c0];[1:v]{}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
         sample_filter, channel, sample_filter, channel
     );
 
@@ -349,7 +349,7 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 
     // dis = output (distorted), ref = input (reference)
     let filter = format!(
-        "[0:v]{sf}format=yuv420p[dis];[1:v]{sf}format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
+        "[0:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[dis];[1:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
         sf = sample_filter,
         nt = n_threads,
     );
@@ -413,7 +413,7 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
     // Use n_subsample for speed (skips frames inside libvmaf, faster than
     // select filter which still decodes every frame).
     let filter_complex = format!(
-        "[0:v]format=yuv420p[ref];[1:v]format=yuv420p[dist];[dist][ref]libvmaf=feature=name=cambi:n_threads={nt}:n_subsample={ns}:log_fmt=json:log_path={lp}",
+        "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[dist];[dist][ref]libvmaf=feature=name=cambi:n_threads={nt}:n_subsample={ns}:log_fmt=json:log_path={lp}",
         nt = n_threads,
         ns = sample_rate.max(1),
         lp = log_path.display(),
@@ -517,7 +517,7 @@ fn psnr_single_channel(
 
     // Extract the requested plane from both streams, then run psnr on them.
     let filter = format!(
-        "[0:v]{sf}format=yuv420p,extractplanes={ch}[ref];[1:v]{sf}format=yuv420p,extractplanes={ch}[dis];[ref][dis]psnr=stats_file=-",
+        "[0:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={ch}[ref];[1:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={ch}[dis];[ref][dis]psnr=stats_file=-",
         sf = sample_filter,
         ch = channel,
     );
