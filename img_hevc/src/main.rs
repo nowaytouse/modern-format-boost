@@ -1003,7 +1003,8 @@ fn auto_convert_directory(
 
     // Pre-flight disk space check: require at least the total input size free on the output volume.
     // This catches "No space left on device" before encoding starts rather than mid-encode.
-    {
+    // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
+    if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
         let total_input_size: u64 = files.iter()
             .filter_map(|f| std::fs::metadata(f).ok())
             .map(|m| m.len())

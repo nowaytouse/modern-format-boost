@@ -48,66 +48,37 @@ _main() {
     draw_header
     show_stats
 
-    echo -e "${BOLD}Select Cleaning Operation:${RESET}"
-    echo -e "   ${CYAN}1)${RESET} ${WHITE}Vacuum Only${RESET} (Prune old entries, keep database)"
-    echo -e "   ${CYAN}2)${RESET} ${WHITE}Purge All Cache${RESET} (Delete entire .cache folder)"
-    echo -e "   ${CYAN}3)${RESET} ${WHITE}Clear Logs${RESET} (Delete all log files)"
-    echo -e "   ${CYAN}q)${RESET} ${WHITE}Cancel & Quit${RESET}"
+    echo -e "${CYAN}🧹 Cleaning cache and logs...${RESET}"
     echo ""
-    echo -ne "   ${BOLD}Choice > ${RESET}"
-    
-    read -r choice
-    echo -e "\n"
 
-    case "$choice" in
-        1)
-            echo -e "${CYAN}Pruning records older than 30 days and vacuuming...${RESET}"
-            # We don't have a direct CLI for cleanup_old_records yet, 
-            # but we can use sqlite3 if available or just wait for the tool to do it.
-            # For a simple script, we'll try to use sqlite3 if present to VACCUM.
-            if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB_FILE" ]]; then
-                sqlite3 "$DB_FILE" "VACUUM;"
-                echo -e "${GREEN}✅ Database vacuumed.${RESET}"
-            else
-                echo -e "${YELLOW}⚠️ sqlite3 not found or DB missing. Vacuum skipped.${RESET}"
-            fi
-            ;;
-        2)
-            echo -ne "${RED}${BOLD}All cached analysis will be lost. Are you sure? (y/N): ${RESET}"
-            read -r confirm
-            if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                rm -rf "$CACHE_DIR"
-                echo -e "\n${GREEN}✅ Cache directory purged.${RESET}"
-            else
-                echo -e "\n${DIM}Operation cancelled.${RESET}"
-            fi
-            ;;
-        3)
-            echo -ne "${YELLOW}Delete all session logs? (y/N): ${RESET}"
-            read -r confirm
-            if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                # Security check: ensure LOG_DIR is not empty/root
-                if [[ -d "$LOG_DIR" && "$LOG_DIR" != "/" ]]; then
-                    rm -f "$LOG_DIR"/*.log
-                    echo -e "\n${GREEN}✅ Logs cleared.${RESET}"
-                else
-                    echo -e "\n${RED}❌ Invalid log directory.${RESET}"
-                fi
-            else
-                echo -e "\n${DIM}Operation cancelled.${RESET}"
-            fi
-            ;;
-        [qQ])
-            exit 0
-            ;;
-        *)
-            echo -e "${RED}Invalid selection.${RESET}"
-            ;;
-    esac
+    # Vacuum database if sqlite3 is available
+    if command -v sqlite3 >/dev/null 2>&1 && [[ -f "$DB_FILE" ]]; then
+        echo -e "${DIM}   Vacuuming database...${RESET}"
+        sqlite3 "$DB_FILE" "VACUUM;" 2>/dev/null
+        echo -e "   ${GREEN}✅ Database vacuumed${RESET}"
+    fi
+
+    # Purge cache directory
+    if [[ -d "$CACHE_DIR" ]]; then
+        echo -e "${DIM}   Removing cache directory...${RESET}"
+        rm -rf "$CACHE_DIR"
+        echo -e "   ${GREEN}✅ Cache purged${RESET}"
+    fi
+
+    # Clear logs (with safety check)
+    if [[ -d "$LOG_DIR" && "$LOG_DIR" != "/" ]]; then
+        echo -e "${DIM}   Clearing logs...${RESET}"
+        rm -f "$LOG_DIR"/*.log
+        echo -e "   ${GREEN}✅ Logs cleared${RESET}"
+    fi
 
     echo ""
-    echo -e "${DIM}Press any key to exit...${RESET}"
+    echo -e "${GREEN}✅ Cleanup Complete${RESET}"
+    echo ""
+    echo -e "${DIM}Press any key to return to menu...${RESET}"
     read -rn1
+    # Return to caller (select_mode in drag_and_drop_processor.sh)
+    return 0
 }
 
 _main
