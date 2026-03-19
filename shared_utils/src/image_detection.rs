@@ -1482,13 +1482,24 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
         return 0.0;
     }
 
+    // Block-random sampling: divide image into a grid of blocks, sample one pixel
+    // per block at a deterministic-but-spread position. Avoids stride bias where
+    // step-based sampling always hits the same spatial columns/rows.
+    let target_samples: usize = 50_000.min(total_pixels);
+    let block_size = ((total_pixels as f64 / target_samples as f64).max(1.0)) as usize;
+    let blocks_x = (width as usize).div_ceil(block_size);
+    let blocks_y = (height as usize).div_ceil(block_size);
+
     let mut color_freq: std::collections::HashMap<[u8; 4], u32> =
         std::collections::HashMap::new();
-    let step = ((total_pixels as f64 / 50_000.0).max(1.0)) as usize;
     let mut sampled = 0u64;
 
-    for (i, pixel) in rgba.pixels().enumerate() {
-        if i % step == 0 {
+    for by in 0..blocks_y {
+        for bx in 0..blocks_x {
+            // Pick a pixel near the center of each block (deterministic, no RNG needed)
+            let px = ((bx * block_size + block_size / 2) as u32).min(width - 1);
+            let py = ((by * block_size + block_size / 2) as u32).min(height - 1);
+            let pixel = rgba.get_pixel(px, py);
             let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
             *color_freq.entry(key).or_insert(0) += 1;
             sampled += 1;
