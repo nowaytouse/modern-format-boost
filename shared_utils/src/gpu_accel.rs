@@ -62,12 +62,20 @@ impl StderrCapture {
 
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                if let Ok(mut buf) = lines.lock() {
-                    if buf.len() >= max {
-                        buf.pop_front();
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        if let Ok(mut buf) = lines.lock() {
+                            if buf.len() >= max {
+                                buf.pop_front();
+                            }
+                            buf.push_back(line);
+                        }
                     }
-                    buf.push_back(line);
+                    Err(err) => {
+                        tracing::warn!("Failed to read GPU encoder stderr: {}", err);
+                        break;
+                    }
                 }
             }
         })

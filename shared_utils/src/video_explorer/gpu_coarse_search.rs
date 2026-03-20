@@ -1194,7 +1194,19 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut last_time_us = 0_i64;
             let duration_secs = duration as f64;
 
-            for line in reader.lines().map_while(Result::ok) {
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(err) => {
+                        crate::verbose_eprintln!(
+                            "⚠️  Failed to read ffmpeg progress stream at CRF {:.1}: {}",
+                            crf,
+                            err
+                        );
+                        break;
+                    }
+                };
+
                 if let Some(val) = line.strip_prefix("out_time_us=") {
                     if let Ok(time_us) = val.parse::<i64>() {
                         last_time_us = time_us;

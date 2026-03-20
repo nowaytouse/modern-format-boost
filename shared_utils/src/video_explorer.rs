@@ -988,7 +988,18 @@ impl VideoExplorer {
         };
 
         progress_line("Calculate SSIM...".to_string());
-        let ssim = self.calculate_ssim().ok().flatten();
+        let ssim = match self.calculate_ssim() {
+            Ok(ssim) => ssim,
+            Err(err) => {
+                pb.suspend(|| {
+                    crate::log_eprintln!(
+                        "⚠️  SSIM calculation failed during size-only explore: {}",
+                        err
+                    );
+                });
+                None
+            }
+        };
         progress_done();
         // SSIM is computed from self.output_path; must match the encode just above (max_crf).
 
@@ -2308,11 +2319,22 @@ impl VideoExplorer {
                 let reader = BufReader::new(stderr);
                 let mut recent_lines: VecDeque<String> = VecDeque::with_capacity(MAX_LINES);
 
-                for line in reader.lines().map_while(Result::ok) {
-                    if recent_lines.len() >= MAX_LINES {
-                        recent_lines.pop_front();
+                for line in reader.lines() {
+                    match line {
+                        Ok(line) => {
+                            if recent_lines.len() >= MAX_LINES {
+                                recent_lines.pop_front();
+                            }
+                            recent_lines.push_back(line);
+                        }
+                        Err(err) => {
+                            if recent_lines.len() >= MAX_LINES {
+                                recent_lines.pop_front();
+                            }
+                            recent_lines.push_back(format!("[stderr read error: {}]", err));
+                            break;
+                        }
                     }
-                    recent_lines.push_back(line);
                 }
 
                 recent_lines.into_iter().collect::<Vec<_>>().join("\n")
@@ -2325,7 +2347,18 @@ impl VideoExplorer {
             let mut last_fps: f64 = 0.0;
             let mut last_speed: String = String::new();
 
-            for line in reader.lines().map_while(Result::ok) {
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(err) => {
+                        crate::verbose_eprintln!(
+                            "⚠️  Failed to read ffmpeg progress output: {}",
+                            err
+                        );
+                        break;
+                    }
+                };
+
                 if let Some(val) = line.strip_prefix("out_time_us=") {
                     if let Ok(time_us) = val.parse::<u64>() {
                         last_time_us = time_us;
