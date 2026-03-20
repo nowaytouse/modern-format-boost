@@ -4341,11 +4341,9 @@ mod tests {
     fn test_ultimate_mode_constants() {
         // Updated for v0.10.32+: ULTIMATE_MIN_WALL_HITS (15) > NORMAL_MAX_WALL_HITS (4)
         // This is intentional to ensure deeper saturation in ultimate mode
-        assert!(
-            ULTIMATE_MIN_WALL_HITS > NORMAL_MAX_WALL_HITS,
-            "Ultimate min ({}) should be greater than normal max ({}) for extreme saturation",
-            ULTIMATE_MIN_WALL_HITS, NORMAL_MAX_WALL_HITS
-        );
+        const {
+            assert!(ULTIMATE_MIN_WALL_HITS > NORMAL_MAX_WALL_HITS);
+        }
     }
 
     #[test]

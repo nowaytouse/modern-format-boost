@@ -11,7 +11,7 @@ use std::process::Command;
 
 /// Extract ICC Profile from source image and return temp file path
 pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
-    if !which::which("exiftool").is_ok() {
+    if which::which("exiftool").is_err() {
         return None;
     }
 
