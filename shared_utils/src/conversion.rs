@@ -30,7 +30,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use crate::modern_ui::{colors, symbols};
 use std::sync::{LazyLock, Mutex};
-use rand::RngExt;
+use rand::Rng;
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -560,10 +560,10 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
         .unwrap_or_default();
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     
-    // Add unique random string for security (prevents collision with user files)
+    let mut rng = rand::thread_rng();
     let random_id: String = (0..8)
         .map(|_| {
-            let idx = rand::rng().random_range(0..62);
+            let idx = rng.gen_range(0..62);
             match idx {
                 0..=25 => (b'a' + idx) as char,
                 26..=51 => (b'A' + (idx - 26)) as char,
