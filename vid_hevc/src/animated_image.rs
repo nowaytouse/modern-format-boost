@@ -306,7 +306,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     
-    let ext = if options.apple_compat { "mov" } else { "mp4" };
+    let ext = if options.apple_compat { "MOV" } else { "MP4" };
     let output = get_output_path(input, ext, options)?;
 
     if output.exists() && !options.force {
@@ -635,7 +635,7 @@ pub fn convert_to_hevc_mp4_matched(
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
     
-    let ext = if options.apple_compat { "mov" } else { "mp4" };
+    let ext = if options.apple_compat { "MOV" } else { "MP4" };
     let output = get_output_path(input, ext, options)?;
 
     if output.exists() && !options.force {
@@ -1277,7 +1277,7 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
-    let output = get_output_path(input, "gif", options)?;
+    let output = get_output_path(input, "GIF", options)?;
 
     if let Some(parent) = output.parent() {
         let _ = fs::create_dir_all(parent);
