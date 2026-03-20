@@ -23,6 +23,17 @@ VERBOSE_MODE=false
 hide_cursor() { printf '\033[?25l'; }
 show_cursor() { printf '\033[?25h'; }
 clear_screen() { printf '\033[2J\033[H'; }
+contains_control_chars() {
+    local value="$1"
+    [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\0'* ]]
+}
+
+validate_target_dir() {
+    if contains_control_chars "$TARGET_DIR"; then
+        echo -e "\n${RED}❌ Error: Path contains unsupported control characters.${RESET}"
+        exit 1
+    fi
+}
 
 SPINNER_PID=""
 ELAPSED_START=0
@@ -257,6 +268,8 @@ get_target_directory() {
         TARGET_DIR="${TARGET_DIR## }"
         TARGET_DIR="${TARGET_DIR%% }"
     fi
+
+    validate_target_dir
     
     if [[ ! -d "$TARGET_DIR" ]]; then
         echo -e "\n${RED}❌ Error: Directory not found.${RESET}"
@@ -394,7 +407,7 @@ check_disk_space() {
 
     # Calculate total input size
     local total_bytes
-    total_bytes=$(find "$target" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \) -print0 2>/dev/null | xargs -0 stat -f%z 2>/dev/null | awk '{s+=$1} END{print s+0}')
+    total_bytes=$(find "$target" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.mkv" -o -iname "*.avi" -o -iname "*.webm" -o -iname "*.m4v" -o -iname "*.wmv" -o -iname "*.flv" \) -exec stat -f%z {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
 
     # Get available space
     local avail_bytes
@@ -556,6 +569,7 @@ _main() {
             VERBOSE_MODE=true
         elif [[ -d "$arg" ]]; then
             TARGET_DIR="$arg"
+            validate_target_dir
         fi
     done
 
