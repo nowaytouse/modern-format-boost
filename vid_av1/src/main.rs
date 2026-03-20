@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 
-use vid_av1::{auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError};
+use vid_av1::{auto_convert_with_cache, detect_video_with_cache, determine_strategy, ConversionConfig, VidQualityError};
 use shared_utils::analysis_cache::AnalysisCache;
 
 #[derive(Parser)]
@@ -199,7 +199,7 @@ fn main() -> anyhow::Result<()> {
         }
 
         Commands::Strategy { input } => {
-            let detection = detect_video(&input)?;
+            let detection = detect_video_with_cache(&input, None)?;
             let strategy = determine_strategy(&detection);
 
             println!("\n🎯 Recommended Strategy (AV1 Auto Mode)");
