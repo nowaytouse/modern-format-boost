@@ -195,10 +195,10 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         .unwrap_or("output");
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    let output_path = if input_ext.eq_ignore_ascii_case("mp4") {
-        output_dir.join(format!("{}_av1.mp4", stem))
+    let output_path = if input_ext.eq_ignore_ascii_case("MP4") {
+        output_dir.join(format!("{}_av1.MP4", stem))
     } else {
-        output_dir.join(format!("{}.mp4", stem))
+        output_dir.join(format!("{}.MP4", stem))
     };
 
     info!("🎬 Simple Mode: {} → AV1 MP4 (LOSSLESS)", input.display());
@@ -1211,7 +1211,7 @@ mod tests {
 
     #[test]
     fn test_target_format() {
-        assert_eq!(TargetVideoFormat::Ffv1Mkv.extension(), "mkv");
-        assert_eq!(TargetVideoFormat::Av1Mp4.extension(), "mp4");
+        assert_eq!(TargetVideoFormat::Ffv1Mkv.extension(), "MKV");
+        assert_eq!(TargetVideoFormat::Av1Mp4.extension(), "MP4");
     }
 }

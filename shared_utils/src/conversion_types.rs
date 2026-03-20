@@ -13,8 +13,8 @@ pub enum TargetVideoFormat {
 impl TargetVideoFormat {
     pub fn extension(&self) -> &str {
         match self {
-            TargetVideoFormat::Ffv1Mkv | TargetVideoFormat::HevcLosslessMkv => "mkv",
-            TargetVideoFormat::Av1Mp4 | TargetVideoFormat::HevcMp4 => "mp4",
+            TargetVideoFormat::Ffv1Mkv | TargetVideoFormat::HevcLosslessMkv => "MKV",
+            TargetVideoFormat::Av1Mp4 | TargetVideoFormat::HevcMp4 => "MP4",
             TargetVideoFormat::Skip => "",
         }
     }

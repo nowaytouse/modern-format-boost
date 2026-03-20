@@ -263,7 +263,7 @@ fn vaapi_device_path() -> &'static str {
 }
 
 fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
-    let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("MP4");
     format!("{}.{}", suffix, ext)
 }
 
