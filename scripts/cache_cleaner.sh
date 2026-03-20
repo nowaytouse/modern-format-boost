@@ -10,13 +10,15 @@ source "$SCRIPT_DIR/common.sh"
 CACHE_DIR="$PROJECT_ROOT/.cache"
 DB_FILE="$CACHE_DIR/image_analysis_v2.db"
 LOG_DIR="$PROJECT_ROOT/logs"
+MFB_PROGRESS_DIR="$HOME/.mfb_progress"
 
 clear_screen() { printf '\033[2J\033[H'; }
 
 draw_header() {
     echo -e "${BLUE}╭$(printf '─%.0s' {1..60})╮${RESET}"
-    echo -e "${BLUE}│${RESET}  ${BOLD}${CYAN}🧹 CACHE CLEANER v1.0${RESET}                                ${BLUE}│${RESET}"
+    echo -e "${BLUE}│${RESET}  ${BOLD}${RED}🔥 DATA PURGE UTILITY v1.0${RESET}                            ${BLUE}│${RESET}"
     echo -e "${BLUE}╰$(printf '─%.0s' {1..60})╯${RESET}"
+    echo -e "   ${RED}⚠️  WARNING: Critical processing data will be permanently deleted.${RESET}"
     echo ""
 }
 
@@ -37,9 +39,14 @@ show_stats() {
         echo -e "   ${YELLOW}Empty: No cache directory found.${RESET}"
     fi
     
-    local log_size
     log_size=$(du -sh "$LOG_DIR" 2>/dev/null | cut -f1 || echo "0B")
     echo -e "   📝 Logs:      ${DIM}$log_size${RESET}"
+    
+    if [[ -d "$MFB_PROGRESS_DIR" ]]; then
+        local prog_size
+        prog_size=$(du -sh "$MFB_PROGRESS_DIR" 2>/dev/null | cut -f1 || echo "0B")
+        echo -e "   🔄 Progress:  ${DIM}$prog_size${RESET}"
+    fi
     echo ""
 }
 
@@ -48,7 +55,7 @@ _main() {
     draw_header
     show_stats
 
-    echo -e "${CYAN}🧹 Cleaning cache and logs...${RESET}"
+    echo -e "${RED}🔥 Purging all analysis data, logs and progress trackers...${RESET}"
     echo ""
 
     # Vacuum database if sqlite3 is available
@@ -70,6 +77,13 @@ _main() {
         echo -e "${DIM}   Clearing logs...${RESET}"
         rm -f "$LOG_DIR"/*.log
         echo -e "   ${GREEN}✅ Logs cleared${RESET}"
+    fi
+
+    # Purge MFB progress directory
+    if [[ -d "$MFB_PROGRESS_DIR" ]]; then
+        echo -e "${DIM}   Removing MFB progress directory...${RESET}"
+        rm -rf "$MFB_PROGRESS_DIR"
+        echo -e "   ${GREEN}✅ MFB progress purged${RESET}"
     fi
 
     echo ""

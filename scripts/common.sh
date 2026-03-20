@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # common.sh - Unified Path, Color, and Metadata Utilities
 # Compatible with both Bash and Zsh
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
 
 # 1. Path Setup
 if [[ -z "${SCRIPT_DIR:-}" ]]; then

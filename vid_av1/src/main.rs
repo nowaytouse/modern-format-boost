@@ -67,6 +67,12 @@ enum Commands {
 
         #[arg(short, long)]
         verbose: bool,
+
+        #[arg(long, default_value_t = true)]
+        resume: bool,
+
+        #[arg(long)]
+        no_resume: bool,
     },
 
     Strategy {
@@ -102,9 +108,12 @@ fn main() -> anyhow::Result<()> {
             allow_size_tolerance,
             no_allow_size_tolerance,
             verbose,
+            resume,
+            no_resume,
         } => {
             let apple_compat = apple_compat && !no_apple_compat;
             let allow_size_tolerance = allow_size_tolerance && !no_allow_size_tolerance;
+            let resume = resume && !no_resume;
 
             if let Err(e) = shared_utils::validate_flags_result_with_ultimate(
                 explore,
@@ -191,6 +200,7 @@ fn main() -> anyhow::Result<()> {
                     } else {
                         None
                     },
+                    resume,
                 },
                 |file| auto_convert_with_cache(file, &config, cache.as_ref()).map_err(|e: VidQualityError| anyhow::anyhow!(e)),
             )?;
