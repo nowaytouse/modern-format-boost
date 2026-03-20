@@ -1,0 +1,169 @@
+name: Nightly Release
+
+on:
+  push:
+    branches: [nightly]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    name: Build (macOS ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+          - arch: x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action/setup@v1
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies (Homebrew)
+        run: |
+          brew install ffmpeg jpeg-xl exiftool imagemagick webp libheif nasm
+
+      - name: Build release binaries
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/img-hevc dist/
+          cp target/${{ matrix.target }}/release/img-av1 dist/
+          cp target/${{ matrix.target }}/release/vid-hevc dist/
+          cp target/${{ matrix.target }}/release/vid-av1 dist/
+          cp LICENSE README.md CHANGELOG.md dist/
+          cd dist
+          tar czf ../modern-format-boost-${{ matrix.target }}.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: modern-format-boost-${{ matrix.target }}
+          path: modern-format-boost-${{ matrix.target }}.tar.gz
+
+  build-linux:
+    name: Build (Linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action/setup@v1
+
+      - name: Install dependencies (apt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg libimage-exiftool-perl imagemagick webp nasm cmake
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cp target/release/img-hevc dist/
+          cp target/release/img-av1 dist/
+          cp target/release/vid-hevc dist/
+          cp target/release/vid-av1 dist/
+          cp LICENSE README.md CHANGELOG.md dist/
+          cd dist
+          tar czf ../modern-format-boost-x86_64-unknown-linux-gnu.tar.gz *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: modern-format-boost-x86_64-unknown-linux-gnu
+          path: modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
+
+  release:
+    name: Create Nightly Release
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep -m1 'version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Delete existing nightly release (if exists)
+        run: gh release delete nightly --yes || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete existing nightly tag (if exists)
+        run: git push --delete origin nightly-release || true
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: "🌙 Nightly v${{ steps.version.outputs.version }}"
+          body: |
+            ## 🌙 Nightly Release — v${{ steps.version.outputs.version }}
+
+            > ⚠️ This is an automated nightly build from the `nightly` branch.
+            > It uses bleeding-edge GitHub source dependencies and may contain untested features.
+            > For stable builds, use the `main` branch releases.
+
+            ### 📦 Downloads
+
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | macOS | ARM64 (Apple Silicon) | `modern-format-boost-aarch64-apple-darwin.tar.gz` |
+            | macOS | x86_64 (Intel) | `modern-format-boost-x86_64-apple-darwin.tar.gz` |
+            | Linux | x86_64 | `modern-format-boost-x86_64-unknown-linux-gnu.tar.gz` |
+
+            ### 📋 Quick Install
+
+            ```bash
+            # macOS ARM64 (Apple Silicon)
+            curl -LO https://github.com/${{ github.repository }}/releases/download/nightly/modern-format-boost-aarch64-apple-darwin.tar.gz
+            tar xzf modern-format-boost-aarch64-apple-darwin.tar.gz
+
+            # macOS Intel
+            curl -LO https://github.com/${{ github.repository }}/releases/download/nightly/modern-format-boost-x86_64-apple-darwin.tar.gz
+            tar xzf modern-format-boost-x86_64-apple-darwin.tar.gz
+
+            # Linux x86_64
+            curl -LO https://github.com/${{ github.repository }}/releases/download/nightly/modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
+            tar xzf modern-format-boost-x86_64-unknown-linux-gnu.tar.gz
+            ```
+
+            ### 📖 What's Included
+
+            - `img-hevc` — Image optimization (→ JXL / HEVC)
+            - `img-av1` — Image optimization (→ JXL / AV1)
+            - `vid-hevc` — Video optimization (→ HEVC / H.265)
+            - `vid-av1` — Video optimization (→ AV1 / SVT-AV1)
+
+            ---
+            *Built from commit ${{ github.sha }} on ${{ github.event.head_commit.timestamp || 'nightly branch' }}*
+          prerelease: true
+          files: |
+            artifacts/**/*.tar.gz
