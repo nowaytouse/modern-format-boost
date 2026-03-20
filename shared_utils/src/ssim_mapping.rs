@@ -35,6 +35,15 @@ impl PsnrSsimMapping {
     }
 
     pub fn insert(&mut self, psnr: f64, ssim: f64) {
+        if let Some(existing) = self
+            .points
+            .iter_mut()
+            .find(|point| (point.psnr - psnr).abs() < f64::EPSILON)
+        {
+            existing.ssim = ssim;
+            return;
+        }
+
         let point = MappingPoint { psnr, ssim };
         let pos = self
             .points
@@ -42,6 +51,16 @@ impl PsnrSsimMapping {
             .position(|p| p.psnr > psnr)
             .unwrap_or(self.points.len());
         self.points.insert(pos, point);
+    }
+
+    #[inline]
+    fn interpolate_or_clamp(p1: &MappingPoint, p2: &MappingPoint, psnr: f64) -> f64 {
+        let delta = p2.psnr - p1.psnr;
+        if delta.abs() < f64::EPSILON {
+            return p2.ssim;
+        }
+        let ratio = (psnr - p1.psnr) / delta;
+        p1.ssim + ratio * (p2.ssim - p1.ssim)
     }
 
     pub fn has_enough_points(&self) -> bool {
@@ -83,16 +102,14 @@ impl PsnrSsimMapping {
             (Some(l), Some(u)) => {
                 let p1 = &self.points[l];
                 let p2 = &self.points[u];
-                let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
-                Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
+                Some(Self::interpolate_or_clamp(p1, p2, psnr))
             }
             (Some(_), None) => {
                 let n = self.points.len();
                 if n >= 2 {
                     let p1 = &self.points[n - 2];
                     let p2 = &self.points[n - 1];
-                    let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
-                    Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
+                    Some(Self::interpolate_or_clamp(p1, p2, psnr))
                 } else {
                     None
                 }
@@ -101,8 +118,7 @@ impl PsnrSsimMapping {
                 if self.points.len() >= 2 {
                     let p1 = &self.points[0];
                     let p2 = &self.points[1];
-                    let ratio = (psnr - p1.psnr) / (p2.psnr - p1.psnr);
-                    Some(p1.ssim + ratio * (p2.ssim - p1.ssim))
+                    Some(Self::interpolate_or_clamp(p1, p2, psnr))
                 } else {
                     None
                 }
@@ -166,6 +182,36 @@ mod tests {
 
         assert_eq!(mapping.len(), 1);
         assert!((mapping.get_points()[0].ssim - 0.91).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_insert_replaces_exact_duplicate_psnr() {
+        let mut mapping = PsnrSsimMapping::new();
+        mapping.insert(30.0, 0.90);
+        mapping.insert(30.0, 0.92);
+
+        assert_eq!(mapping.len(), 1);
+        assert!((mapping.get_points()[0].ssim - 0.92).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_predict_ssim_with_duplicate_psnr_points_stays_finite() {
+        let mapping = PsnrSsimMapping {
+            points: vec![
+                MappingPoint {
+                    psnr: 30.0,
+                    ssim: 0.90,
+                },
+                MappingPoint {
+                    psnr: 30.0,
+                    ssim: 0.92,
+                },
+            ],
+        };
+
+        let predicted = mapping.predict_ssim(35.0).expect("prediction should exist");
+        assert!(predicted.is_finite());
+        assert!((predicted - 0.92).abs() < 0.001);
     }
 }
 

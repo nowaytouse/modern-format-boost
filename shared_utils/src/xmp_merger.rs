@@ -126,6 +126,40 @@ impl XmpMerger {
         Ok(xmp_files)
     }
 
+    fn read_parent_paths(&self, parent: &Path) -> Option<Vec<PathBuf>> {
+        let entries = match std::fs::read_dir(parent) {
+            Ok(entries) => entries,
+            Err(err) => {
+                if self.config.verbose {
+                    eprintln!(
+                        "  ⚠️ Failed to read directory {}: {}",
+                        parent.display(),
+                        err
+                    );
+                }
+                return None;
+            }
+        };
+
+        let mut paths = Vec::new();
+        for entry in entries {
+            match entry {
+                Ok(entry) => paths.push(entry.path()),
+                Err(err) => {
+                    if self.config.verbose {
+                        eprintln!(
+                            "  ⚠️ Skipping unreadable directory entry in {}: {}",
+                            parent.display(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
+
+        Some(paths)
+    }
+
     fn extract_xmp_metadata(&self, xmp_path: &Path) -> Result<XmpFile> {
         let output = Command::new("exiftool")
             .args([
@@ -189,9 +223,7 @@ impl XmpMerger {
 
         let xmp_root_stem = xmp_stem_raw.split('.').next().unwrap_or(&xmp_stem_raw);
 
-        for entry in std::fs::read_dir(parent).ok()? {
-            let entry = entry.ok()?;
-            let path = entry.path();
+        for path in self.read_parent_paths(parent)? {
 
             if !path.is_file() {
                 continue;
@@ -222,15 +254,16 @@ impl XmpMerger {
         let parent = xmp_path.parent()?;
         let xmp_stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
 
-        for entry in std::fs::read_dir(parent).ok()? {
-            let entry = entry.ok()?;
-            let path = entry.path();
+        for path in self.read_parent_paths(parent)? {
 
             if !path.is_file() {
                 continue;
             }
 
-            let file_stem = path.file_stem()?.to_string_lossy().to_lowercase();
+            let file_stem = match path.file_stem() {
+                Some(stem) => stem.to_string_lossy().to_lowercase(),
+                None => continue,
+            };
             let ext = match path.extension() {
                 Some(e) => e.to_string_lossy().to_lowercase(),
                 None => continue,
@@ -255,9 +288,7 @@ impl XmpMerger {
             return None;
         }
 
-        for entry in std::fs::read_dir(parent).ok()? {
-            let entry = entry.ok()?;
-            let path = entry.path();
+        for path in self.read_parent_paths(parent)? {
 
             if !path.is_file() {
                 continue;
@@ -272,7 +303,10 @@ impl XmpMerger {
                 continue;
             }
 
-            let file_stem = path.file_stem()?.to_string_lossy();
+            let file_stem = match path.file_stem() {
+                Some(stem) => stem.to_string_lossy(),
+                None => continue,
+            };
             let normalized_file = Self::normalize_filename(&file_stem);
             let root_normalized_file =
                 Self::normalize_filename(file_stem.split('.').next().unwrap_or(&file_stem));
@@ -295,9 +329,7 @@ impl XmpMerger {
         let parent = xmp_path.parent()?;
         let xmp_filename = xmp_path.file_name()?.to_string_lossy();
 
-        for entry in std::fs::read_dir(parent).ok()? {
-            let entry = entry.ok()?;
-            let path = entry.path();
+        for path in self.read_parent_paths(parent)? {
 
             if !path.is_file() {
                 continue;
@@ -312,11 +344,33 @@ impl XmpMerger {
                 continue;
             }
 
-            let output = Command::new("exiftool")
+            let output = match Command::new("exiftool")
                 .args(["-s3", "-SidecarForExtension", "-XMPFileRef"])
                 .arg(crate::safe_path_arg(&path).as_ref())
                 .output()
-                .ok()?;
+            {
+                Ok(output) if output.status.success() => output,
+                Ok(output) => {
+                    if self.config.verbose {
+                        eprintln!(
+                            "  ⚠️ exiftool sidecar scan failed for {}: status {}",
+                            path.display(),
+                            output.status
+                        );
+                    }
+                    continue;
+                }
+                Err(err) => {
+                    if self.config.verbose {
+                        eprintln!(
+                            "  ⚠️ exiftool sidecar scan failed for {}: {}",
+                            path.display(),
+                            err
+                        );
+                    }
+                    continue;
+                }
+            };
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.contains(&*xmp_filename) {
@@ -334,9 +388,7 @@ impl XmpMerger {
             return None;
         }
 
-        for entry in std::fs::read_dir(parent).ok()? {
-            let entry = entry.ok()?;
-            let path = entry.path();
+        for path in self.read_parent_paths(parent)? {
 
             if !path.is_file() {
                 continue;
@@ -351,7 +403,10 @@ impl XmpMerger {
                 continue;
             }
 
-            let file_stem = path.file_stem()?.to_string_lossy();
+            let file_stem = match path.file_stem() {
+                Some(stem) => stem.to_string_lossy(),
+                None => continue,
+            };
 
             if file_stem.contains(&*stem) || stem.contains(&*file_stem) {
                 let shorter = std::cmp::min(stem.len(), file_stem.len());
@@ -430,24 +485,47 @@ impl XmpMerger {
             eprintln!("  🔍 Searching by DocumentID: {}", xmp_doc_id);
         }
 
-        for entry in std::fs::read_dir(parent).ok()? {
-            let entry = entry.ok()?;
-            let path = entry.path();
+        for path in self.read_parent_paths(parent)? {
 
             if !path.is_file() {
                 continue;
             }
 
-            let ext = path.extension()?.to_string_lossy().to_lowercase();
+            let ext = match path.extension() {
+                Some(ext) => ext.to_string_lossy().to_lowercase(),
+                None => continue,
+            };
             if !is_potential_media(&ext) {
                 continue;
             }
 
-            let output = Command::new("exiftool")
+            let output = match Command::new("exiftool")
                 .args(["-s3", "-DocumentID"])
                 .arg(crate::safe_path_arg(&path).as_ref())
                 .output()
-                .ok()?;
+            {
+                Ok(output) if output.status.success() => output,
+                Ok(output) => {
+                    if self.config.verbose {
+                        eprintln!(
+                            "  ⚠️ exiftool DocumentID scan failed for {}: status {}",
+                            path.display(),
+                            output.status
+                        );
+                    }
+                    continue;
+                }
+                Err(err) => {
+                    if self.config.verbose {
+                        eprintln!(
+                            "  ⚠️ exiftool DocumentID scan failed for {}: {}",
+                            path.display(),
+                            err
+                        );
+                    }
+                    continue;
+                }
+            };
 
             let media_doc_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
