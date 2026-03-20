@@ -286,10 +286,10 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
         .unwrap_or("output");
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    let output_path = if input_ext.eq_ignore_ascii_case("mp4") {
-        output_dir.join(format!("{}_hevc.mp4", stem))
+    let output_path = if input_ext.eq_ignore_ascii_case("MP4") {
+        output_dir.join(format!("{}_hevc.MP4", stem))
     } else {
-        output_dir.join(format!("{}.mp4", stem))
+        output_dir.join(format!("{}.MP4", stem))
     };
 
     info!("🎬 Simple Mode: {} → HEVC MP4 (CRF 18)", input.display());
@@ -461,7 +461,7 @@ pub fn auto_convert_with_cache(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
     let target_ext = if config.apple_compat && strategy.target == TargetVideoFormat::HevcMp4 {
-        "mov"
+        "MOV"
     } else {
         strategy.target.extension()
     };
@@ -1433,8 +1433,8 @@ mod tests {
 
     #[test]
     fn test_target_format() {
-        assert_eq!(TargetVideoFormat::HevcLosslessMkv.extension(), "mkv");
-        assert_eq!(TargetVideoFormat::HevcMp4.extension(), "mp4");
+        assert_eq!(TargetVideoFormat::HevcLosslessMkv.extension(), "MKV");
+        assert_eq!(TargetVideoFormat::HevcMp4.extension(), "MP4");
     }
 
     #[test]

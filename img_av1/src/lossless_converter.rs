@@ -965,7 +965,7 @@ mod tests {
             ..Default::default()
         };
         let output = get_output_path(input, "jxl", &options).unwrap();
-        assert_eq!(output, Path::new("/path/to/image.jxl"));
+        assert_eq!(output, Path::new("/path/to/image.JXL"));
     }
 
     #[test]
@@ -977,12 +977,12 @@ mod tests {
             ..Default::default()
         };
         let output = get_output_path(input, "avif", &options).unwrap();
-        assert_eq!(output, Path::new("/output/image.avif"));
+        assert_eq!(output, Path::new("/output/image.AVIF"));
     }
 
     #[test]
     fn test_get_output_path_same_file_error() {
-        let input = Path::new("/path/to/image.jxl");
+        let input = Path::new("/path/to/image.JXL");
         let options = ConvertOptions {
             output_dir: None,
             base_dir: None,
