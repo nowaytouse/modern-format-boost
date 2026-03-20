@@ -101,8 +101,22 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     let reader = BufReader::new(&file);
     let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
 
-    for path in reader.lines().map_while(Result::ok) {
-        processed.insert(path);
+    let mut read_error = None;
+    for line in reader.lines() {
+        match line {
+            Ok(path) => {
+                processed.insert(path);
+            }
+            Err(err) => {
+                if read_error.is_none() {
+                    read_error = Some(err);
+                }
+            }
+        }
+    }
+
+    if let Some(err) = read_error {
+        return Err(Box::new(err));
     }
 
     Ok(())
@@ -441,7 +455,7 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     } else {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
-        format!("size increased {}", size_diff)
+        format!("size increased {:.1}% ({})", -reduction_pct, size_diff)
     }
 }
 
@@ -583,10 +597,10 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
 /// which violated the program's core requirement of comprehensive metadata preservation.
 #[deprecated(since = "0.10.71", note = "Removed. Use commit_temp_to_output_with_metadata instead.")]
 pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std::io::Result<bool> {
-    panic!(
-        "commit_temp_to_output has been removed. Use commit_temp_to_output_with_metadata instead.\n\
-         All conversions MUST preserve metadata from the original file."
-    );
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "commit_temp_to_output has been removed; use commit_temp_to_output_with_metadata instead",
+    ))
 }
 
 /// Commits a temp file with complete metadata preservation from the original file.
@@ -1100,6 +1114,20 @@ mod tests {
         let path4 = temp_path_for_output(Path::new("name.with.dots.mov")).to_string_lossy().to_string();
         assert!(path4.starts_with("name.with.dots.tmp."));
         assert!(path4.ends_with(".mov"));
+    }
+
+    #[test]
+    fn test_removed_commit_temp_to_output_returns_error() {
+        #[allow(deprecated)]
+        let err = commit_temp_to_output(Path::new("temp.tmp"), Path::new("out.mp4"), false)
+            .expect_err("removed API should return an error instead of panicking");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        assert!(
+            err.to_string().contains("commit_temp_to_output has been removed"),
+            "unexpected error message: {}",
+            err
+        );
     }
 
     #[test]
