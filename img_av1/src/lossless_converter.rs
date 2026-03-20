@@ -14,6 +14,46 @@ pub use shared_utils::conversion::{
     ConversionResult, ConvertOptions,
 };
 
+fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
+    shared_utils::copy_on_skip_or_fail(
+        input,
+        options.output_dir.as_deref(),
+        options.base_dir.as_deref(),
+        options.verbose,
+    )
+    .unwrap_or_default()
+}
+
+/// Finalize conversion with size check and metadata preservation.
+/// Common pattern: commit temp → check size → finalize.
+/// Returns ConversionResult on success or error.
+fn finalize_with_size_check(
+    input: &Path,
+    temp_output: &Path,
+    output: &Path,
+    input_size: u64,
+    output_size: u64,
+    options: &ConvertOptions,
+    format_label: &str,
+    extra_info: Option<String>,
+) -> Result<ConversionResult> {
+    // Commit temp file to final output WITH METADATA PRESERVATION
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(temp_output, output, options.force, Some(input))? {
+        return Ok(ConversionResult::skipped_exists(input, output));
+    }
+
+    // Check size tolerance (compress mode, oversized check)
+    if let Some(skipped) =
+        check_size_tolerance(input, output, input_size, output_size, options, format_label)
+    {
+        return Ok(skipped);
+    }
+
+    // Finalize with metadata preservation
+    finalize_conversion(input, output, input_size, format_label, extra_info.as_deref(), options)
+        .map_err(ImgQualityError::IoError)
+}
+
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -25,6 +65,22 @@ pub fn convert_to_jxl(
     }
 
     let input_size = fs::metadata(input)?.len();
+
+    if let Some(ext) = input.extension() {
+        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+            if options.verbose {
+                eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
+            }
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            return Ok(ConversionResult::skipped_custom(
+                input,
+                input_size,
+                "PNG",
+                "Size < 500KB threshold",
+            ));
+        }
+    }
     let output = get_output_path(input, "jxl", options)?;
 
     if let Some(parent) = output.parent() {
@@ -118,18 +174,16 @@ pub fn convert_to_jxl(
                 return Err(e);
             }
 
-            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
-            {
-                return Ok(skipped);
-            }
-
-            finalize_conversion(input, &output, input_size, "JXL", None, options)
-                .map_err(ImgQualityError::IoError)
+            finalize_with_size_check(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                output_size,
+                options,
+                "JXL",
+                None,
+            )
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -220,18 +274,17 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
             let _ = fs::remove_file(&temp_output);
             return Err(e);
         }
-        if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
-            return Ok(ConversionResult::skipped_exists(input, &output));
-        }
-        return finalize_conversion(
+        let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
+        return finalize_with_size_check(
             input,
+            &temp_output,
             &output,
             input_size,
+            output_size,
+            options,
             "JPEG lossless transcode",
             None,
-            options,
-        )
-        .map_err(ImgQualityError::IoError);
+        );
     }
 
     let stderr = String::from_utf8_lossy(&output_cmd.stderr);
@@ -308,6 +361,22 @@ pub fn convert_to_avif(
     }
 
     let input_size = fs::metadata(input)?.len();
+
+    if let Some(ext) = input.extension() {
+        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+            if options.verbose {
+                eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
+            }
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            return Ok(ConversionResult::skipped_custom(
+                input,
+                input_size,
+                "PNG",
+                "Size < 500KB threshold",
+            ));
+        }
+    }
     let output = get_output_path(input, "avif", options)?;
 
     if let Some(parent) = output.parent() {
@@ -339,11 +408,17 @@ pub fn convert_to_avif(
                 let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
             }
-            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-            finalize_conversion(input, &output, input_size, "AVIF", None, options)
-                .map_err(ImgQualityError::IoError)
+            let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
+            finalize_with_size_check(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                output_size,
+                options,
+                "AVIF",
+                None,
+            )
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&temp_output);
@@ -376,6 +451,22 @@ pub fn convert_to_avif_lossless(
     }
 
     let input_size = fs::metadata(input)?.len();
+
+    if let Some(ext) = input.extension() {
+        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+            if options.verbose {
+                eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
+            }
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            return Ok(ConversionResult::skipped_custom(
+                input,
+                input_size,
+                "PNG",
+                "Size < 500KB threshold",
+            ));
+        }
+    }
     let output = get_output_path(input, "avif", options)?;
 
     if let Some(parent) = output.parent() {
@@ -405,11 +496,17 @@ pub fn convert_to_avif_lossless(
                 let _ = fs::remove_file(&temp_output);
                 return Err(ImgQualityError::ConversionError(e));
             }
-            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-            finalize_conversion(input, &output, input_size, "Lossless AVIF", None, options)
-                .map_err(ImgQualityError::IoError)
+            let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
+            finalize_with_size_check(
+                input,
+                &temp_output,
+                &output,
+                input_size,
+                output_size,
+                options,
+                "Lossless AVIF",
+                None,
+            )
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&temp_output);
@@ -518,6 +615,22 @@ pub fn convert_to_jxl_matched(
     }
 
     let input_size = fs::metadata(input)?.len();
+
+    if let Some(ext) = input.extension() {
+        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+            if options.verbose {
+                eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
+            }
+            copy_original_on_skip(input, options);
+            mark_as_processed(input);
+            return Ok(ConversionResult::skipped_custom(
+                input,
+                input_size,
+                "PNG",
+                "Size < 500KB threshold",
+            ));
+        }
+    }
     let output = get_output_path(input, "jxl", options)?;
 
     if let Some(parent) = output.parent() {
@@ -578,26 +691,17 @@ pub fn convert_to_jxl_matched(
                 return Err(e);
             }
 
-            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
-                return Ok(ConversionResult::skipped_exists(input, &output));
-            }
-
-            if let Some(skipped) =
-                check_size_tolerance(input, &output, input_size, output_size, options, "JXL")
-            {
-                return Ok(skipped);
-            }
-
             let extra = format!("d={:.2}", distance);
-            finalize_conversion(
+            finalize_with_size_check(
                 input,
+                &temp_output,
                 &output,
                 input_size,
-                "Quality-matched JXL",
-                Some(&extra),
+                output_size,
                 options,
+                "Quality-matched JXL",
+                Some(extra),
             )
-            .map_err(ImgQualityError::IoError)
         }
         Ok(output_cmd) => {
             let _ = fs::remove_file(&temp_output);

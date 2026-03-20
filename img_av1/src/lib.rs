@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod constants;
 pub mod formats;
 pub mod heic_analysis;
 pub mod jpeg_analysis;
