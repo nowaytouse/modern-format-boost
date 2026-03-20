@@ -264,12 +264,21 @@ fn encode_to_hevc(
             use std::io::{BufRead, BufReader, Read};
             let reader = BufReader::with_capacity(8192, stderr.take(10 * 1024 * 1024));
             let mut output = String::with_capacity(64 * 1024);
-            for line in reader.lines().take(100_000).map_while(Result::ok) {
-                if output.len() + line.len() + 1 > 1024 * 1024 {
-                    break;
+            for line in reader.lines().take(100_000) {
+                match line {
+                    Ok(line) => {
+                        if output.len() + line.len() + 1 > 1024 * 1024 {
+                            break;
+                        }
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
+                    Err(err) => {
+                        warn!("Failed to read ffmpeg decode stderr: {}", err);
+                        output.push_str(&format!("[stderr read error: {}]\n", err));
+                        break;
+                    }
                 }
-                output.push_str(&line);
-                output.push('\n');
             }
             output
         })
@@ -280,12 +289,21 @@ fn encode_to_hevc(
             use std::io::{BufRead, BufReader, Read};
             let reader = BufReader::with_capacity(8192, stderr.take(10 * 1024 * 1024));
             let mut output = String::with_capacity(64 * 1024);
-            for line in reader.lines().take(100_000).map_while(Result::ok) {
-                if output.len() + line.len() + 1 > 1024 * 1024 {
-                    break;
+            for line in reader.lines().take(100_000) {
+                match line {
+                    Ok(line) => {
+                        if output.len() + line.len() + 1 > 1024 * 1024 {
+                            break;
+                        }
+                        output.push_str(&line);
+                        output.push('\n');
+                    }
+                    Err(err) => {
+                        warn!("Failed to read x265 stderr: {}", err);
+                        output.push_str(&format!("[stderr read error: {}]\n", err));
+                        break;
+                    }
                 }
-                output.push_str(&line);
-                output.push('\n');
             }
             output
         })

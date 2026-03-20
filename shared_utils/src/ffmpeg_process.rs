@@ -63,9 +63,18 @@ impl FfmpegProcess {
         let stderr_thread = thread::spawn(move || {
             let mut buf = String::new();
             let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                buf.push_str(&line);
-                buf.push('\n');
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        buf.push_str(&line);
+                        buf.push('\n');
+                    }
+                    Err(err) => {
+                        error!("Failed to read FFmpeg stderr: {}", err);
+                        buf.push_str(&format!("[stderr read error: {}]\n", err));
+                        break;
+                    }
+                }
             }
             buf
         });
