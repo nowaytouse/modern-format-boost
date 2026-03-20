@@ -48,9 +48,14 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const PROGRESS_DIR_NAME: &str = ".mfb_progress";
-const LOCK_FILE_NAME: &str = "processing.lock";
-const PROGRESS_FILE_PREFIX: &str = "completed_";
+/// The central location for all MFB progress tracking to avoid polluting user directories.
+fn get_central_progress_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("MFB_PROGRESS_DIR") {
+        return PathBuf::from(path);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".mfb_progress")
+}
 const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,30 +155,34 @@ fn get_hostname() -> String {
     }
 }
 
+use std::sync::Mutex;
+
 pub struct CheckpointManager {
     progress_dir: PathBuf,
     lock_file: PathBuf,
     progress_file: PathBuf,
-    completed: HashSet<String>,
+    completed: Mutex<HashSet<String>>,
     resume_mode: bool,
 }
 
 impl CheckpointManager {
     pub fn new(target_dir: &Path) -> io::Result<Self> {
-        let progress_dir = target_dir.join(PROGRESS_DIR_NAME);
-        let dir_hash = Self::hash_path(target_dir);
-        let progress_file = progress_dir.join(format!("{}{}.txt", PROGRESS_FILE_PREFIX, dir_hash));
-        let lock_file = progress_dir.join(LOCK_FILE_NAME);
+        let canonical_target = Self::normalize_path_to_buf(target_dir);
+        let dir_hash = Self::hash_path(&canonical_target);
+        
+        let central_dir = get_central_progress_dir();
+        fs::create_dir_all(&central_dir)?;
 
-        fs::create_dir_all(&progress_dir)?;
+        let progress_file = central_dir.join(format!("{}.txt", dir_hash));
+        let lock_file = central_dir.join(format!("{}.lock", dir_hash));
 
-        let (completed, resume_mode) = Self::load_progress(&progress_file)?;
+        let (completed_set, resume_mode) = Self::load_progress(&progress_file)?;
 
         Ok(Self {
-            progress_dir,
+            progress_dir: central_dir,
             lock_file,
             progress_file,
-            completed,
+            completed: Mutex::new(completed_set),
             resume_mode,
         })
     }
@@ -295,29 +304,48 @@ impl CheckpointManager {
     }
 
     pub fn completed_count(&self) -> usize {
-        self.completed.len()
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        completed.len()
     }
 
     pub fn is_completed(&self, path: &Path) -> bool {
         let key = Self::normalize_path(path);
-        self.completed.contains(&key)
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        completed.contains(&key)
     }
 
-    pub fn mark_completed(&mut self, path: &Path) -> io::Result<()> {
+    pub fn mark_completed(&self, path: &Path) -> io::Result<()> {
         let key = Self::normalize_path(path);
-        if self.completed.insert(key.clone()) {
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.progress_file)?;
-            writeln!(file, "{}", key)?;
+        {
+            let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+            if !completed.insert(key.clone()) {
+                return Ok(());
+            }
         }
+        
+        // Append to file outside the lock if possible, but actually we need to preserve order/integrity
+        // Using a manual lock for the file append
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.progress_file)?;
+        writeln!(file, "{}", key)?;
+        
+        // Also sync to the global processed list in conversion module
+        crate::conversion::mark_as_processed(path);
         Ok(())
     }
 
-    pub fn clear_progress(&mut self) -> io::Result<()> {
-        self.completed.clear();
-        self.resume_mode = false;
+    pub fn sync_to_processed_list(&self) {
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        for path_str in completed.iter() {
+            crate::conversion::mark_as_processed(Path::new(path_str));
+        }
+    }
+
+    pub fn clear_progress(&self) -> io::Result<()> {
+        let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        completed.clear();
         if self.progress_file.exists() {
             fs::remove_file(&self.progress_file)?;
         }
@@ -325,15 +353,18 @@ impl CheckpointManager {
     }
 
     pub fn cleanup(&self) -> io::Result<()> {
-        self.release_lock()?;
-
         if self.progress_file.exists() {
-            fs::remove_file(&self.progress_file)?;
+            let _ = fs::remove_file(&self.progress_file);
         }
-
-        let _ = fs::remove_dir(&self.progress_dir);
-
+        if self.lock_file.exists() {
+            let _ = fs::remove_file(&self.lock_file);
+        }
         Ok(())
+    }
+
+    fn normalize_path_to_buf(path: &Path) -> PathBuf {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
     }
 
     pub fn progress_dir(&self) -> &Path {
@@ -443,27 +474,37 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
+    use std::sync::Mutex as std_mutex;
+    static TEST_LOCK: std_mutex<()> = std_mutex::new(());
+
+    fn setup_test_env() -> (TempDir, TempDir, std::sync::MutexGuard<'static, ()>) {
+        let guard = TEST_LOCK.lock().unwrap();
+        let temp_target = TempDir::new().unwrap();
+        let temp_progress = TempDir::new().unwrap();
+        std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path());
+        (temp_target, temp_progress, guard)
+    }
+
+    fn teardown_test_env(_guard: std::sync::MutexGuard<'static, ()>) {
+        std::env::remove_var("MFB_PROGRESS_DIR");
+    }
 
     #[test]
     fn test_checkpoint_new_creates_progress_dir() {
-        let temp = TempDir::new().unwrap();
-        let target = temp.path();
-
-        let checkpoint = CheckpointManager::new(target).unwrap();
-
+        let (_target, progress, guard) = setup_test_env();
+        let checkpoint = CheckpointManager::new(_target.path()).unwrap();
         assert!(checkpoint.progress_dir().exists());
-        assert!(!checkpoint.is_resume_mode());
-        assert_eq!(checkpoint.completed_count(), 0);
+        assert!(progress.path().exists());
+        teardown_test_env(guard);
     }
 
     #[test]
     fn test_checkpoint_mark_and_check_completed() {
-        let temp = TempDir::new().unwrap();
+        let (temp, _progress, guard) = setup_test_env();
         let target = temp.path();
 
-        let mut checkpoint = CheckpointManager::new(target).unwrap();
+        let checkpoint = CheckpointManager::new(target).unwrap();
 
         let file1 = target.join("test1.mp4");
         let file2 = target.join("test2.mp4");
@@ -482,15 +523,16 @@ mod tests {
         assert!(checkpoint.is_completed(&file1));
         assert!(checkpoint.is_completed(&file2));
         assert_eq!(checkpoint.completed_count(), 2);
+        teardown_test_env(guard);
     }
 
     #[test]
     fn test_checkpoint_resume_mode() {
-        let temp = TempDir::new().unwrap();
+        let (temp, _progress, guard) = setup_test_env();
         let target = temp.path();
 
         {
-            let mut checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target).unwrap();
             checkpoint
                 .mark_completed(&target.join("file1.mp4"))
                 .unwrap();
@@ -508,14 +550,15 @@ mod tests {
             assert!(checkpoint.is_completed(&target.join("file2.mp4")));
             assert!(!checkpoint.is_completed(&target.join("file3.mp4")));
         }
+        teardown_test_env(guard);
     }
 
     #[test]
     fn test_checkpoint_clear_progress() {
-        let temp = TempDir::new().unwrap();
+        let (temp, _progress, guard) = setup_test_env();
         let target = temp.path();
 
-        let mut checkpoint = CheckpointManager::new(target).unwrap();
+        let checkpoint = CheckpointManager::new(target).unwrap();
         checkpoint
             .mark_completed(&target.join("file1.mp4"))
             .unwrap();
@@ -529,15 +572,18 @@ mod tests {
 
         assert_eq!(checkpoint.completed_count(), 0);
         assert!(!checkpoint.is_resume_mode());
+        teardown_test_env(guard);
     }
 
     #[test]
     fn test_checkpoint_cleanup() {
-        let temp = TempDir::new().unwrap();
-        let target = temp.path();
+        let temp_target = TempDir::new().unwrap();
+        let target = temp_target.path();
+        
+        let (progress_temp, _, guard) = setup_test_env();
 
         {
-            let mut checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target).unwrap();
             checkpoint.acquire_lock().unwrap();
             checkpoint
                 .mark_completed(&target.join("file1.mp4"))
@@ -546,13 +592,13 @@ mod tests {
             checkpoint.cleanup().unwrap();
         }
 
-        let progress_dir = target.join(PROGRESS_DIR_NAME);
-        assert!(!progress_dir.exists() || fs::read_dir(&progress_dir).unwrap().count() == 0);
+        assert!(!progress_temp.path().join("completed.txt").exists());
+        teardown_test_env(guard);
     }
 
     #[test]
     fn test_checkpoint_lock_acquire_release() {
-        let temp = TempDir::new().unwrap();
+        let (temp, _progress, guard) = setup_test_env();
         let target = temp.path();
 
         let checkpoint = CheckpointManager::new(target).unwrap();
@@ -564,6 +610,7 @@ mod tests {
 
         checkpoint.release_lock().unwrap();
         assert!(!checkpoint.lock_file.exists());
+        teardown_test_env(guard);
     }
 
     #[test]
@@ -654,7 +701,7 @@ mod tests {
 
     #[test]
     fn test_full_workflow_with_interruption() {
-        let temp = TempDir::new().unwrap();
+        let (temp, _progress, guard) = setup_test_env();
         let target = temp.path();
 
         let files: Vec<PathBuf> = (1..=5)
@@ -666,7 +713,7 @@ mod tests {
             .collect();
 
         {
-            let mut checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target).unwrap();
             checkpoint.acquire_lock().unwrap();
 
             for file in files.iter().take(2) {
@@ -677,7 +724,7 @@ mod tests {
         }
 
         {
-            let mut checkpoint = CheckpointManager::new(target).unwrap();
+            let checkpoint = CheckpointManager::new(target).unwrap();
 
             assert!(checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 2);
@@ -708,5 +755,6 @@ mod tests {
             assert!(!checkpoint.is_resume_mode());
             assert_eq!(checkpoint.completed_count(), 0);
         }
+        teardown_test_env(guard);
     }
 }

@@ -24,8 +24,9 @@ hide_cursor() { printf '\033[?25l'; }
 show_cursor() { printf '\033[?25h'; }
 clear_screen() { printf '\033[2J\033[H'; }
 contains_control_chars() {
-    local value="$1"
-    [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\0'* ]]
+    # Strictly check for Newline (\012) and Carriage Return (\015) using octal literals.
+    # This avoids false positives with multi-byte or C1 control bytes in some locales.
+    [[ "$1" == *$'\012'* || "$1" == *$'\015'* ]]
 }
 
 validate_target_dir() {
@@ -235,6 +236,7 @@ draw_header() {
     echo -e "${BLUE}│${RESET}  ${DIM}PREMIUM MEDIA OPTIMIZER${RESET}               ${BLUE}│${RESET}"
     echo -e "${BLUE}│${RESET}  ${GREEN}●${RESET} ${DIM}No Data Loss${RESET}   ${GREEN}●${RESET} ${DIM}Smart Conversion${RESET}   ${GREEN}●${RESET} ${DIM}Auto-Repair${RESET}               ${BLUE}│${RESET}"
     echo -e "${BLUE}╰$(printf '─%.0s' {1..70})╯${RESET}"
+    echo -e "   ${RED}⚠️  WARNING: Always keep a backup of your original media before optimization.${RESET}"
     echo ""
 }
 
@@ -254,7 +256,7 @@ check_tools() {
 }
 
 get_target_directory() {
-    if [[ -z "$TARGET_DIR" ]]; then
+    if [[ -z "$TARGET_DIR" && -z "$FROM_APP" ]]; then
         draw_header
         echo -e "${CYAN}📂 Waiting for input...${RESET}"
         echo -e "${DIM}   Please drag and drop a folder here, then press Enter.${RESET}"
@@ -297,8 +299,8 @@ select_mode() {
     SELECTED=0
     hide_cursor
 
-    local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors" "🧹 Clean Cache & Logs")
-    local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import." "Clear metadata cache and session logs to free disk space.")
+    local options=("📂 Output to Adjacent Folder" "🚀 In-Place Optimization" "🩹 Fix iCloud Import Errors" "🧹 Purge Processing Data")
+    local descriptions=("Safe mode. Keeps originals untouched." "Replaces original files. Saves disk space." "Fix corrupted Brotli EXIF metadata that prevents iCloud Photos import." "Clear analysis cache, session logs, and ALL resume progress.")
     
     while true; do
         clear_screen
@@ -362,7 +364,8 @@ select_mode() {
         echo ""
     else
         OUTPUT_MODE="cache_clean"
-        echo -e "\n${CYAN}🧹 CACHE CLEANING MODE${RESET}"
+        echo -e "\n${RED}🔥 DATA PURGE MODE${RESET}"
+        echo -e "${DIM}   Analysis cache and ALL task progress will be permanently deleted.${RESET}"
         echo ""
     fi
 }
@@ -567,7 +570,9 @@ _main() {
             ULTIMATE_MODE=true
         elif [[ "$arg" == "--verbose" ]] || [[ "$arg" == "-v" ]]; then
             VERBOSE_MODE=true
-        elif [[ -d "$arg" ]]; then
+        else
+            # Take any non-explicit flag argument as a path, even if it starts with '-'
+            # This handles both '-' prefixed folders and encoding mismatches.
             TARGET_DIR="$arg"
             validate_target_dir
         fi
@@ -575,12 +580,15 @@ _main() {
 
     check_tools
     get_target_directory
-    echo ""
-    echo -e "${CYAN}📋 Configuration:${RESET}"
-    echo -e "   ${DIM}Target: ${RESET}${BOLD}$TARGET_DIR${RESET}"
-    [[ "$ULTIMATE_MODE" == true ]] && echo -e "   ${MAGENTA}🔥 Ultimate Mode: ${RESET}${GREEN}ENABLED${RESET}"
-    [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}"
-    echo ""
+
+    if [[ -z "$FROM_APP" ]]; then
+        echo ""
+        echo -e "${CYAN}📋 Configuration:${RESET}"
+        echo -e "   ${DIM}Target: ${RESET}${BOLD}$TARGET_DIR${RESET}"
+        [[ "$ULTIMATE_MODE" == true ]] && echo -e "   ${MAGENTA}🔥 Ultimate Mode: ${RESET}${GREEN}ENABLED${RESET}"
+        [[ "$VERBOSE_MODE" == true ]] && echo -e "   ${CYAN}💬 Verbose: ${RESET}${GREEN}ENABLED${RESET}"
+        echo ""
+    fi
 
     safety_check
 

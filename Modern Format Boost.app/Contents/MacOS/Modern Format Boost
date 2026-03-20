@@ -6,15 +6,18 @@
 # Get app bundle path (zsh: $0 is script path)
 APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJECT_ROOT="$(dirname "$APP_DIR")"
+export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8
 PROCESSOR_SCRIPT="$PROJECT_ROOT/scripts/drag_and_drop_processor.sh"
 
 contains_control_chars() {
-    local value="$1"
-    [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\0'* ]]
+    # Strictly check for Newline (\012) and Carriage Return (\015) using octal literals.
+    [[ "$1" == *$'\012'* || "$1" == *$'\015'* ]]
 }
 
 shell_quote() {
-    printf '%q' "$1"
+    # Safer quoting for Chinese paths: wrap in single quotes and escape any single quotes within the path
+    echo "'${1//\'/\'\\\'\'}'"
 }
 
 escape_applescript_string() {
