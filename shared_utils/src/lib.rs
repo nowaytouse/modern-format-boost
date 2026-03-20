@@ -157,7 +157,6 @@ pub use safety::*;
 pub use tools::*;
 pub use video::*;
 
-#[allow(deprecated)] // re-export for quality dimensions; routing use is deprecated
 pub use image_quality_detector::{
     analyze_image_quality, analyze_image_quality_from_path, log_media_info_for_image_quality,
     ImageContentType, ImageQualityAnalysis,
@@ -184,7 +183,6 @@ pub use video_explorer::{
     METADATA_MARGIN_PERCENT, SMALL_FILE_THRESHOLD,
 };
 
-#[allow(deprecated)]
 pub use video_explorer::{
     explore_compress_only_gpu, explore_compress_with_quality_gpu,
     explore_precise_quality_match_gpu, explore_precise_quality_match_with_compression_gpu,

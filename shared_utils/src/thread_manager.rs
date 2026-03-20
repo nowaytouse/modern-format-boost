@@ -13,8 +13,6 @@ use crate::system_memory::{self, MemoryPressure};
 
 static MULTI_INSTANCE_MODE: AtomicBool = AtomicBool::new(false);
 
-static OPTIMAL_THREADS: OnceLock<usize> = OnceLock::new();
-
 #[derive(Debug, Clone)]
 pub struct ThreadConfig {
     pub core_percentage: usize,
@@ -113,6 +111,21 @@ fn apply_memory_cap(parallel_tasks: usize, child_threads: usize) -> (usize, usiz
     (parallel_tasks, child_threads)
 }
 
+fn apply_multi_instance_cap(
+    workload: WorkloadType,
+    parallel_tasks: usize,
+    child_threads: usize,
+) -> (usize, usize) {
+    if !is_multi_instance() {
+        return (parallel_tasks, child_threads);
+    }
+
+    match workload {
+        WorkloadType::Image => ((parallel_tasks / 2).max(1), child_threads.max(1)),
+        WorkloadType::Video => (parallel_tasks.min(1), child_threads.div_ceil(2).max(1)),
+    }
+}
+
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
     let total_cores = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -128,14 +141,17 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
             let child_threads = 2;
             let parallel_tasks = (available_cores / child_threads).max(1);
             let parallel_tasks = parallel_tasks.clamp(1, 8);
-            apply_memory_cap(parallel_tasks, child_threads)
+            (parallel_tasks, child_threads)
         }
         WorkloadType::Video => {
             let parallel_tasks = if available_cores >= 8 { 2 } else { 1 };
             let child_threads = (available_cores / parallel_tasks).max(1);
-            apply_memory_cap(parallel_tasks, child_threads)
+            (parallel_tasks, child_threads)
         }
     };
+    let (parallel_tasks, child_threads) =
+        apply_multi_instance_cap(workload, parallel_tasks, child_threads);
+    let (parallel_tasks, child_threads) = apply_memory_cap(parallel_tasks, child_threads);
 
     ThreadAllocation {
         parallel_tasks: parallel_tasks.max(1),
@@ -144,7 +160,7 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
 }
 
 pub fn get_optimal_threads() -> usize {
-    *OPTIMAL_THREADS.get_or_init(|| get_balanced_thread_config(WorkloadType::Image).parallel_tasks)
+    get_balanced_thread_config(WorkloadType::Image).parallel_tasks
 }
 
 /// Optional hint for logging when parallelism was reduced due to memory (e.g. "low memory: reduced parallelism").
@@ -239,5 +255,25 @@ mod tests {
     fn test_rsync_path() {
         let path = get_rsync_path();
         assert!(!path.is_empty());
+    }
+
+    #[test]
+    fn test_apply_multi_instance_cap_reduces_image_parallelism() {
+        enable_multi_instance_mode();
+        let (parallel_tasks, child_threads) = apply_multi_instance_cap(WorkloadType::Image, 6, 2);
+        disable_multi_instance_mode();
+
+        assert_eq!(parallel_tasks, 3);
+        assert_eq!(child_threads, 2);
+    }
+
+    #[test]
+    fn test_apply_multi_instance_cap_reduces_video_parallelism() {
+        enable_multi_instance_mode();
+        let (parallel_tasks, child_threads) = apply_multi_instance_cap(WorkloadType::Video, 2, 8);
+        disable_multi_instance_mode();
+
+        assert_eq!(parallel_tasks, 1);
+        assert_eq!(child_threads, 4);
     }
 }
