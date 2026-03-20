@@ -165,3 +165,47 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
     }
     Ok(())
 }
+
+/// Appends MFB branding to the macOS Finder comment (kMDItemFinderComment).
+/// This uses AppleScript to ensure we interact properly with the Finder's database,
+/// as raw xattr writes for 'com.apple.metadata:kMDItemFinderComment' require
+/// complex binary plist encoding and may not trigger Spotlight index updates correctly.
+pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
+    use std::process::Command;
+
+    let path_str = path.to_string_lossy();
+    let branding = "[Optimized by Modern Format Boost]";
+
+    // AppleScript logic:
+    // 1. Get existing comment.
+    // 2. If it contains the branding, skip.
+    // 3. Otherwise, prepend branding followed by a newline (if original comment existed).
+    let script = format!(
+        "tell application \"Finder\"
+            set theFile to (POSIX file \"{path}\" as alias)
+            set oldComment to (comment of theFile)
+            if oldComment does not contain \"{branding}\" then
+                if oldComment is \"\" then
+                    set newComment to \"{branding}\"
+                else
+                    set newComment to \"{branding}\" & return & oldComment
+                end if
+                set comment of theFile to newComment
+            end if
+        end tell",
+        path = path_str.replace("\"", "\\\""),
+        branding = branding
+    );
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .output()?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(io::Error::new(io::ErrorKind::Other, format!("AppleScript failed: {}", err)));
+    }
+
+    Ok(())
+}

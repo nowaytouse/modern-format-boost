@@ -133,6 +133,12 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
         }
         // Network xattrs (WhereFroms, UserTags) — copy + verify
         let _ = network::preserve_network_metadata(src, dst);
+
+        // Apple Finder Comment Branding
+        if let Err(e) = macos::append_mfb_branding(dst) {
+            tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
+        }
+
         // Unix permission bits (copyfile covers STAT but be explicit)
         if let Ok(meta) = std::fs::metadata(src) {
             use std::os::unix::fs::PermissionsExt;
