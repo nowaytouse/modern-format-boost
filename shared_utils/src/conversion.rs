@@ -1122,7 +1122,7 @@ mod tests {
 
     #[test]
     fn test_removed_commit_temp_to_output_returns_error() {
-        #[allow(deprecated)]
+        #[expect(deprecated, reason = "regression test for removed compatibility shim")]
         let err = commit_temp_to_output(Path::new("temp.tmp"), Path::new("out.mp4"), false)
             .expect_err("removed API should return an error instead of panicking");
 

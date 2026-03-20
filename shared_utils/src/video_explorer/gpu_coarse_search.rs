@@ -967,7 +967,6 @@ fn is_image_container(path: &Path) -> bool {
     )
 }
 
-#[allow(unused_assignments)]
 #[allow(clippy::too_many_arguments)]
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
@@ -987,8 +986,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     best_psnr_uv_tracked: &mut Option<(f64, f64)>,
     gpu_executed: bool,
 ) -> Result<ExploreResult> {
-    #[allow(unused_mut)]
-    let mut log = Vec::new();
+    let log = Vec::new();
     let mut early_insight_triggered = false;
 
     let input_size = fs::metadata(input)
@@ -1313,8 +1311,6 @@ fn cpu_fine_tune_from_gpu_boundary(
 
     let mut best_crf: Option<f32> = None;
     let mut best_size: Option<u64> = None;
-    #[allow(unused_assignments)]
-    let mut best_ssim_tracked: Option<f64> = None;
 
     crate::verbose_eprintln!(
         "{}Step: {:.2} | GPU boundary: CRF {:.1}{}",
@@ -1402,7 +1398,6 @@ fn cpu_fine_tune_from_gpu_boundary(
     if is_gpu_effectively_compressed {
         best_crf = Some(gpu_boundary_crf);
         best_size = Some(gpu_size);
-        best_ssim_tracked = gpu_ssim;
         
         let mut gpu_ultimate_metrics_str = String::new();
         if ultimate_mode {
@@ -1502,15 +1497,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut current_step = initial_step;
         let mut wall_hits: u32 = 0;
         let mut test_crf = gpu_boundary_crf - current_step;
-        #[allow(unused_assignments)]
-        let mut prev_ssim_opt = gpu_ssim;
-        #[allow(unused_variables, unused_assignments)]
-        let mut _prev_size = gpu_size;
         let mut last_good_crf = gpu_boundary_crf;
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
-        #[allow(unused_assignments)]
-        let mut overshoot_detected = false;
 
         let gpu_ssim_baseline = match gpu_ssim {
             Some(s) => s,
@@ -1587,12 +1576,12 @@ fn cpu_fine_tune_from_gpu_boundary(
             let is_effectively_compressed = size < input_size;
 
             if is_effectively_compressed {
+                let prev_ssim_opt = last_good_ssim;
                 last_good_crf = test_crf;
                 last_good_size = size;
                 last_good_ssim = current_ssim_opt;
                 best_crf = Some(test_crf);
                 best_size = Some(size);
-                best_ssim_tracked = current_ssim_opt;
 
                 let should_stop = match (current_ssim_opt, prev_ssim_opt) {
                     (Some(current_ssim), Some(prev_ssim)) => {
@@ -1766,13 +1755,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     break;
                 }
 
-                prev_ssim_opt = current_ssim_opt;
-                _prev_size = size;
-
                 test_crf -= current_step;
             } else {
-                overshoot_detected = true;
-                
                 wall_hits += 1;
 
                 let _total_file_diff = crate::format_size_diff(size as i64 - input_size as i64);
@@ -1839,9 +1823,8 @@ fn cpu_fine_tune_from_gpu_boundary(
             if best_crf.is_none_or(|c| c > last_good_crf) {
                 best_crf = Some(last_good_crf);
                 best_size = Some(last_good_size);
-                best_ssim_tracked = last_good_ssim;
             }
-        } else if overshoot_detected {
+        } else if wall_hits > 0 {
             crate::log_eprintln!();
             crate::log_eprintln!(
                 "   {} [CPU] Size wall hit: overshoot at CRF < {:.1}{}",
@@ -1875,7 +1858,6 @@ fn cpu_fine_tune_from_gpu_boundary(
             if best_crf.is_none_or(|c| c > last_good_crf) {
                 best_crf = Some(last_good_crf);
                 best_size = Some(last_good_size);
-                best_ssim_tracked = last_good_ssim;
             }
         }
     } else {
@@ -1957,7 +1939,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                             if best_crf.is_none() {
                                 best_crf = Some(best_tested_crf);
                                 best_size = Some(best_tested_size);
-                                best_ssim_tracked = calculate_ssim_quick();
                             }
                             early_insight_triggered = true;
                             break;
@@ -1972,7 +1953,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                 if best_crf.is_none_or(|c| test_crf < c) {
                     best_crf = Some(test_crf);
                     best_size = Some(size);
-                    best_ssim_tracked = calculate_ssim_quick();
                 }
                 found_compress_point = true;
                 use crate::modern_ui::colors::*;
@@ -2016,7 +1996,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut consecutive_failures = 0u32;
             let mut consecutive_01_successes = 0u32;
             let mut consecutive_compressions = 0u32;
-            let mut prev_ssim_opt = best_ssim_tracked;
+            let mut prev_ssim_opt = calculate_ssim_quick();
             let mut prev_size = best_size.unwrap_or(0);
             let search_floor = if ultimate_mode { 0.0 } else { min_crf };
             let mut test_crf = compress_point - current_step;
@@ -2073,7 +2053,6 @@ fn cpu_fine_tune_from_gpu_boundary(
 
                     best_crf = Some(test_crf);
                     best_size = Some(size);
-                    best_ssim_tracked = current_ssim_opt;
 
                     if ultimate_mode {
                         if vmaf_improved || best_vmaf_tracked.is_none() { *best_vmaf_tracked = current_vmaf_val; }
@@ -2325,7 +2304,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if is_effectively_compressed {
                         current_best = test_crf;
                         current_best_size = size;
-                        best_ssim_tracked = calculate_ssim_quick(); // track latest if valid
                         fine_failures = 0;
                         consecutive_successes += 1;
 
