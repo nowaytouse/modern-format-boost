@@ -6,9 +6,7 @@
 use std::fmt;
 use std::path::Path;
 
-const DANGEROUS_CHARS: &[char] = &[
-    ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r', '\0',
-];
+const DANGEROUS_CHARS: &[char] = &['\n', '\r'];
 
 #[derive(Debug, Clone)]
 pub enum PathValidationError {
@@ -96,6 +94,11 @@ pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
         return Err(PathValidationError::EmptyPath);
     }
 
+    if path_str.contains('\0') {
+        eprintln!("⚠️ PATH VALIDATION FAILED: Null byte in: {}", path_str);
+        return Err(PathValidationError::NullByte(path_str.to_string()));
+    }
+
     for &c in DANGEROUS_CHARS {
         if path_str.contains(c) {
             eprintln!(
@@ -172,60 +175,26 @@ mod tests {
     }
 
     #[test]
-    fn test_dangerous_semicolon() {
-        let path = Path::new("/home/user/; rm -rf /");
-        let result = validate_path(path);
-        assert!(result.is_err());
-        if let Err(PathValidationError::DangerousCharacter { character, .. }) = result {
-            assert_eq!(character, ';');
-        }
-    }
+    fn test_shell_metacharacters_are_allowed_in_parameterized_paths() {
+        let shellish_paths = [
+            "/home/user/; rm -rf /.mp4",
+            "/home/user/video.mp4 | cat /etc/passwd",
+            "/home/user/video.mp4 && rm -rf /",
+            "/home/$USER/video.mp4",
+            "/home/user/`whoami`.mp4",
+            "/home/user/video.mp4 > /dev/null",
+            "/home/user/clip(name).mp4",
+            "/home/user/{draft}.mp4",
+        ];
 
-    #[test]
-    fn test_dangerous_pipe() {
-        let path = Path::new("/home/user/video.mp4 | cat /etc/passwd");
-        let result = validate_path(path);
-        assert!(result.is_err());
-        if let Err(PathValidationError::DangerousCharacter { character, .. }) = result {
-            assert_eq!(character, '|');
+        for path_str in shellish_paths {
+            let path = Path::new(path_str);
+            assert!(
+                validate_path(path).is_ok(),
+                "parameterized command paths should allow '{}'",
+                path_str
+            );
         }
-    }
-
-    #[test]
-    fn test_dangerous_ampersand() {
-        let path = Path::new("/home/user/video.mp4 && rm -rf /");
-        let result = validate_path(path);
-        assert!(result.is_err());
-        if let Err(PathValidationError::DangerousCharacter { character, .. }) = result {
-            assert_eq!(character, '&');
-        }
-    }
-
-    #[test]
-    fn test_dangerous_dollar() {
-        let path = Path::new("/home/$USER/video.mp4");
-        let result = validate_path(path);
-        assert!(result.is_err());
-        if let Err(PathValidationError::DangerousCharacter { character, .. }) = result {
-            assert_eq!(character, '$');
-        }
-    }
-
-    #[test]
-    fn test_dangerous_backtick() {
-        let path = Path::new("/home/user/`whoami`.mp4");
-        let result = validate_path(path);
-        assert!(result.is_err());
-        if let Err(PathValidationError::DangerousCharacter { character, .. }) = result {
-            assert_eq!(character, '`');
-        }
-    }
-
-    #[test]
-    fn test_dangerous_redirect() {
-        let path = Path::new("/home/user/video.mp4 > /dev/null");
-        let result = validate_path(path);
-        assert!(result.is_err());
     }
 
     #[test]
@@ -251,7 +220,7 @@ mod tests {
     fn test_validate_paths_one_dangerous() {
         let paths: Vec<&Path> = vec![
             Path::new("/home/user/video1.mp4"),
-            Path::new("/home/user/; rm -rf /"),
+            Path::new("/home/user/video2.mp4\nrm -rf /"),
         ];
         assert!(validate_paths(&paths).is_err());
     }
@@ -259,12 +228,12 @@ mod tests {
     #[test]
     fn test_error_display() {
         let err = PathValidationError::DangerousCharacter {
-            character: ';',
+            character: '\n',
             path: "/test/path".to_string(),
         };
         let msg = format!("{}", err);
         assert!(msg.contains("Dangerous character"));
-        assert!(msg.contains(";"));
+        assert!(msg.contains('\n'));
     }
 
     #[test]
@@ -277,6 +246,18 @@ mod tests {
                 "Dangerous char '{}' should be detected",
                 c
             );
+        }
+    }
+
+    #[test]
+    fn test_null_byte_detected() {
+        let path = Path::new("/home/user/test\0file.mp4");
+        let result = validate_path(path);
+        assert!(result.is_err());
+        if let Err(PathValidationError::NullByte(path)) = result {
+            assert!(path.contains("test"));
+        } else {
+            panic!("expected null-byte validation error");
         }
     }
 }
