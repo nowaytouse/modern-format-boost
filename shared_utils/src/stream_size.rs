@@ -67,26 +67,16 @@ impl StreamSizeInfo {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 struct FfprobeStreamInfo {
     #[serde(default)]
     codec_type: String,
     #[serde(default)]
     bit_rate: Option<String>,
-    #[serde(default)]
-    duration: Option<String>,
-    #[serde(default)]
-    nb_frames: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize, Default)]
 struct FfprobeFormatInfo {
-    #[serde(default)]
-    size: Option<String>,
-    #[serde(default)]
-    bit_rate: Option<String>,
     #[serde(default)]
     duration: Option<String>,
 }

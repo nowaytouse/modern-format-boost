@@ -457,12 +457,35 @@ fn find_box_payload_by_magic<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::Builder;
 
     #[test]
     fn test_is_heic_file() {
-        assert!(is_heic_file(Path::new("test.heic")));
-        assert!(is_heic_file(Path::new("test.HEIC")));
-        assert!(is_heic_file(Path::new("test.heif")));
-        assert!(!is_heic_file(Path::new("test.jpg")));
+        let mut heic = Builder::new()
+            .suffix(".heic")
+            .tempfile()
+            .expect("create temp heic");
+        heic.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
+            .expect("write heic header");
+
+        let mut heif = Builder::new()
+            .suffix(".HEIF")
+            .tempfile()
+            .expect("create temp heif");
+        heif.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1'])
+            .expect("write heif header");
+
+        let mut jpg = Builder::new()
+            .suffix(".jpg")
+            .tempfile()
+            .expect("create temp jpg");
+        jpg.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'j', b'p', b'e', b'g'])
+            .expect("write jpg header");
+
+        assert!(is_heic_file(heic.path()));
+        assert!(is_heic_file(heif.path()));
+        assert!(!is_heic_file(jpg.path()));
+        assert!(!is_heic_file(Path::new("test.heic")));
     }
 }
