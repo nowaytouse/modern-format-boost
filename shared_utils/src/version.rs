@@ -85,7 +85,7 @@ pub fn cache_algorithm_version() -> i32 {
 /// 🔧 Parse semantic version string to integer code
 ///
 /// Converts "MAJOR.MINOR.PATCH" to MajorMinorPatch integer.
-/// Example: "0.10.70" → 10070
+/// Example: "0.10.70" → 1070
 ///
 /// **Panics** if:
 /// - Version format is not "MAJOR.MINOR.PATCH"
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
-        assert_eq!(parse_version_to_code("0.10.70", "Test"), 10070);
+        assert_eq!(parse_version_to_code("0.10.70", "Test"), 1070);
         assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);
         assert_eq!(parse_version_to_code("10.20.30", "Test"), 102030);
     }

@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use tracing::info;
 
 use vid_hevc::{
-    auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig,
-    VideoDetectionResult, VidQualityError,
+    auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError,
 };
 use shared_utils::analysis_cache::AnalysisCache;
 
@@ -209,46 +208,3 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-#[allow(dead_code)]
-fn print_analysis_human(result: &VideoDetectionResult) {
-    println!("\n📊 Video Analysis Report (HEVC)");
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!("📁 File: {}", result.file_path);
-    println!("📦 Format: {}", result.format);
-    println!(
-        "🎬 Codec: {} ({})",
-        result.codec.as_str(),
-        result.codec_long
-    );
-    println!("🔍 Compression: {}", result.compression.as_str());
-    println!();
-    println!("📐 Resolution: {}x{}", result.width, result.height);
-    println!("🎞️  Frames: {} @ {:.2} fps", result.frame_count, result.fps);
-    println!("⏱️  Duration: {:.2}s", result.duration_secs);
-    println!("🎨 Bit Depth: {}-bit", result.bit_depth);
-    println!("🌈 Pixel Format: {}", result.pix_fmt);
-    println!();
-    println!("💾 File Size: {} bytes", result.file_size);
-    println!("📊 Bitrate: {} bps", result.bitrate);
-    println!(
-        "🎵 Audio: {}",
-        if result.has_audio {
-            result.audio_codec.as_deref().unwrap_or("yes")
-        } else {
-            "no"
-        }
-    );
-    println!();
-    println!("⭐ Quality Score: {}/100", result.quality_score);
-    println!(
-        "📦 Archival Candidate: {}",
-        if result.archival_candidate {
-            "✅ Yes"
-        } else {
-            "❌ No"
-        }
-    );
-    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-}
-

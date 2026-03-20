@@ -637,7 +637,7 @@ pub fn gif_meta_from_probe_with_path(
 /// with the ffprobe-only path.
 ///
 /// ## Usage
-/// ```rust
+/// ```ignore
 /// let mut meta = gif_meta_from_probe_with_path(&probe, size, path)?;
 /// let (pal, exts) = scan_gif_headers(path).unwrap_or_default();
 /// meta.palette_size   = pal;

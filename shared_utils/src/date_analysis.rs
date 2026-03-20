@@ -108,7 +108,6 @@ impl Default for DateAnalysisConfig {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct ExiftoolOutput {
     #[serde(rename = "SourceFile")]
     source_file: Option<String>,
@@ -120,16 +119,12 @@ struct ExiftoolOutput {
     xmp_created: Option<String>,
     #[serde(rename = "XMP-xmp:MetadataDate")]
     xmp_metadata: Option<String>,
-    #[serde(rename = "XMP-xmp:ModifyDate")]
-    xmp_modified: Option<String>,
     #[serde(rename = "XMP-xmpMM:HistoryWhen")]
     xmp_history: Option<serde_json::Value>,
     #[serde(rename = "EXIF:DateTimeOriginal")]
     exif_original: Option<String>,
     #[serde(rename = "EXIF:CreateDate")]
     exif_created: Option<String>,
-    #[serde(rename = "EXIF:ModifyDate")]
-    exif_modified: Option<String>,
 }
 
 pub fn analyze_directory(

@@ -577,29 +577,6 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
     smart_convert(path, &config)
 }
 
-/// Lossless JXL (modular, effort 9). Kept for API completeness; execute_conversion uses convert_to_jxl (effort 7).
-#[allow(dead_code)]
-fn convert_to_jxl_lossless(input: &Path, output: &Path, format: &DetectedFormat) -> Result<()> {
-    let mut cmd = Command::new("cjxl");
-    if *format == DetectedFormat::JPEG {
-        cmd.args(["--lossless_jpeg=1", "--"]);
-    } else {
-        cmd.args(["-d", "0.0", "--modular=1", "-e", "9", "--"]);
-    }
-    let status = cmd
-        .arg(shared_utils::safe_path_arg(input).as_ref())
-        .arg(shared_utils::safe_path_arg(output).as_ref())
-        .output()?;
-
-    if !status.status.success() {
-        return Err(ImgQualityError::ConversionError(
-            String::from_utf8_lossy(&status.stderr).to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

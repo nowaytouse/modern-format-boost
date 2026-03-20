@@ -156,8 +156,6 @@ impl HeartbeatConfig {
 pub struct UniversalHeartbeat {
     config: Arc<HeartbeatConfig>,
     running: Arc<AtomicBool>,
-    #[allow(dead_code)]
-    start_time: Instant,
     handle: Option<JoinHandle<()>>,
 }
 
@@ -187,7 +185,6 @@ impl UniversalHeartbeat {
         Self {
             config,
             running,
-            start_time,
             handle,
         }
     }
