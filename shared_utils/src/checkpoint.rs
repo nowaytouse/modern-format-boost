@@ -151,8 +151,6 @@ fn get_hostname() -> String {
 }
 
 pub struct CheckpointManager {
-    #[allow(dead_code)]
-    target_dir: PathBuf,
     progress_dir: PathBuf,
     lock_file: PathBuf,
     progress_file: PathBuf,
@@ -172,7 +170,6 @@ impl CheckpointManager {
         let (completed, resume_mode) = Self::load_progress(&progress_file)?;
 
         Ok(Self {
-            target_dir: target_dir.to_path_buf(),
             progress_dir,
             lock_file,
             progress_file,
