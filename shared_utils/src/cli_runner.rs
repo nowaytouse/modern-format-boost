@@ -54,6 +54,7 @@ pub struct CliRunnerConfig {
     pub recursive: bool,
     pub label: String,
     pub base_dir: Option<PathBuf>,
+    pub resume: bool,
 }
 
 /// Resolve base_dir for video `run` command. Shared by vid_hevc and vid_av1 to reduce duplication.
@@ -115,6 +116,24 @@ where
     // Pre-flight disk space check: require at least the total input size free on the output volume.
     // This catches "No space left on device" before encoding starts rather than mid-encode.
     // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
+    // Initialize checkpoint manager if resume is enabled
+    let mut checkpoint = if config.resume {
+        match crate::checkpoint::CheckpointManager::new(input) {
+            Ok(cp) => {
+                if cp.is_resume_mode() {
+                    info!("📂 Resume: skipping {} already completed files", cp.completed_count());
+                }
+                Some(cp)
+            }
+            Err(e) => {
+                warn!("⚠️  Could not initialize checkpoint manager: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
         let total_input_size: u64 = files.iter()
             .filter_map(|f| std::fs::metadata(f).ok())
@@ -174,6 +193,15 @@ where
             batch_result.skip();
             continue;
         }
+
+        // Skip if already processed
+        if let Some(ref cp) = checkpoint {
+            if cp.is_completed(&fixed) {
+                batch_result.skip();
+                continue;
+            }
+        }
+
         match converter(fixed.as_path()) {
             Ok(result) => {
                 if result.is_skipped() {
@@ -194,6 +222,11 @@ where
                     crate::progress_mode::video_processed_success();
                     total_input_bytes += result.input_size();
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
+
+                    // Mark as completed
+                    if let Some(ref mut cp) = checkpoint {
+                        let _ = cp.mark_completed(&fixed);
+                    }
                 } else {
                     info!(
                         "{} → FAILED ({}) ❌",
@@ -229,6 +262,15 @@ where
                     crate::progress_mode::video_processed_failure();
                 }
             }
+        }
+    }
+
+    // Cleanup checkpoint only on 100% success
+    if let Some(cp) = checkpoint {
+        if batch_result.failed == 0 {
+            let _ = cp.cleanup();
+        } else {
+            let _ = cp.release_lock();
         }
     }
 

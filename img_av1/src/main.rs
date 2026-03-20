@@ -251,28 +251,7 @@ fn main() -> anyhow::Result<()> {
             if input.is_file() {
                 auto_convert_single_file(&input, &config)?;
             } else if input.is_dir() {
-                let progress_path = output.as_ref().unwrap_or(&input).join(".mfb_processed");
-                if resume {
-                    if let Err(e) = shared_utils::load_processed_list(&progress_path) {
-                        if config.verbose {
-                            shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not load progress file\x1b[0m", e);
-                        }
-                    } else if config.verbose && progress_path.exists() {
-                        println!("📂 Resume: loading progress from {}", progress_path.display());
-                    }
-                } else {
-                    shared_utils::clear_processed_list();
-                    let _ = std::fs::remove_file(&progress_path);
-                    if config.verbose {
-                        println!("📂 Fresh run: previous progress cleared");
-                    }
-                }
-                auto_convert_directory(&input, &config)?;
-                if let Err(e) = shared_utils::save_processed_list(&progress_path) {
-                    if config.verbose {
-                        shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not save progress file\x1b[0m", e);
-                    }
-                }
+                auto_convert_directory(&input, &config, resume)?;
             } else {
                 shared_utils::log_eprintln!("❌ {}: {}", "\x1b[1;31mError: Input path does not exist\x1b[0m", input.display());
                 std::process::exit(1);
@@ -769,7 +748,7 @@ fn auto_convert_single_file(
     Ok(output)
 }
 
-fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::Result<()> {
+fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool) -> anyhow::Result<()> {
     // Check for Apple Photos library before any processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
         eprintln!("{}", e);
@@ -823,9 +802,30 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         println!("📂 Found {} files to process", total);
     }
 
-    // Pre-flight disk space check: require at least the total input size free on the output volume.
-    // This catches "No space left on device" before encoding starts rather than mid-encode.
-    // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
+    // Initialize checkpoint manager for resume/progress tracking
+    let checkpoint = if resume {
+        match shared_utils::checkpoint::CheckpointManager::new(input) {
+            Ok(cp) => {
+                if cp.is_resume_mode() {
+                    if config.verbose {
+                        println!("📂 Resume: skipping {} already completed images", cp.completed_count());
+                    }
+                    cp.sync_to_processed_list();
+                }
+                Some(cp)
+            }
+            Err(e) => {
+                if config.verbose {
+                    println!("⚠️ [checkpoint] Failed to initialize: {}", e);
+                }
+                None
+            }
+        }
+    } else {
+        shared_utils::clear_processed_list();
+        None
+    };
+
     if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
         let total_input_size: u64 = files.iter()
             .filter_map(|f| std::fs::metadata(f).ok())
@@ -906,6 +906,21 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     pool.install(|| {
         files.par_iter().for_each(|path| {
+            // Check if already completed (thread-safe)
+            if let Some(cp) = checkpoint.as_ref() {
+                if cp.is_completed(path) {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    shared_utils::progress_mode::write_progress_line_to_run_log(
+                        start_time.elapsed().as_secs(),
+                        current as u64,
+                        total as u64,
+                        &path.file_name().unwrap_or_default().to_string_lossy(),
+                    );
+                    return;
+                }
+            }
+
             match auto_convert_single_file(path, config) {
                 Ok(result) => {
                     if result.skipped {
@@ -916,6 +931,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
                         actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
                         if let Some(out_size) = result.output_size {
                             actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
+                        }
+                        // Mark as completed in checkpoint manager on success (thread-safe)
+                        if let Some(cp) = checkpoint.as_ref() {
+                            let _ = cp.mark_completed(path);
                         }
                     }
                 }
@@ -990,6 +1009,15 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
         }
         shared_utils::restore_directory_timestamps(saved);
         shared_utils::log_eprintln!("✅ Directory timestamps restored");
+    }
+
+    // Finalize checkpoint only on 100% success
+    if let Some(cp) = checkpoint {
+        if failed_count == 0 {
+            let _ = cp.cleanup();
+        } else {
+            let _ = cp.release_lock();
+        }
     }
 
     Ok(())
