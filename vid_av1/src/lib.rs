@@ -29,5 +29,4 @@ pub use shared_utils::conversion_types::{
     ConversionConfig, ConversionOutput, ConversionStrategy, TargetVideoFormat,
 };
 
-#[allow(deprecated)]
 pub use shared_utils::unified_error::{Result, VidQualityError};
