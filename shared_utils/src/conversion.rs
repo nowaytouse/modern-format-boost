@@ -366,12 +366,13 @@ pub fn determine_output_path(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
 
+    let up_ext = extension.to_uppercase();
     let output = match output_dir {
         Some(dir) => {
             let _ = fs::create_dir_all(dir);
-            dir.join(format!("{}.{}", stem, extension))
+            dir.join(format!("{}.{}", stem, up_ext))
         }
-        None => input.with_extension(extension),
+        None => input.with_extension(up_ext),
     };
 
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
@@ -407,6 +408,7 @@ pub fn determine_output_path_with_base(
         .and_then(|s| s.to_str())
         .unwrap_or("output");
 
+    let up_ext = extension.to_uppercase();
     let output = match output_dir {
         Some(dir) => {
             let rel_path = input
@@ -418,9 +420,9 @@ pub fn determine_output_path_with_base(
             let out_subdir = dir.join(rel_path);
             let _ = fs::create_dir_all(&out_subdir);
 
-            out_subdir.join(format!("{}.{}", stem, extension))
+            out_subdir.join(format!("{}.{}", stem, up_ext))
         }
-        None => input.with_extension(extension),
+        None => input.with_extension(up_ext),
     };
 
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
@@ -1183,7 +1185,7 @@ mod tests {
     fn test_determine_output_path() {
         let input = Path::new("/path/to/image.png");
         let output = determine_output_path(input, "jxl", &None).unwrap();
-        assert_eq!(output, Path::new("/path/to/image.jxl"));
+        assert_eq!(output, Path::new("/path/to/image.JXL"));
     }
 
     #[test]
@@ -1191,7 +1193,7 @@ mod tests {
         let input = Path::new("/path/to/image.png");
         let output_dir = Some(PathBuf::from("/output"));
         let output = determine_output_path(input, "avif", &output_dir).unwrap();
-        assert_eq!(output, Path::new("/output/image.avif"));
+        assert_eq!(output, Path::new("/output/image.AVIF"));
     }
 
     #[test]
@@ -1199,10 +1201,10 @@ mod tests {
         let input = Path::new("/path/to/video.mp4");
 
         let webm = determine_output_path(input, "webm", &None).unwrap();
-        assert_eq!(webm, Path::new("/path/to/video.webm"));
+        assert_eq!(webm, Path::new("/path/to/video.WEBM"));
 
         let mkv = determine_output_path(input, "mkv", &None).unwrap();
-        assert_eq!(mkv, Path::new("/path/to/video.mkv"));
+        assert_eq!(mkv, Path::new("/path/to/video.MKV"));
     }
 
     #[test]
