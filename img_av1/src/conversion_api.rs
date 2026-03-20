@@ -65,7 +65,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
     ) {
         (ImageType::Static, _, DetectedFormat::JPEG) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("jxl");
+            let output_path = Path::new(input_path).with_extension("JXL");
             Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "JPEG lossless transcode to JXL, preserving DCT coefficients".to_string(),
@@ -80,7 +80,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Static, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("jxl");
+            let output_path = Path::new(input_path).with_extension("JXL");
             Ok(ConversionStrategy {
                 target: TargetFormat::JXL,
                 reason: "Static lossless image, recommend JXL for better compression".to_string(),
@@ -95,7 +95,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("mp4");
+            let output_path = Path::new(input_path).with_extension("MP4");
             let fps = detection.fps.or_else(|| {
                 get_animation_duration_for_path(Path::new(input_path))
                     .and_then(|d: f32| if d > 0.0 && detection.frame_count > 0 { 
@@ -132,7 +132,7 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
 
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
-            let output_path = Path::new(input_path).with_extension("avif");
+            let output_path = Path::new(input_path).with_extension("AVIF");
             let quality = detection.estimated_quality.ok_or_else(|| -> ImgQualityError {
                 ImgQualityError::AnalysisError(
                     format!("Cannot determine estimated quality for lossy image: {}", input_path)
@@ -185,9 +185,9 @@ pub fn execute_conversion(
     }
 
     let extension = match strategy.target {
-        TargetFormat::JXL => "jxl",
-        TargetFormat::AVIF => "avif",
-        TargetFormat::AV1MP4 => "mp4",
+        TargetFormat::JXL => "JXL",
+        TargetFormat::AVIF => "AVIF",
+        TargetFormat::AV1MP4 => "MP4",
         TargetFormat::NoConversion => unreachable!("NoConversion handled by early return above"),
     };
 
