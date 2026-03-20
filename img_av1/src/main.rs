@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use rayon::prelude::*;
 use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
+use shared_utils::modern_ui::{colors, symbols};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -96,6 +97,10 @@ enum Commands {
         #[arg(long)]
         no_allow_size_tolerance: bool,
 
+        /// Force video conversion: skip meme-score check, always convert animated images to video (MOV/MP4)
+        #[arg(long)]
+        force_video: bool,
+
         /// Resume from last run: skip files already in progress file (default).
         #[arg(long, default_value_t = true)]
         resume: bool,
@@ -118,6 +123,9 @@ enum Commands {
         #[arg(value_name = "OUTPUT_DIR")]
         output: PathBuf,
     },
+
+    /// Display cache statistics
+    CacheStats,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -158,6 +166,7 @@ fn main() -> anyhow::Result<()> {
             child_threads,
             allow_size_tolerance,
             no_allow_size_tolerance,
+            force_video,
             resume: resume_flag,
             no_resume,
         } => {
@@ -180,8 +189,8 @@ fn main() -> anyhow::Result<()> {
             };
 
             if verbose {
-                shared_utils::log_eprintln!("🎬 {} (for animated→video)", flag_mode.description_en());
-                shared_utils::log_eprintln!("📷 Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)");
+                shared_utils::progress_mode::emit_stderr(&format!("{} {} (for animated→video)", symbols::VIDEO, flag_mode.description_en()));
+                shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)", symbols::IMAGE));
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Create run log automatically; quality and progress are always recorded
@@ -189,21 +198,21 @@ fn main() -> anyhow::Result<()> {
                 shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open default log file\x1b[0m", e);
             }
             if apple_compat {
-                shared_utils::log_eprintln!("🍎 Apple Compatibility: ENABLED (animated WebP → AV1)");
+                shared_utils::progress_mode::emit_stderr(&format!("{} Apple Compatibility: {}ENABLED{} (animated WebP → AV1)", symbols::SHIELD, colors::BOLD, colors::RESET));
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
+            if force_video {
+                shared_utils::progress_mode::emit_stderr(&format!("{} Force Video: {}ENABLED{} (skip meme-score)", symbols::ROCKET, colors::BOLD, colors::RESET));
+                std::env::set_var("MODERN_FORMAT_BOOST_FORCE_VIDEO", "1");
+            }
             if in_place {
-                shared_utils::log_eprintln!(
-                    "🔄 In-place mode: ENABLED (original files will be deleted after conversion)"
-                );
+                shared_utils::progress_mode::emit_stderr(&format!("{} In-place mode: {}ENABLED{} (auto-delete original)", symbols::SAVE, colors::BOLD, colors::RESET));
             }
             if ultimate {
-                shared_utils::log_eprintln!("🔍 Ultimate Explore: ENABLED (search until SSIM saturates)");
+                shared_utils::progress_mode::emit_stderr(&format!("{} Ultimate Explore: {}ENABLED{} (max SSIM mode)", symbols::SEARCH, colors::BOLD, colors::RESET));
             }
             if !allow_size_tolerance {
-                shared_utils::log_eprintln!(
-                    "📏 Size Tolerance: DISABLED (output must be strictly smaller than input)"
-                );
+                shared_utils::progress_mode::emit_stderr(&format!("{} Size Tolerance: {}DISABLED{} (strict < original)", symbols::CHART, colors::BOLD, colors::RESET));
             }
             if cpu {
                 shared_utils::log_eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
@@ -281,6 +290,63 @@ fn main() -> anyhow::Result<()> {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
                 shared_utils::log_eprintln!("⚠️ {}: {}", "\x1b[33mrestore-timestamps failed\x1b[0m", e);
+                std::process::exit(1);
+            }
+        }
+
+        Commands::CacheStats => {
+            if let Some(cache) = cache {
+                match cache.get_statistics() {
+                    Ok(stats) => {
+                        println!("\n📊 Cache Statistics");
+                        println!("═══════════════════════════════════════");
+                        println!("📁 Database Size: {:.2} MB ({:.3} GB)", stats.db_size_mb(), stats.db_size_gb());
+                        println!("📦 Total Records: {}", stats.total_records());
+                        println!("   ├─ Analysis: {}", stats.analysis_records);
+                        println!("   ├─ Quality: {}", stats.quality_records);
+                        println!("   └─ Video: {}", stats.video_records);
+                        println!("🔗 Path Index Entries: {}", stats.path_index_entries);
+                        println!("\n🔢 Version Information:");
+                        println!("   ├─ Schema Version: v{}", stats.schema_version);
+                        println!("   └─ Current Algorithm: v{}", stats.current_algorithm_version);
+                        
+                        if !stats.algorithm_version_distribution.is_empty() {
+                            println!("\n📈 Algorithm Version Distribution:");
+                            let mut versions: Vec<_> = stats.algorithm_version_distribution.iter().collect();
+                            versions.sort_by_key(|(v, _)| *v);
+                            for (version, count) in versions {
+                                let marker = if *version < stats.current_algorithm_version {
+                                    "⚠️  (stale)"
+                                } else if *version == stats.current_algorithm_version {
+                                    "✅ (current)"
+                                } else {
+                                    "❓ (future)"
+                                };
+                                println!("   v{}: {} records {}", version, count, marker);
+                            }
+                            
+                            let stale = stats.stale_records();
+                            if stale > 0 {
+                                println!("\n⚠️  {} stale records detected (will be auto-invalidated on next run)", stale);
+                            }
+                        }
+                        
+                        let usage_percent = (stats.db_size_bytes as f64 / shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES as f64) * 100.0;
+                        println!("\n💾 Storage Usage: {:.1}% of 85 GB limit", usage_percent);
+                        
+                        if usage_percent > 80.0 {
+                            println!("⚠️  Cache is approaching size limit!");
+                        }
+                        
+                        println!("═══════════════════════════════════════\n");
+                    }
+                    Err(e) => {
+                        shared_utils::log_eprintln!("❌ Failed to get cache statistics: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                shared_utils::log_eprintln!("❌ Cache is not initialized");
                 std::process::exit(1);
             }
         }
@@ -507,6 +573,19 @@ fn copy_original_if_adjacent_mode(input: &Path, config: &AutoConvertConfig) -> a
     Ok(())
 }
 
+fn convert_result_to_output(result: shared_utils::ConversionResult) -> ConversionOutput {
+    let input_path = result.input_path.clone();
+    ConversionOutput {
+        original_path: result.input_path,
+        output_path: result.output_path.unwrap_or(input_path),
+        skipped: result.skipped,
+        message: result.message,
+        original_size: result.input_size,
+        output_size: result.output_size,
+        size_reduction: result.size_reduction.map(|r| r as f32),
+    }
+}
+
 fn auto_convert_single_file(
     input: &Path,
     config: &AutoConvertConfig,
@@ -638,7 +717,7 @@ fn auto_convert_single_file(
         | ("HEIC", true, false)
         | ("HEIF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0)?
+            convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
         // Static modern lossy / JXL already handled by should_skip_image_format above.
 
@@ -648,18 +727,76 @@ fn auto_convert_single_file(
                 convert_to_jxl_matched(input, &options, &analysis)?
             } else {
                 verbose_log!("🔄 JPEG→JXL lossless transcode: {}", input.display());
-                convert_jpeg_to_jxl(input, &options)?
+                convert_jpeg_to_jxl(input, &options, analysis.hdr_info.as_ref())?
             }
         }
         (_, true, false) => {
             verbose_log!("🔄 Legacy Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0)?
+            convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
-        (_, true, true) => {
+        (format, is_lossless, true) => {
+            let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
+            let is_apple_native = matches!(format, "HEIC" | "HEIF");
+
+            let should_skip_modern = if is_modern_animated && !is_lossless {
+                if config.apple_compat {
+                    is_apple_native
+                } else {
+                    true
+                }
+            } else {
+                false
+            };
+
+            if should_skip_modern {
+                verbose_log!(
+                    "⏭️ Skipping modern lossy animated format (avoid generational loss): {}",
+                    input.display()
+                );
+                if is_apple_native && config.apple_compat {
+                    verbose_log!("   💡 Reason: {} is already a native Apple format", format);
+                } else {
+                    verbose_log!(
+                        "   💡 Use --apple-compat to convert to AV1 for Apple device compatibility"
+                    );
+                }
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(make_skipped("Skipping modern lossy animated format"));
+            }
+
             let duration = match analysis.duration_secs {
                 Some(d) if d > 0.0 => d,
+                Some(0.0) => {
+                    let is_modern = matches!(format, "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF");
+                    let use_lossless = analysis.is_lossless;
+
+                    if is_modern && !use_lossless {
+                        verbose_log!(
+                            "⏭️ Skipping static-disguised modern format (lossy): {}",
+                            input.display()
+                        );
+                        copy_original_if_adjacent_mode(input, config)?;
+                        return Ok(make_skipped("Skipping static modern format to avoid generational loss"));
+                    }
+
+                    let distance = if use_lossless { 0.0 } else { 0.1 };
+                    verbose_log!(
+                        "🔄 Static GIF/Modern→JXL ({}): {}",
+                        if distance == 0.0 { "Lossless" } else { "Quality 100" },
+                        input.display()
+                    );
+                    let conv_result = if use_lossless {
+                        convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
+                    } else if config.match_quality {
+                        convert_to_jxl_matched(input, &options, &analysis)?
+                    } else {
+                        convert_to_jxl(input, &options, 0.1, analysis.hdr_info.as_ref())?
+                    };
+                    return Ok(convert_result_to_output(conv_result));
+                }
                 _ => {
-                    if let Some(d) = shared_utils::image_analyzer::get_animation_duration_for_path(input) {
+                    let retry = shared_utils::image_analyzer::get_animation_duration_for_path(input);
+                    if let Some(d) = retry {
                         d
                     } else {
                         shared_utils::log_eprintln!(
@@ -674,57 +811,54 @@ fn auto_convert_single_file(
                     }
                 }
             };
-            if duration < 3.0 {
-                verbose_log!(
-                    "⏭️ Skipping short animation ({:.1}s < 3s): {}",
-                    duration,
-                    input.display()
-                );
-                copy_original_if_adjacent_mode(input, config)?;
-                return Ok(make_skipped("Skipping short animation"));
-            }
 
-            verbose_log!(
-                "🔄 Animated lossless→AV1 MP4 (CRF 0, {:.1}s): {}",
-                duration,
-                input.display()
-            );
-            convert_to_av1_mp4(input, &options)?
-        }
-        (_, false, true) => {
-            let duration = match analysis.duration_secs {
-                Some(d) if d > 0.0 => d,
-                _ => {
-                    if let Some(d) = shared_utils::image_analyzer::get_animation_duration_for_path(input) {
-                        d
-                    } else {
-                        shared_utils::log_eprintln!(
-                            "⚠️  {}: {}",
-                            "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
-                            input.display()
-                        );
-                        shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                        copy_original_if_adjacent_mode(input, config)?;
-                        return Ok(make_skipped("Cannot get animation duration"));
+            // Use meme-score to decide video vs GIF for all animated routes
+            let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
+            let probe = shared_utils::probe_video(input).ok();
+            let meme_keep = if force_video {
+                // Force video mode: always convert to video, skip meme-score
+                false
+            } else if let Some(ref p) = probe {
+                if let Some(mut meta) = shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input) {
+                    if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
+                        meta.palette_size = pal;
+                        meta.app_extensions = exts;
                     }
-                }
-            };
-            if duration < 3.0 {
-                verbose_log!(
-                    "⏭️ Skipping short animation ({:.1}s < 3s): {}",
-                    duration,
-                    input.display()
-                );
-                copy_original_if_adjacent_mode(input, config)?;
-                return Ok(make_skipped("Skipping short animation"));
-            }
 
-            verbose_log!(
-                "🔄 Animated lossy→AV1 MP4 (MATCH QUALITY, {:.1}s): {}",
-                duration,
-                input.display()
-            );
-            convert_to_av1_mp4_matched(input, &options, &analysis)?
+                    shared_utils::should_keep_as_gif(&meta)
+                } else {
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🎞️  GIF [{}] probe failed → KEEP GIF",
+                        input.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    true
+                }
+            } else {
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "🎞️  GIF [{}] probe failed → KEEP GIF",
+                    input.file_name().unwrap_or_default().to_string_lossy()
+                ));
+                true
+            };
+
+            if meme_keep {
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(make_skipped("GIF meme-score: keep as GIF"));
+            } else {
+                if is_lossless {
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🔄 Animated {}→AV1 MP4 (CRF 0, {:.1}s): {}",
+                        format, duration, input.display()
+                    ));
+                    convert_to_av1_mp4(input, &options)?
+                } else {
+                    shared_utils::progress_mode::emit_stderr(&format!(
+                        "🔄 Animated {}→AV1 MP4 (SMART QUALITY, {:.1}s): {}",
+                        format, duration, input.display()
+                    ));
+                    convert_to_av1_mp4_matched(input, &options, &analysis)?
+                }
+            }
         }
         (_, false, false) => {
             // Modern lossy static already skipped above; only legacy lossy reach here.
@@ -733,7 +867,7 @@ fn auto_convert_single_file(
                 convert_to_jxl_matched(input, &options, &analysis)?
             } else {
                 verbose_log!("🔄 Legacy Lossy→JXL (Quality 100): {}", input.display());
-                convert_to_jxl(input, &options, 0.1)?
+                convert_to_jxl(input, &options, 0.1, analysis.hdr_info.as_ref())?
             }
         }
     };
@@ -815,7 +949,8 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     // Pre-flight disk space check: require at least the total input size free on the output volume.
     // This catches "No space left on device" before encoding starts rather than mid-encode.
-    {
+    // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
+    if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
         let total_input_size: u64 = files.iter()
             .filter_map(|f| std::fs::metadata(f).ok())
             .map(|m| m.len())
@@ -858,23 +993,38 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
 
     shared_utils::progress_mode::enable_quiet_mode();
 
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(pool_size)
+    let max_threads = pool_size;
+    let child_threads = thread_config.child_threads;
+
+    let pool = match rayon::ThreadPoolBuilder::new()
+        .num_threads(max_threads)
         .build()
-        .or_else(|_| rayon::ThreadPoolBuilder::new().num_threads(2).build())
-        .map_err(|e| anyhow::anyhow!("Failed to create thread pool: {}", e))?;
+    {
+        Ok(p) => p,
+        Err(e) => {
+            shared_utils::log_eprintln!(
+                "⚠️  {}: {}, falling back to 2 threads",
+                format!("\x1b[33mFailed to create {} thread pool\x1b[0m", max_threads),
+                e
+            );
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(2)
+                .build()
+                .map_err(|e| anyhow::anyhow!("Failed to create fallback thread pool: {}", e))?
+        }
+    };
 
     if config.verbose {
-        println!(
+        shared_utils::log_eprintln!(
             "🔧 Thread Strategy: {} parallel tasks x {} threads/task (CPU cores: {})",
-            pool_size,
-            thread_config.child_threads,
+            max_threads,
+            child_threads,
             std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4)
         );
         if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {
-            println!("   💡 {}", hint);
+            shared_utils::log_eprintln!("   💡 {}", hint);
         }
     }
 
@@ -916,7 +1066,12 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig) -> anyhow::R
                 }
             }
             let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            let _ = current;
+            shared_utils::progress_mode::write_progress_line_to_run_log(
+                start_time.elapsed().as_secs(),
+                current as u64,
+                total as u64,
+                &path.file_name().unwrap_or_default().to_string_lossy(),
+            );
         });
     });
 

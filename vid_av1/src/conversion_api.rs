@@ -177,7 +177,11 @@ pub fn determine_strategy_with_apple_compat(
 }
 
 pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
-    let detection = detect_video(input)?;
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(VidQualityError::ConversionError(e));
+    }
+
+    let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
     let output_dir = output_dir
         .map(|p| p.to_path_buf())
@@ -287,7 +291,11 @@ pub fn auto_convert_with_cache(
         });
     }
 
-    let detection = detect_video(input)?;
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(VidQualityError::ConversionError(e));
+    }
+
+    let detection = crate::detection_api::detect_video_with_cache(input, cache)?;
 
     // Warn about dynamic HDR metadata that will be stripped during re-encode
     if detection.is_dolby_vision {

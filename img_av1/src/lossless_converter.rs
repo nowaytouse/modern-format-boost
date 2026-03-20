@@ -18,6 +18,7 @@ pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
     distance: f32,
+    hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
@@ -36,7 +37,7 @@ pub fn convert_to_jxl(
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options)?;
+    let (actual_input, _temp_file_guard) = prepare_input_for_cjxl(input, options, hdr_info)?;
 
     // Extract ICC Profile from original input for preservation
     let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
@@ -57,6 +58,13 @@ pub fn convert_to_jxl(
 
     if options.apple_compat {
         cmd.arg("--compress_boxes=0");
+    }
+
+    // Add HDR metadata via CICP if available
+    if let Some(hdr) = hdr_info {
+        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
+            cmd.arg(format!("--cicp={}", cicp));
+        }
     }
 
     shared_utils::jxl_utils::add_icc_to_cjxl(&mut cmd, icc_path);
@@ -149,6 +157,7 @@ fn run_cjxl_jpeg_transcode(
     temp_output: &Path,
     options: &ConvertOptions,
     allow_jpeg_reconstruction: Option<u8>,
+    hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> std::io::Result<std::process::Output> {
     let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
     let icc_path = _icc_temp.as_ref().map(|t| t.path());
@@ -165,6 +174,12 @@ fn run_cjxl_jpeg_transcode(
         cmd.arg("--compress_boxes=0");
     }
 
+    if let Some(hdr) = hdr_info {
+        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
+            cmd.arg(format!("--cicp={}", cicp));
+        }
+    }
+
     shared_utils::jxl_utils::add_icc_to_cjxl(&mut cmd, icc_path);
 
     cmd.arg("--")
@@ -173,7 +188,7 @@ fn run_cjxl_jpeg_transcode(
     cmd.output()
 }
 
-pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
+pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Option<&shared_utils::ColorInfo>) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
@@ -191,7 +206,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
-    let result = run_cjxl_jpeg_transcode(input, &temp_output, options, None);
+    let result = run_cjxl_jpeg_transcode(input, &temp_output, options, None, hdr_info);
 
     let output_cmd = match result {
         Ok(out) => out,
@@ -231,7 +246,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
             };
 
         // 2) Retry with original cjxl flags (no --allow_jpeg_reconstruction 0) on fixed or original
-        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, None);
+        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, None, hdr_info);
         if let Ok(out) = retry_original {
             if out.status.success() {
                 if let Err(e) = verify_jxl_health(&temp_output) {
@@ -253,7 +268,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions) -> Result<Con
         let _ = fs::remove_file(&temp_output);
 
         // 3) Fallback: --allow_jpeg_reconstruction 0
-        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, Some(0));
+        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, Some(0), hdr_info);
         if let Ok(out) = retry_no_recon {
             if out.status.success() {
                 if let Err(e) = verify_jxl_health(&temp_output) {
@@ -531,6 +546,13 @@ pub fn convert_to_jxl_matched(
         cmd.arg("--compress_boxes=0");
     }
 
+    // `analysis` passed in doesn't have hdr_info in signature, we get it from analysis
+    if let Some(ref hdr) = analysis.hdr_info {
+        if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
+            cmd.arg(format!("--cicp={}", cicp));
+        }
+    }
+
     // Only disable lossless JPEG mode when input is actually JPEG and we want lossy encoding.
     if distance > 0.0 {
         let is_jpeg = options.input_format.as_deref()
@@ -624,7 +646,36 @@ fn convert_to_temp_png(
 fn prepare_input_for_cjxl(
     input: &Path,
     options: &ConvertOptions,
+    hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> Result<(std::path::PathBuf, Option<tempfile::NamedTempFile>)> {
+    // Check if we need HDR decoding first
+    if shared_utils::needs_hdr_decode(hdr_info) {
+        use console::style;
+        eprintln!(
+            "   {} {}",
+            style("🌈 HDR DECODING:").cyan().bold(),
+            style("Using FFmpeg to preserve high bit-depth").cyan()
+        );
+
+        match shared_utils::decode_hdr_image_to_png16(input, hdr_info.unwrap()) {
+            Ok((png16_path, temp_file)) => {
+                eprintln!(
+                    "   {} {}",
+                    style("✅").green(),
+                    style("HDR decode successful (16-bit PNG)").green().bold()
+                );
+                return Ok((png16_path, Some(temp_file)));
+            }
+            Err(e) => {
+                eprintln!(
+                    "   {} HDR decode failed: {}, falling back to standard decode",
+                    style("⚠️").yellow(),
+                    e
+                );
+            }
+        }
+    }
+
     let detected_ext = shared_utils::common_utils::detect_real_extension(input);
     let literal_ext = input
         .extension()
