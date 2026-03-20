@@ -1057,8 +1057,6 @@ pub struct GlobalProgressManager {
     multi: MultiProgress,
     main_bar: Option<ProgressBar>,
     sub_bar: Option<ProgressBar>,
-    #[allow(dead_code)]
-    _start_time: Instant,
 }
 
 impl GlobalProgressManager {
@@ -1067,7 +1065,6 @@ impl GlobalProgressManager {
             multi: MultiProgress::new(),
             main_bar: None,
             sub_bar: None,
-            _start_time: Instant::now(),
         }
     }
 
