@@ -108,18 +108,24 @@ impl XmpMerger {
     pub fn find_xmp_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut xmp_files = Vec::new();
 
-        for entry in WalkDir::new(dir)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext.to_string_lossy().to_lowercase() == "xmp" {
-                        xmp_files.push(path.to_path_buf());
+        for entry in WalkDir::new(dir).follow_links(true) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    if self.config.verbose {
+                        eprintln!("  ⚠️ Skipping unreadable path while scanning XMP files: {err}");
                     }
+                    continue;
                 }
+            };
+
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("xmp"))
+            {
+                xmp_files.push(path.to_path_buf());
             }
         }
 
@@ -172,6 +178,20 @@ impl XmpMerger {
             .arg(crate::safe_path_arg(xmp_path).as_ref())
             .output()
             .context("Failed to run exiftool")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let detail = if stderr.is_empty() {
+                format!("status {}", output.status)
+            } else {
+                stderr
+            };
+            bail!(
+                "ExifTool metadata extraction failed for {}: {}",
+                xmp_path.display(),
+                detail
+            );
+        }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let lines: Vec<&str> = stdout.lines().collect();
@@ -423,11 +443,21 @@ impl XmpMerger {
         let parent = xmp_path.parent()?;
         let stem = xmp_path.file_stem()?.to_string_lossy();
 
-        for entry in WalkDir::new(parent)
-            .max_depth(2)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for entry in WalkDir::new(parent).max_depth(2) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    if self.config.verbose {
+                        eprintln!(
+                            "  ⚠️ Skipping unreadable path while scanning subdirectories for {}: {}",
+                            xmp_path.display(),
+                            err
+                        );
+                    }
+                    continue;
+                }
+            };
+
             let path = entry.path();
             if !path.is_file() || path == xmp_path {
                 continue;
@@ -442,7 +472,10 @@ impl XmpMerger {
                 continue;
             }
 
-            let file_stem = path.file_stem()?.to_string_lossy();
+            let file_stem = match path.file_stem() {
+                Some(stem) => stem.to_string_lossy(),
+                None => continue,
+            };
             if file_stem.to_lowercase() == stem.to_lowercase() {
                 return Some(path.to_path_buf());
             }
@@ -456,7 +489,7 @@ impl XmpMerger {
         if let Some(ref derived) = xmp_info.derived_from {
             if !derived.contains("uuid:") {
                 let candidate = parent.join(derived);
-                if candidate.exists() {
+                if candidate.is_file() {
                     return Some(candidate);
                 }
             }
@@ -464,7 +497,7 @@ impl XmpMerger {
 
         if let Some(ref source) = xmp_info.source {
             let candidate = parent.join(source);
-            if candidate.exists() {
+            if candidate.is_file() {
                 return Some(candidate);
             }
         }
@@ -929,7 +962,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     ];
 
     for xmp_path in &xmp_candidates {
-        if xmp_path.exists() {
+        if xmp_path.is_file() {
             if crate::progress_mode::is_verbose_mode() {
                 eprintln!("📋 Found XMP sidecar: {}", xmp_path.display());
             }
@@ -1168,5 +1201,55 @@ mod tests {
 
         assert!(jpg_path.exists());
         assert!(!jpg_path.with_extension("png").exists());
+    }
+
+    #[test]
+    fn test_find_by_xmp_metadata_ignores_directory_candidate() {
+        let temp_dir = TempDir::new().unwrap();
+        let xmp_path = temp_dir.path().join("photo.xmp");
+        let dir_candidate = temp_dir.path().join("photo.jpg");
+
+        fs::write(&xmp_path, "fake xmp").unwrap();
+        fs::create_dir(&dir_candidate).unwrap();
+
+        let xmp_info = XmpFile {
+            path: xmp_path.clone(),
+            document_id: None,
+            derived_from: Some("photo.jpg".to_string()),
+            source: None,
+        };
+
+        let merger = XmpMerger::new(XmpMergerConfig::default());
+        assert_eq!(merger.find_by_xmp_metadata(&xmp_path, &xmp_info), None);
+    }
+
+    #[test]
+    fn test_merge_xmp_for_copied_file_ignores_directory_sidecar() {
+        let temp_dir = TempDir::new().unwrap();
+        let input = temp_dir.path().join("photo.jpg");
+        let dest = temp_dir.path().join("copy.jpg");
+        let xmp_dir = temp_dir.path().join("photo.xmp");
+
+        fs::write(&input, "fake jpg").unwrap();
+        fs::write(&dest, "fake jpg").unwrap();
+        fs::create_dir(&xmp_dir).unwrap();
+
+        let merged = merge_xmp_for_copied_file(&input, &dest).unwrap();
+        assert!(!merged);
+    }
+
+    #[test]
+    fn test_extract_xmp_metadata_reports_exiftool_failure() {
+        if Command::new("exiftool").arg("-ver").output().is_err() {
+            eprintln!("ExifTool not found, skipping test");
+            return;
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let missing_xmp = temp_dir.path().join("missing.xmp");
+        let merger = XmpMerger::new(XmpMergerConfig::default());
+
+        let err = merger.extract_xmp_metadata(&missing_xmp).unwrap_err();
+        assert!(err.to_string().contains("ExifTool metadata extraction failed"));
     }
 }
