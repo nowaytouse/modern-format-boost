@@ -224,8 +224,18 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
         }
 
         if i < scales - 1 {
-            orig = orig.resize_exact(w / 2, h / 2, image::imageops::FilterType::Lanczos3);
-            conv = conv.resize_exact(w / 2, h / 2, image::imageops::FilterType::Lanczos3);
+            orig = image::DynamicImage::ImageRgba8(image::imageops::resize(
+                &orig.to_rgba8(),
+                w / 2,
+                h / 2,
+                image::imageops::FilterType::Lanczos3,
+            ));
+            conv = image::DynamicImage::ImageRgba8(image::imageops::resize(
+                &conv.to_rgba8(),
+                w / 2,
+                h / 2,
+                image::imageops::FilterType::Lanczos3,
+            ));
         }
     }
 
