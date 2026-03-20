@@ -1873,48 +1873,15 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     };
 
     if estimated_quality.is_none() && compression == CompressionType::Lossy {
-        let pixels = (width as u64) * (height as u64);
-        if pixels > 0 && file_size > 0 {
-            // Heuristic v2: Multi-factor quality estimation
-            let raw_bpp = (file_size * 8) as f64 / pixels as f64 / (frame_count.max(1) as f64);
-            
-            // Format efficiency multiplier (relative to JPEG)
-            // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
-            let efficiency_factor = match format {
-                DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => 3.0,
-                DetectedFormat::WebP => 1.5,
-                _ => 1.0,
-            };
-
-            // Entropy compensation: 
-            // High entropy (>7.5) means complex texture, needs more BPP for same quality
-            // Low entropy (<4.0) means flat colors, quality is higher even with low BPP
-            let entropy_adj = (7.5 / entropy.max(1.0)).sqrt().clamp(0.7, 1.3);
-            
-            let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
-            let bpp_quality = (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0) as u8;
-
-            crate::progress_mode::emit_stderr(&format!(
-                "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
-                   \x1b[33m      File: {}\x1b[0m\n\
-                   \x1b[33m      Heuristic: BPP={:.3}, Eff={:.1}x, Entropy={:.2} -> \x1b[1;32mEstimated Q: {}\x1b[0m",
-                format.as_str(),
-                path.display(),
-                raw_bpp,
-                efficiency_factor,
-                entropy,
-                bpp_quality
-            ));
-            estimated_quality = Some(bpp_quality);
-        } else {
-            crate::progress_mode::emit_stderr(&format!(
-                "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed AND dimensions invalid.\x1b[0m\n\
-                   \x1b[31m      File: {}\x1b[0m\n\
-                   \x1b[31m      Defaulting to safe base Q85\x1b[0m",
-                path.display()
-            ));
-            estimated_quality = Some(85);
-        }
+        estimated_quality = Some(estimate_lossy_quality_fallback(
+            path,
+            &format,
+            width,
+            height,
+            file_size,
+            frame_count,
+            entropy,
+        )?);
     }
 
     let duration = if is_animated {
@@ -1944,6 +1911,64 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         entropy,
         precision,
     })
+}
+
+fn estimate_lossy_quality_fallback(
+    path: &Path,
+    format: &DetectedFormat,
+    width: u32,
+    height: u32,
+    file_size: u64,
+    frame_count: u32,
+    entropy: f64,
+) -> Result<u8> {
+    let pixels = (width as u64) * (height as u64);
+    if pixels == 0 || file_size == 0 {
+        crate::progress_mode::emit_stderr(&format!(
+            "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed and heuristic fallback is impossible.\x1b[0m\n\
+               \x1b[31m      File: {}\x1b[0m\n\
+               \x1b[31m      Refusing to invent a hardcoded quality value.\x1b[0m",
+            path.display()
+        ));
+        return Err(ImgQualityError::AnalysisError(format!(
+            "Cannot estimate quality for lossy {}: invalid dimensions ({width}x{height}) or empty file",
+            format.as_str()
+        )));
+    }
+
+    // Heuristic v2: Multi-factor quality estimation
+    let raw_bpp = (file_size * 8) as f64 / pixels as f64 / (frame_count.max(1) as f64);
+
+    // Format efficiency multiplier (relative to JPEG)
+    // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
+    let efficiency_factor = match format {
+        DetectedFormat::AVIF | DetectedFormat::HEIC | DetectedFormat::HEIF => 3.0,
+        DetectedFormat::WebP => 1.5,
+        _ => 1.0,
+    };
+
+    // Entropy compensation:
+    // High entropy (>7.5) means complex texture, needs more BPP for same quality
+    // Low entropy (<4.0) means flat colors, quality is higher even with low BPP
+    let entropy_adj = (7.5 / entropy.max(1.0)).sqrt().clamp(0.7, 1.3);
+
+    let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
+    let bpp_quality = (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0)
+        as u8;
+
+    crate::progress_mode::emit_stderr(&format!(
+        "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
+           \x1b[33m      File: {}\x1b[0m\n\
+           \x1b[33m      Heuristic: BPP={:.3}, Eff={:.1}x, Entropy={:.2} -> \x1b[1;32mEstimated Q: {}\x1b[0m",
+        format.as_str(),
+        path.display(),
+        raw_bpp,
+        efficiency_factor,
+        entropy,
+        bpp_quality
+    ));
+
+    Ok(bpp_quality)
 }
 
 fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
@@ -2513,5 +2538,27 @@ mod tests {
     fn test_detect_nonexistent_file() {
         let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
         assert!(result.is_err(), "Non-existent file should return error");
+    }
+
+    #[test]
+    fn test_estimate_lossy_quality_fallback_rejects_invalid_dimensions() {
+        let err = estimate_lossy_quality_fallback(
+            std::path::Path::new("/tmp/fake-lossy.webp"),
+            &DetectedFormat::WebP,
+            0,
+            1080,
+            12345,
+            1,
+            5.0,
+        )
+        .expect_err("invalid dimensions should not produce a hardcoded fallback quality");
+
+        match err {
+            ImgQualityError::AnalysisError(message) => {
+                assert!(message.contains("Cannot estimate quality"));
+                assert!(message.contains("invalid dimensions"));
+            }
+            other => panic!("expected AnalysisError, got {:?}", other),
+        }
     }
 }

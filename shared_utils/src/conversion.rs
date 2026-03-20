@@ -99,13 +99,13 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     #[cfg(unix)]
     let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
     let reader = BufReader::new(&file);
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut loaded = HashSet::new();
 
     let mut read_error = None;
     for line in reader.lines() {
         match line {
             Ok(path) => {
-                processed.insert(path);
+                loaded.insert(path);
             }
             Err(err) => {
                 if read_error.is_none() {
@@ -118,6 +118,9 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     if let Some(err) = read_error {
         return Err(Box::new(err));
     }
+
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    processed.extend(loaded);
 
     Ok(())
 }
@@ -1025,6 +1028,7 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_strict_size_reduction_formula() {
@@ -1126,6 +1130,31 @@ mod tests {
         assert!(
             err.to_string().contains("commit_temp_to_output has been removed"),
             "unexpected error message: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_processed_list_is_atomic_on_invalid_utf8() {
+        clear_processed_list();
+
+        let tracked = std::env::temp_dir().join("mfb-processed-track.mp4");
+        let tracked_canonical = tracked.display().to_string();
+        let mut list = NamedTempFile::new().expect("failed to create processed list");
+        list.write_all(tracked_canonical.as_bytes())
+            .expect("failed to write valid entry");
+        list.write_all(b"\n\xff\n")
+            .expect("failed to write invalid utf8");
+
+        let err = load_processed_list(list.path())
+            .expect_err("invalid utf8 should fail instead of partially loading state");
+        assert!(
+            !is_already_processed(&tracked),
+            "processed list should not be partially updated on read failure"
+        );
+        assert!(
+            err.to_string().contains("stream did not contain valid UTF-8"),
+            "unexpected error: {}",
             err
         );
     }
