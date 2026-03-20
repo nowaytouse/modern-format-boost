@@ -517,7 +517,7 @@ pub fn calculate_jxl_distance_with_options(
             distance: clamped,
             effective_bpp: analysis.bpp,
             analysis_details: AnalysisDetails {
-                confidence: 0.9,
+                confidence: calculate_confidence_v3(analysis),
                 match_mode: mode,
                 quality_bias: bias,
                 ..Default::default()
@@ -2154,6 +2154,16 @@ mod tests {
             (result.distance - 1.5).abs() < 0.3,
             "JPEG Q85 should produce distance ~1.5, got {}",
             result.distance
+        );
+        assert!(
+            (result.analysis_details.confidence - calculate_confidence_v3(&jpeg)).abs() < f64::EPSILON,
+            "JPEG estimated-quality path should use calculated confidence, got {}",
+            result.analysis_details.confidence
+        );
+        assert!(
+            result.analysis_details.confidence < 0.9,
+            "Sparse JPEG metadata should not be reported as fixed 0.9 confidence, got {}",
+            result.analysis_details.confidence
         );
     }
 
