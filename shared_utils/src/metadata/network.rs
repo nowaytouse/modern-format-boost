@@ -44,10 +44,3 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
 
     Ok(())
 }
-
-/// Legacy alias kept for call-site compatibility.
-#[allow(dead_code)]
-#[inline]
-pub fn verify_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
-    preserve_network_metadata(src, dst)
-}

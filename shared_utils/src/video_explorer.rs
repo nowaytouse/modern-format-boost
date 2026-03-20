@@ -19,33 +19,12 @@ use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
 use crate::float_compare::SSIM_EPSILON;
 use crate::types::{FileSize, Ssim};
 
-pub mod codec_detection;
 pub mod error_handling;
-pub mod metadata;
 pub mod ssim_calculator;
 pub mod stream_analysis;
 
-#[allow(unused_imports)]
-pub use codec_detection::*;
-#[allow(unused_imports)]
-pub use metadata::*;
 pub use ssim_calculator::*;
 pub use stream_analysis::*;
-
-#[allow(unused_macros)]
-macro_rules! progress_line {
-    ($($arg:tt)*) => {{
-        eprint!("\r\x1b[K{}", format!($($arg)*));
-        let _ = std::io::stderr().flush();
-    }};
-}
-
-#[allow(unused_macros)]
-macro_rules! progress_done {
-    () => {{
-        crate::log_eprintln!();
-    }};
-}
 
 pub const ABSOLUTE_MIN_CRF: f32 = 0.0;
 
@@ -984,15 +963,8 @@ impl VideoExplorer {
 
         let pb = crate::progress::create_professional_spinner("🔍 Size Explore");
 
-        macro_rules! progress_line {
-            ($($arg:tt)*) => {{
-                pb.set_message(format!($($arg)*));
-            }};
-        }
-
-        macro_rules! progress_done {
-            () => {{}};
-        }
+        let progress_line = |message: String| pb.set_message(message);
+        let progress_done = || {};
 
         pb.suspend(|| {
             crate::log_eprintln!("┌ 🔍 Size-Only Explore ({:?})", self.encoder);
@@ -1004,10 +976,10 @@ impl VideoExplorer {
 
         log.push(format!("🔍 Size-Only Explore ({:?})", self.encoder));
 
-        progress_line!("Test CRF {:.1}...", self.config.max_crf);
+        progress_line(format!("Test CRF {:.1}...", self.config.max_crf));
         let max_size = self.encode(self.config.max_crf)?;
         let iterations = 1u32;
-        progress_done!();
+        progress_done();
 
         let (best_crf, best_size, quality_passed) = if self.can_compress_with_margin(max_size) {
             (self.config.max_crf, max_size, true)
@@ -1015,9 +987,9 @@ impl VideoExplorer {
             (self.config.max_crf, max_size, false)
         };
 
-        progress_line!("Calculate SSIM...");
+        progress_line("Calculate SSIM...".to_string());
         let ssim = self.calculate_ssim().ok().flatten();
-        progress_done!();
+        progress_done();
         // SSIM is computed from self.output_path; must match the encode just above (max_crf).
 
         let size_change_pct = self.calc_change_pct(best_size);
@@ -1128,15 +1100,8 @@ impl VideoExplorer {
 
         let pb = crate::progress::create_professional_spinner("📦 Compress Only");
 
-        macro_rules! progress_line {
-            ($($arg:tt)*) => {{
-                pb.set_message(format!($($arg)*));
-            }};
-        }
-
-        macro_rules! progress_done {
-            () => {{}};
-        }
+        let progress_line = |message: String| pb.set_message(message);
+        let progress_done = || {};
 
         pb.suspend(|| {
             crate::log_eprintln!("┌ 📦 Compress-Only ({:?})", self.encoder);
@@ -1152,15 +1117,15 @@ impl VideoExplorer {
         let initial_size = encode_cached(self.config.initial_crf, &mut cache, self)?;
         iterations += 1;
         let size_pct = self.calc_change_pct(initial_size);
-        progress_line!(
+        progress_line(format!(
             "CRF {:.1} | {:+.1}% | Iter {}",
             self.config.initial_crf,
             size_pct,
             iterations
-        );
+        ));
 
         if self.can_compress_with_margin(initial_size) {
-            progress_done!();
+            progress_done();
             let elapsed = start_time.elapsed();
 
             pb.finish_and_clear();
@@ -1205,13 +1170,13 @@ impl VideoExplorer {
             } else {
                 "❌"
             };
-            progress_line!(
+            progress_line(format!(
                 "Binary Search | CRF {:.1} | {:+.1}% {} | Best: {:.1}",
                 mid,
                 size_pct,
                 compress_icon,
                 best_crf_so_far
-            );
+            ));
 
             if self.can_compress_with_margin(size) {
                 best_crf = Some(mid);
@@ -1222,7 +1187,7 @@ impl VideoExplorer {
                 low = mid;
             }
         }
-        progress_done!();
+        progress_done();
 
         let (final_crf, final_size) = if let (Some(crf), Some(size)) = (best_crf, best_size) {
             (crf, size)
@@ -1701,15 +1666,8 @@ impl VideoExplorer {
 
         let pb = crate::progress::create_professional_spinner("🔍 Initializing");
 
-        macro_rules! progress_line {
-            ($($arg:tt)*) => {{
-                pb.set_message(format!($($arg)*));
-            }};
-        }
-
-        macro_rules! progress_done {
-            () => {{}};
-        }
+        let progress_line = |message: String| pb.set_message(message);
+        let progress_done = || {};
 
         macro_rules! log_header {
             ($($arg:tt)*) => {{
@@ -1797,7 +1755,7 @@ impl VideoExplorer {
 
         if min_size < target_size {
             best_crf_so_far = self.config.min_crf;
-            progress_done!();
+            progress_done();
 
             let mut best_crf = self.config.min_crf;
             let mut best_size = min_size;
@@ -1818,7 +1776,7 @@ impl VideoExplorer {
                     break;
                 }
             }
-            progress_done!();
+            progress_done();
 
             log_header!("   Stage B-2: Fine tune (0.1 step)");
             for offset in [-0.25_f32, -0.5, -0.75, -1.0] {
@@ -1847,20 +1805,20 @@ impl VideoExplorer {
                     break;
                 }
             }
-            progress_done!();
+            progress_done();
 
             if last_encoded_crf != Some(best_crf) {
-                progress_line!("│ Re-encoding to best CRF {:.1}... │", best_crf);
+                progress_line(format!("│ Re-encoding to best CRF {:.1}... │", best_crf));
                 let _ = encode_size_only(best_crf, &mut size_cache, &mut last_encoded_crf, self)?;
-                progress_done!();
+                progress_done();
             }
 
             log_header!("   Stage C: SSIM verification");
-            progress_line!("│ Computing SSIM... │");
+            progress_line("│ Computing SSIM... │".to_string());
             let quality = validate_ssim(best_crf, &mut quality_cache, self)?;
             let ssim = quality.0.unwrap_or(0.0);
 
-            progress_done!();
+            progress_done();
 
             let status = if ssim >= 0.999 {
                 "Excellent"
@@ -1895,7 +1853,7 @@ impl VideoExplorer {
             });
         }
 
-        progress_done!();
+        progress_done();
 
         let max_size = encode_size_only(
             self.config.max_crf,
@@ -1907,7 +1865,7 @@ impl VideoExplorer {
         log_progress!("Stage A", self.config.max_crf, max_size, iterations);
 
         if max_size >= self.input_size {
-            progress_done!();
+            progress_done();
             log_header!("   ⚠️ File already highly compressed; cannot compress further");
             let quality = validate_ssim(self.config.max_crf, &mut quality_cache, self)?;
 
@@ -1936,7 +1894,7 @@ impl VideoExplorer {
             });
         }
 
-        progress_done!();
+        progress_done();
 
         // Heuristic early exit: only after enough iterations to avoid premature stop on flat
         // bitrate curves (e.g. static/scene-heavy content). Variance threshold is strict so
@@ -1999,7 +1957,7 @@ impl VideoExplorer {
                 && variance < VARIANCE_THRESHOLD
                 && size_history.len() >= WINDOW_SIZE
             {
-                progress_done!();
+                progress_done();
                 log_header!(
                     "   ⚡ Early exit: variance converged {:.2e} < {:.2e} (after {} iterations)",
                     variance,
@@ -2012,7 +1970,7 @@ impl VideoExplorer {
                 && change_rate < CHANGE_RATE_THRESHOLD
                 && prev_size.is_some()
             {
-                progress_done!();
+                progress_done();
                 log_header!(
                     "   ⚡ Early exit: change rate negligible {:.4}% < {:.4}% (after {} iterations)",
                     change_rate * 100.0,
@@ -2024,7 +1982,7 @@ impl VideoExplorer {
 
             prev_size = Some(size);
         }
-        progress_done!();
+        progress_done();
 
         log_header!("   Stage B: Fine tune (0.1 step)");
 
@@ -2058,7 +2016,7 @@ impl VideoExplorer {
                     let prev = fine_tune_history[fine_tune_history.len() - 2];
                     let rate = calc_change_rate(prev, size);
                     if rate < CHANGE_RATE_THRESHOLD {
-                        progress_done!();
+                        progress_done();
                         log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0);
                         break;
                     }
@@ -2099,7 +2057,7 @@ impl VideoExplorer {
                         let prev = fine_tune_history[fine_tune_history.len() - 2];
                         let rate = calc_change_rate(prev, size);
                         if rate < CHANGE_RATE_THRESHOLD {
-                            progress_done!();
+                            progress_done();
                             log_header!("   ⚡ Early termination: Δ{:.3}%", rate * 100.0);
                             break;
                         }
@@ -2109,7 +2067,7 @@ impl VideoExplorer {
                 }
             }
         }
-        progress_done!();
+        progress_done();
 
         if best_boundary != boundary_crf {
             boundary_crf = best_boundary;
@@ -2118,16 +2076,16 @@ impl VideoExplorer {
         log_header!("   Stage C: SSIM verification");
 
         if last_encoded_crf != Some(boundary_crf) {
-            progress_line!("│ Re-encoding to CRF {:.1}... │", boundary_crf);
+            progress_line(format!("│ Re-encoding to CRF {:.1}... │", boundary_crf));
             let _ = encode_size_only(boundary_crf, &mut size_cache, &mut last_encoded_crf, self)?;
-            progress_done!();
+            progress_done();
         }
 
-        progress_line!("│ Computing SSIM... │");
+        progress_line("│ Computing SSIM... │".to_string());
         let quality = validate_ssim(boundary_crf, &mut quality_cache, self)?;
         let ssim = quality.0.unwrap_or(0.0);
 
-        progress_done!();
+        progress_done();
 
         let final_size = size_cache.get(boundary_crf).copied().unwrap_or(0);
 
@@ -3342,8 +3300,12 @@ pub mod calibration;
 pub mod dynamic_mapping;
 
 pub mod gpu_coarse_search;
-#[allow(unused_imports)]
-pub use gpu_coarse_search::*;
+pub use gpu_coarse_search::{
+    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full,
+    explore_av1_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse,
+    explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_ultimate,
+    explore_with_gpu_coarse_search,
+};
 
 #[cfg(test)]
 mod tests {
