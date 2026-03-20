@@ -429,10 +429,8 @@ pub struct HeuristicConfig {
     pub quality_match_precision: f32,
 }
 
-impl HeuristicConfig {
-    /// Default configuration
-    #[allow(clippy::should_implement_trait)]
-    pub fn default() -> Self {
+impl Default for HeuristicConfig {
+    fn default() -> Self {
         Self {
             jxl_lossless_distance_threshold: 0.1,
             hevc_crf_threshold: 18.0,
@@ -441,7 +439,9 @@ impl HeuristicConfig {
             quality_match_precision: 0.95,
         }
     }
-    
+}
+
+impl HeuristicConfig {
     /// Compute hash of configuration
     pub fn compute_hash(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
