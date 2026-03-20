@@ -1,0 +1,1 @@
+pub const SMALL_PNG_THRESHOLD_BYTES: u64 = 500 * 1024; // 500KB

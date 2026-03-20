@@ -5,7 +5,7 @@
 //! - Simple Mode: Always AV1 MP4
 //! - Size Exploration: Tries higher CRF if output is larger than input
 
-use crate::detection_api::{detect_video, CompressionType, VideoDetectionResult};
+use crate::detection_api::{CompressionType, VideoDetectionResult};
 use crate::{Result, VidQualityError};
 
 use shared_utils::analysis_cache::AnalysisCache;
