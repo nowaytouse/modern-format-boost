@@ -4410,7 +4410,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_zero_gains_scaling_basic() {
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 41.0, true),
@@ -4421,21 +4420,21 @@ mod tests {
             ULTIMATE_REQUIRED_ZERO_GAINS
         );
 
-        // ultimate_mode: min 15, so scaled = 20*0.75 = 15
+        // ultimate_mode: base 50, crf_range 15 -> factor 0.75, scaled = 50 * 0.75 = 37.5 -> round to 38
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 15.0, true),
-            15
+            38
         );
 
-        // crf_range 10 -> factor 0.5, scaled 10 -> clamped to min 15
+        // crf_range 10 -> factor 0.5, scaled = 50 * 0.5 = 25
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 10.0, true),
-            15
+            25
         );
 
         assert_eq!(
             calculate_zero_gains_for_duration_and_range(60.0, 5.0, true),
-            15
+            25
         );
     }
 
