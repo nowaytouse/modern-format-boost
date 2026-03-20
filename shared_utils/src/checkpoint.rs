@@ -368,11 +368,25 @@ impl CheckpointManager {
         let reader = BufReader::new(file);
         let mut completed = HashSet::new();
 
-        for path in reader.lines().map_while(Result::ok) {
-            let trimmed = path.trim();
-            if !trimmed.is_empty() {
-                completed.insert(trimmed.to_string());
+        let mut read_error = None;
+        for line in reader.lines() {
+            match line {
+                Ok(path) => {
+                    let trimmed = path.trim();
+                    if !trimmed.is_empty() {
+                        completed.insert(trimmed.to_string());
+                    }
+                }
+                Err(err) => {
+                    if read_error.is_none() {
+                        read_error = Some(err);
+                    }
+                }
             }
+        }
+
+        if let Some(err) = read_error {
+            return Err(err);
         }
 
         let resume_mode = !completed.is_empty();
