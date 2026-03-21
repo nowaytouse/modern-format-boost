@@ -11,6 +11,7 @@
 #[cfg(test)]
 use chrono::Timelike;
 use chrono::{DateTime, FixedOffset, Utc};
+use std::any::Any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -19,6 +20,16 @@ use std::time::Duration;
 pub struct Heartbeat {
     running: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+}
+
+fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
+    match payload.downcast::<String>() {
+        Ok(msg) => *msg,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(msg) => (*msg).to_string(),
+            Err(_) => "non-string panic payload".to_string(),
+        },
+    }
 }
 
 impl Heartbeat {
@@ -46,7 +57,12 @@ impl Heartbeat {
     pub fn stop(mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            if let Err(payload) = handle.join() {
+                eprintln!(
+                    "⚠️ [MS-SSIM Heartbeat] Worker thread panicked: {}",
+                    describe_thread_panic(payload)
+                );
+            }
         }
     }
 
@@ -66,7 +82,12 @@ impl Drop for Heartbeat {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            if let Err(payload) = handle.join() {
+                eprintln!(
+                    "⚠️ [MS-SSIM Heartbeat] Worker thread panicked during drop: {}",
+                    describe_thread_panic(payload)
+                );
+            }
         }
     }
 }

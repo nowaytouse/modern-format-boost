@@ -915,6 +915,12 @@ fn auto_convert_directory(
     let checkpoint = if resume {
         match shared_utils::checkpoint::CheckpointManager::new(input) {
             Ok(cp) => {
+                if let Err(err) = cp.reset_if_output_root_missing(config.output_dir.as_deref()) {
+                    shared_utils::log_eprintln!(
+                        "⚠️ [checkpoint] Failed to reset stale resume state for missing output root: {}",
+                        err
+                    );
+                }
                 if cp.is_resume_mode() {
                     if config.verbose {
                         println!(
@@ -923,6 +929,8 @@ fn auto_convert_directory(
                         );
                     }
                     cp.sync_to_processed_list();
+                } else {
+                    shared_utils::clear_processed_list();
                 }
                 Some(cp)
             }
