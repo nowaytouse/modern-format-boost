@@ -2929,6 +2929,31 @@ pub fn explore_hevc_with_gpu_coarse(
     )
 }
 
+pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    baseline_crf: f32,
+    warm_start_crf: Option<f32>,
+    ultimate_mode: bool,
+    allow_size_tolerance: bool,
+    max_threads: usize,
+) -> Result<ExploreResult> {
+    let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
+    explore_hevc_with_gpu_coarse_full_warm_start(
+        input,
+        output,
+        vf_args,
+        baseline_crf,
+        warm_start_crf,
+        ultimate_mode,
+        false,
+        allow_size_tolerance,
+        min_ssim,
+        max_threads,
+    )
+}
+
 pub fn explore_hevc_with_gpu_coarse_ultimate(
     input: &Path,
     output: &Path,
@@ -2939,15 +2964,45 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_hevc_with_gpu_coarse_full(
+    explore_hevc_with_gpu_coarse_full_warm_start(
         input,
         output,
         vf_args,
         initial_crf,
+        None,
         ultimate_mode,
         false,
         allow_size_tolerance,
         min_ssim,
+        max_threads,
+    )
+}
+
+pub fn explore_hevc_with_gpu_coarse_full_warm_start(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    baseline_crf: f32,
+    warm_start_crf: Option<f32>,
+    ultimate_mode: bool,
+    force_ms_ssim_long: bool,
+    allow_size_tolerance: bool,
+    min_ssim: f64,
+    max_threads: usize,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
+    let search_anchor_crf = warm_start_crf.unwrap_or(baseline_crf).clamp(ABSOLUTE_MIN_CRF, max_crf);
+    explore_with_gpu_coarse_search(
+        input,
+        output,
+        VideoEncoder::Hevc,
+        vf_args,
+        search_anchor_crf,
+        max_crf,
+        min_ssim,
+        ultimate_mode,
+        force_ms_ssim_long,
+        allow_size_tolerance,
         max_threads,
     )
 }
@@ -2963,18 +3018,41 @@ pub fn explore_hevc_with_gpu_coarse_full(
     min_ssim: f64,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
-    explore_with_gpu_coarse_search(
+    explore_hevc_with_gpu_coarse_full_warm_start(
         input,
         output,
-        VideoEncoder::Hevc,
         vf_args,
         initial_crf,
-        max_crf,
-        min_ssim,
+        None,
         ultimate_mode,
         force_ms_ssim_long,
         allow_size_tolerance,
+        min_ssim,
+        max_threads,
+    )
+}
+
+pub fn explore_av1_with_gpu_coarse_ultimate_warm_start(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    baseline_crf: f32,
+    warm_start_crf: Option<f32>,
+    ultimate_mode: bool,
+    allow_size_tolerance: bool,
+    max_threads: usize,
+) -> Result<ExploreResult> {
+    let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
+    explore_av1_with_gpu_coarse_full_warm_start(
+        input,
+        output,
+        vf_args,
+        baseline_crf,
+        warm_start_crf,
+        ultimate_mode,
+        false,
+        allow_size_tolerance,
+        min_ssim,
         max_threads,
     )
 }
@@ -3013,15 +3091,45 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
-    explore_av1_with_gpu_coarse_full(
+    explore_av1_with_gpu_coarse_full_warm_start(
         input,
         output,
         vf_args,
         initial_crf,
+        None,
         ultimate_mode,
         false,
         allow_size_tolerance,
         min_ssim,
+        max_threads,
+    )
+}
+
+pub fn explore_av1_with_gpu_coarse_full_warm_start(
+    input: &Path,
+    output: &Path,
+    vf_args: Vec<String>,
+    baseline_crf: f32,
+    warm_start_crf: Option<f32>,
+    ultimate_mode: bool,
+    force_ms_ssim_long: bool,
+    allow_size_tolerance: bool,
+    min_ssim: f64,
+    max_threads: usize,
+) -> Result<ExploreResult> {
+    let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
+    let search_anchor_crf = warm_start_crf.unwrap_or(baseline_crf).clamp(ABSOLUTE_MIN_CRF, max_crf);
+    explore_with_gpu_coarse_search(
+        input,
+        output,
+        VideoEncoder::Av1,
+        vf_args,
+        search_anchor_crf,
+        max_crf,
+        min_ssim,
+        ultimate_mode,
+        force_ms_ssim_long,
+        allow_size_tolerance,
         max_threads,
     )
 }
@@ -3037,18 +3145,16 @@ pub fn explore_av1_with_gpu_coarse_full(
     min_ssim: f64,
     max_threads: usize,
 ) -> Result<ExploreResult> {
-    let (max_crf, _) = calculate_smart_thresholds(initial_crf, VideoEncoder::Av1);
-    explore_with_gpu_coarse_search(
+    explore_av1_with_gpu_coarse_full_warm_start(
         input,
         output,
-        VideoEncoder::Av1,
         vf_args,
         initial_crf,
-        max_crf,
-        min_ssim,
+        None,
         ultimate_mode,
         force_ms_ssim_long,
         allow_size_tolerance,
+        min_ssim,
         max_threads,
     )
 }

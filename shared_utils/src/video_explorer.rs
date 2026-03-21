@@ -3336,8 +3336,10 @@ pub mod dynamic_mapping;
 pub mod gpu_coarse_search;
 pub use gpu_coarse_search::{
     explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full,
-    explore_av1_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse,
-    explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_ultimate,
+    explore_av1_with_gpu_coarse_full_warm_start, explore_av1_with_gpu_coarse_ultimate,
+    explore_av1_with_gpu_coarse_ultimate_warm_start, explore_hevc_with_gpu_coarse,
+    explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_full_warm_start,
+    explore_hevc_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse_ultimate_warm_start,
     explore_with_gpu_coarse_search,
 };
 
