@@ -131,6 +131,51 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.45] - 2026-03-14
 
+## [0.10.66] - 2026-03-12
+
+### Fixed
+- 🔓 **HEIC Security Limits (Critical - Complete Fix)**: Correctly implemented security limits with proper API usage.
+- **Root Cause Analysis**: Fixed issues where v0.10.65 used non-existent APIs and failed to propagate the `v1_21` feature flag.
+- **Solution**: Implemented the correct three-step API (`HeifContext::new()` → `set_security_limits()` → `read_bytes()`).
+- **Feature Propagation**: Added `v1_21` to default features in `shared_utils`, `img_hevc`, and `img_av1`.
+- **Limits Increased**: Memory 15GB (was 7GB), `ipco` boxes 50,000 (was 10,000).
+- **Fallback Strategy**: Restored complete 3-layer fallback (main → `ftyp` scan → file read). Fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors.
+- 🔧 **Code Quality**: Fixed all clippy warnings in library code (simplified logic, fixed lazy evaluations).
+
+### Technical Details
+- **Correct API Usage**:
+  ```rust
+  let mut ctx = HeifContext::new()?;           // 1. Create empty context
+  ctx.set_security_limits(&limits)?;           // 2. Set limits BEFORE reading
+  ctx.read_bytes(&data)?;                      // 3. Read with limits applied
+  ```
+- **Security Limits**: `max_total_memory`: 15GB, `max_children_per_box`: 50,000, `max_items`: 500,000, `max_components`: 50,000.
+
+### Added
+- `verify_heic_config.sh`: Verification script to check all HEIC security configurations.
+- `HEIC_SECURITY_CONFIG.md`: Comprehensive documentation of HEIC security configuration.
+
+## [0.10.64] - 2026-03-11
+
+### Highlights (v0.10.9 → v0.10.64)
+- 🔒 **Security & Privacy**: Permanently removed AI tool configs from Git history (1,724 commits cleaned; repo size reduced to 78MB).
+- 🔓 **HEIC Processing**: Increased security limits (6GB memory, 10k `ipco` children). Fixed lossless detection cache bug for `RExt` profile + 4:4:4 chroma.
+- 🎯 **Quality & Detection**: 3D Quality Gate (VMAF-Y ≥93.0, PSNR-UV ≥35.0, CAMBI ≤5.0). 0.01-precision CRF fine-tuning with sprint & backtrack optimization.
+- 🚀 **Performance**: Global CRF cache with warm start; Cache version binding for auto-invalidation; JPEG fast path header analysis.
+- 📦 **Dependencies**: Branch strategy finalized (Main stable vs Nightly GitHub sources).
+- 🎨 **UI & Logging**: 24-bit TrueColor UI with video milestones (V:, X:, P:, I:). Unified error system with classification.
+- 🔧 **Technical**: Unique 8-char UUID temp files; Apple ecosystem support (AAE sidecars, iPhone VFR, iCloud metadata).
+
+## [0.10.9] - 2025-12-28
+
+### Release v0.10.9
+- **Robust ImageMagick Fallback Pipeline**: Fixed a critical logic bug where the ImageMagick fallback was never called for `img-hevc` and `img-av1` after direct `cjxl` failure.
+- **Enhanced Grayscale ICC Conflict Handling**: Optimized recovery for grayscale images with incompatible RGB ICC profiles (stripping profiles and attempting 16-bit/8-bit conversion).
+- **Fixed Silent Failures**: Added detailed logging for multi-attempt fallbacks (✅/❌ status icons).
+- **Broader Error Detection**: Expanded `is_decode_or_pixel_cjxl_error` to catch more pixel data and decoding errors.
+- **Code Quality**: Resolved unused variable compiler warnings.
+
+
 
 
 ### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.45)
