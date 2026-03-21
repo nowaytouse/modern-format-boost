@@ -200,7 +200,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
-    
+
     let mut tags = std::collections::HashMap::new();
     if let Some(tags_obj) = format["tags"].as_object() {
         for (k, v) in tags_obj {
@@ -221,11 +221,13 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .enumerate()
         .filter(|(_, s)| s["codec_type"].as_str() == Some("video"))
         .collect();
-    
+
     if video_streams.is_empty() {
-        return Err(FFprobeError::ParseError("No video stream found".to_string()));
+        return Err(FFprobeError::ParseError(
+            "No video stream found".to_string(),
+        ));
     }
-    
+
     // Select stream with most frames (for animated images) or first stream (for regular videos)
     // Use the actual stream index from the JSON, not the enumerate index
     let (stream_index, video_stream) = if video_streams.len() > 1 {
@@ -248,12 +250,18 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     };
 
     if duration <= 0.0 {
-        if let Some(d) = video_stream["duration"].as_str().and_then(|s| s.parse::<f64>().ok()) {
+        if let Some(d) = video_stream["duration"]
+            .as_str()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
             duration = d;
         }
     }
     if duration <= 0.0 {
-        return Err(FFprobeError::ParseError("Missing duration (both format and video stream reported 0 or invalid duration)".to_string()));
+        return Err(FFprobeError::ParseError(
+            "Missing duration (both format and video stream reported 0 or invalid duration)"
+                .to_string(),
+        ));
     }
 
     let video_codec = video_stream["codec_name"]
@@ -264,10 +272,19 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .unwrap_or("")
         .to_string();
-    let width = video_stream["width"].as_u64().ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))? as u32;
-    let height = video_stream["height"].as_u64().ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))? as u32;
+    let width = video_stream["width"]
+        .as_u64()
+        .ok_or_else(|| FFprobeError::ParseError("Missing width".to_string()))?
+        as u32;
+    let height = video_stream["height"]
+        .as_u64()
+        .ok_or_else(|| FFprobeError::ParseError("Missing height".to_string()))?
+        as u32;
     if width == 0 || height == 0 {
-        return Err(FFprobeError::ParseError(format!("Invalid dimensions: {}x{}", width, height)));
+        return Err(FFprobeError::ParseError(format!(
+            "Invalid dimensions: {}x{}",
+            width, height
+        )));
     }
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
@@ -276,12 +293,8 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {}", e)))?;
 
     // Enhanced VFR detection with slow-motion handling
-    let is_variable_frame_rate = detect_vfr_enhanced(
-        video_stream,
-        frame_rate,
-        avg_frame_rate,
-        &format_name,
-    );
+    let is_variable_frame_rate =
+        detect_vfr_enhanced(video_stream, frame_rate, avg_frame_rate, &format_name);
 
     let frame_count = video_stream["nb_frames"]
         .as_str()
@@ -293,13 +306,25 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .ok_or_else(|| FFprobeError::ParseError("Missing pixel format".to_string()))?
         .to_string();
     let color_space = video_stream["color_space"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "unknown" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     });
     let color_transfer = video_stream["color_transfer"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "unknown" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     });
     let color_primaries = video_stream["color_primaries"].as_str().and_then(|s| {
-        if s.is_empty() || s == "unknown" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "unknown" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     });
 
     // Parse HDR side data: Dolby Vision, HDR10+, mastering display, CLL
@@ -459,7 +484,10 @@ fn extract_hdr_side_data(json: &serde_json::Value) -> HdrSideData {
             }
         }
 
-        if sd_type.contains("hdr dynamic") || sd_type.contains("st2094") || sd_type.contains("hdr10+") {
+        if sd_type.contains("hdr dynamic")
+            || sd_type.contains("st2094")
+            || sd_type.contains("hdr10+")
+        {
             result.is_hdr10_plus = true;
         }
 
@@ -487,7 +515,9 @@ fn parse_rational_to_50k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = num.trim().parse().ok()?;
         let d: f64 = den.trim().parse().ok()?;
-        if d == 0.0 { return None; }
+        if d == 0.0 {
+            return None;
+        }
         // Normalise to denominator 50000
         Some(((n / d) * 50000.0).round() as u64)
     } else {
@@ -508,7 +538,9 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
     if let Some((num, den)) = s.split_once('/') {
         let n: f64 = num.trim().parse().ok()?;
         let d: f64 = den.trim().parse().ok()?;
-        if d == 0.0 { return None; }
+        if d == 0.0 {
+            return None;
+        }
         Some(((n / d) * 10000.0).round() as u64)
     } else {
         let v: f64 = s.trim().parse().ok()?;
@@ -524,11 +556,15 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
 /// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
 fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
     let get_coord = |field: &str| -> Option<u64> {
-        sd[field].as_str().and_then(parse_rational_to_50k)
+        sd[field]
+            .as_str()
+            .and_then(parse_rational_to_50k)
             .or_else(|| sd[field].as_f64().map(|v| (v * 50000.0).round() as u64))
     };
     let get_lum = |field: &str| -> Option<u64> {
-        sd[field].as_str().and_then(parse_luminance_to_10k)
+        sd[field]
+            .as_str()
+            .and_then(parse_luminance_to_10k)
             .or_else(|| sd[field].as_f64().map(|v| (v * 10000.0).round() as u64))
     };
 
@@ -666,8 +702,12 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
-            let num = parts[0].parse::<f64>().map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {}", e)))?;
-            let den = parts[1].parse::<f64>().map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {}", e)))?;
+            let num = parts[0]
+                .parse::<f64>()
+                .map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {}", e)))?;
+            let den = parts[1]
+                .parse::<f64>()
+                .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {}", e)))?;
             if den > 0.0 {
                 let rate = num / den;
                 if rate > 0.0 {
@@ -678,7 +718,10 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     }
     match s.parse::<f64>() {
         Ok(v) if v > 0.0 => Ok(v),
-        _ => Err(FFprobeError::ParseError(format!("Could not parse frame rate: '{}'", s))),
+        _ => Err(FFprobeError::ParseError(format!(
+            "Could not parse frame rate: '{}'",
+            s
+        ))),
     }
 }
 

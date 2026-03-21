@@ -20,9 +20,13 @@ pub mod conversion_api;
 pub mod detection_api;
 pub mod ffprobe;
 
-pub use conversion_api::{auto_convert, auto_convert_with_cache, determine_strategy, determine_strategy_with_apple_compat, simple_convert};
+pub use conversion_api::{
+    auto_convert, auto_convert_with_cache, determine_strategy,
+    determine_strategy_with_apple_compat, simple_convert,
+};
 pub use detection_api::{
-    detect_video, detect_video_with_cache, ColorSpace, CompressionType, DetectedCodec, VideoDetectionResult,
+    detect_video, detect_video_with_cache, ColorSpace, CompressionType, DetectedCodec,
+    VideoDetectionResult,
 };
 pub use ffprobe::{probe_video, FFprobeResult};
 pub use shared_utils::conversion_types::{

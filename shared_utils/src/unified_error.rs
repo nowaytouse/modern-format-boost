@@ -15,8 +15,11 @@ use std::fmt;
 use std::path::PathBuf;
 
 // Re-export types from modules we're keeping
-pub use crate::error_handler::{ErrorAction, ErrorCategory, ResultExt, handle_error, report_error, add_context, install_panic_handler};
-pub use crate::error_logging::{ErrorSeverity, classify_error, log_enhanced_error};
+pub use crate::error_handler::{
+    add_context, handle_error, install_panic_handler, report_error, ErrorAction, ErrorCategory,
+    ResultExt,
+};
+pub use crate::error_logging::{classify_error, log_enhanced_error, ErrorSeverity};
 pub use crate::types::{CrfError, IterationError, SsimError};
 
 // ─── Unified Error Types ─────────────────────────────────────────────────────
@@ -305,7 +308,10 @@ impl UnifiedError {
 
     /// Check if this error should skip the file
     pub fn is_skip(&self) -> bool {
-        matches!(self, UnifiedError::OutputExists { .. } | UnifiedError::SkipFile(_))
+        matches!(
+            self,
+            UnifiedError::OutputExists { .. } | UnifiedError::SkipFile(_)
+        )
     }
 
     /// Add file path to error
@@ -377,16 +383,12 @@ impl UnifiedError {
             UnifiedError::FileNotFound { path, .. } => {
                 UnifiedError::FileNotFound { path, operation }
             }
-            UnifiedError::FileReadError {
-                path, source, ..
-            } => UnifiedError::FileReadError {
+            UnifiedError::FileReadError { path, source, .. } => UnifiedError::FileReadError {
                 path,
                 source,
                 operation,
             },
-            UnifiedError::FileWriteError {
-                path, source, ..
-            } => UnifiedError::FileWriteError {
+            UnifiedError::FileWriteError { path, source, .. } => UnifiedError::FileWriteError {
                 path,
                 source,
                 operation,
@@ -394,12 +396,10 @@ impl UnifiedError {
             UnifiedError::DirectoryNotFound { path, .. } => {
                 UnifiedError::DirectoryNotFound { path, operation }
             }
-            UnifiedError::ToolNotFound { tool_name, .. } => {
-                UnifiedError::ToolNotFound {
-                    tool_name,
-                    operation,
-                }
-            }
+            UnifiedError::ToolNotFound { tool_name, .. } => UnifiedError::ToolNotFound {
+                tool_name,
+                operation,
+            },
             UnifiedError::OutputExists { path, .. } => {
                 UnifiedError::OutputExists { path, operation }
             }

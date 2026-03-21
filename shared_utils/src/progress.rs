@@ -18,19 +18,66 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+static PROGRESS_STDERR_LOCK: Mutex<()> = Mutex::new(());
+static ACTIVE_PROGRESS_LINE: Mutex<Option<String>> = Mutex::new(None);
+
 pub struct CoarseProgressBar {
     total: u64,
     current: AtomicU64,
     start_time: Instant,
     prefix: String,
     last_render: Arc<Mutex<Instant>>,
+    message: Arc<Mutex<String>>,
     is_finished: AtomicBool,
+    enabled: bool,
+}
+
+fn progress_line_enabled() -> bool {
+    if std::env::var("FORCE_COLOR").is_ok() {
+        return true;
+    }
+    console::Term::stderr().is_term()
+}
+
+fn truncate_progress_message(msg: &str, max_chars: usize) -> String {
+    let char_count = msg.chars().count();
+    if char_count <= max_chars {
+        return msg.to_string();
+    }
+    let truncated: String = msg.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}…", truncated)
+}
+
+fn set_active_progress_line(line: Option<String>) {
+    if let Ok(mut guard) = ACTIVE_PROGRESS_LINE.lock() {
+        *guard = line;
+    }
+}
+
+pub fn active_progress_line() -> Option<String> {
+    ACTIVE_PROGRESS_LINE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+}
+
+pub fn wrap_output_for_active_progress(line: &str) -> String {
+    if let Some(progress_line) = active_progress_line() {
+        format!("\r\x1b[K{}\n\r\x1b[K{}", line, progress_line)
+    } else {
+        format!("{}\n", line)
+    }
 }
 
 impl CoarseProgressBar {
     pub fn new(total: u64, prefix: &str) -> Self {
-        eprint!("\x1b[?25l");
-        let _ = io::stderr().flush();
+        let enabled = progress_line_enabled();
+        if enabled {
+            if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+                eprint!("\x1b[?25l");
+                let _ = io::stderr().flush();
+            }
+        }
 
         Self {
             total,
@@ -38,12 +85,18 @@ impl CoarseProgressBar {
             start_time: Instant::now(),
             prefix: prefix.to_string(),
             last_render: Arc::new(Mutex::new(Instant::now())),
+            message: Arc::new(Mutex::new(String::new())),
             is_finished: AtomicBool::new(false),
+            enabled,
         }
     }
 
     pub fn set(&self, current: u64) {
         self.current.store(current, Ordering::Relaxed);
+
+        if !self.enabled {
+            return;
+        }
 
         if let Ok(mut last) = self.last_render.try_lock() {
             if last.elapsed() >= Duration::from_millis(200) {
@@ -60,8 +113,11 @@ impl CoarseProgressBar {
         }
     }
 
-    pub fn set_message(&self, _msg: &str) {
-        self.render();
+    pub fn set_message(&self, msg: &str) {
+        if let Ok(mut current_message) = self.message.lock() {
+            *current_message = truncate_progress_message(msg, 28);
+        }
+        self.set(self.current.load(Ordering::Relaxed));
     }
 
     pub fn println(&self, msg: &str) {
@@ -70,16 +126,20 @@ impl CoarseProgressBar {
             return;
         }
 
-        eprint!("\r\x1b[K");
-        let _ = io::stderr().flush();
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            eprint!("\r\x1b[K");
+            let _ = io::stderr().flush();
 
-        eprintln!("{}", msg);
+            eprintln!("{}", msg);
+        }
 
-        self.render();
+        if self.enabled {
+            self.render();
+        }
     }
 
     fn render(&self) {
-        if self.is_finished.load(Ordering::Relaxed) {
+        if self.is_finished.load(Ordering::Relaxed) || !self.enabled {
             return;
         }
 
@@ -87,6 +147,12 @@ impl CoarseProgressBar {
         let total = self.total.max(1);
         let percent = (current as f64 / total as f64 * 100.0).min(100.0);
         let elapsed = self.start_time.elapsed();
+        let message = self
+            .message
+            .lock()
+            .map(|msg| msg.clone())
+            .unwrap_or_default();
+        let stats = crate::progress_mode::get_current_stats_string();
 
         let bar_width: usize = progress_style::BAR_WIDTH;
         let filled = ((percent / 100.0) * bar_width as f64) as usize;
@@ -104,21 +170,49 @@ impl CoarseProgressBar {
             "---".to_string()
         };
 
-        eprint!(
-            "\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {} • ETA: {}\x1b[0m",
-            color,
-            self.prefix,
-            progress_style::BAR_LEFT,
-            color,
-            bar,
-            color,
-            percent,
-            current,
-            total,
-            format_duration_compact(elapsed),
-            eta_str
-        );
-        let _ = io::stderr().flush();
+        let message_part = if message.is_empty() {
+            String::new()
+        } else {
+            format!(" • {}", message)
+        };
+
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            set_active_progress_line(None);
+            eprint!(
+                "\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {} • ETA {}{}\x1b[0m{}",
+                color,
+                self.prefix,
+                progress_style::BAR_LEFT,
+                color,
+                bar,
+                color,
+                percent,
+                current,
+                total,
+                format_duration_compact(elapsed),
+                eta_str,
+                message_part,
+                stats
+            );
+            let active_line = format!(
+                "{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {} • ETA {}{}\x1b[0m{}",
+                color,
+                self.prefix,
+                progress_style::BAR_LEFT,
+                color,
+                bar,
+                color,
+                percent,
+                current,
+                total,
+                format_duration_compact(elapsed),
+                eta_str,
+                message_part,
+                stats
+            );
+            set_active_progress_line(Some(active_line));
+            let _ = io::stderr().flush();
+        }
     }
 
     pub fn finish(&self) {
@@ -131,19 +225,24 @@ impl CoarseProgressBar {
 
         let bar_width: usize = progress_style::BAR_WIDTH;
         let bar = "█".repeat(bar_width);
+        let stats = crate::progress_mode::get_current_stats_string();
 
-        eprint!(
-            "\r\x1b[K\x1b[32m{} {}\x1b[32m{}\x1b[32m▏ ✅ 100% • {}/{} • ⏱️ {}\x1b[0m\n",
-            self.prefix,
-            progress_style::BAR_LEFT,
-            bar,
-            total,
-            total,
-            format_duration_compact(elapsed)
-        );
+        if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+            set_active_progress_line(None);
+            eprint!(
+                "\r\x1b[K\x1b[32m{} {}\x1b[32m{}\x1b[32m▏ ✅ 100% • {}/{} • ⏱️ {}\x1b[0m{}\n",
+                self.prefix,
+                progress_style::BAR_LEFT,
+                bar,
+                total,
+                total,
+                format_duration_compact(elapsed),
+                stats
+            );
 
-        eprint!("\x1b[?25h");
-        let _ = io::stderr().flush();
+            eprint!("\x1b[?25h");
+            let _ = io::stderr().flush();
+        }
     }
 
     pub fn finish_and_clear(&self) {
@@ -151,9 +250,14 @@ impl CoarseProgressBar {
             return;
         }
 
-        eprint!("\r\x1b[K");
-        eprint!("\x1b[?25h");
-        let _ = io::stderr().flush();
+        if self.enabled {
+            if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
+                set_active_progress_line(None);
+                eprint!("\r\x1b[K");
+                eprint!("\x1b[?25h");
+                let _ = io::stderr().flush();
+            }
+        }
     }
 }
 

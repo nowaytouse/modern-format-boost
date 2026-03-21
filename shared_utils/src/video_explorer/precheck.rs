@@ -173,8 +173,7 @@ fn parse_rational_fps(value: &serde_json::Value) -> Option<f64> {
 fn parse_fps_from_stream(stream: &serde_json::Value) -> Option<f64> {
     let avg = parse_rational_fps(&stream["avg_frame_rate"])
         .filter(|&v| v > 0.0 && v.is_finite() && v <= FPS_THRESHOLD_INVALID);
-    let r_fps = parse_rational_fps(&stream["r_frame_rate"])
-        .filter(|&v| v > 0.0 && v.is_finite());
+    let r_fps = parse_rational_fps(&stream["r_frame_rate"]).filter(|&v| v > 0.0 && v.is_finite());
     avg.or(r_fps)
 }
 
@@ -196,7 +195,7 @@ fn parse_duration_from_precheck_json(
     input: &Path,
 ) -> Result<(f64, f64, u64)> {
     let stream = json["streams"].get(0);
-    
+
     // If frame_count is 0, try to get nb_read_frames (for formats like APNG that need -count_frames)
     if frame_count == 0 {
         if let Some(nb_read_frames) = stream
@@ -204,10 +203,13 @@ fn parse_duration_from_precheck_json(
             .and_then(|s| s.parse::<u64>().ok())
         {
             frame_count = nb_read_frames;
-            info!(nb_read_frames = frame_count, "Using nb_read_frames for frame count");
+            info!(
+                nb_read_frames = frame_count,
+                "Using nb_read_frames for frame count"
+            );
         }
     }
-    
+
     let stream_duration: Option<f64> = stream
         .and_then(|s| s["duration"].as_str())
         .and_then(|s| s.parse().ok())
@@ -253,11 +255,7 @@ fn parse_duration_from_precheck_json(
 }
 
 /// P3: Compute only BPP from precheck JSON (one ffprobe, no full VideoInfo).
-fn bpp_from_precheck_json(
-    json: &serde_json::Value,
-    file_size: u64,
-    input: &Path,
-) -> Result<f64> {
+fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path) -> Result<f64> {
     let stream = json["streams"]
         .get(0)
         .context("No video stream in ffprobe output")?;
@@ -269,7 +267,8 @@ fn bpp_from_precheck_json(
         .as_u64()
         .and_then(|h| u32::try_from(h).ok())
         .context("Missing or invalid video height")?;
-    let fps = parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
+    let fps =
+        parse_fps_from_stream(stream).context("Could not determine FPS for BPP calculation")?;
     let frame_count_raw: u64 = stream["nb_frames"]
         .as_str()
         .and_then(|s| s.parse().ok())
@@ -330,7 +329,8 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
         serde_json::from_str(&json_str).context("ffprobe JSON parse failed")?;
 
     let stream = json["streams"].get(0).context("No video stream")?;
-    let fps: f64 = parse_fps_from_stream(stream).context("Could not determine FPS for duration calculation")?;
+    let fps: f64 = parse_fps_from_stream(stream)
+        .context("Could not determine FPS for duration calculation")?;
 
     let frame_count: u64 = json["streams"]
         .get(0)
@@ -466,7 +466,6 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     } else {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
-
 
     use crate::quality_matcher::parse_source_codec;
     let source_codec_enum = parse_source_codec(&codec);
@@ -681,7 +680,9 @@ fn evaluate_processing_recommendation(
 
 /// Returns bits-per-pixel from video stream (one ffprobe, minimal parse; P3 lightweight path).
 pub fn calculate_bpp(input: &Path) -> Result<f64> {
-    let file_size = std::fs::metadata(input).context("Failed to read file metadata")?.len();
+    let file_size = std::fs::metadata(input)
+        .context("Failed to read file metadata")?
+        .len();
     let json = run_precheck_ffprobe(input)?;
     bpp_from_precheck_json(&json, file_size, input)
 }
@@ -700,7 +701,11 @@ pub fn print_precheck_report(info: &VideoInfo) {
         "│ Duration: {:.1}s ({} frames)",
         info.duration, info.frame_count
     ));
-    lines.push(format!("│ FPS: {:.2} {}", info.fps, info.fps_category.description()));
+    lines.push(format!(
+        "│ FPS: {:.2} {}",
+        info.fps,
+        info.fps_category.description()
+    ));
     lines.push(format!(
         "│ File Size: {:.2} MB",
         info.file_size as f64 / 1024.0 / 1024.0

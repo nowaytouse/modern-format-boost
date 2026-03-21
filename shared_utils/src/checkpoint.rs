@@ -199,7 +199,7 @@ impl CheckpointManager {
     pub fn new(target_dir: &Path) -> io::Result<Self> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let dir_hash = Self::hash_path(&canonical_target);
-        
+
         let central_dir = get_central_progress_dir();
         fs::create_dir_all(&central_dir)?;
 
@@ -372,7 +372,7 @@ impl CheckpointManager {
                 return Ok(());
             }
         }
-        
+
         // Append to file outside the lock if possible, but actually we need to preserve order/integrity
         // Using a manual lock for the file append
         let mut file = OpenOptions::new()
@@ -380,7 +380,7 @@ impl CheckpointManager {
             .append(true)
             .open(&self.progress_file)?;
         writeln!(file, "{}", key)?;
-        
+
         // Also sync to the global processed list in conversion module
         crate::conversion::mark_as_processed(path);
         Ok(())
@@ -425,8 +425,7 @@ impl CheckpointManager {
     }
 
     fn normalize_path_to_buf(path: &Path) -> PathBuf {
-        path.canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf())
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
 
     pub fn progress_dir(&self) -> &Path {
@@ -542,8 +541,8 @@ pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::sync::Mutex as std_mutex;
+    use tempfile::TempDir;
     static TEST_LOCK: std_mutex<()> = std_mutex::new(());
 
     fn setup_test_env() -> (TempDir, TempDir, std::sync::MutexGuard<'static, ()>) {
@@ -647,7 +646,7 @@ mod tests {
     fn test_checkpoint_cleanup() {
         let temp_target = TempDir::new().unwrap();
         let target = temp_target.path();
-        
+
         let (progress_temp, _, guard) = setup_test_env();
 
         {

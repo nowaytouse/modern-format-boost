@@ -9,9 +9,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 // copyfile.h constants
-const COPYFILE_ACL: u32 = 1 << 0;      // 0x1
-const COPYFILE_STAT: u32 = 1 << 1;     // 0x2
-const COPYFILE_XATTR: u32 = 1 << 2;    // 0x4
+const COPYFILE_ACL: u32 = 1 << 0; // 0x1
+const COPYFILE_STAT: u32 = 1 << 1; // 0x2
+const COPYFILE_XATTR: u32 = 1 << 2; // 0x4
 const COPYFILE_RECURSIVE: u32 = 1 << 15; // 0x8000
 
 // COPYFILE_METADATA = COPYFILE_STAT | COPYFILE_ACL | COPYFILE_XATTR
@@ -197,14 +197,14 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
         branding = branding
     );
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()?;
+    let output = Command::new("osascript").arg("-e").arg(&script).output()?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(io::Error::new(io::ErrorKind::Other, format!("AppleScript failed: {}", err)));
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("AppleScript failed: {}", err),
+        ));
     }
 
     Ok(())

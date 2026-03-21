@@ -3,16 +3,16 @@
 //! Avoids progress output clutter when processing in parallel.
 //! Stderr output is routed through tracing when a subscriber is set (init_logging).
 
+use crate::modern_ui::{colors, symbols};
 use std::cell::RefCell;
-use tracing;
-use tracing::Level;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use std::vec::Vec;
-use crate::modern_ui::{colors, symbols};
+use tracing;
+use tracing::Level;
 
 // ── Per-thread log context (file name or ID) for concurrent processing ───────
 // When set, every log_eprintln! / verbose_eprintln! line is prefixed so interleaved
@@ -40,23 +40,35 @@ fn report_run_log_io_failure(context: &str, detail: &str) {
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
-    let years   = total_millis / (365 * 86400 * 1000);
-    let months  = (total_millis % (365 * 86400 * 1000)) / (30 * 86400 * 1000);
-    let weeks   = (total_millis % (30 * 86400 * 1000)) / (7 * 86400 * 1000);
-    let days    = (total_millis % (7 * 86400 * 1000)) / (86400 * 1000);
-    let hours   = (total_millis % (86400 * 1000)) / (3600 * 1000);
+    let years = total_millis / (365 * 86400 * 1000);
+    let months = (total_millis % (365 * 86400 * 1000)) / (30 * 86400 * 1000);
+    let weeks = (total_millis % (30 * 86400 * 1000)) / (7 * 86400 * 1000);
+    let days = (total_millis % (7 * 86400 * 1000)) / (86400 * 1000);
+    let hours = (total_millis % (86400 * 1000)) / (3600 * 1000);
     let minutes = (total_millis % (3600 * 1000)) / (60 * 1000);
     let seconds = (total_millis % (60 * 1000)) / 1000;
-    let millis  = total_millis % 1000;
+    let millis = total_millis % 1000;
 
     let mut parts = Vec::new();
 
-    if years   > 0 { parts.push(format!("{:02}Y", years)); }
-    if months  > 0 || years > 0 { parts.push(format!("{:02}M", months)); }
-    if weeks   > 0 || months > 0 || years > 0 { parts.push(format!("{:02}W", weeks)); }
-    if days    > 0 || weeks > 0 || months > 0 || years > 0 { parts.push(format!("{:02}D", days)); }
-    if hours   > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 { parts.push(format!("{:02}h", hours)); }
-    if minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 { parts.push(format!("{:02}m", minutes)); }
+    if years > 0 {
+        parts.push(format!("{:02}Y", years));
+    }
+    if months > 0 || years > 0 {
+        parts.push(format!("{:02}M", months));
+    }
+    if weeks > 0 || months > 0 || years > 0 {
+        parts.push(format!("{:02}W", weeks));
+    }
+    if days > 0 || weeks > 0 || months > 0 || years > 0 {
+        parts.push(format!("{:02}D", days));
+    }
+    if hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
+        parts.push(format!("{:02}h", hours));
+    }
+    if minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
+        parts.push(format!("{:02}m", minutes));
+    }
 
     // Seconds: only show when there are no hours-or-larger components
     // (avoids "1h01m40s" when "1h01m" is cleaner at hour-level precision)
@@ -68,7 +80,8 @@ pub fn format_duration_compact(duration: Duration) -> String {
     // Milliseconds: only show when there are no seconds-or-larger components
     // (i.e., sub-second precision is useful), or when ms is non-zero and
     // there are no minutes-or-larger components (show "5s372ms" but not "30s000ms").
-    let has_large_unit = minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
+    let has_large_unit =
+        minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
     if !has_large_unit && millis > 0 {
         parts.push(format!("{:03}ms", millis));
     } else if total_millis == 0 {
@@ -84,7 +97,9 @@ pub fn format_duration_compact(duration: Duration) -> String {
     // "1m30s" rather than "01m30s" while sub-units stay zero-padded ("01m", "30s").
     if let Some(first) = parts.first_mut() {
         // Find where digits end and the unit suffix begins
-        let suffix_start = first.find(|c: char| c.is_alphabetic()).unwrap_or(first.len());
+        let suffix_start = first
+            .find(|c: char| c.is_alphabetic())
+            .unwrap_or(first.len());
         let digits = &first[..suffix_start];
         let suffix = &first[suffix_start..];
         let trimmed = digits.trim_start_matches('0');
@@ -104,16 +119,15 @@ pub fn format_duration_compact(duration: Duration) -> String {
             {
                 "   " // 3 spaces after large units
             } else if i == 4 && (hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0) {
-                "  "  // 2 spaces after hours
+                "  " // 2 spaces after hours
             } else {
-                ""    // no extra spacing for minutes/seconds/ms
+                "" // no extra spacing for minutes/seconds/ms
             };
             result.push_str(spacing);
         }
         result
     } else {
         parts.join("")
-
     }
 }
 
@@ -199,12 +213,12 @@ fn file_type_emoji(filename: &str) -> &'static str {
             // Animated / GIF
             "gif" => "🎞️ ",
             // Still images
-            "jpg" | "jpeg" | "png" | "webp" | "avif" | "heic" | "heif" | "jxl"
-            | "bmp" | "tiff" | "tif" | "ico" | "svg" | "psd" | "raw" | "cr2" | "nef"
-            | "arw" | "dng" | "orf" | "rw2" | "exr" | "qoi" | "flif" | "jp2" | "j2k" => "🖼️  ",
+            "jpg" | "jpeg" | "png" | "webp" | "avif" | "heic" | "heif" | "jxl" | "bmp" | "tiff"
+            | "tif" | "ico" | "svg" | "psd" | "raw" | "cr2" | "nef" | "arw" | "dng" | "orf"
+            | "rw2" | "exr" | "qoi" | "flif" | "jp2" | "j2k" => "🖼️  ",
             // Videos
-            "mp4" | "mov" | "avi" | "mkv" | "webm" | "flv" | "wmv" | "m4v" | "mpg"
-            | "mpeg" | "3gp" | "ogv" | "ts" | "mts" | "m2ts" => "🎬 ",
+            "mp4" | "mov" | "avi" | "mkv" | "webm" | "flv" | "wmv" | "m4v" | "mpg" | "mpeg"
+            | "3gp" | "ogv" | "ts" | "mts" | "m2ts" => "🎬 ",
             _ => "",
         }
     } else {
@@ -439,7 +453,7 @@ pub fn emit_stderr(line: &str) {
                 break;
             }
         }
-        
+
         // Add milestone stats only to the first line of a multi-line message
         let line_with_stats = if is_first {
             append_stats_to_line(&curr_line)
@@ -452,20 +466,31 @@ pub fn emit_stderr(line: &str) {
         if has_log_file() {
             write_to_log(&line_with_stats);
         }
-        
+
         use std::io::Write;
         let out = if stderr_is_tty() {
             // TTY: keep colours.
             format!("{}{}", STDERR_INDENT, line_with_stats)
         } else {
             // Non-TTY: strip ANSI so piped / redirected output is clean.
-            format!("{}{}", STDERR_INDENT, crate::logging::strip_ansi_str(&line_with_stats))
+            format!(
+                "{}{}",
+                STDERR_INDENT,
+                crate::logging::strip_ansi_str(&line_with_stats)
+            )
         };
-        if let Err(err) = writeln!(std::io::stderr(), "{}", out) {
+        let wrapped = if stderr_is_tty() {
+            crate::progress::wrap_output_for_active_progress(&out)
+        } else {
+            format!("{}\n", out)
+        };
+        if let Err(err) = write!(std::io::stderr(), "{}", wrapped) {
             tracing::warn!(
                 error = %err,
                 "Failed to write progress output to stderr"
             );
+        } else {
+            let _ = std::io::stderr().flush();
         }
     }
 }
@@ -476,12 +501,18 @@ pub fn flush_log_file() {
         Ok(mut guard) => {
             if let Some(ref mut w) = *guard {
                 if let Err(err) = w.flush() {
-                    report_run_log_io_failure("failed to flush run log at shutdown", &err.to_string());
+                    report_run_log_io_failure(
+                        "failed to flush run log at shutdown",
+                        &err.to_string(),
+                    );
                 }
             }
         }
         Err(err) => {
-            report_run_log_io_failure("run log writer mutex poisoned during shutdown", &err.to_string());
+            report_run_log_io_failure(
+                "run log writer mutex poisoned during shutdown",
+                &err.to_string(),
+            );
         }
     }
 }
@@ -625,10 +656,20 @@ pub fn image_processed_failure() {
 /// Logs a prominent message to stderr and increments the skip counter.
 pub fn image_skipped(reason: &str) {
     let _img_skip = IMAGE_SKIP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let line = format!("{}⏭️  {}  {}{}{}", colors::MFB_YELLOW, "[SKIP]", colors::RESET, colors::DIM, reason);
+    let line = format!(
+        "{}⏭️  {}  {}{}{}",
+        colors::MFB_YELLOW,
+        "[SKIP]",
+        colors::RESET,
+        colors::DIM,
+        reason
+    );
     log_eprintln!("{}", line);
     // Force a status line update so the skip count is visible immediately
-    emit_combined_status_line(IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed), IMAGE_FAIL_COUNT.load(Ordering::Relaxed));
+    emit_combined_status_line(
+        IMAGE_SUCCESS_COUNT.load(Ordering::Relaxed),
+        IMAGE_FAIL_COUNT.load(Ordering::Relaxed),
+    );
 }
 
 pub fn video_processed_success() {
@@ -643,7 +684,14 @@ pub fn video_processed_failure() {
 /// Logs a prominent message to stderr and increments the skip counter.
 pub fn video_skipped(reason: &str) {
     let _ = VIDEO_SKIP_COUNT.fetch_add(1, Ordering::Relaxed);
-    let line = format!("{}⏭️  {}  {}{}{}", colors::MFB_YELLOW, "[SKIP]", colors::RESET, colors::DIM, reason);
+    let line = format!(
+        "{}⏭️  {}  {}{}{}",
+        colors::MFB_YELLOW,
+        "[SKIP]",
+        colors::RESET,
+        colors::DIM,
+        reason
+    );
     log_eprintln!("{}", line);
 }
 
@@ -654,32 +702,41 @@ pub fn append_stats_to_line(line: &str) -> String {
     if trimmed.is_empty() {
         return line.to_string();
     }
-    
+
     // Strip ANSI for accurate length calculation and duplicate check
     let plain = crate::logging::strip_ansi_str(trimmed);
-    
+
     // Check if it already has stats (avoids double appending)
     // We check for "│ 📊" which is the delimiter used in get_current_stats_string()
     if plain.contains("│ 📊") {
         return trimmed.to_string();
     }
-    
+
     let stats_string = get_current_stats_string();
-    
+
     // Check if it ends with \x1b[0m
     let has_reset = trimmed.ends_with("\x1b[0m");
     if has_reset {
         trimmed = &trimmed[..trimmed.len() - 4];
     }
-    
+
     let visible_len = plain.chars().count();
-    
+
     // Align stats to column 65 (Standard for this project)
     let target_len = 65;
-    let padding_len = if visible_len < target_len { target_len - visible_len } else { 1 };
-    
+    let padding_len = if visible_len < target_len {
+        target_len - visible_len
+    } else {
+        1
+    };
+
     // Put \x1b[0m before padding to prevent color bleed to stats
-    format!("{}\x1b[0m{}{}", trimmed, " ".repeat(padding_len), stats_string)
+    format!(
+        "{}\x1b[0m{}{}",
+        trimmed,
+        " ".repeat(padding_len),
+        stats_string
+    )
 }
 
 pub fn get_current_stats_string() -> String {
@@ -696,22 +753,40 @@ pub fn get_current_stats_string() -> String {
     let vid_ok = VIDEO_SUCCESS_COUNT.load(Ordering::Relaxed);
     let vid_fail = VIDEO_FAIL_COUNT.load(Ordering::Relaxed);
     let vid_skip = VIDEO_SKIP_COUNT.load(Ordering::Relaxed);
-    
+
     let is_video = IS_VIDEO_MODE.load(Ordering::Relaxed);
-    
+
     let msg = if is_video {
-        format_video_stats_line(vid_ok, vid_fail, vid_skip, xmp_ok, xmp_failed, preprocess_ok, fallback_ok)
+        format_video_stats_line(
+            vid_ok,
+            vid_fail,
+            vid_skip,
+            xmp_ok,
+            xmp_failed,
+            preprocess_ok,
+            fallback_ok,
+        )
     } else {
-        format_xmp_jxl_images_line(xmp_ok, xmp_done, xmp_failed, jxl_ok, img_ok, img_fail, img_skip, preprocess_ok, fallback_ok)
+        format_xmp_jxl_images_line(
+            xmp_ok,
+            xmp_done,
+            xmp_failed,
+            jxl_ok,
+            img_ok,
+            img_fail,
+            img_skip,
+            preprocess_ok,
+            fallback_ok,
+        )
     };
-    
+
     // Very minimalist separator for video
     let separator = if is_video {
         format!("{}│{}", colors::DIM, colors::RESET)
     } else {
         format!("{}│{} {}", colors::DIM, colors::RESET, symbols::CHART)
     };
-    
+
     format!(" {} {}", separator, msg)
 }
 
@@ -729,9 +804,24 @@ fn format_video_stats_line(
     // XMP Stats: X: 12✓ (Only show if used for video)
     if xmp_ok > 0 || xmp_failed > 0 {
         let xmp_msg = if xmp_failed > 0 {
-            format!("{}X:{}{}✓{}{}{}✗{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::DIM, colors::MFB_RED, xmp_failed, colors::RESET)
+            format!(
+                "{}X:{}{}✓{}{}{}✗{}",
+                colors::MFB_BLUE,
+                colors::MFB_GREEN,
+                xmp_ok,
+                colors::DIM,
+                colors::MFB_RED,
+                xmp_failed,
+                colors::RESET
+            )
         } else {
-            format!("{}X:{}{}✓{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::RESET)
+            format!(
+                "{}X:{}{}✓{}",
+                colors::MFB_BLUE,
+                colors::MFB_GREEN,
+                xmp_ok,
+                colors::RESET
+            )
         };
         parts.push(xmp_msg);
     }
@@ -740,7 +830,12 @@ fn format_video_stats_line(
     let vid_msg = if vid_fail > 0 || vid_skip > 0 {
         let mut v_stat = format!("{}V:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok);
         if vid_skip > 0 {
-            v_stat.push_str(&format!("{}{}{}s", colors::DIM, colors::MFB_YELLOW, vid_skip));
+            v_stat.push_str(&format!(
+                "{}{}{}s",
+                colors::DIM,
+                colors::MFB_YELLOW,
+                vid_skip
+            ));
         }
         if vid_fail > 0 {
             v_stat.push_str(&format!("{}{}{}✗", colors::DIM, colors::MFB_RED, vid_fail));
@@ -748,13 +843,25 @@ fn format_video_stats_line(
         v_stat.push_str(colors::RESET);
         v_stat
     } else {
-        format!("{}V:{}{}✓{}", colors::MFB_PURPLE, colors::MFB_GREEN, vid_ok, colors::RESET)
+        format!(
+            "{}V:{}{}✓{}",
+            colors::MFB_PURPLE,
+            colors::MFB_GREEN,
+            vid_ok,
+            colors::RESET
+        )
     };
     parts.push(vid_msg);
 
     // Preprocessing: P: 1✓ (Only show if > 0 for video)
     if preprocess_ok > 0 {
-        parts.push(format!("{}P:{}{}✓{}", colors::MFB_CYAN, colors::MFB_GREEN, preprocess_ok, colors::RESET));
+        parts.push(format!(
+            "{}P:{}{}✓{}",
+            colors::MFB_CYAN,
+            colors::MFB_GREEN,
+            preprocess_ok,
+            colors::RESET
+        ));
     }
 
     parts.join(&format!("{} ", colors::DIM))
@@ -780,17 +887,42 @@ fn format_xmp_jxl_images_line(
 
     // XMP Stats: X: 12✓
     let xmp_msg = if xmp_failed > 0 {
-        format!("{}X:{}{}✓{}{}{}✗{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::DIM, colors::MFB_RED, xmp_failed, colors::RESET)
+        format!(
+            "{}X:{}{}✓{}{}{}✗{}",
+            colors::MFB_BLUE,
+            colors::MFB_GREEN,
+            xmp_ok,
+            colors::DIM,
+            colors::MFB_RED,
+            xmp_failed,
+            colors::RESET
+        )
     } else {
-        format!("{}X:{}{}✓{}", colors::MFB_BLUE, colors::MFB_GREEN, xmp_ok, colors::RESET)
+        format!(
+            "{}X:{}{}✓{}",
+            colors::MFB_BLUE,
+            colors::MFB_GREEN,
+            xmp_ok,
+            colors::RESET
+        )
     };
     parts.push(xmp_msg);
 
     // Image Stats: I: 123✓
     let img_msg = if img_fail > 0 || img_skip > 0 {
-        let mut i_stat = format!("{}I:{}{}✓", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok);
+        let mut i_stat = format!(
+            "{}I:{}{}✓",
+            colors::MFB_PURPLE,
+            colors::MFB_GREEN,
+            images_ok
+        );
         if img_skip > 0 {
-            i_stat.push_str(&format!("{}{}{}s", colors::DIM, colors::MFB_YELLOW, img_skip));
+            i_stat.push_str(&format!(
+                "{}{}{}s",
+                colors::DIM,
+                colors::MFB_YELLOW,
+                img_skip
+            ));
         }
         if img_fail > 0 {
             i_stat.push_str(&format!("{}{}{}✗", colors::DIM, colors::MFB_RED, img_fail));
@@ -798,12 +930,24 @@ fn format_xmp_jxl_images_line(
         i_stat.push_str(colors::RESET);
         i_stat
     } else {
-        format!("{}I:{}{}✓{}", colors::MFB_PURPLE, colors::MFB_GREEN, images_ok, colors::RESET)
+        format!(
+            "{}I:{}{}✓{}",
+            colors::MFB_PURPLE,
+            colors::MFB_GREEN,
+            images_ok,
+            colors::RESET
+        )
     };
     parts.push(img_msg);
 
     // Preprocessing: P: 1✓
-    parts.push(format!("{}P:{}{}✓{}", colors::MFB_CYAN, colors::MFB_GREEN, preprocess_ok, colors::RESET));
+    parts.push(format!(
+        "{}P:{}{}✓{}",
+        colors::MFB_CYAN,
+        colors::MFB_GREEN,
+        preprocess_ok,
+        colors::RESET
+    ));
 
     parts.join(&format!("{} ", colors::DIM))
 }
@@ -887,11 +1031,27 @@ pub fn xmp_merge_finalize() {
     if xmp_total > 0 {
         let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
         let failed = xmp_total.saturating_sub(success);
-        let msg = format_xmp_jxl_images_line(success, true, failed, jxl_ok, img_ok, img_fail, img_skip, preprocess_ok, fallback_ok);
+        let msg = format_xmp_jxl_images_line(
+            success,
+            true,
+            failed,
+            jxl_ok,
+            img_ok,
+            img_fail,
+            img_skip,
+            preprocess_ok,
+            fallback_ok,
+        );
         let line = fmt_stats_line_final(&msg);
         emit_stderr(&line);
     } else {
-        if jxl_ok > 0 || img_ok > 0 || img_fail > 0 || img_skip > 0 || preprocess_ok > 0 || fallback_ok > 0 {
+        if jxl_ok > 0
+            || img_ok > 0
+            || img_fail > 0
+            || img_skip > 0
+            || preprocess_ok > 0
+            || fallback_ok > 0
+        {
             let mut parts = Vec::new();
             let images_ok = img_ok + jxl_ok;
             if images_ok > 0 || img_fail > 0 || img_skip > 0 {

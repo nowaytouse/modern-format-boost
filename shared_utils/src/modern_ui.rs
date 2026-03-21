@@ -43,15 +43,15 @@ pub mod colors {
     pub const BG_WHITE: &str = "\x1b[47m";
 
     // 24-bit True Colors (RGB) - Premium Palette
-    pub const MFB_BLUE: &str = "\x1b[38;2;67;160;255m";      // Electric Blue
-    pub const MFB_PURPLE: &str = "\x1b[38;2;187;134;252m";    // Soft Lilac (Premium)
-    pub const MFB_PINK: &str = "\x1b[38;2;255;121;198m";      // Hot Pink
-    pub const MFB_GREEN: &str = "\x1b[38;2;80;250;123m";      // Spring Green
-    pub const MFB_YELLOW: &str = "\x1b[38;2;241;250;140m";     // Pale Gold
-    pub const MFB_CYAN: &str = "\x1b[38;2;139;233;253m";       // Sky Cyan
-    pub const MFB_ORANGE: &str = "\x1b[38;2;255;184;108m";     // Burnt Orange
-    pub const MFB_RED: &str = "\x1b[38;2;255;85;85m";         // Vivid Red
-    
+    pub const MFB_BLUE: &str = "\x1b[38;2;67;160;255m"; // Electric Blue
+    pub const MFB_PURPLE: &str = "\x1b[38;2;187;134;252m"; // Soft Lilac (Premium)
+    pub const MFB_PINK: &str = "\x1b[38;2;255;121;198m"; // Hot Pink
+    pub const MFB_GREEN: &str = "\x1b[38;2;80;250;123m"; // Spring Green
+    pub const MFB_YELLOW: &str = "\x1b[38;2;241;250;140m"; // Pale Gold
+    pub const MFB_CYAN: &str = "\x1b[38;2;139;233;253m"; // Sky Cyan
+    pub const MFB_ORANGE: &str = "\x1b[38;2;255;184;108m"; // Burnt Orange
+    pub const MFB_RED: &str = "\x1b[38;2;255;85;85m"; // Vivid Red
+
     // UI Interaction Colors
     pub const ACCENT: &str = "\x1b[38;2;0;198;255m";
     pub const SUCCESS_GRADIENT: &str = "\x1b[38;2;0;255;135m";
@@ -62,11 +62,11 @@ pub mod colors {
 
 pub mod gradients {
     use super::colors::*;
-    
+
     pub fn blue_to_cyan(text: &str) -> String {
         format!("{}{}{}", MFB_BLUE, text, RESET) // Simplified for now, real gradient logic would iterate chars
     }
-    
+
     pub fn purple_to_pink(text: &str) -> String {
         format!("{}{}{}", MFB_PURPLE, text, RESET)
     }
@@ -389,7 +389,10 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
 pub fn print_success_banner(msg: &str) {
     use colors::*;
     use symbols::*;
-    eprintln!("\n   {}{}{} {}  {}{}{}", BOLD, MFB_GREEN, SPARKLE, msg, SPARKLE, RESET, RESET);
+    eprintln!(
+        "\n   {}{}{} {}  {}{}{}",
+        BOLD, MFB_GREEN, SPARKLE, msg, SPARKLE, RESET, RESET
+    );
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -413,7 +416,14 @@ fn strip_ansi(s: &str) -> String {
 
 pub fn print_stage(_icon: &str, title: &str) {
     use colors::*;
-    eprintln!("{} {} {}{}{}", MFB_BLUE, symbols::DIAMOND, BOLD, title, RESET);
+    eprintln!(
+        "{} {} {}{}{}",
+        MFB_BLUE,
+        symbols::DIAMOND,
+        BOLD,
+        title,
+        RESET
+    );
     let _ = io::stderr().flush();
 }
 

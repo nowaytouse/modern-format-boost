@@ -15,17 +15,20 @@ pub struct QualityMetric {
 impl QualityMetric {
     /// Get MS-SSIM score or return error if not measured
     pub fn ms_ssim_or_err(&self) -> Result<f64> {
-        self.ms_ssim.ok_or_else(|| anyhow::anyhow!("MS-SSIM not measured"))
+        self.ms_ssim
+            .ok_or_else(|| anyhow::anyhow!("MS-SSIM not measured"))
     }
 
     /// Get SSIM score or return error if not measured
     pub fn ssim_or_err(&self) -> Result<f64> {
-        self.ssim.ok_or_else(|| anyhow::anyhow!("SSIM not measured"))
+        self.ssim
+            .ok_or_else(|| anyhow::anyhow!("SSIM not measured"))
     }
 
     /// Get VMAF score or return error if not measured
     pub fn vmaf_or_err(&self) -> Result<f64> {
-        self.vmaf_y.ok_or_else(|| anyhow::anyhow!("VMAF not measured"))
+        self.vmaf_y
+            .ok_or_else(|| anyhow::anyhow!("VMAF not measured"))
     }
 }
 
@@ -74,20 +77,25 @@ impl CompressionResult {
     pub fn error_message(&self) -> Option<String> {
         match self {
             CompressionResult::Success { .. } => None,
-            CompressionResult::QualityFailed { reason, actual_score, target_score, .. } => {
-                Some(format!(
-                    "Quality check failed: {} (score: {:.4}, target: {:.2})",
-                    reason,
-                    actual_score.unwrap_or(0.0),
-                    target_score
-                ))
-            }
-            CompressionResult::SizeFailed { output_size, input_size, .. } => {
-                Some(format!(
-                    "Size target failed: output {} bytes >= input {} bytes",
-                    output_size, input_size
-                ))
-            }
+            CompressionResult::QualityFailed {
+                reason,
+                actual_score,
+                target_score,
+                ..
+            } => Some(format!(
+                "Quality check failed: {} (score: {:.4}, target: {:.2})",
+                reason,
+                actual_score.unwrap_or(0.0),
+                target_score
+            )),
+            CompressionResult::SizeFailed {
+                output_size,
+                input_size,
+                ..
+            } => Some(format!(
+                "Size target failed: output {} bytes >= input {} bytes",
+                output_size, input_size
+            )),
             CompressionResult::NoCompressionPossible { reason, .. } => {
                 Some(format!("No compression possible: {}", reason))
             }
@@ -96,19 +104,10 @@ impl CompressionResult {
 }
 
 /// Validate quality score against target, return explicit error
-pub fn validate_quality_score(
-    score: Option<f64>,
-    target: f64,
-    metric_name: &str,
-) -> Result<f64> {
+pub fn validate_quality_score(score: Option<f64>, target: f64, metric_name: &str) -> Result<f64> {
     match score {
         Some(s) if s >= target => Ok(s),
-        Some(s) => bail!(
-            "{} score {:.4} below target {:.2}",
-            metric_name,
-            s,
-            target
-        ),
+        Some(s) => bail!("{} score {:.4} below target {:.2}", metric_name, s, target),
         None => bail!("{} not measured", metric_name),
     }
 }

@@ -44,8 +44,12 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             let is_hidden = (file_attrs & 0x2) != 0;
             let is_system = (file_attrs & 0x4) != 0;
             let mut cmd = Command::new("attrib");
-            if is_hidden { cmd.arg("+h"); }
-            if is_system { cmd.arg("+s"); }
+            if is_hidden {
+                cmd.arg("+h");
+            }
+            if is_system {
+                cmd.arg("+s");
+            }
             cmd.arg(dst);
             match cmd.output() {
                 Ok(output) if !output.status.success() => {

@@ -51,20 +51,37 @@ fn finalize_with_size_check(
     extra_info: Option<String>,
 ) -> Result<ConversionResult> {
     // Commit temp file to final output WITH METADATA PRESERVATION
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(temp_output, output, options.force, Some(input))? {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        temp_output,
+        output,
+        options.force,
+        Some(input),
+    )? {
         return Ok(ConversionResult::skipped_exists(input, output));
     }
 
     // Check size tolerance (compress mode, oversized check)
-    if let Some(skipped) =
-        check_size_tolerance(input, output, input_size, output_size, options, format_label)
-    {
+    if let Some(skipped) = check_size_tolerance(
+        input,
+        output,
+        input_size,
+        output_size,
+        options,
+        format_label,
+    ) {
         return Ok(skipped);
     }
 
     // Finalize with metadata preservation
-    finalize_conversion(input, output, input_size, format_label, extra_info.as_deref(), options)
-        .map_err(ImgQualityError::IoError)
+    finalize_conversion(
+        input,
+        output,
+        input_size,
+        format_label,
+        extra_info.as_deref(),
+        options,
+    )
+    .map_err(ImgQualityError::IoError)
 }
 
 pub fn convert_to_jxl(
@@ -80,7 +97,9 @@ pub fn convert_to_jxl(
     let input_size = fs::metadata(input)?.len();
 
     if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+        if ext.to_string_lossy().to_lowercase() == "png"
+            && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
+        {
             if options.verbose {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
@@ -154,21 +173,42 @@ pub fn convert_to_jxl(
                     distance,
                     max_threads,
                     options.apple_compat,
-                ).is_ok() {
+                )
+                .is_ok()
+                {
                     // ImageMagick fallback succeeded — finalize directly
                     let output_size = fs::metadata(&temp_output)?.len();
                     if let Err(e) = verify_jxl_health(&temp_output) {
                         cleanup_temp_output(&temp_output, input);
                         return Err(e);
                     }
-                    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+                    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+                        &temp_output,
+                        &output,
+                        options.force,
+                        Some(input),
+                    )? {
                         return Ok(ConversionResult::skipped_exists(input, &output));
                     }
-                    if let Some(skipped) = check_size_tolerance(input, &output, input_size, output_size, options, "JXL") {
+                    if let Some(skipped) = check_size_tolerance(
+                        input,
+                        &output,
+                        input_size,
+                        output_size,
+                        options,
+                        "JXL",
+                    ) {
                         return Ok(skipped);
                     }
-                    return finalize_conversion(input, &output, input_size, "JXL", Some("(imagemagick fallback)"), options)
-                        .map_err(ImgQualityError::IoError);
+                    return finalize_conversion(
+                        input,
+                        &output,
+                        input_size,
+                        "JXL",
+                        Some("(imagemagick fallback)"),
+                        options,
+                    )
+                    .map_err(ImgQualityError::IoError);
                 }
                 cmd_result
             } else {
@@ -255,7 +295,11 @@ fn run_cjxl_jpeg_transcode(
     cmd.output()
 }
 
-pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Option<&shared_utils::ColorInfo>) -> Result<ConversionResult> {
+pub fn convert_jpeg_to_jxl(
+    input: &Path,
+    options: &ConvertOptions,
+    hdr_info: Option<&shared_utils::ColorInfo>,
+) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(ConversionResult::skipped_duplicate(input));
     }
@@ -278,7 +322,10 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
     let output_cmd = match result {
         Ok(out) => out,
         Err(e) => {
-            return Err(ImgQualityError::ToolNotFound(format!("cjxl not found: {}", e)));
+            return Err(ImgQualityError::ToolNotFound(format!(
+                "cjxl not found: {}",
+                e
+            )));
         }
     };
 
@@ -312,14 +359,20 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
             };
 
         // 2) Retry with original cjxl flags (no --allow_jpeg_reconstruction 0) on fixed or original
-        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, None, hdr_info);
+        let retry_original =
+            run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, None, hdr_info);
         if let Ok(out) = retry_original {
             if out.status.success() {
                 if let Err(e) = verify_jxl_health(&temp_output) {
                     cleanup_temp_output(&temp_output, input);
                     return Err(e);
                 }
-                if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+                if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+                    &temp_output,
+                    &output,
+                    options.force,
+                    Some(input),
+                )? {
                     return Ok(ConversionResult::skipped_exists(input, &output));
                 }
                 let label = if source_to_use != input {
@@ -334,14 +387,20 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
         cleanup_temp_output(&temp_output, input);
 
         // 3) Fallback: --allow_jpeg_reconstruction 0
-        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, Some(0), hdr_info);
+        let retry_no_recon =
+            run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, Some(0), hdr_info);
         if let Ok(out) = retry_no_recon {
             if out.status.success() {
                 if let Err(e) = verify_jxl_health(&temp_output) {
                     cleanup_temp_output(&temp_output, input);
                     return Err(e);
                 }
-                if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+                if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+                    &temp_output,
+                    &output,
+                    options.force,
+                    Some(input),
+                )? {
                     return Ok(ConversionResult::skipped_exists(input, &output));
                 }
                 return finalize_conversion(
@@ -376,7 +435,9 @@ pub fn convert_to_avif(
     let input_size = fs::metadata(input)?.len();
 
     if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+        if ext.to_string_lossy().to_lowercase() == "png"
+            && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
+        {
             if options.verbose {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
@@ -401,7 +462,9 @@ pub fn convert_to_avif(
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
-    let q = quality.ok_or_else(|| ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string()))?;
+    let q = quality.ok_or_else(|| {
+        ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string())
+    })?;
 
     let result = Command::new("avifenc")
         .arg("-s")
@@ -466,7 +529,9 @@ pub fn convert_to_avif_lossless(
     let input_size = fs::metadata(input)?.len();
 
     if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+        if ext.to_string_lossy().to_lowercase() == "png"
+            && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
+        {
             if options.verbose {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
@@ -546,7 +611,9 @@ pub fn convert_to_av1_mp4_matched(
         return Err(ImgQualityError::ConversionError(e));
     }
 
-    let input_size = fs::metadata(input).map(|m| m.len()).map_err(ImgQualityError::IoError)?;
+    let input_size = fs::metadata(input)
+        .map(|m| m.len())
+        .map_err(ImgQualityError::IoError)?;
     let initial_crf = calculate_matched_crf_for_animation(analysis, input_size)?;
     vid_av1::animated_image::convert_to_av1_mp4_matched(
         input,
@@ -557,7 +624,10 @@ pub fn convert_to_av1_mp4_matched(
     .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
-fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_size: u64) -> Result<f32> {
+fn calculate_matched_crf_for_animation(
+    analysis: &crate::ImageAnalysis,
+    file_size: u64,
+) -> Result<f32> {
     let quality_analysis = shared_utils::from_image_analysis(
         &analysis.format,
         analysis.width,
@@ -579,9 +649,10 @@ fn calculate_matched_crf_for_animation(analysis: &crate::ImageAnalysis, file_siz
             );
             Ok(result.crf)
         }
-        Err(e) => {
-            Err(ImgQualityError::AnalysisError(format!("Quality analysis failed for animation: {}", e)))
-        }
+        Err(e) => Err(ImgQualityError::AnalysisError(format!(
+            "Quality analysis failed for animation: {}",
+            e
+        ))),
     }
 }
 
@@ -612,9 +683,10 @@ pub fn calculate_matched_distance_for_static(
             );
             Ok(result.distance)
         }
-        Err(e) => {
-            Err(ImgQualityError::AnalysisError(format!("Quality analysis failed for static: {}", e)))
-        }
+        Err(e) => Err(ImgQualityError::AnalysisError(format!(
+            "Quality analysis failed for static: {}",
+            e
+        ))),
     }
 }
 
@@ -630,7 +702,9 @@ pub fn convert_to_jxl_matched(
     let input_size = fs::metadata(input)?.len();
 
     if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+        if ext.to_string_lossy().to_lowercase() == "png"
+            && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
+        {
             if options.verbose {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
@@ -681,7 +755,9 @@ pub fn convert_to_jxl_matched(
 
     // Only disable lossless JPEG mode when input is actually JPEG and we want lossy encoding.
     if distance > 0.0 {
-        let is_jpeg = options.input_format.as_deref()
+        let is_jpeg = options
+            .input_format
+            .as_deref()
             .map(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"))
             .unwrap_or(false);
         if is_jpeg {
@@ -801,16 +877,17 @@ fn prepare_input_for_cjxl(
         .unwrap_or_default();
 
     let ext = if let Some(real) = detected_ext {
-        if !literal_ext.is_empty() && real != literal_ext
+        if !literal_ext.is_empty()
+            && real != literal_ext
             && !((real == "jpg" && literal_ext == "jpeg")
                 || (real == "jpeg" && literal_ext == "jpg"))
-            {
-                eprintln!(
-                    "   ⚠️  EXTENSION MISMATCH: {} is actually {}, adjusting pre-processing...",
-                    input.display(),
-                    real
-                );
-            }
+        {
+            eprintln!(
+                "   ⚠️  EXTENSION MISMATCH: {} is actually {}, adjusting pre-processing...",
+                input.display(),
+                real
+            );
+        }
         real.to_string()
     } else if let Some(ref format) = options.input_format {
         format.to_lowercase()

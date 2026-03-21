@@ -15,7 +15,6 @@
 //! provides the CRF calculation layer.
 
 use crate::progress_mode::write_to_log_at_level;
-use tracing::Level;
 use crate::quality_matcher::{
     parse_source_codec, should_skip_video_codec, ContentType, QualityAnalysis, SourceCodec,
     VideoAnalysisBuilder,
@@ -23,6 +22,7 @@ use crate::quality_matcher::{
 use crate::video_detection::VideoDetectionResult;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use tracing::Level;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoQualityAnalysis {
@@ -108,7 +108,11 @@ impl ChromaSubsampling {
             ChromaSubsampling::Yuv444
         } else if fmt.contains("422") || fmt.contains("411") {
             ChromaSubsampling::Yuv422
-        } else if fmt.contains("420") || fmt.contains("nv12") || fmt.starts_with("yuv") || fmt.contains("410") {
+        } else if fmt.contains("420")
+            || fmt.contains("nv12")
+            || fmt.starts_with("yuv")
+            || fmt.contains("410")
+        {
             ChromaSubsampling::Yuv420
         } else if fmt.contains("rgb") || fmt.contains("gbr") || fmt.contains("bgr") {
             ChromaSubsampling::Rgb
@@ -332,14 +336,16 @@ pub fn analyze_video_quality_from_detection(
 
 fn extract_crf_from_params(params: &str) -> Option<u8> {
     let lower = params.to_lowercase();
-    
+
     // Look for various ways CRF/QP might be specified
     for keyword in ["crf=", "qp=", "cqp=", "crf ", "qp "] {
         if let Some(pos) = lower.find(keyword) {
             let start = pos + keyword.len();
             let rest = &lower[start..];
             // Take characters while they are part of a float
-            let end = rest.find(|c: char| !c.is_numeric() && c != '.').unwrap_or(rest.len());
+            let end = rest
+                .find(|c: char| !c.is_numeric() && c != '.')
+                .unwrap_or(rest.len());
             let val_str = rest[..end].trim();
             if let Ok(val) = val_str.parse::<f64>() {
                 return Some(val.round() as u8);
@@ -355,7 +361,10 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
     if !crate::progress_mode::has_log_file() {
         return;
     }
-    write_to_log_at_level(Level::DEBUG, &format!("[Media info] {}", input_path.display()));
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!("[Media info] {}", input_path.display()),
+    );
     write_to_log_at_level(
         Level::DEBUG,
         &format!(
@@ -378,10 +387,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
         Level::DEBUG,
         &format!(
             "  bitrate={} video_bitrate={:?} bpp={:.4} bit_depth={}",
-            analysis.total_bitrate,
-            analysis.video_bitrate,
-            analysis.bpp,
-            analysis.bit_depth
+            analysis.total_bitrate, analysis.video_bitrate, analysis.bpp, analysis.bit_depth
         ),
     );
     write_to_log_at_level(
@@ -648,7 +654,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.codec_type, VideoCodecType::ModernEfficient);
-        assert!(result.should_skip, "AV1 skipped in normal mode (use Apple-compat to convert)");
+        assert!(
+            result.should_skip,
+            "AV1 skipped in normal mode (use Apple-compat to convert)"
+        );
     }
 
     #[test]
@@ -711,7 +720,11 @@ mod tests {
                 60_000_000,
             )
             .unwrap();
-            assert!(result.should_skip, "{} skipped in normal mode (modern format)", codec);
+            assert!(
+                result.should_skip,
+                "{} skipped in normal mode (modern format)",
+                codec
+            );
         }
     }
 
@@ -1095,7 +1108,10 @@ mod tests {
             60_000_000,
         )
         .unwrap();
-        assert!(result.should_skip, "HEVC should be marked skip by should_skip_video_codec");
+        assert!(
+            result.should_skip,
+            "HEVC should be marked skip by should_skip_video_codec"
+        );
     }
 
     #[test]
@@ -1809,8 +1825,8 @@ mod tests {
 
         for (fps, duration, expected_frames) in test_cases {
             let result = analyze_video_quality(
-                "h264", 1920, 1080, fps, duration, 8_000_000, None, "yuv420p", 8, 2, None, None, None,
-                60_000_000,
+                "h264", 1920, 1080, fps, duration, 8_000_000, None, "yuv420p", 8, 2, None, None,
+                None, 60_000_000,
             )
             .unwrap();
 
@@ -1825,7 +1841,14 @@ mod tests {
     #[test]
     fn test_strict_modern_always_skip() {
         // Normal mode: all modern codecs skipped (use Apple-compat to convert AV1/VP9/VVC/AV2).
-        let modern_skip = [("hevc", true), ("h265", true), ("av1", true), ("vp9", true), ("vvc", true), ("av2", true)];
+        let modern_skip = [
+            ("hevc", true),
+            ("h265", true),
+            ("av1", true),
+            ("vp9", true),
+            ("vvc", true),
+            ("av2", true),
+        ];
 
         for (codec, expected_skip) in modern_skip {
             let result = analyze_video_quality(
@@ -1878,11 +1901,26 @@ mod tests {
     #[test]
     fn test_analyze_video_quality_with_deterministic_crf() {
         let result = analyze_video_quality(
-            "h264", 1920, 1080, 30.0, 60.0, 1_000_000, None, "yuv420p", 8, 2, 
-            Some("rc=crf / crf=15.0 / preset=medium"), 
-            None, None, 7_500_000
-        ).unwrap();
+            "h264",
+            1920,
+            1080,
+            30.0,
+            60.0,
+            1_000_000,
+            None,
+            "yuv420p",
+            8,
+            2,
+            Some("rc=crf / crf=15.0 / preset=medium"),
+            None,
+            None,
+            7_500_000,
+        )
+        .unwrap();
 
-        assert_eq!(result.estimated_crf, 15, "Should use CRF from encoder_params");
+        assert_eq!(
+            result.estimated_crf, 15,
+            "Should use CRF from encoder_params"
+        );
     }
 }
