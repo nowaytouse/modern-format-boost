@@ -246,7 +246,11 @@ impl VideoDetectionResult {
 
     /// Returns true for high-bitrate archival-grade content
     pub fn is_high_fidelity(&self) -> bool {
-        self.bit_depth >= 10 && matches!(self.compression, CompressionType::Lossless | CompressionType::VisuallyLossless)
+        self.bit_depth >= 10
+            && matches!(
+                self.compression,
+                CompressionType::Lossless | CompressionType::VisuallyLossless
+            )
     }
 
     /// High-precision VFR detection including slow-motion recording analysis
@@ -266,7 +270,7 @@ pub fn determine_compression_type(
     if codec.is_lossless() || precision.is_lossless_deterministic {
         return CompressionType::Lossless;
     }
-    
+
     // HEVC/AV1 Lossless often uses specific profiles or encoder params
     if let Some(ref settings) = precision.original_encoder {
         if settings.contains("lossless=1") || settings.contains("qp=0") {
@@ -335,18 +339,34 @@ pub fn detect_video_with_cache(
     cache: Option<&crate::analysis_cache::AnalysisCache>,
 ) -> Result<VideoDetectionResult, FFprobeError> {
     if let Some(cache) = cache {
-        if let Ok(Some(cached)) = cache.get_video_analysis(path) {
-            if std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+        match cache.get_video_analysis(path) {
+            Ok(Some(cached)) => {
+                if std::env::var("IMGQUALITY_DEBUG").is_ok() {
+                    eprintln!("🔍 [Video Cache] Hit: {}", path.display());
+                }
+                return Ok(cached);
             }
-            return Ok(cached);
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Failed to load cached video analysis"
+                );
+            }
         }
     }
 
     let result = detect_video(path)?;
 
     if let Some(cache) = cache {
-        let _ = cache.store_video_analysis(path, &result);
+        if let Err(err) = cache.store_video_analysis(path, &result) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to store video analysis in cache"
+            );
+        }
     }
 
     Ok(result)
@@ -364,7 +384,11 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
         0.0
     };
 
-    let precision = extract_video_precision(&probe.tags, probe.encoder_settings.as_deref(), probe.max_b_frames);
+    let precision = extract_video_precision(
+        &probe.tags,
+        probe.encoder_settings.as_deref(),
+        probe.max_b_frames,
+    );
 
     let compression = determine_compression_type(
         &codec,
@@ -439,7 +463,11 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     })
 }
 
-fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Option<&str>, max_b_frames: u8) -> VideoPrecisionMetadata {
+fn extract_video_precision(
+    tags: &HashMap<String, String>,
+    encoder_settings: Option<&str>,
+    max_b_frames: u8,
+) -> VideoPrecisionMetadata {
     let mut precision = VideoPrecisionMetadata {
         original_max_b_frames: Some(max_b_frames),
         original_encoder: tags.get("encoder").cloned(),
@@ -457,17 +485,23 @@ fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Opt
 
     if !search_string.is_empty() {
         let lower = search_string.to_lowercase();
-        
+
         // Extract CRF
         if let Some(crf_pos) = lower.find("crf=") {
             let sub = &lower[crf_pos + 4..];
-            let val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let val: String = sub
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
             if let Ok(v) = val.parse::<f32>() {
                 precision.original_crf = Some(v);
             }
         } else if let Some(qp_pos) = lower.find("qp=") {
             let sub = &lower[qp_pos + 4..];
-            let val: String = sub.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let val: String = sub
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
             if let Ok(v) = val.parse::<f32>() {
                 precision.original_crf = Some(v);
             }
@@ -476,12 +510,15 @@ fn extract_video_precision(tags: &HashMap<String, String>, encoder_settings: Opt
         // Extract Preset
         if let Some(preset_pos) = lower.find("preset=") {
             let sub = &lower[preset_pos + 7..];
-            let val: String = sub.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let val: String = sub
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
             if !val.is_empty() {
                 precision.original_preset = Some(val);
             }
         }
     }
-    
+
     precision
 }
