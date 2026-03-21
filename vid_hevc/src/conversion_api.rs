@@ -17,6 +17,19 @@ use std::path::PathBuf;
 use std::process::Command;
 use tracing::{info, warn};
 
+fn cleanup_output_file(path: &Path, context: &str) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                context = context,
+                "Failed to remove output file during cleanup"
+            );
+        }
+    }
+}
+
 /// Build the FFmpeg colour/HDR arguments that must be forwarded to every HEVC encode.
 ///
 /// This preserves:
@@ -291,6 +304,8 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     } else {
         output_dir.join(format!("{}.MP4", stem))
     };
+    shared_utils::conversion::validate_output_path(&output_path, None)
+        .map_err(VidQualityError::ConversionError)?;
 
     info!("🎬 Simple Mode: {} → HEVC MP4 (CRF 18)", input.display());
 
@@ -476,6 +491,8 @@ pub fn auto_convert_with_cache(
     } else {
         output_dir.join(format!("{}.{}", stem, target_ext))
     };
+    shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
+        .map_err(VidQualityError::ConversionError)?;
 
     shared_utils::path_validator::check_input_output_conflict(input, &output_path)
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
@@ -601,7 +618,7 @@ pub fn auto_convert_with_cache(
                         Some(s) => s,
                         None => {
                             warn!("   ⚠️  SSIM not measured, cannot verify quality");
-                            let _ = std::fs::remove_file(&temp_path);
+                            cleanup_output_file(&temp_path, "temporary output cleanup after missing SSIM");
                             return Err(VidQualityError::GeneralError(
                                 "Quality verification failed: SSIM not measured".to_string()
                             ));
@@ -904,11 +921,11 @@ pub fn auto_convert_with_cache(
             }
 
             if output_path.exists() {
-                let _ = std::fs::remove_file(&output_path);
+                cleanup_output_file(&output_path, "low MS-SSIM cleanup");
                 info!("   🗑️  Low MS-SSIM output deleted");
             }
             if temp_path.exists() {
-                let _ = std::fs::remove_file(&temp_path);
+                cleanup_output_file(&temp_path, "temporary output cleanup after low MS-SSIM");
             }
 
             shared_utils::copy_on_skip_or_fail(
@@ -1051,11 +1068,11 @@ pub fn auto_convert_with_cache(
         }
 
         if output_path.exists() {
-            let _ = std::fs::remove_file(&output_path);
+            cleanup_output_file(&output_path, "compression failure cleanup");
             info!("   🗑️  Output deleted (cannot compress by total file size)");
         }
         if temp_path.exists() {
-            let _ = std::fs::remove_file(&temp_path);
+            cleanup_output_file(&temp_path, "temporary output cleanup after compression failure");
         }
 
         shared_utils::copy_on_skip_or_fail(

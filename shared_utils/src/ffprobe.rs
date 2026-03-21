@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::Path;
 use std::process::Command;
+use tracing::warn;
 
 #[derive(Debug)]
 pub enum FFprobeError {
@@ -559,7 +560,7 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "quiet",
@@ -571,20 +572,45 @@ pub fn get_duration(path: &Path) -> Option<f64> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to launch ffprobe duration query"
+            );
+            return None;
+        }
+    };
 
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<f64>()
-            .ok()
-    } else {
-        None
+    if !output.status.success() {
+        warn!(
+            path = %path.display(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "ffprobe duration query failed"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    match trimmed.parse::<f64>() {
+        Ok(duration) => Some(duration),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                output = %trimmed,
+                error = %err,
+                "Failed to parse ffprobe duration output"
+            );
+            None
+        }
     }
 }
 
 pub fn get_frame_count(path: &Path) -> Option<u64> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "quiet",
@@ -599,15 +625,40 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to launch ffprobe frame-count query"
+            );
+            return None;
+        }
+    };
 
-    if output.status.success() {
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse::<u64>()
-            .ok()
-    } else {
-        None
+    if !output.status.success() {
+        warn!(
+            path = %path.display(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "ffprobe frame-count query failed"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    match trimmed.parse::<u64>() {
+        Ok(frame_count) => Some(frame_count),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                output = %trimmed,
+                error = %err,
+                "Failed to parse ffprobe frame-count output"
+            );
+            None
+        }
     }
 }
 

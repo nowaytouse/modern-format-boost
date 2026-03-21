@@ -12,11 +12,28 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             src.to_string_lossy().replace('\'', "''"),
             dst.to_string_lossy().replace('\'', "''")
         );
-        let _ = Command::new("powershell")
+        match Command::new("powershell")
             .arg("-NoProfile")
             .arg("-Command")
             .arg(ps_script)
-            .output();
+            .output()
+        {
+            Ok(output) if !output.status.success() => {
+                eprintln!(
+                    "⚠️ [metadata] PowerShell ACL copy returned non-zero status for {}: {}",
+                    dst.display(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️ [metadata] Failed to launch PowerShell ACL copy for {}: {}",
+                    dst.display(),
+                    e
+                );
+            }
+            _ => {}
+        }
     }
 
     #[cfg(windows)]
@@ -30,7 +47,23 @@ pub fn preserve_windows_attributes(src: &Path, dst: &Path) -> io::Result<()> {
             if is_hidden { cmd.arg("+h"); }
             if is_system { cmd.arg("+s"); }
             cmd.arg(dst);
-            let _ = cmd.output();
+            match cmd.output() {
+                Ok(output) if !output.status.success() => {
+                    eprintln!(
+                        "⚠️ [metadata] attrib returned non-zero status for {}: {}",
+                        dst.display(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "⚠️ [metadata] Failed to launch attrib for {}: {}",
+                        dst.display(),
+                        e
+                    );
+                }
+                _ => {}
+            }
         }
 
         // Alternate Data Streams (ADS) — enumerate via PowerShell and copy each stream
@@ -55,8 +88,21 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
         .arg("-Command")
         .arg(&list_script)
         .output();
-    let Ok(out) = out else { return };
-    if !out.status.success() { return }
+    let Ok(out) = out else {
+        eprintln!(
+            "⚠️ [metadata] Failed to enumerate ADS streams for {}",
+            src.display()
+        );
+        return;
+    };
+    if !out.status.success() {
+        eprintln!(
+            "⚠️ [metadata] PowerShell ADS enumeration returned non-zero status for {}: {}",
+            src.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+        return;
+    }
 
     let streams = String::from_utf8_lossy(&out.stdout);
     for stream_name in streams.lines().map(str::trim).filter(|s| !s.is_empty()) {
@@ -81,6 +127,13 @@ fn preserve_alternate_data_streams(src: &Path, dst: &Path) {
                     String::from_utf8_lossy(&r.stderr)
                 );
             }
+        } else if let Err(e) = result {
+            eprintln!(
+                "⚠️ [metadata] Failed to launch PowerShell while copying ADS stream '{}' to {}: {}",
+                stream_name,
+                dst.display(),
+                e
+            );
         }
     }
 }

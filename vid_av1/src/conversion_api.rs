@@ -16,6 +16,19 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
+fn cleanup_output_file(path: &Path, context: &str) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            warn!(
+                path = %path.display(),
+                error = %e,
+                context = context,
+                "Failed to remove output file during cleanup"
+            );
+        }
+    }
+}
+
 /// Build the FFmpeg colour/HDR arguments that must be forwarded to every AV1 encode.
 ///
 /// This preserves:
@@ -200,6 +213,8 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     } else {
         output_dir.join(format!("{}.MP4", stem))
     };
+    shared_utils::conversion::validate_output_path(&output_path, None)
+        .map_err(VidQualityError::ConversionError)?;
 
     info!("🎬 Simple Mode: {} → AV1 MP4 (LOSSLESS)", input.display());
 
@@ -360,6 +375,8 @@ pub fn auto_convert_with_cache(
     } else {
         output_dir.join(format!("{}.{}", stem, target_ext))
     };
+    shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
+        .map_err(VidQualityError::ConversionError)?;
 
     shared_utils::path_validator::check_input_output_conflict(input, &output_path)
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
@@ -739,7 +756,7 @@ pub fn auto_convert_with_cache(
                     }
 
                     if output_path.exists() {
-                        let _ = std::fs::remove_file(&output_path);
+                        cleanup_output_file(&output_path, "low MS-SSIM cleanup");
                         info!("   🗑️  Low MS-SSIM output deleted");
                     }
 
@@ -918,7 +935,7 @@ pub fn auto_convert_with_cache(
         }
 
         if output_path.exists() {
-            let _ = std::fs::remove_file(&output_path);
+            cleanup_output_file(&output_path, "compression failure cleanup");
             info!("   🗑️  Output deleted (cannot compress by total file size)");
         }
         shared_utils::copy_on_skip_or_fail(
@@ -1091,7 +1108,7 @@ fn execute_ffv1_conversion(
     let result = Command::new("ffmpeg").args(&args).output()?;
 
     if !result.status.success() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "failed FFV1 output");
         return Err(VidQualityError::FFmpegError {
             message: "FFmpeg command failed".to_string(),
             stderr: String::from_utf8_lossy(&result.stderr).to_string(),
@@ -1106,13 +1123,13 @@ fn execute_ffv1_conversion(
     })?;
     let size = size.len();
     if size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty FFV1 output");
         return Err(VidQualityError::ConversionError(
             "FFV1 output file is empty (encoding may have failed)".to_string(),
         ));
     }
     if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "invalid FFV1 output");
         return Err(VidQualityError::ConversionError(
             "FFV1 output file is not readable (invalid or corrupted)".to_string(),
         ));
@@ -1171,7 +1188,7 @@ fn execute_av1_lossless(
     let result = Command::new("ffmpeg").args(&args).output()?;
 
     if !result.status.success() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "failed AV1 output");
         return Err(VidQualityError::FFmpegError {
             message: "FFmpeg command failed".to_string(),
             stderr: String::from_utf8_lossy(&result.stderr).to_string(),
@@ -1186,13 +1203,13 @@ fn execute_av1_lossless(
     })?;
     let size = size.len();
     if size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty AV1 output");
         return Err(VidQualityError::ConversionError(
             "AV1 output file is empty (encoding may have failed)".to_string(),
         ));
     }
     if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "invalid AV1 output");
         return Err(VidQualityError::ConversionError(
             "AV1 output file is not readable (invalid or corrupted)".to_string(),
         ));

@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use crate::modern_ui::{colors, symbols};
 use std::sync::{LazyLock, Mutex};
 use rand::Rng;
@@ -369,7 +369,13 @@ pub fn determine_output_path(
     let up_ext = extension.to_uppercase();
     let output = match output_dir {
         Some(dir) => {
-            let _ = fs::create_dir_all(dir);
+            fs::create_dir_all(dir).map_err(|e| {
+                format!(
+                    "Failed to create output directory {}: {}",
+                    dir.display(),
+                    e
+                )
+            })?;
             dir.join(format!("{}.{}", stem, up_ext))
         }
         None => input.with_extension(up_ext),
@@ -391,8 +397,16 @@ pub fn determine_output_path(
     }
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create output parent directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
+
+    validate_output_path(&output, None)?;
 
     Ok(output)
 }
@@ -418,7 +432,13 @@ pub fn determine_output_path_with_base(
                 .unwrap_or(Path::new(""));
 
             let out_subdir = dir.join(rel_path);
-            let _ = fs::create_dir_all(&out_subdir);
+            fs::create_dir_all(&out_subdir).map_err(|e| {
+                format!(
+                    "Failed to create output directory {}: {}",
+                    out_subdir.display(),
+                    e
+                )
+            })?;
 
             out_subdir.join(format!("{}.{}", stem, up_ext))
         }
@@ -441,8 +461,16 @@ pub fn determine_output_path_with_base(
     }
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create output parent directory {}: {}",
+                parent.display(),
+                e
+            )
+        })?;
     }
+
+    validate_output_path(&output, Some(base_dir))?;
 
     Ok(output)
 }
@@ -559,7 +587,15 @@ impl TempOutputGuard {
 impl Drop for TempOutputGuard {
     fn drop(&mut self) {
         if self.0.exists() {
-            let _ = fs::remove_file(&self.0);
+            if let Err(e) = fs::remove_file(&self.0) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "⚠️ [conversion] Failed to remove temp output on drop {}: {}",
+                        self.0.display(),
+                        e
+                    );
+                }
+            }
         }
     }
 }
@@ -616,6 +652,8 @@ pub fn commit_temp_to_output_with_metadata(
     force: bool,
     original: Option<&Path>,
 ) -> std::io::Result<bool> {
+    validate_output_path(output, None).map_err(std::io::Error::other)?;
+
     if temp.exists() {
         let size = fs::metadata(temp)?.len();
         if size == 0 {
@@ -626,7 +664,15 @@ pub fn commit_temp_to_output_with_metadata(
         }
     }
     if !force && output.exists() {
-        let _ = fs::remove_file(temp);
+        if let Err(e) = fs::remove_file(temp) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "⚠️ [conversion] Failed to remove temp output {} after concurrent output detection: {}",
+                    temp.display(),
+                    e
+                );
+            }
+        }
         return Ok(false);
     }
     fs::rename(temp, output)?;
@@ -924,6 +970,15 @@ pub fn check_size_tolerance(
 ///
 /// Returns Ok(()) if valid, Err with descriptive message otherwise.
 pub fn validate_input_file(input: &Path) -> Result<(), String> {
+    crate::path_validator::validate_path(input).map_err(|e| e.to_string())?;
+
+    if input.to_str().is_none() {
+        return Err(format!(
+            "Input path contains non-UTF-8 bytes and cannot be passed safely to external tools: {}",
+            input.display()
+        ));
+    }
+
     // Check if path exists
     if !input.exists() {
         return Err(format!("Input file does not exist: {}", input.display()));
@@ -969,12 +1024,63 @@ pub fn validate_output_path(
     output: &Path,
     _base_dir: Option<&Path>,
 ) -> Result<(), String> {
+    crate::path_validator::validate_path(output).map_err(|e| e.to_string())?;
+
+    if output.to_str().is_none() {
+        return Err(format!(
+            "Output path contains non-UTF-8 bytes and cannot be passed safely to external tools: {}",
+            output.display()
+        ));
+    }
+
+    ensure_no_symlink_components(output)?;
+
     // Check if output is a symbolic link
     if output.exists() && output.is_symlink() {
         return Err(format!(
             "Output path is a symbolic link, refusing to overwrite: {}",
             output.display()
         ));
+    }
+
+    Ok(())
+}
+
+fn ensure_no_symlink_components(path: &Path) -> Result<(), String> {
+    let mut current = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to resolve current directory for {}: {}", path.display(), e))?
+    };
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                current.push(component.as_os_str());
+            }
+            _ => current.push(component.as_os_str()),
+        }
+
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "Output path traverses symbolic link component, refusing to write: {}",
+                        current.display()
+                    ));
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => {
+                return Err(format!(
+                    "Failed to inspect output path component {}: {}",
+                    current.display(),
+                    err
+                ));
+            }
+        }
     }
 
     Ok(())
@@ -1149,6 +1255,28 @@ mod tests {
             "unexpected error: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_validate_input_file_rejects_newlines() {
+        let err = validate_input_file(Path::new("bad\nname.png"))
+            .expect_err("newline path should be rejected before filesystem access");
+        assert!(err.contains("PATH SECURITY ERROR"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_output_path_rejects_symlink_parent() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let real_dir = temp.path().join("real");
+        fs::create_dir_all(&real_dir).expect("real dir");
+        let link_dir = temp.path().join("link");
+        symlink(&real_dir, &link_dir).expect("symlink");
+
+        let err = validate_output_path(&link_dir.join("out.jxl"), None)
+            .expect_err("symlinked parent directory should be rejected");
+        assert!(err.contains("symbolic link component"));
     }
 
     #[test]

@@ -106,10 +106,12 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    let _ = shared_utils::logging::init_logging(
+    if let Err(e) = shared_utils::logging::init_logging(
         "img_hevc",
         shared_utils::logging::LogConfig::default(),
-    );
+    ) {
+        eprintln!("⚠️ Failed to initialize logging: {}", e);
+    }
 
     let cache = AnalysisCache::default_local()
         .map(Arc::new)
@@ -120,7 +122,9 @@ fn main() -> anyhow::Result<()> {
         .ok();
 
     if let Some(ref cache) = cache {
-        let _ = cache.cleanup_old_records(30 * 24 * 3600); // 30 days
+        if let Err(e) = cache.cleanup_old_records(30 * 24 * 3600) {
+            shared_utils::log_eprintln!("⚠️ [Cache] Failed to cleanup old records: {}", e);
+        }
     }
 
     let cli = Cli::parse();
@@ -703,7 +707,17 @@ fn auto_convert_single_file(
             // (apple_compat and non-compat unified under the same strategy).
             // Can be overridden with --force-video flag
             let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
-            let probe = shared_utils::probe_video(input).ok();
+            let probe = match shared_utils::probe_video(input) {
+                Ok(probe) => Some(probe),
+                Err(e) => {
+                    shared_utils::log_eprintln!(
+                        "⚠️ [GIF Probe] Failed to probe animated input {}: {}",
+                        input.display(),
+                        e
+                    );
+                    None
+                }
+            };
             let meme_keep = if force_video {
                 // Force video mode: always convert to video, skip meme-score
                 false
@@ -828,7 +842,17 @@ fn auto_convert_directory(
 
     let start_time = Instant::now();
 
-    let saved_dir_timestamps = shared_utils::save_directory_timestamps(input).ok();
+    let saved_dir_timestamps = match shared_utils::save_directory_timestamps(input) {
+        Ok(saved) => Some(saved),
+        Err(e) => {
+            shared_utils::log_eprintln!(
+                "⚠️ [Metadata] Failed to snapshot directory timestamps for {}: {}",
+                input.display(),
+                e
+            );
+            None
+        }
+    };
 
     let files = shared_utils::collect_files_small_first(
         input,
@@ -878,9 +902,19 @@ fn auto_convert_directory(
     };
 
     if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
-        let total_input_size: u64 = files.iter()
-            .filter_map(|f| std::fs::metadata(f).ok())
-            .map(|m| m.len())
+        let total_input_size: u64 = files
+            .iter()
+            .map(|f| match std::fs::metadata(f) {
+                Ok(metadata) => metadata.len(),
+                Err(err) => {
+                    shared_utils::log_eprintln!(
+                        "⚠️ [Disk Precheck] Failed to read file metadata ({}): {}",
+                        f.display(),
+                        err
+                    );
+                    0
+                }
+            })
             .sum();
         let check_path = config.output_dir.as_deref().unwrap_or(input);
         if let Some(avail) = shared_utils::system_memory::get_available_disk_bytes(check_path) {
@@ -985,7 +1019,13 @@ fn auto_convert_directory(
                         }
                         // Mark as completed in checkpoint manager on success (thread-safe)
                         if let Some(cp) = checkpoint.as_ref() {
-                            let _ = cp.mark_completed(path);
+                            if let Err(e) = cp.mark_completed(path) {
+                                shared_utils::log_eprintln!(
+                                    "⚠️ [checkpoint] Failed to mark completed {}: {}",
+                                    path.display(),
+                                    e
+                                );
+                            }
                         }
                     }
                 }
@@ -1001,12 +1041,18 @@ fn auto_convert_directory(
                         shared_utils::progress_mode::image_processed_failure();
 
                         if let Some(ref output_dir) = config.output_dir {
-                            let _ = shared_utils::copy_on_skip_or_fail(
+                            if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
                                 path,
                                 Some(output_dir),
                                 config.base_dir.as_deref(),
                                 config.verbose,
-                            );
+                            ) {
+                                shared_utils::log_eprintln!(
+                                    "⚠️ [Recovery] Failed to copy original after image conversion failure ({}): {}",
+                                    path.display(),
+                                    copy_err
+                                );
+                            }
                         }
                     }
                 }
@@ -1065,9 +1111,13 @@ fn auto_convert_directory(
     // Finalize checkpoint only on 100% success
     if let Some(cp) = checkpoint {
         if failed_count == 0 {
-            let _ = cp.cleanup();
+            if let Err(e) = cp.cleanup() {
+                shared_utils::log_eprintln!("⚠️ [checkpoint] Cleanup failed: {}", e);
+            }
         } else {
-            let _ = cp.release_lock();
+            if let Err(e) = cp.release_lock() {
+                shared_utils::log_eprintln!("⚠️ [checkpoint] Release lock failed: {}", e);
+            }
         }
     }
 

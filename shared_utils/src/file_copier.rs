@@ -118,12 +118,23 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         WalkDir::new(input_dir).max_depth(1)
     };
 
-    let total_files: usize = walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| should_copy_file(e.path()))
-        .count();
+    let mut total_files = 0usize;
+    for entry in walker.into_iter() {
+        match entry {
+            Ok(entry) => {
+                if entry.file_type().is_file() && should_copy_file(entry.path()) {
+                    total_files += 1;
+                }
+            }
+            Err(err) => {
+                warn!(
+                    input_dir = %input_dir.display(),
+                    error = %err,
+                    "Failed to inspect directory entry during pre-scan"
+                );
+            }
+        }
+    }
 
     debug!(total_files = total_files, "Pre-scan completed");
 
@@ -142,7 +153,28 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         WalkDir::new(input_dir).max_depth(1)
     };
 
-    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+    for entry in walker.into_iter() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                let path = err
+                    .path()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| input_dir.to_path_buf());
+                let error_msg = format!("Directory traversal failed: {}", err);
+                warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Directory traversal failed during batch copy"
+                );
+                result.failed += 1;
+                result
+                    .errors
+                    .push((path, error_msg, "walkdir".to_string()));
+                continue;
+            }
+        };
+
         if !entry.file_type().is_file() {
             continue;
         }
@@ -356,7 +388,19 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
         WalkDir::new(dir).max_depth(1)
     };
 
-    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+    for entry in walker.into_iter() {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                warn!(
+                    dir = %dir.display(),
+                    error = %err,
+                    "Failed to inspect directory entry while counting files"
+                );
+                continue;
+            }
+        };
+
         if !entry.file_type().is_file() {
             continue;
         }

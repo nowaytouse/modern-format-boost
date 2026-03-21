@@ -12,6 +12,7 @@
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
+use tracing::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtractionMethod {
@@ -110,7 +111,17 @@ pub fn get_container_overhead_percent(path: &Path) -> f64 {
 }
 
 pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
-    let total_file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let total_file_size = match std::fs::metadata(path) {
+        Ok(metadata) => metadata.len(),
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to read file metadata for stream-size extraction"
+            );
+            0
+        }
+    };
 
     if let Some(info) = try_ffprobe_extraction(path, total_file_size) {
         return info;
@@ -120,7 +131,7 @@ pub fn extract_stream_sizes(path: &Path) -> StreamSizeInfo {
 }
 
 fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSizeInfo> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "error",
@@ -132,14 +143,50 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "ffprobe stream-size extraction failed to start"
+            );
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!(
+            path = %path.display(),
+            stderr = %stderr.trim(),
+            "ffprobe stream-size extraction returned non-zero status"
+        );
         return None;
     }
 
-    let json_str = String::from_utf8(output.stdout).ok()?;
-    let parsed: FfprobeFullOutput = serde_json::from_str(&json_str).ok()?;
+    let json_str = match String::from_utf8(output.stdout) {
+        Ok(json_str) => json_str,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "ffprobe stream-size extraction returned non-UTF-8 JSON"
+            );
+            return None;
+        }
+    };
+    let parsed: FfprobeFullOutput = match serde_json::from_str(&json_str) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "ffprobe stream-size extraction JSON parse failed"
+            );
+            return None;
+        }
+    };
 
     let duration_secs = parsed
         .format
@@ -149,6 +196,11 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
         .unwrap_or(0.0);
 
     if duration_secs <= 0.0 {
+        warn!(
+            path = %path.display(),
+            duration = duration_secs,
+            "ffprobe stream-size extraction reported invalid duration"
+        );
         return None;
     }
 
@@ -187,6 +239,10 @@ fn try_ffprobe_extraction(path: &Path, total_file_size: u64) -> Option<StreamSiz
     };
 
     if video_stream_size == 0 {
+        warn!(
+            path = %path.display(),
+            "ffprobe stream-size extraction produced no usable video bitrate; falling back to estimated sizing"
+        );
         return None;
     }
 

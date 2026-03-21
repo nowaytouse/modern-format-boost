@@ -48,10 +48,29 @@ pub fn get_video_duration(input: &Path) -> Option<f64> {
         .output()
         .ok()?;
 
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<f64>()
-        .ok()
+    if !output.status.success() {
+        warn!(
+            path = %input.display(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "ffprobe failed to read video duration"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    match trimmed.parse::<f64>() {
+        Ok(duration) => Some(duration),
+        Err(err) => {
+            warn!(
+                path = %input.display(),
+                output = %trimmed,
+                error = %err,
+                "Failed to parse ffprobe duration output"
+            );
+            None
+        }
+    }
 }
 
 pub fn calculate_ssim_enhanced(input: &Path, output: &Path) -> Option<f64> {

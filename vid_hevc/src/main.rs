@@ -66,10 +66,12 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    let _ = shared_utils::logging::init_logging(
+    if let Err(e) = shared_utils::logging::init_logging(
         "vid_hevc",
         shared_utils::logging::LogConfig::default(),
-    );
+    ) {
+        eprintln!("⚠️ Failed to initialize logging: {}", e);
+    }
 
     shared_utils::ctrlc_guard::init();
 
@@ -167,7 +169,13 @@ fn main() -> anyhow::Result<()> {
             if force_ms_ssim_long {
                 info!("   ⚠️  Force MS-SSIM for long videos: ENABLED");
             }
-            let cache = AnalysisCache::default_local().ok();
+            let cache = match AnalysisCache::default_local() {
+                Ok(cache) => Some(cache),
+                Err(e) => {
+                    shared_utils::log_eprintln!("⚠️ [Cache] Failed to initialize persistent cache: {}", e);
+                    None
+                }
+            };
             if cache.is_some() {
                 info!("   💽 Persistent Cache: ENABLED");
             }

@@ -308,7 +308,17 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     let is_lossless = detect_lossless(&format, path).unwrap_or_else(|_| pixel_fallback_lossless(path));
 
     let jpeg_analysis = if format == ImageFormat::Jpeg {
-        analyze_jpeg_file(path).ok()
+        match analyze_jpeg_file(path) {
+            Ok(analysis) => Some(analysis),
+            Err(e) => {
+                log_eprintln!(
+                    "⚠️  JPEG quantization analysis failed for {}: {}",
+                    path.display(),
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };
@@ -522,13 +532,39 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 /// Specialized fast path for JPEG files to avoid expensive pixel decoding.
 /// JPEG->JXL transcoding only needs quantization tables, not raw pixels.
 fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
-    let jpeg_analysis = analyze_jpeg_file(path).ok();
+    let jpeg_analysis = match analyze_jpeg_file(path) {
+        Ok(analysis) => Some(analysis),
+        Err(e) => {
+            log_eprintln!(
+                "⚠️  JPEG fast-path analysis failed for {}: {}",
+                path.display(),
+                e
+            );
+            None
+        }
+    };
     
     // Use fast metadata parsing to get dimensions without decoding pixels
-    let (width, height) = if let Ok(reader) = image::ImageReader::open(path) {
-        reader.into_dimensions().unwrap_or_default()
-    } else {
-        (0, 0)
+    let (width, height) = match image::ImageReader::open(path) {
+        Ok(reader) => match reader.into_dimensions() {
+            Ok(dimensions) => dimensions,
+            Err(e) => {
+                log_eprintln!(
+                    "⚠️  Failed to read JPEG dimensions for {}: {}",
+                    path.display(),
+                    e
+                );
+                (0, 0)
+            }
+        },
+        Err(e) => {
+            log_eprintln!(
+                "⚠️  Failed to open JPEG for fast dimension probe {}: {}",
+                path.display(),
+                e
+            );
+            (0, 0)
+        }
     };
 
     let metadata = extract_metadata(path).unwrap_or_default();
@@ -1028,6 +1064,14 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
     let temp_apng = tempfile::Builder::new()
         .suffix(".apng")
         .tempfile()
+        .map_err(|e| {
+            log_eprintln!(
+                "⚠️  Failed to create temporary APNG for {}: {}",
+                path.display(),
+                e
+            );
+            e
+        })
         .ok()?;
     let temp_apng_path = temp_apng.path();
     
@@ -1036,6 +1080,14 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
         .arg(crate::safe_path_arg(path).as_ref())
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output()
+        .map_err(|e| {
+            log_eprintln!(
+                "⚠️  Failed to launch djxl for {}: {}",
+                path.display(),
+                e
+            );
+            e
+        })
         .ok()?;
     
     if !djxl_result.status.success() || !temp_apng_path.exists() {
@@ -1058,6 +1110,14 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
         ])
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output()
+        .map_err(|e| {
+            log_eprintln!(
+                "⚠️  Failed to launch ffprobe for temporary APNG {}: {}",
+                temp_apng_path.display(),
+                e
+            );
+            e
+        })
         .ok()?;
     
     if probe_output.status.success() {
@@ -1087,7 +1147,18 @@ fn try_jxl_via_apng(path: &Path) -> Option<f32> {
                     return Some(duration);
                 }
             }
+        } else {
+            log_eprintln!(
+                "⚠️  Failed to parse ffprobe JSON for temporary APNG {}",
+                temp_apng_path.display()
+            );
         }
+    } else {
+        log_eprintln!(
+            "⚠️  ffprobe returned non-zero status for temporary APNG {}: {}",
+            temp_apng_path.display(),
+            String::from_utf8_lossy(&probe_output.stderr).trim()
+        );
     }
     
     // Fallback: try ffprobe methods
@@ -1103,9 +1174,18 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
         .args(["-v", "error", "-print_format", "json", "-show_format", "--"])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
+        .map_err(|e| {
+            log_eprintln!("⚠️  Failed to launch ffprobe JSON probe for {}: {}", path.display(), e);
+            e
+        })
         .ok()?;
 
     if !output.status.success() {
+        log_eprintln!(
+            "⚠️  ffprobe JSON probe failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
         return None;
     }
 
@@ -1117,7 +1197,15 @@ fn try_ffprobe_json(path: &Path) -> Option<f32> {
             let after_quote = &after_key[quote_start + 1..];
             if let Some(quote_end) = after_quote.find('"') {
                 let duration_str = &after_quote[..quote_end];
-                return duration_str.parse::<f32>().ok();
+                return duration_str.parse::<f32>().map_err(|e| {
+                    log_eprintln!(
+                        "⚠️  Failed to parse ffprobe JSON duration '{}' for {}: {}",
+                        duration_str,
+                        path.display(),
+                        e
+                    );
+                    e
+                }).ok();
             }
         }
     }
@@ -1140,14 +1228,35 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
+        .map_err(|e| {
+            log_eprintln!(
+                "⚠️  Failed to launch ffprobe default duration probe for {}: {}",
+                path.display(),
+                e
+            );
+            e
+        })
         .ok()?;
 
     if !output.status.success() {
+        log_eprintln!(
+            "⚠️  ffprobe default duration probe failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
         return None;
     }
 
     let duration_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    duration_str.parse::<f32>().ok()
+    duration_str.parse::<f32>().map_err(|e| {
+        log_eprintln!(
+            "⚠️  Failed to parse ffprobe default duration '{}' for {}: {}",
+            duration_str,
+            path.display(),
+            e
+        );
+        e
+    }).ok()
 }
 
 /// Returns (duration_secs, frame_count) from ImageMagick `identify -format "%T"`.
@@ -1255,14 +1364,31 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
+        .map_err(|e| {
+            log_eprintln!("⚠️  Failed to launch ffprobe frame-count probe for {}: {}", path.display(), e);
+            e
+        })
         .ok()?;
 
     if !output.status.success() {
+        log_eprintln!(
+            "⚠️  ffprobe frame-count probe failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
         return None;
     }
 
     let count_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    count_str.parse::<u32>().ok()
+    count_str.parse::<u32>().map_err(|e| {
+        log_eprintln!(
+            "⚠️  Failed to parse ffprobe frame count '{}' for {}: {}",
+            count_str,
+            path.display(),
+            e
+        );
+        e
+    }).ok()
 }
 
 /// Determines if the image is stored in a lossless way for conversion decisions.
@@ -1447,28 +1573,52 @@ fn analyze_avif_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     // Use ffprobe directly for AVIF: the `image` crate's AVIF decoder rejects many
     // valid files (10-bit, HDR color spaces, certain profiles). ffprobe handles them
     // correctly and also provides pix_fmt for accurate alpha and bit-depth detection.
-    let (width, height, has_alpha, color_depth) = if let Ok(probe) = crate::probe_video(path) {
-        let pix_fmt = probe.pix_fmt.to_lowercase();
-        let alpha = pix_fmt.contains("yuva")
-            || pix_fmt.contains("rgba")
-            || pix_fmt.contains("gbrap")
-            || pix_fmt.starts_with("p4");
-        let depth = if probe.bit_depth > 0 {
-            probe.bit_depth
-        } else {
-            8
-        };
-        (probe.width, probe.height, alpha, depth)
-    } else if let Ok(img) = crate::image_detection::open_image_with_limits(path) {
-        let (w, h) = img.dimensions();
-        (w, h, has_alpha_channel(&img), detect_color_depth(&img))
-    } else {
-        (0u32, 0u32, false, 8u8)
+    let (width, height, has_alpha, color_depth) = match crate::probe_video(path) {
+        Ok(probe) => {
+            let pix_fmt = probe.pix_fmt.to_lowercase();
+            let alpha = pix_fmt.contains("yuva")
+                || pix_fmt.contains("rgba")
+                || pix_fmt.contains("gbrap")
+                || pix_fmt.starts_with("p4");
+            let depth = if probe.bit_depth > 0 {
+                probe.bit_depth
+            } else {
+                8
+            };
+            (probe.width, probe.height, alpha, depth)
+        }
+        Err(probe_err) => match crate::image_detection::open_image_with_limits(path) {
+            Ok(img) => {
+                log_eprintln!(
+                    "⚠️  ffprobe AVIF probe failed for {}; falling back to image decode: {}",
+                    path.display(),
+                    probe_err
+                );
+                let (w, h) = img.dimensions();
+                (w, h, has_alpha_channel(&img), detect_color_depth(&img))
+            }
+            Err(image_err) => {
+                log_eprintln!(
+                    "⚠️  Both ffprobe and image decode failed for AVIF {}: ffprobe={}, image={}",
+                    path.display(),
+                    probe_err,
+                    image_err
+                );
+                (0u32, 0u32, false, 8u8)
+            }
+        },
     };
 
     let is_lossless = match detect_compression(&DetectedFormat::AVIF, path) {
         Ok(ct) => ct == CompressionType::Lossless,
-        Err(_) => pixel_fallback_lossless(path),
+        Err(e) => {
+            log_eprintln!(
+                "⚠️  AVIF compression analysis failed for {}; falling back to pixel heuristic: {}",
+                path.display(),
+                e
+            );
+            pixel_fallback_lossless(path)
+        }
     };
 
     // Extract HDR metadata using ffprobe
