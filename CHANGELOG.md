@@ -1650,3 +1650,1454 @@ All changes below are since 8.7.0.
 
 ## [8.1.0] - 2026-02-15
 - Initial release of the `modern_format_boost` Rust rewrites.
+
+
+--- ARCHIVAL COMMIT HISTORY (Full Ledger) ---
+
+
+* 2025-12-10 | ba77a9d | chore: add project files
+* 2025-12-11 | d2b35a2 | feat: video tools default to --match-quality enabled, image tools default to disabled
+* 2025-12-11 | 870bf01 | feat: unified quality_matcher module for all tools
+* 2025-12-11 | 4982b00 | fix: match_quality only for lossy sources, lossless uses CRF 0
+* 2025-12-11 | d0a23fe | feat: enhanced quality_matcher with cutting-edge codec support
+* 2025-12-11 | 0f8293b | refactor: modularize skip logic with VVC/AV2 support
+* 2025-12-11 | b729a4c | fix: remove silent fallbacks in quality_matcher (Quality Standard)
+* 2025-12-11 | 77f068f | 🔥 Quality Matcher v3.0 - Data-Driven Precision
+* 2025-12-11 | 91f6f57 | 🔬 Add strict precision tests and edge case validation
+* 2025-12-11 | 934fb4d | 🔬 Image Quality Detector - Precision-Validated Auto Routing
+* 2025-12-11 | a9ed8c9 | feat(shared_utils): add video_quality_detector module with 56 precision tests
+* 2025-12-11 | fb5fd7a | feat(shared_utils): expand precision tests for ffprobe and conversion modules
+* 2025-12-11 | 1e59703 | feat(shared_utils): add comprehensive codec detection tests
+* 2025-12-11 | e1d3e61 | feat(shared_utils): add batch/report precision tests and README
+* 2025-12-11 | 93fd0d8 | feat(video_explorer): 模块化探索功能 + 精确度规范
+* 2025-12-11 | 497abd5 | feat(imgquality-hevc): add --explore flag for animated→video conversion
+* 2025-12-11 | 311063f | feat(shared_utils): enhance precision validation and SSIM/PSNR calculation
+* 2025-12-11 | e81e4e6 | fix(video_explorer): add scale filter for SSIM/PSNR calculation
+* 2025-12-11 | c6be1fc | feat(video_explorer): add VMAF support for quality validation v3.3
+* 2025-12-11 | f52e1f8 | v3.5: Enhanced quality matching with full field support
+* 2025-12-11 | d728727 | v3.6: Enhanced PNG lossy detection via IHDR chunk analysis
+* 2025-12-11 | 5e81555 | 🔥 v3.7: Enhanced PNG Quantization Detection with Referee System
+* 2025-12-11 | 34b1ba2 | 🔧 Code Quality Improvements
+* 2025-12-11 | 15a2a03 | feat: Complete drag & drop one-click processing system
+* 2025-12-11 | f3072d9 | fix: vidquality-hevc --match-quality requires explicit value
+* 2025-12-11 | 069dee7 | fix: 🛡️ Protect original files when quality validation fails (CRITICAL)
+* 2025-12-11 | bdf3beb | refactor: Code quality improvements + README update (v3.8)
+* 2025-12-11 | a1648f7 | perf: Code quality improvements and clippy fixes
+* 2025-12-11 | c833a4c | fix: Remove all clippy warnings
+* 2025-12-11 | 5724f23 | feat: Add XMP metadata merge before format conversion v3.9
+* 2025-12-11 | a3fccfc | cleanup: Remove accidentally committed test file
+* 2025-12-11 | 7ca2d6d | fix: resolve clippy warnings and type errors
+* 2025-12-11 | 163d6d1 | refactor: implement real functionality, remove TODO placeholders
+* 2025-12-11 | aefdf1c | fix: resolve remaining clippy warnings in imgquality_API
+* 2025-12-11 | 40e9b0a | refactor: introduce AutoConvertConfig struct to fix too_many_arguments warning
+* 2025-12-12 | dfe8438 | fix: XMP 合并时保留媒体文件的原始时间戳
+* 2025-12-12 | 2416812 | fix: 修复 metadata/timestamps 保留顺序问题
+* 2025-12-12 | b12d126 | 🍎 苹果兼容模式裁判测试完善 + H.264 精度验证 + 编译警告修复
+* 2025-12-12 | b56429b | feat: 断点续传 + 原子操作保护
+* 2025-12-12 | 555c18e | feat: 新增测试模式 v4.2
+* 2025-12-12 | a3451cb | fix: 测试模式修复 + 增强边缘案例采样
+* 2025-12-12 | a8a751b | fix: 修复测试模式采样问题
+* 2025-12-12 | 2b09971 | feat: 🍎 Apple 兼容模式增强 - 现代动态图片智能转换
+* 2025-12-12 | 5335a3a | refactor: rename vidquality_API → vidquality_av1, imgquality_API → imgquality_av1
+* 2025-12-12 | a77a90f | feat(test-mode): v4.3 随机采样 + 多样性覆盖
+* 2025-12-12 | f8afdf7 | fix: 使用 Homebrew bash 5.x 支持 local -n 特性
+* 2025-12-12 | 9728979 | chore: 使用 Homebrew bash 5.x 替代系统 bash 3.x
+* 2025-12-12 | 78bffd6 | feat: 新增 XMP Merger Rust 模块 - 可靠的元数据合并
+* 2025-12-12 | b7f4554 | feat: XMP Merger v2.0 - 增强可靠性
+* 2025-12-12 | 2af2a2d | feat: Expand XMP merger file type support and matching strategies
+* 2025-12-12 | 3586534 | fix: Add .jpe, .jfif, .jif JPEG variants to supported extensions
+* 2025-12-12 | 00f6142 | refactor: switch XMP merger from whitelist to blacklist approach
+* 2025-12-12 | e8b67c4 | fix: always restore original media timestamp after XMP merge
+* 2025-12-12 | 4a8152d | feat: add checkpoint/resume support to XMP merger
+* 2025-12-12 | 897232f | fix: improve lock file detection to avoid false positives
+* 2025-12-12 | 3f7a213 | fix: add WebP fallback for cjxl 'Getting pixel data failed' error
+* 2025-12-12 | 28a1d26 | refactor: proactive input preprocessing for cjxl instead of fallback
+* 2025-12-12 | 918ee33 | refactor: simplify drag_and_drop_processor v5.0
+* 2025-12-12 | 4c4346a | fix: correct CLI argument from --output-dir to --output
+* 2025-12-12 | 1aa9dcb | fix: add ImageMagick fallback for cjxl 'Getting pixel data failed' errors
+* 2025-12-12 | 27d32ee | enhance: add comprehensive transparency for fallback mechanisms
+* 2025-12-12 | 0884fc0 | 修复视频处理中'Output exists'被错误计为失败的问题
+* 2025-12-12 | 1f6316e | 🔥 根源修复：Output exists 返回跳过状态而非错误
+* 2025-12-12 | b16ae55 | 🔬 v3.5: 增强裁判机制 (Referee Mechanism Enhancement)
+* 2025-12-12 | 4703967 | 🎯 v3.6: 三阶段高精度搜索算法 (±0.5 CRF)
+* 2025-12-12 | 6dc3ca5 | v3.7: Dynamic threshold adjustment for low-quality sources
+* 2025-12-13 | 61bdf5b | v3.8: Intelligent threshold system - eliminate hardcoding
+* 2025-12-13 | cf5f5b6 | v3.9: Fix --explore --match-quality to MATCH source quality, not minimize size
+* 2025-12-13 | 175f44b | v4.0: 激进精度追求 - 无限逼近 SSIM=1.0
+* 2025-12-13 | 2b1a626 | v4.1: 三重交叉验证 + 完整透明度
+* 2025-12-13 | c3ca9f3 | v4.2: 实时日志输出 - 解决长时间编码终端冻结问题
+* 2025-12-13 | 795e319 | v4.3: 优化搜索策略 - 大幅减少无意义迭代
+* 2025-12-13 | 53beb43 | v4.4: 智能质量匹配 - 根本性设计改进
+* 2025-12-13 | 168ef3c | v4.4: 修正术语 - 移除误导性的 AI 描述
+* 2025-12-13 | 06339f4 | v4.5: 精确质量匹配 - 恢复正确语义 + 高效搜索
+* 2025-12-13 | 121a4b8 | v4.5: 新增 --compress flag - 精确质量匹配 + 压缩
+* 2025-12-13 | 2da7915 | v4.5: 添加单元测试 + 实际测试验证
+* 2025-12-13 | a32b126 | 🔥 v4.6: Flag 组合模块化 + 编译警告修复
+* 2025-12-13 | dcb2ed1 | 🔥 v4.6: 精度提升到 ±0.1 + 算法深度复盘文档
+* 2025-12-13 | 91819a7 | 🔥 v4.7: Bug 修复 + 术语澄清
+* 2025-12-13 | e3862a1 | 🔥 v4.8: 性能优化 + 缓存机制
+* 2025-12-13 | 18ce9c3 | 🔥 v4.8: 性能优化 + CPU flag + README 更新
+* 2025-12-13 | 6c73fd3 | 🔧 v4.8: 代码统一 - 消除重复实现
+* 2025-12-13 | 9cac2d4 | v4.12: Add 0.1 fine-tune phase to explore_precise_quality_match_with_compression
+* 2025-12-13 | 768b5b0 | v4.12: Bidirectional 0.1 fine-tune search
+* 2025-12-13 | 387ef8c | v4.13: Smart early termination with variance & change rate detection
+* 2025-12-13 | 4efdb57 | v4.13: Fix doc test + Update README (EN/CN)
+* 2025-12-13 | 118ddaa | v5.1: Improve UX + Add v4.13 tests
+* 2025-12-13 | e875faf | v5.1: Fix GIF conversion + Real animated media tests
+* 2025-12-13 | cb1bc06 | v5.1: Verified animated image → video conversion
+* 2025-12-13 | b396725 | 🔥 v5.0: 智能 GPU 控制 + 自动 fallback
+* 2025-12-13 | 96a2372 | 🐛 修复：min_crf 能压缩时跳过精细调整阶段的问题
+* 2025-12-13 | cd08512 | 🐛 修复：Phase 3 必须用 CPU 重新编码最终结果
+* 2025-12-13 | 4429e87 | 🔥 v5.1: GPU 粗略搜索 + CPU 精细搜索智能化处理
+* 2025-12-13 | aa067df | v5.1.1: 响亮报告 GPU 粗略搜索和 Fallback - GPU 粗略搜索阶段明确显示 --cpu flag 被忽略 - Fallback 情况都有醒目的框框提示
+* 2025-12-13 | 664934d | v5.1.2: 从双击 app 脚本中移除 --cpu flag - 移除 drag_and_drop_processor.sh 中的 --cpu flag - 撤回之前的忽略 --cpu flag 报告（没有意义） - 保留 Fallback 响亮报告
+* 2025-12-13 | ccd0145 | v5.1.3: 修复 - 实际调用新的 GPU+CPU 智能探索函数 - vidquality_hevc 和 imgquality_hevc 的 PreciseQualityWithCompress 模式现在使用 explore_hevc_with_gpu_coarse - 之前的代码仍然调用旧的 explore_precise_quality_match_with_compression_gpu
+* 2025-12-13 | 855f26c | v5.1.4: 修复 GPU 粗略搜索性能和日志重复问题
+* 2025-12-13 | 1dbabf1 | 🔥 v5.2: Fix Stage naming + Add 0.1 fine-tuning when min_crf compresses
+* 2025-12-13 | 5a508fb | 🔥 v5.2: Fix GPU range design - GPU only narrows upper bound, not lower
+* 2025-12-13 | 90725a6 | 🔥 v5.2: Fix Stage B upward search - update best_boundary when finding lower CRF
+* 2025-12-14 | 71aeaa0 | Fix GPU/CPU CRF mapping display
+* 2025-12-14 | a73e808 | v5.3: Improve GPU+CPU search accuracy
+* 2025-12-14 | 2da6b7d | v5.3: Smart short video handling + README update
+* 2025-12-14 | 20408ff | v5.3: Extract hardcoded values to constants + Simplify README
+* 2025-12-14 | 955b37d | v5.4: GPU three-stage fine-tuning + CPU upward search
+* 2025-12-14 | 3da73aa | v5.5: Fix VideoToolbox q:v mapping (1=lowest, 100=highest)
+* 2025-12-14 | 83720d3 | v5.6: GPU SSIM validation + dual fine-tuning
+* 2025-12-14 | f1b00b4 | v5.6.1: Extract GPU iteration limits to constants + README update
+* 2025-12-14 | 7828422 | v5.7: Extend GPU CRF range for higher quality search
+* 2025-12-14 | bc788f8 | 🔥 v5.18: Add cache warmup optimization + fix v5.17 performance protection integration
+* 2025-12-14 | 5d30664 | 🐛 Fix: --explore --compress now correctly reports error
+* 2025-12-14 | 6e8bae0 | 🎨 v5.19: Add modern UI/UX module
+* 2025-12-14 | 67731fe | 🔥 v5.20: Add RealtimeExploreProgress with background thread
+* 2025-12-14 | 70724cf | 🔥 v5.21: Fix early termination threshold + real bar progress
+* 2025-12-14 | 3eaf05c | v5.25: Progress bar + exploration improvements
+* 2025-12-14 | 1d3de30 | 🚀 v5.33: 设计效率优化 + 进度条稳定性改进
+* 2025-12-14 | 5011cba | 🚀 v5.34: 进度条重构 - 基于迭代计数（GPU部分已修复）
+* 2025-12-14 | 5e2aceb | 🔥 v5.34: 完全重构进度条系统 - 从CRF映射→迭代计数
+* 2025-12-14 | 0cd30d6 | 🔥 v5.35: 修复进度条冻结 - 禁用GPU并行探测阻塞
+* 2025-12-14 | dda3638 | 🔥 v5.35: 防止键盘干扰 - 禁用终端echo
+* 2025-12-14 | 39d4c0f | 🔥 v5.35: 脚本强制重新编译 - 确保使用最新代码修复
+* 2025-12-14 | 4943392 | 🔥 v5.35: 改进终端控制 - 禁用icanon和输入缓冲
+* 2025-12-14 | 33392f5 | 🔥 v5.35: 三重修复 - 解决进度条冻结+终端崩溃+慢速编码
+* 2025-12-14 | 081c214 | 🔥 v5.35: 最终方案 - 在shell层面禁止键盘输入
+* 2025-12-14 | 8119b8f | 🔥 v5.35: 防止刷屏 - 静默模式禁用GPU搜索详细日志
+* 2025-12-14 | e8efcea | 🔥 v5.35: 彻底简化进度显示 - 移除旧进度条混乱
+* 2025-12-14 | c025ca5 | 🔥 v5.35: 最终方案 - 关闭stdin文件描述符
+* 2025-12-14 | c0825a9 | 🔥 v5.36: 多层键盘交互防护 - 彻底阻止终端输入干扰
+* 2025-12-14 | 7ea7a59 | 🔥 v5.38: 完全修复键盘输入污染 - 实现 + 验证成功
+* 2025-12-14 | 34dae4b | 🔥 v5.39: 键盘输入保护 - 移除冻结 hidden() 模式，改用 100Hz 刷新 + 强化终端设置
+* 2025-12-14 | d8abf9f | 🔥 v5.40: 修复编译警告 + 改进构建脚本
+* 2025-12-14 | e988c8a | 🔥 v5.41: 激进的键盘输入防护 - 多重防线完全禁用终端输入
+* 2025-12-14 | 7bf3ff1 | 🔥 v5.42: 完全修复键盘输入污染 - 实时进度更新
+* 2025-12-14 | e929be8 | 🔥 v5.43: GPU编码超时保护 + I/O优化 - 完全修复Phase 1挂起
+* 2025-12-14 | 7327fad | 🔥 v5.44: 简化超时逻辑 - 仅保留 12 小时底线超时，响亮 Fallback
+* 2025-12-14 | aca5365 | 🔥 v5.45: 智能搜索算法 - 收益递减终止 + 压缩率修复
+* 2025-12-14 | 30bf7dd | 🔥 v5.46: 修复 GPU 搜索方向 - 使用 initial_crf 作为起点
+* 2025-12-14 | 162e0aa | 🔥 v5.47: 完全重写 GPU Stage 1 搜索 - 双向智能边界探测
+* 2025-12-14 | 8ecdf4d | 🔥 v5.48: 简化 CPU 搜索 - 仅在 GPU 边界附近微调
+* 2025-12-14 | 132b1e4 | 🔥 v5.49: 增加 GPU 采样时长 - 提高映射精度
+* 2025-12-14 | 082093b | 🔥 v5.50: GPU 搜索目标改为 SSIM 上限 + 10分钟采样
+* 2025-12-14 | 7b674d4 | 🔥 v5.51: 简化 GPU Stage 3 搜索逻辑 - 0.5 步长 + 最多 3 次尝试
+* 2025-12-14 | 710757d | 🔥 v5.52: 完整重构 GPU 搜索 - 智能采样 + SSIM+大小组合决策 + 收益递减
+* 2025-12-14 | 5074dd1 | 🔥 v5.53: 修复 GPU 迭代限制 + CPU 采样编码
+* 2025-12-14 | 72d98fb | 🔥 v5.54: 修复 CPU 采样导致最终输出不完整的严重 BUG
+* 2025-12-14 | 2aa6c88 | 📦 v5.54 稳定版本备份 - 准备开始柔和改进
+* 2025-12-14 | 6ee65bc | 🔥 v5.55: 恢复三阶段结构 + 智能提前终止
+* 2025-12-15 | c57f03c | 🔥 v5.55: CPU 精度调整 0.1 → 0.25（速度提升 2-3 倍）
+* 2025-12-15 | 548d52f | v5.56: 添加预检查(BPP分析)和GPU→CPU自适应校准
+* 2025-12-15 | 4f33660 | v5.57: 添加置信度评分系统
+* 2025-12-15 | 3dff3cd | v5.58: 最终编码实时进度显示
+* 2025-12-15 | dc32aee | v5.59: 可压缩空间检测 + 动态精度选择
+* 2025-12-15 | fedd7e4 | v5.60: 保守智能跳过策略 - 连续3个CRF大小变化<0.1%才跳过
+* 2025-12-15 | 031f264 | v5.60: CPU全片编码策略 - 100%准确度，移除采样误差
+* 2025-12-15 | eddaf16 | v5.61: 动态自校准GPU→CPU映射系统 - 通过实测建立精确映射
+* 2025-12-15 | 5182b82 | v5.62: 双向验证+压缩保证 - 修复搜索方向，确保最高SSIM且能压缩
+* 2025-12-15 | d9b094e | v5.63: 双向验证 + 压缩保证
+* 2025-12-15 | b8bfc06 | v5.64: GPU 多段采样策略
+* 2025-12-15 | db0c427 | v5.65: GPU 精细搜索后 CPU 窄范围验证
+* 2025-12-15 | 5f70d27 | v5.66: GPU 质量天花板概念 + 分层接力策略基础
+* 2025-12-15 | 239b356 | v5.67: 边际效益递减算法 + 颜色UI改进
+* 2025-12-15 | 2ac555b | v5.67.1: 全面英语化输出日志
+* 2025-12-15 | f1f7120 | 🔥 v5.70: Smart Build System - 智能编译系统
+* 2025-12-15 | dc49402 | feat(precheck): v5.71 - Fix legacy codec handling and smart FPS detection
+* 2025-12-15 | d17a724 | v5.72: Add robustness improvements - LRU cache, unified error handling, three-phase search, detailed progress
+* 2025-12-15 | e9960eb | fix(v5.72): Correct GPU+CPU dual refinement strategy
+* 2025-12-15 | afb21a8 | v5.74: 备份 - 开始透明度改进 spec
+* 2025-12-15 | 116b8f3 | v5.74: 透明度改进 - PSNR→SSIM映射 + Preset一致性 + Mock测试
+* 2025-12-15 | f53adb1 | feat(gpu): Implement GPU quality ceiling detection v5.80
+* 2025-12-15 | aef11f8 | fix(gpu): Clarify compression boundary vs quality ceiling
+* 2025-12-15 | 0133a29 | feat(v5.76): auto-merge XMP sidecar files during conversion
+* 2025-12-15 | 1bf0312 | fix(cache): Unify cache key mechanism to prevent cache misses
+* 2025-12-15 | e230c25 | feat(progress): Add unified println() method for log output
+* 2025-12-15 | c0e5e25 | feat(vmaf): Add VMAF verification for short videos (≤5min)
+* 2025-12-15 | a058949 | v5.75: VMAF-SSIM synergy - 探索用SSIM，验证用VMAF
+* 2025-12-16 | 0e59949 | v5.81: Adaptive multiplicative CPU search - 67% fewer iterations
+* 2025-12-16 | b84fe45 | v5.82: Smart adaptive CPU search with target compression
+* 2025-12-16 | 0505723 | v5.83: High quality target - SSIM threshold 0.995
+* 2025-12-16 | 8ff02f1 | feat(cpu): CPU步进算法v5.87 - 自适应大步长+边际效益+GPU对比
+* 2025-12-16 | 263bbf3 | 🔥 v5.87: VMAF与SSIM协同改进 - 5分钟阈值
+* 2025-12-16 | e356146 | 🔥 v5.88: 进度条统一 - DetailedCoarseProgressBar
+* 2025-12-16 | f827da6 | 🔥 v5.89: CPU步进算法深入改进 - 递进式步长+过头回退
+* 2025-12-16 | 8019089 | 🔥 v5.90: CPU自适应动态步进 - 数学公式驱动（用户建议）
+* 2025-12-16 | d2e10c7 | 🔥 v5.91: 强制过头策略 - 必须找到真正边界
+* 2025-12-16 | 2f7a6ae | v5.93: 智能撞墙算法 - 质量墙检测
+* 2025-12-16 | be4257c | v5.94: Fix VMAF quality grading thresholds + cleanup warnings
+* 2025-12-16 | bc4f88a | v5.95: 激进撞墙算法 - 扩大CPU搜索范围(3→15 CRF)
+* 2025-12-16 | 701a198 | v5.97: Ultra-aggressive CPU stepping strategy
+* 2025-12-16 | 535867f | v5.98: Curve model aggressive stepping - exponential decay (step × 0.4^n), max 4 wall hits, 87.5% iteration reduction
+* 2025-12-16 | 5a6f32b | v5.99: Curve model + fine tuning phase - switch to 0.1 step when curve_step < 1.0
+* 2025-12-16 | f842c35 | v6.0: GPU curve model strategy - aggressive wall collision + fine backtrack in GPU phase
+* 2025-12-16 | 5fb76c2 | v6.1: Boundary fine tuning - auto switch to 0.1 step when reaching min_crf boundary
+* 2025-12-16 | 2af40e4 | backup: before Strategy pattern refactoring v6.3
+* 2025-12-16 | 4e0f883 | feat(v6.3): Strategy pattern for ExploreMode - SSIM/Progress unified
+* 2025-12-16 | 6265b26 | test(v6.3): add property-based tests for Strategy pattern
+* 2025-12-16 | 7c9db2e | v6.4.4: Code quality improvements - Strategy helper methods (build_result, binary_search_compress, binary_search_quality, log_final_result) reduce ~40% duplicate code - Enhanced Rustdoc comments with examples for public APIs - SsimResult helpers: is_actual(), is_predicted() methods - Boundary tests for metadata margin edge cases - All 505 tests pass
+* 2025-12-16 | 206b765 | v6.4.5: Performance & error handling improvements
+* 2025-12-16 | 40eaeb6 | v6.4.6: Technical debt cleanup
+* 2025-12-16 | a197427 | v6.5.0: Unified CrfCache refactor - Replace HashMap with CrfCache in gpu_accel.rs
+* 2025-12-16 | 333b9ad | v6.6.0: Complete cache unification - All HashMap migrated to CrfCache
+* 2025-12-16 | a62821d | spec: code-quality-v6.4.6 requirements and design
+* 2025-12-16 | f9c7759 | feat(v6.4.7): 代码质量修复 - CrfCache精度升级/GPU临时文件扩展名/FFmpeg进程管理
+* 2025-12-16 | e423454 | feat(v6.4.8): 苹果兼容模式使用 MOV 容器格式
+* 2025-12-16 | 0e7733b | Revert "feat(v6.4.8): 苹果兼容模式使用 MOV 容器格式"
+* 2025-12-16 | ced5135 | feat(v6.4.8): --apple-compat 模式使用 MOV 容器格式
+* 2025-12-16 | 44659b6 | feat(v6.4.8): vidquality_hevc 也支持 --apple-compat MOV 输出
+* 2025-12-16 | 3bfa99c | feat(v6.4.9): 代码质量与安全性修复
+* 2025-12-16 | 21f71ea | fix: doctest ignore 标记修复
+* 2025-12-17 | e49aab9 | v6.5.1: 取消硬上限机制，改为保底机制
+* 2025-12-17 | 387506e | fix(v6.6.1): 修复 CPU Fine-Tune 阶段长视频卡死问题
+* 2025-12-18 | 2199bea | 🔥 v6.7: Container Overhead Fix - Pure Media Comparison
+* 2025-12-18 | eed101b | 🔧 v6.8: Fix FPS parsing - correct ffprobe field order
+* 2025-12-18 | 19fd831 | v6.9: Adaptive zero-gains + VP9 duration detection
+* 2025-12-18 | 28f7855 | fix: suppress dead_code warnings for serde fields
+* 2025-12-18 | 0787f1e | 🔥 v7.0: Fix test quality issues - eliminate self-proving assertions
+* 2025-12-18 | 23a0dbd | feat(v7.1): Add type-safe wrappers for CRF, SSIM, FileSize, IterationGuard
+* 2025-12-18 | 9334d90 | v7.1.1: Gradual migration to type-safe wrappers
+* 2025-12-18 | 9058806 | v7.1.2: Add type-safe helpers to gpu_accel.rs
+* 2025-12-18 | eead475 | v7.1.3: Add type-safe helpers to more modules
+* 2025-12-18 | c9224d1 | fix(v6.8): CRF超出范围导致编码失败 + dead_code警告
+* 2025-12-18 | 042459d | v6.8: Fix evaluation consistency - use pure video stream comparison
+* 2025-12-19 | 213c007 | v6.9.1: Smart audio transcoding + cleanup
+* 2025-12-19 | 57050de | chore: move smart_build.sh to scripts/, update drag_and_drop path
+* 2025-12-20 | a276503 | chore: auto-sync changes
+* 2025-12-20 | 76ffa06 | fix: VP8/VP9压缩失败和GPU搜索范围问题
+* 2025-12-20 | 6e1ba1b | fix: MS-SSIM功能修复
+* 2025-12-20 | 32e0a21 | feat(v6.9): MS-SSIM as target threshold (not just verification)
+* 2025-12-20 | 9b1421a | fix(v6.9.1): Clamp MS-SSIM to valid range [0, 1]
+* 2025-12-20 | 8817828 | fix(v6.9.2): Fix MS-SSIM JSON parsing - use pooled_metrics mean
+* 2025-12-20 | 5062efc | feat(v6.9.3): Add SSIM All comparison and chroma loss detection
+* 2025-12-20 | c9f8f67 | feat(v6.9.4): Use SSIM All as final quality threshold (includes chroma)
+* 2025-12-20 | a8866db | fix(v6.9.5): Use dynamic SSIM threshold from explore phase in Phase 3
+* 2025-12-20 | c7979c2 | feat(v6.9.6): MS-SSIM as primary quality judgment
+* 2025-12-20 | 3ed3d44 | refactor(v6.9.6): Use SSIM All exclusively, remove MS-SSIM
+* 2025-12-20 | a762879 | feat(v6.9.6): Implement 3-channel MS-SSIM (Y+U+V) for accurate quality verification
+* 2025-12-20 | dbf16b8 | feat(v6.9.7): Enhance fallback warnings and add MS-SSIM vs SSIM test
+* 2025-12-20 | 1d7a24a | v6.9.8: Fusion quality score (0.6×MS-SSIM + 0.4×SSIM_All)
+* 2025-12-20 | 414879b | v6.9.9: Use SSIM All for non-MS-SSIM verification
+* 2025-12-25 | e889fc6 | fix(xmp): treat ExifTool [minor] warnings as success for JXL container wrapping
+* 2025-12-25 | 3c3947d | fix(imgquality): correct error message when video stream compression fails
+* 2025-12-25 | 674486f | fix(xmp): merge XMP sidecars for skipped files
+* 2026-01-16 | 6ba3acf | v6.9.12: 格式支持增强 + 验证机制
+* 2026-01-16 | 20585b3 | v6.9.13: 无遗漏设计 - 处理全部文件
+* 2026-01-16 | 27d80c1 | v6.9.13: 无遗漏设计 - 核心实现移至Rust
+* 2026-01-16 | 3404065 | v6.9.14: 无遗漏设计 - 失败文件回退复制
+* 2026-01-16 | c72a8cc | v6.9.15: 无遗漏设计 - 不支持文件的XMP处理
+* 2026-01-16 | d508a65 | v6.9.16: XMP合并优先策略
+* 2026-01-17 | a72b3cd | fix: 添加转换差异分析和修复脚本
+* 2026-01-18 | 24bcb98 | 🔥 v6.9.17: Critical CPU Encoding & GPU Fallback Fixes
+* 2026-01-18 | 813b20e | 🔥 v7.2: Quality Verification Fix - Standalone VMAF Integration
+* 2026-01-18 | c8719fb | 🔧 Fix vmaf model parameter - remove unsupported version flag
+* 2026-01-18 | 4a1cb5a | ✅ Final vmaf fix - correct feature parameter format
+* 2026-01-18 | ab0faf1 | 📝 Document: vmaf float_ms_ssim includes chroma information
+* 2026-01-18 | 0bab125 | 🔬 Critical Finding: vmaf float_ms_ssim is Y-channel only
+* 2026-01-18 | 14c6b7f | 🔧 Add FFmpeg libvmaf installation scripts
+* 2026-01-18 | ac03c29 | 🔧 Add FFmpeg libvmaf installation scripts
+* 2026-01-18 | a922ef0 | 🔄 Switch to ffmpeg libvmaf priority (now installed)
+* 2026-01-18 | aa1150d | 验证ffmpeg libvmaf多通道支持 - 确认MS-SSIM为亮度通道算法
+* 2026-01-18 | 98619db | v7.3: 最终验证多层fallback设计科学性
+* 2026-01-18 | 7d55c55 | 解释Layer 4为何用SSIM Y而非PSNR
+* 2026-01-18 | 19b7810 | 日志分析报告 - 发现5个关键问题
+* 2026-01-18 | eb9c116 | v7.4: 修复日志分析发现的问题1/3/4/5
+* 2026-01-18 | 4d5c274 | v7.4.1: 改进PNG→JXL管道 + 修复元数据保留
+* 2026-01-18 | 326c72f | 重构: 修复 VMAF/MS-SSIM 常量和测试，模块化重复代码
+* 2026-01-18 | 30bdeb0 | 修复: 移除脚本中不存在的 --verbose 参数
+* 2026-01-18 | 0bb4cf7 | 功能: 添加 verbose 模式支持
+* 2026-01-18 | 3e68fc1 | 功能: 保留目录结构 (WIP - imgquality-hevc)
+* 2026-01-18 | 4e6e5b8 | 修复: 完成所有工具的 base_dir 支持
+* 2026-01-18 | 0b4a310 | 文档: 目录结构保留功能实现状态
+* 2026-01-18 | cbdde68 | 修复: 双击脚本正确传递 --recursive 参数
+* 2026-01-18 | d253492 | fix: 确认目录结构保留功能正常工作
+* 2026-01-18 | 30faafe | fix: 清理过时编译产物并修正双击脚本路径
+* 2026-01-18 | caf6a42 | docs: 添加元数据保留功能文档
+* 2026-01-18 | 6102f49 | fix: 修复跳过文件复制时不保留目录结构和时间戳的严重BUG
+* 2026-01-18 | e203738 | fix: 确保复制文件时保留元数据和合并 XMP
+* 2026-01-18 | ba7c9de | 🐛 v7.3.1: Fix directory structure in ALL fallback scenarios
+* 2026-01-18 | cecaea9 | ✨ v7.3.2: Modular file copier + Progress bar fix
+* 2026-01-18 | 5e142e6 | 🔧 v7.3.3: Smart build system + Binary verification
+* 2026-01-18 | 88d607f | 🐛 v7.3.5: Force rebuild + structure verification
+* 2026-01-18 | c4ca5d0 | 🚨 v7.4.1: CRITICAL FIX - Use smart_file_copier module
+* 2026-01-18 | bc98866 | 🔧 Export preserve_directory_metadata
+* 2026-01-18 | cad51c8 | 🚀 v7.4.2: Complete smart_file_copier integration
+* 2026-01-18 | 08bee89 | 📝 v7.4 Complete - Directory structure fix
+* 2026-01-18 | a48bf4a | 🔧 v7.4.3: Apply smart_copier to vidquality_hevc
+* 2026-01-18 | dc46dbf | ✅ v7.4.3: All 4 locations use smart_copier
+* 2026-01-18 | 40418c3 | 🔧 v7.4.4: 修复进度条混乱 + smart_build.sh bash 3.x 兼容
+* 2026-01-18 | 2fa2783 | 🔧 v7.4.5: 彻底修复文件夹结构BUG - 所有复制点使用 smart_file_copier
+* 2026-01-18 | 47bf3ff | 🔧 v7.4.6: 统一四个工具的目录元数据保留
+* 2026-01-18 | 9d0099d | 🔧 v7.4.7: 无遗漏设计 - 所有文件类型保留元数据
+* 2026-01-18 | 4156d84 | 🔧 v7.4.8: Fix smart_build.sh script - set -e + ((var++)) issue
+* 2026-01-18 | 2f15189 | ✅ v7.4.8: Complete metadata preservation audit & fixes
+* 2026-01-18 | b180997 | v7.4.9: Output directory timestamp preservation
+* 2026-01-18 | 33a4e58 | v7.4.9: FIXED - Output directory timestamp preservation
+* 2026-01-18 | 134f6d5 | v7.4.9: FINAL FIX - Directory timestamp preservation after rsync
+* 2026-01-18 | bcd0d8a | v7.5.0: File Processing Optimization + Build System Enhancement
+* 2026-01-20 | 46c50fa | 🔴 CRITICAL FIX v7.5.1: MS-SSIM freeze for long videos
+* 2026-01-20 | efc4d66 | docs: Add v7.5.1 verification script and summary
+* 2026-01-20 | 4f85874 | test: Add v7.5.1 freeze fix test scripts and manual test guide
+* 2026-01-20 | e7e3644 | test: Add v7.5.1 freeze fix test scripts and manual test guide
+* 2026-01-20 | 27fed3e | feat(v7.6.0): MS-SSIM性能优化 - 10倍速度提升
+* 2026-01-20 | 7d9893b | feat(v7.6.0): MS-SSIM性能优化 - 10倍速度提升
+* 2026-01-20 | fddffdc | 🔥 v7.7: Universal Heartbeat System - Phase 1-3 Complete
+* 2026-01-20 | 495a139 | 🔥 v7.7: Universal Heartbeat System - Phase 1-3 Complete
+* 2026-01-20 | 82ac353 | 🔥 v7.7: Universal Heartbeat - Phase 2 Complete (Tasks 7-9)
+* 2026-01-20 | 04faccb | 🔥 v7.7: Universal Heartbeat - Phase 2 Complete (Tasks 7-9)
+* 2026-01-20 | 02d4370 | 🔥 v7.7: Universal Heartbeat - Phase 3 Complete (Tasks 10-12)
+* 2026-01-20 | e39a5fa | 🔥 v7.7: Universal Heartbeat - Phase 3 Complete (Tasks 10-12)
+* 2026-01-20 | f49d23e | chore: run rustfmt on entire project
+* 2026-01-20 | c0eb640 | chore: run rustfmt on entire project
+* 2026-01-21 | ab10aed | feat: v7.8 quality improvements - unified logging, modular architecture, zero warnings
+* 2026-01-21 | d02a07e | feat: v7.8 quality improvements - unified logging, modular architecture, zero warnings
+* 2026-01-21 | d39105f | 🔧 v7.8: 完成容差机制和GIF修复验证
+* 2026-01-21 | b91b98c | 🔧 v7.8: 完成容差机制和GIF修复验证
+* 2026-01-21 | 2747584 | 🎯 v7.8: 优化容差为1%，符合精确控制理念
+* 2026-01-21 | 8bde7fc | 🎯 v7.8: 优化容差为1%，符合精确控制理念
+* 2026-01-21 | 4d9e94f | 🔧 v7.8: 修复关键统计BUG - JXL转换应用1%容差机制
+* 2026-01-21 | 1ab96be | 🔧 v7.8: 修复关键统计BUG - JXL转换应用1%容差机制
+* 2026-01-21 | 84b34f2 | 🔧 v7.8.1: Fix 3 critical BUGs with safe testing
+* 2026-01-21 | 04ba240 | 🔧 v7.8.1: Fix 3 critical BUGs with safe testing
+* 2026-01-21 | e27b5a8 | 🔧 Fix CJXL large image encoding failure (v7.8.2)
+* 2026-01-21 | e4de579 | 🔧 Fix CJXL large image encoding failure (v7.8.2)
+* 2026-01-28 | 9eb4733 | fix(scripts): prevent uppercase media files from being copied as non-media
+* 2026-01-28 | 14e915f | fix(scripts): prevent uppercase media files from being copied as non-media
+* 2026-01-28 | 51d9ece | fix: comprehensive fix for case-insensitive file extension handling across scripts and tools
+* 2026-01-28 | f41eff6 | fix: comprehensive fix for case-insensitive file extension handling across scripts and tools
+* 2026-01-31 | 64d1b15 | Backup before Anglicization
+* 2026-01-31 | 3c91c6d | Backup before Anglicization
+* 2026-01-31 | 20a4f68 | Anglicize project: Translate UI, logs, errors and docs to English
+* 2026-01-31 | 07d9abf | Anglicize project: Translate UI, logs, errors and docs to English
+* 2026-01-31 | 471bc2f | GIF Fix 🐛: proper block parsing; Performance ⚡: Smart thread manager (75% core usage); Rsync 📦: v3.4.1 support; Stability 🛡️: 512MB limit & empty check; Security ✅: 46 command injection patches & case-sensitivity verification
+* 2026-01-31 | eafece3 | GIF Fix 🐛: proper block parsing; Performance ⚡: Smart thread manager (75% core usage); Rsync 📦: v3.4.1 support; Stability 🛡️: 512MB limit & empty check; Security ✅: 46 command injection patches & case-sensitivity verification
+* 2026-01-31 | 48d1fa7 | fix(conversion,cjxl): reorder cjxl arguments to place flags before files
+* 2026-01-31 | 9288b13 | fix(conversion,cjxl): reorder cjxl arguments to place flags before files
+* 2026-01-31 | c6c0e0f | fix(tooling): remove unsupported '--' delimiter from ffmpeg, sips, dwebp calls
+* 2026-01-31 | 54f4623 | fix(tooling): remove unsupported '--' delimiter from ffmpeg, sips, dwebp calls
+* 2026-01-31 | ec5db41 | fix(security): implement strict safe_path_arg wrapper for ffmpeg inputs
+* 2026-01-31 | 018c166 | fix(security): implement strict safe_path_arg wrapper for ffmpeg inputs
+* 2026-01-31 | 454dc0a | chore: update dependencies and apply security/functional fixes
+* 2026-01-31 | adcedc6 | chore: update dependencies and apply security/functional fixes
+* 2026-01-31 | f9cfca2 | Update all dependencies to latest versions
+* 2026-01-31 | a792751 | Update all dependencies to latest versions
+* 2026-01-31 | 431219d | Fix unused import warning in path_safety.rs
+* 2026-01-31 | e46cb6a | Fix unused import warning in path_safety.rs
+* 2026-01-31 | 1019377 | Fix clippy warnings: doc formatting and io error creation
+* 2026-01-31 | 6492e2e | Fix clippy warnings: doc formatting and io error creation
+* 2026-02-01 | cdf27e8 | fix: resolve temp file race conditions using tempfile crate (v7.9.2)
+* 2026-02-01 | 08f20f0 | fix: resolve temp file race conditions using tempfile crate (v7.9.2)
+* 2026-02-01 | 88a4235 | fix(security): comprehensive temp file safety audit and refactor (v7.9.2)
+* 2026-02-01 | b6dfb6a | fix(security): comprehensive temp file safety audit and refactor (v7.9.2)
+* 2026-02-01 | 88bb7ae | fix(security): replace unreliable extension checks with robust ffprobe content detection (v7.9.3)
+* 2026-02-01 | 765ac2f | fix(security): replace unreliable extension checks with robust ffprobe content detection (v7.9.3)
+* 2026-02-01 | 15d0a55 | feat(ux): improve logging for fallback copy on conversion failure (v7.9.4)
+* 2026-02-01 | 788a600 | feat(ux): improve logging for fallback copy on conversion failure (v7.9.4)
+* 2026-02-01 | 83e7e1b | Update files
+* 2026-02-01 | 353bd1e | Update files
+* 2026-02-01 | 720eb30 | 🛠️ 综合修复与性能优化 / Comprehensive Fixes & Enhancements
+* 2026-02-01 | 1610981 | 🛠️ 综合修复与性能优化 / Comprehensive Fixes & Enhancements
+* 2026-02-05 | 2d46830 | feat: content-aware format detection and remediation tools for PNG/JPEG mismatch
+* 2026-02-05 | b5e8782 | feat: content-aware format detection and remediation tools for PNG/JPEG mismatch
+* 2026-02-05 | 58d4124 | v8.0.0: Fix directory structure preservation and enhance content-aware detection
+* 2026-02-05 | 7c6bc1d | v8.0.0: Fix directory structure preservation and enhance content-aware detection
+* 2026-02-05 | 8a6169e | Cleanup: Remove temporary analysis logs and test artifacts after v8.0.0 release
+* 2026-02-05 | 244461c | Cleanup: Remove temporary analysis logs and test artifacts after v8.0.0 release
+* 2026-02-07 | acd5ebb | 🔥 v7.9.9: Fix HEIC SecurityLimitExceeded and FFmpeg hang issues
+* 2026-02-07 | ca45728 | 🔥 v7.9.9: Fix HEIC SecurityLimitExceeded and FFmpeg hang issues
+* 2026-02-07 | 1e5821e | 🔥 v7.9.10: 用心跳检测替代FFmpeg超时机制
+* 2026-02-07 | ecd7c5d | 🔥 v7.9.10: 用心跳检测替代FFmpeg超时机制
+* 2026-02-07 | 20788aa | 🔥 v7.9.11: Use FfmpegProcess to prevent FFmpeg pipe deadlock
+* 2026-02-07 | aed8d0b | 🔥 v7.9.11: Use FfmpegProcess to prevent FFmpeg pipe deadlock
+* 2026-02-12 | 3077227 | 🔥 v8.0: Unified Progress Bar & Robustness Overhaul - Created UnifiedProgressBar in shared_utils - Migrated imgquality and video_explorer to unified progress system - Fixed high-risk unwrap() calls in production code - Cleaned up redundant UI path references
+* 2026-02-12 | 41e99e7 | 🔥 v8.0: Unified Progress Bar & Robustness Overhaul - Created UnifiedProgressBar in shared_utils - Migrated imgquality and video_explorer to unified progress system - Fixed high-risk unwrap() calls in production code - Cleaned up redundant UI path references
+* 2026-02-18 | bd8b27d | Fix pipe buffer deadlock in x265 encoder and update dependencies
+* 2026-02-18 | 44c5cf2 | Fix pipe buffer deadlock in x265 encoder and update dependencies
+* 2026-02-19 | 449e136 | 清理: 删除110+个临时测试脚本
+* 2026-02-19 | 066e524 | 清理: 删除110+个临时测试脚本
+* 2026-02-19 | 05408ee | 清理: 删除临时清理脚本
+* 2026-02-19 | c357bae | 清理: 删除临时清理脚本
+* 2026-02-20 | 2865cde | feat: Add JXL container to codestream converter for iCloud Photos compatibility
+* 2026-02-20 | c72c40f | feat: Add JXL container to codestream converter for iCloud Photos compatibility
+* 2026-02-20 | 658c584 | feat: Add JXL Container Fix Only mode to UI
+* 2026-02-20 | 7210328 | feat: Add JXL Container Fix Only mode to UI
+* 2026-02-20 | 245a5b4 | docs: Clarify JXL backup mechanism and add cleanup tool
+* 2026-02-20 | 17d5468 | docs: Clarify JXL backup mechanism and add cleanup tool
+* 2026-02-20 | d1bfdce | fix: Improve JXL container fixer with organized backups and precise detection
+* 2026-02-20 | ca6b7e9 | fix: Improve JXL container fixer with organized backups and precise detection
+* 2026-02-20 | 49be22d | fix: Ensure complete metadata preservation following shared_utils pattern
+* 2026-02-20 | aafca44 | fix: Ensure complete metadata preservation following shared_utils pattern
+* 2026-02-20 | 9985117 | Add Brotli EXIF repair tool
+* 2026-02-20 | 7ca8923 | Add Brotli EXIF repair tool
+* 2026-02-20 | 2d0aa66 | Improve metadata preservation in Brotli EXIF fix
+* 2026-02-20 | 789689f | Improve metadata preservation in Brotli EXIF fix
+* 2026-02-20 | 3d5f01c | Add Brotli EXIF corruption prevention to main pipeline
+* 2026-02-20 | 9e95a7c | Add Brotli EXIF corruption prevention to main pipeline
+* 2026-02-20 | 9642c6d | Revert: Remove -fixBase (ineffective for Brotli corruption)
+* 2026-02-20 | e6fec2c | Revert: Remove -fixBase (ineffective for Brotli corruption)
+* 2026-02-20 | 945f5a1 | Fix: Remove -all:all from XMP merge to prevent Brotli corruption
+* 2026-02-20 | 23d5570 | Fix: Remove -all:all from XMP merge to prevent Brotli corruption
+* 2026-02-20 | e264b9b | docs: clarify design decision to keep -all:all for maximum information preservation
+* 2026-02-20 | 2f834ee | docs: clarify design decision to keep -all:all for maximum information preservation
+* 2026-02-20 | ca01052 | fix: preserve DateCreated in Brotli EXIF repair without re-introducing corruption
+* 2026-02-20 | 3304a87 | fix: preserve DateCreated in Brotli EXIF repair without re-introducing corruption
+* 2026-02-20 | 46c8be8 | feat: add Brotli EXIF Fix option to drag-and-drop menu
+* 2026-02-20 | 655d24d | feat: add Brotli EXIF Fix option to drag-and-drop menu
+* 2026-02-20 | c7c83b7 | refactor: remove imprecise JXL Container Fix option
+* 2026-02-20 | 30b62a6 | refactor: remove imprecise JXL Container Fix option
+* 2026-02-20 | 2120ef4 | fix: improve file iteration reliability in Brotli EXIF fix script
+* 2026-02-20 | 516fb12 | fix: improve file iteration reliability in Brotli EXIF fix script
+* 2026-02-20 | eefd11d | fix: add -warning flag to exiftool for reliable Brotli detection
+* 2026-02-20 | 7c73902 | fix: add -warning flag to exiftool for reliable Brotli detection
+* 2026-02-20 | a26cb37 | 🔒 元数据安全性修复：金标准重构 + 源头预防 Brotli 损坏
+* 2026-02-20 | d4ccdd1 | 🔒 元数据安全性修复：金标准重构 + 源头预防 Brotli 损坏
+* 2026-02-20 | 09bf9a1 | 🍎 Apple 兼容模式条件化修复：Brotli 元数据损坏问题 100% 解决
+* 2026-02-20 | 0be816c | 🍎 Apple 兼容模式条件化修复：Brotli 元数据损坏问题 100% 解决
+* 2026-02-20 | a453d7b | Enhance HEIC detection and smart correction handling
+* 2026-02-20 | cc60fd8 | Enhance HEIC detection and smart correction handling
+* 2026-02-20 | f2bdbd9 | Fix: Content-aware extension correction and on-demand structural repair
+* 2026-02-20 | c0731f0 | Fix: Content-aware extension correction and on-demand structural repair
+* 2026-02-20 | f3e7724 | Fix: Replace all Chinese text with English
+* 2026-02-20 | a18b618 | Fix: Replace all Chinese text with English
+* 2026-02-20 | 5dd957c | Fix: Add ImageMagick identify fallback for WebP/GIF animation duration
+* 2026-02-20 | 320876d | Fix: Add ImageMagick identify fallback for WebP/GIF animation duration
+* 2026-02-20 | 4f036fa | Update dependencies to latest versions
+* 2026-02-20 | c30877d | Update dependencies to latest versions
+* 2026-02-20 | bfae170 | Update dependencies: tempfile 3.20, proptest 1.7
+* 2026-02-20 | 8870967 | Update dependencies: tempfile 3.20, proptest 1.7
+* 2026-02-20 | 2fd9e52 | Merge remote merge/v5.2-v5.54-gentle
+* 2026-02-20 | a647fca | Merge remote merge/v5.2-v5.54-gentle
+* 2026-02-20 | d2501a0 | Fix: Replace remaining Chinese error messages with English
+* 2026-02-20 | a1a7632 | Fix: Replace remaining Chinese error messages with English
+* 2026-02-21 | fb397b1 | fix: Deep audit — 12 bug fixes across extension handling, pipelines, and tooling
+* 2026-02-21 | bb46646 | fix: Deep audit — 12 bug fixes across extension handling, pipelines, and tooling
+* 2026-02-21 | c7af6b4 | fix: Systematic code quality sweep — clippy, safety, error visibility
+* 2026-02-21 | bbbfd3d | fix: Systematic code quality sweep — clippy, safety, error visibility
+* 2026-02-21 | cf7cd47 | feat: 添加完整会话日志记录功能
+* 2026-02-21 | 8f72113 | feat: 添加完整会话日志记录功能
+* 2026-02-21 | 9b63d63 | chore: maintainability and deduplication (plan)
+* 2026-02-21 | 3f4c31e | chore: maintainability and deduplication (plan)
+* 2026-02-21 | 3114be1 | feat: GIF 响亮报错+无遗漏设计(相邻目录)+校准stderr
+* 2026-02-21 | 6057fd5 | feat: GIF 响亮报错+无遗漏设计(相邻目录)+校准stderr
+* 2026-02-21 | a1e5a13 | fix(calibration): GIF 使用 FFmpeg 单步 libx265 校准，避免 Y4M→x265 管道失败
+* 2026-02-21 | fa46a4d | fix(calibration): GIF 使用 FFmpeg 单步 libx265 校准，避免 Y4M→x265 管道失败
+* 2026-02-21 | 983e03d | 🚀 Refactor: Simplification of project structure and dependencies
+* 2026-02-21 | 3d9494f | 🚀 Refactor: Simplification of project structure and dependencies
+* 2026-02-21 | ef79ae3 | 🧹 Maintenance: Centralize build artifacts to root target directory
+* 2026-02-21 | 9027f14 | 🧹 Maintenance: Centralize build artifacts to root target directory
+* 2026-02-21 | 2d1629b | 🎨 Audit: Unified code style and syntax fixes
+* 2026-02-21 | f386dc8 | 🎨 Audit: Unified code style and syntax fixes
+* 2026-02-22 | edd451d | 📦 Refactor: Extract image and video analysis logic to shared_utils
+* 2026-02-22 | 395e466 | 📦 Refactor: Extract image and video analysis logic to shared_utils
+* 2026-02-22 | aaa029b | Fix recursive directory processing consistency across all tools, restore JXL extension support in file copier, and add directory analysis support to video tools.
+* 2026-02-22 | 81437be | Fix recursive directory processing consistency across all tools, restore JXL extension support in file copier, and add directory analysis support to video tools.
+* 2026-02-22 | da41be4 | Complete consistency sweep: add allow_size_tolerance and no_allow_size_tolerance to all AV1 tools for full parity with HEVC tools.
+* 2026-02-22 | 017c254 | Complete consistency sweep: add allow_size_tolerance and no_allow_size_tolerance to all AV1 tools for full parity with HEVC tools.
+* 2026-02-22 | 64895c2 | Replace standalone JXL fixer with unified Apple Photos repair script in drag_and_drop_processor.sh.
+* 2026-02-22 | 7802ea4 | Replace standalone JXL fixer with unified Apple Photos repair script in drag_and_drop_processor.sh.
+* 2026-02-22 | 26c6518 | Complete AV1 tools alignment: Finalize img_av1 and vid_av1 with parity to HEVC counterparts, including apple_compat, ultimate flags, MS-SSIM enhancements, and improved metadata/stats tracking.
+* 2026-02-22 | 818eee8 | Complete AV1 tools alignment: Finalize img_av1 and vid_av1 with parity to HEVC counterparts, including apple_compat, ultimate flags, MS-SSIM enhancements, and improved metadata/stats tracking.
+* 2026-02-22 | ba65b3d | Fix(video_explorer): Refine GIF verification logic in Phase 3.
+* 2026-02-22 | 56a14ff | Fix(video_explorer): Refine GIF verification logic in Phase 3.
+* 2026-02-23 | b6e91a0 | refactor(shared_utils): remove unused simple_progress and realtime_progress modules
+* 2026-02-23 | 7a0b92d | refactor(shared_utils): remove unused simple_progress and realtime_progress modules
+* 2026-02-23 | 8e7646f | chore: strip all inline comments, keep only module-level //! docs
+* 2026-02-23 | b422109 | chore: strip all inline comments, keep only module-level //! docs
+* 2026-02-23 | 582826d | fix: audit fixes + modernization
+* 2026-02-23 | cb71337 | fix: audit fixes + modernization
+* 2026-02-23 | 10dae3a | refactor: deduplicate ConversionResult boilerplate, bump to v8.4.0
+* 2026-02-23 | 799044a | refactor: deduplicate ConversionResult boilerplate, bump to v8.4.0
+* 2026-02-23 | 2f6c761 | fix: SSIM 计算失败、安全性增强与代码健壮性修复
+* 2026-02-23 | d6347ac | fix: SSIM 计算失败、安全性增强与代码健壮性修复
+* 2026-02-23 | 47c69f8 | refactor: 代码质量改进 — 抽象重复模式，消除冗余代码 (-100 net lines)
+* 2026-02-23 | 85f6e57 | refactor: 代码质量改进 — 抽象重复模式，消除冗余代码 (-100 net lines)
+* 2026-02-23 | fc8b360 | refactor: 代码重构与 Alpha 通道修复
+* 2026-02-23 | 0e3e91c | refactor: 代码重构与 Alpha 通道修复
+* 2026-02-23 | c17c16b | refactor: split video_explorer.rs into focused submodules
+* 2026-02-23 | 0b286f1 | refactor: split video_explorer.rs into focused submodules
+* 2026-02-23 | f29f3d5 | test: remove 26 low-value tests across 3 files
+* 2026-02-23 | b8c8930 | test: remove 26 low-value tests across 3 files
+* 2026-02-23 | 986078a | scripts: add spinner and elapsed time at bottom during processing
+* 2026-02-23 | 7206735 | scripts: add spinner and elapsed time at bottom during processing
+* 2026-02-23 | f6163c4 | scripts: keep spinner out of session log; use tee for logging
+* 2026-02-23 | 61aa93b | scripts: keep spinner out of session log; use tee for logging
+* 2026-02-23 | 77b4823 | Apple compat fallback: explicit report, keep last best-effort attempt
+* 2026-02-23 | b1dfe81 | Apple compat fallback: explicit report, keep last best-effort attempt
+* 2026-02-23 | 41e1d53 | Ultimate mode: widen attempt counts and raise saturation/fallback limits
+* 2026-02-23 | 1c37e3a | Ultimate mode: widen attempt counts and raise saturation/fallback limits
+* 2026-02-23 | 41907f6 | fix(log): per-file log context to fix interleaved output
+* 2026-02-23 | 0057fad | fix(log): per-file log context to fix interleaved output
+* 2026-02-23 | 6d25b5b | fix(log): UTF-8-safe prefix, formatted indentation for all log lines
+* 2026-02-23 | 96ab6b2 | fix(log): UTF-8-safe prefix, formatted indentation for all log lines
+* 2026-02-23 | 989b785 | fix(duration): ImageMagick fallback when ffprobe has no duration for WebP/GIF
+* 2026-02-23 | 691ce6e | fix(duration): ImageMagick fallback when ffprobe has no duration for WebP/GIF
+* 2026-02-24 | 597e817 | fix(log): clearer QualityCheck for GIF when verification skipped
+* 2026-02-24 | 5b3bb4e | fix(log): clearer QualityCheck for GIF when verification skipped
+* 2026-02-24 | c971389 | Release 8.5.0: logging, duration fallback, GIF quality verification
+* 2026-02-24 | 30bde9c | Release 8.5.0: logging, duration fallback, GIF quality verification
+* 2026-02-24 | 0ec267e | audit: path safety, div-by-zero, unsafe comments, doc
+* 2026-02-24 | bc23142 | audit: path safety, div-by-zero, unsafe comments, doc
+* 2026-02-24 | 95e9e67 | feat: log_file, XMP progress, i18n and test gating
+* 2026-02-24 | 41d54d4 | feat: log_file, XMP progress, i18n and test gating
+* 2026-02-24 | 2374f78 | audit: path safety for video_explorer SSIM/PSNR/MS-SSIM and dynamic_mapping calibration
+* 2026-02-24 | 28409aa | audit: path safety for video_explorer SSIM/PSNR/MS-SSIM and dynamic_mapping calibration
+* 2026-02-24 | 6bcbe4f | audit: img_av1/img_hevc path safety and div-by-zero
+* 2026-02-24 | 87eee91 | audit: img_av1/img_hevc path safety and div-by-zero
+* 2026-02-24 | 5585f6f | audit: logic/math/ordering — div-by-zero and numeric safety
+* 2026-02-24 | 3e3022f | audit: logic/math/ordering — div-by-zero and numeric safety
+* 2026-02-24 | 79f7ee1 | audit: image_metrics.rs SSIM/MS-SSIM correctness and perf
+* 2026-02-24 | 0117346 | audit: image_metrics.rs SSIM/MS-SSIM correctness and perf
+* 2026-02-24 | 19b719d | audit: image_quality_core.rs safety, correctness, and design
+* 2026-02-24 | 5000747 | audit: image_quality_core.rs safety, correctness, and design
+* 2026-02-24 | 72f3b22 | audit: img_av1 conversion_api.rs correctness and design
+* 2026-02-24 | f929646 | audit: img_av1 conversion_api.rs correctness and design
+* 2026-02-24 | 68e4aea | audit: img_av1 lossless_converter.rs correctness and cleanup
+* 2026-02-24 | 121ed2d | audit: img_av1 lossless_converter.rs correctness and cleanup
+* 2026-02-24 | a72ba02 | video_explorer: audit fixes (GSS naming, SSIM comment, build(), confidence, prop test, best_crf_so_far)
+* 2026-02-24 | 40c2856 | video_explorer: audit fixes (GSS naming, SSIM comment, build(), confidence, prop test, best_crf_so_far)
+* 2026-02-24 | fdd19ed | AVIF/AV1 health check + gpu_accel audit fixes
+* 2026-02-24 | 89aa028 | AVIF/AV1 health check + gpu_accel audit fixes
+* 2026-02-24 | b9b1567 | explore_strategy audit: binary_search_quality goal, compress Option, PSNR→SSIM, proptest, docs
+* 2026-02-24 | 6dd0475 | explore_strategy audit: binary_search_quality goal, compress Option, PSNR→SSIM, proptest, docs
+* 2026-02-24 | 68ed74b | video_quality_detector audit: content type, fallbacks, chroma, routing, bpp, CRF
+* 2026-02-24 | fba4d3b | video_quality_detector audit: content type, fallbacks, chroma, routing, bpp, CRF
+* 2026-02-24 | 0db1287 | Implement quality_verifier_enhanced; heartbeat; progress/gpu fixes; audit
+* 2026-02-24 | fa9af22 | Implement quality_verifier_enhanced; heartbeat; progress/gpu fixes; audit
+* 2026-02-24 | a476a17 | Use quality_verifier_enhanced in pipeline; re-export; code quality
+* 2026-02-24 | b0865a3 | Use quality_verifier_enhanced in pipeline; re-export; code quality
+* 2026-02-24 | 2af4cc4 | Fix metadata/windows.rs invalid escape; cargo fmt --all
+* 2026-02-24 | 978fdee | Fix metadata/windows.rs invalid escape; cargo fmt --all
+* 2026-02-24 | b4267d8 | docs: metadata/network.rs purpose, CODE_AUDIT §24, deps note
+* 2026-02-24 | dd24636 | docs: metadata/network.rs purpose, CODE_AUDIT §24, deps note
+* 2026-02-24 | 0c54f7e | Ultimate mode: raise Domain Wall required zero-gains to 15–20
+* 2026-02-24 | f26fad8 | Ultimate mode: raise Domain Wall required zero-gains to 15–20
+* 2026-02-24 | 78dd940 | docs: CODE_AUDIT updates; precheck/dynamic_mapping/ssim/precision/stream_analysis fixes
+* 2026-02-24 | bdb1bc4 | docs: CODE_AUDIT updates; precheck/dynamic_mapping/ssim/precision/stream_analysis fixes
+* 2026-02-24 | 17612d5 | logging: unify stderr output with tracing (CODE_AUDIT)
+* 2026-02-24 | 1986e18 | logging: unify stderr output with tracing (CODE_AUDIT)
+* 2026-02-24 | b3e9073 | docs: CODE_AUDIT §28.2 log format; logging: align file lines, stderr indent, LOG_TAG_WIDTH 24
+* 2026-02-24 | fd90ebf | docs: CODE_AUDIT §28.2 log format; logging: align file lines, stderr indent, LOG_TAG_WIDTH 24
+* 2026-02-24 | e9c4256 | shared_utils: video_explorer codec_detection.rs updates
+* 2026-02-24 | 13d88e9 | shared_utils: video_explorer codec_detection.rs updates
+* 2026-02-24 | 92e66a9 | fix(logging): strip ANSI from file log output so files are plain text
+* 2026-02-24 | 602a7ca | fix(logging): strip ANSI from file log output so files are plain text
+* 2026-02-24 | 1fdd9e1 | fix(logging): strip ANSI when stderr not TTY, quiet GPU line on terminal
+* 2026-02-24 | 7842ecf | fix(logging): strip ANSI when stderr not TTY, quiet GPU line on terminal
+* 2026-02-24 | 7159717 | fix(img): unify compress check for all image conversion paths
+* 2026-02-24 | 8f13b7b | fix(img): unify compress check for all image conversion paths
+* 2026-02-24 | d92132e | fix(audit): CLI duplication + pipe error handling
+* 2026-02-24 | 57bfd0b | fix(audit): CLI duplication + pipe error handling
+* 2026-02-24 | 5907272 | fix(audit): GPU concurrency limit + VAAPI device configurable
+* 2026-02-24 | 3dff5ac | fix(audit): GPU concurrency limit + VAAPI device configurable
+* 2026-02-24 | 0f0771d | Audit fixes: GIF parser bounds check, rsync via which, processed list file lock (Unix)
+* 2026-02-24 | 0f598f7 | Audit fixes: GIF parser bounds check, rsync via which, processed list file lock (Unix)
+* 2026-02-24 | a9e8cef | chore: bump version to 8.6.0
+* 2026-02-24 | a2712f1 | chore: bump version to 8.6.0
+* 2026-02-24 | 03e8d50 | chore(deps): bump libheif-rs to 2.6.1, tempfile to 3.26
+* 2026-02-24 | ca76f86 | chore(deps): bump libheif-rs to 2.6.1, tempfile to 3.26
+* 2026-02-24 | b7f69f0 | fix(video_explorer): heuristic early-exit sensitivity for flat bitrate curves
+* 2026-02-24 | eda4074 | fix(video_explorer): heuristic early-exit sensitivity for flat bitrate curves
+* 2026-02-24 | 5a93713 | feat(ssim): increase segment duration for better media-type adaptation
+* 2026-02-24 | fdd2d84 | feat(ssim): increase segment duration for better media-type adaptation
+* 2026-02-24 | a994b7b | feat(ultimate): longer SSIM segment duration in ultimate mode
+* 2026-02-24 | 6ef1a35 | feat(ultimate): longer SSIM segment duration in ultimate mode
+* 2026-02-24 | 442500a | fix(progress): XMP merge display single count, no OK/N to avoid confusion with Metadata total
+* 2026-02-24 | 0e2a033 | fix(progress): XMP merge display single count, no OK/N to avoid confusion with Metadata total
+* 2026-02-24 | 0a10d9d | feat(progress): Images OK/failed on same line as XMP/JXL; image milestones
+* 2026-02-24 | 19e5dad | feat(progress): Images OK/failed on same line as XMP/JXL; image milestones
+* 2026-02-24 | a40b2d0 | fix(conversion): merge XMP sidecar into converted output (real flow fix, not display only)
+* 2026-02-24 | d29dcab | fix(conversion): merge XMP sidecar into converted output (real flow fix, not display only)
+* 2026-02-25 | 10d5b75 | Audit follow-up: document Phase 2 assumption, iteration cap, efficiency factors; warn when MS-SSIM skipped for long video (8.5.1)
+* 2026-02-25 | 6f60725 | Audit follow-up: document Phase 2 assumption, iteration cap, efficiency factors; warn when MS-SSIM skipped for long video (8.5.1)
+* 2026-02-25 | 0bee838 | Ultimate mode: use 25min MS-SSIM skip threshold (8.5.2)
+* 2026-02-25 | d388792 | Ultimate mode: use 25min MS-SSIM skip threshold (8.5.2)
+* 2026-02-25 | 560cb38 | quality_matcher: defensive design for extreme BPP (NaN/Inf, clamp to safe range, CRF clamp); CODE_AUDIT §35
+* 2026-02-25 | c397a47 | quality_matcher: defensive design for extreme BPP (NaN/Inf, clamp to safe range, CRF clamp); CODE_AUDIT §35
+* 2026-02-25 | f568b54 | GIF: exclude from Apple compat fallback (fail = copy original only); add docs/COPY_AND_COMPLETENESS.md (copy strategy, no-omission, conflicts)
+* 2026-02-25 | e6b7f4a | GIF: exclude from Apple compat fallback (fail = copy original only); add docs/COPY_AND_COMPLETENESS.md (copy strategy, no-omission, conflicts)
+* 2026-02-25 | f3a3221 | Copy strategy & extension fix: doc §36; video path fix-before-validate; no rsync; 动图不混淆
+* 2026-02-25 | 18734a5 | Copy strategy & extension fix: doc §36; video path fix-before-validate; no rsync; 动图不混淆
+* 2026-02-26 | d102a8a | doc: 扩展名修正不混淆动图；检测顺序保证 GIF/WebP/AVIF 先于视频
+* 2026-02-26 | b5b8266 | doc: 扩展名修正不混淆动图；检测顺序保证 GIF/WebP/AVIF 先于视频
+* 2026-02-26 | 396679f | Round 4 audit fixes: img_hevc path/config, vid_hevc quality+static GIF, docs
+* 2026-02-26 | bddfece | Round 4 audit fixes: img_hevc path/config, vid_hevc quality+static GIF, docs
+* 2026-02-26 | 78757b5 | img_hevc: pass full config to convert_to_jxl, add output verification and compress check
+* 2026-02-26 | 31d2e1c | img_hevc: pass full config to convert_to_jxl, add output verification and compress check
+* 2026-02-26 | e4d8e30 | Unify user-facing errors and logs to English; CODE_AUDIT §38.11
+* 2026-02-26 | 759b327 | Unify user-facing errors and logs to English; CODE_AUDIT §38.11
+* 2026-02-26 | 5f8d3b0 | Align img_av1 and vid_av1 with hevc tools (§38.8)
+* 2026-02-26 | 577e37b | Align img_av1 and vid_av1 with hevc tools (§38.8)
+* 2026-02-26 | 9108c7c | TOCTOU mitigation: temp file + atomic rename in conversion APIs
+* 2026-02-26 | bd17c1d | TOCTOU mitigation: temp file + atomic rename in conversion APIs
+* 2026-02-26 | a8aeea2 | fix: implement TOCTOU-safe conversion and address design audit findings for HEVC/AV1 modules
+* 2026-02-26 | bc13c31 | fix: implement TOCTOU-safe conversion and address design audit findings for HEVC/AV1 modules
+* 2026-02-27 | 96010d2 | Fix libheif deprecation; document match _ pattern (CODE_AUDIT §39)
+* 2026-02-27 | 8d3d781 | Fix libheif deprecation; document match _ pattern (CODE_AUDIT §39)
+* 2026-02-27 | 7a88ba5 | Temp path fix (stem.tmp.ext) + re-audit doc
+* 2026-02-27 | 24791ec | Temp path fix (stem.tmp.ext) + re-audit doc
+* 2026-02-27 | b3c3798 | audit: remove redundant config, unify logging, align vid_hevc/vid_av1
+* 2026-02-27 | d08f40d | audit: remove redundant config, unify logging, align vid_hevc/vid_av1
+* 2026-02-27 | fa494d8 | jxl/imagemagick: better diagnostics and format-agnostic animation log
+* 2026-02-27 | 4a8e1b1 | jxl/imagemagick: better diagnostics and format-agnostic animation log
+* 2026-02-27 | 9b79503 | script: do not auto-run Apple Photos Compatibility Repair; jxl: strip only on grayscale+ICC retry, document metadata preservation
+* 2026-02-27 | 3a6db8f | script: do not auto-run Apple Photos Compatibility Repair; jxl: strip only on grayscale+ICC retry, document metadata preservation
+* 2026-02-27 | 579f7a1 | script: disable auto Apple Photos repair; app: confirm before run (double-click)
+* 2026-02-27 | 3931477 | script: disable auto Apple Photos repair; app: confirm before run (double-click)
+* 2026-02-27 | aaeb4e0 | release: v8.7.0 - Critical bug fixes and comprehensive audit completion
+* 2026-02-27 | 0945f43 | release: v8.7.0 - Critical bug fixes and comprehensive audit completion
+* 2026-02-27 | 380de00 | fix: spinner Killed:9 suppression, negative elapsed time, pipeline failed filename
+* 2026-02-27 | c0fe5b6 | fix: spinner Killed:9 suppression, negative elapsed time, pipeline failed filename
+* 2026-02-27 | e1dd5b6 | feat(video): expand codec scope, strict ProRes/DNxHD, fallback only for Apple-incompatible
+* 2026-02-27 | 47e72d6 | feat(video): expand codec scope, strict ProRes/DNxHD, fallback only for Apple-incompatible
+* 2026-02-27 | a7bdf89 | fix(video): normal mode skip AV1/VP9/VVC/AV2; only Apple-compat converts them
+* 2026-02-27 | 6d0a340 | fix(video): normal mode skip AV1/VP9/VVC/AV2; only Apple-compat converts them
+* 2026-02-27 | dd84f02 | feat(animated): raise min duration for animated→video to 4.5s
+* 2026-02-27 | c88be8b | feat(animated): raise min duration for animated→video to 4.5s
+* 2026-02-27 | 74bcb41 | 从 y4m 直连到内存管控：管道防堵、日志去噪、OOM 防护
+* 2026-02-27 | 9c44839 | 从 y4m 直连到内存管控：管道防堵、日志去噪、OOM 防护
+* 2026-02-27 | a21a1ae | fix: 会话日志完整录制 img-hevc/vid-hevc 输出（含 stderr）
+* 2026-02-27 | a5e0b3f | fix: 会话日志完整录制 img-hevc/vid-hevc 输出（含 stderr）
+* 2026-02-27 | d04006b | chore: 依赖更新至最新兼容版本
+* 2026-02-27 | b9c6cb9 | chore: 依赖更新至最新兼容版本
+* 2026-02-28 | 714372a | feat(image): 图像质量判断可靠性改进与转换逻辑审计
+* 2026-02-28 | 9824a6a | feat(image): 图像质量判断可靠性改进与转换逻辑审计
+* 2026-02-28 | dc049a1 | Audit fixes: P0-2/D1-D6 — compress doc, tolerance doc, safe_delete constants, Apple fallback predicate, reject empty commit, temp+commit doc, phase comments
+* 2026-02-28 | dbcc77e | Audit fixes: P0-2/D1-D6 — compress doc, tolerance doc, safe_delete constants, Apple fallback predicate, reject empty commit, temp+commit doc, phase comments
+* 2026-02-28 | b714797 | Apple fallback: behavior by total file size only; video stream stays internal
+* 2026-02-28 | 69bf43a | Apple fallback: behavior by total file size only; video stream stays internal
+* 2026-02-28 | 429157b | feat(img): resume from last run (--resume/--no-resume), doc updates
+* 2026-02-28 | 76c21d1 | feat(img): resume from last run (--resume/--no-resume), doc updates
+* 2026-02-28 | 21e1363 | chore: push remaining changes (image_quality_core removal, pixel routing doc, default log, audit)
+* 2026-02-28 | 0f50fdd | chore: push remaining changes (image_quality_core removal, pixel routing doc, default log, audit)
+* 2026-02-28 | 3715778 | fix: default run logs go to ./logs/ (gitignored), add *_run.log to .gitignore
+* 2026-02-28 | be9ee0b | fix: default run logs go to ./logs/ (gitignored), add *_run.log to .gitignore
+* 2026-02-28 | e6dbf8a | image: AVIF format-level is_lossless + pixel fallback; doc reliability and fallback checklist
+* 2026-02-28 | 6ba6303 | image: AVIF format-level is_lossless + pixel fallback; doc reliability and fallback checklist
+* 2026-02-28 | 05ba56c | anim: WebP native duration parse + retry when duration unknown, no fake default
+* 2026-02-28 | ce74832 | anim: WebP native duration parse + retry when duration unknown, no fake default
+* 2026-02-28 | 9edd55e | fix: 修复伪造成功/日志/验证/XMP 等多项问题并更新审计文档
+* 2026-02-28 | a827afc | fix: 修复伪造成功/日志/验证/XMP 等多项问题并更新审计文档
+* 2026-02-28 | 764ee54 | fix: resolve file logging issues - merge run logs into session log, flush after critical writes
+* 2026-02-28 | f969d0f | fix: resolve file logging issues - merge run logs into session log, flush after critical writes
+* 2026-02-28 | ae8f955 | fix: 日志全部即时落盘 + vid_hevc 默认 run log
+* 2026-02-28 | fb6c244 | fix: 日志全部即时落盘 + vid_hevc 默认 run log
+* 2026-02-28 | 45abd73 | fix: 默认 run log 文件名加时间戳，避免多次运行重名冲突
+* 2026-02-28 | 0461587 | fix: 默认 run log 文件名加时间戳，避免多次运行重名冲突
+* 2026-02-28 | 56971fa | log: 移除 --log-file，自动命名并始终写 run log；run log 全量未过滤+emoji；日志文件加 advisory 锁
+* 2026-02-28 | 1fae2f6 | log: 移除 --log-file，自动命名并始终写 run log；run log 全量未过滤+emoji；日志文件加 advisory 锁
+* 2026-02-28 | 5e0a795 | logging: make log level apply to direct run-log writes (should_log + write_to_log_at_level)
+* 2026-02-28 | f1327d2 | logging: make log level apply to direct run-log writes (should_log + write_to_log_at_level)
+* 2026-02-28 | 2e8dc3f | quality: surface enhanced verify failure reason + regression tests (temp-copy only, no pollute)
+* 2026-02-28 | 743ee5e | quality: surface enhanced verify failure reason + regression tests (temp-copy only, no pollute)
+* 2026-02-28 | 49bb4d4 | chore: bump version to 0.8.8, adopt 0.8.x scheme, update docs
+* 2026-02-28 | e21e2a0 | chore: bump version to 0.8.8, adopt 0.8.x scheme, update docs
+* 2026-02-28 | e927749 | chore: cargo update (js-sys, redox_syscall, wasm-bindgen); add release notes file; include pending doc/code changes
+* 2026-02-28 | 03ab292 | chore: cargo update (js-sys, redox_syscall, wasm-bindgen); add release notes file; include pending doc/code changes
+* 2026-02-28 | 64bab40 | fix: remove ExifTool _exiftool_tmp before merge to avoid 'Temporary file already exists'; merge PRE-PROCESSING output to one line
+* 2026-02-28 | 1e873f5 | fix: remove ExifTool _exiftool_tmp before merge to avoid 'Temporary file already exists'; merge PRE-PROCESSING output to one line
+* 2026-02-28 | d51dea0 | app: 30min timeout for folder picker and confirm dialog; close and exit on timeout
+* 2026-02-28 | 47cd243 | app: 30min timeout for folder picker and confirm dialog; close and exit on timeout
+* 2026-02-28 | d3b06f1 | app: use AppleScript entry (osascript) to avoid extra terminal window and 'terminate zsh' prompt
+* 2026-02-28 | 34d186c | app: use AppleScript entry (osascript) to avoid extra terminal window and 'terminate zsh' prompt
+* 2026-02-28 | 5922e48 | app: use zsh instead of bash; run Terminal osascript in background then exit to avoid two windows and 'terminate process' warning
+* 2026-02-28 | 63e9ade | app: use zsh instead of bash; run Terminal osascript in background then exit to avoid two windows and 'terminate process' warning
+* 2026-02-28 | cc14b5a | app: do not close any Terminal window; avoid closing user manual window or wrong window when multi-opening
+* 2026-02-28 | c92dfd6 | app: do not close any Terminal window; avoid closing user manual window or wrong window when multi-opening
+* 2026-02-28 | 4b30abd | logs: add Fallback count to status line; run log always full; less noise
+* 2026-02-28 | d3cb752 | logs: add Fallback count to status line; run log always full; less noise
+* 2026-02-28 | 66be686 | scripts: put Output to Adjacent first; drain stdin between stages for safe prompts
+* 2026-02-28 | e962d89 | scripts: put Output to Adjacent first; drain stdin between stages for safe prompts
+* 2026-03-01 | 8a03909 | video: unify compression decision on total file size with video-stream diagnostics
+* 2026-03-01 | 127aded | video: unify compression decision on total file size with video-stream diagnostics
+* 2026-03-01 | 31a17ea | Fix: apple_compat flag in ImageMagick fallback + cjxl decode error retry
+* 2026-03-01 | a67cfb0 | Fix: apple_compat flag in ImageMagick fallback + cjxl decode error retry
+* 2026-03-01 | 8fbfe10 | Release v0.8.9
+* 2026-03-01 | 0b24a24 | Release v0.8.9
+* 2026-03-01 | 5c70370 | docs: add code quality audit results to CHANGELOG for v0.8.9
+* 2026-03-01 | 8e7c3ef | docs: add code quality audit results to CHANGELOG for v0.8.9
+* 2026-03-01 | 3ecd9f1 | docs: add performance optimization to CHANGELOG for v0.8.9
+* 2026-03-01 | e789201 | docs: add performance optimization to CHANGELOG for v0.8.9
+* 2026-03-02 | c8d63ff | Add subtitle and audio channel support for MKV/MP4 containers
+* 2026-03-02 | a3ea725 | Add subtitle and audio channel support for MKV/MP4 containers
+* 2026-03-02 | c26fd85 | feat: 实现 HDR 图像保留功能
+* 2026-03-02 | 02cc3f2 | feat: 实现 HDR 图像保留功能
+* 2026-03-02 | 13400c6 | feat: Add Live Photo detection and skip in Apple compat mode
+* 2026-03-02 | b1f0cad | feat: Add Live Photo detection and skip in Apple compat mode
+* 2026-03-02 | e6a0052 | docs: improve README.md with detailed technical architecture and update libheif-rs
+* 2026-03-02 | 2cc63cb | docs: improve README.md with detailed technical architecture and update libheif-rs
+* 2026-03-02 | 46b58e9 | fix: use portable bash shebang in drag_and_drop_processor.sh
+* 2026-03-02 | 836a79b | fix: use portable bash shebang in drag_and_drop_processor.sh
+* 2026-03-02 | e76b43f | i18n: translate all shell scripts to English
+* 2026-03-02 | 1b776ab | i18n: translate all shell scripts to English
+* 2026-03-02 | 0f9fd67 | Add Dolby Vision (DV) support with dovi_tool integration
+* 2026-03-02 | 47d3903 | Add Dolby Vision (DV) support with dovi_tool integration
+* 2026-03-02 | 4ddd4cc | feat: Add HEIC HDR/Dolby Vision detection and skip
+* 2026-03-02 | 71a228f | feat: Add HEIC HDR/Dolby Vision detection and skip
+* 2026-03-03 | 16585ae | feat: ultimate mode 3D quality gate (VMAF-Y + CAMBI + PSNR-UV)
+* 2026-03-03 | 7e4baa5 | feat: ultimate mode 3D quality gate (VMAF-Y + CAMBI + PSNR-UV)
+* 2026-03-03 | d32b9f8 | fix: relax duration tolerance for animated images (GIF/WebP/AVIF)
+* 2026-03-03 | 3454eed | fix: relax duration tolerance for animated images (GIF/WebP/AVIF)
+* 2026-03-03 | 1cf0163 | feat: GIF multi-dimensional meme-score to replace duration-only skip logic
+* 2026-03-03 | 323f188 | feat: GIF multi-dimensional meme-score to replace duration-only skip logic
+* 2026-03-03 | 515a31b | fix: resolve clippy warnings in gif_meme_score and animated_image
+* 2026-03-03 | 248bf26 | fix: resolve clippy warnings in gif_meme_score and animated_image
+* 2026-03-03 | 64a7ffb | feat: GIF judgment — five-layer edge-case suppression strategy
+* 2026-03-03 | fb03a6c | feat: GIF judgment — five-layer edge-case suppression strategy
+* 2026-03-03 | bd425fb | fix: CAMBI calculation broken — libvmaf requires two inputs
+* 2026-03-03 | 9626065 | fix: CAMBI calculation broken — libvmaf requires two inputs
+* 2026-03-03 | b728f7f | release: v0.9.0 — fix CAMBI 3D gate, tighten thresholds, consolidate docs
+* 2026-03-03 | c3b61a4 | release: v0.9.0 — fix CAMBI 3D gate, tighten thresholds, consolidate docs
+* 2026-03-03 | 0b537d0 | fix(img-hevc): replace outdated 4.5s duration cutoff with meme-score for GIF
+* 2026-03-03 | 197bc8d | fix(img-hevc): replace outdated 4.5s duration cutoff with meme-score for GIF
+* 2026-03-03 | ea7573a | Fix: Improve grayscale PNG + RGB ICC profile error detection
+* 2026-03-03 | 2c1a26f | Fix: Improve grayscale PNG + RGB ICC profile error detection
+* 2026-03-03 | 6311aba | Fix: Skip palette-quantized (lossy) PNG to avoid generational loss
+* 2026-03-03 | 9b55458 | Fix: Skip palette-quantized (lossy) PNG to avoid generational loss
+* 2026-03-03 | cbf1011 | Fix: Lossy PNG → JXL d=1.0 (try compress, skip if larger); update README
+* 2026-03-03 | 15e796c | Fix: Lossy PNG → JXL d=1.0 (try compress, skip if larger); update README
+* 2026-03-03 | 702ac0c | Fix: Suppress spurious 'ExifTool failed: ' warnings when stderr is empty
+* 2026-03-03 | 158f0f3 | Fix: Suppress spurious 'ExifTool failed: ' warnings when stderr is empty
+* 2026-03-03 | 12f2407 | ci: add GitHub Actions workflow for cross-platform release builds
+* 2026-03-03 | c4a23cf | ci: add GitHub Actions workflow for cross-platform release builds
+* 2026-03-03 | d60f1dd | ci: include full scripts folder and documentation in release artifacts
+* 2026-03-03 | 133f666 | ci: include full scripts folder and documentation in release artifacts
+* 2026-03-03 | 38a35a8 | Fix: Static GIF → JXL d=1.0 (was lossless d=0.0, always oversized)
+* 2026-03-03 | 3978882 | Fix: Static GIF → JXL d=1.0 (was lossless d=0.0, always oversized)
+* 2026-03-03 | 6740dfe | Fix: BMP/ICO/PNM/TGA/HDR/EXR etc. → lossless JXL; complete format_to_string
+* 2026-03-03 | 836a30a | Fix: BMP/ICO/PNM/TGA/HDR/EXR etc. → lossless JXL; complete format_to_string
+* 2026-03-03 | 82640f3 | ci: fix all platform dependency issues; bump to v0.9.4
+* 2026-03-03 | f705f42 | ci: fix all platform dependency issues; bump to v0.9.4
+* 2026-03-03 | ffd2b75 | ci: fix dav1d version + macOS x86_64 cross-compile; bump v0.9.5
+* 2026-03-03 | 4183ba1 | ci: fix dav1d version + macOS x86_64 cross-compile; bump v0.9.5
+* 2026-03-03 | 1ba1d29 | ci: add meson to Linux deps; bump v0.9.6
+* 2026-03-03 | cc58cf8 | ci: add meson to Linux deps; bump v0.9.6
+* 2026-03-03 | da046c3 | ci: install pkgconfiglite on Windows; bump v0.9.7
+* 2026-03-03 | d4f14ce | ci: install pkgconfiglite on Windows; bump v0.9.7
+* 2026-03-04 | ad5c0c0 | fix: remove fabricated ExitStatus::default() from fallback pipelines; bump v0.9.8
+* 2026-03-04 | 077e0b2 | fix: remove fabricated ExitStatus::default() from fallback pipelines; bump v0.9.8
+* 2026-03-04 | 246f6e8 | fix: propagate copy_on_skip_or_fail errors; fix Linux ACL apply to dst
+* 2026-03-04 | de48f88 | fix: propagate copy_on_skip_or_fail errors; fix Linux ACL apply to dst
+* 2026-03-04 | f654a86 | feat: add Apple Photos library protection
+* 2026-03-04 | cb8acfc | feat: add Apple Photos library protection
+* 2026-03-05 | 323e165 | fix: detect animated AVIF/JXL/HEIC instead of hardcoding is_animated=false
+* 2026-03-05 | 7b1f413 | fix: detect animated AVIF/JXL/HEIC instead of hardcoding is_animated=false
+* 2026-03-05 | bc7e21a | fix: deep audit — routing, error propagation, and cjxl precision fixes
+* 2026-03-05 | 45dc081 | fix: deep audit — routing, error propagation, and cjxl precision fixes
+* 2026-03-05 | 5a11324 | fix: bypass size/quality guard in apple_compat mode for animated image→HEVC
+* 2026-03-05 | b4c4e85 | fix: bypass size/quality guard in apple_compat mode for animated image→HEVC
+* 2026-03-05 | c1c300e | refactor: unify animated routing to meme-score strategy, remove 4.5s hardcoded threshold
+* 2026-03-05 | eaaafad | refactor: unify animated routing to meme-score strategy, remove 4.5s hardcoded threshold
+* 2026-03-05 | 3441d33 | fix: fallback to ImageMagick when ffmpeg cannot decode animated WebP for GIF
+* 2026-03-05 | 43540fb | fix: fallback to ImageMagick when ffmpeg cannot decode animated WebP for GIF
+* 2026-03-05 | 284255b | fix: ImageMagick-first GIF encoding; copy original on all animated conversion failures
+* 2026-03-05 | abab8d9 | fix: ImageMagick-first GIF encoding; copy original on all animated conversion failures
+* 2026-03-05 | ace403c | feat: iPhone slow-motion VFR handling & fix AA/AEE orphan files
+* 2026-03-05 | b4b3ce7 | feat: iPhone slow-motion VFR handling & fix AA/AEE orphan files
+* 2026-03-05 | 51275cd | docs: improve VFR detection algorithm for iPhone slow-motion videos
+* 2026-03-05 | f003163 | docs: improve VFR detection algorithm for iPhone slow-motion videos
+* 2026-03-05 | 81a9253 | Improve VFR detection: use Apple slow-mo tag and frame rate ratio
+* 2026-03-05 | 03a6ffd | Improve VFR detection: use Apple slow-mo tag and frame rate ratio
+* 2026-03-05 | 88842ef | Improve VFR detection: use Apple slow-mo tag and frame rate ratio
+* 2026-03-05 | 7b56dcd | Improve VFR detection: use Apple slow-mo tag and frame rate ratio
+* 2026-03-05 | 18ffe5f | release: v0.9.9-3 - Improved VFR detection & AAE file handling
+* 2026-03-05 | ede1286 | release: v0.9.9-3 - Improved VFR detection & AAE file handling
+* 2026-03-05 | 4f72b28 | Merge branch 'nightly'
+* 2026-03-05 | a62db73 | Merge branch 'nightly'
+* 2026-03-05 | 5b59ddb | Fix tests: add is_variable_frame_rate field to test cases
+* 2026-03-05 | 114bf1c | Fix tests: add is_variable_frame_rate field to test cases
+* 2026-03-06 | 9871070 | fix: 临时文件清理、FPS预检查、分辨率修正
+* 2026-03-06 | 0151eab | fix: 临时文件清理、FPS预检查、分辨率修正
+* 2026-03-08 | 44b0a92 | style: clippy and quality improvements
+* 2026-03-08 | 1b7274a | style: clippy and quality improvements
+* 2026-03-08 | 9d8bc33 | docs: add MIT license file
+* 2026-03-08 | 156019b | docs: add MIT license file
+* 2026-03-08 | 4085fdc | chore: update dependencies
+* 2026-03-08 | 6f211a9 | chore: update dependencies
+* 2026-03-08 | 0e856a5 | chore: upgrade dependencies to latest including incompatible ones
+* 2026-03-08 | 357a0fb | chore: upgrade dependencies to latest including incompatible ones
+* 2026-03-08 | 1518836 | fix: skip audio demux from image containers in x265 mux step
+* 2026-03-08 | e4fb111 | fix: skip audio demux from image containers in x265 mux step
+* 2026-03-08 | 146f531 | fix: downgrade NotRecommended precheck from warn to info
+* 2026-03-08 | 16562b1 | fix: downgrade NotRecommended precheck from warn to info
+* 2026-03-09 | f988a54 | Fix FFmpeg libx265 error for image containers (AVIF/HEIC/GIF/WebP)
+* 2026-03-09 | facd993 | Fix FFmpeg libx265 error for image containers (AVIF/HEIC/GIF/WebP)
+* 2026-03-09 | 73f519a | chore: bump version to 0.10.1
+* 2026-03-09 | c31d179 | chore: bump version to 0.10.1
+* 2026-03-09 | b8c74a8 | Update dependencies to nightly versions using git sources
+* 2026-03-09 | 723f39c | Update dependencies to nightly versions using git sources
+* 2026-03-09 | 7eef34c | Revert to stable dependencies - nightly git sources cause version conflicts
+* 2026-03-09 | f990e45 | Revert to stable dependencies - nightly git sources cause version conflicts
+* 2026-03-09 | 421763b | v0.10.2: Enhanced meme detection with filename and loop frequency analysis
+* 2026-03-09 | 3721fcf | v0.10.2: Enhanced meme detection with filename and loop frequency analysis
+* 2026-03-09 | d613c95 | v0.10.3: Fix multi-stream animated files frame loss + preserve FPS
+* 2026-03-09 | 625275b | v0.10.3: Fix multi-stream animated files frame loss + preserve FPS
+* 2026-03-09 | 5a91f27 | Release v0.10.4: Remove ImageMagick fallback, unify GIF conversion pipeline
+* 2026-03-09 | dd0a928 | Release v0.10.4: Remove ImageMagick fallback, unify GIF conversion pipeline
+* 2026-03-09 | 551b229 | Release v0.10.5: Add animated JXL support and fix static JXL detection
+* 2026-03-09 | 8fee495 | Release v0.10.5: Add animated JXL support and fix static JXL detection
+* 2026-03-09 | 9fd0c75 | Fix clippy warnings: code quality improvements
+* 2026-03-09 | 22409d0 | Fix clippy warnings: code quality improvements
+* 2026-03-09 | 54fea58 | Fix AVIF GBR colorspace bug, WebP dimension detection, and add WebP pre-processing
+* 2026-03-09 | 68b3b68 | Fix AVIF GBR colorspace bug, WebP dimension detection, and add WebP pre-processing
+* 2026-03-09 | 10be66c | Fix WebP APNG duration detection using FFmpeg
+* 2026-03-09 | dc3772d | Fix WebP APNG duration detection using FFmpeg
+* 2026-03-09 | f1cf5cc | Fix WebP frame extraction and timing using webpmux
+* 2026-03-09 | 9eba15d | Fix WebP frame extraction and timing using webpmux
+* 2026-03-09 | a761579 | Fix multi-stream AVIF/HEIC stream selection bug
+* 2026-03-09 | add29fa | Fix multi-stream AVIF/HEIC stream selection bug
+* 2026-03-09 | 00198e0 | Fix clippy warning: use .find() instead of .skip_while().next()
+* 2026-03-09 | dfe1a7c | Fix clippy warning: use .find() instead of .skip_while().next()
+* 2026-03-09 | b9a6f88 | Update release workflow to use RELEASE_NOTES file if available
+* 2026-03-09 | 203090b | Update release workflow to use RELEASE_NOTES file if available
+* 2026-03-09 | aa02499 | Fix ffprobe failures on filenames with special characters ([]{%})
+* 2026-03-09 | 616dece | Fix ffprobe failures on filenames with special characters ([]{%})
+* 2026-03-09 | 6809bea | Fix misleading quality check messages and improve timestamp verification diagnostics
+* 2026-03-09 | 44dd242 | Fix misleading quality check messages and improve timestamp verification diagnostics
+* 2026-03-09 | 92d915c | Fix ffprobe image2 demuxer pattern matching and silent errors
+* 2026-03-09 | bf9e0be | Fix ffprobe image2 demuxer pattern matching and silent errors
+* 2026-03-09 | 3dbbf27 | Change stream_size ffprobe from -v quiet to -v error
+* 2026-03-09 | 2c92919 | Change stream_size ffprobe from -v quiet to -v error
+* 2026-03-09 | ad69147 | Enhanced size check logging and copy-on-fail feedback
+* 2026-03-09 | 76f0467 | Enhanced size check logging and copy-on-fail feedback
+* 2026-03-09 | 7a82fac | Changed size tolerance from percentage to KB-level
+* 2026-03-09 | 0def125 | Changed size tolerance from percentage to KB-level
+* 2026-03-09 | 983e831 | Fixed compress mode to respect tolerance setting
+* 2026-03-09 | afa54a2 | Fixed compress mode to respect tolerance setting
+* 2026-03-09 | 152114a | feat: Enhanced error logging system with severity levels and auto-classification
+* 2026-03-09 | 535f2d9 | feat: Enhanced error logging system with severity levels and auto-classification
+* 2026-03-09 | ea0222f | feat: Colorized output, English-only UI, standardized logging macros
+* 2026-03-09 | 65d890d | feat: Colorized output, English-only UI, standardized logging macros
+* 2026-03-10 | b9fe604 | fix: Colors now render in terminal when launched via drag-drop script or app
+* 2026-03-10 | 76549b9 | fix: Colors now render in terminal when launched via drag-drop script or app
+* 2026-03-10 | 6b1b780 | v0.10.13: replace [Info] with 📊 emoji on stats lines; add visual separation
+* 2026-03-10 | 9eaa3d5 | v0.10.13: replace [Info] with 📊 emoji on stats lines; add visual separation
+* 2026-03-10 | e79d953 | v0.10.14: fix all clippy warnings (format! in format! args)
+* 2026-03-10 | d4b78ca | v0.10.14: fix all clippy warnings (format! in format! args)
+* 2026-03-10 | bcef494 | chore: unify version to v0.10.14 across README and Cargo.toml
+* 2026-03-10 | c722d23 | chore: unify version to v0.10.14 across README and Cargo.toml
+* 2026-03-10 | 13426d9 | Add compact duration formatting (1d2h3m4s) to progress displays
+* 2026-03-10 | 528b96b | Add compact duration formatting (1d2h3m4s) to progress displays
+* 2026-03-10 | 9051f36 | Update duration format to detailed style with milliseconds
+* 2026-03-10 | f094d06 | Update duration format to detailed style with milliseconds
+* 2026-03-10 | adf1f99 | Beautify duration format with elegant standard time notation
+* 2026-03-10 | 554ca55 | Beautify duration format with elegant standard time notation
+* 2026-03-10 | e127815 | Beautify duration format with proper spacing and normalization
+* 2026-03-10 | 6f0319f | Beautify duration format with proper spacing and normalization
+* 2026-03-10 | 1215b8c | Beautify duration format with spaces for better readability
+* 2026-03-10 | 94d8465 | Beautify duration format with spaces for better readability
+* 2026-03-10 | cd898ed | Optimize duration format spacing for better balance
+* 2026-03-10 | e1b576d | Optimize duration format spacing for better balance
+* 2026-03-10 | 7ec61a8 | Add weeks unit and implement gradual spacing strategy
+* 2026-03-10 | f34086f | Add weeks unit and implement gradual spacing strategy
+* 2026-03-10 | 1321cfe | Add years and months units with comprehensive time duration support
+* 2026-03-10 | 2226277 | Add years and months units with comprehensive time duration support
+* 2026-03-10 | 76511b6 | Implement progressive spacing strategy for enhanced visual hierarchy
+* 2026-03-10 | b64d4e2 | Implement progressive spacing strategy for enhanced visual hierarchy
+* 2026-03-10 | a799f67 | Consolidate redundant log messages for cleaner output
+* 2026-03-10 | b92cab2 | Consolidate redundant log messages for cleaner output
+* 2026-03-10 | 46388f5 | Restore multi-line log format for better visual presentation
+* 2026-03-10 | 3611793 | Restore multi-line log format for better visual presentation
+* 2026-03-10 | cd080b8 | Create beautiful single-line log format with visual separators
+* 2026-03-10 | 1bc9846 | Create beautiful single-line log format with visual separators
+* 2026-03-10 | 4e15d3b | Move single emoji to QUALITY GATE position for better meaning
+* 2026-03-10 | 0c1a9cf | Move single emoji to QUALITY GATE position for better meaning
+* 2026-03-10 | ff1ee86 | Ensure exactly 4 emojis in both success and failure cases
+* 2026-03-10 | 3b0cf69 | Ensure exactly 4 emojis in both success and failure cases
+* 2026-03-10 | b9c3141 | Fix emoji logic: use ❌ for failed QUALITY GATE
+* 2026-03-10 | ef6bc54 | Fix emoji logic: use ❌ for failed QUALITY GATE
+* 2026-03-10 | 104ca45 | Clean up all test-related temporary files
+* 2026-03-10 | 9ae8a3f | Clean up all test-related temporary files
+* 2026-03-10 | 70ea684 | Update CHANGELOG.md with log beautification improvements
+* 2026-03-10 | 292da0f | Update CHANGELOG.md with log beautification improvements
+* 2026-03-10 | 8526e4d | Fix terminal running-time residue: remove tee /dev/tty from binary pipeline
+* 2026-03-10 | 3d6105e | Fix terminal running-time residue: remove tee /dev/tty from binary pipeline
+* 2026-03-10 | 3fe66c1 | Update bash spinner time format to match Rust compact duration format
+* 2026-03-10 | b801ae5 | Update bash spinner time format to match Rust compact duration format
+* 2026-03-10 | 618f947 | Fix: clear spinner line after processing, restore normal output display
+* 2026-03-10 | f4784de | Fix: clear spinner line after processing, restore normal output display
+* 2026-03-10 | 426c1b5 | fix: stop spinner before binary runs to prevent terminal line collision
+* 2026-03-10 | 2583a30 | fix: stop spinner before binary runs to prevent terminal line collision
+* 2026-03-10 | d15784f | Fix: restore Running spinner display during processing
+* 2026-03-10 | 9c1b670 | Fix: restore Running spinner display during processing
+* 2026-03-10 | effbf83 | Merge branch 'main' into nightly
+* 2026-03-10 | a7ef421 | Merge branch 'main' into nightly
+* 2026-03-10 | 30a303e | Fix: restore Running spinner display during processing (nightly)
+* 2026-03-10 | d66e6ef | Fix: restore Running spinner display during processing (nightly)
+* 2026-03-10 | eb0748d | Fix: restore Running spinner display during processing
+* 2026-03-10 | 6b8c87a | Fix: restore Running spinner display during processing
+* 2026-03-10 | 347e4da | Fix: pause spinner during binary execution, resume after
+* 2026-03-10 | ba967bb | Fix: pause spinner during binary execution, resume after
+* 2026-03-10 | d491811 | Merge branch 'main' into nightly
+* 2026-03-10 | ec0ec92 | Merge branch 'main' into nightly
+* 2026-03-10 | 18df035 | Fix: keep spinner visible by capturing binary output silently
+* 2026-03-10 | d6c152e | Fix: keep spinner visible by capturing binary output silently
+* 2026-03-10 | cd99d55 | Fix: move spinner to terminal title bar to eliminate residue
+* 2026-03-10 | d5b91d8 | Fix: move spinner to terminal title bar to eliminate residue
+* 2026-03-10 | e06d130 | Simplify title bar spinner: show only ⏱ elapsed time
+* 2026-03-10 | ef7e977 | Simplify title bar spinner: show only ⏱ elapsed time
+* 2026-03-10 | ab6048c | Sync title bar timer format with Rust format_duration_compact()
+* 2026-03-10 | 86620ab | Sync title bar timer format with Rust format_duration_compact()
+* 2026-03-10 | 523dcc5 | Increase title bar padding from 30 to 30000 spaces for complete coverage
+* 2026-03-10 | 483b407 | Increase title bar padding from 30 to 30000 spaces for complete coverage
+* 2026-03-10 | bd136c5 | Combine WALL HIT and Backtrack messages into single line
+* 2026-03-10 | 5314916 | Combine WALL HIT and Backtrack messages into single line
+* 2026-03-10 | 2e629fc | Improve WALL HIT log format for better readability and aesthetics
+* 2026-03-10 | 4355384 | Improve WALL HIT log format for better readability and aesthetics
+* 2026-03-10 | 56d186b | Revert to single-line WALL HIT format with emoji at end
+* 2026-03-10 | 94702fa | Revert to single-line WALL HIT format with emoji at end
+* 2026-03-10 | 4570f31 | Unify emoji placement for all CRF search logs - move to end
+* 2026-03-10 | d4ac860 | Unify emoji placement for all CRF search logs - move to end
+* 2026-03-10 | ad1251b | Add separators to success cases for unified CRF log format
+* 2026-03-10 | 5a08b3e | Add separators to success cases for unified CRF log format
+* 2026-03-10 | 5cadf1d | Simplify x265 encoding logs to reduce CLI parameter confusion
+* 2026-03-10 | a307567 | Simplify x265 encoding logs to reduce CLI parameter confusion
+* 2026-03-10 | d63fbad | Add emoji feedback for x265 encoding steps
+* 2026-03-10 | da83460 | Add emoji feedback for x265 encoding steps
+* 2026-03-10 | 2c50c91 | Replace 🔥 fire emoji with 🔍 magnifying glass for Ultimate Explore
+* 2026-03-10 | 0a43633 | Replace 🔥 fire emoji with 🔍 magnifying glass for Ultimate Explore
+* 2026-03-10 | e83015d | Unify per-file log: emoji at tail, fixed-width filename column
+* 2026-03-10 | ad8936f | Unify per-file log: emoji at tail, fixed-width filename column
+* 2026-03-10 | d383e4e | Unify per-file log: emoji at tail, fixed-width filename column
+* 2026-03-10 | babe47b | Unify per-file log: emoji at tail, fixed-width filename column
+* 2026-03-10 | eecb118 | Merge branch 'main' into nightly
+* 2026-03-10 | 38c4129 | Merge branch 'main' into nightly
+* 2026-03-10 | 5e1968b | fix: script syntax error and inconsistent clear-screen on double-click
+* 2026-03-10 | 9b9d100 | fix: script syntax error and inconsistent clear-screen on double-click
+* 2026-03-10 | 9e372d8 | Merge branch 'main' into nightly
+* 2026-03-10 | 7cb6d85 | Merge branch 'main' into nightly
+* 2026-03-10 | 384f963 | fix: restore per-file success lines suppressed by quiet mode in batch
+* 2026-03-10 | 871a895 | fix: restore per-file success lines suppressed by quiet mode in batch
+* 2026-03-10 | d980a1f | Merge branch 'main' into nightly
+* 2026-03-10 | ecf66dc | Merge branch 'main' into nightly
+* 2026-03-10 | 24ee0ac | fix+feat: raise image decode limit for large JPEGs; add Ctrl+C guard
+* 2026-03-10 | d31cbca | fix+feat: raise image decode limit for large JPEGs; add Ctrl+C guard
+* 2026-03-10 | d5e801e | Merge branch 'main' into nightly
+* 2026-03-10 | 2d42493 | Merge branch 'main' into nightly
+* 2026-03-10 | c5cbe90 | fix+feat+refactor: periodic clear fix, emoji prefixes, remove pb/lossless/Simple
+* 2026-03-10 | 970779e | fix+feat+refactor: periodic clear fix, emoji prefixes, remove pb/lossless/Simple
+* 2026-03-10 | 1536da6 | Merge branch 'main' into nightly
+* 2026-03-10 | 141bb51 | Merge branch 'main' into nightly
+* 2026-03-10 | 68f6aec | fix: remove leading blank line from milestone status lines to prevent terminal badges
+* 2026-03-10 | 08d8db2 | fix: remove leading blank line from milestone status lines to prevent terminal badges
+* 2026-03-10 | 1436bda | Merge branch 'main' into nightly
+* 2026-03-10 | 254604e | Merge branch 'main' into nightly
+* 2026-03-10 | f5470d7 | Release v0.10.19: Update version numbers and documentation
+* 2026-03-10 | a39fb44 | Release v0.10.19: Update version numbers and documentation
+* 2026-03-10 | 11f97b3 | Fix emoji display issues
+* 2026-03-10 | d3bf5a5 | Fix emoji display issues
+* 2026-03-10 | 8ffbde8 | Update changelog for emoji bug fixes
+* 2026-03-10 | d9d079d | Update changelog for emoji bug fixes
+* 2026-03-10 | ea977a5 | fix: script clear-screen, double Ctrl+C, milestone inline display
+* 2026-03-10 | 371c3dd | fix: script clear-screen, double Ctrl+C, milestone inline display
+* 2026-03-10 | 2299d24 | fix+refactor: compact milestone format, fix title padding leak, Ctrl+C race
+* 2026-03-10 | 06d3cc6 | fix+refactor: compact milestone format, fix title padding leak, Ctrl+C race
+* 2026-03-10 | 0a27bed | fix: Ctrl+C auto-resume logic, milestone alignment, title padding
+* 2026-03-10 | e79d344 | fix: Ctrl+C auto-resume logic, milestone alignment, title padding
+* 2026-03-10 | 195c22a | Fix milestone persistent display and implement native Ctrl+C guard
+* 2026-03-10 | a76f5ca | Fix milestone persistent display and implement native Ctrl+C guard
+* 2026-03-10 | 88635a1 | Fix milestone persistent display and implement native Ctrl+C guard
+* 2026-03-10 | 5e3ef69 | Fix milestone persistent display and implement native Ctrl+C guard
+* 2026-03-10 | c2f0a09 | Merge main fixes (no version bump)
+* 2026-03-10 | 57f51f2 | Merge main fixes (no version bump)
+* 2026-03-10 | f674422 | Fix Ctrl+C guard and simplify GIF log format
+* 2026-03-10 | 1d97e4a | Fix Ctrl+C guard and simplify GIF log format
+* 2026-03-10 | d9ee140 | Fix milestone display after GIF processing logs
+* 2026-03-10 | 248af3a | Fix milestone display after GIF processing logs
+* 2026-03-10 | 50aa21f | Fix Ctrl+C guard signal handling in pipeline
+* 2026-03-10 | 35d5cd5 | Fix Ctrl+C guard signal handling in pipeline
+* 2026-03-10 | f446a25 | Systematic fix for Ctrl+C guard signal handling
+* 2026-03-10 | aeff861 | Systematic fix for Ctrl+C guard signal handling
+* 2026-03-10 | 16253ac | Fix milestone position and GIF log alignment
+* 2026-03-10 | e02ad9f | Fix milestone position and GIF log alignment
+* 2026-03-10 | f9cc4d8 | 彻底修复 Ctrl+C 守卫信号处理
+* 2026-03-10 | 004e293 | 彻底修复 Ctrl+C 守卫信号处理
+* 2026-03-10 | 723732f | Clean up all temporary test files
+* 2026-03-10 | a895018 | Clean up all temporary test files
+* 2026-03-10 | 7d56312 | Remove all shell signal handling - let Rust handle Ctrl+C directly
+* 2026-03-10 | 1f62fcc | Remove all shell signal handling - let Rust handle Ctrl+C directly
+* 2026-03-10 | bda92b9 | Revert Ctrl+C guard to original working version
+* 2026-03-10 | b72db32 | Revert Ctrl+C guard to original working version
+* 2026-03-10 | 0c5a45f | Restore log display fixes from previous attempts
+* 2026-03-10 | bf54592 | Restore log display fixes from previous attempts
+* 2026-03-10 | 6becb36 | Fix conversion message to use correct English term 'transcoding'
+* 2026-03-10 | 2834878 | Fix conversion message to use correct English term 'transcoding'
+* 2026-03-10 | 4e93876 | Remove redundant 'successful' text since ✅ emoji already indicates success
+* 2026-03-10 | df168d7 | Remove redundant 'successful' text since ✅ emoji already indicates success
+* 2026-03-10 | 1c3e719 | Change GIF text to 'Animation' in English
+* 2026-03-10 | 2ae1fa5 | Change GIF text to 'Animation' in English
+* 2026-03-10 | 7677996 | Fix conversion message to prevent truncation
+* 2026-03-10 | 7055d24 | Fix conversion message to prevent truncation
+* 2026-03-10 | a75c8be | feat: modernize log format, fix terminal colors, rewrite ctrl+c guard, audit & update deps
+* 2026-03-10 | af1c13f | feat: modernize log format, fix terminal colors, rewrite ctrl+c guard, audit & update deps
+* 2026-03-11 | 37f7d52 | fix: make bash script compatible with Rust interactive features
+* 2026-03-11 | 09a2de0 | fix: make bash script compatible with Rust interactive features
+* 2026-03-11 | 1738142 | fix: robust SIGINT pipeline handling and inline terminal stats
+* 2026-03-11 | 5042a8b | fix: robust SIGINT pipeline handling and inline terminal stats
+* 2026-03-11 | bfc4fa7 | fix: restore ANSI colors stripped by refactoring, remove unused TTY code, and consolidate changelog
+* 2026-03-11 | b13975e | fix: restore ANSI colors stripped by refactoring, remove unused TTY code, and consolidate changelog
+* 2026-03-11 | de2dd33 | fix: correctly terminate background title spinner on pipeline Ctrl+C interruptions
+* 2026-03-11 | 1e8930f | fix: correctly terminate background title spinner on pipeline Ctrl+C interruptions
+* 2026-03-11 | 1da93c6 | fix(ui & termination): ensure colors render and subprocesses quit reliably on Ctrl+C
+* 2026-03-11 | c539664 | fix(ui & termination): ensure colors render and subprocesses quit reliably on Ctrl+C
+* 2026-03-11 | bd654f1 | fix: enforce thread suspension on Ctrl+C prompt & overhaul terminal UI aesthetics
+* 2026-03-11 | 38a974b | fix: enforce thread suspension on Ctrl+C prompt & overhaul terminal UI aesthetics
+* 2026-03-11 | 599e6d8 | Merge branch 'main' into nightly
+* 2026-03-11 | fae1291 | Merge branch 'main' into nightly
+* 2026-03-11 | 571ef44 | chore: Standardized 1MB file size limits and translated Simplified Chinese internal outputs
+* 2026-03-11 | 68bfc51 | chore: Standardized 1MB file size limits and translated Simplified Chinese internal outputs
+* 2026-03-11 | 44d9a5e | chore: updated dependencies and translated remaining test assertions to English
+* 2026-03-11 | d3bf728 | chore: updated dependencies and translated remaining test assertions to English
+* 2026-03-11 | 1ac6445 | chore: make can_compress_pure_video respect allow_size_tolerance flag
+* 2026-03-11 | 38d82eb | chore: make can_compress_pure_video respect allow_size_tolerance flag
+* 2026-03-11 | 5fba6d0 | feat: implement precision-first quality detection for video (CRF/B-frames) and images (HEIC/AVIF/TIFF/JXL/JP2)
+* 2026-03-11 | 7a78102 | feat: implement precision-first quality detection for video (CRF/B-frames) and images (HEIC/AVIF/TIFF/JXL/JP2)
+* 2026-03-11 | 453c6e0 | feat: implement precision-first quality detection across all formats and fix workspace build errors
+* 2026-03-11 | 1103319 | feat: implement precision-first quality detection across all formats and fix workspace build errors
+* 2026-03-11 | fc8fb08 | chore: fix clippy  warning in image_detection.rs
+* 2026-03-11 | 9d98595 | chore: fix clippy  warning in image_detection.rs
+* 2026-03-11 | 019703d | feat: use precision-first strategy for image quality detection
+* 2026-03-11 | 7ad8356 | feat: use precision-first strategy for image quality detection
+* 2026-03-11 | e936162 | feat(av1): sync AV1 animated image encoding with HEVC parity
+* 2026-03-11 | 1d74242 | feat(av1): sync AV1 animated image encoding with HEVC parity
+* 2026-03-11 | 4041891 | chore: release v0.10.26 - Precision-first metadata, Ultimate Wall Detection, and UI Overhaul
+* 2026-03-11 | 72492af | chore: release v0.10.26 - Precision-first metadata, Ultimate Wall Detection, and UI Overhaul
+* 2026-03-12 | 495e257 | feat: implement quality fast-fail in upward search and increase saturation to 30 for Ultimate Mode
+* 2026-03-12 | 8aa7360 | feat: implement quality fast-fail in upward search and increase saturation to 30 for Ultimate Mode
+* 2026-03-12 | ceaaa05 | feat: increase saturation to 30 and add 3-sample confirmation for quality fast-fail
+* 2026-03-12 | daf5e0b | feat: increase saturation to 30 and add 3-sample confirmation for quality fast-fail
+* 2026-03-12 | 4fbcf0f | feat: implement 10-step confirmation window for Ultimate wall detection to avoid noise-induced early exit
+* 2026-03-12 | 76bc97d | feat: implement 10-step confirmation window for Ultimate wall detection to avoid noise-induced early exit
+* 2026-03-12 | 2675e46 | feat: implement 'Dead-Wall' fast-fail in downward search to prevent performance waste on non-recoverable quality
+* 2026-03-12 | a7ddbcf | feat: implement 'Dead-Wall' fast-fail in downward search to prevent performance waste on non-recoverable quality
+* 2026-03-12 | c9f5675 | feat: implement sticky quality insights and 50-step extreme saturation for Ultimate Mode
+* 2026-03-12 | 8163294 | feat: implement sticky quality insights and 50-step extreme saturation for Ultimate Mode
+* 2026-03-12 | 121fdc0 | fix: prevent early termination in Ultimate Mode when hitting standard min_crf boundary
+* 2026-03-12 | 6b80f94 | fix: prevent early termination in Ultimate Mode when hitting standard min_crf boundary
+* 2026-03-12 | 45d7b18 | feat: remove CRF floor in Ultimate Mode to allow hitting true physical walls at any CRF
+* 2026-03-12 | 0f626fc | feat: remove CRF floor in Ultimate Mode to allow hitting true physical walls at any CRF
+* 2026-03-12 | 5f104b4 | feat: accelerated CPU fine-tuning with Sprint & Backtrack and removed CRF barriers
+* 2026-03-12 | 46a6656 | feat: accelerated CPU fine-tuning with Sprint & Backtrack and removed CRF barriers
+* 2026-03-12 | df7be3b | feat: unified 10-sample integer quality insight mechanism across all phases (v0.10.34)
+* 2026-03-12 | 3560cd0 | feat: unified 10-sample integer quality insight mechanism across all phases (v0.10.34)
+* 2026-03-12 | 609cf4d | feat: optimize quality insight mechanism and 1MB tolerance logic (v0.10.35)
+* 2026-03-12 | 60af964 | feat: optimize quality insight mechanism and 1MB tolerance logic (v0.10.35)
+* 2026-03-12 | 7c30e4e | feat: Add sprint and backtrack mechanism in CPU 0.1 fine-tuning phase
+* 2026-03-12 | 1df988d | feat: Add sprint and backtrack mechanism in CPU 0.1 fine-tuning phase
+* 2026-03-12 | cf1ecae | feat: restore 453c6e0 precision detection + hardware-aware logging [GPU/CPU]
+* 2026-03-12 | dfdc51e | feat: restore 1103319 precision detection + hardware-aware logging [GPU/CPU]
+* 2026-03-12 | 460e9ff | feat: enhance GPU/CPU phase distinction in logs & clean up fake fallbacks
+* 2026-03-12 | 919a39f | feat: enhance GPU/CPU phase distinction in logs & clean up fake fallbacks
+* 2026-03-13 | 0b10ad5 | feat: unified error handling, enhanced logging & algorithm optimizations
+* 2026-03-13 | 6b9e614 | feat: unified error handling, enhanced logging & algorithm optimizations
+* 2026-03-13 | 1f3499f | test: update test expectations for new constants
+* 2026-03-13 | 95c052d | test: update test expectations for new constants
+* 2026-03-13 | 8411fb1 | docs: update CHANGELOG for v0.10.36
+* 2026-03-13 | e2d3da1 | docs: update CHANGELOG for v0.10.36
+* 2026-03-13 | bdc2a9f | Merge nightly into main - v0.10.36
+* 2026-03-13 | c7e57bb | Merge nightly into main - v0.10.36
+* 2026-03-13 | e27c53a | feat: unified error handling, test fixes, and code cleanup (v0.10.37)
+* 2026-03-13 | 885b618 | feat: unified error handling, test fixes, and code cleanup (v0.10.37)
+* 2026-03-13 | 7add822 | chore: remove unused progress modules
+* 2026-03-13 | 9b65892 | chore: remove unused progress modules
+* 2026-03-13 | 20e91da | fix: remove silent CRF defaults and fix Phase 2 algorithm issues
+* 2026-03-13 | 6b9ccdf | fix: remove silent CRF defaults and fix Phase 2 algorithm issues
+* 2026-03-13 | 7c551f3 | fix(Phase 1): add VMAF/PSNR-UV early insight with integer-level improvement detection
+* 2026-03-13 | 2c75aa7 | fix(Phase 1): add VMAF/PSNR-UV early insight with integer-level improvement detection
+* 2026-03-13 | cc524ae | fix(Phase 4): skip 0.01-granularity when early insight triggered
+* 2026-03-13 | 3bf454b | fix(Phase 4): skip 0.01-granularity when early insight triggered
+* 2026-03-13 | 4706a16 | feat: skip quality verification when early insight triggered
+* 2026-03-13 | 2f1a6f9 | feat: skip quality verification when early insight triggered
+* 2026-03-13 | 3a703fa | fix: early insight only triggers when quality meets thresholds
+* 2026-03-13 | daca562 | fix: early insight only triggers when quality meets thresholds
+* 2026-03-13 | 0591a9e | Fix early insight logic and CRF 40 fallback in GPU coarse search
+* 2026-03-13 | b5ed27f | Fix early insight logic and CRF 40 fallback in GPU coarse search
+* 2026-03-13 | 62fe5e0 | Improve Phase 3 efficiency and GPU precision
+* 2026-03-13 | da2eb99 | Improve Phase 3 efficiency and GPU precision
+* 2026-03-13 | 0b0115c | fix: Phase 2/3 algorithm bugs and logging improvements
+* 2026-03-13 | c54f6c6 | fix: Phase 2/3 algorithm bugs and logging improvements
+* 2026-03-13 | 98d5690 | fix: add quality metrics to early insight log
+* 2026-03-13 | 8d95dfd | fix: add quality metrics to early insight log
+* 2026-03-13 | e1927a8 | feat: increase GPU utilization in ultimate mode with precise exploration
+* 2026-03-13 | e65396e | feat: increase GPU utilization in ultimate mode with precise exploration
+* 2026-03-13 | d8fa914 | fix: enable GPU exploration for small files in ultimate mode
+* 2026-03-13 | f9ad142 | fix: enable GPU exploration for small files in ultimate mode
+* 2026-03-13 | caa499c | fix: adjust GPU skip threshold to prevent hang on tiny files
+* 2026-03-13 | 65898db | fix: adjust GPU skip threshold to prevent hang on tiny files
+* 2026-03-13 | 99262b4 | fix: use integer GPU step sizes to prevent hang, increase iterations
+* 2026-03-13 | 8c97f3c | fix: use integer GPU step sizes to prevent hang, increase iterations
+* 2026-03-13 | ed9b329 | fix: reduce GPU sample duration to prevent timeout hang
+* 2026-03-13 | bc0852e | fix: reduce GPU sample duration to prevent timeout hang
+* 2026-03-13 | 09fafd5 | feat: restore 0.5-0.1 GPU steps and lower Stage 1 threshold
+* 2026-03-13 | 29f2cac | feat: restore 0.5-0.1 GPU steps and lower Stage 1 threshold
+* 2026-03-13 | d695891 | fix: enable GPU search logs in ultimate mode for transparency
+* 2026-03-13 | 35cbc5a | fix: enable GPU search logs in ultimate mode for transparency
+* 2026-03-13 | b931cd7 | feat: enhance temp file security with unique IDs and update dependencies to v0.10.37
+* 2026-03-13 | d020474 | feat: enhance temp file security with unique IDs and update dependencies to v0.10.37
+* 2026-03-13 | 5f5545d | feat: increase GPU and CPU sampling durations in ultimate mode by 15s
+* 2026-03-13 | aab1925 | feat: increase GPU and CPU sampling durations in ultimate mode by 15s
+* 2026-03-13 | 0458b5e | chore: release 0.10.38 - Fix temp file cleanup, PSNR calc, and container overhead
+* 2026-03-13 | 11e53d5 | chore: release 0.10.38 - Fix temp file cleanup, PSNR calc, and container overhead
+* 2026-03-13 | 2db3b45 | feat(gpu_search): Optimize GPU search efficiency for low bitrate videos (<5Mbps)
+* 2026-03-13 | d5e8462 | feat(gpu_search): Optimize GPU search efficiency for low bitrate videos (<5Mbps)
+* 2026-03-13 | 62f61b4 | feat: add image quality metrics to logs and bump version to v0.10.39
+* 2026-03-13 | c38fe0b | feat: add image quality metrics to logs and bump version to v0.10.39
+* 2026-03-13 | 6b4e1e7 | feat: implement JSON-based extensible image classification rule engine and expansion
+* 2026-03-13 | af72fdc | feat: implement JSON-based extensible image classification rule engine and expansion
+* 2026-03-13 | 9c93df7 | feat: hide JPEG transcoding logs from terminal by default (always in log file)
+* 2026-03-13 | 555a912 | feat: hide JPEG transcoding logs from terminal by default (always in log file)
+* 2026-03-13 | 7bea44a | feat: unified milestone statistics and enhanced log alignment
+* 2026-03-13 | 6e4966b | feat: unified milestone statistics and enhanced log alignment
+* 2026-03-13 | eed05ce | feat: add MANGA category and refine DOCUMENT classification rules
+* 2026-03-13 | f91e9c8 | feat: add MANGA category and refine DOCUMENT classification rules
+* 2026-03-13 | f5fbab7 | feat: remove format recommendation from image_classifiers.json
+* 2026-03-13 | f4309f2 | feat: remove format recommendation from image_classifiers.json
+* 2026-03-13 | 4b3cdb9 | feat: Full Logging System Overhaul with Premium Aesthetics
+* 2026-03-13 | 8d4f68c | feat: Full Logging System Overhaul with Premium Aesthetics
+* 2026-03-14 | 6be689f | fix: Resolve duplicate milestone stats and clean up multi-line logs
+* 2026-03-14 | 03eaac0 | fix: Resolve duplicate milestone stats and clean up multi-line logs
+* 2026-03-14 | e707293 | feat: Minimalist Abbreviated Milestones for Video Mode
+* 2026-03-14 | f33040d | feat: Minimalist Abbreviated Milestones for Video Mode
+* 2026-03-14 | f523fe8 | feat: Add XMP shorthand (X:) support to Video Mode milestones
+* 2026-03-14 | 7a17a07 | feat: Add XMP shorthand (X:) support to Video Mode milestones
+* 2026-03-14 | 2f0be3e | feat: release v0.10.43
+* 2026-03-14 | 2f9c613 | feat: release v0.10.43
+* 2026-03-14 | 7108eb3 | fix: eliminate hardcoded quality degradation in image routing
+* 2026-03-14 | 0dd5558 | fix: eliminate hardcoded quality degradation in image routing
+* 2026-03-14 | fd3bb98 | fix: refine image quality routing and update startup logs
+* 2026-03-14 | b3ce399 | fix: refine image quality routing and update startup logs
+* 2026-03-14 | c2bb88d | fix: suppress deprecation warnings in routing logic
+* 2026-03-14 | dbb36be | fix: suppress deprecation warnings in routing logic
+* 2026-03-14 | c17d689 | chore: release v0.10.45
+* 2026-03-14 | 51008fa | chore: release v0.10.45
+* 2026-03-14 | 59cc4d0 | feat: lossless routing for WebP/AVIF/TIFF → JXL; exclude HEIC/HEIF
+* 2026-03-14 | 6e80913 | feat: lossless routing for WebP/AVIF/TIFF → JXL; exclude HEIC/HEIF
+* 2026-03-14 | 568c81b | chore: release v0.10.46 with enhanced modern-lossy-skip and heuristic fix
+* 2026-03-14 | 09d3188 | chore: release v0.10.46 with enhanced modern-lossy-skip and heuristic fix
+* 2026-03-14 | 98ecd4d | feat: add lossless HEIC/HEIF to JXL conversion route
+* 2026-03-14 | 117d3fc | feat: add lossless HEIC/HEIF to JXL conversion route
+* 2026-03-14 | b2823ca | fix: correct HEIC/HEIF skip logic to match WebP/AVIF pattern
+* 2026-03-14 | 6ceb6f5 | fix: correct HEIC/HEIF skip logic to match WebP/AVIF pattern
+* 2026-03-14 | 5ac8656 | Add HEVC transquant_bypass detection and mp4parse dependency
+* 2026-03-14 | ff88e12 | Add HEVC transquant_bypass detection and mp4parse dependency
+* 2026-03-14 | 390edec | fix: restore safe fallback behavior for corrupted media files
+* 2026-03-14 | 806a5c9 | fix: restore safe fallback behavior for corrupted media files
+* 2026-03-14 | a6e129d | fix: silence cache debug logs and prevent stack overflow
+* 2026-03-14 | 2265c2a | fix: silence cache debug logs and prevent stack overflow
+* 2026-03-14 | 5c850d4 | feat: enrich analysis cache and fix UI labels
+* 2026-03-14 | 6e20956 | feat: enrich analysis cache and fix UI labels
+* 2026-03-14 | 0cee0e8 | release: v0.10.49 - README overhaul and HEIC security fix
+* 2026-03-14 | 3b49b5b | release: v0.10.49 - README overhaul and HEIC security fix
+* 2026-03-14 | 06fced5 | feat: explicit size units in logs (v0.10.50)
+* 2026-03-14 | 188f0b2 | feat: explicit size units in logs (v0.10.50)
+* 2026-03-14 | fbc6c96 | refactor: remove dynamic compression adjustment and legacy routing (v0.10.51)
+* 2026-03-14 | 54cdcd6 | refactor: remove dynamic compression adjustment and legacy routing (v0.10.51)
+* 2026-03-14 | 288831c | fix: simplify image classifiers usage and log all fallbacks
+* 2026-03-14 | 765f374 | fix: simplify image classifiers usage and log all fallbacks
+* 2026-03-14 | 2f9505b | tune: refine gif meme-score heuristics for tiny stickers
+* 2026-03-14 | bb697a0 | tune: refine gif meme-score heuristics for tiny stickers
+* 2026-03-14 | 3550944 | tune: sharpen gif meme-score for stickers and social-cache names
+* 2026-03-14 | 8b87107 | tune: sharpen gif meme-score for stickers and social-cache names
+* 2026-03-15 | 1ba9ab8 | chore: bump version to 0.10.52 and perfected meme scoring mechanism
+* 2026-03-15 | 3384e4c | chore: bump version to 0.10.52 and perfected meme scoring mechanism
+* 2026-03-15 | 8467207 | fix: resolve GIF parser desync and implement performance-optimized Joint Audit
+* 2026-03-15 | 731ee96 | fix: resolve GIF parser desync and implement performance-optimized Joint Audit
+* 2026-03-15 | 543e198 | feat: implement 3-stage cross-audit with deep byte-level bitstream investigation
+* 2026-03-15 | e035471 | feat: implement 3-stage cross-audit with deep byte-level bitstream investigation
+* 2026-03-15 | 6c3bfea | fix: resolve compilation errors and implement internal deep byte-research for joint audit
+* 2026-03-15 | cd49c08 | fix: resolve compilation errors and implement internal deep byte-research for joint audit
+* 2026-03-15 | 1a7cfa0 | feat: implement robust persistent cache with nanosecond change detection and SQL migration
+* 2026-03-15 | 021e740 | feat: implement robust persistent cache with nanosecond change detection and SQL migration
+* 2026-03-15 | 71c092a | feat: implement Video CRF search hint (warm start) v0.10.57
+* 2026-03-15 | 2a5cd19 | feat: implement Video CRF search hint (warm start) v0.10.57
+* 2026-03-15 | 1b58859 | chore: update gitignore for local caches and tool configs
+* 2026-03-15 | 23e65a6 | chore: update gitignore for local caches and tool configs
+* 2026-03-15 | 54c20b7 | feat: implement global CRF warm start cache for video and dynamic images
+* 2026-03-15 | a8d3aac | feat: implement global CRF warm start cache for video and dynamic images
+* 2026-03-15 | 34908b1 | fix: unnecessary parentheses around assigned value
+* 2026-03-15 | 42cb077 | fix: unnecessary parentheses around assigned value
+* 2026-03-15 | 208c468 | feat: enhance detect_animation with ffprobe/libavformat fallback
+* 2026-03-15 | b9c8433 | feat: enhance detect_animation with ffprobe/libavformat fallback
+* 2026-03-15 | 564e81c | refactor(animation): fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
+* 2026-03-15 | dff899c | refactor(animation): fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
+* 2026-03-15 | 9d07b93 | fix(heic): remove extension fallback from format detection to prevent NoFtypBox false errors
+* 2026-03-15 | ef4ca89 | fix(heic): remove extension fallback from format detection to prevent NoFtypBox false errors
+* 2026-03-15 | f109e9b | fix(heic): use numeric value for LIBHEIF_SECURITY_LIMITS to prevent NoFtypBox error
+* 2026-03-15 | 860c9ca | fix(heic): use numeric value for LIBHEIF_SECURITY_LIMITS to prevent NoFtypBox error
+* 2026-03-15 | a6427eb | fix(heic): add robust fallback to read_from_file and verify security limits
+* 2026-03-15 | 4494c8f | fix(heic): add robust fallback to read_from_file and verify security limits
+* 2026-03-15 | 6e38294 | fix(heic): complete brand list (heix, hevc, hevx) and add diagnostic tag V3
+* 2026-03-15 | 26c3c2b | fix(heic): complete brand list (heix, hevc, hevx) and add diagnostic tag V3
+* 2026-03-15 | c71f930 | refactor(heic): rename to analyze_heic_file_v4 and add V4 diagnostic tags
+* 2026-03-15 | 4d8f97d | refactor(heic): rename to analyze_heic_file_v4 and add V4 diagnostic tags
+* 2026-03-15 | 7dc4092 | fix(heic): final V4 cleanup, remove panic and restore security limits
+* 2026-03-15 | bb404c6 | fix(heic): final V4 cleanup, remove panic and restore security limits
+* 2026-03-15 | 6212773 | fix(heic): set LIBHEIF_SECURITY_LIMITS at global program entry points
+* 2026-03-15 | 17ec85d | fix(heic): set LIBHEIF_SECURITY_LIMITS at global program entry points
+* 2026-03-15 | cfc083b | v0.10.59: Cache version control + HEIC lossless detection fix
+* 2026-03-15 | a2b3d34 | v0.10.59: Cache version control + HEIC lossless detection fix
+* 2026-03-15 | 72d374f | v0.10.60: Log level optimization + dependency updates
+* 2026-03-15 | 5f8bf26 | v0.10.60: Log level optimization + dependency updates
+* 2026-03-15 | fd8fb02 | v0.10.61: Bind cache version to program version for automatic invalidation
+* 2026-03-15 | c668aff | v0.10.61: Bind cache version to program version for automatic invalidation
+* 2026-03-15 | 73cb2cf | Add WebP/AVIF lossless detection verification
+* 2026-03-15 | 5e4447f | Add WebP/AVIF lossless detection verification
+* 2026-03-15 | 85fd073 | v0.10.62: Unify dependencies to GitHub nightly sources
+* 2026-03-15 | 4d07d80 | v0.10.62: Unify dependencies to GitHub nightly sources
+* 2026-03-15 | 4ce3ddf | Fix compilation warning in nightly branch
+* 2026-03-15 | 9d1ee4c | Fix compilation warning in nightly branch
+* 2026-03-15 | a2eff7f | v0.10.63: Increase HEIC security limits
+* 2026-03-15 | dcf8fd8 | v0.10.63: Increase HEIC security limits
+* 2026-03-15 | e025fc1 | Remove AI tool config folders from Git tracking
+* 2026-03-15 | 193feb8 | Remove AI tool config folders from Git tracking
+* 2026-03-15 | 6bf75cc | fix: remove .clippy.toml from .gitignore (should be tracked)
+* 2026-03-15 | 4900f5e | fix: remove .clippy.toml from .gitignore (should be tracked)
+* 2026-03-15 | 283b936 | chore: bump version to 0.10.64
+* 2026-03-15 | 9a547f5 | chore: bump version to 0.10.64
+* 2026-03-15 | 7511d2b | ci: restore release workflow and add v0.10.64 release notes
+* 2026-03-15 | 8216e56 | ci: restore release workflow and add v0.10.64 release notes
+* 2026-03-15 | befef0e | fix: apply HEIC security limits before reading file (v0.10.65)
+* 2026-03-15 | 240f0e5 | fix: apply HEIC security limits before reading file (v0.10.65)
+* 2026-03-15 | e9a6ad7 | fix: remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
+* 2026-03-15 | e6f0e20 | fix: remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
+* 2026-03-16 | 4f8a9ca | fix: enable v1_21 feature in img_hevc/img_av1 + increase HEIC limits to 15GB (v0.10.66)
+* 2026-03-16 | 863900c | fix: enable v1_21 feature in img_hevc/img_av1 + increase HEIC limits to 15GB (v0.10.66)
+* 2026-03-16 | c12429f | fix: enable v1_21 in shared_utils default feature (critical fix)
+* 2026-03-16 | 56b422d | fix: enable v1_21 in shared_utils default feature (critical fix)
+* 2026-03-16 | 55bda88 | fix: correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
+* 2026-03-16 | a34ee26 | fix: correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
+* 2026-03-16 | d3f02f9 | fix: clippy warnings - simplify logic and add allow attributes
+* 2026-03-16 | 702fcac | fix: clippy warnings - simplify logic and add allow attributes
+* 2026-03-16 | 2a2a99c | fix: resolve all clippy warnings in workspace
+* 2026-03-16 | daaef9d | fix: resolve all clippy warnings in workspace
+* 2026-03-16 | 2aa3a0f | fix: preserve file creation time and clean log output (v0.10.67)
+* 2026-03-16 | fefbcee | fix: preserve file creation time and clean log output (v0.10.67)
+* 2026-03-16 | a252364 | fix: comprehensive metadata preservation across all platforms (v0.10.68)
+* 2026-03-16 | cd37370 | fix: comprehensive metadata preservation across all platforms (v0.10.68)
+* 2026-03-16 | c91553f | fix: enable metadata preservation by default (v0.10.69)
+* 2026-03-16 | 69f182f | fix: enable metadata preservation by default (v0.10.69)
+* 2026-03-16 | 7cdc22e | feat(cache): Enhanced cache system v3 with content fingerprint and integrity verification
+* 2026-03-16 | f6ff095 | feat(cache): Enhanced cache system v3 with content fingerprint and integrity verification
+* 2026-03-16 | 5a55b24 | docs: clarify nightly-only GitHub dependencies in Cargo.toml
+* 2026-03-16 | 393d72e | docs: clarify nightly-only GitHub dependencies in Cargo.toml
+* 2026-03-16 | 5acc824 | feat: nightly branch uses GitHub dependencies for latest iterations
+* 2026-03-16 | e5e1018 | feat: nightly branch uses GitHub dependencies for latest iterations
+* 2026-03-16 | 48c222c | feat: main branch uses stable crates.io dependencies
+* 2026-03-16 | 82be7bf | feat: main branch uses stable crates.io dependencies
+* 2026-03-16 | 815772b | feat: unified version management system
+* 2026-03-16 | cdbb7b8 | feat: unified version management system
+* 2026-03-16 | fe23a4f | feat: unified version management system
+* 2026-03-16 | 65a2ada | feat: unified version management system
+* 2026-03-16 | d08485d | v0.10.72: Fix ICC Profile & Metadata Preservation
+* 2026-03-16 | 4f9ed02 | v0.10.72: Fix ICC Profile & Metadata Preservation
+* 2026-03-16 | f6ce3de | v0.10.71: Complete metadata preservation fix
+* 2026-03-16 | 9c422a9 | v0.10.71: Complete metadata preservation fix
+* 2026-03-16 | 5eca0a6 | nightly: Restore GitHub dependencies for latest iterations
+* 2026-03-16 | db71ab1 | nightly: Restore GitHub dependencies for latest iterations
+* 2026-03-19 | 31e5fe2 | v0.10.73: Compilation warnings fixed and unified version management
+* 2026-03-19 | 55bf6ad | v0.10.73: Compilation warnings fixed and unified version management
+* 2026-03-19 | 9be8d70 | main: Restore crates.io dependencies for stable production use
+* 2026-03-19 | 93fd794 | main: Restore crates.io dependencies for stable production use
+* 2026-03-19 | e8a60cb | feat: Add disk space pre-check to img-hevc
+* 2026-03-19 | c46d459 | feat: Add disk space pre-check to img-hevc
+* 2026-03-19 | 394afe4 | fix: Script menu flow and disk space pre-check integration
+* 2026-03-19 | ea9f3b3 | fix: Script menu flow and disk space pre-check integration
+* 2026-03-19 | cd58b8c | nightly: Restore GitHub dependencies for latest iterations
+* 2026-03-19 | d7d5bad | nightly: Restore GitHub dependencies for latest iterations
+* 2026-03-19 | dbd4c27 | v0.10.74: PNG quantization heuristic accuracy overhaul
+* 2026-03-19 | ebb91d3 | v0.10.74: PNG quantization heuristic accuracy overhaul
+* 2026-03-19 | f277917 | v0.10.74: PNG quantization heuristic accuracy overhaul
+* 2026-03-19 | 7cbe56d | v0.10.74: PNG quantization heuristic accuracy overhaul
+* 2026-03-19 | 97c73cb | v0.10.75: Fix stride bias in color frequency distribution sampling
+* 2026-03-19 | 4614097 | v0.10.75: Fix stride bias in color frequency distribution sampling
+* 2026-03-19 | eb16680 | v0.10.75: Fix stride bias in color frequency distribution sampling
+* 2026-03-19 | b6c8bd4 | v0.10.75: Fix stride bias in color frequency distribution sampling
+* 2026-03-20 | ff9748c | v0.10.76: Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
+* 2026-03-20 | 1059bd8 | v0.10.76: Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
+* 2026-03-20 | ddba28d | v0.10.76: Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
+* 2026-03-20 | 4d688a2 | v0.10.76: Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
+* 2026-03-20 | c10e434 | feat: level up AV1 tools maturity to parity with HEVC, implement CacheStats and GIF meme-score config parity; add GitHub workflow for nightly releases
+* 2026-03-20 | b4a2671 | feat: level up AV1 tools maturity to parity with HEVC, implement CacheStats and GIF meme-score config parity; add GitHub workflow for nightly releases
+* 2026-03-20 | 0e1d51b | Merge branch 'main' into nightly
+* 2026-03-20 | 0213b6b | Merge branch 'main' into nightly
+* 2026-03-20 | b761879 | feat: complete av1 tools parity with hevc tools (small png optimization & finalize logic)
+* 2026-03-20 | ad1955f | feat: complete av1 tools parity with hevc tools (small png optimization & finalize logic)
+* 2026-03-20 | f06a628 | chore: restore clean crates.io dependencies for main branch
+* 2026-03-20 | d48d9ea | chore: restore clean crates.io dependencies for main branch
+* 2026-03-20 | 8866d56 | chore: bump version to v0.10.78 and update docs
+* 2026-03-20 | 8939374 | chore: bump version to v0.10.78 and update docs
+* 2026-03-20 | dabe39b | chore: bump version to v0.10.78 and update docs
+* 2026-03-20 | 3691046 | chore: bump version to v0.10.78 and update docs
+* 2026-03-20 | 6f61fc8 | Merge branch 'nightly'
+* 2026-03-20 | 9bc4058 | Merge branch 'nightly'
+* 2026-03-20 | 0a22e6c | chore: stabilize main branch by removing git dependencies and fixing version regressions
+* 2026-03-20 | fe0cf5f | chore: stabilize main branch by removing git dependencies and fixing version regressions
+* 2026-03-20 | d3235ed | chore: fix clippy warnings
+* 2026-03-20 | 20f273e | chore: fix clippy warnings
+* 2026-03-20 | e436212 | Merge branch 'nightly'
+* 2026-03-20 | dc0478f | Merge branch 'nightly'
+* 2026-03-20 | b80f68b | Fix hardcoded JXL confidence and progress loading
+* 2026-03-20 | 72e546e | Fix hardcoded JXL confidence and progress loading
+* 2026-03-20 | 4ca71da | Fix hardcoded JXL confidence and progress loading
+* 2026-03-20 | 482e8b2 | Fix hardcoded JXL confidence and progress loading
+* 2026-03-20 | 520498e | Fix MS-SSIM resize chain on main deps
+* 2026-03-20 | 43829f9 | Fix MS-SSIM resize chain on main deps
+* 2026-03-20 | ee04d6c | Fix MS-SSIM resize chain on main deps
+* 2026-03-20 | f745da3 | Fix MS-SSIM resize chain on main deps
+* 2026-03-20 | 695734a | Make MS-SSIM resize portable across image deps
+* 2026-03-20 | bf89ec2 | Make MS-SSIM resize portable across image deps
+* 2026-03-20 | 95e99ee | Make MS-SSIM resize portable across image deps
+* 2026-03-20 | 1edcd62 | Make MS-SSIM resize portable across image deps
+* 2026-03-20 | 366780c | Remove hardcoded Q85 lossy fallback
+* 2026-03-20 | 9aeab12 | Remove hardcoded Q85 lossy fallback
+* 2026-03-20 | 793da37 | Remove hardcoded Q85 lossy fallback
+* 2026-03-20 | 6f866b6 | Remove hardcoded Q85 lossy fallback
+* 2026-03-20 | 7c8aa4e | Make thread allocation react to multi-instance mode
+* 2026-03-20 | 24f586b | Make thread allocation react to multi-instance mode
+* 2026-03-20 | c7a5f6a | Make thread allocation react to multi-instance mode
+* 2026-03-20 | bd28ec3 | Make thread allocation react to multi-instance mode
+* 2026-03-20 | 9c22bb8 | Relax path validation for argv-safe paths
+* 2026-03-20 | 6e495df | Relax path validation for argv-safe paths
+* 2026-03-20 | 3cc35f9 | Relax path validation for argv-safe paths
+* 2026-03-20 | 6c4c4cf | Relax path validation for argv-safe paths
+* 2026-03-20 | dba31ee | Harden app and drag-drop shell entrypoints
+* 2026-03-20 | 763de29 | Harden app and drag-drop shell entrypoints
+* 2026-03-20 | c5f2ef7 | Harden app and drag-drop shell entrypoints
+* 2026-03-20 | a1b0143 | Harden app and drag-drop shell entrypoints
+* 2026-03-20 | 0f892a6 | Clean dead helpers and fix validation regressions
+* 2026-03-20 | 1dd2349 | Clean dead helpers and fix validation regressions
+* 2026-03-20 | 389da50 | Clean dead helpers and fix validation regressions
+* 2026-03-20 | fde49fe | Clean dead helpers and fix validation regressions
+* 2026-03-20 | 24142a9 | Remove stale explorer allows and duplicate modules
+* 2026-03-20 | 8835549 | Remove stale explorer allows and duplicate modules
+* 2026-03-20 | 64c060b | Remove stale explorer allows and duplicate modules
+* 2026-03-20 | 1dd1cdb | Remove stale explorer allows and duplicate modules
+* 2026-03-21 | 9625df4 | Surface tool stream read failures
+* 2026-03-21 | 06765b3 | Surface tool stream read failures
+* 2026-03-21 | 2422d74 | Surface tool stream read failures
+* 2026-03-21 | a34a1eb | Surface tool stream read failures
+* 2026-03-21 | fcaddbe | Harden XMP matching and SSIM mapping
+* 2026-03-21 | 9637e4c | Harden XMP matching and SSIM mapping
+* 2026-03-21 | 5a3a75c | Harden XMP matching and SSIM mapping
+* 2026-03-21 | 2552741 | Harden XMP matching and SSIM mapping
+* 2026-03-21 | 24c1c62 | Harden XMP metadata discovery and sidecar matching
+* 2026-03-21 | cb1b174 | Harden XMP metadata discovery and sidecar matching
+* 2026-03-21 | cf975ee | Harden XMP metadata discovery and sidecar matching
+* 2026-03-21 | 3a150ef | Harden XMP metadata discovery and sidecar matching
+* 2026-03-21 | 130b13c | chore: sync changelog for v0.10.79/0.10.80 and update progress tracking logic
+* 2026-03-21 | ca9e6a1 | chore: sync changelog for v0.10.79/0.10.80 and update progress tracking logic
+* 2026-03-21 | 99b915c | merge nightly v0.10.80 into main (maintaining stable dependencies)
+* 2026-03-21 | 745db2f | merge nightly v0.10.80 into main (maintaining stable dependencies)
+* 2026-03-21 | 3e1a76e | feat: standardize output extensions to uppercase and fix formatting in simple mode
+* 2026-03-21 | d875704 | feat: standardize output extensions to uppercase and fix formatting in simple mode
+* 2026-03-21 | b8c5f32 | merge uppercase extensions and formatting fixes into main (maintaining stable dependencies)
+* 2026-03-21 | e8efdb0 | merge uppercase extensions and formatting fixes into main (maintaining stable dependencies)
+* 2026-03-21 | d397fb2 | merge nightly v0.10.81 into main (maintaining stable dependencies)
+* 2026-03-21 | 32f73dd | merge nightly v0.10.81 into main (maintaining stable dependencies)
+* 2026-03-21 | 5331988 | test: remove #[ignore] from all tests and fix stale assertions in video_explorer
+* 2026-03-21 | 561a73d | test: remove #[ignore] from all tests and fix stale assertions in video_explorer
+* 2026-03-21 | 95f608d | merge test fixes into main
+* 2026-03-21 | c85dd89 | merge test fixes into main
+* 2026-03-21 | deb5337 | feat: inject MFB branding into macOS Finder comments
+* 2026-03-21 | fd57df7 | feat: inject MFB branding into macOS Finder comments
+* 2026-03-21 | a57837a | merge macOS Finder branding into main
+* 2026-03-21 | bcfa526 | merge macOS Finder branding into main
+* 2026-03-21 | f20dabc | feat: restrict Finder branding to target formats (JXL, MOV, MP4)
+* 2026-03-21 | cbc4148 | feat: restrict Finder branding to target formats (JXL, MOV, MP4)
+* 2026-03-21 | 55ca01d | merge selective Finder branding
+* 2026-03-21 | 5c5cb57 | merge selective Finder branding
+* 2026-03-21 | b6ec5de | security: remove sensitive prompts from history and add to gitignore
+* 2026-03-21 | 6f93369 | security: remove sensitive prompts from history and add to gitignore
+* 2026-03-21 | b0c3d3c | chore: bump workspace version to 0.10.82
+* 2026-03-21 | d7c56a7 | chore: bump workspace version to 0.10.82
+* 2026-03-21 | 2af000d | merge version bump to 0.10.82
+* 2026-03-21 | e90fdfc | merge version bump to 0.10.82
+* 2026-03-21 | 374a797 | fix: atomic rename for Windows and FFmpeg stream mapping for cover art
+* 2026-03-21 | 6dc59e3 | fix: atomic rename for Windows and FFmpeg stream mapping for cover art
+* 2026-03-21 | 46d6c6b | merge v0.10.82 performance and stability fixes
+* 2026-03-21 | abdc61e | merge v0.10.82 performance and stability fixes
+* 2026-03-21 | dfa68f7 | Harden error visibility and recovery paths
+* 2026-03-21 | ee42745 | Harden error visibility and recovery paths
+* 2026-03-21 | 8e1133c | Tighten cleanup failure reporting
+* 2026-03-21 | ddb3433 | Tighten cleanup failure reporting
+* 2026-03-21 | e07c84f | Surface cache and ffprobe failures
+* 2026-03-21 | aa0fabf | Surface cache and ffprobe failures
+* 2026-03-21 | 7834948 | merge v0.10.82: comprehensive hardening, path security, and error visibility fixes
+* 2026-03-21 | 5cb771c | merge v0.10.82: comprehensive hardening, path security, and error visibility fixes
+* 2026-03-21 | 4a34187 | Pause batch runs on mid-process disk exhaustion
+* 2026-03-21 | 452347f | Pause batch runs on mid-process disk exhaustion
+* 2026-03-21 | 738f2b3 | merge v0.10.82 update: pause batch runs on disk exhaustion
+* 2026-03-21 | 99cfc6f | merge v0.10.82 update: pause batch runs on disk exhaustion
+* 2026-03-21 | a02000d | Scope Finder comment branding to conversion output only; surface delete failures
+* 2026-03-21 | 6522058 | Scope Finder comment branding to conversion output only; surface delete failures
+* 2026-03-21 | c2a0323 | Surface more silent runtime degradation paths
+* 2026-03-21 | b4129a4 | Surface more silent runtime degradation paths
+* 2026-03-21 | de6bbda | fix: scope Finder branding to conversion and surface more silent failures
+* 2026-03-21 | 27a4f28 | fix: scope Finder branding to conversion and surface more silent failures
+* 2026-03-21 | c119011 | merge v0.10.83: stability and metadata scoping fixes
+* 2026-03-21 | ea17b65 | merge v0.10.83: stability and metadata scoping fixes
+* 2026-03-21 | e6d063b | Improve perceived-speed scheduling and surface silent failures
+* 2026-03-21 | d65d3bd | Improve perceived-speed scheduling and surface silent failures
+* 2026-03-21 | 6d81807 | Improve perceived-speed scheduling and surface silent failures
+* 2026-03-21 | c9f7ce6 | Improve perceived-speed scheduling and surface silent failures
+* 2026-03-21 | e11f17b | Harden GUI launches and narrow-terminal progress
+* 2026-03-21 | 20536ad | Harden GUI launches and narrow-terminal progress
+* 2026-03-21 | d68b948 | Harden GUI launches and narrow-terminal progress
+* 2026-03-21 | 8756c54 | Harden GUI launches and narrow-terminal progress
+* 2026-03-21 | 59c8246 | merge v0.10.85: environment hardening and terminal-aware progress
+* 2026-03-21 | 69b8f7c | merge v0.10.85: environment hardening and terminal-aware progress
+* 2026-03-21 | 997b035 | chore: restore GitHub metadata and nightly patch section
+* 2026-03-21 | 32c42d8 | chore: restore GitHub metadata and nightly patch section
+* 2026-03-21 | d0b27ba | merge v0.10.85 (with GitHub sources)
+* 2026-03-21 | 8de2b02 | Fix nightly GitHub dependency build regression
+* 2026-03-21 | f3e51d4 | Fix nightly GitHub dependency build regression
+* 2026-03-21 | d03f8a4 | Surface more silent failures and reset stale checkpoints
+* 2026-03-21 | 2e180c9 | Surface more silent failures and reset stale checkpoints
+* 2026-03-21 | b6331db | Tighten resume validation with cache-bound checkpoints
+* 2026-03-21 | 0cb4a93 | Tighten resume validation with cache-bound checkpoints
+* 2026-03-21 | 8ffb098 | Make checkpoint process probing portable and louder
+* 2026-03-21 | 9d0dae5 | Make checkpoint process probing portable and louder
+* 2026-03-21 | 937a49d | Finish surfacing startup and runtime state failures
+* 2026-03-21 | 8a4217d | Finish surfacing startup and runtime state failures
+* 2026-03-21 | dfed411 | Refine video CRF warm-start cache hints
+* 2026-03-21 | 2bf8d57 | Refine video CRF warm-start cache hints
+* 2026-03-21 | 11c4917 | Refine video CRF warm-start cache hints
+* 2026-03-21 | fde43f7 | Make temp output suffix rand-api agnostic
+* 2026-03-21 | 8b7d0e5 | merge v0.10.85: documentation and latest fixes
+* 2026-03-21 | f790c24 | release: v0.10.86 - finalized v0.10.85 features and documentation
+* 2026-03-21 | df4b355 | release: v0.10.86 - finalized v0.10.85 features and documentation
+* 2026-03-21 | 425b2c2 | merge v0.10.86: sealed release with updated notes
+* 2026-03-22 | 1004123 | docs: consolidate redundant documentation and release notes into docs/ directory
+* 2026-03-22 | f5e2c94 | force sync nightly to remote to resolve diversion
+* 2026-03-22 | 60aac8c | merge v0.10.86: synchronized after dual-branch privacy purge
+* 2026-03-22 | 6bce313 | release: v0.10.87 - privacy hardened repository with segmented dependency architecture
+* 2026-03-22 | ac0e2c3 | docs: re-anchor project documentation with complete README history purged
+* 2026-03-22 | c2c372f | build(nightly): synchronize and update GitHub dependencies to latest upstream iterations (v0.10.87-nightly)
+* 2026-03-22 | 272163e | docs: reconstruct and synchronize 2200-line changelog following repository sanitization (v0.10.87)
+* 2026-03-22 | 5483742 | docs: finalize v0.10.87 changelog with comprehensive official release notes (v0.10.78-v0.10.87)
+* 2026-03-22 | dddcb6b | docs: integrate core historical release notes (v0.10.66, v0.10.64, v0.10.9) into unified changelog
+* 2026-03-22 | 5de8774 | docs/app: restore macOS application bundle stripped during repository sanitization
+* 2026-03-22 | fc98820 | build: finalize and lock drag-and-drop scripts for v0.10.87 release
+* 2026-03-22 | 4f58b56 | docs: integrate translated historical 'loud failure' notes into unified changelog (v0.10.82-v0.10.87)
+* 2026-03-22 | 808bd25 | Fix odd-dimension metric normalization for animated quality checks
+* 2026-03-22 | 571a92c | build: restore modern English-only macOS app bundle (v0.10.87)
+* 2026-03-22 | d1d3f4c | build: finalize app bundle versioning to v0.10.87 (2026-03-22)
+* 2026-03-22 | 281a65a | build: truly restore original v0.10.87 app bundle and changelog
+* 2026-03-22 | 272ffb7 | build: remove redundant cleanup script and finalize unified project state
+* 2026-03-22 | 4c078c9 | docs: RESTORED FULL ULTIMATE CHANGELOG via local Cursor history (2200+ lines)
+* 2026-03-22 | 0312a7e | feat: add real-time branch/version transparency to UI header (v0.10.87)
