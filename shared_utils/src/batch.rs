@@ -7,6 +7,8 @@
 
 use crate::file_sorter::{sort_by_size_ascending, SortStrategy};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tracing::warn;
 use walkdir::WalkDir;
 
@@ -109,12 +111,84 @@ pub const IMAGE_EXTENSIONS: &[&str] = &[
 pub const ANIMATED_EXTENSIONS: &[&str] = &["gif", "webp", "png"];
 
 #[derive(Debug, Clone)]
+pub struct BatchPauseInfo {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+#[derive(Debug, Default)]
+pub struct BatchPauseController {
+    paused: AtomicBool,
+    info: Mutex<Option<BatchPauseInfo>>,
+}
+
+impl BatchPauseController {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    pub fn request_pause(&self, path: &Path, reason: impl Into<String>) -> bool {
+        let reason = reason.into();
+        let newly_paused = self
+            .paused
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok();
+
+        if newly_paused {
+            let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
+            *info = Some(BatchPauseInfo {
+                path: path.to_path_buf(),
+                reason,
+            });
+        }
+
+        newly_paused
+    }
+
+    pub fn pause_info(&self) -> Option<BatchPauseInfo> {
+        self.info.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+}
+
+pub fn disk_full_pause_reason(message: &str) -> Option<String> {
+    let lower = message.to_lowercase();
+    let disk_full = [
+        "no space left on device",
+        "disk full",
+        "storage full",
+        "database or disk is full",
+        "there is not enough space on the disk",
+        "not enough space",
+        "enospc",
+        "no usable temporary file name found",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle));
+
+    if disk_full {
+        Some(
+            "Disk space was exhausted during processing. Batch paused; free space and rerun with --resume to continue."
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct BatchResult {
     pub total: usize,
     pub succeeded: usize,
     pub failed: usize,
     pub skipped: usize,
     pub errors: Vec<(PathBuf, String)>,
+    pub paused: bool,
+    pub pause_info: Option<BatchPauseInfo>,
+    pub paused_remaining: usize,
 }
 
 impl BatchResult {
@@ -125,6 +199,9 @@ impl BatchResult {
             failed: 0,
             skipped: 0,
             errors: Vec::new(),
+            paused: false,
+            pause_info: None,
+            paused_remaining: 0,
         }
     }
 
@@ -142,6 +219,12 @@ impl BatchResult {
     pub fn skip(&mut self) {
         self.total += 1;
         self.skipped += 1;
+    }
+
+    pub fn pause(&mut self, path: PathBuf, reason: String, remaining: usize) {
+        self.paused = true;
+        self.pause_info = Some(BatchPauseInfo { path, reason });
+        self.paused_remaining = remaining;
     }
 
     pub fn success_rate(&self) -> f64 {
@@ -375,5 +458,44 @@ mod tests {
             result.succeeded + result.failed + result.skipped,
             "STRICT: total must equal succeeded + failed + skipped"
         );
+    }
+
+    #[test]
+    fn test_disk_full_pause_reason_matches_common_messages() {
+        assert!(disk_full_pause_reason("No space left on device").is_some());
+        assert!(disk_full_pause_reason("sqlite error: database or disk is full").is_some());
+        assert!(disk_full_pause_reason("ENOSPC while writing temp output").is_some());
+        assert!(disk_full_pause_reason("permission denied").is_none());
+    }
+
+    #[test]
+    fn test_batch_result_pause_tracks_remaining_work() {
+        let mut result = BatchResult::new();
+        result.success();
+        result.pause(
+            PathBuf::from("example.mov"),
+            "Disk exhausted".to_string(),
+            5,
+        );
+
+        assert!(result.paused);
+        assert_eq!(result.total, 1);
+        assert_eq!(result.paused_remaining, 5);
+        assert_eq!(
+            result.pause_info.as_ref().map(|info| info.path.as_path()),
+            Some(Path::new("example.mov"))
+        );
+    }
+
+    #[test]
+    fn test_pause_controller_keeps_first_pause_reason() {
+        let controller = BatchPauseController::new();
+
+        assert!(controller.request_pause(Path::new("first.png"), "first"));
+        assert!(!controller.request_pause(Path::new("second.png"), "second"));
+
+        let info = controller.pause_info().expect("pause info should exist");
+        assert_eq!(info.path, PathBuf::from("first.png"));
+        assert_eq!(info.reason, "first");
     }
 }

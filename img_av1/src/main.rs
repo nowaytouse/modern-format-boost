@@ -1,13 +1,16 @@
 use clap::{Parser, Subcommand};
 use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
 use rayon::prelude::*;
-use shared_utils::{check_dangerous_directory, print_summary_report, BatchResult};
+use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
+use shared_utils::{
+    check_dangerous_directory, disk_full_pause_reason, print_summary_report, BatchPauseController,
+    BatchResult,
+};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use shared_utils::analysis_cache::AnalysisCache;
 
 use img_av1::conversion_api::ConversionOutput;
 
@@ -194,30 +197,63 @@ fn main() -> anyhow::Result<()> {
             };
 
             if verbose {
-                shared_utils::progress_mode::emit_stderr(&format!("{} {} (for animated→video)", symbols::VIDEO, flag_mode.description_en()));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} {} (for animated→video)",
+                    symbols::VIDEO,
+                    flag_mode.description_en()
+                ));
                 shared_utils::progress_mode::emit_stderr(&format!("{} Static: JPEG→JXL (reconstruct) │ Modern Lossless→JXL (d=0.0) │ PNG/Legacy→JXL (d=0.0/0.1)", symbols::IMAGE));
             }
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Create run log automatically; quality and progress are always recorded
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("img_av1") {
-                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open default log file\x1b[0m", e);
+                shared_utils::log_eprintln!(
+                    "⚠️  {}: {}",
+                    "\x1b[33mCould not open default log file\x1b[0m",
+                    e
+                );
             }
             if apple_compat {
-                shared_utils::progress_mode::emit_stderr(&format!("{} Apple Compatibility: {}ENABLED{} (animated WebP → AV1)", symbols::SHIELD, colors::BOLD, colors::RESET));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} Apple Compatibility: {}ENABLED{} (animated WebP → AV1)",
+                    symbols::SHIELD,
+                    colors::BOLD,
+                    colors::RESET
+                ));
                 std::env::set_var("MODERN_FORMAT_BOOST_APPLE_COMPAT", "1");
             }
             if force_video {
-                shared_utils::progress_mode::emit_stderr(&format!("{} Force Video: {}ENABLED{} (skip meme-score)", symbols::ROCKET, colors::BOLD, colors::RESET));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} Force Video: {}ENABLED{} (skip meme-score)",
+                    symbols::ROCKET,
+                    colors::BOLD,
+                    colors::RESET
+                ));
                 std::env::set_var("MODERN_FORMAT_BOOST_FORCE_VIDEO", "1");
             }
             if in_place {
-                shared_utils::progress_mode::emit_stderr(&format!("{} In-place mode: {}ENABLED{} (auto-delete original)", symbols::SAVE, colors::BOLD, colors::RESET));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} In-place mode: {}ENABLED{} (auto-delete original)",
+                    symbols::SAVE,
+                    colors::BOLD,
+                    colors::RESET
+                ));
             }
             if ultimate {
-                shared_utils::progress_mode::emit_stderr(&format!("{} Ultimate Explore: {}ENABLED{} (max SSIM mode)", symbols::SEARCH, colors::BOLD, colors::RESET));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} Ultimate Explore: {}ENABLED{} (max SSIM mode)",
+                    symbols::SEARCH,
+                    colors::BOLD,
+                    colors::RESET
+                ));
             }
             if !allow_size_tolerance {
-                shared_utils::progress_mode::emit_stderr(&format!("{} Size Tolerance: {}DISABLED{} (strict < original)", symbols::CHART, colors::BOLD, colors::RESET));
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "{} Size Tolerance: {}DISABLED{} (strict < original)",
+                    symbols::CHART,
+                    colors::BOLD,
+                    colors::RESET
+                ));
             }
             if cpu {
                 shared_utils::log_eprintln!("🖥️  CPU Encoding: ENABLED (libaom for maximum SSIM)");
@@ -258,7 +294,11 @@ fn main() -> anyhow::Result<()> {
             } else if input.is_dir() {
                 auto_convert_directory(&input, &config, resume)?;
             } else {
-                shared_utils::log_eprintln!("❌ {}: {}", "\x1b[1;31mError: Input path does not exist\x1b[0m", input.display());
+                shared_utils::log_eprintln!(
+                    "❌ {}: {}",
+                    "\x1b[1;31mError: Input path does not exist\x1b[0m",
+                    input.display()
+                );
                 std::process::exit(1);
             }
         }
@@ -273,7 +313,11 @@ fn main() -> anyhow::Result<()> {
         Commands::RestoreTimestamps { source, output } => {
             if let Err(e) = shared_utils::restore_timestamps_from_source_to_output(&source, &output)
             {
-                shared_utils::log_eprintln!("⚠️ {}: {}", "\x1b[33mrestore-timestamps failed\x1b[0m", e);
+                shared_utils::log_eprintln!(
+                    "⚠️ {}: {}",
+                    "\x1b[33mrestore-timestamps failed\x1b[0m",
+                    e
+                );
                 std::process::exit(1);
             }
         }
@@ -284,7 +328,11 @@ fn main() -> anyhow::Result<()> {
                     Ok(stats) => {
                         println!("\n📊 Cache Statistics");
                         println!("═══════════════════════════════════════");
-                        println!("📁 Database Size: {:.2} MB ({:.3} GB)", stats.db_size_mb(), stats.db_size_gb());
+                        println!(
+                            "📁 Database Size: {:.2} MB ({:.3} GB)",
+                            stats.db_size_mb(),
+                            stats.db_size_gb()
+                        );
                         println!("📦 Total Records: {}", stats.total_records());
                         println!("   ├─ Analysis: {}", stats.analysis_records);
                         println!("   ├─ Quality: {}", stats.quality_records);
@@ -292,11 +340,15 @@ fn main() -> anyhow::Result<()> {
                         println!("🔗 Path Index Entries: {}", stats.path_index_entries);
                         println!("\n🔢 Version Information:");
                         println!("   ├─ Schema Version: v{}", stats.schema_version);
-                        println!("   └─ Current Algorithm: v{}", stats.current_algorithm_version);
-                        
+                        println!(
+                            "   └─ Current Algorithm: v{}",
+                            stats.current_algorithm_version
+                        );
+
                         if !stats.algorithm_version_distribution.is_empty() {
                             println!("\n📈 Algorithm Version Distribution:");
-                            let mut versions: Vec<_> = stats.algorithm_version_distribution.iter().collect();
+                            let mut versions: Vec<_> =
+                                stats.algorithm_version_distribution.iter().collect();
                             versions.sort_by_key(|(v, _)| *v);
                             for (version, count) in versions {
                                 let marker = if *version < stats.current_algorithm_version {
@@ -308,20 +360,22 @@ fn main() -> anyhow::Result<()> {
                                 };
                                 println!("   v{}: {} records {}", version, count, marker);
                             }
-                            
+
                             let stale = stats.stale_records();
                             if stale > 0 {
                                 println!("\n⚠️  {} stale records detected (will be auto-invalidated on next run)", stale);
                             }
                         }
-                        
-                        let usage_percent = (stats.db_size_bytes as f64 / shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES as f64) * 100.0;
+
+                        let usage_percent = (stats.db_size_bytes as f64
+                            / shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES as f64)
+                            * 100.0;
                         println!("\n💾 Storage Usage: {:.1}% of 85 GB limit", usage_percent);
-                        
+
                         if usage_percent > 80.0 {
                             println!("⚠️  Cache is approaching size limit!");
                         }
-                        
+
                         println!("═══════════════════════════════════════\n");
                     }
                     Err(e) => {
@@ -339,13 +393,19 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn verify_conversion(original: &Path, converted: &Path, cache: Option<&AnalysisCache>) -> anyhow::Result<()> {
+fn verify_conversion(
+    original: &Path,
+    converted: &Path,
+    cache: Option<&AnalysisCache>,
+) -> anyhow::Result<()> {
     println!("🔍 Verifying conversion quality...");
     println!("   Original:  {}", original.display());
     println!("   Converted: {}", converted.display());
 
-    let original_analysis = shared_utils::image_analyzer::analyze_image_with_cache(original, cache)?;
-    let converted_analysis = shared_utils::image_analyzer::analyze_image_with_cache(converted, cache)?;
+    let original_analysis =
+        shared_utils::image_analyzer::analyze_image_with_cache(original, cache)?;
+    let converted_analysis =
+        shared_utils::image_analyzer::analyze_image_with_cache(converted, cache)?;
 
     println!("\n📊 Size Comparison:");
     println!(
@@ -451,8 +511,8 @@ fn auto_convert_single_file(
     config: &AutoConvertConfig,
 ) -> anyhow::Result<ConversionOutput> {
     use img_av1::lossless_converter::{
-        convert_jpeg_to_jxl, convert_to_av1_mp4,
-        convert_to_av1_mp4_matched, convert_to_jxl, convert_to_jxl_matched, ConvertOptions,
+        convert_jpeg_to_jxl, convert_to_av1_mp4, convert_to_av1_mp4_matched, convert_to_jxl,
+        convert_to_jxl_matched, ConvertOptions,
     };
 
     // Pause if the user is being prompted to exit via Ctrl+C
@@ -483,11 +543,13 @@ fn auto_convert_single_file(
         });
     }
 
-    let analysis = shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
+    let analysis =
+        shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
 
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
     if !analysis.is_animated {
-        let skip = shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
+        let skip =
+            shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
         if skip.should_skip {
             if config.verbose {
                 println!("⏭️ {}: {}", skip.reason, input.display());
@@ -508,7 +570,10 @@ fn auto_convert_single_file(
     // 完整接入图像质量分析：静态图始终做像素级分析，用于路由 + 质量输出（自动写入 run log）
     // 针对性：JPEG 这种已经明确走 lossless transcode 到 JXL 的不需要开启昂贵的像素级分析
     let pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
-        shared_utils::image_quality_detector::analyze_image_quality_with_cache(input, config.cache.as_deref())
+        shared_utils::image_quality_detector::analyze_image_quality_with_cache(
+            input,
+            config.cache.as_deref(),
+        )
     } else {
         None
     };
@@ -545,7 +610,6 @@ fn auto_convert_single_file(
         quality_label: Some(quality_label),
     };
 
-
     macro_rules! verbose_log {
         ($($arg:tt)*) => {
             if config.verbose {
@@ -580,7 +644,6 @@ fn auto_convert_single_file(
             convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
         // Static modern lossy / JXL already handled by should_skip_image_format above.
-
         ("JPEG", _, false) => {
             if config.match_quality {
                 verbose_log!("🔄 JPEG→JXL (MATCH QUALITY): {}", input.display());
@@ -636,13 +699,19 @@ fn auto_convert_single_file(
                             input.display()
                         );
                         copy_original_if_adjacent_mode(input, config)?;
-                        return Ok(make_skipped("Skipping static modern format to avoid generational loss"));
+                        return Ok(make_skipped(
+                            "Skipping static modern format to avoid generational loss",
+                        ));
                     }
 
                     let distance = if use_lossless { 0.0 } else { 0.1 };
                     verbose_log!(
                         "🔄 Static GIF/Modern→JXL ({}): {}",
-                        if distance == 0.0 { "Lossless" } else { "Quality 100" },
+                        if distance == 0.0 {
+                            "Lossless"
+                        } else {
+                            "Quality 100"
+                        },
                         input.display()
                     );
                     let conv_result = if use_lossless {
@@ -655,7 +724,8 @@ fn auto_convert_single_file(
                     return Ok(convert_result_to_output(conv_result));
                 }
                 _ => {
-                    let retry = shared_utils::image_analyzer::get_animation_duration_for_path(input);
+                    let retry =
+                        shared_utils::image_analyzer::get_animation_duration_for_path(input);
                     if let Some(d) = retry {
                         d
                     } else {
@@ -665,7 +735,9 @@ fn auto_convert_single_file(
                             input.display()
                         );
                         shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                        shared_utils::log_eprintln!("   💡 Suggestion: install ffprobe: brew install ffmpeg");
+                        shared_utils::log_eprintln!(
+                            "   💡 Suggestion: install ffprobe: brew install ffmpeg"
+                        );
                         copy_original_if_adjacent_mode(input, config)?;
                         return Ok(make_skipped("Cannot get animation duration"));
                     }
@@ -689,7 +761,9 @@ fn auto_convert_single_file(
                 // Force video mode: always convert to video, skip meme-score
                 false
             } else if let Some(ref p) = probe {
-                if let Some(mut meta) = shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input) {
+                if let Some(mut meta) =
+                    shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input)
+                {
                     if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
                         meta.palette_size = pal;
                         meta.app_extensions = exts;
@@ -718,13 +792,17 @@ fn auto_convert_single_file(
                 if is_lossless {
                     shared_utils::progress_mode::emit_stderr(&format!(
                         "🔄 Animated {}→AV1 MP4 (CRF 0, {:.1}s): {}",
-                        format, duration, input.display()
+                        format,
+                        duration,
+                        input.display()
                     ));
                     convert_to_av1_mp4(input, &options)?
                 } else {
                     shared_utils::progress_mode::emit_stderr(&format!(
                         "🔄 Animated {}→AV1 MP4 (SMART QUALITY, {:.1}s): {}",
-                        format, duration, input.display()
+                        format,
+                        duration,
+                        input.display()
                     ));
                     convert_to_av1_mp4_matched(input, &options, &analysis)?
                 }
@@ -763,7 +841,11 @@ fn auto_convert_single_file(
     Ok(output)
 }
 
-fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool) -> anyhow::Result<()> {
+fn auto_convert_directory(
+    input: &Path,
+    config: &AutoConvertConfig,
+    resume: bool,
+) -> anyhow::Result<()> {
     // Check for Apple Photos library before any processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
         eprintln!("{}", e);
@@ -833,7 +915,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
             Ok(cp) => {
                 if cp.is_resume_mode() {
                     if config.verbose {
-                        println!("📂 Resume: skipping {} already completed images", cp.completed_count());
+                        println!(
+                            "📂 Resume: skipping {} already completed images",
+                            cp.completed_count()
+                        );
                     }
                     cp.sync_to_processed_list();
                 }
@@ -898,6 +983,7 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
     let processed = AtomicUsize::new(0);
     let actual_input_bytes = std::sync::atomic::AtomicU64::new(0);
     let actual_output_bytes = std::sync::atomic::AtomicU64::new(0);
+    let pause_controller = Arc::new(BatchPauseController::new());
 
     // Initialize Ctrl+C guard for long-running batch operations
     shared_utils::ctrlc_guard::init();
@@ -915,7 +1001,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
         Err(e) => {
             shared_utils::log_eprintln!(
                 "⚠️  {}: {}, falling back to 2 threads",
-                format!("\x1b[33mFailed to create {} thread pool\x1b[0m", max_threads),
+                format!(
+                    "\x1b[33mFailed to create {} thread pool\x1b[0m",
+                    max_threads
+                ),
                 e
             );
             rayon::ThreadPoolBuilder::new()
@@ -941,6 +1030,10 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
 
     pool.install(|| {
         files.par_iter().for_each(|path| {
+            if pause_controller.is_paused() {
+                return;
+            }
+
             // Check if already completed (thread-safe)
             if let Some(cp) = checkpoint.as_ref() {
                 if cp.is_completed(path) {
@@ -983,6 +1076,15 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
                     let msg = e.to_string();
                     if msg.contains("Skipped") || msg.contains("skip") {
                         skipped.fetch_add(1, Ordering::Relaxed);
+                    } else if let Some(reason) = disk_full_pause_reason(&msg) {
+                        if pause_controller.request_pause(path, reason.clone()) {
+                            shared_utils::log_eprintln!(
+                                "⏸️ [Batch] Paused at {}: {}",
+                                path.display(),
+                                reason
+                            );
+                        }
+                        return;
                     } else {
                         let err_str = e.to_string();
                         shared_utils::log_auto_error!("Image conversion", "Failed {}: {}", path.display(), e);
@@ -1024,12 +1126,20 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
     let success_count = success.load(Ordering::Relaxed);
     let skipped_count = skipped.load(Ordering::Relaxed);
     let failed_count = failed.load(Ordering::Relaxed);
+    let processed_count = processed.load(Ordering::Relaxed);
 
     let mut result = BatchResult::new();
     result.succeeded = success_count;
     result.failed = failed_count;
     result.skipped = skipped_count;
-    result.total = total;
+    result.total = processed_count;
+    if let Some(pause) = pause_controller.pause_info() {
+        result.pause(
+            pause.path,
+            pause.reason,
+            total.saturating_sub(processed_count),
+        );
+    }
 
     let final_input_bytes = actual_input_bytes.load(Ordering::Relaxed);
     let final_output_bytes = actual_output_bytes.load(Ordering::Relaxed);
@@ -1042,16 +1152,20 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
         "Image Conversion",
     );
 
-    if let Some(ref output_dir) = config.output_dir {
-        if let Some(ref base_dir) = config.base_dir {
-            shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
+    if !result.paused {
+        if let Some(ref output_dir) = config.output_dir {
+            if let Some(ref base_dir) = config.base_dir {
+                shared_utils::preserve_directory_metadata_with_log(base_dir, output_dir);
+            }
         }
     }
 
     if let Some(ref saved) = saved_dir_timestamps {
-        if let Some(ref output_dir) = config.output_dir {
-            if let Some(ref base_dir) = config.base_dir {
-                shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
+        if !result.paused {
+            if let Some(ref output_dir) = config.output_dir {
+                if let Some(ref base_dir) = config.base_dir {
+                    shared_utils::apply_saved_timestamps_to_dst(saved, base_dir, output_dir);
+                }
             }
         }
         shared_utils::restore_directory_timestamps(saved);
@@ -1060,14 +1174,16 @@ fn auto_convert_directory(input: &Path, config: &AutoConvertConfig, resume: bool
 
     // Finalize checkpoint only on 100% success
     if let Some(cp) = checkpoint {
-        if failed_count == 0 {
-            if let Err(e) = cp.cleanup() {
-                shared_utils::log_eprintln!("⚠️ [checkpoint] Cleanup failed: {}", e);
-            }
-        } else {
+        if result.paused {
             if let Err(e) = cp.release_lock() {
                 shared_utils::log_eprintln!("⚠️ [checkpoint] Release lock failed: {}", e);
             }
+        } else if failed_count == 0 {
+            if let Err(e) = cp.cleanup() {
+                shared_utils::log_eprintln!("⚠️ [checkpoint] Cleanup failed: {}", e);
+            }
+        } else if let Err(e) = cp.release_lock() {
+            shared_utils::log_eprintln!("⚠️ [checkpoint] Release lock failed: {}", e);
         }
     }
 

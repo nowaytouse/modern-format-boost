@@ -23,12 +23,25 @@ pub fn print_summary_report(
     };
 
     println!();
-    println!("{}╭────────────────────────────────────────────────────────────────────────────╮{}", MFB_BLUE, RESET);
+    println!(
+        "{}╭────────────────────────────────────────────────────────────────────────────╮{}",
+        MFB_BLUE, RESET
+    );
     println!(
         "{}│{}  {}📊 {} Summary Report{}{}                                        {}│{}",
-        MFB_BLUE, RESET, BOLD, operation_name, RESET, " ".repeat(46 - operation_name.len()), MFB_BLUE, RESET
+        MFB_BLUE,
+        RESET,
+        BOLD,
+        operation_name,
+        RESET,
+        " ".repeat(46 - operation_name.len()),
+        MFB_BLUE,
+        RESET
     );
-    println!("{}├────────────────────────────────────────────────────────────────────────────┤{}", MFB_BLUE, RESET);
+    println!(
+        "{}├────────────────────────────────────────────────────────────────────────────┤{}",
+        MFB_BLUE, RESET
+    );
     println!(
         "{}│{}  📁 Files Processed:    {:>10}                                         {}│{}",
         MFB_BLUE, RESET, result.total, MFB_BLUE, RESET
@@ -45,31 +58,69 @@ pub fn print_summary_report(
         "{}│{}  {}⏭️  Skipped:             {:>10}{}                                         {}│{}",
         MFB_BLUE, RESET, BRIGHT_YELLOW, result.skipped, RESET, MFB_BLUE, RESET
     );
-    
-    let rate_color = if result.success_rate() > 90.0 { BRIGHT_GREEN } else { BRIGHT_YELLOW };
+    if result.paused {
+        println!(
+            "{}│{}  {}⏸️  Paused:              {:>10}{}                                         {}│{}",
+            MFB_BLUE, RESET, BRIGHT_YELLOW, "YES", RESET, MFB_BLUE, RESET
+        );
+    }
+
+    let rate_color = if result.success_rate() > 90.0 {
+        BRIGHT_GREEN
+    } else {
+        BRIGHT_YELLOW
+    };
     println!(
         "{}│{}  {}📈 Success Rate:{}        {}{:>9.1}%{}                                         {}│{}",
         MFB_BLUE, RESET, BRIGHT_CYAN, RESET, rate_color, result.success_rate(), RESET, MFB_BLUE, RESET
     );
-    println!("{}├────────────────────────────────────────────────────────────────────────────┤{}", MFB_BLUE, RESET);
+    println!(
+        "{}├────────────────────────────────────────────────────────────────────────────┤{}",
+        MFB_BLUE, RESET
+    );
     println!(
         "{}│{}  💾 Input Size:         {}{:>10}{}                                         {}│{}",
-        MFB_BLUE, RESET, DIM, format_bytes(input_bytes), RESET, MFB_BLUE, RESET
+        MFB_BLUE,
+        RESET,
+        DIM,
+        format_bytes(input_bytes),
+        RESET,
+        MFB_BLUE,
+        RESET
     );
-    
-    let out_color = if reduction > 0.0 { BRIGHT_GREEN } else { BRIGHT_YELLOW };
+
+    let out_color = if reduction > 0.0 {
+        BRIGHT_GREEN
+    } else {
+        BRIGHT_YELLOW
+    };
     println!(
         "{}│{}  💾 Output Size:        {}{:>10}{}                                         {}│{}",
-        MFB_BLUE, RESET, out_color, format_bytes(output_bytes), RESET, MFB_BLUE, RESET
+        MFB_BLUE,
+        RESET,
+        out_color,
+        format_bytes(output_bytes),
+        RESET,
+        MFB_BLUE,
+        RESET
     );
     println!(
         "{}│{}  📉 Size Reduction:     {}{:>9.1}%{}                                         {}│{}",
         MFB_BLUE, RESET, out_color, reduction, RESET, MFB_BLUE, RESET
     );
-    println!("{}├────────────────────────────────────────────────────────────────────────────┤{}", MFB_BLUE, RESET);
+    println!(
+        "{}├────────────────────────────────────────────────────────────────────────────┤{}",
+        MFB_BLUE, RESET
+    );
     println!(
         "{}│{}  ⏱️  Total Time:         {}{:>10}{}                                         {}│{}",
-        MFB_BLUE, RESET, BRIGHT_CYAN, format_duration(duration), RESET, MFB_BLUE, RESET
+        MFB_BLUE,
+        RESET,
+        BRIGHT_CYAN,
+        format_duration(duration),
+        RESET,
+        MFB_BLUE,
+        RESET
     );
     if result.total > 0 {
         let avg_time = duration.as_secs_f64() / result.total as f64;
@@ -80,15 +131,32 @@ pub fn print_summary_report(
     } else {
         println!("{}│{}                                                                            {}│{}", MFB_BLUE, RESET, MFB_BLUE, RESET);
     }
-    println!("{}╰────────────────────────────────────────────────────────────────────────────╯{}", MFB_BLUE, RESET);
+    println!(
+        "{}╰────────────────────────────────────────────────────────────────────────────╯{}",
+        MFB_BLUE, RESET
+    );
 
     if !result.errors.is_empty() {
         println!();
         println!("{}❌ Errors encountered:{}", BRIGHT_RED, RESET);
-        println!("{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}", BRIGHT_RED, RESET);
+        println!(
+            "{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}",
+            BRIGHT_RED, RESET
+        );
         for (path, error) in &result.errors {
             println!("   {}{} → {}{}", DIM, path.display(), RESET, error);
         }
+    }
+
+    if let Some(pause) = &result.pause_info {
+        println!();
+        println!("{}⏸️ Batch Paused:{}", BRIGHT_YELLOW, RESET);
+        println!("   {}File:{} {}", DIM, RESET, pause.path.display());
+        println!("   {}Reason:{} {}", DIM, RESET, pause.reason);
+        println!(
+            "   {}Pending:{} {} files remain for retry. Free space and rerun with `--resume`.",
+            DIM, RESET, result.paused_remaining
+        );
     }
 }
 
