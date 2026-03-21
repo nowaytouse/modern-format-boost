@@ -42,12 +42,14 @@ pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE: u64 = 100;
 pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO: u64 = 1000;
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::version::{cache_algorithm_version, CACHE_SCHEMA_VERSION};
 
 /// The central location for all MFB progress tracking to avoid polluting user directories.
 fn get_central_progress_dir() -> PathBuf {
@@ -58,12 +60,110 @@ fn get_central_progress_dir() -> PathBuf {
     PathBuf::from(home).join(".mfb_progress")
 }
 const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+const CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
 fn current_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_secs()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CheckpointEntry {
+    path: String,
+    size: i64,
+    mtime: i64,
+    ctime: i64,
+    btime: i64,
+}
+
+impl CheckpointEntry {
+    fn from_path(path: &Path) -> io::Result<Self> {
+        let metadata = std::fs::metadata(path)?;
+        let size = metadata.len() as i64;
+        let mtime = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO)
+            .as_nanos() as i64;
+
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        #[cfg(unix)]
+        let ctime = metadata.ctime_nsec();
+        #[cfg(windows)]
+        use std::os::windows::fs::MetadataExt;
+        #[cfg(windows)]
+        let ctime = metadata.last_write_time() as i64;
+        #[cfg(not(any(unix, windows)))]
+        let ctime = mtime;
+
+        let btime = match metadata.created() {
+            Ok(t) => t
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(ctime),
+            Err(_) => ctime,
+        };
+
+        Ok(Self {
+            path: CheckpointManager::normalize_path(path),
+            size,
+            mtime,
+            ctime,
+            btime,
+        })
+    }
+
+    fn matches_current_file(&self, path: &Path) -> io::Result<bool> {
+        Ok(Self::from_path(path)? == *self)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CheckpointHeader {
+    format_version: u32,
+    target_dir: String,
+    output_root: Option<String>,
+    cache_algorithm_version: i32,
+    cache_schema_version: i32,
+    created_at: u64,
+}
+
+impl CheckpointHeader {
+    fn new(target_dir: &Path, output_root: Option<&Path>) -> Self {
+        Self {
+            format_version: CHECKPOINT_FORMAT_VERSION,
+            target_dir: CheckpointManager::normalize_path(target_dir),
+            output_root: output_root.map(CheckpointManager::normalize_path),
+            cache_algorithm_version: cache_algorithm_version(),
+            cache_schema_version: CACHE_SCHEMA_VERSION,
+            created_at: current_unix_secs(),
+        }
+    }
+
+    fn is_compatible_with(&self, expected: &Self) -> bool {
+        self.format_version == expected.format_version
+            && self.target_dir == expected.target_dir
+            && self.output_root == expected.output_root
+            && self.cache_algorithm_version == expected.cache_algorithm_version
+            && self.cache_schema_version == expected.cache_schema_version
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum CheckpointRecord {
+    Header(CheckpointHeader),
+    Entry(CheckpointEntry),
+}
+
+#[derive(Debug, Default)]
+struct LoadedCheckpointState {
+    header: Option<CheckpointHeader>,
+    entries: HashMap<String, CheckpointEntry>,
+    legacy_entries: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,14 +292,20 @@ pub struct CheckpointManager {
     progress_dir: PathBuf,
     lock_file: PathBuf,
     progress_file: PathBuf,
-    completed: Mutex<HashSet<String>>,
+    header: CheckpointHeader,
+    completed: Mutex<HashMap<String, CheckpointEntry>>,
     resume_mode: AtomicBool,
 }
 
 impl CheckpointManager {
     pub fn new(target_dir: &Path) -> io::Result<Self> {
+        Self::new_with_context(target_dir, None)
+    }
+
+    pub fn new_with_context(target_dir: &Path, output_root: Option<&Path>) -> io::Result<Self> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let dir_hash = Self::hash_path(&canonical_target);
+        let header = CheckpointHeader::new(&canonical_target, output_root);
 
         let central_dir = get_central_progress_dir();
         fs::create_dir_all(&central_dir)?;
@@ -207,15 +313,42 @@ impl CheckpointManager {
         let progress_file = central_dir.join(format!("{}.txt", dir_hash));
         let lock_file = central_dir.join(format!("{}.lock", dir_hash));
 
-        let (completed_set, resume_mode) = Self::load_progress(&progress_file)?;
+        let loaded = Self::load_progress(&progress_file)?;
+        let (completed_set, resume_mode, reset_reason) =
+            Self::validate_loaded_state(&loaded, &header, output_root);
 
-        Ok(Self {
+        if let Some(reason) = reset_reason.as_deref() {
+            eprintln!("⚠️ [checkpoint] {}", reason);
+            if progress_file.exists() {
+                if let Err(err) = fs::remove_file(&progress_file) {
+                    eprintln!(
+                        "⚠️ [checkpoint] Failed to remove invalidated checkpoint file {}: {}",
+                        progress_file.display(),
+                        err
+                    );
+                }
+            }
+        }
+
+        let manager = Self {
             progress_dir: central_dir,
             lock_file,
             progress_file,
+            header,
             completed: Mutex::new(completed_set),
             resume_mode: AtomicBool::new(resume_mode),
-        })
+        };
+
+        if manager.resume_mode.load(Ordering::Relaxed) {
+            if let Err(err) = manager.rewrite_progress_file() {
+                eprintln!(
+                    "⚠️ [checkpoint] Failed to compact validated checkpoint state: {}",
+                    err
+                );
+            }
+        }
+
+        Ok(manager)
     }
 
     pub fn check_lock(&self) -> io::Result<Option<u32>> {
@@ -361,19 +494,48 @@ impl CheckpointManager {
 
     pub fn is_completed(&self, path: &Path) -> bool {
         let key = Self::normalize_path(path);
-        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
-        completed.contains(&key)
+        let maybe_entry = {
+            let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+            completed.get(&key).cloned()
+        };
+
+        let Some(entry) = maybe_entry else {
+            return false;
+        };
+
+        match entry.matches_current_file(path) {
+            Ok(true) => true,
+            Ok(false) => {
+                eprintln!(
+                    "⚠️ [checkpoint] Resume entry became stale after input changed: {}. Reprocessing.",
+                    path.display()
+                );
+                self.drop_completed_entry(&key);
+                false
+            }
+            Err(err) => {
+                eprintln!(
+                    "⚠️ [checkpoint] Failed to validate checkpoint entry {}: {}. Reprocessing.",
+                    path.display(),
+                    err
+                );
+                false
+            }
+        }
     }
 
     pub fn mark_completed(&self, path: &Path) -> io::Result<()> {
-        let key = Self::normalize_path(path);
+        let entry = CheckpointEntry::from_path(path)?;
+        let key = entry.path.clone();
         {
             let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
-            if !completed.insert(key.clone()) {
+            if completed.contains_key(&key) {
                 return Ok(());
             }
+            completed.insert(key.clone(), entry.clone());
         }
         self.resume_mode.store(true, Ordering::Relaxed);
+        self.ensure_progress_header_exists()?;
 
         // Append to file outside the lock if possible, but actually we need to preserve order/integrity
         // Using a manual lock for the file append
@@ -381,7 +543,9 @@ impl CheckpointManager {
             .create(true)
             .append(true)
             .open(&self.progress_file)?;
-        writeln!(file, "{}", key)?;
+        let record = serde_json::to_string(&CheckpointRecord::Entry(entry))
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        writeln!(file, "{}", record)?;
 
         // Also sync to the global processed list in conversion module
         crate::conversion::mark_as_processed(path);
@@ -390,7 +554,7 @@ impl CheckpointManager {
 
     pub fn sync_to_processed_list(&self) {
         let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
-        for path_str in completed.iter() {
+        for path_str in completed.keys() {
             crate::conversion::mark_as_processed(Path::new(path_str));
         }
     }
@@ -448,7 +612,15 @@ impl CheckpointManager {
     }
 
     fn normalize_path_to_buf(path: &Path) -> PathBuf {
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+        path.canonicalize().unwrap_or_else(|_| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(path)
+            }
+        })
     }
 
     pub fn progress_dir(&self) -> &Path {
@@ -465,20 +637,20 @@ impl CheckpointManager {
     }
 
     fn normalize_path(path: &Path) -> String {
-        path.canonicalize()
-            .ok()
-            .and_then(|p| p.to_str().map(String::from))
+        Self::normalize_path_to_buf(path)
+            .to_str()
+            .map(String::from)
             .unwrap_or_else(|| path.display().to_string())
     }
 
-    fn load_progress(progress_file: &Path) -> io::Result<(HashSet<String>, bool)> {
+    fn load_progress(progress_file: &Path) -> io::Result<LoadedCheckpointState> {
         if !progress_file.exists() {
-            return Ok((HashSet::new(), false));
+            return Ok(LoadedCheckpointState::default());
         }
 
         let file = File::open(progress_file)?;
         let reader = BufReader::new(file);
-        let mut completed = HashSet::new();
+        let mut state = LoadedCheckpointState::default();
 
         let mut read_error = None;
         for line in reader.lines() {
@@ -486,7 +658,26 @@ impl CheckpointManager {
                 Ok(path) => {
                     let trimmed = path.trim();
                     if !trimmed.is_empty() {
-                        completed.insert(trimmed.to_string());
+                        if trimmed.starts_with('{') {
+                            match serde_json::from_str::<CheckpointRecord>(trimmed) {
+                                Ok(CheckpointRecord::Header(header)) => {
+                                    state.header = Some(header);
+                                }
+                                Ok(CheckpointRecord::Entry(entry)) => {
+                                    state.entries.insert(entry.path.clone(), entry);
+                                }
+                                Err(err) => {
+                                    if read_error.is_none() {
+                                        read_error = Some(io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            format!("Failed to parse checkpoint record: {}", err),
+                                        ));
+                                    }
+                                }
+                            }
+                        } else {
+                            state.legacy_entries += 1;
+                        }
                     }
                 }
                 Err(err) => {
@@ -501,8 +692,139 @@ impl CheckpointManager {
             return Err(err);
         }
 
-        let resume_mode = !completed.is_empty();
-        Ok((completed, resume_mode))
+        Ok(state)
+    }
+
+    fn validate_loaded_state(
+        loaded: &LoadedCheckpointState,
+        expected_header: &CheckpointHeader,
+        output_root: Option<&Path>,
+    ) -> (HashMap<String, CheckpointEntry>, bool, Option<String>) {
+        if loaded.legacy_entries > 0 {
+            return (
+                HashMap::new(),
+                false,
+                Some(format!(
+                    "Legacy checkpoint format detected ({} path-only entries). Clearing old resume state because it lacks cache/signature validation metadata.",
+                    loaded.legacy_entries
+                )),
+            );
+        }
+
+        let Some(header) = loaded.header.as_ref() else {
+            if loaded.entries.is_empty() {
+                return (HashMap::new(), false, None);
+            }
+            return (
+                HashMap::new(),
+                false,
+                Some("Checkpoint entries were found without a header. Clearing invalid resume state.".to_string()),
+            );
+        };
+
+        if !header.is_compatible_with(expected_header) {
+            return (
+                HashMap::new(),
+                false,
+                Some(format!(
+                    "Checkpoint context changed (target/output/cache version mismatch). Clearing stale resume state for {}.",
+                    expected_header.target_dir
+                )),
+            );
+        }
+
+        if let Some(output_root) = output_root {
+            if !output_root.exists() && !loaded.entries.is_empty() {
+                return (
+                    HashMap::new(),
+                    false,
+                    Some(format!(
+                        "Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
+                        loaded.entries.len(),
+                        output_root.display()
+                    )),
+                );
+            }
+        }
+
+        let mut valid = HashMap::new();
+        let mut missing = 0usize;
+        let mut changed = 0usize;
+        let mut unreadable = 0usize;
+
+        for (path, entry) in &loaded.entries {
+            match entry.matches_current_file(Path::new(path)) {
+                Ok(true) => {
+                    valid.insert(path.clone(), entry.clone());
+                }
+                Ok(false) => changed += 1,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => missing += 1,
+                Err(_) => unreadable += 1,
+            }
+        }
+
+        if valid.is_empty() && (!loaded.entries.is_empty()) {
+            return (
+                HashMap::new(),
+                false,
+                Some(format!(
+                    "All saved checkpoint entries became invalid during startup validation (changed: {}, missing: {}, unreadable: {}). Clearing stale resume state.",
+                    changed, missing, unreadable
+                )),
+            );
+        }
+
+        if changed > 0 || missing > 0 || unreadable > 0 {
+            eprintln!(
+                "⚠️ [checkpoint] Dropped stale resume entries during validation (changed: {}, missing: {}, unreadable: {}).",
+                changed, missing, unreadable
+            );
+        }
+
+        let resume_mode = !valid.is_empty();
+        (valid, resume_mode, None)
+    }
+
+    fn ensure_progress_header_exists(&self) -> io::Result<()> {
+        if self.progress_file.exists() {
+            return Ok(());
+        }
+        self.rewrite_progress_file()
+    }
+
+    fn rewrite_progress_file(&self) -> io::Result<()> {
+        let temp_path = self.progress_file.with_extension("txt.tmp");
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let mut file = File::create(&temp_path)?;
+        let header = serde_json::to_string(&CheckpointRecord::Header(self.header.clone()))
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        writeln!(file, "{}", header)?;
+        for entry in completed.values() {
+            let line = serde_json::to_string(&CheckpointRecord::Entry(entry.clone()))
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+            writeln!(file, "{}", line)?;
+        }
+        file.sync_all()?;
+        drop(file);
+        fs::rename(temp_path, &self.progress_file)?;
+        Ok(())
+    }
+
+    fn drop_completed_entry(&self, key: &str) {
+        let became_empty = {
+            let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+            completed.remove(key);
+            completed.is_empty()
+        };
+        if became_empty {
+            self.resume_mode.store(false, Ordering::Relaxed);
+        }
+        if let Err(err) = self.rewrite_progress_file() {
+            eprintln!(
+                "⚠️ [checkpoint] Failed to rewrite checkpoint state after dropping stale entry: {}",
+                err
+            );
+        }
     }
 }
 
@@ -569,7 +891,7 @@ mod tests {
     static TEST_LOCK: std_mutex<()> = std_mutex::new(());
 
     fn setup_test_env() -> (TempDir, TempDir, std::sync::MutexGuard<'static, ()>) {
-        let guard = TEST_LOCK.lock().unwrap();
+        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_target = TempDir::new().unwrap();
         let temp_progress = TempDir::new().unwrap();
         std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path());
@@ -578,6 +900,10 @@ mod tests {
 
     fn teardown_test_env(_guard: std::sync::MutexGuard<'static, ()>) {
         std::env::remove_var("MFB_PROGRESS_DIR");
+    }
+
+    fn create_test_file(path: &Path) {
+        fs::write(path, b"checkpoint-test").unwrap();
     }
 
     #[test]
@@ -598,6 +924,8 @@ mod tests {
 
         let file1 = target.join("test1.mp4");
         let file2 = target.join("test2.mp4");
+        create_test_file(&file1);
+        create_test_file(&file2);
 
         assert!(!checkpoint.is_completed(&file1));
         assert!(!checkpoint.is_completed(&file2));
@@ -623,6 +951,8 @@ mod tests {
 
         {
             let checkpoint = CheckpointManager::new(target).unwrap();
+            create_test_file(&target.join("file1.mp4"));
+            create_test_file(&target.join("file2.mp4"));
             checkpoint
                 .mark_completed(&target.join("file1.mp4"))
                 .unwrap();
@@ -649,6 +979,8 @@ mod tests {
         let target = temp.path();
 
         let checkpoint = CheckpointManager::new(target).unwrap();
+        create_test_file(&target.join("file1.mp4"));
+        create_test_file(&target.join("file2.mp4"));
         checkpoint
             .mark_completed(&target.join("file1.mp4"))
             .unwrap();
@@ -672,6 +1004,7 @@ mod tests {
 
         let checkpoint = CheckpointManager::new(target).unwrap();
         assert!(!checkpoint.is_resume_mode());
+        create_test_file(&target.join("file1.mp4"));
 
         checkpoint
             .mark_completed(&target.join("file1.mp4"))
@@ -689,6 +1022,8 @@ mod tests {
 
         {
             let checkpoint = CheckpointManager::new(target).unwrap();
+            create_test_file(&target.join("file1.mp4"));
+            create_test_file(&target.join("file2.mp4"));
             checkpoint
                 .mark_completed(&target.join("file1.mp4"))
                 .unwrap();
@@ -713,6 +1048,49 @@ mod tests {
     }
 
     #[test]
+    fn test_new_with_context_clears_resume_state_when_output_root_changes() {
+        let (temp, _progress, guard) = setup_test_env();
+        let target = temp.path();
+        let output_a = target.join("optimized_a");
+        let output_b = target.join("optimized_b");
+        let input = target.join("file1.mp4");
+        create_test_file(&input);
+
+        {
+            let checkpoint = CheckpointManager::new_with_context(target, Some(&output_a)).unwrap();
+            checkpoint.mark_completed(&input).unwrap();
+        }
+
+        let checkpoint = CheckpointManager::new_with_context(target, Some(&output_b)).unwrap();
+        assert!(!checkpoint.is_resume_mode());
+        assert_eq!(checkpoint.completed_count(), 0);
+        teardown_test_env(guard);
+    }
+
+    #[test]
+    fn test_new_with_context_drops_entries_when_input_signature_changes() {
+        let (temp, _progress, guard) = setup_test_env();
+        let target = temp.path();
+        let output = target.join("optimized");
+        let input = target.join("file1.mp4");
+        fs::write(&input, b"aaaaaaaaaaaaaaa").unwrap();
+
+        {
+            let checkpoint = CheckpointManager::new_with_context(target, Some(&output)).unwrap();
+            checkpoint.mark_completed(&input).unwrap();
+        }
+
+        std::thread::sleep(Duration::from_millis(2));
+        fs::write(&input, b"bbbbbbbbbbbbbbb").unwrap();
+
+        let checkpoint = CheckpointManager::new_with_context(target, Some(&output)).unwrap();
+        assert!(!checkpoint.is_resume_mode());
+        assert_eq!(checkpoint.completed_count(), 0);
+        assert!(!checkpoint.is_completed(&input));
+        teardown_test_env(guard);
+    }
+
+    #[test]
     fn test_checkpoint_cleanup() {
         let temp_target = TempDir::new().unwrap();
         let target = temp_target.path();
@@ -722,6 +1100,7 @@ mod tests {
         {
             let checkpoint = CheckpointManager::new(target).unwrap();
             checkpoint.acquire_lock().unwrap();
+            create_test_file(&target.join("file1.mp4"));
             checkpoint
                 .mark_completed(&target.join("file1.mp4"))
                 .unwrap();

@@ -76,12 +76,16 @@ impl StderrCapture {
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
-                        if let Ok(mut buf) = lines.lock() {
-                            if buf.len() >= max {
-                                buf.pop_front();
-                            }
-                            buf.push_back(line);
+                        let mut buf = lines.lock().unwrap_or_else(|err| {
+                            tracing::warn!(
+                                "GPU stderr capture buffer mutex was poisoned; recovering buffered stderr state"
+                            );
+                            err.into_inner()
+                        });
+                        if buf.len() >= max {
+                            buf.pop_front();
                         }
+                        buf.push_back(line);
                     }
                     Err(err) => {
                         tracing::warn!("Failed to read GPU encoder stderr: {}", err);
@@ -1912,63 +1916,76 @@ fn gpu_coarse_search_with_log_impl(
                     first_output.store(true, Ordering::Relaxed);
                 }
 
-                if let Ok(mut guard) = last_activity.lock() {
-                    *guard = Instant::now();
-                }
+                let mut guard = last_activity.lock().unwrap_or_else(|err| {
+                    crate::log_eprintln!(
+                        "⚠️  GPU heartbeat activity mutex was poisoned; recovering activity tracking state"
+                    );
+                    err.into_inner()
+                });
+                *guard = Instant::now();
 
-                if let Ok(line) = line {
-                    if let Some(val) = line.strip_prefix("out_time_us=") {
-                        if let Ok(time_us) = val.parse::<u64>() {
-                            if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
-                                let current_secs = time_us as f64 / 1_000_000.0;
-                                let pct = (current_secs / actual_sample_duration as f64 * 100.0)
-                                    .min(100.0);
-                                let elapsed_secs = start_time.elapsed().as_secs_f64();
-                                let eta = if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
-                                    let speed = current_secs / elapsed_secs;
-                                    if speed > 0.0 {
-                                        ((actual_sample_duration as f64 - current_secs) / speed)
-                                            .max(0.0) as u64
+                match line {
+                    Ok(line) => {
+                        if let Some(val) = line.strip_prefix("out_time_us=") {
+                            if let Ok(time_us) = val.parse::<u64>() {
+                                if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
+                                    let current_secs = time_us as f64 / 1_000_000.0;
+                                    let pct = (current_secs / actual_sample_duration as f64 * 100.0)
+                                        .min(100.0);
+                                    let elapsed_secs = start_time.elapsed().as_secs_f64();
+                                    let eta = if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
+                                        let speed = current_secs / elapsed_secs;
+                                        if speed > 0.0 {
+                                            ((actual_sample_duration as f64 - current_secs) / speed)
+                                                .max(0.0) as u64
+                                        } else {
+                                            0
+                                        }
                                     } else {
                                         0
-                                    }
-                                } else {
-                                    0
-                                };
-                                let speed = if current_secs > 0.0 {
-                                    start_time.elapsed().as_secs_f64() / current_secs
-                                } else {
-                                    0.0
-                                };
+                                    };
+                                    let speed = if current_secs > 0.0 {
+                                        start_time.elapsed().as_secs_f64() / current_secs
+                                    } else {
+                                        0.0
+                                    };
 
-                                let estimated_final_size = match std::fs::metadata(output) {
-                                    Ok(metadata) => {
-                                        let current_size = metadata.len();
-                                        fallback_logged = false;
-                                        (current_size as f64 / pct.max(1.0) * 100.0) as u64
-                                    }
-                                    Err(_) => {
-                                        if !fallback_logged {
-                                            crate::log_eprintln!(
-                                                "Using linear estimation (metadata unavailable)"
-                                            );
-                                            fallback_logged = true;
+                                    let estimated_final_size = match std::fs::metadata(output) {
+                                        Ok(metadata) => {
+                                            let current_size = metadata.len();
+                                            fallback_logged = false;
+                                            (current_size as f64 / pct.max(1.0) * 100.0) as u64
                                         }
-                                        (sample_input_size as f64 * (1.0 / pct.max(0.1)))
-                                            .min(sample_input_size as f64 * 10.0)
-                                            as u64
+                                        Err(_) => {
+                                            if !fallback_logged {
+                                                crate::log_eprintln!(
+                                                    "Using linear estimation (metadata unavailable)"
+                                                );
+                                                fallback_logged = true;
+                                            }
+                                            (sample_input_size as f64 * (1.0 / pct.max(0.1)))
+                                                .min(sample_input_size as f64 * 10.0)
+                                                as u64
+                                        }
+                                    };
+
+                                    crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
+                                        pct, current_secs, actual_sample_duration, eta, speed);
+
+                                    if let Some(cb) = progress_cb {
+                                        cb(crf, estimated_final_size);
                                     }
-                                };
-
-                                crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
-                                    pct, current_secs, actual_sample_duration, eta, speed);
-
-                                if let Some(cb) = progress_cb {
-                                    cb(crf, estimated_final_size);
+                                    last_progress_time = Instant::now();
                                 }
-                                last_progress_time = Instant::now();
                             }
                         }
+                    }
+                    Err(err) => {
+                        crate::log_eprintln!(
+                            "⚠️  Failed to read GPU encoder stdout progress stream: {}",
+                            err
+                        );
+                        break;
                     }
                 }
             }
