@@ -21,23 +21,23 @@
 //! error!(error = "something went wrong", "Operation failed");
 //! ```
 
+use crate::modern_ui::{colors, symbols};
 use anyhow::{Context, Result};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use tracing::field::Field;
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
+    field::Visit,
     filter::FilterFn,
     fmt::{self, format::FormatEvent, writer::MakeWriter, FmtContext, FormatFields},
     layer::{Layer, SubscriberExt},
     registry::LookupSpan,
     util::SubscriberInitExt,
     EnvFilter,
-    field::Visit,
 };
-use tracing::field::Field;
-use crate::modern_ui::{colors, symbols};
 
 struct ModernFormatter;
 
@@ -69,7 +69,14 @@ where
 
         if level != tracing::Level::INFO {
             write!(writer, "{}{}{} ", color, icon, colors::RESET)?;
-            write!(writer, "{}{}{}{} ", colors::DIM, color, label, colors::RESET)?;
+            write!(
+                writer,
+                "{}{}{}{} ",
+                colors::DIM,
+                color,
+                label,
+                colors::RESET
+            )?;
         }
 
         // 2. Message and Fields
@@ -106,7 +113,7 @@ impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
         if field_name.starts_with("log.") {
             return;
         }
-        
+
         if field_name == "message" {
             let msg = format!("{:?}", value);
             // Strip quotes from Debug format of string
@@ -117,7 +124,7 @@ impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
             if !self.is_first || self.has_message {
                 let _ = write!(self.writer, " ");
             }
-            
+
             let _ = write!(
                 self.writer,
                 "{}{}={}{:?}{}",
@@ -181,7 +188,9 @@ struct RunLogWriter;
 
 impl Write for RunLogWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut buffer = RUN_LOG_BUFFER
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         buffer.extend_from_slice(buf);
         while let Some(i) = buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = buffer.drain(..=i).collect();
@@ -197,7 +206,9 @@ impl Write for RunLogWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut buffer = RUN_LOG_BUFFER.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut buffer = RUN_LOG_BUFFER
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         if !buffer.is_empty() {
             let line = String::from_utf8_lossy(&buffer);
             let stripped = strip_ansi_str(line.trim_end_matches('\n'));
@@ -296,7 +307,10 @@ impl<W: Write + Send> StripAnsiWriter<W> {
         }
         let stripped = strip_ansi_bytes(&self.buffer);
         self.buffer.clear();
-        let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut w = self
+            .inner
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         w.write_all(&stripped)?;
         Ok(())
     }
@@ -309,7 +323,10 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
         while let Some(i) = self.buffer.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = self.buffer.drain(..=i).collect();
             let stripped = strip_ansi_bytes(&line);
-            let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
+            let mut w = self
+                .inner
+                .lock()
+                .map_err(|e| io::Error::other(e.to_string()))?;
             w.write_all(&stripped)?;
         }
         Ok(buf.len())
@@ -317,7 +334,10 @@ impl<W: Write + Send> Write for StripAnsiWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.flush_buffer()?;
-        let mut w = self.inner.lock().map_err(|e| io::Error::other(e.to_string()))?;
+        let mut w = self
+            .inner
+            .lock()
+            .map_err(|e| io::Error::other(e.to_string()))?;
         w.flush()?;
         Ok(())
     }
@@ -441,7 +461,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     );
     // Note: We don't call append_stats_to_line here to avoid potential circular dependency during init.
     // The run log writer will handle it if we pass it through.
-    
+
     tracing::info!("{}", init_msg);
     store_init_message_for_run_log(init_msg);
 
@@ -472,9 +492,23 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
         if let Some(file_name) = path.file_name() {
             let file_name_str = file_name.to_string_lossy();
             if file_name_str.starts_with(program_name) && file_name_str.ends_with(".log") {
-                if let Ok(metadata) = fs::metadata(&path) {
-                    if let Ok(modified) = metadata.modified() {
-                        log_files.push((path, modified));
+                match fs::metadata(&path) {
+                    Ok(metadata) => match metadata.modified() {
+                        Ok(modified) => log_files.push((path, modified)),
+                        Err(err) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %err,
+                                "Failed to read log file modification time during cleanup"
+                            );
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %err,
+                            "Failed to read log file metadata during cleanup"
+                        );
                     }
                 }
             }
@@ -713,7 +747,10 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert!(result.stdout.contains("hello"));
-        assert!(result.duration.as_secs() <= 10, "echo should complete within 10s");
+        assert!(
+            result.duration.as_secs() <= 10,
+            "echo should complete within 10s"
+        );
     }
 
     #[test]

@@ -540,7 +540,7 @@ pub fn finalize_conversion(
     }
 
     if options.should_delete_original() {
-        let _ = safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE);
+        safe_delete_original(input, output, MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE)?;
     }
 
     Ok(ConversionResult::success(
@@ -685,13 +685,24 @@ pub fn commit_temp_to_output_with_metadata(
             eprintln!("⚠️ Failed to preserve metadata: {}", e);
         }
         crate::metadata::merge_xmp_sidecar_into_dest(src, output);
-        
-        // Step 2: Apply timestamps AFTER all file modifications
+
+        // Step 2: Finder comment branding — only on the committed conversion output
+        #[cfg(target_os = "macos")]
+        {
+            let ext = output.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
+            if ext == "jxl" || ext == "mov" || ext == "mp4" || ext == "heic" || ext == "avif" {
+                if let Err(e) = crate::metadata::append_mfb_branding(output) {
+                    tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
+                }
+            }
+        }
+
+        // Step 3: Apply timestamps AFTER all file modifications
         // This is critical because ExifTool and other tools reset creation time to current time
         // We must reapply timestamps as the final step to preserve original creation time
         crate::metadata::apply_file_timestamps(src, output);
     }
-    
+
     Ok(true)
 }
 
