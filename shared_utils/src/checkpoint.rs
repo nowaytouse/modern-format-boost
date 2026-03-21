@@ -204,50 +204,109 @@ fn get_process_start_time() -> Option<u64> {
 #[cfg(unix)]
 fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
     use std::process::Command;
-    let output = match Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "etimes="])
-        .output()
-    {
-        Ok(output) => output,
-        Err(err) => {
-            eprintln!(
-                "⚠️ [checkpoint] Failed to query process age for PID {}: {}",
-                pid, err
-            );
-            return None;
-        }
-    };
+    let mut saw_real_error = false;
 
-    if output.status.success() {
-        let elapsed_secs = match String::from_utf8(output.stdout) {
-            Ok(stdout) => match stdout.trim().parse::<u64>() {
-                Ok(elapsed_secs) => elapsed_secs,
-                Err(err) => {
-                    eprintln!(
-                        "⚠️ [checkpoint] Failed to parse process age for PID {}: {}",
-                        pid, err
-                    );
-                    return None;
-                }
-            },
+    for field in ["etimes", "etime"] {
+        let output = match Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", &format!("{}=", field)])
+            .output()
+        {
+            Ok(output) => output,
             Err(err) => {
                 eprintln!(
-                    "⚠️ [checkpoint] Non-UTF-8 process age output for PID {}: {}",
-                    pid, err
+                    "⚠️ [checkpoint] Failed to query process age for PID {} via ps {}: {}",
+                    pid, field, err
                 );
                 return None;
             }
         };
-        Some(current_unix_secs().saturating_sub(elapsed_secs))
-    } else {
+
+        if output.status.success() {
+            let stdout = match String::from_utf8(output.stdout) {
+                Ok(stdout) => stdout,
+                Err(err) => {
+                    eprintln!(
+                        "⚠️ [checkpoint] Non-UTF-8 process age output for PID {} via ps {}: {}",
+                        pid, field, err
+                    );
+                    return None;
+                }
+            };
+
+            let elapsed_secs = match field {
+                "etimes" => stdout.trim().parse::<u64>().ok(),
+                "etime" => parse_ps_etime_to_secs(&stdout),
+                _ => None,
+            };
+
+            if let Some(elapsed_secs) = elapsed_secs {
+                return Some(current_unix_secs().saturating_sub(elapsed_secs));
+            }
+
+            eprintln!(
+                "⚠️ [checkpoint] Failed to parse process age for PID {} from ps {} output: {}",
+                pid,
+                field,
+                stdout.trim()
+            );
+            saw_real_error = true;
+            continue;
+        }
+
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if ps_field_unsupported(stderr.trim()) {
+            continue;
+        }
+
         eprintln!(
-            "⚠️ [checkpoint] ps returned non-zero while querying PID {}: {}",
+            "⚠️ [checkpoint] ps {} returned non-zero while querying PID {}: {}",
+            field,
             pid,
             stderr.trim()
         );
+        saw_real_error = true;
+    }
+
+    if saw_real_error {
+        None
+    } else {
         None
     }
+}
+
+#[cfg(unix)]
+fn ps_field_unsupported(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("keyword not found")
+        || lower.contains("no valid keywords")
+        || lower.contains("invalid keyword")
+}
+
+#[cfg(unix)]
+fn parse_ps_etime_to_secs(raw: &str) -> Option<u64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (days, clock) = match trimmed.split_once('-') {
+        Some((days, rest)) => (days.trim().parse::<u64>().ok()?, rest.trim()),
+        None => (0, trimmed),
+    };
+
+    let parts: Vec<_> = clock.split(':').collect();
+    let clock_secs = match parts.as_slice() {
+        [minutes, seconds] => minutes.trim().parse::<u64>().ok()? * 60
+            + seconds.trim().parse::<u64>().ok()?,
+        [hours, minutes, seconds] => {
+            hours.trim().parse::<u64>().ok()? * 3600
+                + minutes.trim().parse::<u64>().ok()? * 60
+                + seconds.trim().parse::<u64>().ok()?
+        }
+        _ => return None,
+    };
+
+    Some(days * 24 * 3600 + clock_secs)
 }
 
 #[cfg(not(unix))]
@@ -377,11 +436,19 @@ impl CheckpointManager {
             #[cfg(unix)]
             {
                 use std::process::Command;
-                let exists = Command::new("kill")
+                let exists = match Command::new("kill")
                     .args(["-0", &lock_info.pid.to_string()])
                     .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
+                {
+                    Ok(status) => status.success(),
+                    Err(err) => {
+                        eprintln!(
+                            "⚠️ [checkpoint] Failed to probe lock owner PID {} via kill -0: {}",
+                            lock_info.pid, err
+                        );
+                        false
+                    }
+                };
 
                 if !exists {
                     eprintln!(
@@ -1272,5 +1339,19 @@ mod tests {
             assert_eq!(checkpoint.completed_count(), 0);
         }
         teardown_test_env(guard);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_parse_ps_etime_to_secs_short_format() {
+        assert_eq!(parse_ps_etime_to_secs("03:15"), Some(195));
+        assert_eq!(parse_ps_etime_to_secs("01:02:03"), Some(3723));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_parse_ps_etime_to_secs_day_format() {
+        assert_eq!(parse_ps_etime_to_secs("2-03:04:05"), Some(183_845));
+        assert_eq!(parse_ps_etime_to_secs(""), None);
     }
 }
