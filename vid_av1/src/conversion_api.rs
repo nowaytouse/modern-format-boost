@@ -756,7 +756,7 @@ pub fn auto_convert_with_cache(
                     }
 
                     if output_path.exists() {
-                        let _ = std::fs::remove_file(&output_path);
+                        cleanup_output_file(&output_path, "low MS-SSIM cleanup");
                         info!("   🗑️  Low MS-SSIM output deleted");
                     }
 
