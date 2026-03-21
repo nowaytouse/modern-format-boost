@@ -9,6 +9,13 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - 🎞️ **Animated quality metrics no longer crash on odd/even dimension mismatches**: `VMAF-Y`, `PSNR-UV`, and `MS-SSIM` now normalize both reference and encoded streams to the same shared even resolution before running ffmpeg/libvmaf filters. This fixes `Error reinitializing filters` / `Invalid argument (-22)` failures seen during GIF and other animated-image CRF search when one side landed on odd dimensions.
 
+### Restored
+- 🧰 **macOS application bundle runtime restored after sanitization**: Recovered the Finder-launchable app wrapper and bundle metadata that were stripped during repository privacy cleanup, keeping the packaged app usable outside direct terminal launches.
+
+### Changed
+- 📚 **Top-level docs re-anchored after repository cleanup**: Rebuilt the README and core docs structure, then re-synchronized the unified changelog so release history remained centralized after redundant root documentation was purged.
+- 🖱️ **Drag-and-drop release wrapper finalized**: Locked the release launcher scripts back into their intended packaged state for `v0.10.87`, avoiding post-sanitization drift between the app bundle and shell entrypoints.
+
 ### 🛡️ Comprehensive Privacy Purge & Repository Hardening
 - **Repository-Wide History Sanitization**: Executed deep Git history rewrite to completely eliminate accidental metadata, test assets, and sensitive path leaks from the global revision graph.
 - **Historical Documentation Archival**: Successfully extracted and localized 140+ legacy technical documents (Algorithms, Audits, Manuals) to the local `logs/` directory, while removing them from the remote Git footprint to ensure a lean, production-focused codebase.

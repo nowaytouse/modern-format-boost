@@ -6,6 +6,48 @@
 use std::path::Path;
 use std::process::Command;
 
+fn common_even_metric_dimensions(
+    input_width: u32,
+    input_height: u32,
+    output_width: u32,
+    output_height: u32,
+) -> Option<(u32, u32)> {
+    let target_width = input_width.min(output_width);
+    let target_height = input_height.min(output_height);
+    let (target_width, target_height, _) =
+        crate::video::ensure_even_dimensions(target_width, target_height);
+
+    if target_width == 0 || target_height == 0 {
+        return None;
+    }
+
+    Some((target_width, target_height))
+}
+
+fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> Option<(u32, u32)> {
+    let (input_width, input_height) = crate::conversion::get_input_dimensions(input)
+        .map_err(|err| {
+            eprintln!(
+                "      ❌ Failed to read reference dimensions for quality metric: {}",
+                err
+            );
+        })
+        .ok()?;
+    let (output_width, output_height) = crate::conversion::get_input_dimensions(output)
+        .map_err(|err| {
+            eprintln!(
+                "      ❌ Failed to read distorted dimensions for quality metric: {}",
+                err
+            );
+        })
+        .ok()?;
+
+    let (target_width, target_height) =
+        common_even_metric_dimensions(input_width, input_height, output_width, output_height)?;
+
+    Some((target_width, target_height))
+}
+
 /// `max_duration_min`: skip MS-SSIM when video longer than this (e.g. 5.0 normal, 25.0 ultimate).
 pub fn calculate_ms_ssim_yuv(
     input: &Path,
@@ -68,6 +110,8 @@ pub fn calculate_ms_ssim_yuv(
     }
     eprintln!("   🔄 Parallel processing: Y+U+V channels simultaneously");
 
+    let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
+
     let input_y = input.to_path_buf();
     let output_y = output.to_path_buf();
     let input_u = input.to_path_buf();
@@ -78,13 +122,34 @@ pub fn calculate_ms_ssim_yuv(
     let start_time = std::time::Instant::now();
 
     let y_handle = thread::spawn(move || {
-        calculate_ms_ssim_channel_sampled(&input_y, &output_y, "y", sample_rate)
+        calculate_ms_ssim_channel_sampled(
+            &input_y,
+            &output_y,
+            "y",
+            sample_rate,
+            target_width,
+            target_height,
+        )
     });
     let u_handle = thread::spawn(move || {
-        calculate_ms_ssim_channel_sampled(&input_u, &output_u, "u", sample_rate)
+        calculate_ms_ssim_channel_sampled(
+            &input_u,
+            &output_u,
+            "u",
+            sample_rate,
+            target_width,
+            target_height,
+        )
     });
     let v_handle = thread::spawn(move || {
-        calculate_ms_ssim_channel_sampled(&input_v, &output_v, "v", sample_rate)
+        calculate_ms_ssim_channel_sampled(
+            &input_v,
+            &output_v,
+            "v",
+            sample_rate,
+            target_width,
+            target_height,
+        )
     });
 
     let y_ms_ssim = match y_handle.join() {
@@ -133,6 +198,8 @@ fn calculate_ms_ssim_channel_sampled(
     output: &Path,
     channel: &str,
     sample_rate: usize,
+    target_width: u32,
+    target_height: u32,
 ) -> Option<f64> {
     if let Some(ext) = input.extension().and_then(|e| e.to_str()) {
         if matches!(ext.to_lowercase().as_str(), "gif") {
@@ -153,8 +220,11 @@ fn calculate_ms_ssim_channel_sampled(
     };
 
     let filter = format!(
-        "[0:v]{}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={}[c0];[1:v]{}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
-        sample_filter, channel, sample_filter, channel
+        "[0:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[c0];[1:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
+        sf = sample_filter,
+        w = target_width,
+        h = target_height,
+        ch = channel,
     );
 
     let result = Command::new("ffmpeg")
@@ -227,13 +297,19 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
 
     eprintln!("   📊 Calculating MS-SSIM (Multi-Scale Structural Similarity)...");
 
+    let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
+
     let result = Command::new("ffmpeg")
         .arg("-i")
         .arg(crate::safe_path_arg(input).as_ref())
         .arg("-i")
         .arg(crate::safe_path_arg(output).as_ref())
-        .arg("-lavfi")
-        .arg("[0:v][1:v]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'")
+        .arg("-filter_complex")
+        .arg(format!(
+            "[0:v]scale={w}:{h}:flags=bicubic,format=yuv420p[ref];[1:v]scale={w}:{h}:flags=bicubic,format=yuv420p[dis];[ref][dis]libvmaf=log_path=/dev/stdout:log_fmt=json:feature='name=float_ms_ssim'",
+            w = target_width,
+            h = target_height,
+        ))
         .arg("-f")
         .arg("null")
         .arg("-")
@@ -351,11 +427,14 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
     };
 
     let n_threads = num_cpus_capped();
+    let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
 
     // dis = output (distorted), ref = input (reference)
     let filter = format!(
-        "[0:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[dis];[1:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
+        "[0:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p[dis];[1:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
         sf = sample_filter,
+        w = target_width,
+        h = target_height,
         nt = n_threads,
     );
 
@@ -478,15 +557,33 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
 pub fn calculate_psnr_uv(input: &Path, output: &Path, sample_rate: usize) -> Option<(f64, f64)> {
     use std::thread;
 
+    let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
+
     let input_u = input.to_path_buf();
     let output_u = output.to_path_buf();
     let input_v = input.to_path_buf();
     let output_v = output.to_path_buf();
 
-    let u_handle =
-        thread::spawn(move || psnr_single_channel(&input_u, &output_u, "u", sample_rate));
-    let v_handle =
-        thread::spawn(move || psnr_single_channel(&input_v, &output_v, "v", sample_rate));
+    let u_handle = thread::spawn(move || {
+        psnr_single_channel(
+            &input_u,
+            &output_u,
+            "u",
+            sample_rate,
+            target_width,
+            target_height,
+        )
+    });
+    let v_handle = thread::spawn(move || {
+        psnr_single_channel(
+            &input_v,
+            &output_v,
+            "v",
+            sample_rate,
+            target_width,
+            target_height,
+        )
+    });
 
     let psnr_u = match u_handle.join() {
         Ok(Some(v)) => v,
@@ -511,6 +608,8 @@ fn psnr_single_channel(
     output: &Path,
     channel: &str,
     sample_rate: usize,
+    target_width: u32,
+    target_height: u32,
 ) -> Option<f64> {
     let sample_filter = if sample_rate > 1 {
         format!(
@@ -523,8 +622,10 @@ fn psnr_single_channel(
 
     // Extract the requested plane from both streams, then run psnr on them.
     let filter = format!(
-        "[0:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={ch}[ref];[1:v]{sf}scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p,extractplanes={ch}[dis];[ref][dis]psnr=stats_file=-",
+        "[0:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[ref];[1:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[dis];[ref][dis]psnr=stats_file=-",
         sf = sample_filter,
+        w = target_width,
+        h = target_height,
         ch = channel,
     );
 
@@ -812,6 +913,18 @@ mod tests {
         let result = parse_psnr_average_y_from_stderr(stderr);
         assert!(result.is_some());
         assert!((result.unwrap() - 44.1).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_common_even_metric_dimensions_uses_shared_even_minimum() {
+        let dims = common_even_metric_dimensions(29571, 1833, 29570, 1834);
+        assert_eq!(dims, Some((29570, 1832)));
+    }
+
+    #[test]
+    fn test_common_even_metric_dimensions_rejects_zero_after_even_rounding() {
+        let dims = common_even_metric_dimensions(1, 2, 2, 2);
+        assert_eq!(dims, None);
     }
 
     // ── num_cpus_capped ───────────────────────────────────────────────────────
