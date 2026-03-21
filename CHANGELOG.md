@@ -125,40 +125,204 @@ All notable changes to this project will be documented in this file.
 - 🎯 **PNG Quantization Detection (Meme Score v3)**: Added RGB-weighted banding analysis and dithering recognition for improved icons/pixel-art accuracy.
 - ✨ **AV1 Tools Parity**: Brought `img-av1` and `vid-av1` up to feature parity with HEVC tools, including unified finalization checks.
 
-## [0.10.66] - 2026-03-12
+## [0.10.76] - 2026-03-20
 
-### Fixed
-- 🔓 **HEIC Security Limits (Critical - Complete Fix)**: Correctly implemented security limits with proper API usage.
-- **Root Cause Analysis**: Fixed issues where v0.10.65 used non-existent APIs and failed to propagate the `v1_21` feature flag.
-- **Solution**: Implemented the correct three-step API (`HeifContext::new()` → `set_security_limits()` → `read_bytes()`).
-- **Feature Propagation**: Added `v1_21` to default features in `shared_utils`, `img_hevc`, and `img_av1`.
-- **Limits Increased**: Memory 15GB (was 7GB), `ipco` boxes 50,000 (was 10,000).
-- **Fallback Strategy**: Restored complete 3-layer fallback (main → `ftyp` scan → file read). Fixes "Maximum number of child boxes (100) in 'ipco' box exceeded" errors.
-- 🔧 **Code Quality**: Fixed all clippy warnings in library code (simplified logic, fixed lazy evaluations).
+### 🐛 Bug Fixes
+- Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
 
-### Technical Details
-- **Correct API Usage**:
-  ```rust
-  let mut ctx = HeifContext::new()?;           // 1. Create empty context
-  ctx.set_security_limits(&limits)?;           // 2. Set limits BEFORE reading
-  ctx.read_bytes(&data)?;                      // 3. Read with limits applied
-  ```
-- **Security Limits**: `max_total_memory`: 15GB, `max_children_per_box`: 50,000, `max_items`: 500,000, `max_components`: 50,000.
+## [0.10.75] - 2026-03-19
 
-### Added
-- `verify_heic_config.sh`: Verification script to check all HEIC security configurations.
-- `HEIC_SECURITY_CONFIG.md`: Comprehensive documentation of HEIC security configuration.
+### 🐛 Bug Fixes
+- Fix stride bias in color frequency distribution sampling
 
-## [0.10.64] - 2026-03-11
+## [0.10.74] - 2026-03-19
 
-### Highlights (v0.10.9 → v0.10.64)
-- 🔒 **Security & Privacy**: Permanently removed AI tool configs from Git history (1,724 commits cleaned; repo size reduced to 78MB).
-- 🔓 **HEIC Processing**: Increased security limits (6GB memory, 10k `ipco` children). Fixed lossless detection cache bug for `RExt` profile + 4:4:4 chroma.
-- 🎯 **Quality & Detection**: 3D Quality Gate (VMAF-Y ≥93.0, PSNR-UV ≥35.0, CAMBI ≤5.0). 0.01-precision CRF fine-tuning with sprint & backtrack optimization.
-- 🚀 **Performance**: Global CRF cache with warm start; Cache version binding for auto-invalidation; JPEG fast path header analysis.
-- 📦 **Dependencies**: Branch strategy finalized (Main stable vs Nightly GitHub sources).
-- 🎨 **UI & Logging**: 24-bit TrueColor UI with video milestones (V:, X:, P:, I:). Unified error system with classification.
-- 🔧 **Technical**: Unique 8-char UUID temp files; Apple ecosystem support (AAE sidecars, iPhone VFR, iCloud metadata).
+### ✨ Features
+- Add disk space pre-check to img-hevc
+
+### 🐛 Bug Fixes
+- Script menu flow and disk space pre-check integration
+
+### 🔨 Other Changes
+- PNG quantization heuristic accuracy overhaul
+- nightly: Restore GitHub dependencies for latest iterations
+- main: Restore crates.io dependencies for stable production use
+
+## [0.10.73] - 2026-03-19
+
+### 🐛 Bug Fixes
+- Compilation warnings fixed and unified version management
+
+### 🔨 Other Changes
+- nightly: Restore GitHub dependencies for latest iterations
+
+## [0.10.72] - 2026-03-16
+
+### ✨ Features
+- unified version management system
+- main branch uses stable crates.io dependencies
+- nightly branch uses GitHub dependencies for latest iterations
+- Enhanced cache system v3 with content fingerprint and integrity verification
+
+### 🐛 Bug Fixes
+- Fix ICC Profile & Metadata Preservation
+
+### 📝 Documentation
+- clarify nightly-only GitHub dependencies in Cargo.toml
+
+## [0.10.71] - 2026-03-16
+
+### 🐛 Bug Fixes
+- Complete metadata preservation fix
+
+## [0.10.69] - 2026-03-16
+
+### 🐛 Bug Fixes
+- enable metadata preservation by default (v0.10.69)
+
+## [0.10.68] - 2026-03-16
+
+### 🐛 Bug Fixes
+- comprehensive metadata preservation across all platforms (v0.10.68)
+
+## [0.10.67] - 2026-03-16
+
+### 🐛 Bug Fixes
+- preserve file creation time and clean log output (v0.10.67)
+- resolve all clippy warnings in workspace
+- clippy warnings - simplify logic and add allow attributes
+
+## [0.10.66] - 2026-03-22
+
+### 🐛 Bug Fixes
+- correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
+- enable v1_21 in shared_utils default feature (critical fix)
+- enable v1_21 feature in img_hevc/img_av1 + increase HEIC limits to 15GB (v0.10.66)
+- remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
+
+### 📝 Documentation
+- integrate core historical release notes (v0.10.66, v0.10.64, v0.10.9) into unified changelog
+
+## [0.10.65] - 2026-03-15
+
+### 🐛 Bug Fixes
+- apply HEIC security limits before reading file (v0.10.65)
+
+## [0.10.64] - 2026-03-15
+
+### ✨ Features
+- ci: restore release workflow and add v0.10.64 release notes
+
+### 🐛 Bug Fixes
+- remove .clippy.toml from .gitignore (should be tracked)
+
+### 🔨 Other Changes
+- Remove AI tool config folders from Git tracking
+
+### 🚀 Performance & Refactoring
+- bump version to 0.10.64
+
+## [0.10.63] - 2026-03-15
+
+### 🐛 Bug Fixes
+- Fix compilation warning in nightly branch
+
+### 🔨 Other Changes
+- Increase HEIC security limits
+
+## [0.10.62] - 2026-03-15
+
+### ✨ Features
+- Add WebP/AVIF lossless detection verification
+
+### 🔨 Other Changes
+- Unify dependencies to GitHub nightly sources
+
+## [0.10.61] - 2026-03-15
+
+### 🔨 Other Changes
+- Bind cache version to program version for automatic invalidation
+
+## [0.10.60] - 2026-03-15
+
+### 🔨 Other Changes
+- Log level optimization + dependency updates
+
+## [0.10.59] - 2026-03-15
+
+### ✨ Features
+- enhance detect_animation with ffprobe/libavformat fallback
+- implement global CRF warm start cache for video and dynamic images
+
+### 🐛 Bug Fixes
+- Cache version control + HEIC lossless detection fix
+- set LIBHEIF_SECURITY_LIMITS at global program entry points
+- final V4 cleanup, remove panic and restore security limits
+- complete brand list (heix, hevc, hevx) and add diagnostic tag V3
+- add robust fallback to read_from_file and verify security limits
+- use numeric value for LIBHEIF_SECURITY_LIMITS to prevent NoFtypBox error
+- remove extension fallback from format detection to prevent NoFtypBox false errors
+- unnecessary parentheses around assigned value
+
+### 🚀 Performance & Refactoring
+- rename to analyze_heic_file_v4 and add V4 diagnostic tags
+- fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
+- update gitignore for local caches and tool configs
+
+## [0.10.57] - 2026-03-15
+
+### ✨ Features
+- implement Video CRF search hint (warm start) v0.10.57
+- implement robust persistent cache with nanosecond change detection and SQL migration
+- implement 3-stage cross-audit with deep byte-level bitstream investigation
+
+### 🐛 Bug Fixes
+- resolve compilation errors and implement internal deep byte-research for joint audit
+- resolve GIF parser desync and implement performance-optimized Joint Audit
+
+## [0.10.52] - 2026-03-15
+
+### 🐛 Bug Fixes
+- simplify image classifiers usage and log all fallbacks
+
+### 🔨 Other Changes
+- tune: sharpen gif meme-score for stickers and social-cache names
+- tune: refine gif meme-score heuristics for tiny stickers
+
+### 🚀 Performance & Refactoring
+- bump version to 0.10.52 and perfected meme scoring mechanism
+
+## [0.10.51] - 2026-03-14
+
+### 🚀 Performance & Refactoring
+- remove dynamic compression adjustment and legacy routing (v0.10.51)
+
+## [0.10.50] - 2026-03-14
+
+### ✨ Features
+- explicit size units in logs (v0.10.50)
+
+## [0.10.49] - 2026-03-14
+
+### ✨ Features
+- Add HEVC transquant_bypass detection and mp4parse dependency
+- add lossless HEIC/HEIF to JXL conversion route
+
+### 🐛 Bug Fixes
+- release: v0.10.49 - README overhaul and HEIC security fix
+- enrich analysis cache and fix UI labels
+- silence cache debug logs and prevent stack overflow
+- restore safe fallback behavior for corrupted media files
+- correct HEIC/HEIF skip logic to match WebP/AVIF pattern
+
+## [0.10.46] - 2026-03-14
+
+### ✨ Features
+- lossless routing for WebP/AVIF/TIFF → JXL; exclude HEIC/HEIF
+
+### 🐛 Bug Fixes
+- release v0.10.46 with enhanced modern-lossy-skip and heuristic fix
+
 
 ## [0.10.45] - 2026-03-14
 
