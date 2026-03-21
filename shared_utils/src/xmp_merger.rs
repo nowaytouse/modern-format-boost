@@ -244,7 +244,6 @@ impl XmpMerger {
         let xmp_root_stem = xmp_stem_raw.split('.').next().unwrap_or(&xmp_stem_raw);
 
         for path in self.read_parent_paths(parent)? {
-
             if !path.is_file() {
                 continue;
             }
@@ -275,7 +274,6 @@ impl XmpMerger {
         let xmp_stem = xmp_path.file_stem()?.to_string_lossy().to_lowercase();
 
         for path in self.read_parent_paths(parent)? {
-
             if !path.is_file() {
                 continue;
             }
@@ -309,7 +307,6 @@ impl XmpMerger {
         }
 
         for path in self.read_parent_paths(parent)? {
-
             if !path.is_file() {
                 continue;
             }
@@ -350,7 +347,6 @@ impl XmpMerger {
         let xmp_filename = xmp_path.file_name()?.to_string_lossy();
 
         for path in self.read_parent_paths(parent)? {
-
             if !path.is_file() {
                 continue;
             }
@@ -409,7 +405,6 @@ impl XmpMerger {
         }
 
         for path in self.read_parent_paths(parent)? {
-
             if !path.is_file() {
                 continue;
             }
@@ -519,7 +514,6 @@ impl XmpMerger {
         }
 
         for path in self.read_parent_paths(parent)? {
-
             if !path.is_file() {
                 continue;
             }
@@ -699,8 +693,17 @@ impl XmpMerger {
 
         // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
         if let Some(name) = media_path.file_name() {
-            let tmp_path = media_path.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
-            let _ = std::fs::remove_file(&tmp_path);
+            let tmp_path =
+                media_path.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
+            if let Err(err) = std::fs::remove_file(&tmp_path) {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    crate::progress_mode::emit_stderr(&format!(
+                        "⚠️ Failed to remove stale ExifTool temp file {}: {}",
+                        tmp_path.display(),
+                        err
+                    ));
+                }
+            }
         }
 
         let output = Command::new("exiftool")
@@ -869,7 +872,13 @@ impl XmpMerger {
         match self.merge_xmp(xmp_path, &media) {
             Ok(()) => {
                 if self.config.delete_xmp_after_merge {
-                    let _ = std::fs::remove_file(xmp_path);
+                    if let Err(err) = std::fs::remove_file(xmp_path) {
+                        crate::progress_mode::emit_stderr(&format!(
+                            "⚠️ XMP merge succeeded but sidecar delete failed for {}: {}",
+                            xmp_path.display(),
+                            err
+                        ));
+                    }
                 }
 
                 MergeResult {
@@ -1250,6 +1259,8 @@ mod tests {
         let merger = XmpMerger::new(XmpMergerConfig::default());
 
         let err = merger.extract_xmp_metadata(&missing_xmp).unwrap_err();
-        assert!(err.to_string().contains("ExifTool metadata extraction failed"));
+        assert!(err
+            .to_string()
+            .contains("ExifTool metadata extraction failed"));
     }
 }

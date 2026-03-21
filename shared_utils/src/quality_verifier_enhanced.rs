@@ -81,9 +81,7 @@ impl EnhancedVerifyResult {
     /// True only when file is OK and no required check explicitly failed.
     /// None = check was not required (treat as pass); Some(false) = required check failed (do not fake success).
     pub fn passed(&self) -> bool {
-        self.file_ok
-            && self.duration_match != Some(false)
-            && self.has_video_stream != Some(false)
+        self.file_ok && self.duration_match != Some(false) && self.has_video_stream != Some(false)
     }
 
     pub fn summary(&self) -> String {
@@ -293,14 +291,13 @@ mod tests {
         let minimal: [u8; 64] = [0u8; 64];
         std::fs::write(&input_copy, minimal).unwrap();
         std::fs::write(&output_copy, minimal).unwrap();
-        let result = verify_after_encode(
-            &input_copy,
-            &output_copy,
-            &VerifyOptions::strict_video(),
-        );
+        let result = verify_after_encode(&input_copy, &output_copy, &VerifyOptions::strict_video());
         let _ = std::fs::remove_file(&input_copy);
         let _ = std::fs::remove_file(&output_copy);
-        assert!(!result.passed(), "non-video files should fail strict verification");
+        assert!(
+            !result.passed(),
+            "non-video files should fail strict verification"
+        );
         assert!(
             result.message.contains("Probe") || result.message.contains("probe"),
             "expected probe-related message, got: {}",

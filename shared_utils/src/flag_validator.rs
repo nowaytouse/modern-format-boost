@@ -162,7 +162,9 @@ mod tests {
         assert!(FlagMode::PreciseQualityWithCompress
             .description_en()
             .contains("Precise"));
-        assert!(FlagMode::UltimateExplore.description_en().contains("Ultimate"));
+        assert!(FlagMode::UltimateExplore
+            .description_en()
+            .contains("Ultimate"));
         assert!(FlagMode::UltimateExplore.is_ultimate());
         assert!(!FlagMode::PreciseQualityWithCompress.is_ultimate());
     }

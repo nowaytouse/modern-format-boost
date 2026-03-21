@@ -557,7 +557,7 @@ mod prop_tests {
             input_video_size in 1u64..1_000_000_000u64,
         ) {
             let expected_can_compress = output_video_size < input_video_size.saturating_add(1_048_576);
-            
+
             // Check tolerance=true manually (mirrors logic)
             prop_assert_eq!(
                 expected_can_compress,

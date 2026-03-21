@@ -255,11 +255,13 @@ impl Drop for GpuSlotGuard {
 #[cfg(target_os = "linux")]
 fn vaapi_device_path() -> &'static str {
     static CACHE: OnceLock<String> = OnceLock::new();
-    CACHE.get_or_init(|| {
-        std::env::var("MODERN_FORMAT_BOOST_VAAPI_DEVICE")
-            .or_else(|_| std::env::var("VAAPI_DEVICE"))
-            .unwrap_or_else(|_| "/dev/dri/renderD128".to_string())
-    }).as_str()
+    CACHE
+        .get_or_init(|| {
+            std::env::var("MODERN_FORMAT_BOOST_VAAPI_DEVICE")
+                .or_else(|_| std::env::var("VAAPI_DEVICE"))
+                .unwrap_or_else(|_| "/dev/dri/renderD128".to_string())
+        })
+        .as_str()
 }
 
 fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
@@ -1201,7 +1203,10 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
 
     if !psnr_output.status.success() {
         let stderr = String::from_utf8_lossy(&psnr_output.stderr);
-        return Err(format!("ffmpeg psnr failed: {}", stderr.lines().last().unwrap_or("unknown error")));
+        return Err(format!(
+            "ffmpeg psnr failed: {}",
+            stderr.lines().last().unwrap_or("unknown error")
+        ));
     }
 
     let stderr = String::from_utf8_lossy(&psnr_output.stderr);
@@ -1236,8 +1241,10 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
         }
     }
 
-    Err(format!("Failed to parse PSNR from ffmpeg output. Last line: {}",
-        stderr.lines().last().unwrap_or("(empty)")))
+    Err(format!(
+        "Failed to parse PSNR from ffmpeg output. Last line: {}",
+        stderr.lines().last().unwrap_or("(empty)")
+    ))
 }
 
 #[derive(Debug)]
@@ -1425,10 +1432,24 @@ pub fn gpu_coarse_search_with_log(
     log_cb: Option<&dyn Fn(&str)>,
 ) -> anyhow::Result<GpuCoarseResult> {
     let result = gpu_coarse_search_with_log_impl(
-        input, output, encoder, input_size, config, progress_cb, log_cb,
+        input,
+        output,
+        encoder,
+        input_size,
+        config,
+        progress_cb,
+        log_cb,
     );
     // Ensure temp output is always deleted, regardless of success/failure
-    let _ = std::fs::remove_file(output);
+    if let Err(err) = std::fs::remove_file(output) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            crate::progress_mode::emit_stderr(&format!(
+                "⚠️ Failed to remove GPU coarse-search temp output {}: {}",
+                output.display(),
+                err
+            ));
+        }
+    }
     result
 }
 
@@ -1522,7 +1543,11 @@ fn gpu_coarse_search_with_log_impl(
         }
     };
 
-    let skip_gpu_size_threshold: u64 = if config.ultimate_mode { 100 * 1024 } else { 500 * 1024 };
+    let skip_gpu_size_threshold: u64 = if config.ultimate_mode {
+        100 * 1024
+    } else {
+        500 * 1024
+    };
     let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 1.0 } else { 3.0 };
 
     const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
@@ -1561,7 +1586,10 @@ fn gpu_coarse_search_with_log_impl(
                 skip_gpu_size_threshold / 1024
             )
         } else {
-            format!("duration too short ({:.1}s < {:.1}s)", quick_duration, skip_gpu_duration_threshold)
+            format!(
+                "duration too short ({:.1}s < {:.1}s)",
+                quick_duration, skip_gpu_duration_threshold
+            )
         };
         log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
         return Ok(GpuCoarseResult {
@@ -1586,14 +1614,22 @@ fn gpu_coarse_search_with_log_impl(
     let is_very_long_video = quick_duration >= VERY_LONG_DURATION_THRESHOLD;
 
     let (sample_duration_limit, skip_parallel) = if is_very_large_file || is_very_long_video {
-        let limit = if config.ultimate_mode { 50.0_f32 } else { 30.0_f32 };
+        let limit = if config.ultimate_mode {
+            50.0_f32
+        } else {
+            30.0_f32
+        };
         log_msg!(
             "   ⚠️ Very large file detected → Conservative mode ({}s sample)",
             limit as u32
         );
         (limit, true)
     } else if is_large_file || is_long_video {
-        let limit = if config.ultimate_mode { 70.0_f32 } else { 45.0_f32 };
+        let limit = if config.ultimate_mode {
+            70.0_f32
+        } else {
+            45.0_f32
+        };
         log_msg!(
             "   📊 Large file detected → Sequential mode ({}s sample)",
             limit as u32
@@ -1679,7 +1715,15 @@ fn gpu_coarse_search_with_log_impl(
         } else {
             0
         };
-        let _ = std::fs::remove_file(&warmup_output);
+        if let Err(err) = std::fs::remove_file(&warmup_output) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                crate::progress_mode::emit_stderr(&format!(
+                    "⚠️ Failed to remove GPU warmup output {}: {}",
+                    warmup_output.display(),
+                    err
+                ));
+            }
+        }
         Ok(size)
     };
 
@@ -1976,7 +2020,15 @@ fn gpu_coarse_search_with_log_impl(
                         Err(e) => Err(anyhow::anyhow!("{}", e)),
                     };
 
-                    let _ = std::fs::remove_file(&output_path);
+                    if let Err(err) = std::fs::remove_file(&output_path) {
+                        if err.kind() != std::io::ErrorKind::NotFound {
+                            crate::progress_mode::emit_stderr(&format!(
+                                "⚠️ Failed to remove GPU probe output {}: {}",
+                                output_path.display(),
+                                err
+                            ));
+                        }
+                    }
 
                     (crf, size)
                 })
@@ -2427,7 +2479,10 @@ fn gpu_coarse_search_with_log_impl(
             );
         } else {
             let stage3_step = if config.ultimate_mode { 0.1 } else { 0.5 };
-            log_msg!("   📍 Stage 3: Fine-tune with {:.1} step (quality ceiling detection)", stage3_step);
+            log_msg!(
+                "   📍 Stage 3: Fine-tune with {:.1} step (quality ceiling detection)",
+                stage3_step
+            );
 
             let mut offset = stage3_step;
             let mut consecutive_small_improvements = 0;
@@ -2707,7 +2762,15 @@ fn gpu_coarse_search_with_log_impl(
         if fine_tuned { "yes" } else { "no" }
     );
 
-    let _ = std::fs::remove_file(output);
+    if let Err(err) = std::fs::remove_file(output) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            crate::progress_mode::emit_stderr(&format!(
+                "⚠️ Failed to remove final GPU coarse-search temp output {}: {}",
+                output.display(),
+                err
+            ));
+        }
+    }
 
     Ok(GpuCoarseResult {
         gpu_boundary_crf,

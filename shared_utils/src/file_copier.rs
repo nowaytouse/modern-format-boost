@@ -34,8 +34,8 @@ pub const IMAGE_EXTENSIONS_FOR_CONVERT: &[&str] = &[
 /// .mov can contain ProRes (must convert) or HEVC (skip by codec); .mp4 can contain H.264 or HEVC.
 /// Skip vs convert is decided by **codec detection** (e.g. should_skip_video_codec), not by extension.
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts",
-    "m2ts", "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
+    "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts", "m2ts",
+    "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
 ];
 
 pub const IMAGE_EXTENSIONS_ANALYZE: &[&str] = &[
@@ -168,9 +168,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                     "Directory traversal failed during batch copy"
                 );
                 result.failed += 1;
-                result
-                    .errors
-                    .push((path, error_msg, "walkdir".to_string()));
+                result.errors.push((path, error_msg, "walkdir".to_string()));
                 continue;
             }
         };

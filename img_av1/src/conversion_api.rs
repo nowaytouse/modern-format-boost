@@ -109,18 +109,23 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("MP4");
-            let fps = detection.fps.or_else(|| {
-                get_animation_duration_for_path(Path::new(input_path))
-                    .and_then(|d: f32| if d > 0.0 && detection.frame_count > 0 { 
-                        Some(detection.frame_count as f32 / d) 
-                    } else { 
-                        None 
+            let fps = detection
+                .fps
+                .or_else(|| {
+                    get_animation_duration_for_path(Path::new(input_path)).and_then(|d: f32| {
+                        if d > 0.0 && detection.frame_count > 0 {
+                            Some(detection.frame_count as f32 / d)
+                        } else {
+                            None
+                        }
                     })
-            }).ok_or_else(|| -> ImgQualityError {
-                ImgQualityError::AnalysisError(
-                    format!("Cannot determine FPS for animated image: {}", input_path)
-                )
-            })?;
+                })
+                .ok_or_else(|| -> ImgQualityError {
+                    ImgQualityError::AnalysisError(format!(
+                        "Cannot determine FPS for animated image: {}",
+                        input_path
+                    ))
+                })?;
 
             Ok(ConversionStrategy {
                 target: TargetFormat::AV1MP4,
@@ -146,11 +151,14 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("AVIF");
-            let quality = detection.estimated_quality.ok_or_else(|| -> ImgQualityError {
-                ImgQualityError::AnalysisError(
-                    format!("Cannot determine estimated quality for lossy image: {}", input_path)
-                )
-            })?;
+            let quality = detection
+                .estimated_quality
+                .ok_or_else(|| -> ImgQualityError {
+                    ImgQualityError::AnalysisError(format!(
+                        "Cannot determine estimated quality for lossy image: {}",
+                        input_path
+                    ))
+                })?;
             Ok(ConversionStrategy {
                 target: TargetFormat::AVIF,
                 reason: "Static lossy image (non-JPEG), recommend AVIF for better compression"
@@ -181,9 +189,10 @@ pub fn execute_conversion(
                 Some(out_dir),
                 config.base_dir.as_deref(),
                 false,
-            ).map_err(|e| ImgQualityError::ConversionError(
-                format!("Failed to copy skipped file: {}", e),
-            ))?;
+            )
+            .map_err(|e| {
+                ImgQualityError::ConversionError(format!("Failed to copy skipped file: {}", e))
+            })?;
         }
 
         return Ok(ConversionOutput {
@@ -204,8 +213,7 @@ pub fn execute_conversion(
         TargetFormat::NoConversion => unreachable!("NoConversion handled by early return above"),
     };
 
-    let output_path =
-        resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
+    let output_path = resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(ImgQualityError::ConversionError)?;
 
@@ -224,28 +232,21 @@ pub fn execute_conversion(
     let temp_path = shared_utils::conversion::temp_path_for_output(&output_path);
     let result = match strategy.target {
         TargetFormat::JXL => convert_to_jxl(input_path, &temp_path, &detection.format, config),
-        TargetFormat::AVIF => convert_to_avif(
-            input_path,
-            &temp_path,
-            detection.estimated_quality,
-            config,
-        ),
+        TargetFormat::AVIF => {
+            convert_to_avif(input_path, &temp_path, detection.estimated_quality, config)
+        }
         TargetFormat::AV1MP4 => {
             let fps = detection.fps.or_else(|| {
-                get_animation_duration_for_path(input_path)
-                    .and_then(|d: f32| if d > 0.0 && detection.frame_count > 0 { 
-                        Some(detection.frame_count as f32 / d) 
-                    } else { 
-                        None 
-                    })
+                get_animation_duration_for_path(input_path).and_then(|d: f32| {
+                    if d > 0.0 && detection.frame_count > 0 {
+                        Some(detection.frame_count as f32 / d)
+                    } else {
+                        None
+                    }
+                })
             });
-            convert_to_av1_mp4(
-                input_path,
-                &temp_path,
-                fps,
-                config,
-            )
-        },
+            convert_to_av1_mp4(input_path, &temp_path, fps, config)
+        }
         TargetFormat::NoConversion => unreachable!("handled above"),
     };
 
@@ -254,8 +255,13 @@ pub fn execute_conversion(
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
 
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, config.force, Some(input_path))
-        .map_err(|e: std::io::Error| ImgQualityError::ConversionError(e.to_string()))?
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_path,
+        &output_path,
+        config.force,
+        Some(input_path),
+    )
+    .map_err(|e: std::io::Error| ImgQualityError::ConversionError(e.to_string()))?
     {
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
@@ -268,7 +274,9 @@ pub fn execute_conversion(
         });
     }
 
-    let output_size = std::fs::metadata(&output_path).ok().map(|m: std::fs::Metadata| m.len());
+    let output_size = std::fs::metadata(&output_path)
+        .ok()
+        .map(|m: std::fs::Metadata| m.len());
     let size_reduction = output_size.map(|s: u64| {
         if detection.file_size == 0 {
             0.0
@@ -290,9 +298,13 @@ pub fn execute_conversion(
                     Some(out_dir),
                     config.base_dir.as_deref(),
                     false,
-                ).map_err(|e| ImgQualityError::ConversionError(
-                    format!("Failed to copy original after compress skip: {}", e),
-                ))?;
+                )
+                .map_err(|e| {
+                    ImgQualityError::ConversionError(format!(
+                        "Failed to copy original after compress skip: {}",
+                        e
+                    ))
+                })?;
             }
 
             return Ok(ConversionOutput {
@@ -315,22 +327,26 @@ pub fn execute_conversion(
     }
 
     if config.delete_original {
-        if let Err(e) =
-            shared_utils::conversion::safe_delete_original(
-                input_path,
-                &output_path,
-                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-            )
-        {
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
+            input_path,
+            &output_path,
+            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+        ) {
             eprintln!("   ⚠️  Safe delete failed: {}", e);
         }
     }
 
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!("Conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction)
+        format!(
+            "Conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m",
+            reduction
+        )
     } else {
-        format!("Conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m", -reduction)
+        format!(
+            "Conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
+            -reduction
+        )
     };
 
     Ok(ConversionOutput {
@@ -355,9 +371,9 @@ fn resolve_output_path(
     output_dir: Option<&Path>,
     extension: &str,
 ) -> Result<PathBuf> {
-    let file_stem = input
-        .file_stem()
-        .ok_or_else(|| ImgQualityError::ConversionError("Invalid file path: no file stem".to_string()))?;
+    let file_stem = input.file_stem().ok_or_else(|| {
+        ImgQualityError::ConversionError("Invalid file path: no file stem".to_string())
+    })?;
     let output = if let Some(dir) = output_dir {
         dir.join(file_stem).with_extension(extension)
     } else {
@@ -450,7 +466,9 @@ fn convert_to_avif(
     config: &ConversionConfig,
 ) -> Result<()> {
     let q = quality
-        .ok_or_else(|| ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string()))?
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string())
+        })?
         .to_string();
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
@@ -468,7 +486,9 @@ fn convert_to_avif(
     }
 
     let output_size = std::fs::metadata(output)
-        .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read AVIF output: {}", e)))?
+        .map_err(|e| {
+            ImgQualityError::ConversionError(format!("Failed to read AVIF output: {}", e))
+        })?
         .len();
     if output_size == 0 {
         cleanup_output_file(output, "empty AVIF output");
@@ -499,7 +519,9 @@ fn convert_to_av1_mp4(
     fps: Option<f32>,
     config: &ConversionConfig,
 ) -> Result<()> {
-    let fps_val = fps.ok_or_else(|| ImgQualityError::AnalysisError("Missing FPS for AV1 MP4 conversion".to_string()))?;
+    let fps_val = fps.ok_or_else(|| {
+        ImgQualityError::AnalysisError("Missing FPS for AV1 MP4 conversion".to_string())
+    })?;
     let fps_str = fps_val.to_string();
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let svt_params = format!("tune=0:film-grain=0:lp={}", max_threads);
@@ -587,8 +609,8 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
         base_dir: None,
         force: false,
         delete_original: false,
-        preserve_timestamps: true,  // Changed: Always preserve timestamps by default
-        preserve_metadata: true,     // Changed: Always preserve metadata by default
+        preserve_timestamps: true, // Changed: Always preserve timestamps by default
+        preserve_metadata: true,   // Changed: Always preserve metadata by default
         compress: false,
         apple_compat: false,
     };

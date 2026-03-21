@@ -2,8 +2,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 
-use vid_av1::{auto_convert_with_cache, detect_video_with_cache, determine_strategy, ConversionConfig, VidQualityError};
 use shared_utils::analysis_cache::AnalysisCache;
+use vid_av1::{
+    auto_convert_with_cache, detect_video_with_cache, determine_strategy, ConversionConfig,
+    VidQualityError,
+};
 
 #[derive(Parser)]
 #[command(name = "vid-av1")]
@@ -157,7 +160,11 @@ fn main() -> anyhow::Result<()> {
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Run 时自动创建并写入 ./logs/vid_av1_run_<timestamp>.log
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_av1") {
-                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
+                shared_utils::log_eprintln!(
+                    "⚠️  {}: {}",
+                    "\x1b[33mCould not open run log file\x1b[0m",
+                    e
+                );
             }
             info!("🎬 Run Mode Conversion (AV1)");
             info!("   Lossless sources → AV1 Lossless");
@@ -188,7 +195,10 @@ fn main() -> anyhow::Result<()> {
             let cache = match AnalysisCache::default_local() {
                 Ok(cache) => Some(cache),
                 Err(e) => {
-                    shared_utils::log_eprintln!("⚠️ [Cache] Failed to initialize persistent cache: {}", e);
+                    shared_utils::log_eprintln!(
+                        "⚠️ [Cache] Failed to initialize persistent cache: {}",
+                        e
+                    );
                     None
                 }
             };
@@ -211,7 +221,10 @@ fn main() -> anyhow::Result<()> {
                     },
                     resume,
                 },
-                |file| auto_convert_with_cache(file, &config, cache.as_ref()).map_err(|e: VidQualityError| anyhow::anyhow!(e)),
+                |file| {
+                    auto_convert_with_cache(file, &config, cache.as_ref())
+                        .map_err(|e: VidQualityError| anyhow::anyhow!(e))
+                },
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
             shared_utils::progress_mode::flush_log_file();

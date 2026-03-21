@@ -38,7 +38,7 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 
     // Map transfer function to CICP code
     let transfer = match info.color_transfer.as_deref() {
-        Some("smpte2084") => 16, // PQ (HDR10)
+        Some("smpte2084") => 16,    // PQ (HDR10)
         Some("arib-std-b67") => 18, // HLG
         Some("bt709") => 1,
         Some("srgb") | Some("iec61966-2-1") => 13,
@@ -184,11 +184,7 @@ pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, 
     let status = Command::new("ffmpeg")
         .args(["-y", "-i"])
         .arg(input)
-        .args([
-            "-c:v", "copy",
-            "-bsf:v", "hevc_mp4toannexb",
-            "-an", "-sn",
-        ])
+        .args(["-c:v", "copy", "-bsf:v", "hevc_mp4toannexb", "-an", "-sn"])
         .arg(&raw_hevc)
         .output()
         .map_err(|e| format!("failed to run ffmpeg for bitstream extraction: {}", e))?;
@@ -241,7 +237,10 @@ pub fn extract_dv_rpu(
 
         if !conv_output.status.success() {
             let stderr = String::from_utf8_lossy(&conv_output.stderr);
-            return Err(format!("dovi_tool convert (profile 7→8.1) failed: {}", stderr));
+            return Err(format!(
+                "dovi_tool convert (profile 7→8.1) failed: {}",
+                stderr
+            ));
         }
         return Ok(converted_rpu);
     }

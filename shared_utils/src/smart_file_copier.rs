@@ -82,7 +82,7 @@ fn detect_content_format(path: &Path) -> Option<String> {
     }
 
     // --- Video containers (checked after all image/anim formats so GIF/WebP/AVIF are never misclassified as video) ---
-    // AVI: RIFF....AVI 
+    // AVI: RIFF....AVI
     if buffer.starts_with(&[0x52, 0x49, 0x46, 0x46])
         && buffer.len() >= 12
         && buffer[8..12] == [0x41, 0x56, 0x49, 0x20]
@@ -102,8 +102,8 @@ fn detect_content_format(path: &Path) -> Option<String> {
 
     // ASF (WMV/WMA container)
     if buffer.starts_with(&[
-        0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA,
-        0x00, 0x62, 0xCE, 0x6C,
+        0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11, 0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE,
+        0x6C,
     ]) {
         return Some("wmv".to_string());
     }

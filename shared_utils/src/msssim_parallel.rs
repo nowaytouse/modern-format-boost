@@ -98,7 +98,7 @@ impl ParallelMsssimCalculator {
                     "GIF does not support MS-SSIM quality verification."
                 )));
             }
-        } 
+        }
 
         eprintln!("🔄 Calculating MS-SSIM (heartbeat active)");
 

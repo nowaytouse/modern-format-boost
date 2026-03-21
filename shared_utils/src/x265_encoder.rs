@@ -76,8 +76,7 @@ pub fn encode_with_x265(
 ) -> Result<u64> {
     debug!(
         "🖥️ CPU encoding started: CRF {:.1}, preset={}",
-        config.crf,
-        config.preset
+        config.crf, config.preset
     );
 
     use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
@@ -123,7 +122,10 @@ fn encode_y4m_direct(
     config: &X265Config,
     start_time: std::time::Instant,
 ) -> Result<bool> {
-    debug!("Starting x265 encoding with CRF {:.1}, preset {}", config.crf, config.preset);
+    debug!(
+        "Starting x265 encoding with CRF {:.1}, preset {}",
+        config.crf, config.preset
+    );
 
     let output = Command::new("x265")
         .arg("--y4m")
@@ -155,7 +157,10 @@ fn encode_y4m_direct(
         if !stderr.is_empty() {
             eprintln!("x265 stderr:\n{}", stderr);
         }
-        bail!("x265 encode failed with exit code {:?}", output.status.code());
+        bail!(
+            "x265 encode failed with exit code {:?}",
+            output.status.code()
+        );
     }
 
     debug!(
@@ -223,11 +228,12 @@ fn encode_to_hevc(
     let is_hdr_content = config.pix_fmt.contains("10")
         || config.mastering_display.is_some()
         || config.max_cll.is_some()
-        || matches!(config.color_trc.as_deref(), Some("smpte2084") | Some("arib-std-b67"));
+        || matches!(
+            config.color_trc.as_deref(),
+            Some("smpte2084") | Some("arib-std-b67")
+        );
     if is_hdr_content {
-        x265_cmd
-            .arg("--hdr10-opt")
-            .arg("--repeat-headers");
+        x265_cmd.arg("--hdr10-opt").arg("--repeat-headers");
 
         if let Some(ref cp) = config.color_primaries {
             x265_cmd.arg("--colorprim").arg(cp);
@@ -346,7 +352,10 @@ fn encode_to_hevc(
             if is_broken_pipe {
                 warn!("Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream");
                 if !x265_stderr.is_empty() {
-                    eprintln!("x265 stderr (often shows why pipe closed):\n{}", x265_stderr);
+                    eprintln!(
+                        "x265 stderr (often shows why pipe closed):\n{}",
+                        x265_stderr
+                    );
                 }
             }
             if !ffmpeg_stderr.is_empty() {
@@ -439,10 +448,8 @@ fn mux_hevc_to_container(
         cmd.arg("-c:v").arg("copy");
 
         // Audio: copy when compatible, transcode only for incompatible codecs
-        let audio_args = crate::audio_args_for_container(
-            config.audio_codec.as_deref(),
-            &config.container,
-        );
+        let audio_args =
+            crate::audio_args_for_container(config.audio_codec.as_deref(), &config.container);
         for arg in &audio_args {
             // Skip -an since we already have -map 1:a?
             if arg != "-an" {

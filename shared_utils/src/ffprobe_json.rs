@@ -90,16 +90,26 @@ fn rational_to_50k(v: &serde_json::Value) -> Option<u64> {
             if let Some((n, d)) = s.split_once('/') {
                 let n: f64 = n.trim().parse().ok()?;
                 let d: f64 = d.trim().parse().ok()?;
-                if d == 0.0 { return None; }
+                if d == 0.0 {
+                    return None;
+                }
                 Some(((n / d) * 50000.0).round() as u64)
             } else {
                 let f: f64 = s.trim().parse().ok()?;
-                if f <= 1.0 { Some((f * 50000.0).round() as u64) } else { Some(f.round() as u64) }
+                if f <= 1.0 {
+                    Some((f * 50000.0).round() as u64)
+                } else {
+                    Some(f.round() as u64)
+                }
             }
         }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
-            if f <= 1.0 { Some((f * 50000.0).round() as u64) } else { Some(f.round() as u64) }
+            if f <= 1.0 {
+                Some((f * 50000.0).round() as u64)
+            } else {
+                Some(f.round() as u64)
+            }
         }
         _ => None,
     }
@@ -111,16 +121,26 @@ fn rational_to_10k(v: &serde_json::Value) -> Option<u64> {
             if let Some((n, d)) = s.split_once('/') {
                 let n: f64 = n.trim().parse().ok()?;
                 let d: f64 = d.trim().parse().ok()?;
-                if d == 0.0 { return None; }
+                if d == 0.0 {
+                    return None;
+                }
                 Some(((n / d) * 10000.0).round() as u64)
             } else {
                 let f: f64 = s.trim().parse().ok()?;
-                if f <= 10000.0 { Some((f * 10000.0).round() as u64) } else { Some(f.round() as u64) }
+                if f <= 10000.0 {
+                    Some((f * 10000.0).round() as u64)
+                } else {
+                    Some(f.round() as u64)
+                }
             }
         }
         serde_json::Value::Number(n) => {
             let f = n.as_f64()?;
-            if f <= 10000.0 { Some((f * 10000.0).round() as u64) } else { Some(f.round() as u64) }
+            if f <= 10000.0 {
+                Some((f * 10000.0).round() as u64)
+            } else {
+                Some(f.round() as u64)
+            }
         }
         _ => None,
     }
@@ -139,11 +159,25 @@ fn parse_side_data_list(
         if sd_type.contains("dolby vision") || sd_type.contains("dovi") {
             *is_dolby_vision = true;
         }
-        if sd_type.contains("hdr dynamic") || sd_type.contains("st2094") || sd_type.contains("hdr10+") {
+        if sd_type.contains("hdr dynamic")
+            || sd_type.contains("st2094")
+            || sd_type.contains("hdr10+")
+        {
             *is_hdr10_plus = true;
         }
         if sd_type.contains("mastering display") && mastering_display.is_none() {
-            if let (Some(gx), Some(gy), Some(bx), Some(by_), Some(rx), Some(ry), Some(wx), Some(wy), Some(lmax), Some(lmin)) = (
+            if let (
+                Some(gx),
+                Some(gy),
+                Some(bx),
+                Some(by_),
+                Some(rx),
+                Some(ry),
+                Some(wx),
+                Some(wy),
+                Some(lmax),
+                Some(lmin),
+            ) = (
                 sd.green_x.as_ref().and_then(rational_to_50k),
                 sd.green_y.as_ref().and_then(rational_to_50k),
                 sd.blue_x.as_ref().and_then(rational_to_50k),
@@ -174,7 +208,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
     let output = match Command::new("ffprobe")
         .args([
             "-v",
-            "error",  // Use "error" instead of "quiet" to capture stderr for fallback detection
+            "error", // Use "error" instead of "quiet" to capture stderr for fallback detection
             "-print_format",
             "json",
             "-show_streams",
@@ -192,7 +226,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         Ok(o) => {
             // Check if failure is due to image2 demuxer pattern matching (e.g., filenames with [])
             let stderr = String::from_utf8_lossy(&o.stderr);
-            if stderr.contains("Could find no file with path") && stderr.contains("and index in the range") {
+            if stderr.contains("Could find no file with path")
+                && stderr.contains("and index in the range")
+            {
                 crate::log_rare_error!("FFprobe", "Image2 demuxer pattern matching failed for file: {} - Retrying with -pattern_type none", input_str);
                 // Retry with -pattern_type none to disable sequence pattern matching
                 match Command::new("ffprobe")
@@ -222,7 +258,11 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                             stderr = %retry_stderr.trim(),
                             "FFprobe pattern_type fallback returned non-zero exit"
                         );
-                        crate::log_rare_error!("FFprobe", "Pattern_type fallback also failed for: {}", input_str);
+                        crate::log_rare_error!(
+                            "FFprobe",
+                            "Pattern_type fallback also failed for: {}",
+                            input_str
+                        );
                         return ColorInfo::default();
                     }
                     Err(err) => {
@@ -231,7 +271,11 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                             error = %err,
                             "FFprobe pattern_type fallback failed to start"
                         );
-                        crate::log_rare_error!("FFprobe", "Pattern_type fallback also failed for: {}", input_str);
+                        crate::log_rare_error!(
+                            "FFprobe",
+                            "Pattern_type fallback also failed for: {}",
+                            input_str
+                        );
                         return ColorInfo::default();
                     }
                 }
@@ -275,9 +319,18 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         .as_ref()
         .and_then(|s| s.parse::<u8>().ok());
 
-    let color_space = stream.color_space.clone().filter(|s| !s.is_empty() && s != "unknown");
-    let color_transfer = stream.color_transfer.clone().filter(|s| !s.is_empty() && s != "unknown");
-    let color_primaries = stream.color_primaries.clone().filter(|s| !s.is_empty() && s != "unknown");
+    let color_space = stream
+        .color_space
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
+    let color_transfer = stream
+        .color_transfer
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
+    let color_primaries = stream
+        .color_primaries
+        .clone()
+        .filter(|s| !s.is_empty() && s != "unknown");
 
     let mut is_dolby_vision = false;
     let mut is_hdr10_plus = false;

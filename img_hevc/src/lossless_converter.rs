@@ -57,20 +57,37 @@ fn finalize_with_size_check(
     extra_info: Option<String>,
 ) -> Result<ConversionResult> {
     // Commit temp file to final output WITH METADATA PRESERVATION
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(temp_output, output, options.force, Some(input))? {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        temp_output,
+        output,
+        options.force,
+        Some(input),
+    )? {
         return Ok(ConversionResult::skipped_exists(input, output));
     }
 
     // Check size tolerance (compress mode, oversized check)
-    if let Some(skipped) =
-        check_size_tolerance(input, output, input_size, output_size, options, format_label)
-    {
+    if let Some(skipped) = check_size_tolerance(
+        input,
+        output,
+        input_size,
+        output_size,
+        options,
+        format_label,
+    ) {
         return Ok(skipped);
     }
 
     // Finalize with metadata preservation
-    finalize_conversion(input, output, input_size, format_label, extra_info.as_deref(), options)
-        .map_err(ImgQualityError::IoError)
+    finalize_conversion(
+        input,
+        output,
+        input_size,
+        format_label,
+        extra_info.as_deref(),
+        options,
+    )
+    .map_err(ImgQualityError::IoError)
 }
 
 /// Finalize a JXL produced by a fallback pipeline (ffmpeg or imagemagick).
@@ -89,8 +106,13 @@ fn finalize_fallback_jxl(
         return Err(e);
     }
     finalize_with_size_check(
-        input, temp_output, output,
-        input_size, output_size, options, "JXL",
+        input,
+        temp_output,
+        output,
+        input_size,
+        output_size,
+        options,
+        "JXL",
         Some(label.to_string()),
     )
 }
@@ -143,7 +165,9 @@ pub fn convert_to_jxl(
     let input_size = fs::metadata(input)?.len();
 
     if let Some(ext) = input.extension() {
-        if ext.to_string_lossy().to_lowercase() == "png" && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES {
+        if ext.to_string_lossy().to_lowercase() == "png"
+            && input_size < crate::constants::SMALL_PNG_THRESHOLD_BYTES
+        {
             if options.verbose {
                 eprintln!("⏭️  Skipped small PNG (< 500KB): {}", input.display());
             }
@@ -211,10 +235,13 @@ pub fn convert_to_jxl(
         .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
 
     if options.verbose {
-        eprintln!("   🔧 Executing: cjxl -d {:.2} -e 7 -j {} {} {}",
-            distance, max_threads,
+        eprintln!(
+            "   🔧 Executing: cjxl -d {:.2} -e 7 -j {} {} {}",
+            distance,
+            max_threads,
             actual_input.display(),
-            temp_output.display());
+            temp_output.display()
+        );
     }
 
     let result = cmd.output();
@@ -273,20 +300,41 @@ pub fn convert_to_jxl(
                                             std::thread::spawn(move || {
                                                 use std::io::Read;
                                                 let mut buf = String::with_capacity(64 * 1024);
-                                                let _ = stderr.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
+                                                if let Err(err) = stderr
+                                                    .take(crate::constants::STDERR_BUFFER_MAX as u64)
+                                                    .read_to_string(&mut buf)
+                                                {
+                                                    let line = format!(
+                                                        "   ⚠️ Failed to read FFmpeg stderr output: {}",
+                                                        err
+                                                    );
+                                                    shared_utils::progress_mode::emit_stderr(&line);
+                                                }
                                                 buf
                                             })
                                         });
 
                                     // Drain cjxl stderr in background so cjxl does not block when pipe buffer fills.
-                                    let cjxl_stderr_thread = cjxl_proc.stderr.take().map(|stderr| {
-                                        std::thread::spawn(move || {
-                                            use std::io::Read;
-                                            let mut buf = String::with_capacity(64 * 1024);
-                                            let _ = stderr.take(crate::constants::STDERR_BUFFER_MAX as u64).read_to_string(&mut buf);
-                                            buf
-                                        })
-                                    });
+                                    let cjxl_stderr_thread =
+                                        cjxl_proc.stderr.take().map(|stderr| {
+                                            std::thread::spawn(move || {
+                                                use std::io::Read;
+                                                let mut buf = String::with_capacity(64 * 1024);
+                                                if let Err(err) = stderr
+                                                    .take(
+                                                        crate::constants::STDERR_BUFFER_MAX as u64,
+                                                    )
+                                                    .read_to_string(&mut buf)
+                                                {
+                                                    let line = format!(
+                                                    "   ⚠️ Failed to read cjxl stderr output: {}",
+                                                    err
+                                                );
+                                                    shared_utils::progress_mode::emit_stderr(&line);
+                                                }
+                                                buf
+                                            })
+                                        });
 
                                     let ffmpeg_status = ffmpeg_proc.wait();
                                     let cjxl_status = cjxl_proc.wait();
@@ -295,7 +343,9 @@ pub fn convert_to_jxl(
                                         Some(handle) => match handle.join() {
                                             Ok(s) => s,
                                             Err(_) => {
-                                                shared_utils::progress_mode::emit_stderr("   ⚠️ FFmpeg stderr thread panicked");
+                                                shared_utils::progress_mode::emit_stderr(
+                                                    "   ⚠️ FFmpeg stderr thread panicked",
+                                                );
                                                 String::new()
                                             }
                                         },
@@ -305,7 +355,9 @@ pub fn convert_to_jxl(
                                         Some(handle) => match handle.join() {
                                             Ok(s) => s,
                                             Err(_) => {
-                                                shared_utils::progress_mode::emit_stderr("   ⚠️ cjxl stderr thread panicked");
+                                                shared_utils::progress_mode::emit_stderr(
+                                                    "   ⚠️ cjxl stderr thread panicked",
+                                                );
                                                 String::new()
                                             }
                                         },
@@ -333,7 +385,8 @@ pub fn convert_to_jxl(
                                             false
                                         }
                                         Err(e) => {
-                                            let line = format!("   ❌ Failed to wait for FFmpeg: {}", e);
+                                            let line =
+                                                format!("   ❌ Failed to wait for FFmpeg: {}", e);
                                             shared_utils::progress_mode::emit_stderr(&line);
                                             false
                                         }
@@ -360,7 +413,8 @@ pub fn convert_to_jxl(
                                             false
                                         }
                                         Err(e) => {
-                                            let line = format!("   ❌ Failed to wait for cjxl: {}", e);
+                                            let line =
+                                                format!("   ❌ Failed to wait for cjxl: {}", e);
                                             shared_utils::progress_mode::emit_stderr(&line);
                                             false
                                         }
@@ -375,8 +429,13 @@ pub fn convert_to_jxl(
                                             return Err(e);
                                         }
                                         return finalize_with_size_check(
-                                            input, &temp_output, &output,
-                                            input_size, output_size, options, "JXL",
+                                            input,
+                                            &temp_output,
+                                            &output,
+                                            input_size,
+                                            output_size,
+                                            options,
+                                            "JXL",
                                             Some("(ffmpeg fallback)".to_string()),
                                         );
                                     } else {
@@ -394,8 +453,17 @@ pub fn convert_to_jxl(
                                             distance,
                                             max_threads,
                                             options.apple_compat,
-                                        ).is_ok() {
-                                            return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                                        )
+                                        .is_ok()
+                                        {
+                                            return finalize_fallback_jxl(
+                                                input,
+                                                &temp_output,
+                                                &output,
+                                                input_size,
+                                                options,
+                                                "(imagemagick fallback)",
+                                            );
                                         }
                                         result
                                     }
@@ -403,20 +471,68 @@ pub fn convert_to_jxl(
                                 Err(e) => {
                                     let line = format!("   ❌ Failed to start cjxl process: {}", e);
                                     shared_utils::progress_mode::emit_stderr(&line);
-                                    let _ = ffmpeg_proc.kill();
-                                    shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                                    if try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat).is_ok() {
-                                        return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                                    if let Err(kill_err) = ffmpeg_proc.kill() {
+                                        let line = format!(
+                                            "   ⚠️ Failed to stop FFmpeg after cjxl startup failure: {}",
+                                            kill_err
+                                        );
+                                        shared_utils::progress_mode::emit_stderr(&line);
+                                    }
+                                    shared_utils::progress_mode::emit_stderr(
+                                        "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
+                                    );
+                                    if try_imagemagick_fallback(
+                                        input,
+                                        &temp_output,
+                                        distance,
+                                        max_threads,
+                                        options.apple_compat,
+                                    )
+                                    .is_ok()
+                                    {
+                                        return finalize_fallback_jxl(
+                                            input,
+                                            &temp_output,
+                                            &output,
+                                            input_size,
+                                            options,
+                                            "(imagemagick fallback)",
+                                        );
                                     }
                                     result
                                 }
                             }
                         } else {
-                            shared_utils::progress_mode::emit_stderr("   ❌ Failed to capture FFmpeg stdout");
-                            let _ = ffmpeg_proc.kill();
-                            shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                            if try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat).is_ok() {
-                                return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                            shared_utils::progress_mode::emit_stderr(
+                                "   ❌ Failed to capture FFmpeg stdout",
+                            );
+                            if let Err(kill_err) = ffmpeg_proc.kill() {
+                                let line = format!(
+                                    "   ⚠️ Failed to stop FFmpeg after stdout capture failure: {}",
+                                    kill_err
+                                );
+                                shared_utils::progress_mode::emit_stderr(&line);
+                            }
+                            shared_utils::progress_mode::emit_stderr(
+                                "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
+                            );
+                            if try_imagemagick_fallback(
+                                input,
+                                &temp_output,
+                                distance,
+                                max_threads,
+                                options.apple_compat,
+                            )
+                            .is_ok()
+                            {
+                                return finalize_fallback_jxl(
+                                    input,
+                                    &temp_output,
+                                    &output,
+                                    input_size,
+                                    options,
+                                    "(imagemagick fallback)",
+                                );
                             }
                             result
                         }
@@ -424,10 +540,29 @@ pub fn convert_to_jxl(
                     Err(e) => {
                         let line = format!("   ❌ FFmpeg not available or failed to start: {}", e);
                         shared_utils::progress_mode::emit_stderr(&line);
-                        shared_utils::progress_mode::emit_stderr("      💡 Install: brew install ffmpeg");
-                        shared_utils::progress_mode::emit_stderr("   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...");
-                        if try_imagemagick_fallback(input, &temp_output, distance, max_threads, options.apple_compat).is_ok() {
-                            return finalize_fallback_jxl(input, &temp_output, &output, input_size, options, "(imagemagick fallback)");
+                        shared_utils::progress_mode::emit_stderr(
+                            "      💡 Install: brew install ffmpeg",
+                        );
+                        shared_utils::progress_mode::emit_stderr(
+                            "   🔄 SECONDARY FALLBACK: Trying ImageMagick pipeline...",
+                        );
+                        if try_imagemagick_fallback(
+                            input,
+                            &temp_output,
+                            distance,
+                            max_threads,
+                            options.apple_compat,
+                        )
+                        .is_ok()
+                        {
+                            return finalize_fallback_jxl(
+                                input,
+                                &temp_output,
+                                &output,
+                                input_size,
+                                options,
+                                "(imagemagick fallback)",
+                            );
                         }
                         result
                     }
@@ -597,7 +732,10 @@ pub fn convert_jpeg_to_jxl(
     let output_cmd = match result {
         Ok(out) => out,
         Err(e) => {
-            return Err(ImgQualityError::ToolNotFound(format!("cjxl not found: {}", e)));
+            return Err(ImgQualityError::ToolNotFound(format!(
+                "cjxl not found: {}",
+                e
+            )));
         }
     };
 
@@ -629,7 +767,14 @@ pub fn convert_jpeg_to_jxl(
             };
 
         // 2) Retry with original cjxl flags (no --allow_jpeg_reconstruction 0) on fixed or original
-        let retry_original = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, None, hdr_info);
+        let retry_original = run_cjxl_jpeg_transcode(
+            &source_to_use,
+            &temp_output,
+            options,
+            max_threads,
+            None,
+            hdr_info,
+        );
         if let Ok(out) = retry_original {
             if out.status.success() {
                 let label = if source_to_use != input {
@@ -650,7 +795,14 @@ pub fn convert_jpeg_to_jxl(
         cleanup_temp_output(&temp_output, input);
 
         // 3) Fallback: --allow_jpeg_reconstruction 0 (no bitstream reconstruction, often larger)
-        let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, max_threads, Some(0), hdr_info);
+        let retry_no_recon = run_cjxl_jpeg_transcode(
+            &source_to_use,
+            &temp_output,
+            options,
+            max_threads,
+            Some(0),
+            hdr_info,
+        );
         if let Ok(out) = retry_no_recon {
             if out.status.success() {
                 return commit_jpeg_to_jxl_success(
@@ -674,7 +826,13 @@ pub fn convert_jpeg_to_jxl(
         || stderr.contains("Corrupt JPEG")
         || stderr.contains("Premature end")
     {
-        match shared_utils::jxl_utils::try_imagemagick_fallback(input, &temp_output, 0.0, max_threads, options.apple_compat) {
+        match shared_utils::jxl_utils::try_imagemagick_fallback(
+            input,
+            &temp_output,
+            0.0,
+            max_threads,
+            options.apple_compat,
+        ) {
             Ok(_) => commit_jpeg_to_jxl_success(
                 input,
                 &temp_output,
@@ -692,7 +850,13 @@ pub fn convert_jpeg_to_jxl(
         shared_utils::progress_mode::emit_stderr(
             "   🔄 JPEG transcode failed, trying ImageMagick pipeline...",
         );
-        match shared_utils::jxl_utils::try_imagemagick_fallback(input, &temp_output, 0.0, max_threads, options.apple_compat) {
+        match shared_utils::jxl_utils::try_imagemagick_fallback(
+            input,
+            &temp_output,
+            0.0,
+            max_threads,
+            options.apple_compat,
+        ) {
             Ok(_) => commit_jpeg_to_jxl_success(
                 input,
                 &temp_output,
@@ -766,7 +930,8 @@ pub fn convert_to_avif(
             if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
                 cleanup_temp_output(&temp_output, input);
                 return Err(ImgQualityError::ConversionError(format!(
-                    "AVIF health check failed: {}", e
+                    "AVIF health check failed: {}",
+                    e
                 )));
             }
             finalize_with_size_check(
@@ -846,7 +1011,8 @@ pub fn convert_to_avif_lossless(
             if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
                 cleanup_temp_output(&temp_output, input);
                 return Err(ImgQualityError::ConversionError(format!(
-                    "Lossless AVIF health check failed: {}", e
+                    "Lossless AVIF health check failed: {}",
+                    e
                 )));
             }
             finalize_with_size_check(
@@ -1015,7 +1181,9 @@ pub fn convert_to_jxl_matched(
     // Only disable lossless JPEG mode when input is actually JPEG and we want lossy encoding.
     // For non-JPEG inputs this flag is a no-op, but omitting it keeps the command clean.
     if distance > 0.0 {
-        let is_jpeg = options.input_format.as_deref()
+        let is_jpeg = options
+            .input_format
+            .as_deref()
             .map(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"))
             .unwrap_or(false);
         if is_jpeg {
@@ -1080,7 +1248,13 @@ fn try_imagemagick_fallback(
     max_threads: usize,
     apple_compat: bool,
 ) -> std::result::Result<(), std::io::Error> {
-    shared_utils::jxl_utils::try_imagemagick_fallback(input, output, distance, max_threads, apple_compat)
+    shared_utils::jxl_utils::try_imagemagick_fallback(
+        input,
+        output,
+        distance,
+        max_threads,
+        apple_compat,
+    )
 }
 
 fn convert_to_temp_png(
@@ -1142,19 +1316,20 @@ fn prepare_input_for_cjxl(
         .unwrap_or_default();
 
     let ext = if let Some(real) = detected_ext {
-        if !literal_ext.is_empty() && real != literal_ext
+        if !literal_ext.is_empty()
+            && real != literal_ext
             && !((real == "jpg" && literal_ext == "jpeg")
                 || (real == "jpeg" && literal_ext == "jpg"))
-            {
-                use console::style;
-                eprintln!(
-                    "   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
-                    style("⚠️  [Smart fix] Extension mismatch:").yellow().bold(),
-                    input.display(),
-                    literal_ext,
-                    real.to_uppercase()
-                );
-            }
+        {
+            use console::style;
+            eprintln!(
+                "   {} '{}' (disguised as .{}) -> actually {}, will process as actual format",
+                style("⚠️  [Smart fix] Extension mismatch:").yellow().bold(),
+                input.display(),
+                literal_ext,
+                real.to_uppercase()
+            );
+        }
         real.to_string()
     } else if let Some(ref format) = options.input_format {
         format.to_lowercase()

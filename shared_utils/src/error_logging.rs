@@ -24,24 +24,24 @@ impl ErrorSeverity {
     /// Short label used in log lines (no color — for file logs)
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Critical      => "[CRITICAL]",
-            Self::Rare          => "[RARE ERROR]",
-            Self::MetadataLoss  => "[METADATA LOSS]",
+            Self::Critical => "[CRITICAL]",
+            Self::Rare => "[RARE ERROR]",
+            Self::MetadataLoss => "[METADATA LOSS]",
             Self::PipelineBroken => "[PIPELINE BROKEN]",
             Self::UpstreamError => "[UPSTREAM ERROR]",
-            Self::Standard      => "[ERROR]",
+            Self::Standard => "[ERROR]",
         }
     }
 
     /// Colored label for terminal output
     pub fn label_colored(&self) -> String {
         match self {
-            Self::Critical      => "\x1b[1;31m🚨 CRITICAL\x1b[0m".to_string(),
-            Self::Rare          => "\x1b[1;33m⚠️  RARE ERROR\x1b[0m".to_string(),
-            Self::MetadataLoss  => "\x1b[1;35m📋 METADATA LOSS\x1b[0m".to_string(),
+            Self::Critical => "\x1b[1;31m🚨 CRITICAL\x1b[0m".to_string(),
+            Self::Rare => "\x1b[1;33m⚠️  RARE ERROR\x1b[0m".to_string(),
+            Self::MetadataLoss => "\x1b[1;35m📋 METADATA LOSS\x1b[0m".to_string(),
             Self::PipelineBroken => "\x1b[1;36m🔧 PIPELINE BROKEN\x1b[0m".to_string(),
             Self::UpstreamError => "\x1b[33m🔺 UPSTREAM ERROR\x1b[0m".to_string(),
-            Self::Standard      => "\x1b[31m❌ ERROR\x1b[0m".to_string(),
+            Self::Standard => "\x1b[31m❌ ERROR\x1b[0m".to_string(),
         }
     }
 }
@@ -52,8 +52,12 @@ impl ErrorSeverity {
 /// File:     `  [CRITICAL] <context>: <detail>`
 pub fn log_enhanced_error(severity: ErrorSeverity, context: &str, detail: &str) {
     // Terminal: colored, indented
-    let colored = format!("  {}  \x1b[1m{}\x1b[0m: {}", severity.label_colored(),
-        context, detail);
+    let colored = format!(
+        "  {}  \x1b[1m{}\x1b[0m: {}",
+        severity.label_colored(),
+        context,
+        detail
+    );
     crate::progress_mode::emit_stderr(&colored);
 
     // File log: plain text with label
@@ -70,19 +74,30 @@ pub fn classify_error(msg: &str) -> ErrorSeverity {
     if lower.contains("data loss") || lower.contains("corrupt") || lower.contains("truncat") {
         return ErrorSeverity::Critical;
     }
-    if lower.contains("metadata") && (lower.contains("lost") || lower.contains("missing") || lower.contains("strip")) {
+    if lower.contains("metadata")
+        && (lower.contains("lost") || lower.contains("missing") || lower.contains("strip"))
+    {
         return ErrorSeverity::MetadataLoss;
     }
-    if lower.contains("broken pipe") || lower.contains("unexpected eof") || lower.contains("connection reset") {
+    if lower.contains("broken pipe")
+        || lower.contains("unexpected eof")
+        || lower.contains("connection reset")
+    {
         return ErrorSeverity::PipelineBroken;
     }
-    if lower.contains("assertion failed") || lower.contains("segmentation fault") || lower.contains("bus error") {
+    if lower.contains("assertion failed")
+        || lower.contains("segmentation fault")
+        || lower.contains("bus error")
+    {
         return ErrorSeverity::Rare;
     }
     if lower.contains("could find no file") || lower.contains("pattern_type") {
         return ErrorSeverity::Rare;
     }
-    if (lower.contains("cjxl") || lower.contains("magick") || lower.contains("ffmpeg") || lower.contains("ffprobe"))
+    if (lower.contains("cjxl")
+        || lower.contains("magick")
+        || lower.contains("ffmpeg")
+        || lower.contains("ffprobe"))
         && (lower.contains("exit code") || lower.contains("failed") || lower.contains("error"))
     {
         return ErrorSeverity::UpstreamError;

@@ -47,8 +47,11 @@ pub fn is_live_photo(path: &Path) -> bool {
         let heif_path = parent.join(format!("{}.heif", stem));
         let heif_upper_path = parent.join(format!("{}.HEIF", stem));
 
-        if heic_path.exists() || heic_upper_path.exists()
-            || heif_path.exists() || heif_upper_path.exists() {
+        if heic_path.exists()
+            || heic_upper_path.exists()
+            || heif_path.exists()
+            || heif_upper_path.exists()
+        {
             return true;
         }
     }
