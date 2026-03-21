@@ -629,17 +629,7 @@ pub fn commit_temp_to_output_with_metadata(
         let _ = fs::remove_file(temp);
         return Ok(false);
     }
-    #[cfg(unix)]
-    {
-        fs::rename(temp, output)?;
-    }
-    #[cfg(not(unix))]
-    {
-        if output.exists() {
-            fs::remove_file(output)?;
-        }
-        fs::rename(temp, output)?;
-    }
+    fs::rename(temp, output)?;
     
     // Preserve complete metadata from original file if provided
     if let Some(src) = original {
