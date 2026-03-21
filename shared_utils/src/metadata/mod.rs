@@ -18,6 +18,8 @@ mod network;
 mod windows;
 
 pub use exif::preserve_internal_metadata;
+#[cfg(target_os = "macos")]
+pub use macos::append_mfb_branding;
 
 pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     use tracing::debug;
@@ -138,16 +140,6 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
         // Network xattrs (WhereFroms, UserTags) — copy + verify
         if let Err(e) = network::preserve_network_metadata(src, dst) {
             eprintln!("⚠️ [metadata] Network metadata preservation failed: {}", e);
-        }
-
-        // Apple Finder Comment Branding (Selective for target formats JXL, MOV, MP4)
-        let ext = dst.extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase()).unwrap_or_default();
-        let is_target_format = ext == "jxl" || ext == "mov" || ext == "mp4";
-        
-        if is_target_format {
-            if let Err(e) = macos::append_mfb_branding(dst) {
-                tracing::debug!("Failed to append MFB branding to Finder comment: {}", e);
-            }
         }
 
         // Unix permission bits (copyfile covers STAT but be explicit)
