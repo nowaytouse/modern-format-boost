@@ -316,6 +316,40 @@ impl DependencyVersions {
             x265_version: Self::get_x265_version(),
         }
     }
+
+    fn get_command_version_line(tool: &str, args: &[&str]) -> Option<String> {
+        let output = match std::process::Command::new(tool).args(args).output() {
+            Ok(output) => output,
+            Err(err) => {
+                debug!(tool, error = %err, "Failed to execute external tool for version detection");
+                return None;
+            }
+        };
+
+        if !output.status.success() {
+            debug!(
+                tool,
+                status = ?output.status.code(),
+                stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+                "External tool returned non-success during version detection"
+            );
+            return None;
+        }
+
+        let stdout = match String::from_utf8(output.stdout) {
+            Ok(stdout) => stdout,
+            Err(err) => {
+                warn!(tool, error = %err, "Failed to decode tool version output as UTF-8");
+                return None;
+            }
+        };
+
+        let line = stdout.lines().next().map(str::trim).filter(|line| !line.is_empty());
+        if line.is_none() {
+            debug!(tool, "Version detection returned empty stdout");
+        }
+        line.map(ToString::to_string)
+    }
     
     /// Compute hash of all dependency versions
     pub fn compute_hash(&self) -> u64 {
@@ -333,48 +367,20 @@ impl DependencyVersions {
     }
     
     fn get_ffmpeg_version() -> Option<String> {
-        std::process::Command::new("ffmpeg")
-            .arg("-version")
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8(output.stdout).ok()
-            })
-            .and_then(|s| {
-                s.lines().next().map(|line| {
-                    // Extract version from "ffmpeg version N-xxxxx-gxxxxxxx"
-                    line.split_whitespace()
-                        .nth(2)
-                        .unwrap_or("unknown")
-                        .to_string()
-                })
-            })
+        Self::get_command_version_line("ffmpeg", &["-version"]).map(|line| {
+            line.split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .to_string()
+        })
     }
     
     fn get_libjxl_version() -> Option<String> {
-        std::process::Command::new("cjxl")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8(output.stdout).ok()
-            })
-            .and_then(|s| {
-                s.lines().next().map(|line| line.trim().to_string())
-            })
+        Self::get_command_version_line("cjxl", &["--version"])
     }
     
     fn get_libavif_version() -> Option<String> {
-        std::process::Command::new("avifenc")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8(output.stdout).ok()
-            })
-            .and_then(|s| {
-                s.lines().next().map(|line| line.trim().to_string())
-            })
+        Self::get_command_version_line("avifenc", &["--version"])
     }
     
     fn get_libheif_version() -> Option<String> {
@@ -384,29 +390,11 @@ impl DependencyVersions {
     }
     
     fn get_svt_av1_version() -> Option<String> {
-        std::process::Command::new("SvtAv1EncApp")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8(output.stdout).ok()
-            })
-            .and_then(|s| {
-                s.lines().next().map(|line| line.trim().to_string())
-            })
+        Self::get_command_version_line("SvtAv1EncApp", &["--version"])
     }
     
     fn get_x265_version() -> Option<String> {
-        std::process::Command::new("x265")
-            .arg("--version")
-            .output()
-            .ok()
-            .and_then(|output| {
-                String::from_utf8(output.stdout).ok()
-            })
-            .and_then(|s| {
-                s.lines().next().map(|line| line.trim().to_string())
-            })
+        Self::get_command_version_line("x265", &["--version"])
     }
 }
 

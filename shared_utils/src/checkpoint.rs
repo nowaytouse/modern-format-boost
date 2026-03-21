@@ -58,6 +58,13 @@ fn get_central_progress_dir() -> PathBuf {
 }
 const LOCK_STALE_TIMEOUT_SECS: u64 = 24 * 60 * 60;
 
+fn current_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LockInfo {
     pid: u32,
@@ -68,10 +75,7 @@ struct LockInfo {
 
 impl LockInfo {
     fn new() -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
+        let now = current_unix_secs();
         Self {
             pid: std::process::id(),
             start_time: get_process_start_time().unwrap_or(now),
@@ -81,54 +85,66 @@ impl LockInfo {
     }
 
     fn is_stale(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
+        let now = current_unix_secs();
         now.saturating_sub(self.created_at) > LOCK_STALE_TIMEOUT_SECS
     }
 }
 
 #[cfg(unix)]
 fn get_process_start_time() -> Option<u64> {
-    use std::process::Command;
-    let _output = Command::new("ps")
-        .args(["-p", &std::process::id().to_string(), "-o", "lstart="])
-        .output()
-        .ok()?;
-    Some(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs(),
-    )
+    get_process_start_time_for_pid(std::process::id())
 }
 
 #[cfg(not(unix))]
 fn get_process_start_time() -> Option<u64> {
-    Some(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs(),
-    )
+    Some(current_unix_secs())
 }
 
 #[cfg(unix)]
 fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
     use std::process::Command;
-    let output = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "lstart="])
+    let output = match Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "etimes="])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            eprintln!(
+                "⚠️ [checkpoint] Failed to query process age for PID {}: {}",
+                pid, err
+            );
+            return None;
+        }
+    };
+
     if output.status.success() {
-        Some(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::ZERO)
-                .as_secs(),
-        )
+        let elapsed_secs = match String::from_utf8(output.stdout) {
+            Ok(stdout) => match stdout.trim().parse::<u64>() {
+                Ok(elapsed_secs) => elapsed_secs,
+                Err(err) => {
+                    eprintln!(
+                        "⚠️ [checkpoint] Failed to parse process age for PID {}: {}",
+                        pid, err
+                    );
+                    return None;
+                }
+            },
+            Err(err) => {
+                eprintln!(
+                    "⚠️ [checkpoint] Non-UTF-8 process age output for PID {}: {}",
+                    pid, err
+                );
+                return None;
+            }
+        };
+        Some(current_unix_secs().saturating_sub(elapsed_secs))
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!(
+            "⚠️ [checkpoint] ps returned non-zero while querying PID {}: {}",
+            pid,
+            stderr.trim()
+        );
         None
     }
 }
@@ -142,12 +158,26 @@ fn get_hostname() -> String {
     #[cfg(unix)]
     {
         use std::process::Command;
-        Command::new("hostname")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| "unknown".to_string())
+        match Command::new("hostname").output() {
+            Ok(output) if output.status.success() => String::from_utf8(output.stdout)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|err| {
+                    eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {}", err);
+                    "unknown".to_string()
+                }),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "⚠️ [checkpoint] hostname returned non-zero status: {}",
+                    stderr.trim()
+                );
+                "unknown".to_string()
+            }
+            Err(err) => {
+                eprintln!("⚠️ [checkpoint] Failed to query hostname: {}", err);
+                "unknown".to_string()
+            }
+        }
     }
     #[cfg(not(unix))]
     {
@@ -288,8 +318,28 @@ impl CheckpointManager {
         let lock_info = LockInfo::new();
         let json = serde_json::to_string_pretty(&lock_info)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        fs::write(&self.lock_file, json)?;
-        Ok(())
+
+        loop {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&self.lock_file)
+            {
+                Ok(mut file) => {
+                    file.write_all(json.as_bytes())?;
+                    return Ok(());
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                    if let Some(pid) = self.check_lock()? {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AlreadyExists,
+                            format!("Checkpoint lock already held by PID {}", pid),
+                        ));
+                    }
+                }
+                Err(err) => return Err(err),
+            }
+        }
     }
 
     pub fn release_lock(&self) -> io::Result<()> {
@@ -354,10 +404,22 @@ impl CheckpointManager {
 
     pub fn cleanup(&self) -> io::Result<()> {
         if self.progress_file.exists() {
-            let _ = fs::remove_file(&self.progress_file);
+            if let Err(err) = fs::remove_file(&self.progress_file) {
+                eprintln!(
+                    "⚠️ [checkpoint] Failed to remove progress file {}: {}",
+                    self.progress_file.display(),
+                    err
+                );
+            }
         }
         if self.lock_file.exists() {
-            let _ = fs::remove_file(&self.lock_file);
+            if let Err(err) = fs::remove_file(&self.lock_file) {
+                eprintln!(
+                    "⚠️ [checkpoint] Failed to remove lock file {}: {}",
+                    self.lock_file.display(),
+                    err
+                );
+            }
         }
         Ok(())
     }
@@ -424,7 +486,13 @@ impl CheckpointManager {
 
 impl Drop for CheckpointManager {
     fn drop(&mut self) {
-        let _ = self.release_lock();
+        if let Err(err) = self.release_lock() {
+            eprintln!(
+                "⚠️ [checkpoint] Failed to release lock on drop {}: {}",
+                self.lock_file.display(),
+                err
+            );
+        }
     }
 }
 

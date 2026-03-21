@@ -24,6 +24,19 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
     .unwrap_or_default()
 }
 
+fn cleanup_temp_output(temp_output: &Path, input: &Path) {
+    if let Err(e) = fs::remove_file(temp_output) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "⚠️ [img-av1] Failed to remove temporary output {} for {}: {}",
+                temp_output.display(),
+                input.display(),
+                e
+            );
+        }
+    }
+}
+
 /// Finalize conversion with size check and metadata preservation.
 /// Common pattern: commit temp → check size → finalize.
 /// Returns ConversionResult on success or error.
@@ -84,7 +97,7 @@ pub fn convert_to_jxl(
     let output = get_output_path(input, "jxl", options)?;
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
 
     if output.exists() && !options.force {
@@ -145,7 +158,7 @@ pub fn convert_to_jxl(
                     // ImageMagick fallback succeeded — finalize directly
                     let output_size = fs::metadata(&temp_output)?.len();
                     if let Err(e) = verify_jxl_health(&temp_output) {
-                        let _ = fs::remove_file(&temp_output);
+                        cleanup_temp_output(&temp_output, input);
                         return Err(e);
                     }
                     if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
@@ -170,7 +183,7 @@ pub fn convert_to_jxl(
             let output_size = fs::metadata(&temp_output)?.len();
 
             if let Err(e) = verify_jxl_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
+                cleanup_temp_output(&temp_output, input);
                 return Err(e);
             }
 
@@ -251,7 +264,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
     let output = get_output_path(input, "jxl", options)?;
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
 
     if output.exists() && !options.force {
@@ -271,7 +284,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
 
     if output_cmd.status.success() {
         if let Err(e) = verify_jxl_health(&temp_output) {
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             return Err(e);
         }
         let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
@@ -288,7 +301,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
     }
 
     let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-    let _ = fs::remove_file(&temp_output);
+    cleanup_temp_output(&temp_output, input);
 
     if is_jpeg_reconstruction_cjxl_error(&stderr) {
         // 1) Fix: strip trailing data after JPEG EOI so cjxl can use bitstream reconstruction
@@ -303,7 +316,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
         if let Ok(out) = retry_original {
             if out.status.success() {
                 if let Err(e) = verify_jxl_health(&temp_output) {
-                    let _ = fs::remove_file(&temp_output);
+                    cleanup_temp_output(&temp_output, input);
                     return Err(e);
                 }
                 if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
@@ -318,14 +331,14 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
                     .map_err(ImgQualityError::IoError);
             }
         }
-        let _ = fs::remove_file(&temp_output);
+        cleanup_temp_output(&temp_output, input);
 
         // 3) Fallback: --allow_jpeg_reconstruction 0
         let retry_no_recon = run_cjxl_jpeg_transcode(&source_to_use, &temp_output, options, Some(0), hdr_info);
         if let Ok(out) = retry_no_recon {
             if out.status.success() {
                 if let Err(e) = verify_jxl_health(&temp_output) {
-                    let _ = fs::remove_file(&temp_output);
+                    cleanup_temp_output(&temp_output, input);
                     return Err(e);
                 }
                 if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
@@ -342,7 +355,7 @@ pub fn convert_jpeg_to_jxl(input: &Path, options: &ConvertOptions, hdr_info: Opt
                 .map_err(ImgQualityError::IoError);
             }
         }
-        let _ = fs::remove_file(&temp_output);
+        cleanup_temp_output(&temp_output, input);
     }
 
     Err(ImgQualityError::ConversionError(format!(
@@ -380,7 +393,7 @@ pub fn convert_to_avif(
     let output = get_output_path(input, "avif", options)?;
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
 
     if output.exists() && !options.force {
@@ -405,7 +418,7 @@ pub fn convert_to_avif(
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
+                cleanup_temp_output(&temp_output, input);
                 return Err(ImgQualityError::ConversionError(e));
             }
             let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
@@ -421,7 +434,7 @@ pub fn convert_to_avif(
             )
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc failed: {}",
@@ -470,7 +483,7 @@ pub fn convert_to_avif_lossless(
     let output = get_output_path(input, "avif", options)?;
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
 
     if output.exists() && !options.force {
@@ -493,7 +506,7 @@ pub fn convert_to_avif_lossless(
     match result {
         Ok(output_cmd) if output_cmd.status.success() => {
             if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
+                cleanup_temp_output(&temp_output, input);
                 return Err(ImgQualityError::ConversionError(e));
             }
             let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
@@ -509,7 +522,7 @@ pub fn convert_to_avif_lossless(
             )
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "avifenc lossless failed: {}",
@@ -634,7 +647,7 @@ pub fn convert_to_jxl_matched(
     let output = get_output_path(input, "jxl", options)?;
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
 
     if output.exists() && !options.force {
@@ -687,7 +700,7 @@ pub fn convert_to_jxl_matched(
             let output_size = fs::metadata(&temp_output)?.len();
 
             if let Err(e) = verify_jxl_health(&temp_output) {
-                let _ = fs::remove_file(&temp_output);
+                cleanup_temp_output(&temp_output, input);
                 return Err(e);
             }
 
@@ -704,7 +717,7 @@ pub fn convert_to_jxl_matched(
             )
         }
         Ok(output_cmd) => {
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
                 "cjxl failed: {}",

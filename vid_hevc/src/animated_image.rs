@@ -15,6 +15,19 @@ use shared_utils::conversion::{
     determine_output_path_with_base, is_already_processed, mark_as_processed,
 };
 
+fn cleanup_temp_output(temp_output: &Path, input: &Path) {
+    if let Err(e) = fs::remove_file(temp_output) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                input = %input.display(),
+                temp_output = %temp_output.display(),
+                error = %e,
+                "Failed to remove temporary output"
+            );
+        }
+    }
+}
+
 /// Extract frames from animated WebP using webpmux and create APNG with correct timing
 fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Result<()> {
     // Create temporary directory for frames
@@ -139,13 +152,18 @@ fn get_output_path(
 }
 
 fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::path::PathBuf> {
-    shared_utils::copy_on_skip_or_fail(
+    match shared_utils::copy_on_skip_or_fail(
         input,
         options.output_dir.as_deref(),
         options.base_dir.as_deref(),
         options.verbose,
-    )
-    .unwrap_or_default()
+    ) {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::warn!(input = %input.display(), error = %e, "Failed to copy original on skip");
+            None
+        }
+    }
 }
 
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
@@ -490,7 +508,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
             if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
-                let _ = fs::remove_file(&temp_output);
+                cleanup_temp_output(&temp_output, input);
                 tracing::warn!(input = %input.display(), "HEVC output invalid (empty or unreadable); copying original");
                 copy_original_on_skip(input, options);
                 mark_as_processed(input);
@@ -518,11 +536,13 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             mark_as_processed(input);
 
             if options.should_delete_original() {
-                let _ = shared_utils::conversion::safe_delete_original(
+                if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
                     shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                );
+                ) {
+                    tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC conversion");
+                }
             }
 
             let reduction_pct = reduction * 100.0;
@@ -554,7 +574,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg HEVC encode failed; copying original");
             copy_original_on_skip(input, options);
             mark_as_processed(input);
@@ -572,7 +592,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             })
         }
         Err(e) => {
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found; copying original");
             copy_original_on_skip(input, options);
             mark_as_processed(input);
@@ -945,12 +965,14 @@ pub fn convert_to_hevc_mp4_matched(
             Some(s) => s,
             None => {
                 tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
-                let _ = shared_utils::copy_on_skip_or_fail(
+                if let Err(e) = shared_utils::copy_on_skip_or_fail(
                     input,
                     options.output_dir.as_deref(),
                     options.base_dir.as_deref(),
                     false,
-                );
+                ) {
+                    tracing::warn!(input = %input.display(), error = %e, "Failed to copy original after HEVC SSIM failure");
+                }
                 mark_as_processed(input);
                 return Ok(ConversionResult {
                     success: false,
@@ -1025,12 +1047,14 @@ pub fn convert_to_hevc_mp4_matched(
             else { "QUALITY VALIDATION FAILED" },
             protect_msg, delete_msg);
 
-        let _ = shared_utils::copy_on_skip_or_fail(
+        if let Err(e) = shared_utils::copy_on_skip_or_fail(
             input,
             options.output_dir.as_deref(),
             options.base_dir.as_deref(),
             false,
-        );
+        ) {
+            tracing::warn!(input = %input.display(), error = %e, "Failed to copy original after HEVC quality skip");
+        }
         mark_as_processed(input);
 
         return Ok(ConversionResult {
@@ -1057,11 +1081,13 @@ pub fn convert_to_hevc_mp4_matched(
     mark_as_processed(input);
 
     if options.should_delete_original() {
-        let _ = shared_utils::conversion::safe_delete_original(
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
             shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-        );
+        ) {
+            tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after HEVC animated conversion");
+        }
     }
 
     let reduction_pct = -explore_result.size_change_pct;
@@ -1164,11 +1190,13 @@ pub fn convert_to_hevc_mkv_lossless(
             mark_as_processed(input);
 
             if options.should_delete_original() {
-                let _ = shared_utils::conversion::safe_delete_original(
+                if let Err(e) = shared_utils::conversion::safe_delete_original(
                     input,
                     &output,
                     shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-                );
+                ) {
+                    tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after lossless HEVC conversion");
+                }
             }
 
             let reduction_pct = reduction * 100.0;
@@ -1194,7 +1222,7 @@ pub fn convert_to_hevc_mkv_lossless(
         }
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             tracing::warn!(input = %input.display(), stderr = %stderr, "ffmpeg lossless HEVC failed; copying original");
             copy_original_on_skip(input, options);
             mark_as_processed(input);
@@ -1212,7 +1240,7 @@ pub fn convert_to_hevc_mkv_lossless(
             })
         }
         Err(e) => {
-            let _ = fs::remove_file(&temp_output);
+            cleanup_temp_output(&temp_output, input);
             tracing::warn!(input = %input.display(), err = %e, "ffmpeg not found for lossless HEVC; copying original");
             copy_original_on_skip(input, options);
             mark_as_processed(input);
@@ -1280,7 +1308,7 @@ pub fn convert_to_gif_apple_compat(
     let output = get_output_path(input, "GIF", options)?;
 
     if let Some(parent) = output.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent)?;
     }
 
     if output.exists() && !options.force {
@@ -1481,7 +1509,7 @@ pub fn convert_to_gif_apple_compat(
 
     if !ffmpeg_ok {
         // FFmpeg conversion failed — copy original so data is not lost
-        let _ = fs::remove_file(&temp_output);
+        cleanup_temp_output(&temp_output, input);
         tracing::warn!(input = %input.display(), "GIF conversion failed (FFmpeg unavailable or failed); copying original");
         copy_original_on_skip(input, options);
         mark_as_processed(input);
@@ -1504,7 +1532,7 @@ pub fn convert_to_gif_apple_compat(
         .map(|m| m.len())
         .unwrap_or(0);
     if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
-        let _ = fs::remove_file(&temp_output);
+        cleanup_temp_output(&temp_output, input);
         tracing::warn!(input = %input.display(), "GIF output invalid (empty or unreadable); copying original");
         copy_original_on_skip(input, options);
         mark_as_processed(input);
@@ -1590,11 +1618,13 @@ pub fn convert_to_gif_apple_compat(
     mark_as_processed(input);
 
     if options.should_delete_original() {
-        let _ = shared_utils::conversion::safe_delete_original(
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
             input,
             &output,
             shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-        );
+        ) {
+            tracing::warn!(input = %input.display(), output = %output.display(), error = %e, "Failed to delete original after GIF apple-compat HEVC conversion");
+        }
     }
 
     let reduction_pct = reduction * 100.0;

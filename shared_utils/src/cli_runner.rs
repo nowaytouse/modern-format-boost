@@ -135,9 +135,19 @@ where
     };
 
     if std::env::var("MFB_SKIP_DISK_PRECHECK").as_deref() != Ok("1") {
-        let total_input_size: u64 = files.iter()
-            .filter_map(|f| std::fs::metadata(f).ok())
-            .map(|m| m.len())
+        let total_input_size: u64 = files
+            .iter()
+            .map(|f| match std::fs::metadata(f) {
+                Ok(metadata) => metadata.len(),
+                Err(err) => {
+                    warn!(
+                        "Failed to read file metadata during disk-space precheck ({}): {}",
+                        f.display(),
+                        err
+                    );
+                    0
+                }
+            })
             .sum();
         let check_path = config.output.as_deref().unwrap_or(input);
         if let Some(avail) = crate::system_memory::get_available_disk_bytes(check_path) {

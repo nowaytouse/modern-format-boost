@@ -7,6 +7,7 @@
 
 use crate::file_sorter::{sort_by_size_ascending, SortStrategy};
 use std::path::{Path, PathBuf};
+use tracing::warn;
 use walkdir::WalkDir;
 
 pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
@@ -16,13 +17,26 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
         WalkDir::new(dir).max_depth(1)
     };
 
-    walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| crate::common_utils::has_extension(e.path(), extensions))
-        .map(|e| e.path().to_path_buf())
-        .collect()
+    let mut files = Vec::new();
+    for entry in walker.into_iter() {
+        match entry {
+            Ok(entry) => {
+                if entry.file_type().is_file()
+                    && crate::common_utils::has_extension(entry.path(), extensions)
+                {
+                    files.push(entry.path().to_path_buf());
+                }
+            }
+            Err(err) => {
+                warn!(
+                    dir = %dir.display(),
+                    error = %err,
+                    "Failed to inspect directory entry while collecting files"
+                );
+            }
+        }
+    }
+    files
 }
 
 pub fn collect_files_sorted(
@@ -55,14 +69,36 @@ pub fn calculate_directory_size_by_extensions(
         WalkDir::new(dir).max_depth(1)
     };
 
-    walker
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| crate::common_utils::has_extension(e.path(), extensions))
-        .filter_map(|e| std::fs::metadata(e.path()).ok())
-        .map(|m| m.len())
-        .sum()
+    let mut total = 0u64;
+    for entry in walker.into_iter() {
+        match entry {
+            Ok(entry) => {
+                if !entry.file_type().is_file()
+                    || !crate::common_utils::has_extension(entry.path(), extensions)
+                {
+                    continue;
+                }
+                match std::fs::metadata(entry.path()) {
+                    Ok(metadata) => total += metadata.len(),
+                    Err(err) => {
+                        warn!(
+                            path = %entry.path().display(),
+                            error = %err,
+                            "Failed to read file metadata while calculating directory size"
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(
+                    dir = %dir.display(),
+                    error = %err,
+                    "Failed to inspect directory entry while calculating directory size"
+                );
+            }
+        }
+    }
+    total
 }
 
 pub const IMAGE_EXTENSIONS: &[&str] = &[
