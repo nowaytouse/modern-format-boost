@@ -125,11 +125,19 @@ where
     let mut checkpoint = if config.resume {
         match crate::checkpoint::CheckpointManager::new(input) {
             Ok(cp) => {
+                if let Err(err) = cp.reset_if_output_root_missing(config.output.as_deref()) {
+                    warn!(
+                        "⚠️  Could not reset stale checkpoint state for missing output root: {}",
+                        err
+                    );
+                }
                 if cp.is_resume_mode() {
                     info!(
                         "📂 Resume: skipping {} already completed files",
                         cp.completed_count()
                     );
+                } else {
+                    crate::clear_processed_list();
                 }
                 Some(cp)
             }

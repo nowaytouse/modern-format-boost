@@ -232,7 +232,12 @@ static GLOBAL_LOGGER: OnceLock<TerminalLogger> = OnceLock::new();
 
 /// 初始化全局终端日志器
 pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
-    let _ = GLOBAL_LOGGER.set(TerminalLogger::new(use_colors, debug_mode));
+    if GLOBAL_LOGGER
+        .set(TerminalLogger::new(use_colors, debug_mode))
+        .is_err()
+    {
+        eprintln!("⚠️ [Terminal Logger] init requested more than once; keeping first instance");
+    }
 }
 
 /// 获取全局终端日志器

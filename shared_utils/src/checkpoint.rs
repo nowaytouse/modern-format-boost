@@ -46,6 +46,7 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The central location for all MFB progress tracking to avoid polluting user directories.
@@ -192,7 +193,7 @@ pub struct CheckpointManager {
     lock_file: PathBuf,
     progress_file: PathBuf,
     completed: Mutex<HashSet<String>>,
-    resume_mode: bool,
+    resume_mode: AtomicBool,
 }
 
 impl CheckpointManager {
@@ -213,7 +214,7 @@ impl CheckpointManager {
             lock_file,
             progress_file,
             completed: Mutex::new(completed_set),
-            resume_mode,
+            resume_mode: AtomicBool::new(resume_mode),
         })
     }
 
@@ -350,7 +351,7 @@ impl CheckpointManager {
     }
 
     pub fn is_resume_mode(&self) -> bool {
-        self.resume_mode
+        self.resume_mode.load(Ordering::Relaxed)
     }
 
     pub fn completed_count(&self) -> usize {
@@ -372,6 +373,7 @@ impl CheckpointManager {
                 return Ok(());
             }
         }
+        self.resume_mode.store(true, Ordering::Relaxed);
 
         // Append to file outside the lock if possible, but actually we need to preserve order/integrity
         // Using a manual lock for the file append
@@ -396,10 +398,31 @@ impl CheckpointManager {
     pub fn clear_progress(&self) -> io::Result<()> {
         let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
         completed.clear();
+        self.resume_mode.store(false, Ordering::Relaxed);
         if self.progress_file.exists() {
             fs::remove_file(&self.progress_file)?;
         }
         Ok(())
+    }
+
+    pub fn reset_if_output_root_missing(&self, output_root: Option<&Path>) -> io::Result<bool> {
+        let Some(output_root) = output_root else {
+            return Ok(false);
+        };
+
+        if !self.is_resume_mode() || output_root.exists() {
+            return Ok(false);
+        }
+
+        let completed = self.completed_count();
+        eprintln!(
+            "⚠️ [checkpoint] Found {} saved resume entries, but output root {} is missing. Assuming the optimized folder was intentionally removed; clearing old resume state and restarting full processing.",
+            completed,
+            output_root.display()
+        );
+        self.clear_progress()?;
+        crate::conversion::clear_processed_list();
+        Ok(true)
     }
 
     pub fn cleanup(&self) -> io::Result<()> {
@@ -639,6 +662,53 @@ mod tests {
 
         assert_eq!(checkpoint.completed_count(), 0);
         assert!(!checkpoint.is_resume_mode());
+        teardown_test_env(guard);
+    }
+
+    #[test]
+    fn test_checkpoint_mark_completed_enables_resume_mode_for_current_run() {
+        let (temp, _progress, guard) = setup_test_env();
+        let target = temp.path();
+
+        let checkpoint = CheckpointManager::new(target).unwrap();
+        assert!(!checkpoint.is_resume_mode());
+
+        checkpoint
+            .mark_completed(&target.join("file1.mp4"))
+            .unwrap();
+
+        assert!(checkpoint.is_resume_mode());
+        teardown_test_env(guard);
+    }
+
+    #[test]
+    fn test_reset_if_output_root_missing_clears_stale_resume_state() {
+        let (temp, _progress, guard) = setup_test_env();
+        let target = temp.path();
+        let missing_output = target.join("deleted_optimized");
+
+        {
+            let checkpoint = CheckpointManager::new(target).unwrap();
+            checkpoint
+                .mark_completed(&target.join("file1.mp4"))
+                .unwrap();
+            checkpoint
+                .mark_completed(&target.join("file2.mp4"))
+                .unwrap();
+        }
+
+        let checkpoint = CheckpointManager::new(target).unwrap();
+        assert!(checkpoint.is_resume_mode());
+        assert_eq!(checkpoint.completed_count(), 2);
+
+        let cleared = checkpoint
+            .reset_if_output_root_missing(Some(&missing_output))
+            .unwrap();
+
+        assert!(cleared);
+        assert!(!checkpoint.is_resume_mode());
+        assert_eq!(checkpoint.completed_count(), 0);
+        assert!(!checkpoint.progress_file.exists());
         teardown_test_env(guard);
     }
 

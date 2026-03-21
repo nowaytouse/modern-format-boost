@@ -412,7 +412,11 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
         console::set_colors_enabled_stderr(true);
     }
 
-    let _ = CURRENT_LOG_LEVEL.set(config.level);
+    if CURRENT_LOG_LEVEL.set(config.level).is_err() {
+        eprintln!(
+            "⚠️ [Logging] log level was already initialized earlier; keeping previous level"
+        );
+    }
     std::fs::create_dir_all(&config.log_dir)
         .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;
 

@@ -24,6 +24,7 @@
 //! ```
 
 use chrono::{DateTime, FixedOffset, Utc};
+use std::any::Any;
 use std::collections::VecDeque;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,16 @@ fn beijing_time_now() -> String {
     now.with_timezone(&beijing)
         .format("%Y-%m-%d %H:%M:%S (UTC+8)")
         .to_string()
+}
+
+fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
+    match payload.downcast::<String>() {
+        Ok(msg) => *msg,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(msg) => (*msg).to_string(),
+            Err(_) => "non-string panic payload".to_string(),
+        },
+    }
 }
 
 struct StderrCapture {
@@ -175,14 +186,38 @@ impl HeartbeatMonitor {
                     #[cfg(unix)]
                     // SAFETY: child_pid is the PID of the child process we spawned; we own it and may signal it.
                     unsafe {
-                        libc::kill(self.child_pid as i32, libc::SIGKILL);
+                        if libc::kill(self.child_pid as i32, libc::SIGKILL) != 0 {
+                            crate::log_eprintln!(
+                                "⚠️  Failed to terminate ffmpeg PID {} via SIGKILL: {}",
+                                self.child_pid,
+                                std::io::Error::last_os_error()
+                            );
+                        }
                     }
 
                     #[cfg(windows)]
                     {
-                        let _ = std::process::Command::new("taskkill")
+                        match std::process::Command::new("taskkill")
                             .args(&["/PID", &self.child_pid.to_string(), "/F"])
-                            .output();
+                            .output()
+                        {
+                            Ok(output) if !output.status.success() => {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                crate::log_eprintln!(
+                                    "⚠️  taskkill failed for ffmpeg PID {}: {}",
+                                    self.child_pid,
+                                    stderr.trim()
+                                );
+                            }
+                            Err(err) => {
+                                crate::log_eprintln!(
+                                    "⚠️  Failed to invoke taskkill for ffmpeg PID {}: {}",
+                                    self.child_pid,
+                                    err
+                                );
+                            }
+                            Ok(_) => {}
+                        }
                     }
 
                     break;
@@ -1942,9 +1977,19 @@ fn gpu_coarse_search_with_log_impl(
         let status = child.wait().context("Failed to wait for ffmpeg")?;
 
         stop_signal.store(true, Ordering::Relaxed);
-        let _ = heartbeat_handle.join();
+        if let Err(payload) = heartbeat_handle.join() {
+            crate::log_eprintln!(
+                "⚠️  GPU heartbeat monitor thread panicked: {}",
+                describe_thread_panic(payload)
+            );
+        }
         if let Some(handle) = stderr_handle {
-            let _ = handle.join();
+            if let Err(payload) = handle.join() {
+                crate::log_eprintln!(
+                    "⚠️  GPU stderr capture thread panicked: {}",
+                    describe_thread_panic(payload)
+                );
+            }
         }
 
         if !status.success() {
