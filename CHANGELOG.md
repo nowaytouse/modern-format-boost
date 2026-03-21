@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.87] - 2026-03-22
 
+### Fixed
+- 🎞️ **Animated quality metrics no longer crash on odd/even dimension mismatches**: `VMAF-Y`, `PSNR-UV`, and `MS-SSIM` now normalize both reference and encoded streams to the same shared even resolution before running ffmpeg/libvmaf filters. This fixes `Error reinitializing filters` / `Invalid argument (-22)` failures seen during GIF and other animated-image CRF search when one side landed on odd dimensions.
+
 ### 🛡️ Comprehensive Privacy Purge & Repository Hardening
 - **Repository-Wide History Sanitization**: Executed deep Git history rewrite to completely eliminate accidental metadata, test assets, and sensitive path leaks from the global revision graph.
 - **Historical Documentation Archival**: Successfully extracted and localized 140+ legacy technical documents (Algorithms, Audits, Manuals) to the local `logs/` directory, while removing them from the remote Git footprint to ensure a lean, production-focused codebase.
@@ -27,7 +30,7 @@ All notable changes to this project will be documented in this file.
 #### 🖥️ Runtime & GUI Hardening
 - **Bootstrapped Environments**: Added robust environment stabilization (PATH, Cargo, Locale) for GUI and Finder-launched sessions, eliminating silent failures in sparse terminal environments.
 - **Terminal-Aware Progress**: CoarseProgressBar now dynamically adapts to terminal width, preventing redraw artifacts and line-wrapping in narrow CLI windows.
-- **Atomic Renaming**: Optimized output commitment on Windows to use direct atomic renaming (MoveFileExW), ensuring data integrity during process interruptions.
+- **Atomic Renaming**: Optimized output commitment on Windows to use direct atomic renaming (`MoveFileExW`), ensuring data integrity during process interruptions.
 
 #### 💾 Reliability & Storage Management
 - **Disk Exhaustion Pausing**: All batch tools now detect storage exhaustion mid-run, automatically pausing work, releasing locks, and preserving progress for easy resumption.
@@ -40,7 +43,7 @@ All notable changes to this project will be documented in this file.
 - **Stream Mapping Fix**: Resolved odd-height cover art encoding failures by locking libx265 re-encoding to the primary video stream only.
 
 #### 📢 Error Visibility & Recovery
-- **Loud Failures**: Surfaced dozens of previously silent failure points, including background thread panics, GPU watchdog issues, metadata preservation errors, and cache write conflicts.
+- **Loud Failures (The "Wake Up All Silent Errors" Update)**: Surfaced dozens of previously silent failure points, including background thread panics, GPU watchdog issues, metadata preservation errors, and cache write conflicts.
 - **Probing Portability**: Standardized PID age detection across macOS and Linux, reducing false "stale lock" warnings while maintaining strict concurrency safety.
 
 #### 📦 Maintenance & Infrastructure
@@ -57,23 +60,16 @@ All notable changes to this project will be documented in this file.
 ## [0.10.82] - 2026-03-18
 
 ### Fixed
-- 🎬 **FFmpeg Stream Mapping**: Added explicit mapping `-map 0:v:0 -map 0:a? -map 0:s?` to the video encoding pipeline. This ensures only the primary video stream is re-encoded, preventing FFmpeg from attempting to apply the heavy video encoder to embedded cover art or thumbnails. Fixes "Picture height must be an integer multiple of the specified chroma subsampling" errors occurring on files with odd-height cover art.
-- 🛡️ **Atomic Output Switch**: Optimized `commit_temp_to_output_with_metadata` for non-Unix/Windows platforms.
-- **Direct Atomic Rename**: Replaced the previous `remove_file` + `rename` sequence with a single direct `fs::rename` call. On Windows, `fs::rename` maps to `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, ensuring the output replacement is atomic and preventing potential data loss if an interruption occurs between deletion and renaming.
-- 🔒 **Output path hardening and loud failures**: output-path generation/commit now rejects control-character paths, non-UTF-8 tool paths, and symlinked parent components; directory creation failures are surfaced instead of being silently ignored.
-- 📋 **Recovery and batch traversal no longer fail silently**: original-file fallback copies, default run-log directory setup, walkdir/read_dir traversal in batch copy/counting, and disk precheck metadata reads now emit explicit warnings/errors instead of quietly dropping files or undercounting required space.
-- 🧪 **PNG structure parsing is stricter on corruption**: truncated text chunks and seek failures now raise analysis errors instead of being skipped, preventing malformed PNG metadata from degrading into silent misclassification.
-- 🎞️ **Probe/cache/tool-version fallback is now visible**: GIF meme-score probes, GPU ffprobe prechecks, ffprobe duration/frame-count helpers, and dependency-version detection in the analysis cache now log why they fell back instead of silently returning None.
-- 🗂️ **Directory/XMP metadata traversal is now observable**: unreadable directory entries during timestamp restoration or XMP sidecar discovery are logged instead of being silently treated as “no metadata”.
-- 🔐 **Checkpoint lock ownership is now validated correctly**: Unix checkpoint locks now record/process actual start time from `ps -o etimes` instead of comparing against the current wall clock, avoiding false stale-lock eviction of still-running processes; lock acquisition also refuses to overwrite an active peer lock.
-- 🧠 **Resource probing no longer degrades invisibly**: system RAM, disk-space, ffprobe JSON color probes, and pure-stream-size extraction now warn on command/parse failures before falling back, making concurrency throttling and size-guard decisions auditable instead of silently defaulting to zeros/estimates.
-- 🧹 **Fallback temp-output cleanup is no longer silent**: AV1/HEVC image lossless converters and animated-image video fallback paths now warn when temporary outputs cannot be removed during failure recovery, instead of quietly leaving behind stale temp files.
-- 🗃️ **Metadata preservation failures are now visible across platforms**: xattr/ACL/permission/timestamp preservation on macOS/Linux/Windows, ExifTool temp/backup cleanup, exiv2 XMP fallback, and network metadata verification now warn on real failures instead of silently pretending metadata was preserved.
-- 🧪 **Image analysis fallbacks are now explainable**: JPEG quantization parsing, JPEG fast-path dimension probes, JXL temporary-APNG duration probing, ffprobe duration/frame-count parsing, and AVIF ffprobe/compression fallback paths now emit concrete warnings before degrading to heuristics or None.
-- 📦 **Batch/checkpoint and rollback cleanup now fail loudly**: image batch flows no longer swallow checkpoint `mark_completed` / `cleanup` / `release_lock` errors, and image/video conversion APIs now warn when rollback cleanup cannot remove temp or rejected output files.
-- 🧯 **Temp-output guards and video quality cleanup are now observable**: shared temp-output drop/commit-conflict cleanup and the remaining AV1/HEVC quality-failure discard paths now warn when cleanup itself fails, instead of silently leaving behind temp artifacts.
-- 🗄️ **Cache migration/limit failures now surface**: SQLite schema-version reads, v2→v3 column migrations, cache-size enforcement after writes, and cache statistics DB-size reads now emit warnings instead of silently degrading; ffprobe duration/frame-count launch failures are now logged as well.
-- ⏸️ **Mid-run disk exhaustion now pauses instead of cascading failures**: all four batch tools (img-av1, img-hevc, vid-av1, vid-hevc) now stop scheduling further work when storage runs out during processing, keep checkpoint progress, release the batch lock cleanly, and tell the user to rerun with `--resume` after freeing space.
+- 📽️ **FFmpeg Stream Mapping**: Added explicit mapping `-map 0:v:0 -map 0:a? -map 0:s?` to the video encoding pipeline to ensure only the primary video stream is re-encoded, fixing odd-height cover art errors.
+- 🛡️ **Atomic Output Switch**: Optimized `commit_temp_to_output_with_metadata` with direct atomic renaming (`MoveFileExW` on Windows) to prevent data loss during interruptions.
+- 🔒 **Path and Process Hardening**: Hardened output path generation (rejecting control characters/symlinks) and standardized Unix checkpoint lock age detection using `ps -o etimes`.
+- 📋 **Universal Loud Failures**: This milestone represents a project-wide push to surface previously "silent failures" into explicit, actionable errors:
+    - **Recovery & Batch Traversal**: Explicit warnings for fallback copies, run-log setup, and `walkdir` traversal failures.
+    - **PNG & Image Analysis**: Stricter corruption checking for PNG chunks and observable fallback explanations for JPEG/JXL duration probes.
+    - **Metadata Preservation**: Native `xattr`/ACL/permission/timestamp preservation on macOS/Linux/Windows now warns on real failures.
+    - **Resource & Cache**: Warns on RAM/disk/ffprobe-parse failures; Surfaces SQLite schema migration and POST-write cache size enforcement errors.
+    - **Cleanup & Rollback**: Temp-output guards and video quality cleanup failures are now fully visible instead of silently leaving stale artifacts.
+- ⏸️ **Mid-run disk exhaustion now pauses instead of cascading failures**: All four batch tools now cleanly pause, release locks, and preserve progress when storage runs out.
 
 ## [0.10.81] - 2026-03-17
 
