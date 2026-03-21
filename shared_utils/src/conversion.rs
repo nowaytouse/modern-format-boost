@@ -24,16 +24,40 @@
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
 use crate::modern_ui::{colors, symbols};
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    LazyLock, Mutex,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 static PROCESSED_FILES: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+static TEMP_OUTPUT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_temp_output_suffix() -> String {
+    const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pid = u128::from(std::process::id());
+    let counter = u128::from(TEMP_OUTPUT_COUNTER.fetch_add(1, Ordering::Relaxed));
+    let mut value = timestamp ^ (pid << 32) ^ counter;
+    let mut suffix = [b'0'; 10];
+
+    for slot in suffix.iter_mut().rev() {
+        let idx = (value % ALPHABET.len() as u128) as usize;
+        *slot = ALPHABET[idx];
+        value /= ALPHABET.len() as u128;
+    }
+
+    String::from_utf8_lossy(&suffix).into_owned()
+}
 
 pub fn is_already_processed(path: &Path) -> bool {
     let canonical = path
@@ -610,18 +634,8 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
         .unwrap_or_default();
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
 
-    // Add unique random string for security (prevents collision with user files)
-    let mut rng = rand::thread_rng();
-    let random_id: String = (0..8)
-        .map(|_| {
-            let idx = rng.gen_range(0..62);
-            match idx {
-                0..=25 => (b'a' + idx) as char,
-                26..=51 => (b'A' + (idx - 26)) as char,
-                _ => (b'0' + (idx - 52)) as char,
-            }
-        })
-        .collect();
+    // Use a timestamp/pid/counter suffix so temp naming stays branch-agnostic across rand APIs.
+    let random_id = next_temp_output_suffix();
 
     parent.join(format!("{}.tmp.{}.{}", stem, random_id, ext))
 }
