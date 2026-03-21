@@ -123,13 +123,16 @@ where
     // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
     // Initialize checkpoint manager if resume is enabled
     let mut checkpoint = if config.resume {
-        match crate::checkpoint::CheckpointManager::new(input) {
+        match crate::checkpoint::CheckpointManager::new_with_context(input, config.output.as_deref())
+        {
             Ok(cp) => {
                 if cp.is_resume_mode() {
                     info!(
                         "📂 Resume: skipping {} already completed files",
                         cp.completed_count()
                     );
+                } else {
+                    crate::clear_processed_list();
                 }
                 Some(cp)
             }

@@ -970,7 +970,10 @@ fn auto_convert_directory(
 
     // Initialize checkpoint manager for resume/progress tracking
     let checkpoint = if resume {
-        match shared_utils::checkpoint::CheckpointManager::new(input) {
+        match shared_utils::checkpoint::CheckpointManager::new_with_context(
+            input,
+            config.output_dir.as_deref(),
+        ) {
             Ok(cp) => {
                 if cp.is_resume_mode() {
                     if config.verbose {
@@ -980,6 +983,8 @@ fn auto_convert_directory(
                         );
                     }
                     cp.sync_to_processed_list();
+                } else {
+                    shared_utils::clear_processed_list();
                 }
                 Some(cp)
             }

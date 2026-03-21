@@ -24,6 +24,7 @@
 //! ```
 
 use chrono::{DateTime, FixedOffset, Utc};
+use std::any::Any;
 use std::collections::VecDeque;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,16 @@ fn beijing_time_now() -> String {
     now.with_timezone(&beijing)
         .format("%Y-%m-%d %H:%M:%S (UTC+8)")
         .to_string()
+}
+
+fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
+    match payload.downcast::<String>() {
+        Ok(msg) => *msg,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(msg) => (*msg).to_string(),
+            Err(_) => "non-string panic payload".to_string(),
+        },
+    }
 }
 
 struct StderrCapture {
@@ -65,12 +76,16 @@ impl StderrCapture {
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
-                        if let Ok(mut buf) = lines.lock() {
-                            if buf.len() >= max {
-                                buf.pop_front();
-                            }
-                            buf.push_back(line);
+                        let mut buf = lines.lock().unwrap_or_else(|err| {
+                            tracing::warn!(
+                                "GPU stderr capture buffer mutex was poisoned; recovering buffered stderr state"
+                            );
+                            err.into_inner()
+                        });
+                        if buf.len() >= max {
+                            buf.pop_front();
                         }
+                        buf.push_back(line);
                     }
                     Err(err) => {
                         tracing::warn!("Failed to read GPU encoder stderr: {}", err);
@@ -175,14 +190,38 @@ impl HeartbeatMonitor {
                     #[cfg(unix)]
                     // SAFETY: child_pid is the PID of the child process we spawned; we own it and may signal it.
                     unsafe {
-                        libc::kill(self.child_pid as i32, libc::SIGKILL);
+                        if libc::kill(self.child_pid as i32, libc::SIGKILL) != 0 {
+                            crate::log_eprintln!(
+                                "⚠️  Failed to terminate ffmpeg PID {} via SIGKILL: {}",
+                                self.child_pid,
+                                std::io::Error::last_os_error()
+                            );
+                        }
                     }
 
                     #[cfg(windows)]
                     {
-                        let _ = std::process::Command::new("taskkill")
+                        match std::process::Command::new("taskkill")
                             .args(&["/PID", &self.child_pid.to_string(), "/F"])
-                            .output();
+                            .output()
+                        {
+                            Ok(output) if !output.status.success() => {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                crate::log_eprintln!(
+                                    "⚠️  taskkill failed for ffmpeg PID {}: {}",
+                                    self.child_pid,
+                                    stderr.trim()
+                                );
+                            }
+                            Err(err) => {
+                                crate::log_eprintln!(
+                                    "⚠️  Failed to invoke taskkill for ffmpeg PID {}: {}",
+                                    self.child_pid,
+                                    err
+                                );
+                            }
+                            Ok(_) => {}
+                        }
                     }
 
                     break;
@@ -1877,63 +1916,76 @@ fn gpu_coarse_search_with_log_impl(
                     first_output.store(true, Ordering::Relaxed);
                 }
 
-                if let Ok(mut guard) = last_activity.lock() {
-                    *guard = Instant::now();
-                }
+                let mut guard = last_activity.lock().unwrap_or_else(|err| {
+                    crate::log_eprintln!(
+                        "⚠️  GPU heartbeat activity mutex was poisoned; recovering activity tracking state"
+                    );
+                    err.into_inner()
+                });
+                *guard = Instant::now();
 
-                if let Ok(line) = line {
-                    if let Some(val) = line.strip_prefix("out_time_us=") {
-                        if let Ok(time_us) = val.parse::<u64>() {
-                            if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
-                                let current_secs = time_us as f64 / 1_000_000.0;
-                                let pct = (current_secs / actual_sample_duration as f64 * 100.0)
-                                    .min(100.0);
-                                let elapsed_secs = start_time.elapsed().as_secs_f64();
-                                let eta = if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
-                                    let speed = current_secs / elapsed_secs;
-                                    if speed > 0.0 {
-                                        ((actual_sample_duration as f64 - current_secs) / speed)
-                                            .max(0.0) as u64
+                match line {
+                    Ok(line) => {
+                        if let Some(val) = line.strip_prefix("out_time_us=") {
+                            if let Ok(time_us) = val.parse::<u64>() {
+                                if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
+                                    let current_secs = time_us as f64 / 1_000_000.0;
+                                    let pct = (current_secs / actual_sample_duration as f64 * 100.0)
+                                        .min(100.0);
+                                    let elapsed_secs = start_time.elapsed().as_secs_f64();
+                                    let eta = if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
+                                        let speed = current_secs / elapsed_secs;
+                                        if speed > 0.0 {
+                                            ((actual_sample_duration as f64 - current_secs) / speed)
+                                                .max(0.0) as u64
+                                        } else {
+                                            0
+                                        }
                                     } else {
                                         0
-                                    }
-                                } else {
-                                    0
-                                };
-                                let speed = if current_secs > 0.0 {
-                                    start_time.elapsed().as_secs_f64() / current_secs
-                                } else {
-                                    0.0
-                                };
+                                    };
+                                    let speed = if current_secs > 0.0 {
+                                        start_time.elapsed().as_secs_f64() / current_secs
+                                    } else {
+                                        0.0
+                                    };
 
-                                let estimated_final_size = match std::fs::metadata(output) {
-                                    Ok(metadata) => {
-                                        let current_size = metadata.len();
-                                        fallback_logged = false;
-                                        (current_size as f64 / pct.max(1.0) * 100.0) as u64
-                                    }
-                                    Err(_) => {
-                                        if !fallback_logged {
-                                            crate::log_eprintln!(
-                                                "Using linear estimation (metadata unavailable)"
-                                            );
-                                            fallback_logged = true;
+                                    let estimated_final_size = match std::fs::metadata(output) {
+                                        Ok(metadata) => {
+                                            let current_size = metadata.len();
+                                            fallback_logged = false;
+                                            (current_size as f64 / pct.max(1.0) * 100.0) as u64
                                         }
-                                        (sample_input_size as f64 * (1.0 / pct.max(0.1)))
-                                            .min(sample_input_size as f64 * 10.0)
-                                            as u64
+                                        Err(_) => {
+                                            if !fallback_logged {
+                                                crate::log_eprintln!(
+                                                    "Using linear estimation (metadata unavailable)"
+                                                );
+                                                fallback_logged = true;
+                                            }
+                                            (sample_input_size as f64 * (1.0 / pct.max(0.1)))
+                                                .min(sample_input_size as f64 * 10.0)
+                                                as u64
+                                        }
+                                    };
+
+                                    crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
+                                        pct, current_secs, actual_sample_duration, eta, speed);
+
+                                    if let Some(cb) = progress_cb {
+                                        cb(crf, estimated_final_size);
                                     }
-                                };
-
-                                crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
-                                    pct, current_secs, actual_sample_duration, eta, speed);
-
-                                if let Some(cb) = progress_cb {
-                                    cb(crf, estimated_final_size);
+                                    last_progress_time = Instant::now();
                                 }
-                                last_progress_time = Instant::now();
                             }
                         }
+                    }
+                    Err(err) => {
+                        crate::log_eprintln!(
+                            "⚠️  Failed to read GPU encoder stdout progress stream: {}",
+                            err
+                        );
+                        break;
                     }
                 }
             }
@@ -1942,9 +1994,19 @@ fn gpu_coarse_search_with_log_impl(
         let status = child.wait().context("Failed to wait for ffmpeg")?;
 
         stop_signal.store(true, Ordering::Relaxed);
-        let _ = heartbeat_handle.join();
+        if let Err(payload) = heartbeat_handle.join() {
+            crate::log_eprintln!(
+                "⚠️  GPU heartbeat monitor thread panicked: {}",
+                describe_thread_panic(payload)
+            );
+        }
         if let Some(handle) = stderr_handle {
-            let _ = handle.join();
+            if let Err(payload) = handle.join() {
+                crate::log_eprintln!(
+                    "⚠️  GPU stderr capture thread panicked: {}",
+                    describe_thread_panic(payload)
+                );
+            }
         }
 
         if !status.success() {

@@ -88,14 +88,21 @@ start_elapsed_spinner() {
         done
     ) 2>/dev/null &
     SPINNER_PID=$!
-    disown "$SPINNER_PID" 2>/dev/null || true
+    if ! disown "$SPINNER_PID" 2>/dev/null; then
+        warn_shell_once "SPINNER_DISOWN" "elapsed-time spinner could not be detached cleanly; continuing."
+    fi
     
     # Ensure spinner is killed when bash exits (including on Ctrl+C)
     trap 'stop_elapsed_spinner' EXIT
 }
 stop_elapsed_spinner() {
     if [[ -n "$SPINNER_PID" ]]; then
-        ( kill "$SPINNER_PID" 2>/dev/null; wait "$SPINNER_PID" 2>/dev/null ) 2>/dev/null || true
+        if ! kill "$SPINNER_PID" 2>/dev/null; then
+            if kill -0 "$SPINNER_PID" 2>/dev/null; then
+                warn_shell_once "SPINNER_KILL" "failed to stop elapsed-time spinner cleanly."
+            fi
+        fi
+        wait "$SPINNER_PID" 2>/dev/null || true
         SPINNER_PID=""
     fi
     [[ "$ELAPSED_START" -eq 0 ]] && return
