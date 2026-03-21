@@ -587,7 +587,15 @@ impl TempOutputGuard {
 impl Drop for TempOutputGuard {
     fn drop(&mut self) {
         if self.0.exists() {
-            let _ = fs::remove_file(&self.0);
+            if let Err(e) = fs::remove_file(&self.0) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!(
+                        "⚠️ [conversion] Failed to remove temp output on drop {}: {}",
+                        self.0.display(),
+                        e
+                    );
+                }
+            }
         }
     }
 }
@@ -656,7 +664,15 @@ pub fn commit_temp_to_output_with_metadata(
         }
     }
     if !force && output.exists() {
-        let _ = fs::remove_file(temp);
+        if let Err(e) = fs::remove_file(temp) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "⚠️ [conversion] Failed to remove temp output {} after concurrent output detection: {}",
+                    temp.display(),
+                    e
+                );
+            }
+        }
         return Ok(false);
     }
     fs::rename(temp, output)?;

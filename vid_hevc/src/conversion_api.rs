@@ -618,7 +618,7 @@ pub fn auto_convert_with_cache(
                         Some(s) => s,
                         None => {
                             warn!("   ⚠️  SSIM not measured, cannot verify quality");
-                            let _ = std::fs::remove_file(&temp_path);
+                            cleanup_output_file(&temp_path, "temporary output cleanup after missing SSIM");
                             return Err(VidQualityError::GeneralError(
                                 "Quality verification failed: SSIM not measured".to_string()
                             ));
