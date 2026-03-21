@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct VideoPrecisionMetadata {
     pub original_crf: Option<f32>,
     pub original_preset: Option<String>,
@@ -19,6 +20,9 @@ pub struct VideoPrecisionMetadata {
     pub is_lossless_deterministic: bool,
     /// 🚀 Hint: The last successful CRF value found during exploration (stored in cache)
     pub last_best_crf: Option<f32>,
+    /// 🚀 Hint: The last kept best-effort CRF value when exploration produced a usable
+    /// output but did not fully satisfy the quality target.
+    pub last_best_effort_crf: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
