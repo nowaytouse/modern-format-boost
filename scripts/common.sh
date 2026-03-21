@@ -15,6 +15,105 @@ if [[ -z "${SCRIPT_DIR:-}" ]]; then
 fi
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+append_path_if_exists() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 0
+    case ":${PATH:-}:" in
+        *":$dir:"*) ;;
+        *) PATH="$dir${PATH:+:$PATH}" ;;
+    esac
+}
+
+normalize_cli_environment() {
+    export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+    export LANG="${LANG:-en_US.UTF-8}"
+    export TERM="${TERM:-xterm-256color}"
+    export COLORTERM="${COLORTERM:-truecolor}"
+    export SHELL="${SHELL:-/bin/zsh}"
+    export HOME="${HOME:-/Users/$(id -un)}"
+    export TMPDIR="${TMPDIR:-/tmp}"
+    export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+    export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
+
+    append_path_if_exists "$CARGO_HOME/bin"
+    append_path_if_exists "/opt/homebrew/bin"
+    append_path_if_exists "/opt/homebrew/sbin"
+    append_path_if_exists "/usr/local/bin"
+    append_path_if_exists "/usr/local/sbin"
+    append_path_if_exists "/usr/bin"
+    append_path_if_exists "/bin"
+    append_path_if_exists "/usr/sbin"
+    append_path_if_exists "/sbin"
+    export PATH
+}
+
+refresh_terminal_dimensions() {
+    local tty_dev="/dev/tty"
+    local rows=""
+    local cols=""
+
+    [[ -c "$tty_dev" ]] || return 0
+
+    if read -r rows cols < <(stty size < "$tty_dev" 2>/dev/null); then
+        :
+    fi
+
+    if [[ -z "$cols" ]] && command -v tput >/dev/null 2>&1; then
+        cols=$(tput cols 2>/dev/null || true)
+        rows=$(tput lines 2>/dev/null || true)
+    fi
+
+    [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 0 ]] && export COLUMNS="$cols"
+    [[ "$rows" =~ ^[0-9]+$ && "$rows" -gt 0 ]] && export LINES="$rows"
+}
+
+ensure_wide_terminal_layout() {
+    local min_cols="${1:-120}"
+    local target_cols="${2:-140}"
+    local target_rows="${3:-42}"
+
+    refresh_terminal_dimensions
+    if [[ "${COLUMNS:-0}" =~ ^[0-9]+$ ]] && [[ "${COLUMNS:-0}" -ge "$min_cols" ]]; then
+        return 0
+    fi
+
+    if [[ -c /dev/tty ]]; then
+        printf '\033[8;%s;%st' "$target_rows" "$target_cols" > /dev/tty 2>/dev/null || true
+    fi
+
+    case "${TERM_PROGRAM:-}" in
+        Apple_Terminal)
+            osascript >/dev/null 2>&1 <<'EOF' || true
+tell application "Terminal"
+    if (count of windows) > 0 then
+        set bounds of front window to {80, 60, 1720, 980}
+        activate
+    end if
+end tell
+EOF
+            ;;
+        iTerm.app)
+            osascript >/dev/null 2>&1 <<'EOF' || true
+tell application "iTerm"
+    if (count of windows) > 0 then
+        set bounds of current window to {80, 60, 1720, 980}
+        activate
+    end if
+end tell
+EOF
+            ;;
+    esac
+
+    sleep 0.2
+    refresh_terminal_dimensions
+    if [[ "${COLUMNS:-0}" =~ ^[0-9]+$ ]] && [[ "${COLUMNS:-0}" -lt "$min_cols" ]]; then
+        export COLUMNS="$target_cols"
+    fi
+}
+
+normalize_cli_environment
+refresh_terminal_dimensions
+
 # 2. Color Definitions (256-color compatible)
 RESET='\033[0m'
 NC='\033[0m'
