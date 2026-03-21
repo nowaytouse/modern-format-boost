@@ -1284,6 +1284,43 @@ All notable changes to this project will be documented in this file.
   - `run_imagemagick_cjxl_pipeline` now returns `Result<(), ...>` instead of `Result<Output, ...>`
   - `try_imagemagick_fallback` now returns `io::Result<()>` instead of `io::Result<Output>`
 
+## [0.9.7] - 2026-03-04
+
+### 📊 Per-File Conversion Transparency
+- **Added unified size/quality summary line per file**: After each conversion, a structured result is emitted to both stderr and `result.log`:
+  - **SizeChange**: `0.xx x (±xx.x%) vs original` — ratio and percentage vs. source file size; `N/A` when size is unavailable.
+  - **Quality**: `xx.x% (MS-SSIM=0.xxxx)` when MS-SSIM is available, `xx.x% (SSIM=0.xxxx, approx.)` for SSIM-only, `N/A (quality check failed)` on failure.
+  - **QualityCheck**: `PASSED` / `FAILED` / `WAIVED` with a brief reason.
+
+### 🖥️ CLI Consolidation
+- **`run` subcommand unified across all four tools**: `vid-hevc`, `vid-av1`, `img-hevc`, and `img-av1` now all accept `run <path>` as the primary subcommand (replacing `auto`), with the recommended flag combination (`--explore --match-quality --compress`) enabled by default.
+- **`drag_and_drop_processor.sh` simplified**: `process_images` and `process_videos` now pass only `run` and the target path, matching the new default-on recommended-combination behavior.
+
+## [0.9.6] - 2026-03-04
+
+### Maintenance
+- Internal build iteration; no user-facing changes beyond the 0.9.1 ImageMagick pipeline refinements.
+
+## [0.9.5] - 2026-03-04
+
+### Maintenance
+- Internal build iteration; no user-facing changes beyond the 0.9.1 ImageMagick pipeline refinements.
+
+## [0.9.4] - 2026-03-04
+
+### Maintenance
+- Internal build iteration; no user-facing changes beyond the 0.9.1 ImageMagick pipeline refinements.
+
+## [0.9.3] - 2026-03-04
+
+### Maintenance
+- Internal build iteration; no user-facing changes beyond the 0.9.1 ImageMagick pipeline refinements.
+
+## [0.9.2] - 2026-03-04
+
+### Fixed
+- **Further tightened `is_grayscale_icc_cjxl_error()` detection**: The predicate introduced in 0.9.1 was narrowed to require both the ICC color-space mismatch warning **and** `getting pixel data failed` simultaneously, preventing false-positive `-strip` retries on messages that only partially matched the pattern.
+
 ## [0.9.1] - 2026-03-04
 
 ### Image Conversion & ICC Profiles
@@ -1586,6 +1623,22 @@ All changes below are since 8.7.0.
 - **precheck** (`video_explorer`): ImageMagick duration fallback after stream/format/frame_count+fps.
 - **stream_analysis** (`video_explorer`): `calculate_ssim_all` multi-step fallback (direct → format_norm → alpha_flatten); `run_ssim_all_filter` for reusable lavfi + parse.
 - **gpu_coarse_search** (`video_explorer`): `quality_verification_skipped_for_format` flag for GIF and friendlier QualityCheck line.
+
+## [8.4.0] - 2026-02-21
+
+### ⚡ Code Modernization
+- **Removed `lazy_static` and `num_cpus` external dependencies**: Replaced with standard-library equivalents `LazyLock` (stabilized in Rust 1.80) and `available_parallelism()`, reducing the dependency surface.
+
+### 🔒 Security & Correctness Fixes
+- **Fixed 5 division-by-zero vulnerabilities**: Guarded PSNR interpolation, quality scoring, ETA calculation, and related arithmetic paths against zero-denominator panics.
+- **Poison-recovery for all Mutex operations**: Every `Mutex::lock()` call now uses `.unwrap_or_else(|e| e.into_inner())` recovery, preventing a panicked thread from permanently deadlocking the process.
+
+### 🧹 Code Deduplication & Architecture
+- **Extracted `finalize_conversion()` shared helper**: Approximately 760 lines of duplicated logic between `img_hevc` and `img_av1` lossless converters were consolidated into a single reusable function.
+- **Workspace version inheritance**: All member crates now declare `version.workspace = true`, ensuring version numbers stay in sync via a single source of truth in the root `Cargo.toml`.
+
+### 📋 Logging
+- **Cleaner stderr output**: Removed redundant timestamps and log-level prefixes from the stderr output layer; structured tracing events retain full context while human-readable lines stay concise.
 
 ## [8.2.2] - 2026-02-20
 
