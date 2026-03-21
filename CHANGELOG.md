@@ -16,20 +16,121 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.86] - 2026-03-21
 
-### 🛠️ Strategic Refinement & Documentation 收纳
-- **Branch Strategy Consolidation**: Formalized the dual-branch strategy (`main` vs `nightly`) with enforced dependency divergence.
-- **Documentation Cleanup**: Centralized all scattered technical drafts into the `docs/` and `logs/` directories.
-- **Progressive Sync**: Synchronized privacy-hardened logic across both production and development branches.
+### Changed
+- 🔢 **Release finalized**: unified versioning bumped to 0.10.86 to seal the v0.10.85 feature set and documentation.
+- 🔢 **Version references are unified again**: workspace version bumped to 0.10.86, and cache-version examples/docs now match the real mapping (0.10.86 -> 1086).
 
 ## [0.10.85] - 2026-03-20
 
-### 🚀 Performance Acceleration & Algorithm Saturation
-- **GPU Accelerator Hardening**: Finalized unified hardware encoder detection (NVENC, QSV, AMF, VAAPI, VideoToolbox) across all four core conversion tools.
-- **Universal Heartbeat Protocol**: Integrated a centralized progress monitoring and health-check system (`universal_heartbeat`) for multi-stage conversion pipelines.
-- **Saturation-Aware CRF Search**: Optimized video encoding logic to detect "Quality Saturation" earlier, preventing redundant compute on visually indistinguishable bitrates.
-- **Path Standardization**: Enforced uppercase extension normalization (e.g., `.JXL`, `.HEIC`, `.MP4`) for consistent file system identification.
+### 🚀 Key Improvements since v0.10.82
+
+#### 🖥️ Runtime & GUI Hardening
+- **Bootstrapped Environments**: Added robust environment stabilization (PATH, Cargo, Locale) for GUI and Finder-launched sessions, eliminating silent failures in sparse terminal environments.
+- **Terminal-Aware Progress**: CoarseProgressBar now dynamically adapts to terminal width, preventing redraw artifacts and line-wrapping in narrow CLI windows.
+- **Atomic Renaming**: Optimized output commitment on Windows to use direct atomic renaming (MoveFileExW), ensuring data integrity during process interruptions.
+
+#### 💾 Reliability & Storage Management
+- **Disk Exhaustion Pausing**: All batch tools now detect storage exhaustion mid-run, automatically pausing work, releasing locks, and preserving progress for easy resumption.
+- **Signature-Bound Checkpoints**: Resume state is now validated against file signatures (size/mtime/mtime/btime) and cache versions, preventing stale or inconsistent resume attempts.
+- **Automatic Resume Reset**: Manually deleting an output folder now automatically triggers a full-run reset, eliminating the need to manually clear checkpoint files.
+
+#### 🎞️ Video Encoding & Quality
+- **CRF Warm-Start Hints**: Refined the video CRF search anchor. Cached results now act as intelligent hints rather than rigid overrides, allowing for better adaptation to current system conditions.
+- **Best-Effort Persistence**: "Quality Miss" scenarios now store their results as reusable CRF hints, optimizing the next attempt even if the initial target wasn't met.
+- **Stream Mapping Fix**: Resolved odd-height cover art encoding failures by locking libx265 re-encoding to the primary video stream only.
+
+#### 📢 Error Visibility & Recovery
+- **Loud Failures**: Surfaced dozens of previously silent failure points, including background thread panics, GPU watchdog issues, metadata preservation errors, and cache write conflicts.
+- **Probing Portability**: Standardized PID age detection across macOS and Linux, reducing false "stale lock" warnings while maintaining strict concurrency safety.
+
+#### 📦 Maintenance & Infrastructure
+- **Dependency Refresh**: Synchronized all workspace dependencies to their latest compatible versions across crates.io and GitHub sources.
+- **Metadata Scoping**: Restored precise scoping for Finder branding, ensuring MFB badges are only applied to successfully converted output files.
+- **Legacy Cleanup**: Removed redundant release notes and stale documentation from the repository root.
+
+## [0.10.83] - 2026-03-19
+
+### Fixed
+- 🏷️ **Finder comment branding is now scoped to conversion output only**: `append_mfb_branding` was previously called inside `preserve_pro`, which fires on every metadata-preservation operation (including non-conversion paths). It is now called exclusively inside `commit_temp_to_output_with_metadata` after a successful atomic rename, ensuring the Finder comment is only written to files that were actually converted by MFB.
+- 🗑️ **Original-file deletion failures are no longer silent**: `safe_delete_original` errors in `finalize_conversion` are now propagated instead of being discarded with `let _ =`, so a failed delete surfaces as a conversion error rather than being silently ignored.
+
+## [0.10.82] - 2026-03-18
+
+### Fixed
+- 🎬 **FFmpeg Stream Mapping**: Added explicit mapping `-map 0:v:0 -map 0:a? -map 0:s?` to the video encoding pipeline. This ensures only the primary video stream is re-encoded, preventing FFmpeg from attempting to apply the heavy video encoder to embedded cover art or thumbnails. Fixes "Picture height must be an integer multiple of the specified chroma subsampling" errors occurring on files with odd-height cover art.
+- 🛡️ **Atomic Output Switch**: Optimized `commit_temp_to_output_with_metadata` for non-Unix/Windows platforms.
+- **Direct Atomic Rename**: Replaced the previous `remove_file` + `rename` sequence with a single direct `fs::rename` call. On Windows, `fs::rename` maps to `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`, ensuring the output replacement is atomic and preventing potential data loss if an interruption occurs between deletion and renaming.
+- 🔒 **Output path hardening and loud failures**: output-path generation/commit now rejects control-character paths, non-UTF-8 tool paths, and symlinked parent components; directory creation failures are surfaced instead of being silently ignored.
+- 📋 **Recovery and batch traversal no longer fail silently**: original-file fallback copies, default run-log directory setup, walkdir/read_dir traversal in batch copy/counting, and disk precheck metadata reads now emit explicit warnings/errors instead of quietly dropping files or undercounting required space.
+- 🧪 **PNG structure parsing is stricter on corruption**: truncated text chunks and seek failures now raise analysis errors instead of being skipped, preventing malformed PNG metadata from degrading into silent misclassification.
+- 🎞️ **Probe/cache/tool-version fallback is now visible**: GIF meme-score probes, GPU ffprobe prechecks, ffprobe duration/frame-count helpers, and dependency-version detection in the analysis cache now log why they fell back instead of silently returning None.
+- 🗂️ **Directory/XMP metadata traversal is now observable**: unreadable directory entries during timestamp restoration or XMP sidecar discovery are logged instead of being silently treated as “no metadata”.
+- 🔐 **Checkpoint lock ownership is now validated correctly**: Unix checkpoint locks now record/process actual start time from `ps -o etimes` instead of comparing against the current wall clock, avoiding false stale-lock eviction of still-running processes; lock acquisition also refuses to overwrite an active peer lock.
+- 🧠 **Resource probing no longer degrades invisibly**: system RAM, disk-space, ffprobe JSON color probes, and pure-stream-size extraction now warn on command/parse failures before falling back, making concurrency throttling and size-guard decisions auditable instead of silently defaulting to zeros/estimates.
+- 🧹 **Fallback temp-output cleanup is no longer silent**: AV1/HEVC image lossless converters and animated-image video fallback paths now warn when temporary outputs cannot be removed during failure recovery, instead of quietly leaving behind stale temp files.
+- 🗃️ **Metadata preservation failures are now visible across platforms**: xattr/ACL/permission/timestamp preservation on macOS/Linux/Windows, ExifTool temp/backup cleanup, exiv2 XMP fallback, and network metadata verification now warn on real failures instead of silently pretending metadata was preserved.
+- 🧪 **Image analysis fallbacks are now explainable**: JPEG quantization parsing, JPEG fast-path dimension probes, JXL temporary-APNG duration probing, ffprobe duration/frame-count parsing, and AVIF ffprobe/compression fallback paths now emit concrete warnings before degrading to heuristics or None.
+- 📦 **Batch/checkpoint and rollback cleanup now fail loudly**: image batch flows no longer swallow checkpoint `mark_completed` / `cleanup` / `release_lock` errors, and image/video conversion APIs now warn when rollback cleanup cannot remove temp or rejected output files.
+- 🧯 **Temp-output guards and video quality cleanup are now observable**: shared temp-output drop/commit-conflict cleanup and the remaining AV1/HEVC quality-failure discard paths now warn when cleanup itself fails, instead of silently leaving behind temp artifacts.
+- 🗄️ **Cache migration/limit failures now surface**: SQLite schema-version reads, v2→v3 column migrations, cache-size enforcement after writes, and cache statistics DB-size reads now emit warnings instead of silently degrading; ffprobe duration/frame-count launch failures are now logged as well.
+- ⏸️ **Mid-run disk exhaustion now pauses instead of cascading failures**: all four batch tools (img-av1, img-hevc, vid-av1, vid-hevc) now stop scheduling further work when storage runs out during processing, keep checkpoint progress, release the batch lock cleanly, and tell the user to rerun with `--resume` after freeing space.
+
+## [0.10.81] - 2026-03-17
+
+### 🚀 Key Highlights (Since v0.10.78)
+
+#### 🔄 Centralized Progress & Batch Resume (v0.10.79+)
+- 🌍 **Zero Directory Pollution**: All processing metadata folders (`.mfb_progress`) have been consolidated into a single, hidden location in the user's home directory (`~/.mfb_progress/`). Improved Privacy: Keeps your photo and video directories completely clean throughout the processing lifecycle.
+- 🛡️ **Atomic Resume Framework**: Introduced a robust, thread-safe checkpoint system. Simply restarting an interrupted job will skip already completed files with millisecond-level detection.
+- **Canonical Path Hashing**: Progress is keyed by the absolute canonical path hash of the target directory, ensuring reliable tracking even across symbolic links.
+- 🗑️ **Automatic Lifecycle Management**: Progress data for a specific folder is automatically and securely purged upon a 100% successful completion.
+
+#### 🔠 Extension Standardization
+- 🔠 **Uppercase File Extensions**: Standardized all output extensions to uppercase across all tools (e.g., `.JXL`, `.MP4`, `.MKV`, `.AVIF`, `.WEBM`) for better visibility in professional file managers and macOS Finder.
+- 🎯 **Path Logic Refinement**: Updated the internal `determine_output_path` API to enforce uppercase extensions while accurately preserving filename stems.
+
+#### 🛡️ System Robustness & UI Improvements
+- 🛡️ **Shell Path Escaping (macOS App)**: Fixed a critical bug in the macOS App wrapper's path quoting logic, correctly handling single quotes, emojis, and shell metacharacters.
+- 🧹 **Data Purge Branding**: Renamed "Clean Cache" to "Purge Processing Data" across all maintenance scripts (drag_and_drop_processor.sh, cache_cleaner.sh).
+- ⚖️ **Thread-Safe Testing**: Refactored the internal `CheckpointManager` test suite to use isolated temporary directories, avoiding CI/CD test collisions.
+
+## [0.10.80] - 2026-03-16
+
+### Added
+- 🌍 **Centralized Progress Tracking**: Moved all `.mfb_progress` folders to `~/.mfb_progress/`.
+- 🛡️ **Enhanced UI Warnings**: Added prominent backup warnings to the drag-and-drop terminal interface.
+
+### Changed
+- 🧹 **Data Purge Branding**: Renamed "Clean Cache" to "Purge Processing Data".
+- 🛠️ **Robust Cleanup**: Updated `cache_cleaner.sh` to include centralized progress data in the purging process.
+- 🔒 **Thread-Safe Test Suite**: Refactored `CheckpointManager` unit tests for reliable multi-threaded execution.
+
+## [0.10.78] - 2026-03-15
+
+### 🏆 Documentation & Transparency
+- 📖 **Complete README Overhaul**: Rewritten with a professional bilingual (English/Chinese) structure and deep technical pipeline explanations.
+- ⚠️ **Stability Disclaimer**: Added guidance highlighting HEVC maturity lead over AV1 variants for production tasks.
+- ⚖️ **License Finalization**: Restored full runtime dependency license tables for compliance.
+
+### 🛡️ Metadata & Data Integrity (Massive Overhaul)
+- 🗂️ **Multi-Platform Preservation**:
+    - **macOS**: Added native Date Added (`kMDItemDateAdded`) and Finder Tag preservation via `copyfile` and `setattrlist`.
+    - **Windows**: Added Alternate Data Streams (ADS) support via PowerShell.
+    - **Linux**: Standardized ACL restoration using `setfacl --restore`.
+- 📅 **QuickTime/EXIF Sync**: Overhauled `fix_quicktime_dates` to synchronize all capture date fields forcefully.
+- 🎨 **ICC Profiles**: Fixed ICC color space loss in JXL conversion; all JXL outputs now manually inject and verify source ICC profiles.
+- 💾 **Disk Space Pre-Check**: All tools now perform a pre-batch disk space validation.
+
+### 🎬 Video Processing Stability
+- 🔧 **Odd-Dimension Fix**: Resolved EINVAL (-22) errors by adding automatic `scale=trunc(iw/2)*2` normalization.
+- 🛡️ **Ctrl+C Guard**: Unified the 4.5-minute confirmation guard across all binaries.
+
+### 🧪 Algorithmic Improvements
+- 🎯 **PNG Quantization Detection (Meme Score v3)**: Added RGB-weighted banding analysis and dithering recognition for improved icons/pixel-art accuracy.
+- ✨ **AV1 Tools Parity**: Brought `img-av1` and `vid-av1` up to feature parity with HEVC tools, including unified finalization checks.
 
 ## [0.10.45] - 2026-03-14
+
 
 
 ### Mega-Release: Cumulative Evolution (v0.10.9 → v0.10.45)
