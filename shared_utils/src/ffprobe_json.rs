@@ -215,13 +215,28 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                     .output()
                 {
                     Ok(retry_o) if retry_o.status.success() => retry_o,
-                    _ => {
+                    Ok(retry_o) => {
+                        let retry_stderr = String::from_utf8_lossy(&retry_o.stderr);
+                        warn!(
+                            input = %input_str,
+                            stderr = %retry_stderr.trim(),
+                            "FFprobe pattern_type fallback returned non-zero exit"
+                        );
+                        crate::log_rare_error!("FFprobe", "Pattern_type fallback also failed for: {}", input_str);
+                        return ColorInfo::default();
+                    }
+                    Err(err) => {
+                        warn!(
+                            input = %input_str,
+                            error = %err,
+                            "FFprobe pattern_type fallback failed to start"
+                        );
                         crate::log_rare_error!("FFprobe", "Pattern_type fallback also failed for: {}", input_str);
                         return ColorInfo::default();
                     }
                 }
             } else {
-                warn!(input = %input_str, "FFPROBE FAILED: non-zero exit");
+                warn!(input = %input_str, stderr = %stderr.trim(), "FFPROBE FAILED: non-zero exit");
                 return ColorInfo::default();
             }
         }
@@ -249,7 +264,10 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
 
     let stream = match parsed.streams.first() {
         Some(s) => s,
-        None => return ColorInfo::default(),
+        None => {
+            warn!(input = %input_str, "FFPROBE JSON contained no video streams");
+            return ColorInfo::default();
+        }
     };
 
     let bit_depth = stream

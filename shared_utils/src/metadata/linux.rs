@@ -36,11 +36,50 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
                 if let Ok(ref mut child) = child {
                     if let Some(stdin) = child.stdin.take() {
                         let mut stdin = stdin;
-                        let _ = stdin.write_all(rewritten.as_bytes());
+                        if let Err(e) = stdin.write_all(rewritten.as_bytes()) {
+                            eprintln!(
+                                "⚠️ [metadata] Failed to pipe ACL restore data to setfacl for {}: {}",
+                                dst.display(),
+                                e
+                            );
+                        }
                     }
-                    let _ = child.wait();
+                    match child.wait() {
+                        Ok(status) if !status.success() => {
+                            eprintln!(
+                                "⚠️ [metadata] setfacl --restore returned non-zero status for {}",
+                                dst.display()
+                            );
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "⚠️ [metadata] Failed waiting for setfacl while restoring {}: {}",
+                                dst.display(),
+                                e
+                            );
+                        }
+                        _ => {}
+                    }
+                } else if let Err(e) = child {
+                    eprintln!(
+                        "⚠️ [metadata] Failed to launch setfacl for {}: {}",
+                        dst.display(),
+                        e
+                    );
                 }
+            } else {
+                eprintln!(
+                    "⚠️ [metadata] getfacl returned non-zero status for {}: {}",
+                    src.display(),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
             }
+        } else if let Err(e) = output {
+            eprintln!(
+                "⚠️ [metadata] Failed to launch getfacl for {}: {}",
+                src.display(),
+                e
+            );
         }
     }
 
@@ -48,7 +87,13 @@ pub fn preserve_linux_attributes(src: &Path, dst: &Path) -> io::Result<()> {
     if let Ok(meta) = std::fs::metadata(src) {
         use std::os::unix::fs::PermissionsExt;
         let mode = meta.permissions().mode();
-        let _ = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode));
+        if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
+            eprintln!(
+                "⚠️ [metadata] Failed to preserve Linux permission bits for {}: {}",
+                dst.display(),
+                e
+            );
+        }
     }
 
     Ok(())

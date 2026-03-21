@@ -29,15 +29,44 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
                 }
             }
             Ok(None) => {} // not present on source, nothing to do
-            Err(_) => {}   // xattr not supported on this platform/fs, skip silently
+            Err(e) => {
+                eprintln!(
+                    "⚠️ [metadata] Could not read source xattr '{}' from {}: {}",
+                    key,
+                    src.display(),
+                    e
+                );
+            }
         }
     }
 
     // Verify after copy
     for &key in COPY_KEYS {
-        if let Ok(Some(_)) = xattr::get(src, key) {
-            if xattr::get(dst, key).ok().flatten().is_none() {
-                eprintln!("⚠️ [metadata] xattr '{}' present on source but missing on destination after copy attempt.", key);
+        match xattr::get(src, key) {
+            Ok(Some(_)) => match xattr::get(dst, key) {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    eprintln!(
+                        "⚠️ [metadata] xattr '{}' present on source but missing on destination after copy attempt.",
+                        key
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "⚠️ [metadata] Could not verify destination xattr '{}' on {}: {}",
+                        key,
+                        dst.display(),
+                        e
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "⚠️ [metadata] Could not re-read source xattr '{}' during verification: {}",
+                    key,
+                    e
+                );
             }
         }
     }

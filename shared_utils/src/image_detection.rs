@@ -1208,6 +1208,19 @@ struct PngQuantizationWeights {
 pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> Result<PngStructureInfo> {
     use std::io::SeekFrom;
 
+    fn skip_bytes<R: std::io::Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
+        let offset = i64::try_from(bytes).map_err(|_| {
+            ImgQualityError::AnalysisError(format!(
+                "PNG chunk too large to seek while parsing {}",
+                context
+            ))
+        })?;
+        reader
+            .seek(SeekFrom::Current(offset))
+            .map_err(|e| ImgQualityError::AnalysisError(format!("Failed to seek past {}: {}", context, e)))?;
+        Ok(())
+    }
+
     let mut sig = [0u8; 8];
     reader.read_exact(&mut sig).map_err(|_| ImgQualityError::AnalysisError("PNG too small".to_string()))?;
     if sig != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
@@ -1224,7 +1237,7 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> R
     let height = u32::from_be_bytes([ihdr_data[4], ihdr_data[5], ihdr_data[6], ihdr_data[7]]);
     let bit_depth = ihdr_data[8];
     let color_type = ihdr_data[9];
-    reader.seek(SeekFrom::Current(4)).ok(); // Skip CRC
+    skip_bytes(&mut reader, 4, "IHDR CRC")?;
 
     let mut palette_size: Option<usize> = None;
     let mut has_trns = false;
@@ -1242,65 +1255,80 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> R
     ];
 
     let mut buf = [0u8; 8];
-    while reader.read_exact(&mut buf).is_ok() {
+    loop {
+        match reader.read_exact(&mut buf) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => {
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "Failed to read PNG chunk header: {}",
+                    e
+                )));
+            }
+        }
         let chunk_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as u64;
         let chunk_type = &buf[4..8];
 
         match chunk_type {
             b"PLTE" if color_type == 3 => {
                 palette_size = Some((chunk_len as usize) / 3);
-                reader.seek(SeekFrom::Current(chunk_len as i64 + 4)).ok();
+                skip_bytes(&mut reader, chunk_len + 4, "PLTE chunk")?;
             }
             b"tRNS" => {
                 has_trns = true;
-                reader.seek(SeekFrom::Current(chunk_len as i64 + 4)).ok();
+                skip_bytes(&mut reader, chunk_len + 4, "tRNS chunk")?;
             }
             b"tEXt" | b"iTXt" | b"zTXt" if detected_tool.is_none() => {
                 has_text_chunks = true;
                 let mut payload = vec![0u8; chunk_len as usize];
-                if reader.read_exact(&mut payload).is_ok() {
-                    if chunk_type == b"zTXt" {
-                        // zTXt: keyword\0 + compression_method(1) + compressed_text
-                        if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
-                            let keyword = String::from_utf8_lossy(&payload[..null_pos]);
-                            for &(pattern, tool_name) in signatures {
-                                if keyword.contains(pattern) {
-                                    detected_tool = Some(tool_name.to_string());
-                                    break;
-                                }
-                            }
-                            if detected_tool.is_none() && null_pos + 2 < payload.len() {
-                                let compressed = &payload[null_pos + 2..];
-                                let mut decompressed = Vec::new();
-                                if flate2::read::ZlibDecoder::new(compressed)
-                                    .read_to_end(&mut decompressed)
-                                    .is_ok()
-                                {
-                                    let text = String::from_utf8_lossy(&decompressed);
-                                    for &(pattern, tool_name) in signatures {
-                                        if text.contains(pattern) {
-                                            detected_tool = Some(tool_name.to_string());
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        let text = String::from_utf8_lossy(&payload);
+                reader.read_exact(&mut payload).map_err(|e| {
+                    ImgQualityError::AnalysisError(format!(
+                        "Failed to read PNG text chunk payload: {}",
+                        e
+                    ))
+                })?;
+                if chunk_type == b"zTXt" {
+                    // zTXt: keyword\0 + compression_method(1) + compressed_text
+                    if let Some(null_pos) = payload.iter().position(|&b| b == 0) {
+                        let keyword = String::from_utf8_lossy(&payload[..null_pos]);
                         for &(pattern, tool_name) in signatures {
-                            if text.contains(pattern) {
+                            if keyword.contains(pattern) {
                                 detected_tool = Some(tool_name.to_string());
                                 break;
                             }
                         }
+                        if detected_tool.is_none() && null_pos + 2 < payload.len() {
+                            let compressed = &payload[null_pos + 2..];
+                            let mut decompressed = Vec::new();
+                            if flate2::read::ZlibDecoder::new(compressed)
+                                .read_to_end(&mut decompressed)
+                                .is_ok()
+                            {
+                                let text = String::from_utf8_lossy(&decompressed);
+                                for &(pattern, tool_name) in signatures {
+                                    if text.contains(pattern) {
+                                        detected_tool = Some(tool_name.to_string());
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                reader.seek(SeekFrom::Current(4)).ok(); // Skip CRC
+                if chunk_type != b"zTXt" {
+                    let text = String::from_utf8_lossy(&payload);
+                    for &(pattern, tool_name) in signatures {
+                        if text.contains(pattern) {
+                            detected_tool = Some(tool_name.to_string());
+                            break;
+                        }
+                    }
+                }
+                skip_bytes(&mut reader, 4, "text chunk CRC")?;
             }
             b"IEND" => break,
             _ => {
-                reader.seek(SeekFrom::Current(chunk_len as i64 + 4)).ok();
+                skip_bytes(&mut reader, chunk_len + 4, "PNG chunk")?;
             }
         }
     }
@@ -2538,6 +2566,26 @@ mod tests {
     fn test_detect_nonexistent_file() {
         let result = detect_format_from_bytes(std::path::Path::new("/nonexistent/file.png"));
         assert!(result.is_err(), "Non-existent file should return error");
+    }
+
+    #[test]
+    fn test_parse_png_structure_rejects_truncated_text_chunk() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        data.extend_from_slice(&13u32.to_be_bytes());
+        data.extend_from_slice(b"IHDR");
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(&[8, 2, 0, 0, 0]);
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&4u32.to_be_bytes());
+        data.extend_from_slice(b"tEXt");
+        data.extend_from_slice(b"ab");
+
+        match parse_png_structure(std::io::Cursor::new(data)) {
+            Ok(_) => panic!("truncated text chunk should fail loudly"),
+            Err(err) => assert!(err.to_string().contains("text chunk payload")),
+        }
     }
 
     #[test]

@@ -57,6 +57,19 @@ impl ConversionOutput {
     }
 }
 
+fn cleanup_output_file(path: &Path, context: &str) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "⚠️ [img-av1] Failed to remove {} {}: {}",
+                context,
+                path.display(),
+                e
+            );
+        }
+    }
+}
+
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     match (
         &detection.image_type,
@@ -193,6 +206,8 @@ pub fn execute_conversion(
 
     let output_path =
         resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
+    shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
+        .map_err(ImgQualityError::ConversionError)?;
 
     if output_path.exists() && !config.force {
         return Ok(ConversionOutput {
@@ -235,7 +250,7 @@ pub fn execute_conversion(
     };
 
     if let Err(e) = result {
-        let _ = std::fs::remove_file(&temp_path);
+        cleanup_output_file(&temp_path, "temporary output after conversion failure");
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
 
@@ -266,7 +281,7 @@ pub fn execute_conversion(
     if config.compress {
         let out_size = output_size.unwrap_or(0);
         if out_size >= detection.file_size {
-            let _ = std::fs::remove_file(&output_path);
+            cleanup_output_file(&output_path, "oversized output in compress mode");
 
             // Copy original to output directory if specified
             if let Some(ref out_dir) = config.output_dir {
@@ -343,11 +358,14 @@ fn resolve_output_path(
     let file_stem = input
         .file_stem()
         .ok_or_else(|| ImgQualityError::ConversionError("Invalid file path: no file stem".to_string()))?;
-    Ok(if let Some(dir) = output_dir {
+    let output = if let Some(dir) = output_dir {
         dir.join(file_stem).with_extension(extension)
     } else {
         input.with_extension(extension)
-    })
+    };
+    shared_utils::conversion::validate_output_path(&output, None)
+        .map_err(ImgQualityError::ConversionError)?;
+    Ok(output)
 }
 
 /// Make output path absolute for tools that require it (e.g. avifenc).
@@ -403,7 +421,7 @@ fn convert_to_jxl(
         .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read JXL output: {}", e)))?
         .len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty JXL output");
         return Err(ImgQualityError::ConversionError(
             "JXL output file is empty (encoding may have failed)".to_string(),
         ));
@@ -414,7 +432,7 @@ fn convert_to_jxl(
             .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {}", e)))?
             .len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing JXL output");
             return Err(ImgQualityError::ConversionError(format!(
                 "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
                 output_size, input_size
@@ -453,7 +471,7 @@ fn convert_to_avif(
         .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read AVIF output: {}", e)))?
         .len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty AVIF output");
         return Err(ImgQualityError::ConversionError(
             "AVIF output file is empty (encoding may have failed)".to_string(),
         ));
@@ -464,7 +482,7 @@ fn convert_to_avif(
             .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {}", e)))?
             .len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing AVIF output");
             return Err(ImgQualityError::ConversionError(format!(
                 "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
                 output_size, input_size
@@ -512,7 +530,7 @@ fn convert_to_av1_mp4(
         .output()?;
 
     if !status.status.success() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "failed AV1 output");
         return Err(ImgQualityError::ConversionError(
             String::from_utf8_lossy(&status.stderr).to_string(),
         ));
@@ -522,14 +540,14 @@ fn convert_to_av1_mp4(
         .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read AV1 output: {}", e)))?
         .len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty AV1 output");
         return Err(ImgQualityError::ConversionError(
             "AV1 output file is empty (encoding may have failed)".to_string(),
         ));
     }
 
     if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "invalid AV1 output");
         return Err(ImgQualityError::ConversionError(
             "AV1 output file is not readable (invalid or corrupted)".to_string(),
         ));
@@ -540,7 +558,7 @@ fn convert_to_av1_mp4(
             .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {}", e)))?
             .len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing AV1 output");
             return Err(ImgQualityError::ConversionError(format!(
                 "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
                 output_size, input_size

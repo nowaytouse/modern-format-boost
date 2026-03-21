@@ -56,6 +56,19 @@ impl ConversionOutput {
     }
 }
 
+fn cleanup_output_file(path: &Path, context: &str) {
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!(
+                "⚠️ [img-hevc] Failed to remove {} {}: {}",
+                context,
+                path.display(),
+                e
+            );
+        }
+    }
+}
+
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     if detection.format.is_modern_format() {
         return Ok(ConversionStrategy {
@@ -194,6 +207,8 @@ pub fn execute_conversion(
 
     let output_path =
         resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
+    shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
+        .map_err(ImgQualityError::ConversionError)?;
 
     if output_path.exists() && !config.force {
         return Ok(ConversionOutput {
@@ -229,7 +244,7 @@ pub fn execute_conversion(
     };
 
     if let Err(e) = result {
-        let _ = std::fs::remove_file(&temp_path);
+        cleanup_output_file(&temp_path, "temporary output after conversion failure");
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
 
@@ -260,7 +275,7 @@ pub fn execute_conversion(
     if config.compress {
         let out_size = output_size.unwrap_or(0);
         if out_size >= detection.file_size {
-            let _ = std::fs::remove_file(&output_path);
+            cleanup_output_file(&output_path, "oversized output in compress mode");
             shared_utils::copy_on_skip_or_fail(
                 input_path,
                 config.output_dir.as_deref(),
@@ -335,11 +350,14 @@ fn resolve_output_path(
     let file_stem = input
         .file_stem()
         .ok_or_else(|| ImgQualityError::ConversionError("Invalid file path: no file stem".to_string()))?;
-    Ok(if let Some(dir) = output_dir {
+    let output = if let Some(dir) = output_dir {
         dir.join(file_stem).with_extension(extension)
     } else {
         input.with_extension(extension)
-    })
+    };
+    shared_utils::conversion::validate_output_path(&output, None)
+        .map_err(ImgQualityError::ConversionError)?;
+    Ok(output)
 }
 
 fn convert_to_jxl(
@@ -383,7 +401,7 @@ fn convert_to_jxl(
         .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read JXL output: {}", e)))?
         .len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty JXL output");
         return Err(ImgQualityError::ConversionError(
             "JXL output file is empty (encoding may have failed)".to_string(),
         ));
@@ -391,7 +409,7 @@ fn convert_to_jxl(
 
     // Verify JXL file integrity
     if let Err(e) = shared_utils::jxl_utils::verify_jxl_health(output) {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "unhealthy JXL output");
         return Err(ImgQualityError::ConversionError(format!(
             "JXL health check failed: {}", e
         )));
@@ -403,7 +421,7 @@ fn convert_to_jxl(
             .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read input: {}", e)))?
             .len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing JXL output");
             return Err(ImgQualityError::ConversionError(format!(
                 "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
                 output_size, input_size
@@ -452,7 +470,7 @@ fn convert_to_avif(
     // Verify output file
     let output_size = std::fs::metadata(output)?.len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty AVIF output");
         return Err(ImgQualityError::ConversionError(
             "AVIF output file is empty (encoding may have failed)".to_string(),
         ));
@@ -460,7 +478,7 @@ fn convert_to_avif(
 
     // Verify AVIF file integrity
     if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(output) {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "unhealthy AVIF output");
         return Err(ImgQualityError::ConversionError(format!(
             "AVIF health check failed: {}", e
         )));
@@ -470,7 +488,7 @@ fn convert_to_avif(
     if config.compress {
         let input_size = std::fs::metadata(input)?.len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing AVIF output");
             return Err(ImgQualityError::ConversionError(format!(
                 "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
                 output_size, input_size
@@ -534,14 +552,14 @@ fn convert_to_hevc_mp4(
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?;
 
     if !status.success() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "failed HEVC output");
         return Err(ImgQualityError::ConversionError(stderr));
     }
 
     // Verify output file
     let output_size = std::fs::metadata(output)?.len();
     if output_size == 0 {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "empty HEVC output");
         return Err(ImgQualityError::ConversionError(
             "HEVC output file is empty (encoding may have failed)".to_string(),
         ));
@@ -549,7 +567,7 @@ fn convert_to_hevc_mp4(
 
     // Check if output is readable
     if shared_utils::conversion::get_input_dimensions(output).is_err() {
-        let _ = std::fs::remove_file(output);
+        cleanup_output_file(output, "invalid HEVC output");
         return Err(ImgQualityError::ConversionError(
             "HEVC output file is not readable (invalid or corrupted)".to_string(),
         ));
@@ -559,7 +577,7 @@ fn convert_to_hevc_mp4(
     if config.compress {
         let input_size = std::fs::metadata(input)?.len();
         if output_size >= input_size {
-            let _ = std::fs::remove_file(output);
+            cleanup_output_file(output, "non-compressing HEVC output");
             return Err(ImgQualityError::ConversionError(format!(
                 "Compress mode: output ({} bytes) not smaller than input ({} bytes)",
                 output_size, input_size
