@@ -24,6 +24,22 @@ append_path_if_exists() {
     esac
 }
 
+warn_shell() {
+    printf '⚠️ [MFB Shell] %s\n' "$*" >&2
+}
+
+warn_shell_once() {
+    local key="$1"
+    shift
+    local var_name="MFB_WARNED_${key}"
+    if eval "[[ -n \${$var_name:-} ]]"; then
+        return 0
+    fi
+    eval "$var_name=1"
+    export "$var_name"
+    warn_shell "$*"
+}
+
 normalize_cli_environment() {
     export LC_ALL="${LC_ALL:-en_US.UTF-8}"
     export LANG="${LANG:-en_US.UTF-8}"
@@ -59,8 +75,14 @@ refresh_terminal_dimensions() {
     fi
 
     if [[ -z "$cols" ]] && command -v tput >/dev/null 2>&1; then
-        cols=$(tput cols 2>/dev/null || true)
-        rows=$(tput lines 2>/dev/null || true)
+        if ! cols=$(tput cols 2>/dev/null); then
+            warn_shell_once "TPUT_COLS" "tput could not read terminal columns; continuing with fallback detection."
+            cols=""
+        fi
+        if ! rows=$(tput lines 2>/dev/null); then
+            warn_shell_once "TPUT_LINES" "tput could not read terminal rows; continuing with fallback detection."
+            rows=""
+        fi
     fi
 
     [[ "$cols" =~ ^[0-9]+$ && "$cols" -gt 0 ]] && export COLUMNS="$cols"
@@ -78,12 +100,14 @@ ensure_wide_terminal_layout() {
     fi
 
     if [[ -c /dev/tty ]]; then
-        printf '\033[8;%s;%st' "$target_rows" "$target_cols" > /dev/tty 2>/dev/null || true
+        if ! printf '\033[8;%s;%st' "$target_rows" "$target_cols" > /dev/tty 2>/dev/null; then
+            warn_shell_once "TTY_RESIZE_ESCAPE" "terminal did not accept ANSI resize escape; continuing with width fallback."
+        fi
     fi
 
     case "${TERM_PROGRAM:-}" in
         Apple_Terminal)
-            osascript >/dev/null 2>&1 <<'EOF' || true
+            if ! osascript >/dev/null 2>&1 <<'EOF'
 tell application "Terminal"
     if (count of windows) > 0 then
         set bounds of front window to {80, 60, 1720, 980}
@@ -91,9 +115,12 @@ tell application "Terminal"
     end if
 end tell
 EOF
+            then
+                warn_shell_once "APPLE_TERMINAL_RESIZE" "Apple Terminal window resize via AppleScript failed; continuing with width fallback."
+            fi
             ;;
         iTerm.app)
-            osascript >/dev/null 2>&1 <<'EOF' || true
+            if ! osascript >/dev/null 2>&1 <<'EOF'
 tell application "iTerm"
     if (count of windows) > 0 then
         set bounds of current window to {80, 60, 1720, 980}
@@ -101,6 +128,9 @@ tell application "iTerm"
     end if
 end tell
 EOF
+            then
+                warn_shell_once "ITERM_RESIZE" "iTerm window resize via AppleScript failed; continuing with width fallback."
+            fi
             ;;
     esac
 
@@ -159,8 +189,12 @@ if [ -n "$ZSH_VERSION" ]; then
             m="${dir_mtimes[$d]}"
             b="${dir_btimes[$d]}"
             if [[ -d "$d" ]]; then
-                touch -mt "$(date -r "$m" +%Y%m%d%H%M.%S)" "$d" 2>/dev/null || true
-                [[ "$b" != "0" ]] && SetFile -d "$(date -r "$b" +%m/%d/%Y\ %H:%M:%S)" "$d" 2>/dev/null || true
+                if ! touch -mt "$(date -r "$m" +%Y%m%d%H%M.%S)" "$d" 2>/dev/null; then
+                    warn_shell_once "RESTORE_DIR_MTIME" "failed to restore one or more directory modification times."
+                fi
+                if [[ "$b" != "0" ]] && ! SetFile -d "$(date -r "$b" +%m/%d/%Y\ %H:%M:%S)" "$d" 2>/dev/null; then
+                    warn_shell_once "RESTORE_DIR_BTIME" "failed to restore one or more directory creation times."
+                fi
             fi
         done
     }

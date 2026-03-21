@@ -274,22 +274,27 @@ fn flock_log_exclusive(file: &File) -> std::io::Result<()> {
 
 static LOG_FILE_WRITER: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 
+fn lock_log_writer() -> std::sync::MutexGuard<'static, Option<BufWriter<File>>> {
+    LOG_FILE_WRITER.lock().unwrap_or_else(|err| {
+        eprintln!("⚠️ [Run Log] log writer mutex was poisoned; recovering state");
+        err.into_inner()
+    })
+}
+
 /// Open (or create) the log file and take an advisory exclusive lock so it is not truncated by others.
 /// Call once at startup. Registers a forwarder so tracing events are also written to this run log.
 pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
     let file = OpenOptions::new().create(true).append(true).open(path)?;
     #[cfg(unix)]
     flock_log_exclusive(&file)?;
-    if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
-        *guard = Some(BufWriter::with_capacity(64 * 1024, file));
-    }
+    *lock_log_writer() = Some(BufWriter::with_capacity(64 * 1024, file));
     crate::logging::register_run_log_forwarder(Box::new(write_to_log));
     Ok(())
 }
 
 /// Returns true if a log file has been configured.
 pub fn has_log_file() -> bool {
-    LOG_FILE_WRITER.lock().map(|g| g.is_some()).unwrap_or(false)
+    lock_log_writer().is_some()
 }
 
 /// If no log file is configured, open a default run log under `./logs/`

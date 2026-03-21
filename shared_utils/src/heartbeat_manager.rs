@@ -21,6 +21,13 @@ static ACTIVE_HEARTBEATS: AtomicUsize = AtomicUsize::new(0);
 
 static HEARTBEAT_REGISTRY: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 
+fn lock_registry() -> std::sync::MutexGuard<'static, Option<HashMap<String, usize>>> {
+    HEARTBEAT_REGISTRY.lock().unwrap_or_else(|err| {
+        eprintln!("⚠️ [Heartbeat Manager] registry mutex was poisoned; recovering state");
+        err.into_inner()
+    })
+}
+
 impl HeartbeatManager {
     pub fn register_progress_bar() {
         ACTIVE_PROGRESS_BARS.fetch_add(1, Ordering::Relaxed);
@@ -53,16 +60,15 @@ impl HeartbeatManager {
     pub fn register_heartbeat(operation: &str) {
         ACTIVE_HEARTBEATS.fetch_add(1, Ordering::Relaxed);
 
-        if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
-            let map = registry.get_or_insert_with(HashMap::new);
-            *map.entry(operation.to_string()).or_insert(0) += 1;
+        let mut registry = lock_registry();
+        let map = registry.get_or_insert_with(HashMap::new);
+        *map.entry(operation.to_string()).or_insert(0) += 1;
 
-            if map[operation] > 1 && std::env::var("IMGQUALITY_DEBUG").is_ok() {
-                eprintln!(
-                    "🔍 Debug: Multiple heartbeats with same name: {} (count: {})",
-                    operation, map[operation]
-                );
-            }
+        if map[operation] > 1 && std::env::var("IMGQUALITY_DEBUG").is_ok() {
+            eprintln!(
+                "🔍 Debug: Multiple heartbeats with same name: {} (count: {})",
+                operation, map[operation]
+            );
         }
     }
 
@@ -80,13 +86,12 @@ impl HeartbeatManager {
             }
         }
 
-        if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
-            if let Some(map) = registry.as_mut() {
-                if let Some(count) = map.get_mut(operation) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        map.remove(operation);
-                    }
+        let mut registry = lock_registry();
+        if let Some(map) = registry.as_mut() {
+            if let Some(count) = map.get_mut(operation) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    map.remove(operation);
                 }
             }
         }
@@ -97,10 +102,9 @@ impl HeartbeatManager {
     }
 
     pub fn get_active_heartbeats() -> Vec<(String, usize)> {
-        if let Ok(registry) = HEARTBEAT_REGISTRY.lock() {
-            if let Some(map) = registry.as_ref() {
-                return map.iter().map(|(k, v)| (k.clone(), *v)).collect();
-            }
+        let registry = lock_registry();
+        if let Some(map) = registry.as_ref() {
+            return map.iter().map(|(k, v)| (k.clone(), *v)).collect();
         }
         Vec::new()
     }
@@ -109,9 +113,7 @@ impl HeartbeatManager {
         ACTIVE_HEARTBEATS.store(0, Ordering::Relaxed);
         ACTIVE_PROGRESS_BARS.store(0, Ordering::Relaxed);
 
-        if let Ok(mut registry) = HEARTBEAT_REGISTRY.lock() {
-            *registry = None;
-        }
+        *lock_registry() = None;
     }
 }
 
