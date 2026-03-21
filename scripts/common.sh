@@ -155,9 +155,34 @@ YELLOW='\033[38;5;226m'
 BLUE='\033[38;5;39m'
 CYAN='\033[38;5;51m'
 MAGENTA='\033[38;5;213m'
+ORANGE='\033[38;5;208m'
 WHITE='\033[38;5;255m'
 GRAY='\033[38;5;240m'
 BG_HEADER='\033[48;5;236m'
+
+# 3. Versioning & Branch Awareness
+GET_BRANCH_TAG() {
+    local branch
+    if [[ -d "$PROJECT_ROOT/.git" ]]; then
+        branch=$(git -C "$PROJECT_ROOT" symbolic-ref --short HEAD 2>/dev/null || git -C "$PROJECT_ROOT" rev-parse --short HEAD 2>/dev/null)
+    fi
+    
+    case "${branch:-}" in
+        nightly)
+            echo -e " ${BOLD}${MAGENTA}[NIGHTLY]${RESET}"
+            ;;
+        main)
+            echo -e " ${BOLD}${CYAN}[MAIN]${RESET}"
+            ;;
+        *)
+            if [[ -n "$branch" ]]; then
+                echo -e " ${DIM}[$branch]${RESET}"
+            else
+                echo ""
+            fi
+            ;;
+    esac
+}
 
 # 3. Zsh-Specific Advanced Metadata Functions
 # These only activate if running in Zsh (e.g., repair_apple_photos.sh)
