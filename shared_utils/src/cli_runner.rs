@@ -1,4 +1,4 @@
-use crate::batch::BatchResult;
+use crate::batch::{disk_full_pause_reason, BatchPauseController, BatchResult};
 use crate::common_utils::has_extension;
 use crate::file_copier::{
     copy_unsupported_files, verify_output_completeness, SUPPORTED_VIDEO_EXTENSIONS,
@@ -121,7 +121,10 @@ where
         match crate::checkpoint::CheckpointManager::new(input) {
             Ok(cp) => {
                 if cp.is_resume_mode() {
-                    info!("📂 Resume: skipping {} already completed files", cp.completed_count());
+                    info!(
+                        "📂 Resume: skipping {} already completed files",
+                        cp.completed_count()
+                    );
                 }
                 Some(cp)
             }
@@ -161,7 +164,8 @@ where
                      💾 Available: {:.2} GB\n\
                      💾 Required:  {:.2} GB (input size + 1 GB headroom)\n\
                      💡 Free up space or choose a different output location.",
-                    avail_gb, required_gb
+                    avail_gb,
+                    required_gb
                 );
             }
             info!(
@@ -176,13 +180,29 @@ where
     let mut batch_result = BatchResult::new();
     let mut total_input_bytes: u64 = 0;
     let mut total_output_bytes: u64 = 0;
+    let pause_controller = BatchPauseController::new();
 
     for file in &files {
+        if pause_controller.is_paused() {
+            break;
+        }
+
         // Fix extension by content first; after fix, only treat as video if extension still in list (avoids disguised-extension panic).
         let fixed = match fix_extension_if_mismatch(file) {
             Ok(p) => p,
             Err(e) => {
                 error!("❌ Extension fix failed for {}: {}", file.display(), e);
+                if let Some(reason) = disk_full_pause_reason(&e.to_string()) {
+                    if pause_controller.request_pause(file, reason.clone()) {
+                        warn!("⏸️ Batch paused at {}: {}", file.display(), reason);
+                    }
+                    batch_result.pause(
+                        file.clone(),
+                        reason,
+                        files.len().saturating_sub(batch_result.total),
+                    );
+                    break;
+                }
                 batch_result.fail(file.clone(), e.to_string());
                 continue;
             }
@@ -197,7 +217,10 @@ where
                 ) {
                     error!("❌ Failed to copy {}: {}", fixed.display(), copy_err);
                 } else {
-                    info!("📋 Copied (content not video after fix): {}", fixed.display());
+                    info!(
+                        "📋 Copied (content not video after fix): {}",
+                        fixed.display()
+                    );
                 }
             }
             batch_result.skip();
@@ -235,9 +258,26 @@ where
 
                     // Mark as completed
                     if let Some(ref mut cp) = checkpoint {
-                        let _ = cp.mark_completed(&fixed);
+                        if let Err(err) = cp.mark_completed(&fixed) {
+                            warn!(
+                                "⚠️ Failed to mark checkpoint complete for {}: {}",
+                                fixed.display(),
+                                err
+                            );
+                        }
                     }
                 } else {
+                    if let Some(reason) = disk_full_pause_reason(result.message()) {
+                        if pause_controller.request_pause(&fixed, reason.clone()) {
+                            warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
+                        }
+                        batch_result.pause(
+                            fixed.clone(),
+                            reason,
+                            files.len().saturating_sub(batch_result.total),
+                        );
+                        break;
+                    }
                     info!(
                         "{} → FAILED ({}) ❌",
                         fixed.file_name().unwrap_or_default().to_string_lossy(),
@@ -255,6 +295,16 @@ where
                         fixed.file_name().unwrap_or_default().to_string_lossy()
                     );
                     batch_result.skip();
+                } else if let Some(reason) = disk_full_pause_reason(&error_msg) {
+                    if pause_controller.request_pause(&fixed, reason.clone()) {
+                        warn!("⏸️ Batch paused at {}: {}", fixed.display(), reason);
+                    }
+                    batch_result.pause(
+                        fixed.clone(),
+                        reason,
+                        files.len().saturating_sub(batch_result.total),
+                    );
+                    break;
                 } else {
                     info!("❌ {} failed: {}", fixed.display(), e);
                     batch_result.fail(fixed.clone(), e.to_string());
@@ -267,7 +317,10 @@ where
                     ) {
                         error!("❌ Failed to copy original: {}", copy_err);
                     } else {
-                        info!("📋 Copied original (conversion failed): {}", fixed.display());
+                        info!(
+                            "📋 Copied original (conversion failed): {}",
+                            fixed.display()
+                        );
                     }
                     crate::progress_mode::video_processed_failure();
                 }
@@ -277,10 +330,21 @@ where
 
     // Cleanup checkpoint only on 100% success
     if let Some(cp) = checkpoint {
-        if batch_result.failed == 0 {
-            let _ = cp.cleanup();
+        if batch_result.paused {
+            if let Err(err) = cp.release_lock() {
+                warn!("⚠️ Failed to release checkpoint lock after pause: {}", err);
+            }
+        } else if batch_result.failed == 0 {
+            if let Err(err) = cp.cleanup() {
+                warn!("⚠️ Failed to clean up checkpoint state: {}", err);
+            }
         } else {
-            let _ = cp.release_lock();
+            if let Err(err) = cp.release_lock() {
+                warn!(
+                    "⚠️ Failed to release checkpoint lock after failure: {}",
+                    err
+                );
+            }
         }
     }
 
@@ -291,6 +355,10 @@ where
         total_output_bytes,
         &config.label,
     );
+
+    if batch_result.paused {
+        return Ok(());
+    }
 
     if let Some(ref output_dir) = config.output {
         info!("\n📦 Copying unsupported files...");
@@ -350,7 +418,10 @@ where
             ) {
                 error!("❌ Failed to copy to output: {}", copy_err);
             } else {
-                info!("📋 Copied to output (not a video after content check): {}", input.display());
+                info!(
+                    "📋 Copied to output (not a video after content check): {}",
+                    input.display()
+                );
             }
         }
         anyhow::bail!(
