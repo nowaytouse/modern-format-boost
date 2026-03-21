@@ -278,7 +278,7 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
     let dir = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join("logs");
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let path = dir.join(format!("{}_run_{}.log", binary_name, timestamp));
     set_log_file(&path)?;

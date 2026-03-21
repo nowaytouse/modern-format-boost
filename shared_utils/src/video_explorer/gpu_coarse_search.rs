@@ -155,7 +155,17 @@ pub fn explore_with_gpu_coarse_search(
     crate::verbose_eprintln!();
 
     // Single ffprobe call — result is reused in Phase 3 and audio strategy detection.
-    let probe_result = crate::ffprobe::probe_video(input).ok();
+    let probe_result = match crate::ffprobe::probe_video(input) {
+        Ok(probe) => Some(probe),
+        Err(err) => {
+            crate::verbose_eprintln!(
+                "⚠️ ffprobe precheck failed for {}: {}",
+                input.display(),
+                err
+            );
+            None
+        }
+    };
     let duration: f32 = probe_result
         .as_ref()
         .map(|p| p.duration as f32)

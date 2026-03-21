@@ -4,6 +4,7 @@
 //! available memory is low, avoiding OOM kills (e.g. spinner/sleep or encoder processes).
 
 use std::process::Command;
+use tracing::warn;
 
 /// Memory pressure level derived from available vs total RAM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,24 +64,55 @@ pub fn is_low_memory_env() -> bool {
 }
 
 fn get_memory_macos() -> (u64, u64) {
-    let total = Command::new("sysctl")
-        .arg("-n")
-        .arg("hw.memsize")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .map(|bytes| bytes / (1024 * 1024))
-        .unwrap_or(0);
+    let total = match Command::new("sysctl").arg("-n").arg("hw.memsize").output() {
+        Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+            Ok(stdout) => match stdout.trim().parse::<u64>() {
+                Ok(bytes) => bytes / (1024 * 1024),
+                Err(err) => {
+                    warn!(error = %err, "Failed to parse macOS total memory from sysctl");
+                    0
+                }
+            },
+            Err(err) => {
+                warn!(error = %err, "sysctl returned non-UTF-8 total memory output");
+                0
+            }
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(stderr = %stderr.trim(), "sysctl hw.memsize returned non-zero status");
+            0
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to execute sysctl hw.memsize");
+            0
+        }
+    };
 
-    let available = Command::new("vm_stat")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|out| parse_vm_stat_available(&out))
-        .unwrap_or(0);
+    let available = match Command::new("vm_stat").output() {
+        Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
+            Ok(stdout) => match parse_vm_stat_available(&stdout) {
+                Some(available) => available,
+                None => {
+                    warn!("Failed to parse macOS available memory from vm_stat");
+                    0
+                }
+            },
+            Err(err) => {
+                warn!(error = %err, "vm_stat returned non-UTF-8 output");
+                0
+            }
+        },
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(stderr = %stderr.trim(), "vm_stat returned non-zero status");
+            0
+        }
+        Err(err) => {
+            warn!(error = %err, "Failed to execute vm_stat");
+            0
+        }
+    };
 
     (available, total)
 }
@@ -121,7 +153,10 @@ fn parse_vm_stat_value(line: &str) -> Option<u64> {
 fn get_memory_linux() -> (u64, u64) {
     let content = match std::fs::read_to_string("/proc/meminfo") {
         Ok(c) => c,
-        Err(_) => return (0, 0),
+        Err(err) => {
+            warn!(error = %err, "Failed to read /proc/meminfo");
+            return (0, 0);
+        }
     };
     let mut mem_available = None::<u64>;
     let mut mem_total = None::<u64>;
@@ -140,6 +175,13 @@ fn get_memory_linux() -> (u64, u64) {
                 .map(|kb| kb / 1024);
         }
     }
+    if mem_available.is_none() || mem_total.is_none() {
+        warn!(
+            has_mem_available = mem_available.is_some(),
+            has_mem_total = mem_total.is_some(),
+            "Missing expected memory fields in /proc/meminfo"
+        );
+    }
     let available = mem_available.unwrap_or(0);
     let total = mem_total.unwrap_or(0);
     (available, total)
@@ -156,7 +198,10 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
             }
             match p.parent() {
                 Some(parent) => p = parent,
-                None => return None,
+                None => {
+                    warn!(path = %path.display(), "No existing ancestor found for disk-space probe");
+                    return None;
+                }
             }
         }
     };
@@ -164,7 +209,13 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
     #[cfg(unix)]
     {
         use std::ffi::CString;
-        let c_path = CString::new(existing.to_string_lossy().as_bytes()).ok()?;
+        let c_path = match CString::new(existing.to_string_lossy().as_bytes()) {
+            Ok(c_path) => c_path,
+            Err(err) => {
+                warn!(path = %existing.display(), error = %err, "Failed to prepare path for statvfs");
+                return None;
+            }
+        };
         let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
         let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
         if ret == 0 {
@@ -172,6 +223,7 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
             let avail = stat.f_bavail as u64 * stat.f_frsize as u64;
             return Some(avail);
         }
+        warn!(path = %existing.display(), errno = std::io::Error::last_os_error().to_string(), "statvfs failed during disk-space probe");
         None
     }
 

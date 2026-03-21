@@ -191,7 +191,15 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     // ExifTool writes to <path>_exiftool_tmp then renames; remove leftover from prior run.
     if let Some(name) = dst.file_name() {
         let tmp_path = dst.with_file_name(format!("{}_exiftool_tmp", name.to_string_lossy()));
-        let _ = std::fs::remove_file(&tmp_path);
+        if let Err(e) = std::fs::remove_file(&tmp_path) {
+            if e.kind() != io::ErrorKind::NotFound {
+                eprintln!(
+                    "⚠️ [metadata] Failed to remove stale ExifTool temp file {}: {}",
+                    tmp_path.display(),
+                    e
+                );
+            }
+        }
     }
 
     let ext = dst
@@ -300,7 +308,15 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
     let mut backup_name = dst.file_name().unwrap_or_default().to_os_string();
     backup_name.push("_original");
     let backup_path = dst.with_file_name(backup_name);
-    let _ = std::fs::remove_file(&backup_path);
+    if let Err(e) = std::fs::remove_file(&backup_path) {
+        if e.kind() != io::ErrorKind::NotFound {
+            eprintln!(
+                "⚠️ [metadata] Failed to remove ExifTool backup file {}: {}",
+                backup_path.display(),
+                e
+            );
+        }
+    }
 
     if is_video_file(dst) {
         fix_quicktime_dates(src, dst)?;

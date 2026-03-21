@@ -326,7 +326,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                         // Set security limits on the new context
                         #[cfg(feature = "v1_21")]
                         {
-                            let _ = file_ctx.set_security_limits(&limits);
+                            if let Err(limit_err) = file_ctx.set_security_limits(&limits) {
+                                return Err(limit_err);
+                            }
                         }
                         
                         // Try to read from file path
