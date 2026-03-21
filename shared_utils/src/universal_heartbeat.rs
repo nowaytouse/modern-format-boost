@@ -79,8 +79,8 @@
 //! - 如果没有进度条，心跳会正常显示
 //! - 可以使用 `.force()` 强制显示，忽略进度条检测
 
-use chrono::{DateTime, FixedOffset, Utc};
 use crate::progress_mode::format_duration_compact;
+use chrono::{DateTime, FixedOffset, Utc};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -207,12 +207,17 @@ impl UniversalHeartbeat {
                         .map(|s| format!(" - {}", s))
                         .unwrap_or_default();
 
-                    let _ = std::io::stderr().write_fmt(format_args!(
+                    let mut stderr = std::io::stderr();
+                    if let Err(err) = stderr.write_fmt(format_args!(
                         "💓 [{}] Active (elapsed: {}, Beijing Time: {}){}",
                         config.operation, elapsed_str, beijing_time, extra
-                    ));
-                    let _ = std::io::stderr().write(b"\n");
-                    let _ = std::io::stderr().flush();
+                    )) {
+                        eprintln!("⚠️ Heartbeat write failed: {}", err);
+                    } else if let Err(err) = stderr.write_all(b"\n") {
+                        eprintln!("⚠️ Heartbeat newline write failed: {}", err);
+                    } else if let Err(err) = stderr.flush() {
+                        eprintln!("⚠️ Heartbeat flush failed: {}", err);
+                    }
                 }
             }
         }));
@@ -237,7 +242,9 @@ impl UniversalHeartbeat {
     pub fn stop(mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            if handle.join().is_err() {
+                eprintln!("⚠️ Heartbeat thread panicked while stopping");
+            }
         }
         crate::heartbeat_manager::HeartbeatManager::unregister_heartbeat(&self.config.operation);
     }
@@ -247,7 +254,9 @@ impl Drop for UniversalHeartbeat {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            if handle.join().is_err() {
+                eprintln!("⚠️ Heartbeat thread panicked during drop");
+            }
         }
         crate::heartbeat_manager::HeartbeatManager::unregister_heartbeat(&self.config.operation);
     }

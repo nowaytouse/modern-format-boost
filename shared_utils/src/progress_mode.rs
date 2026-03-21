@@ -22,6 +22,20 @@ thread_local! {
     static LOG_PREFIX: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
+static RUN_LOG_IO_FAILURE_REPORTED: AtomicBool = AtomicBool::new(false);
+
+fn report_run_log_io_failure(context: &str, detail: &str) {
+    tracing::warn!(
+        context = context,
+        detail = detail,
+        "Run log output degraded"
+    );
+
+    if !RUN_LOG_IO_FAILURE_REPORTED.swap(true, Ordering::Relaxed) {
+        let _ = writeln!(std::io::stderr(), "⚠️ [Run Log] {}: {}", context, detail);
+    }
+}
+
 /// Format duration as detailed string with progressive spacing strategy
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
 pub fn format_duration_compact(duration: Duration) -> String {
@@ -328,10 +342,20 @@ pub fn write_to_log(line: &str) {
     // Ensure every line written to the run log has milestone stats appended (unless it already does)
     let line_with_stats = append_stats_to_line(line);
     let plain = crate::logging::strip_ansi_str(&line_with_stats);
-    if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
-        if let Some(ref mut w) = *guard {
-            let _ = writeln!(w, "{}", plain);
-            let _ = w.flush();
+    match LOG_FILE_WRITER.lock() {
+        Ok(mut guard) => {
+            if let Some(ref mut w) = *guard {
+                if let Err(err) = writeln!(w, "{}", plain) {
+                    report_run_log_io_failure("failed to write run log line", &err.to_string());
+                    return;
+                }
+                if let Err(err) = w.flush() {
+                    report_run_log_io_failure("failed to flush run log line", &err.to_string());
+                }
+            }
+        }
+        Err(err) => {
+            report_run_log_io_failure("run log writer mutex poisoned", &err.to_string());
         }
     }
 }
@@ -437,15 +461,27 @@ pub fn emit_stderr(line: &str) {
             // Non-TTY: strip ANSI so piped / redirected output is clean.
             format!("{}{}", STDERR_INDENT, crate::logging::strip_ansi_str(&line_with_stats))
         };
-        let _ = writeln!(std::io::stderr(), "{}", out);
+        if let Err(err) = writeln!(std::io::stderr(), "{}", out) {
+            tracing::warn!(
+                error = %err,
+                "Failed to write progress output to stderr"
+            );
+        }
     }
 }
 
 /// Flush the log file buffer. Call at program exit.
 pub fn flush_log_file() {
-    if let Ok(mut guard) = LOG_FILE_WRITER.lock() {
-        if let Some(ref mut w) = *guard {
-            let _ = w.flush();
+    match LOG_FILE_WRITER.lock() {
+        Ok(mut guard) => {
+            if let Some(ref mut w) = *guard {
+                if let Err(err) = w.flush() {
+                    report_run_log_io_failure("failed to flush run log at shutdown", &err.to_string());
+                }
+            }
+        }
+        Err(err) => {
+            report_run_log_io_failure("run log writer mutex poisoned during shutdown", &err.to_string());
         }
     }
 }

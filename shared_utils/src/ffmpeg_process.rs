@@ -36,7 +36,7 @@ use anyhow::{Context, Result};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct FfmpegProcess {
     child: Child,
@@ -100,18 +100,33 @@ impl FfmpegProcess {
                 use std::io::Read;
                 let mut reader = BufReader::new(stdout);
                 let mut buf = [0u8; 4096];
-                while reader.read(&mut buf).map(|n| n > 0).unwrap_or(false) {}
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => return None::<String>,
+                        Ok(_) => {}
+                        Err(err) => return Some(err.to_string()),
+                    }
+                }
             })
         });
         let status = self.child.wait().context("Failed to wait for FFmpeg")?;
         if let Some(h) = stdout_drain {
-            let _ = h.join();
+            match h.join() {
+                Ok(Some(err)) => warn!(error = %err, "Failed while draining FFmpeg stdout"),
+                Ok(None) => {}
+                Err(_) => warn!("FFmpeg stdout drain thread panicked"),
+            }
         }
-        let stderr = self
-            .stderr_thread
-            .take()
-            .map(|t| t.join().unwrap_or_default())
-            .unwrap_or_default();
+        let stderr = match self.stderr_thread.take() {
+            Some(t) => match t.join() {
+                Ok(output) => output,
+                Err(_) => {
+                    warn!("FFmpeg stderr reader thread panicked");
+                    String::new()
+                }
+            },
+            None => String::new(),
+        };
 
         if status.success() {
             info!(
@@ -317,11 +332,17 @@ impl std::error::Error for FfmpegError {}
 pub fn get_error_suggestion(stderr: &str) -> Option<String> {
     let patterns = [
         ("No such file or directory", "Check input file path"),
-        ("Invalid data found", "Input file may be corrupted; try re-downloading"),
+        (
+            "Invalid data found",
+            "Input file may be corrupted; try re-downloading",
+        ),
         ("Encoder", "Install encoder (e.g. libx265, libsvtav1)"),
         ("not found", "Check that FFmpeg is installed correctly"),
         ("Permission denied", "Check file permissions (read/write)"),
-        ("Output file is empty", "Encode failed; try lowering quality parameters"),
+        (
+            "Output file is empty",
+            "Encode failed; try lowering quality parameters",
+        ),
         ("Avi header", "AVI header corrupted; try -fflags +genpts"),
         (
             "moov atom not found",
@@ -331,7 +352,10 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
             "Invalid NAL unit size",
             "Video stream corrupted; try -err_detect ignore_err",
         ),
-        ("Discarding", "Some frames discarded; possible timestamp issue"),
+        (
+            "Discarding",
+            "Some frames discarded; possible timestamp issue",
+        ),
         (
             "Too many packets buffered",
             "Increase -max_muxing_queue_size",
