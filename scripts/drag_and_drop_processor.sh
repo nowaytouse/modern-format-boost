@@ -434,6 +434,8 @@ check_disk_space() {
 process_images() {
     [[ $IMG_COUNT -eq 0 ]] && return 0
     draw_separator "Processing Images ($IMG_COUNT)"
+    refresh_terminal_dimensions
+    ensure_wide_terminal_layout 120 140 42
     local args=(run --recursive --allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
@@ -472,6 +474,8 @@ process_images() {
 process_videos() {
     [[ $VID_COUNT -eq 0 ]] && return 0
     draw_separator "Processing Videos ($VID_COUNT)"
+    refresh_terminal_dimensions
+    ensure_wide_terminal_layout 120 140 42
     local args=(run --recursive --allow-size-tolerance)
     [[ "$ULTIMATE_MODE" == true ]] && args+=(--ultimate)
     [[ "$VERBOSE_MODE" == true ]] && args+=(--verbose)
@@ -565,6 +569,9 @@ show_summary() {
 }
 
 _main() {
+    normalize_cli_environment
+    ensure_wide_terminal_layout 120 140 42
+
     for arg in "$@"; do
         if [[ "$arg" == "--ultimate" ]]; then
             ULTIMATE_MODE=true
@@ -667,7 +674,11 @@ if [[ "$1" == "--internal-worker" ]]; then
 fi
 
 main() {
+    normalize_cli_environment
+    ensure_wide_terminal_layout 120 140 42
     export FORCE_COLOR=1
+    export CLICOLOR_FORCE=1
+    export MFB_GUI_LAUNCH="${MFB_GUI_LAUNCH:-1}"
     init_log
     export LOG_FILE
     export VERBOSE_LOG_FILE

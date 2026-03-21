@@ -32,7 +32,9 @@ escape_applescript_string() {
 launch_in_terminal() {
     local target_path="$1"
     local keep_open="${2:-false}"
-    local cmd="cd $(shell_quote "$PROJECT_ROOT") && export FROM_APP=1 && $(shell_quote "$PROCESSOR_SCRIPT")"
+    local launch_home="${HOME:-/Users/$(id -un)}"
+    local launch_path="${launch_home}/.cargo/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+    local cmd="cd $(shell_quote "$PROJECT_ROOT") && export HOME=$(shell_quote "$launch_home") && export CARGO_HOME=$(shell_quote "${launch_home}/.cargo") && export RUSTUP_HOME=$(shell_quote "${launch_home}/.rustup") && export PATH=$(shell_quote "$launch_path") && export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1 FROM_APP=1 MFB_GUI_LAUNCH=1 MFB_FORCE_WIDE_TTY=1 && $(shell_quote "$PROCESSOR_SCRIPT")"
 
     if [[ -n "$target_path" ]]; then
         if contains_control_chars "$target_path"; then
@@ -52,6 +54,9 @@ launch_in_terminal() {
     osascript <<EOF
 tell application "Terminal"
     do script "$escaped_cmd"
+    try
+        set bounds of front window to {80, 60, 1720, 980}
+    end try
     activate
 end tell
 EOF

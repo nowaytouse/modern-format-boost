@@ -10,6 +10,7 @@
 
 use crate::modern_ui::progress_style;
 use crate::progress_mode::format_duration_compact;
+use console::{measure_text_width, truncate_str};
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use std::io::{self, Write};
 use std::sync::{
@@ -39,13 +40,248 @@ fn progress_line_enabled() -> bool {
     console::Term::stderr().is_term()
 }
 
-fn truncate_progress_message(msg: &str, max_chars: usize) -> String {
-    let char_count = msg.chars().count();
-    if char_count <= max_chars {
+fn terminal_columns() -> usize {
+    if let Ok(cols) = std::env::var("COLUMNS") {
+        if let Ok(parsed) = cols.parse::<usize>() {
+            if parsed > 0 {
+                return parsed;
+            }
+        }
+    }
+
+    let (_, cols) = console::Term::stderr().size();
+    cols as usize
+}
+
+fn truncate_progress_message(msg: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    if measure_text_width(msg) <= max_width {
         return msg.to_string();
     }
-    let truncated: String = msg.chars().take(max_chars.saturating_sub(1)).collect();
-    format!("{}…", truncated)
+
+    truncate_str(msg, max_width, "…").into_owned()
+}
+
+fn dynamic_bar_width(terminal_width: usize, reserved_width: usize) -> usize {
+    let remaining = terminal_width.saturating_sub(reserved_width);
+    let preferred = remaining.min(progress_style::BAR_WIDTH);
+
+    if terminal_width >= 120 {
+        preferred.max(14).min(progress_style::BAR_WIDTH)
+    } else if terminal_width >= 96 {
+        preferred.max(10).min(24)
+    } else if terminal_width >= 72 {
+        preferred.max(8).min(16)
+    } else {
+        preferred.max(6).min(10)
+    }
+}
+
+fn build_coarse_progress_line(
+    prefix: &str,
+    percent: f64,
+    current: u64,
+    total: u64,
+    elapsed: Duration,
+    eta_str: &str,
+    message: &str,
+    stats: &str,
+    terminal_width: usize,
+) -> String {
+    let color = "\x1b[32m";
+    let percent_str = format!("{:>5.1}%", percent);
+    let counts_str = format!("{}/{}", current, total);
+    let elapsed_str = format_duration_compact(elapsed);
+
+    struct Variant {
+        show_bar: bool,
+        show_elapsed: bool,
+        show_eta: bool,
+        show_message: bool,
+    }
+
+    let variants = [
+        Variant {
+            show_bar: true,
+            show_elapsed: true,
+            show_eta: true,
+            show_message: !message.is_empty(),
+        },
+        Variant {
+            show_bar: true,
+            show_elapsed: true,
+            show_eta: true,
+            show_message: false,
+        },
+        Variant {
+            show_bar: true,
+            show_elapsed: true,
+            show_eta: false,
+            show_message: false,
+        },
+        Variant {
+            show_bar: true,
+            show_elapsed: false,
+            show_eta: false,
+            show_message: false,
+        },
+        Variant {
+            show_bar: false,
+            show_elapsed: false,
+            show_eta: false,
+            show_message: false,
+        },
+    ];
+
+    for variant in variants {
+        let mut fixed_width = measure_text_width(prefix) + 1 + measure_text_width(&percent_str);
+        fixed_width += 3 + measure_text_width(&counts_str);
+
+        if variant.show_elapsed {
+            fixed_width += 3 + measure_text_width("⏱️ ") + measure_text_width(&elapsed_str);
+        }
+        if variant.show_eta {
+            fixed_width += 3 + measure_text_width("ETA ") + measure_text_width(eta_str);
+        }
+        if !stats.is_empty() {
+            fixed_width += measure_text_width(stats);
+        }
+
+        if variant.show_bar {
+            fixed_width += 1
+                + measure_text_width(progress_style::BAR_LEFT)
+                + measure_text_width(progress_style::BAR_RIGHT)
+                + 1;
+        }
+
+        let min_bar = if variant.show_bar { 6 } else { 0 };
+        let mut bar_width = if variant.show_bar {
+            dynamic_bar_width(terminal_width, fixed_width)
+        } else {
+            0
+        };
+
+        if variant.show_bar && bar_width < min_bar {
+            continue;
+        }
+
+        fixed_width += bar_width;
+
+        let message_text = if variant.show_message {
+            let available = terminal_width.saturating_sub(fixed_width + 3);
+            if available < 6 {
+                continue;
+            }
+            truncate_progress_message(message, available)
+        } else {
+            String::new()
+        };
+
+        let mut line = String::new();
+        line.push_str(color);
+        line.push_str(prefix);
+        line.push(' ');
+
+        if variant.show_bar {
+            let filled = ((percent / 100.0) * bar_width as f64) as usize;
+            let empty = bar_width.saturating_sub(filled);
+            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+            line.push_str(progress_style::BAR_LEFT);
+            line.push_str(&bar);
+            line.push_str(progress_style::BAR_RIGHT);
+            line.push(' ');
+        }
+
+        line.push_str(&percent_str);
+        line.push_str(" • ");
+        line.push_str(&counts_str);
+
+        if variant.show_elapsed {
+            line.push_str(" • ⏱️ ");
+            line.push_str(&elapsed_str);
+        }
+        if variant.show_eta {
+            line.push_str(" • ETA ");
+            line.push_str(eta_str);
+        }
+        if !message_text.is_empty() {
+            line.push_str(" • ");
+            line.push_str(&message_text);
+        }
+
+        line.push_str("\x1b[0m");
+        line.push_str(stats);
+
+        if measure_text_width(&line) <= terminal_width.saturating_sub(1).max(32) {
+            return line;
+        }
+
+        if variant.show_bar && bar_width > min_bar {
+            while bar_width > min_bar {
+                bar_width -= 1;
+                let filled = ((percent / 100.0) * bar_width as f64) as usize;
+                let empty = bar_width.saturating_sub(filled);
+                let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
+                let mut shrunk = String::new();
+                shrunk.push_str(color);
+                shrunk.push_str(prefix);
+                shrunk.push(' ');
+                shrunk.push_str(progress_style::BAR_LEFT);
+                shrunk.push_str(&bar);
+                shrunk.push_str(progress_style::BAR_RIGHT);
+                shrunk.push(' ');
+                shrunk.push_str(&percent_str);
+                shrunk.push_str(" • ");
+                shrunk.push_str(&counts_str);
+                if variant.show_elapsed {
+                    shrunk.push_str(" • ⏱️ ");
+                    shrunk.push_str(&elapsed_str);
+                }
+                if variant.show_eta {
+                    shrunk.push_str(" • ETA ");
+                    shrunk.push_str(eta_str);
+                }
+                if !message_text.is_empty() {
+                    shrunk.push_str(" • ");
+                    shrunk.push_str(&message_text);
+                }
+                shrunk.push_str("\x1b[0m");
+                shrunk.push_str(stats);
+
+                if measure_text_width(&shrunk) <= terminal_width.saturating_sub(1).max(32) {
+                    return shrunk;
+                }
+            }
+        }
+    }
+
+    format!(
+        "{}{} {} • {}\x1b[0m{}",
+        color, prefix, percent_str, counts_str, stats
+    )
+}
+
+fn build_finished_progress_line(
+    prefix: &str,
+    total: u64,
+    elapsed: Duration,
+    stats: &str,
+    terminal_width: usize,
+) -> String {
+    build_coarse_progress_line(
+        prefix,
+        100.0,
+        total,
+        total.max(1),
+        elapsed,
+        "---",
+        "done",
+        stats,
+        terminal_width,
+    )
 }
 
 fn set_active_progress_line(line: Option<String>) {
@@ -115,7 +351,7 @@ impl CoarseProgressBar {
 
     pub fn set_message(&self, msg: &str) {
         if let Ok(mut current_message) = self.message.lock() {
-            *current_message = truncate_progress_message(msg, 28);
+            *current_message = msg.to_string();
         }
         self.set(self.current.load(Ordering::Relaxed));
     }
@@ -154,14 +390,6 @@ impl CoarseProgressBar {
             .unwrap_or_default();
         let stats = crate::progress_mode::get_current_stats_string();
 
-        let bar_width: usize = progress_style::BAR_WIDTH;
-        let filled = ((percent / 100.0) * bar_width as f64) as usize;
-        let empty = bar_width.saturating_sub(filled);
-
-        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(empty));
-
-        let color = "\x1b[32m";
-
         let eta_str = if current > 0 && current < total {
             let avg_time = elapsed.as_secs_f64() / current as f64;
             let remaining_secs = ((total - current) as f64 * avg_time) as u64;
@@ -169,48 +397,23 @@ impl CoarseProgressBar {
         } else {
             "---".to_string()
         };
-
-        let message_part = if message.is_empty() {
-            String::new()
-        } else {
-            format!(" • {}", message)
-        };
+        let terminal_width = terminal_columns().max(48);
+        let line = build_coarse_progress_line(
+            &self.prefix,
+            percent,
+            current,
+            total,
+            elapsed,
+            &eta_str,
+            &message,
+            &stats,
+            terminal_width,
+        );
 
         if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
             set_active_progress_line(None);
-            eprint!(
-                "\r\x1b[K{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {} • ETA {}{}\x1b[0m{}",
-                color,
-                self.prefix,
-                progress_style::BAR_LEFT,
-                color,
-                bar,
-                color,
-                percent,
-                current,
-                total,
-                format_duration_compact(elapsed),
-                eta_str,
-                message_part,
-                stats
-            );
-            let active_line = format!(
-                "{}{} {}{}{}{}▏ {:>5.1}% • {}/{} • ⏱️ {} • ETA {}{}\x1b[0m{}",
-                color,
-                self.prefix,
-                progress_style::BAR_LEFT,
-                color,
-                bar,
-                color,
-                percent,
-                current,
-                total,
-                format_duration_compact(elapsed),
-                eta_str,
-                message_part,
-                stats
-            );
-            set_active_progress_line(Some(active_line));
+            eprint!("\r\x1b[K{}", line);
+            set_active_progress_line(Some(line));
             let _ = io::stderr().flush();
         }
     }
@@ -223,22 +426,14 @@ impl CoarseProgressBar {
         let total = self.total;
         let elapsed = self.start_time.elapsed();
 
-        let bar_width: usize = progress_style::BAR_WIDTH;
-        let bar = "█".repeat(bar_width);
         let stats = crate::progress_mode::get_current_stats_string();
+        let terminal_width = terminal_columns().max(48);
+        let line =
+            build_finished_progress_line(&self.prefix, total, elapsed, &stats, terminal_width);
 
         if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
             set_active_progress_line(None);
-            eprint!(
-                "\r\x1b[K\x1b[32m{} {}\x1b[32m{}\x1b[32m▏ ✅ 100% • {}/{} • ⏱️ {}\x1b[0m{}\n",
-                self.prefix,
-                progress_style::BAR_LEFT,
-                bar,
-                total,
-                total,
-                format_duration_compact(elapsed),
-                stats
-            );
+            eprint!("\r\x1b[K{}\n", line);
 
             eprint!("\x1b[?25h");
             let _ = io::stderr().flush();
@@ -1116,17 +1311,13 @@ impl BatchProgress {
 }
 
 fn truncate_filename(filename: &str, max_len: usize) -> String {
-    if filename.len() <= max_len {
+    if max_len == 0 {
+        return String::new();
+    }
+    if measure_text_width(filename) <= max_len {
         filename.to_string()
-    } else if max_len <= 3 {
-        ".".repeat(max_len)
     } else {
-        let half = (max_len - 3) / 2;
-        format!(
-            "{}...{}",
-            &filename[..half],
-            &filename[filename.len() - half..]
-        )
+        truncate_str(filename, max_len, "…").into_owned()
     }
 }
 
@@ -1252,6 +1443,7 @@ impl Default for GlobalProgressManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use console::measure_text_width;
 
     #[test]
     fn test_format_bytes() {
@@ -1272,11 +1464,28 @@ mod tests {
     fn test_truncate_filename() {
         assert_eq!(truncate_filename("short.txt", 20), "short.txt");
         let truncated = truncate_filename("very_long_filename_that_needs_truncation.txt", 20);
-        assert!(
-            truncated.len() <= 20,
-            "truncated len {} > 20",
-            truncated.len()
+        assert!(measure_text_width(&truncated) <= 20);
+        assert!(truncated.contains('…'));
+    }
+
+    #[test]
+    fn test_build_coarse_progress_line_fits_narrow_terminal() {
+        let stats = crate::progress_mode::get_current_stats_string();
+        let line = build_coarse_progress_line(
+            "Running",
+            42.5,
+            17,
+            40,
+            Duration::from_secs(95),
+            "2m10s",
+            "a_very_long_filename_that_should_be_trimmed_for_narrow_windows.jpeg",
+            &stats,
+            72,
         );
-        assert!(truncated.contains("..."));
+        assert!(
+            measure_text_width(&line) <= 71,
+            "line width {} exceeds terminal budget",
+            measure_text_width(&line)
+        );
     }
 }
