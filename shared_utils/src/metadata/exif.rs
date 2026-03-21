@@ -140,7 +140,13 @@ fn preserve_internal_metadata_fallback(
         if temp_path.exists() && !dst.exists() {
             eprintln!("   🔧 Attempting emergency recovery via copy...");
             if let Ok(()) = std::fs::copy(&temp_path, dst).map(|_| ()) {
-                let _ = std::fs::remove_file(&temp_path);
+                if let Err(cleanup_err) = std::fs::remove_file(&temp_path) {
+                    eprintln!(
+                        "   ⚠️ Emergency recovery succeeded but cleanup failed for {}: {}",
+                        temp_path.display(),
+                        cleanup_err
+                    );
+                }
                 eprintln!("   ✅ Emergency recovery succeeded");
             } else {
                 eprintln!(
@@ -168,7 +174,10 @@ fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
         .chain(stdout.lines())
         .filter(|l| {
             let l = l.trim();
-            !l.is_empty() && !l.starts_with("Warning") && !l.starts_with("  ") && l.contains("Error")
+            !l.is_empty()
+                && !l.starts_with("Warning")
+                && !l.starts_with("  ")
+                && l.contains("Error")
         })
         .collect();
 
@@ -358,7 +367,10 @@ fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // Warnings are non-fatal (e.g. tag not writable for this format)
         if !stderr.trim().is_empty() && !stderr.contains("Warning") {
-            eprintln!("⚠️ [metadata] Failed to set QuickTime/EXIF dates: {}", stderr.trim());
+            eprintln!(
+                "⚠️ [metadata] Failed to set QuickTime/EXIF dates: {}",
+                stderr.trim()
+            );
         }
     }
 

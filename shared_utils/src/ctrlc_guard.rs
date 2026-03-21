@@ -150,7 +150,10 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             out,
             "  \x1b[2mPress Enter to exit, or wait 10 s to resume automatically.\x1b[0m"
         );
-        let _ = write!(out, "  \x1b[1mConfirm exit? [y/N]\x1b[0m (auto-resume in 10 s): ");
+        let _ = write!(
+            out,
+            "  \x1b[1mConfirm exit? [y/N]\x1b[0m (auto-resume in 10 s): "
+        );
         let _ = out.flush();
     }
 
@@ -158,7 +161,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
     // This avoids spawning a blocking thread that would get permanently stuck waiting for input
     // if the timeout expired, which previously broke subsequent Ctrl+C prompts.
     let mut should_exit = false;
-    
+
     #[cfg(unix)]
     {
         let mut pfd = libc::pollfd {
@@ -176,7 +179,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             }
         }
     }
-    
+
     #[cfg(not(unix))]
     {
         // Fallback for non-unix platforms

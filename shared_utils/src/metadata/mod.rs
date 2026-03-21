@@ -23,13 +23,17 @@ pub use macos::append_mfb_branding;
 
 pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     use tracing::debug;
-    
-    debug!("apply_file_timestamps: {} → {}", src.display(), dst.display());
+
+    debug!(
+        "apply_file_timestamps: {} → {}",
+        src.display(),
+        dst.display()
+    );
     let Ok(m) = std::fs::metadata(src) else {
         debug!("Failed to read source metadata");
         return;
     };
-    
+
     // Platform-specific creation time preservation FIRST (before atime/mtime)
     // This is critical because filetime::set_file_times may reset creation time on some systems
     #[cfg(target_os = "macos")]
@@ -53,7 +57,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             }
         }
     }
-    
+
     #[cfg(target_os = "windows")]
     {
         // Windows: Use filetime crate's set_file_times which preserves creation time
@@ -66,7 +70,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             }
         }
     }
-    
+
     #[cfg(target_os = "linux")]
     {
         // Linux: Try to preserve birth time if available (requires statx on newer kernels)
@@ -79,7 +83,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             }
         }
     }
-    
+
     // Set atime/mtime AFTER creation time
     let atime = filetime::FileTime::from_last_access_time(&m);
     let mtime = filetime::FileTime::from_last_modification_time(&m);
@@ -88,7 +92,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     } else {
         debug!("Set atime/mtime successfully");
     }
-    
+
     // RE-APPLY creation time on macOS after setting atime/mtime
     // This is necessary because filetime::set_file_times may reset creation time
     #[cfg(target_os = "macos")]
@@ -100,7 +104,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
             }
         }
     }
-    
+
     // Verify creation time was preserved (macOS only)
     #[cfg(target_os = "macos")]
     {
@@ -109,9 +113,13 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
                 debug!("Verified creation time: {:?}", actual_created);
                 // Check if it matches (allow 1 second tolerance for filesystem precision)
                 let diff = if actual_created > expected_created {
-                    actual_created.duration_since(expected_created).unwrap_or_default()
+                    actual_created
+                        .duration_since(expected_created)
+                        .unwrap_or_default()
                 } else {
-                    expected_created.duration_since(actual_created).unwrap_or_default()
+                    expected_created
+                        .duration_since(actual_created)
+                        .unwrap_or_default()
                 };
                 if diff.as_secs() > 1 {
                     eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
@@ -147,7 +155,10 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let mode = meta.permissions().mode();
             if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
-                eprintln!("⚠️ [metadata] Failed to preserve macOS permission bits: {}", e);
+                eprintln!(
+                    "⚠️ [metadata] Failed to preserve macOS permission bits: {}",
+                    e
+                );
             }
         }
         // Timestamps last (ExifTool rewrites file, so must come after)
@@ -182,7 +193,10 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let mode = meta.permissions().mode();
             if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
-                eprintln!("⚠️ [metadata] Failed to preserve Unix permission bits: {}", e);
+                eprintln!(
+                    "⚠️ [metadata] Failed to preserve Unix permission bits: {}",
+                    e
+                );
             }
         }
         // Timestamps last
@@ -337,7 +351,7 @@ pub fn restore_directory_timestamps(
 ) {
     let mut failed_count = 0;
     let mut total_count = 0;
-    
+
     for (path, (atime, mtime)) in saved {
         if path.exists() && path.is_dir() {
             total_count += 1;
@@ -351,7 +365,7 @@ pub fn restore_directory_timestamps(
             }
         }
     }
-    
+
     if failed_count > 0 {
         eprintln!(
             "⚠️  TIMESTAMP VERIFICATION: {}/{} directories failed (possible filesystem protection or network mount)",
@@ -367,7 +381,7 @@ pub fn apply_saved_timestamps_to_dst(
 ) {
     let mut failed_count = 0;
     let mut total_count = 0;
-    
+
     for (src_path, (atime, mtime)) in saved {
         if let Ok(rel_path) = src_path.strip_prefix(src_root) {
             let dst_path = dst_root.join(rel_path);
@@ -384,7 +398,7 @@ pub fn apply_saved_timestamps_to_dst(
             }
         }
     }
-    
+
     if failed_count > 0 {
         eprintln!(
             "⚠️  TIMESTAMP VERIFICATION: {}/{} destination directories failed (possible filesystem protection or network mount)",
@@ -401,7 +415,10 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
     const SOURCE_EXTENSIONS: &[&str] = &[
         "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl",
     ];
-    for entry in walkdir::WalkDir::new(dst_root).follow_links(false).into_iter() {
+    for entry in walkdir::WalkDir::new(dst_root)
+        .follow_links(false)
+        .into_iter()
+    {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
@@ -530,7 +547,10 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     let Some(parent) = dst.parent() else {
         return false;
     };
-    let stem = dst.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+    let stem = dst
+        .file_stem()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
     let sidecar_for_exiv2 = parent.join(format!("{}.xmp", stem));
     if sidecar_for_exiv2 == *xmp_path {
         return false;
@@ -547,10 +567,7 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
     let out = std::process::Command::new("exiv2")
         .args(["-i", crate::safe_path_arg(dst).as_ref()])
         .output();
-    let ok = out
-        .as_ref()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let ok = out.as_ref().map(|o| o.status.success()).unwrap_or(false);
     if let Ok(out) = &out {
         if !out.status.success() {
             tracing::warn!(
@@ -600,9 +617,7 @@ fn merge_xmp_sidecar(src: &Path, dst: &Path) {
             }
             Err(e) => {
                 let err_str = e.to_string();
-                let format_unsupported = err_str
-                    .to_lowercase()
-                    .contains("format error in file");
+                let format_unsupported = err_str.to_lowercase().contains("format error in file");
                 if format_unsupported {
                     let line = crate::progress_mode::format_status_line(
                         "   ⚠️  XMP merge skipped (ExifTool does not support writing to this file format)",

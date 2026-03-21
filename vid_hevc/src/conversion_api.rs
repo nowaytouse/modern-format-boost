@@ -66,7 +66,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
     // Skip RGB/GBR colorspace: HEVC doesn't support it, and we're converting to YUV in filter chain
     let cs_str = match &detection.color_space {
         crate::detection_api::ColorSpace::BT2020 => Some("bt2020nc"),
-        crate::detection_api::ColorSpace::BT709  => Some("bt709"),
+        crate::detection_api::ColorSpace::BT709 => Some("bt709"),
         crate::detection_api::ColorSpace::Unknown(s) if !s.is_empty() && s != "unknown" => {
             // pass raw string through
             None // handled below separately to avoid lifetime issues
@@ -162,14 +162,15 @@ fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
     };
 
     // Step 2: Extract RPU (and convert Profile 7 → 8.1 if needed)
-    let rpu_path = match shared_utils::extract_dv_rpu(&raw_hevc, temp_dir.path(), detection.dv_profile) {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("DV RPU extraction failed: {}", e);
-            warn!("Falling back to HDR10 static layer");
-            return None;
-        }
-    };
+    let rpu_path =
+        match shared_utils::extract_dv_rpu(&raw_hevc, temp_dir.path(), detection.dv_profile) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("DV RPU extraction failed: {}", e);
+                warn!("Falling back to HDR10 static layer");
+                return None;
+            }
+        };
 
     // Step 3: Determine x265 profile string
     let profile_str = match shared_utils::dv_x265_profile_string(
@@ -186,7 +187,10 @@ fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
         }
     };
 
-    info!("Dolby Vision RPU extracted — profile {} will be preserved in x265 output", profile_str);
+    info!(
+        "Dolby Vision RPU extracted — profile {} will be preserved in x265 output",
+        profile_str
+    );
 
     Some(DvRpuResult {
         rpu_path,
@@ -318,10 +322,17 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let _temp_guard = shared_utils::conversion::TempOutputGuard::new(temp_path.clone());
     let output_size = execute_hevc_conversion(&detection, &temp_path, 18, max_threads)?;
 
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, true, Some(input))
-        .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_path,
+        &output_path,
+        true,
+        Some(input),
+    )
+    .map_err(|e| VidQualityError::ConversionError(e.to_string()))?
     {
-        return Err(VidQualityError::ConversionError("Failed to commit temporary file to output".to_string()));
+        return Err(VidQualityError::ConversionError(
+            "Failed to commit temporary file to output".to_string(),
+        ));
     }
 
     shared_utils::copy_metadata(input, &output_path);
@@ -498,7 +509,10 @@ pub fn auto_convert_with_cache(
         .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
 
     if output_path.exists() && !config.force {
-        shared_utils::progress_mode::video_skipped(&format!("Output exists: {}", output_path.display()));
+        shared_utils::progress_mode::video_skipped(&format!(
+            "Output exists: {}",
+            output_path.display()
+        ));
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
             output_path: String::new(),
@@ -525,15 +539,13 @@ pub fn auto_convert_with_cache(
     let (output_size, final_crf, attempts, explore_result_opt) = match strategy.target {
         TargetVideoFormat::HevcLosslessMkv => {
             info!("   🚀 Using HEVC Lossless Mode");
-            let size =
-                execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
+            let size = execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
             (size, 0.0, 0, None)
         }
         TargetVideoFormat::HevcMp4 => {
             if config.use_lossless {
                 info!("   🚀 Using HEVC Lossless Mode (forced)");
-                let size =
-                    execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
+                let size = execute_hevc_lossless(&detection, &temp_path, config.child_threads)?;
                 (size, 0.0, 0, None)
             } else {
                 let vf_args = shared_utils::get_ffmpeg_dimension_args(
@@ -564,12 +576,14 @@ pub fn auto_convert_with_cache(
                 }
 
                 let ultimate = flag_mode.is_ultimate();
-                
+
                 // 🚀 CRF Hint Logic: Use cached best CRF if available for "warm start"
                 let initial_crf = if let Some(hint) = detection.precision.last_best_crf {
                     info!("   💡 Using cached CRF hint: {:.1} (warm start)", hint);
                     hint
-                } else if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_hevc() {
+                } else if let Some(hint) =
+                    shared_utils::crf_constants::get_global_last_hit_crf_hevc()
+                {
                     info!("   💡 Using global last hit CRF: {:.1} (warm start)", hint);
                     hint
                 } else {
@@ -618,17 +632,22 @@ pub fn auto_convert_with_cache(
                         Some(s) => s,
                         None => {
                             warn!("   ⚠️  SSIM not measured, cannot verify quality");
-                            cleanup_output_file(&temp_path, "temporary output cleanup after missing SSIM");
+                            cleanup_output_file(
+                                &temp_path,
+                                "temporary output cleanup after missing SSIM",
+                            );
                             return Err(VidQualityError::GeneralError(
-                                "Quality verification failed: SSIM not measured".to_string()
+                                "Quality verification failed: SSIM not measured".to_string(),
                             ));
                         }
                     };
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
-                        < explore_result.input_video_stream_size ||
-                        (config.allow_size_tolerance &&
-                         (explore_result.output_video_stream_size as i64 - explore_result.input_video_stream_size as i64) < 1024 * 1024);
+                        < explore_result.input_video_stream_size
+                        || (config.allow_size_tolerance
+                            && (explore_result.output_video_stream_size as i64
+                                - explore_result.input_video_stream_size as i64)
+                                < 1024 * 1024);
                     let total_file_compressed = explore_result.output_size < detection.file_size;
                     let total_size_ratio = if detection.file_size > 0 {
                         explore_result.output_size as f64 / detection.file_size as f64
@@ -652,7 +671,7 @@ pub fn auto_convert_with_cache(
                             } else {
                                 0.0
                             };
-                            
+
                             let base_msg = if input_b < 1024.0 * 1024.0 {
                                 format!(
                                 "⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%)",
@@ -668,15 +687,18 @@ pub fn auto_convert_with_cache(
                                 stream_change_pct
                             )
                             };
-                            
+
                             // Create beautiful single-line format with visual separators
                             let additional_info = if total_file_compressed {
                                 "│ Total file smaller but video stream larger"
                             } else {
                                 "│ Total file and video stream both larger"
                             };
-                            
-                            let final_msg = format!("{} {} │ File may already be highly optimized", base_msg, additional_info);
+
+                            let final_msg = format!(
+                                "{} {} │ File may already be highly optimized",
+                                base_msg, additional_info
+                            );
                             tracing::debug!("   {}", final_msg);
                             (
                                 format!(
@@ -774,7 +796,11 @@ pub fn auto_convert_with_cache(
                     }
 
                     if let Err(e) = std::fs::remove_file(&temp_path) {
-                        warn!("Failed to clean up temp file {}: {}", temp_path.display(), e);
+                        warn!(
+                            "Failed to clean up temp file {}: {}",
+                            temp_path.display(),
+                            e
+                        );
                     }
                     shared_utils::copy_on_skip_or_fail(
                         input,
@@ -849,15 +875,30 @@ pub fn auto_convert_with_cache(
 
     // Verify temp file exists before commit
     if !temp_path.exists() {
-        warn!("⚠️  Temp file missing before commit: {}", temp_path.display());
-        return Err(VidQualityError::ConversionError(
-            format!("Temp file not found: {}", temp_path.display())
-        ));
+        warn!(
+            "⚠️  Temp file missing before commit: {}",
+            temp_path.display()
+        );
+        return Err(VidQualityError::ConversionError(format!(
+            "Temp file not found: {}",
+            temp_path.display()
+        )));
     }
 
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, config.force, Some(input))
-        .map_err(|e| VidQualityError::ConversionError(format!("Commit failed: {} (temp: {}, output: {})", e, temp_path.display(), output_path.display())))?
-    {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_path,
+        &output_path,
+        config.force,
+        Some(input),
+    )
+    .map_err(|e| {
+        VidQualityError::ConversionError(format!(
+            "Commit failed: {} (temp: {}, output: {})",
+            e,
+            temp_path.display(),
+            output_path.display()
+        ))
+    })? {
         info!("⏭️ Output was created concurrently, skipping overwrite");
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
@@ -875,7 +916,8 @@ pub fn auto_convert_with_cache(
 
     if let Some(ref result) = explore_result_opt {
         if let Some(false) = result.ms_ssim_passed {
-            let score_str = result.ms_ssim_score
+            let score_str = result
+                .ms_ssim_score
                 .map(|s| format!("{:.4}", s))
                 .unwrap_or_else(|| "Unknown".to_string());
             // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
@@ -972,8 +1014,11 @@ pub fn auto_convert_with_cache(
     let input_stream_info = shared_utils::extract_stream_sizes(input);
     let output_stream_info = shared_utils::extract_stream_sizes(&output_path);
 
-    let verify_result =
-        shared_utils::verify_pure_media_compression(&input_stream_info, &output_stream_info, config.allow_size_tolerance);
+    let verify_result = shared_utils::verify_pure_media_compression(
+        &input_stream_info,
+        &output_stream_info,
+        config.allow_size_tolerance,
+    );
 
     if metadata_delta > 0 || output_stream_info.container_overhead > 10000 {
         info!("   📋 Metadata: +{} bytes", metadata_delta);
@@ -1072,7 +1117,10 @@ pub fn auto_convert_with_cache(
             info!("   🗑️  Output deleted (cannot compress by total file size)");
         }
         if temp_path.exists() {
-            cleanup_output_file(&temp_path, "temporary output cleanup after compression failure");
+            cleanup_output_file(
+                &temp_path,
+                "temporary output cleanup after compression failure",
+            );
         }
 
         shared_utils::copy_on_skip_or_fail(
@@ -1132,10 +1180,10 @@ pub fn auto_convert_with_cache(
 
     if config.should_delete_original() {
         if let Err(e) = shared_utils::conversion::safe_delete_original(
-                input,
-                &output_path,
-                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
-            ) {
+            input,
+            &output_path,
+            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO,
+        ) {
             warn!("   ⚠️  Safe delete failed: {}", e);
         } else {
             info!("   🗑️  Original deleted (integrity verified)");
@@ -1169,8 +1217,15 @@ pub fn auto_convert_with_cache(
     })
 }
 
-fn success_status_for_cache(target: TargetVideoFormat, explore_result: &Option<shared_utils::ExploreResult>) -> bool {
-    matches!(target, TargetVideoFormat::HevcMp4) && explore_result.as_ref().map(|r| r.quality_passed).unwrap_or(false)
+fn success_status_for_cache(
+    target: TargetVideoFormat,
+    explore_result: &Option<shared_utils::ExploreResult>,
+) -> bool {
+    matches!(target, TargetVideoFormat::HevcMp4)
+        && explore_result
+            .as_ref()
+            .map(|r| r.quality_passed)
+            .unwrap_or(false)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {
@@ -1497,7 +1552,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1549,7 +1605,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1606,7 +1663,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1665,7 +1723,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1726,12 +1785,13 @@ mod tests {
                 is_hdr10_plus: false,
                 has_subtitles: false,
                 subtitle_codec: None,
-            max_b_frames: 0,
-            encoder_params: None,                audio_channels: None,
+                max_b_frames: 0,
+                encoder_params: None,
+                audio_channels: None,
                 is_variable_frame_rate: false,
                 precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
                 tags: std::collections::HashMap::new(),
-            ..Default::default()
+                ..Default::default()
             }
         };
 
@@ -1803,7 +1863,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1852,7 +1913,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1904,7 +1966,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -1961,7 +2024,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -2013,7 +2077,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -2066,7 +2131,8 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
@@ -2119,14 +2185,19 @@ mod tests {
             has_subtitles: false,
             subtitle_codec: None,
             max_b_frames: 0,
-            encoder_params: None,            audio_channels: None,
+            encoder_params: None,
+            audio_channels: None,
             is_variable_frame_rate: false,
             precision: shared_utils::video_detection::VideoPrecisionMetadata::default(),
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
         let normal = determine_strategy(&det);
-        assert_eq!(normal.target, TargetVideoFormat::Skip, "Unknown(\"vp9\") skipped in normal mode");
+        assert_eq!(
+            normal.target,
+            TargetVideoFormat::Skip,
+            "Unknown(\"vp9\") skipped in normal mode"
+        );
         let apple = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(apple.target, TargetVideoFormat::Skip);
     }

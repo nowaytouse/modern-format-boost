@@ -14,7 +14,6 @@
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 //! - Unified version management (program, cache, schema versions)
 
-pub mod version;
 pub mod analysis_cache;
 pub mod batch;
 pub mod checkpoint;
@@ -23,7 +22,6 @@ pub mod conversion;
 pub mod crf_constants;
 pub mod date_analysis;
 pub mod error_handler;
-pub mod unified_error;
 pub mod explore_strategy;
 pub mod ffmpeg_process;
 pub mod ffprobe;
@@ -42,6 +40,8 @@ pub mod safety;
 pub mod ssim_mapping;
 pub mod thread_manager;
 pub mod tools;
+pub mod unified_error;
+pub mod version;
 pub mod video;
 pub mod video_explorer;
 // #[cfg(test)]
@@ -53,7 +53,6 @@ pub mod xmp_merger;
 
 pub mod path_safety;
 pub use path_safety::safe_path_arg;
-pub mod system_memory;
 pub mod app_error;
 pub mod ffprobe_json;
 pub mod file_copier;
@@ -63,6 +62,7 @@ pub mod pure_media_verifier;
 pub mod quality_verifier_enhanced;
 pub mod smart_file_copier;
 pub mod stream_size;
+pub mod system_memory;
 pub mod types;
 
 pub mod progress_mode;
@@ -85,8 +85,8 @@ pub mod msssim_parallel;
 pub mod heartbeat_manager;
 pub mod universal_heartbeat;
 
-pub mod logging;
 pub mod error_logging;
+pub mod logging;
 
 pub mod common_utils;
 
@@ -106,6 +106,7 @@ pub mod video_detection;
 pub mod media_passthrough;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
+pub mod gif_meme_score;
 pub mod image_analyzer;
 pub mod image_detection;
 pub mod image_formats;
@@ -115,8 +116,10 @@ pub mod image_metrics;
 pub mod image_recommender;
 pub mod img_errors;
 pub mod live_photo;
-pub mod gif_meme_score;
-pub use gif_meme_score::{gif_meta_from_probe, gif_meta_from_probe_with_path, scan_gif_headers, should_keep_as_gif, GifMeta, MemeScore};
+pub use gif_meme_score::{
+    gif_meta_from_probe, gif_meta_from_probe_with_path, scan_gif_headers, should_keep_as_gif,
+    GifMeta, MemeScore,
+};
 
 pub use batch::*;
 pub use codecs::*;
@@ -144,13 +147,11 @@ pub use progress::{
 pub use quality_matcher::{
     calculate_av1_crf, calculate_av1_crf_with_options, calculate_hevc_crf,
     calculate_hevc_crf_with_options, calculate_jxl_distance, calculate_jxl_distance_with_options,
-    from_image_analysis, from_video_detection, log_quality_analysis, parse_source_codec,
-    is_apple_incompatible_video_codec, should_keep_apple_fallback_hevc_output,
-    should_keep_best_effort_output_on_failure,
-    should_skip_image_format, should_skip_video_codec,
-    should_skip_video_codec_apple_compat,
-    AnalysisDetails, ContentType, EncoderType, MatchMode, MatchedQuality, QualityAnalysis,
-    QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
+    from_image_analysis, from_video_detection, is_apple_incompatible_video_codec,
+    log_quality_analysis, parse_source_codec, should_keep_apple_fallback_hevc_output,
+    should_keep_best_effort_output_on_failure, should_skip_image_format, should_skip_video_codec,
+    should_skip_video_codec_apple_compat, AnalysisDetails, ContentType, EncoderType, MatchMode,
+    MatchedQuality, QualityAnalysis, QualityBias, SkipDecision, SourceCodec, VideoAnalysisBuilder,
 };
 pub use report::*;
 pub use safety::*;
@@ -212,8 +213,10 @@ pub use gpu_accel::{
 };
 
 pub use video_explorer::{
-    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full, explore_av1_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse, explore_hevc_with_gpu_coarse_full,
-    explore_hevc_with_gpu_coarse_ultimate, explore_with_gpu_coarse_search,
+    explore_av1_with_gpu_coarse, explore_av1_with_gpu_coarse_full,
+    explore_av1_with_gpu_coarse_ultimate, explore_hevc_with_gpu_coarse,
+    explore_hevc_with_gpu_coarse_full, explore_hevc_with_gpu_coarse_ultimate,
+    explore_with_gpu_coarse_search,
 };
 
 pub use modern_ui::{
@@ -229,11 +232,7 @@ pub use error_handler::{handle_error, ErrorAction, ErrorCategory};
 
 // Re-export unified error types
 pub use unified_error::{
-    UnifiedError,
-    Result as UnifiedResult,
-    ImgResult,
-    VidResult,
-    VidQualityError,
+    ImgResult, Result as UnifiedResult, UnifiedError, VidQualityError, VidResult,
 };
 
 pub use ssim_mapping::{MappingPoint, PsnrSsimMapping};
@@ -294,8 +293,8 @@ pub use app_error::AppError;
 
 pub use file_copier::{
     copy_unsupported_files, count_files as count_all_files, verify_output_completeness, CopyResult,
-    FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT, SIDECAR_EXTENSIONS,
-    SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
+    FileStats, VerifyResult, IMAGE_EXTENSIONS_ANALYZE, IMAGE_EXTENSIONS_FOR_CONVERT,
+    SIDECAR_EXTENSIONS, SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_VIDEO_EXTENSIONS,
 };
 pub use smart_file_copier::{
     copy_on_skip_or_fail, fix_extension_if_mismatch, smart_copy_with_structure,
@@ -331,9 +330,7 @@ pub use enhanced_logging::{
 
 // Modern terminal logging with color safety
 pub mod terminal_logging;
-pub use terminal_logging::{
-    init_terminal_logger, terminal_logger, ColorGuard, TerminalLogger,
-};
+pub use terminal_logging::{init_terminal_logger, terminal_logger, ColorGuard, TerminalLogger};
 
 pub use common_utils::{
     compute_relative_path, copy_file_with_context, ensure_dir_exists, ensure_parent_dir_exists,
@@ -346,10 +343,7 @@ pub use common_utils::{
 pub use thread_manager::{
     calculate_optimal_threads, disable_multi_instance_mode, enable_multi_instance_mode,
     get_ffmpeg_threads, get_optimal_threads, get_rsync_path, get_rsync_version, is_multi_instance,
-    memory_cap_hint,
-    ThreadConfig,
+    memory_cap_hint, ThreadConfig,
 };
 
-pub use version::{
-    PROGRAM_VERSION, CACHE_SCHEMA_VERSION, cache_algorithm_version, VersionInfo,
-};
+pub use version::{cache_algorithm_version, VersionInfo, CACHE_SCHEMA_VERSION, PROGRAM_VERSION};

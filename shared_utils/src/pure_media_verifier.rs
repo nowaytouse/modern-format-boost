@@ -100,7 +100,11 @@ pub fn verify_pure_media_compression(
 }
 
 #[inline]
-pub fn is_video_compressed(input_video_size: u64, output_video_size: u64, allow_size_tolerance: bool) -> bool {
+pub fn is_video_compressed(
+    input_video_size: u64,
+    output_video_size: u64,
+    allow_size_tolerance: bool,
+) -> bool {
     if allow_size_tolerance {
         output_video_size < input_video_size.saturating_add(1_048_576)
     } else {

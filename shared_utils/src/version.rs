@@ -25,13 +25,13 @@ use tracing::info;
 /// 📦 Program Version (from Cargo.toml)
 ///
 /// This is the single source of truth for the program version.
-/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.70")
+/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.84")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
 /// This value is automatically calculated from CARGO_PKG_VERSION at program initialization.
-/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.70 → 10070)
+/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.84 → 1084)
 ///
 /// **Purpose**: Automatic cache invalidation on ANY program update
 ///
@@ -41,20 +41,20 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// **Version History**:
 /// - v1: Original HEIC lossless detection
 /// - v2: Fixed HEIC lossless detection + improved box parsing
-/// - v10060: Bound to program version 0.10.60 (automatic invalidation on updates)
-/// - v10061: Cache version binding mechanism
-/// - v10062: Dependency unification (GitHub nightly sources)
-/// - v10063: HEIC security limits increased (6GB, 10k ipco children)
-/// - v10064: Git history cleanup (AI tool configs removed for privacy)
-/// - v10065: HEIC security limits fix (apply before reading, 7GB memory)
-/// - v10066: HEIC security limits increased to 15GB + feature flag fix
-/// - v10067: Log output debug metadata removed + file creation time preservation
-/// - v10068: Comprehensive metadata preservation (Windows/Linux/macOS)
-/// - v10069: Metadata preservation enabled by default + creation time fix
-/// - v10070: Creation time preservation fix + cache version auto-binding + unified version management
-static CACHE_ALGORITHM_VERSION: LazyLock<i32> = LazyLock::new(|| {
-    parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm")
-});
+/// - v1060: Bound to program version 0.10.60 (automatic invalidation on updates)
+/// - v1061: Cache version binding mechanism
+/// - v1062: Dependency unification (GitHub nightly sources)
+/// - v1063: HEIC security limits increased (6GB, 10k ipco children)
+/// - v1064: Git history cleanup (AI tool configs removed for privacy)
+/// - v1065: HEIC security limits fix (apply before reading, 7GB memory)
+/// - v1066: HEIC security limits increased to 15GB + feature flag fix
+/// - v1067: Log output debug metadata removed + file creation time preservation
+/// - v1068: Comprehensive metadata preservation (Windows/Linux/macOS)
+/// - v1069: Metadata preservation enabled by default + creation time fix
+/// - v1070: Creation time preservation fix + cache version auto-binding + unified version management
+/// - v1084: Perceived-speed scheduling, progress refresh, and louder runtime failure reporting
+static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
+    LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
 /// 🔢 Cache Schema Version - Increment ONLY when database structure changes
 ///
@@ -85,7 +85,7 @@ pub fn cache_algorithm_version() -> i32 {
 /// 🔧 Parse semantic version string to integer code
 ///
 /// Converts "MAJOR.MINOR.PATCH" to MajorMinorPatch integer.
-/// Example: "0.10.70" → 1070
+/// Example: "0.10.84" → 1084
 ///
 /// **Panics** if:
 /// - Version format is not "MAJOR.MINOR.PATCH"
@@ -94,45 +94,54 @@ pub fn cache_algorithm_version() -> i32 {
 /// This is intentional - we must never silently use a wrong version number.
 fn parse_version_to_code(version: &str, context: &str) -> i32 {
     let parts: Vec<&str> = version.split('.').collect();
-    
+
     if parts.len() != 3 {
         panic!(
             "FATAL [{}]: Invalid version format: '{}'. Expected format: 'major.minor.patch'",
             context, version
         );
     }
-    
+
     let major = parts[0].parse::<i32>().unwrap_or_else(|e| {
-        panic!("FATAL [{}]: Failed to parse major version from '{}': {}", context, parts[0], e);
+        panic!(
+            "FATAL [{}]: Failed to parse major version from '{}': {}",
+            context, parts[0], e
+        );
     });
-    
+
     let minor = parts[1].parse::<i32>().unwrap_or_else(|e| {
-        panic!("FATAL [{}]: Failed to parse minor version from '{}': {}", context, parts[1], e);
+        panic!(
+            "FATAL [{}]: Failed to parse minor version from '{}': {}",
+            context, parts[1], e
+        );
     });
-    
+
     let patch = parts[2].parse::<i32>().unwrap_or_else(|e| {
-        panic!("FATAL [{}]: Failed to parse patch version from '{}': {}", context, parts[2], e);
+        panic!(
+            "FATAL [{}]: Failed to parse patch version from '{}': {}",
+            context, parts[2], e
+        );
     });
-    
+
     let version_code = major * 10000 + minor * 100 + patch;
-    
+
     info!(
         "{} version initialized: {} (from program version: {})",
         context, version_code, version
     );
-    
+
     version_code
 }
 
 /// 📋 Version Information - For display and debugging
 #[derive(Debug, Clone)]
 pub struct VersionInfo {
-    /// Program version string (e.g., "0.10.70")
+    /// Program version string (e.g., "0.10.84")
     pub program_version: String,
-    
-    /// Cache algorithm version code (e.g., 10070)
+
+    /// Cache algorithm version code (e.g., 1084)
     pub cache_algorithm_version: i32,
-    
+
     /// Cache schema version (e.g., 3)
     pub cache_schema_version: i32,
 }
@@ -146,14 +155,12 @@ impl VersionInfo {
             cache_schema_version: CACHE_SCHEMA_VERSION,
         }
     }
-    
+
     /// Display version information
     pub fn display(&self) -> String {
         format!(
             "Program: {} | Cache Algorithm: {} | Cache Schema: v{}",
-            self.program_version,
-            self.cache_algorithm_version,
-            self.cache_schema_version
+            self.program_version, self.cache_algorithm_version, self.cache_schema_version
         )
     }
 }
@@ -164,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
-        assert_eq!(parse_version_to_code("0.10.70", "Test"), 1070);
+        assert_eq!(parse_version_to_code("0.10.84", "Test"), 1084);
         assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);
         assert_eq!(parse_version_to_code("10.20.30", "Test"), 102030);
     }

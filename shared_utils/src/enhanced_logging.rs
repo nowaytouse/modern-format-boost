@@ -388,7 +388,11 @@ impl UpstreamToolLogger {
                 "\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m [{}] exited with non-zero code: {}",
                 self.tool_name, exit_code
             );
-            tracing::error!("[{}] exited with non-zero code: {}", self.tool_name, exit_code);
+            tracing::error!(
+                "[{}] exited with non-zero code: {}",
+                self.tool_name,
+                exit_code
+            );
         }
     }
 }
@@ -413,7 +417,8 @@ pub fn init_enhanced_logging(
     if let Some(path) = log_file_path {
         let file_appender = tracing_appender::rolling::never(
             path.parent().unwrap_or_else(|| Path::new(".")),
-            path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("app.log")),
+            path.file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("app.log")),
         );
 
         let file_layer = fmt::layer()
@@ -427,14 +432,21 @@ pub fn init_enhanced_logging(
             .with(file_layer)
             .init();
     } else {
-        tracing_subscriber::registry().with(filter).with(fmt_layer).init();
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(fmt_layer)
+            .init();
     }
 
     eprintln!(
         "🚀 {} logging initialized at level {:?}",
         program_name, log_level
     );
-    tracing::info!("{} logging initialized at level {:?}", program_name, log_level);
+    tracing::info!(
+        "{} logging initialized at level {:?}",
+        program_name,
+        log_level
+    );
 
     Ok(())
 }

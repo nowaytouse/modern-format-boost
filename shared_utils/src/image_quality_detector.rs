@@ -9,12 +9,12 @@
 //! - **Quality Metrics**: Extracts complexity, edge density, color diversity, and more.
 //! - **Media Information**: Provides a formatted summary of image characteristics.
 
+use crate::image_detection::PrecisionMetadata;
 use crate::progress_mode::{has_log_file, write_to_log_at_level};
-use tracing::Level;
 use image::{open, GenericImageView};
 use serde::{Deserialize, Serialize};
-use crate::image_detection::PrecisionMetadata;
 use std::path::Path;
+use tracing::Level;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageQualityAnalysis {
@@ -83,10 +83,14 @@ struct ThresholdRange {
 impl ThresholdRange {
     fn matches(&self, value: f64) -> bool {
         if let Some(min) = self.min {
-            if value < min { return false; }
+            if value < min {
+                return false;
+            }
         }
         if let Some(max) = self.max {
-            if value > max { return false; }
+            if value > max {
+                return false;
+            }
         }
         true
     }
@@ -120,7 +124,10 @@ pub fn analyze_image_quality(
     if rgba_data.len() < expected_size {
         return Err(format!(
             "❌ Invalid RGBA data: expected {} bytes for {}x{}, got {}",
-            expected_size, width, height, rgba_data.len()
+            expected_size,
+            width,
+            height,
+            rgba_data.len()
         ));
     }
 
@@ -131,7 +138,7 @@ pub fn analyze_image_quality(
     let pixels = (width as u64) * (height as u64);
 
     let edge_density = calculate_edge_density(rgba_data, width, height);
-    
+
     let color_diversity = if let Some(p_size) = precision.palette_size {
         (p_size as f64 / 256.0).min(1.0)
     } else {
@@ -139,12 +146,13 @@ pub fn analyze_image_quality(
     };
 
     let texture_variance = calculate_texture_variance(rgba_data, width, height);
-    
-    let noise_level = if precision.is_lossless_deterministic && (precision.bit_depth.unwrap_or(8) >= 10) {
-        0.0 
-    } else {
-        calculate_noise_level(rgba_data, width, height)
-    };
+
+    let noise_level =
+        if precision.is_lossless_deterministic && (precision.bit_depth.unwrap_or(8) >= 10) {
+            0.0
+        } else {
+            calculate_noise_level(rgba_data, width, height)
+        };
     let sharpness = calculate_sharpness(rgba_data, width, height);
     let contrast = calculate_contrast(rgba_data, width, height);
     let has_alpha = detect_alpha_usage(rgba_data);
@@ -199,7 +207,13 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
     }
 
     let pixels = (width as usize) * (height as usize);
-    let step = if pixels > 4_000_000 { 4 } else if pixels > 1_000_000 { 2 } else { 1 };
+    let step = if pixels > 4_000_000 {
+        4
+    } else if pixels > 1_000_000 {
+        2
+    } else {
+        1
+    };
 
     let mut edge_count = 0usize;
     let mut sample_count = 0usize;
@@ -227,7 +241,9 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         }
     }
 
-    if sample_count == 0 { return 0.0; }
+    if sample_count == 0 {
+        return 0.0;
+    }
 
     let raw_density = edge_count as f64 / sample_count as f64;
     (raw_density * 3.0).min(1.0)
@@ -237,7 +253,13 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
     use std::collections::HashSet;
 
     let pixels = (width as usize) * (height as usize);
-    let step = if pixels > 1_000_000 { 20 } else if pixels > 100_000 { 10 } else { 1 };
+    let step = if pixels > 1_000_000 {
+        20
+    } else if pixels > 100_000 {
+        10
+    } else {
+        1
+    };
 
     let quantize_step = 4u8;
     let mut colors = HashSet::new();
@@ -254,17 +276,27 @@ fn calculate_color_diversity(rgba: &[u8], width: u32, height: u32) -> f64 {
         }
     }
 
-    if sample_count == 0 { return 0.0; }
+    if sample_count == 0 {
+        return 0.0;
+    }
 
     let max_colors = sample_count.min(10000) as f64;
     (colors.len() as f64 / max_colors).min(1.0)
 }
 
 fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
-    if width < 3 || height < 3 { return 0.0; }
+    if width < 3 || height < 3 {
+        return 0.0;
+    }
 
     let pixels = (width as usize) * (height as usize);
-    let step = if pixels > 1_000_000 { 10 } else if pixels > 100_000 { 5 } else { 2 };
+    let step = if pixels > 1_000_000 {
+        10
+    } else if pixels > 100_000 {
+        5
+    } else {
+        2
+    };
 
     let mut variance_sum = 0.0;
     let mut sample_count = 0usize;
@@ -282,7 +314,8 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
 
                     let gray = (rgba[idx] as i32 * 299
                         + rgba[idx + 1] as i32 * 587
-                        + rgba[idx + 2] as i32 * 114) / 1000;
+                        + rgba[idx + 2] as i32 * 114)
+                        / 1000;
                     sum += gray;
                     sq_sum += (gray as i64) * (gray as i64);
                 }
@@ -295,17 +328,27 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
         }
     }
 
-    if sample_count == 0 { return 0.0; }
+    if sample_count == 0 {
+        return 0.0;
+    }
 
     let avg_std = variance_sum / sample_count as f64;
     (avg_std / 80.0).min(1.0)
 }
 
 fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
-    if width < 2 || height < 2 { return 0.0; }
+    if width < 2 || height < 2 {
+        return 0.0;
+    }
 
     let pixels = (width as usize) * (height as usize);
-    let step = if pixels > 1_000_000 { 10 } else if pixels > 100_000 { 5 } else { 1 };
+    let step = if pixels > 1_000_000 {
+        10
+    } else if pixels > 100_000 {
+        5
+    } else {
+        1
+    };
 
     let mut diff_sum = 0.0;
     let mut sample_count = 0usize;
@@ -318,8 +361,13 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
 
             if idx_down + 2 < rgba.len() {
                 let curr = (rgba[idx] as i32 + rgba[idx + 1] as i32 + rgba[idx + 2] as i32) / 3;
-                let right = (rgba[idx_right] as i32 + rgba[idx_right + 1] as i32 + rgba[idx_right + 2] as i32) / 3;
-                let down = (rgba[idx_down] as i32 + rgba[idx_down + 1] as i32 + rgba[idx_down + 2] as i32) / 3;
+                let right = (rgba[idx_right] as i32
+                    + rgba[idx_right + 1] as i32
+                    + rgba[idx_right + 2] as i32)
+                    / 3;
+                let down =
+                    (rgba[idx_down] as i32 + rgba[idx_down + 1] as i32 + rgba[idx_down + 2] as i32)
+                        / 3;
 
                 diff_sum += (curr - right).abs() as f64;
                 diff_sum += (curr - down).abs() as f64;
@@ -328,17 +376,27 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
         }
     }
 
-    if sample_count == 0 { return 0.0; }
+    if sample_count == 0 {
+        return 0.0;
+    }
 
     let avg_diff = diff_sum / sample_count as f64;
     (avg_diff / 30.0).min(1.0)
 }
 
 fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
-    if width < 3 || height < 3 { return 0.0; }
+    if width < 3 || height < 3 {
+        return 0.0;
+    }
 
     let pixels = (width as usize) * (height as usize);
-    let step = if pixels > 1_000_000 { 10 } else if pixels > 100_000 { 5 } else { 1 };
+    let step = if pixels > 1_000_000 {
+        10
+    } else if pixels > 100_000 {
+        5
+    } else {
+        1
+    };
 
     let mut laplacian_sum = 0.0;
     let mut sample_count = 0usize;
@@ -362,7 +420,9 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
         }
     }
 
-    if sample_count == 0 { return 0.0; }
+    if sample_count == 0 {
+        return 0.0;
+    }
 
     let avg_laplacian = laplacian_sum / sample_count as f64;
     (avg_laplacian / 100.0).min(1.0)
@@ -370,7 +430,13 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
 fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     let pixels = (width as usize) * (height as usize);
-    let step = if pixels > 1_000_000 { 20 } else if pixels > 100_000 { 10 } else { 1 };
+    let step = if pixels > 1_000_000 {
+        20
+    } else if pixels > 100_000 {
+        10
+    } else {
+        1
+    };
 
     let mut sum = 0u64;
     let mut sq_sum = 0u64;
@@ -379,14 +445,18 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let gray = (rgba[idx] as u64 * 299 + rgba[idx + 1] as u64 * 587 + rgba[idx + 2] as u64 * 114) / 1000;
+            let gray =
+                (rgba[idx] as u64 * 299 + rgba[idx + 1] as u64 * 587 + rgba[idx + 2] as u64 * 114)
+                    / 1000;
             sum += gray;
             sq_sum += gray * gray;
             sample_count += 1;
         }
     }
 
-    if sample_count == 0 { return 0.0; }
+    if sample_count == 0 {
+        return 0.0;
+    }
 
     let mean = sum as f64 / sample_count as f64;
     let variance = (sq_sum as f64 / sample_count as f64) - (mean * mean);
@@ -411,7 +481,8 @@ fn calculate_overall_complexity(
     texture_variance: f64,
     noise_level: f64,
 ) -> f64 {
-    (edge_density * 0.35 + color_diversity * 0.25 + texture_variance * 0.25 + noise_level * 0.15).clamp(0.0, 1.0)
+    (edge_density * 0.35 + color_diversity * 0.25 + texture_variance * 0.25 + noise_level * 0.15)
+        .clamp(0.0, 1.0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -430,25 +501,73 @@ fn classify_content_type(
 ) -> ImageContentType {
     let aspect_ratio = width as f64 / height.max(1) as f64;
     let rules = get_classifier_rules();
-    
+
     let mut best_rule: Option<&ClassifierRule> = None;
 
     for rule in rules {
         let cond = &rule.rules;
-        
-        if let Some(v) = cond.is_animated { if v != is_animated { continue; } }
-        if let Some(v) = cond.has_alpha { if v != has_alpha { continue; } }
-        
-        if let Some(r) = &cond.complexity { if !r.matches(complexity) { continue; } }
-        if let Some(r) = &cond.edge_density { if !r.matches(edge_density) { continue; } }
-        if let Some(r) = &cond.color_diversity { if !r.matches(color_diversity) { continue; } }
-        if let Some(r) = &cond.texture_variance { if !r.matches(texture_variance) { continue; } }
-        if let Some(r) = &cond.noise_level { if !r.matches(noise_level) { continue; } }
-        if let Some(r) = &cond.sharpness { if !r.matches(sharpness) { continue; } }
-        if let Some(r) = &cond.contrast { if !r.matches(contrast) { continue; } }
-        if let Some(r) = &cond.aspect_ratio { if !r.matches(aspect_ratio) { continue; } }
-        if let Some(r) = &cond.width { if !r.matches(width as f64) { continue; } }
-        if let Some(r) = &cond.height { if !r.matches(height as f64) { continue; } }
+
+        if let Some(v) = cond.is_animated {
+            if v != is_animated {
+                continue;
+            }
+        }
+        if let Some(v) = cond.has_alpha {
+            if v != has_alpha {
+                continue;
+            }
+        }
+
+        if let Some(r) = &cond.complexity {
+            if !r.matches(complexity) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.edge_density {
+            if !r.matches(edge_density) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.color_diversity {
+            if !r.matches(color_diversity) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.texture_variance {
+            if !r.matches(texture_variance) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.noise_level {
+            if !r.matches(noise_level) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.sharpness {
+            if !r.matches(sharpness) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.contrast {
+            if !r.matches(contrast) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.aspect_ratio {
+            if !r.matches(aspect_ratio) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.width {
+            if !r.matches(width as f64) {
+                continue;
+            }
+        }
+        if let Some(r) = &cond.height {
+            if !r.matches(height as f64) {
+                continue;
+            }
+        }
 
         if best_rule.is_none() || rule.priority > best_rule.unwrap().priority {
             best_rule = Some(rule);
@@ -456,9 +575,13 @@ fn classify_content_type(
     }
 
     if let Some(rule) = best_rule {
-        ImageContentType { name: rule.name.clone() }
+        ImageContentType {
+            name: rule.name.clone(),
+        }
     } else {
-        ImageContentType { name: "UNKNOWN".to_string() }
+        ImageContentType {
+            name: "UNKNOWN".to_string(),
+        }
     }
 }
 
@@ -470,10 +593,20 @@ fn calculate_analysis_confidence(
 ) -> f64 {
     let mut confidence: f64 = 0.7;
 
-    if pixels > 1_000_000 { confidence += 0.1; } else if pixels < 100_000 { confidence -= 0.1; }
-    if file_size > 10_000 && file_size < 100_000_000 { confidence += 0.05; }
-    if edge_density > 0.01 && edge_density < 0.9 { confidence += 0.05; }
-    if color_diversity > 0.01 && color_diversity < 0.99 { confidence += 0.05; }
+    if pixels > 1_000_000 {
+        confidence += 0.1;
+    } else if pixels < 100_000 {
+        confidence -= 0.1;
+    }
+    if file_size > 10_000 && file_size < 100_000_000 {
+        confidence += 0.05;
+    }
+    if edge_density > 0.01 && edge_density < 0.9 {
+        confidence += 0.05;
+    }
+    if color_diversity > 0.01 && color_diversity < 0.99 {
+        confidence += 0.05;
+    }
 
     confidence.clamp(0.0, 1.0)
 }
@@ -482,13 +615,19 @@ pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalys
     analyze_image_quality_with_cache(path, None)
 }
 
-pub fn analyze_image_quality_with_cache(path: &Path, cache: Option<&crate::analysis_cache::AnalysisCache>) -> Option<ImageQualityAnalysis> {
-    let is_jpeg_hint = path.extension()
+pub fn analyze_image_quality_with_cache(
+    path: &Path,
+    cache: Option<&crate::analysis_cache::AnalysisCache>,
+) -> Option<ImageQualityAnalysis> {
+    let is_jpeg_hint = path
+        .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .map(|e| e == "jpg" || e == "jpeg")
         .unwrap_or(false);
 
-    if is_jpeg_hint { return None; }
+    if is_jpeg_hint {
+        return None;
+    }
 
     if let Some(cache) = cache {
         match cache.get_quality_analysis(path) {
@@ -522,15 +661,44 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
     let (width, height) = img.dimensions();
     let rgba = img.to_rgba8();
     let file_size = std::fs::metadata(path).ok()?.len();
-    let format = path.extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_else(|| "unknown".to_string());
-    analyze_image_quality(width, height, rgba.as_raw(), file_size, &format, 1, PrecisionMetadata::default()).ok()
+    let format = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_uppercase())
+        .unwrap_or_else(|| "unknown".to_string());
+    analyze_image_quality(
+        width,
+        height,
+        rgba.as_raw(),
+        file_size,
+        &format,
+        1,
+        PrecisionMetadata::default(),
+    )
+    .ok()
 }
 
 pub fn log_media_info_for_image_quality(analysis: &ImageQualityAnalysis, input_path: &Path) {
-    if !has_log_file() { return; }
-    write_to_log_at_level(Level::DEBUG, &format!("[Image quality] {}", input_path.display()));
-    write_to_log_at_level(Level::DEBUG, &format!("  size={}x{} format={} file_size={}", analysis.width, analysis.height, analysis.format, analysis.file_size));
-    write_to_log_at_level(Level::DEBUG, &format!("  content_type={} complexity={:.4} edge_density={:.4}", analysis.content_type.name, analysis.complexity, analysis.edge_density));
+    if !has_log_file() {
+        return;
+    }
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!("[Image quality] {}", input_path.display()),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  size={}x{} format={} file_size={}",
+            analysis.width, analysis.height, analysis.format, analysis.file_size
+        ),
+    );
+    write_to_log_at_level(
+        Level::DEBUG,
+        &format!(
+            "  content_type={} complexity={:.4} edge_density={:.4}",
+            analysis.content_type.name, analysis.complexity, analysis.edge_density
+        ),
+    );
     write_to_log_at_level(Level::DEBUG, &format!("  color_diversity={:.4} texture_variance={:.4} noise={:.4} sharpness={:.4} contrast={:.4} confidence={:.4}", analysis.color_diversity, analysis.texture_variance, analysis.noise_level, analysis.sharpness, analysis.contrast, analysis.confidence));
     write_to_log_at_level(Level::DEBUG, "");
 }

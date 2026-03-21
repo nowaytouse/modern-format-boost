@@ -1130,9 +1130,7 @@ impl VideoExplorer {
         let size_pct = self.calc_change_pct(initial_size);
         progress_line(format!(
             "CRF {:.1} | {:+.1}% | Iter {}",
-            self.config.initial_crf,
-            size_pct,
-            iterations
+            self.config.initial_crf, size_pct, iterations
         ));
 
         if self.can_compress_with_margin(initial_size) {
@@ -1183,10 +1181,7 @@ impl VideoExplorer {
             };
             progress_line(format!(
                 "Binary Search | CRF {:.1} | {:+.1}% {} | Best: {:.1}",
-                mid,
-                size_pct,
-                compress_icon,
-                best_crf_so_far
+                mid, size_pct, compress_icon, best_crf_so_far
             ));
 
             if self.can_compress_with_margin(size) {
@@ -2767,7 +2762,11 @@ impl VideoExplorer {
 
         let filter = match duration {
             Some(dur) if dur > 60.0 => {
-                let segment_pct = if self.config.ultimate_mode { 0.25 } else { 0.15 };
+                let segment_pct = if self.config.ultimate_mode {
+                    0.25
+                } else {
+                    0.15
+                };
                 let start_end = dur * segment_pct;
                 let mid_start = dur * (0.5 - segment_pct / 2.0);
                 let mid_end = dur * (0.5 + segment_pct / 2.0);
@@ -2776,7 +2775,9 @@ impl VideoExplorer {
                 let pct_label = (segment_pct * 100.0) as u32;
                 crate::log_eprintln!(
                     "   MS-SSIM: 3-segment sampling (start {}% + mid {}% + end {}%)",
-                    pct_label, pct_label, pct_label
+                    pct_label,
+                    pct_label,
+                    pct_label
                 );
                 format!(
                     "[0:v]select='lt(t\\,{:.1})+between(t\\,{:.1}\\,{:.1})+gte(t\\,{:.1})',\
@@ -3402,8 +3403,14 @@ mod tests {
     #[test]
     #[ignore]
     fn test_precision_ssim_quality_grades() {
-        assert_eq!(ssim_quality_grade(0.99), "Excellent (visually indistinguishable)");
-        assert_eq!(ssim_quality_grade(0.98), "Excellent (visually indistinguishable)");
+        assert_eq!(
+            ssim_quality_grade(0.99),
+            "Excellent (visually indistinguishable)"
+        );
+        assert_eq!(
+            ssim_quality_grade(0.98),
+            "Excellent (visually indistinguishable)"
+        );
         assert_eq!(ssim_quality_grade(0.97), "Good (visually lossless)");
         assert_eq!(ssim_quality_grade(0.95), "Good (visually lossless)");
         assert_eq!(ssim_quality_grade(0.92), "Acceptable (minor difference)");

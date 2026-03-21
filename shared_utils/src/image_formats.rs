@@ -1,9 +1,9 @@
 //! Format-specific utilities and helpers
 
 pub mod tiff {
+    use crate::img_errors::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
-    use crate::img_errors::{ImgQualityError, Result};
 
     /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and BigTIFF.
     pub fn is_lossless(path: &Path) -> Result<bool> {
@@ -22,19 +22,51 @@ pub mod tiff {
             return Ok(true);
         }
 
-        let version = if is_little_endian { u16::from_le_bytes([data[2], data[3]]) } else { u16::from_be_bytes([data[2], data[3]]) };
+        let version = if is_little_endian {
+            u16::from_le_bytes([data[2], data[3]])
+        } else {
+            u16::from_be_bytes([data[2], data[3]])
+        };
         let is_bigtiff = version == 0x002B;
 
         let read_u16 = |off: usize| -> u16 {
-            if is_little_endian { u16::from_le_bytes([data[off], data[off + 1]]) } else { u16::from_be_bytes([data[off], data[off + 1]]) }
+            if is_little_endian {
+                u16::from_le_bytes([data[off], data[off + 1]])
+            } else {
+                u16::from_be_bytes([data[off], data[off + 1]])
+            }
         };
         let read_u32 = |off: usize| -> u32 {
-            if is_little_endian { u32::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3]]) } 
-            else { u32::from_be_bytes([data[off], data[off+1], data[off+2], data[off+3]]) }
+            if is_little_endian {
+                u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+            } else {
+                u32::from_be_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+            }
         };
         let read_u64 = |off: usize| -> u64 {
-            if is_little_endian { u64::from_le_bytes([data[off], data[off+1], data[off+2], data[off+3], data[off+4], data[off+5], data[off+6], data[off+7]]) }
-            else { u64::from_be_bytes([data[off], data[off+1], data[off+2], data[off+3], data[off+4], data[off+5], data[off+6], data[off+7]]) }
+            if is_little_endian {
+                u64::from_le_bytes([
+                    data[off],
+                    data[off + 1],
+                    data[off + 2],
+                    data[off + 3],
+                    data[off + 4],
+                    data[off + 5],
+                    data[off + 6],
+                    data[off + 7],
+                ])
+            } else {
+                u64::from_be_bytes([
+                    data[off],
+                    data[off + 1],
+                    data[off + 2],
+                    data[off + 3],
+                    data[off + 4],
+                    data[off + 5],
+                    data[off + 6],
+                    data[off + 7],
+                ])
+            }
         };
 
         let mut ifd_offset: u64 = if is_bigtiff {
@@ -52,30 +84,46 @@ pub mod tiff {
             ifd_count += 1;
             let ifd_pos = ifd_offset as usize;
             let (num_entries, entries_start, entry_size, next_offset_pos) = if is_bigtiff {
-                if ifd_pos + 8 > data.len() { break; }
+                if ifd_pos + 8 > data.len() {
+                    break;
+                }
                 let n = read_u64(ifd_pos) as usize;
                 (n, ifd_pos + 8, 20usize, ifd_pos + 8 + n * 20)
             } else {
-                if ifd_pos + 2 > data.len() { break; }
+                if ifd_pos + 2 > data.len() {
+                    break;
+                }
                 let n = read_u16(ifd_pos) as usize;
                 (n, ifd_pos + 2, 12usize, ifd_pos + 2 + n * 12)
             };
 
             let mut pos = entries_start;
             for _ in 0..num_entries {
-                if pos + entry_size > data.len() { break; }
+                if pos + entry_size > data.len() {
+                    break;
+                }
                 if read_u16(pos) == 259 {
-                    let compression = if is_bigtiff { read_u16(pos + 12) } else { read_u16(pos + 8) };
-                    if compression == 6 || compression == 7 || compression == 50001 { return Ok(false); }
+                    let compression = if is_bigtiff {
+                        read_u16(pos + 12)
+                    } else {
+                        read_u16(pos + 8)
+                    };
+                    if compression == 6 || compression == 7 || compression == 50001 {
+                        return Ok(false);
+                    }
                 }
                 pos += entry_size;
             }
 
             if is_bigtiff {
-                if next_offset_pos + 8 > data.len() { break; }
+                if next_offset_pos + 8 > data.len() {
+                    break;
+                }
                 ifd_offset = read_u64(next_offset_pos);
             } else {
-                if next_offset_pos + 4 > data.len() { break; }
+                if next_offset_pos + 4 > data.len() {
+                    break;
+                }
                 ifd_offset = read_u32(next_offset_pos) as u64;
             }
         }
@@ -118,19 +166,18 @@ pub mod jpeg {
             let mut buffer = vec![0u8; 4096];
             if file.read(&mut buffer).is_ok() {
                 for i in 0..buffer.len().saturating_sub(70) {
-                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB
-                        && i + 5 < buffer.len() {
-                            let q_value = buffer[i + 5] as u32;
-                            return match q_value {
-                                0..=2 => 98,
-                                3..=5 => 95,
-                                6..=10 => 90,
-                                11..=20 => 85,
-                                21..=40 => 75,
-                                41..=60 => 65,
-                                _ => 50,
-                            };
-                        }
+                    if buffer[i] == 0xFF && buffer[i + 1] == 0xDB && i + 5 < buffer.len() {
+                        let q_value = buffer[i + 5] as u32;
+                        return match q_value {
+                            0..=2 => 98,
+                            3..=5 => 95,
+                            6..=10 => 90,
+                            11..=20 => 85,
+                            21..=40 => 75,
+                            41..=60 => 65,
+                            _ => 50,
+                        };
+                    }
                 }
             }
         }
@@ -153,9 +200,9 @@ pub mod jpeg {
 }
 
 pub mod webp {
+    use crate::img_errors::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
-    use crate::img_errors::{ImgQualityError, Result};
 
     /// Detect WebP animated compression by traversing all ANMF (animation frame) chunks.
     ///
@@ -175,9 +222,9 @@ pub mod webp {
 
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = u32::from_le_bytes([
-                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-            ]) as usize;
+            let chunk_size =
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                    as usize;
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -212,7 +259,7 @@ pub mod webp {
             if data.windows(4).any(|w| w == b"VP8L") {
                 Ok(true)
             } else if data.windows(4).any(|w| w == b"VP8 ") {
-                 Ok(false)
+                Ok(false)
             } else {
                 Err(ImgQualityError::AnalysisError(
                     "Animated WebP: no ANMF frames or VP8/VP8L chunks found; cannot determine compression".to_string()
@@ -226,9 +273,9 @@ pub mod webp {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = u32::from_le_bytes([
-                data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7],
-            ]) as usize;
+            let chunk_size =
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                    as usize;
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -243,11 +290,14 @@ pub mod webp {
             let padded = (chunk_size + 1) & !1;
             pos = payload_start + padded;
         }
-        Err(ImgQualityError::AnalysisError("No VP8 chunk found".to_string()))
+        Err(ImgQualityError::AnalysisError(
+            "No VP8 chunk found".to_string(),
+        ))
     }
 
     pub fn estimate_quality(path: &Path) -> Result<u8> {
-        fs::read(path).map_err(ImgQualityError::IoError)
+        fs::read(path)
+            .map_err(ImgQualityError::IoError)
             .and_then(|b| estimate_quality_from_bytes(&b))
     }
 
@@ -278,12 +328,9 @@ pub mod webp {
         let mut total_ms = 0u64;
         while pos + 8 <= data.len() {
             let chunk_id = &data[pos..pos + 4];
-            let chunk_size = u32::from_le_bytes([
-                data[pos + 4],
-                data[pos + 5],
-                data[pos + 6],
-                data[pos + 7],
-            ]) as usize;
+            let chunk_size =
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                    as usize;
             let payload_start = pos + 8;
             let payload_end = (payload_start + chunk_size).min(data.len());
             if chunk_id == b"ANMF" && payload_end >= payload_start + 20 {
@@ -358,15 +405,15 @@ pub mod gif {
                         0
                     };
                     pos += 10 + lct_size;
-                    
+
                     // --- CRITICAL FIX ---
                     // After Image Descriptor and optional Local Color Table,
                     // there is exactly ONE byte for LZW Minimum Code Size.
                     // We must skip it before reading the first data sub-block size.
                     if pos < data.len() {
-                        pos += 1; 
+                        pos += 1;
                     }
-                    
+
                     // Skip Image Data sub-blocks
                     while pos < data.len() {
                         let block_size = data[pos] as usize;
@@ -390,7 +437,7 @@ pub mod gif {
                     if label == 0xF9 {
                         gce_count += 1;
                     }
-                    
+
                     pos += 2;
                     // Skip Extension Data blocks
                     while pos < data.len() {
@@ -409,7 +456,7 @@ pub mod gif {
                 }
             }
         }
-        
+
         // A GIF is animated if it has more than one image descriptor
         // OR if it has Graphic Control Extensions (usually one per frame)
         // Correct for some GIFs having one GCE for a 1-frame static image:
@@ -438,10 +485,10 @@ pub mod gif {
 }
 
 pub mod avif {
+    use crate::common_utils::find_box_data_recursive;
+    use crate::img_errors::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
-    use crate::img_errors::{ImgQualityError, Result};
-    use crate::common_utils::find_box_data_recursive;
 
     /// Detect AVIF lossless encoding — multi-dimension analysis.
     ///
@@ -502,7 +549,8 @@ pub mod avif {
                         if !pixi_data.is_empty() {
                             let num_ch = pixi_data[0] as usize;
                             if num_ch > 0 && pixi_data.len() > num_ch {
-                                let max_depth = pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
+                                let max_depth =
+                                    pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0);
                                 if max_depth >= 12 {
                                     return Ok(true);
                                 }
@@ -531,22 +579,26 @@ pub mod avif {
     }
 
     pub fn is_lossless(path: &Path) -> bool {
-        fs::read(path).ok()
+        fs::read(path)
+            .ok()
             .and_then(|b| is_lossless_from_bytes(&b, path).ok())
             .unwrap_or(false)
     }
 }
 
 pub mod jxl {
+    use crate::common_utils::{find_any_box_recursive, find_box_data_recursive};
+    use crate::img_errors::{ImgQualityError, Result};
     use std::fs;
     use std::path::Path;
-    use crate::img_errors::{ImgQualityError, Result};
-    use crate::common_utils::{find_box_data_recursive, find_any_box_recursive};
 
     /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
         if data.len() < 4 {
-            return Err(ImgQualityError::AnalysisError(format!("JXL: file too short — {}", path.display())));
+            return Err(ImgQualityError::AnalysisError(format!(
+                "JXL: file too short — {}",
+                path.display()
+            )));
         }
 
         let is_naked = data[0] == 0xFF && data[1] == 0x0A;
@@ -567,7 +619,7 @@ pub mod jxl {
         if let Some(cs) = codestream {
             match parse_jxl_xyb_encoded(cs) {
                 Some(true) => return Ok(false), // xyb_encoded=true -> lossy
-                Some(false) => return Ok(true),  // xyb_encoded=false -> lossless
+                Some(false) => return Ok(true), // xyb_encoded=false -> lossless
                 None => {}
             }
         }
@@ -586,20 +638,35 @@ pub mod jxl {
     }
 
     impl<'a> JxlBitReader<'a> {
-        fn new(data: &'a [u8]) -> Self { Self { data, byte_pos: 0, bit_pos: 0 } }
+        fn new(data: &'a [u8]) -> Self {
+            Self {
+                data,
+                byte_pos: 0,
+                bit_pos: 0,
+            }
+        }
         fn read_bits(&mut self, n: u8) -> Option<u32> {
-            if n == 0 { return Some(0); }
+            if n == 0 {
+                return Some(0);
+            }
             let mut result: u32 = 0;
             for i in 0..n {
-                if self.byte_pos >= self.data.len() { return None; }
+                if self.byte_pos >= self.data.len() {
+                    return None;
+                }
                 let bit = (self.data[self.byte_pos] >> self.bit_pos) & 1;
                 result |= (bit as u32) << i;
                 self.bit_pos += 1;
-                if self.bit_pos == 8 { self.bit_pos = 0; self.byte_pos += 1; }
+                if self.bit_pos == 8 {
+                    self.bit_pos = 0;
+                    self.byte_pos += 1;
+                }
             }
             Some(result)
         }
-        fn read_bool(&mut self) -> Option<bool> { self.read_bits(1).map(|v| v == 1) }
+        fn read_bool(&mut self) -> Option<bool> {
+            self.read_bits(1).map(|v| v == 1)
+        }
         fn read_u32(&mut self, dists: [(u32, u8); 4]) -> Option<u32> {
             let sel = self.read_bits(2)? as usize;
             let (base, extra_bits) = dists[sel];
@@ -609,8 +676,14 @@ pub mod jxl {
     }
 
     fn parse_jxl_xyb_encoded(codestream: &[u8]) -> Option<bool> {
-        let start = if codestream.len() >= 2 && codestream[0] == 0xFF && codestream[1] == 0x0A { 2 } else { 0 };
-        if start >= codestream.len() { return None; }
+        let start = if codestream.len() >= 2 && codestream[0] == 0xFF && codestream[1] == 0x0A {
+            2
+        } else {
+            0
+        };
+        if start >= codestream.len() {
+            return None;
+        }
         let mut r = JxlBitReader::new(&codestream[start..]);
 
         // --- SizeHeader ---
@@ -647,7 +720,9 @@ pub mod jxl {
                 if small2 {
                     r.read_bits(5)?; // ysize
                     let ratio2 = r.read_bits(3)?;
-                    if ratio2 == 0 { r.read_bits(5)?; } // xsize
+                    if ratio2 == 0 {
+                        r.read_bits(5)?;
+                    } // xsize
                 } else {
                     r.read_u32([(0, 9), (0, 13), (0, 18), (0, 30)])?; // ysize
                     let ratio2 = r.read_bits(3)?;
@@ -692,7 +767,8 @@ pub mod jxl {
         // num_extra_channels
         let num_extra = r.read_u32([(0, 0), (1, 0), (2, 0), (3, 12)])?;
         for _ in 0..num_extra {
-            if !r.read_bool()? { // ec_default
+            if !r.read_bool()? {
+                // ec_default
                 // Detailed ExtraChannelInfo skip logic (complex, bail if not default)
                 return None;
             }
@@ -735,7 +811,11 @@ mod tests {
         file.write_all(png_data).expect("Failed to write to file");
 
         let level = png::estimate_compression_level(file.path());
-        assert!(level <= 9, "PNG compression level should be between 0-9, actual: {}", level);
+        assert!(
+            level <= 9,
+            "PNG compression level should be between 0-9, actual: {}",
+            level
+        );
     }
 
     #[test]
@@ -752,7 +832,11 @@ mod tests {
         file.write_all(jpeg_data).expect("Failed to write to file");
 
         let quality = jpeg::estimate_quality(file.path());
-        assert!(quality >= 90, "Low quantization value should return high quality, actual: {}", quality);
+        assert!(
+            quality >= 90,
+            "Low quantization value should return high quality, actual: {}",
+            quality
+        );
     }
 
     #[test]
@@ -766,7 +850,8 @@ mod tests {
             data
         };
         let mut file = NamedTempFile::new().expect("Failed to create temporary file");
-        file.write_all(&webp_lossless).expect("Failed to write to file");
+        file.write_all(&webp_lossless)
+            .expect("Failed to write to file");
 
         assert!(
             webp::is_lossless(file.path()),
@@ -785,7 +870,8 @@ mod tests {
             data
         };
         let mut file = NamedTempFile::new().expect("Failed to create temporary file");
-        file.write_all(&webp_lossy).expect("Failed to write to file");
+        file.write_all(&webp_lossy)
+            .expect("Failed to write to file");
 
         assert!(
             !webp::is_lossless(file.path()),
@@ -834,7 +920,8 @@ mod tests {
     fn test_jxl_codestream_signature() {
         let jxl_codestream: &[u8] = &[0xFF, 0x0A, 0x00, 0x00];
         let mut file = NamedTempFile::new().expect("Failed to create temporary file");
-        file.write_all(jxl_codestream).expect("Failed to write to file");
+        file.write_all(jxl_codestream)
+            .expect("Failed to write to file");
 
         assert!(
             jxl::verify_signature(file.path()),
@@ -846,10 +933,26 @@ mod tests {
     fn test_error_handling_nonexistent_file() {
         let path = std::path::Path::new("/nonexistent/file.test");
 
-        assert!(!webp::is_lossless(path), "Non-existent file should return false");
-        assert!(!webp::is_animated(path), "Non-existent file should return false");
-        assert!(!gif::is_animated(path), "Non-existent file should return false");
-        assert_eq!(gif::get_frame_count(path), 0, "Non-existent file should return 0");
-        assert!(!jxl::verify_signature(path), "Non-existent file should return false");
+        assert!(
+            !webp::is_lossless(path),
+            "Non-existent file should return false"
+        );
+        assert!(
+            !webp::is_animated(path),
+            "Non-existent file should return false"
+        );
+        assert!(
+            !gif::is_animated(path),
+            "Non-existent file should return false"
+        );
+        assert_eq!(
+            gif::get_frame_count(path),
+            0,
+            "Non-existent file should return 0"
+        );
+        assert!(
+            !jxl::verify_signature(path),
+            "Non-existent file should return false"
+        );
     }
 }

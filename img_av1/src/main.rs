@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use img_av1::{calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description};
-use rayon::prelude::*;
 use shared_utils::analysis_cache::AnalysisCache;
 use shared_utils::modern_ui::{colors, symbols};
 use shared_utils::{
@@ -886,7 +885,7 @@ fn auto_convert_directory(
         }
     };
 
-    let files = shared_utils::collect_files_small_first(
+    let files = shared_utils::collect_image_files_for_perceived_speed(
         input,
         shared_utils::SUPPORTED_IMAGE_EXTENSIONS,
         config.recursive,
@@ -907,6 +906,9 @@ fn auto_convert_directory(
 
     if config.verbose {
         println!("📂 Found {} files to process", total);
+        shared_utils::log_eprintln!(
+            "⚡ Queue Strategy: deeper paths → fast JPEG/direct transcodes → smaller files → lower resolution"
+        );
     }
 
     // Initialize checkpoint manager for resume/progress tracking
@@ -989,6 +991,10 @@ fn auto_convert_directory(
     shared_utils::ctrlc_guard::init();
 
     shared_utils::progress_mode::enable_quiet_mode();
+    let progress_bar = Arc::new(shared_utils::CoarseProgressBar::new(
+        total as u64,
+        "Running",
+    ));
 
     let max_threads = pool_size;
     let child_threads = thread_config.child_threads;
@@ -1028,16 +1034,100 @@ fn auto_convert_directory(
         }
     }
 
+    let next_index = AtomicUsize::new(0);
     pool.install(|| {
-        files.par_iter().for_each(|path| {
-            if pause_controller.is_paused() {
-                return;
-            }
+        rayon::scope(|scope| {
+            for _ in 0..max_threads {
+                let next_index = &next_index;
+                scope.spawn(|_| loop {
+                    if pause_controller.is_paused() {
+                        break;
+                    }
 
-            // Check if already completed (thread-safe)
-            if let Some(cp) = checkpoint.as_ref() {
-                if cp.is_completed(path) {
-                    skipped.fetch_add(1, Ordering::Relaxed);
+                    let index = next_index.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        break;
+                    }
+
+                    let path = &files[index];
+                    progress_bar.set_message(&path.file_name().unwrap_or_default().to_string_lossy());
+
+                    // Check if already completed (thread-safe)
+                    if let Some(cp) = checkpoint.as_ref() {
+                        if cp.is_completed(path) {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                            let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                            shared_utils::progress_mode::write_progress_line_to_run_log(
+                                start_time.elapsed().as_secs(),
+                                current as u64,
+                                total as u64,
+                                &path.file_name().unwrap_or_default().to_string_lossy(),
+                            );
+                            progress_bar.set(current as u64);
+                            continue;
+                        }
+                    }
+
+                    match auto_convert_single_file(path, config) {
+                        Ok(result) => {
+                            if result.skipped {
+                                skipped.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                success.fetch_add(1, Ordering::Relaxed);
+                                shared_utils::progress_mode::image_processed_success();
+                                actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
+                                if let Some(out_size) = result.output_size {
+                                    actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
+                                }
+                                // Mark as completed in checkpoint manager on success (thread-safe)
+                                if let Some(cp) = checkpoint.as_ref() {
+                                    if let Err(e) = cp.mark_completed(path) {
+                                        shared_utils::log_eprintln!(
+                                            "⚠️ [checkpoint] Failed to mark completed {}: {}",
+                                            path.display(),
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("Skipped") || msg.contains("skip") {
+                                skipped.fetch_add(1, Ordering::Relaxed);
+                            } else if let Some(reason) = disk_full_pause_reason(&msg) {
+                                if pause_controller.request_pause(path, reason.clone()) {
+                                    shared_utils::log_eprintln!(
+                                        "⏸️ [Batch] Paused at {}: {}",
+                                        path.display(),
+                                        reason
+                                    );
+                                }
+                                continue;
+                            } else {
+                                let err_str = e.to_string();
+                                shared_utils::log_auto_error!("Image conversion", "Failed {}: {}", path.display(), e);
+                                shared_utils::progress_mode::log_conversion_failure(path, &err_str);
+                                failed.fetch_add(1, Ordering::Relaxed);
+                                shared_utils::progress_mode::image_processed_failure();
+
+                                if let Some(ref output_dir) = config.output_dir {
+                                    if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
+                                        path,
+                                        Some(output_dir),
+                                        config.base_dir.as_deref(),
+                                        config.verbose,
+                                    ) {
+                                        shared_utils::log_eprintln!(
+                                            "⚠️ [Recovery] Failed to copy original after image conversion failure ({}): {}",
+                                            path.display(),
+                                            copy_err
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
                     shared_utils::progress_mode::write_progress_line_to_run_log(
                         start_time.elapsed().as_secs(),
@@ -1045,80 +1135,13 @@ fn auto_convert_directory(
                         total as u64,
                         &path.file_name().unwrap_or_default().to_string_lossy(),
                     );
-                    return;
-                }
+                    progress_bar.set(current as u64);
+                });
             }
-
-            match auto_convert_single_file(path, config) {
-                Ok(result) => {
-                    if result.skipped {
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                    } else {
-                        success.fetch_add(1, Ordering::Relaxed);
-                        shared_utils::progress_mode::image_processed_success();
-                        actual_input_bytes.fetch_add(result.original_size, Ordering::Relaxed);
-                        if let Some(out_size) = result.output_size {
-                            actual_output_bytes.fetch_add(out_size, Ordering::Relaxed);
-                        }
-                        // Mark as completed in checkpoint manager on success (thread-safe)
-                        if let Some(cp) = checkpoint.as_ref() {
-                            if let Err(e) = cp.mark_completed(path) {
-                                shared_utils::log_eprintln!(
-                                    "⚠️ [checkpoint] Failed to mark completed {}: {}",
-                                    path.display(),
-                                    e
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("Skipped") || msg.contains("skip") {
-                        skipped.fetch_add(1, Ordering::Relaxed);
-                    } else if let Some(reason) = disk_full_pause_reason(&msg) {
-                        if pause_controller.request_pause(path, reason.clone()) {
-                            shared_utils::log_eprintln!(
-                                "⏸️ [Batch] Paused at {}: {}",
-                                path.display(),
-                                reason
-                            );
-                        }
-                        return;
-                    } else {
-                        let err_str = e.to_string();
-                        shared_utils::log_auto_error!("Image conversion", "Failed {}: {}", path.display(), e);
-                        shared_utils::progress_mode::log_conversion_failure(path, &err_str);
-                        failed.fetch_add(1, Ordering::Relaxed);
-                        shared_utils::progress_mode::image_processed_failure();
-
-                        if let Some(ref output_dir) = config.output_dir {
-                            if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
-                                path,
-                                Some(output_dir),
-                                config.base_dir.as_deref(),
-                                config.verbose,
-                            ) {
-                                shared_utils::log_eprintln!(
-                                    "⚠️ [Recovery] Failed to copy original after image conversion failure ({}): {}",
-                                    path.display(),
-                                    copy_err
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-            let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            shared_utils::progress_mode::write_progress_line_to_run_log(
-                start_time.elapsed().as_secs(),
-                current as u64,
-                total as u64,
-                &path.file_name().unwrap_or_default().to_string_lossy(),
-            );
         });
     });
 
+    progress_bar.finish();
     shared_utils::progress_mode::disable_quiet_mode();
     shared_utils::progress_mode::xmp_merge_finalize();
     shared_utils::progress_mode::flush_log_file();

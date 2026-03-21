@@ -57,9 +57,7 @@ pub fn subtitle_args_for_container(
     }
 
     // MP4/MOV: only text-based subtitles are supported (as mov_text).
-    let codec_lower = subtitle_codec
-        .map(|s| s.to_lowercase())
-        .unwrap_or_default();
+    let codec_lower = subtitle_codec.map(|s| s.to_lowercase()).unwrap_or_default();
     let is_text_based = matches!(
         codec_lower.as_str(),
         "srt" | "subrip" | "ass" | "ssa" | "mov_text" | "webvtt" | "text"
