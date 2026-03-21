@@ -970,14 +970,11 @@ fn auto_convert_directory(
 
     // Initialize checkpoint manager for resume/progress tracking
     let checkpoint = if resume {
-        match shared_utils::checkpoint::CheckpointManager::new(input) {
+        match shared_utils::checkpoint::CheckpointManager::new_with_context(
+            input,
+            config.output_dir.as_deref(),
+        ) {
             Ok(cp) => {
-                if let Err(err) = cp.reset_if_output_root_missing(config.output_dir.as_deref()) {
-                    shared_utils::log_eprintln!(
-                        "⚠️ [checkpoint] Failed to reset stale resume state for missing output root: {}",
-                        err
-                    );
-                }
                 if cp.is_resume_mode() {
                     if config.verbose {
                         println!(
