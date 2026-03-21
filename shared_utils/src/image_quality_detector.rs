@@ -491,13 +491,29 @@ pub fn analyze_image_quality_with_cache(path: &Path, cache: Option<&crate::analy
     if is_jpeg_hint { return None; }
 
     if let Some(cache) = cache {
-        if let Ok(Some(cached)) = cache.get_quality_analysis(path) {
-            return Some(cached);
+        match cache.get_quality_analysis(path) {
+            Ok(Some(cached)) => return Some(cached),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Failed to load cached image quality analysis"
+                );
+            }
         }
     }
 
     let analysis = analyze_image_quality_from_path_internal(path)?;
-    if let Some(cache) = cache { let _ = cache.store_quality_analysis(path, &analysis); }
+    if let Some(cache) = cache {
+        if let Err(err) = cache.store_quality_analysis(path, &analysis) {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to store image quality analysis in cache"
+            );
+        }
+    }
     Some(analysis)
 }
 
