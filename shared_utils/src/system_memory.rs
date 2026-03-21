@@ -126,7 +126,10 @@ fn parse_vm_stat_available(out: &str) -> Option<u64> {
     for line in out.lines() {
         let line = line.trim();
         if line.starts_with("page size of ") {
-            if let Some(rest) = line.strip_prefix("page size of ").and_then(|s| s.strip_suffix(" bytes")) {
+            if let Some(rest) = line
+                .strip_prefix("page size of ")
+                .and_then(|s| s.strip_suffix(" bytes"))
+            {
                 if let Ok(n) = rest.replace(',', "").parse::<u64>() {
                     page_size = n;
                 }

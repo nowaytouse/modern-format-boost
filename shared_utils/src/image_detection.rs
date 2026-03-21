@@ -263,8 +263,12 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
             return Ok(DetectedFormat::AVIF);
         }
         // HEIC/HEVC-based brands (incl. sequence variants)
-        if brand == b"heic" || brand == b"heix" || brand == b"heim" || brand == b"heis"
-            || brand == b"hevc" || brand == b"hevx"
+        if brand == b"heic"
+            || brand == b"heix"
+            || brand == b"heim"
+            || brand == b"heis"
+            || brand == b"hevc"
+            || brand == b"hevx"
             || brand == b"hev1"
         {
             return Ok(DetectedFormat::HEIC);
@@ -304,10 +308,7 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
     }
 
     // JPEG 2000: 0x0000000C 6A502020 0D0A870A
-    if header.len() >= 12
-        && header[0..4] == [0x00, 0x00, 0x00, 0x0C]
-        && header[4..8] == *b"jP  "
-    {
+    if header.len() >= 12 && header[0..4] == [0x00, 0x00, 0x00, 0x0C] && header[4..8] == *b"jP  " {
         return Ok(DetectedFormat::JP2);
     }
     // JPEG 2000 codestream: FF 4F FF 51
@@ -457,7 +458,7 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             if probe.frame_rate > 0.0 {
                 fps = Some(probe.frame_rate as f32);
             }
-            
+
             if probe_frames > 1 {
                 return Ok((true, probe_frames, fps));
             } else if probe_frames == 1 {
@@ -510,7 +511,9 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
     file.read_exact(&mut header)?;
 
     if !header.starts_with(b"GIF87a") && !header.starts_with(b"GIF89a") {
-        return Err(ImgQualityError::AnalysisError("Not a valid GIF file".to_string()));
+        return Err(ImgQualityError::AnalysisError(
+            "Not a valid GIF file".to_string(),
+        ));
     }
 
     // Logical Screen Descriptor (bytes 6-12)
@@ -531,21 +534,22 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
     if has_gct {
         let gct_byte_size = 3 * gct_colors;
         let _pos = 13 + gct_byte_size;
-        
+
         // We can't easily scan the whole file for all LCTs without a full decoder,
-        // but typically GCT is the primary source. If we need perfect accuracy, 
+        // but typically GCT is the primary source. If we need perfect accuracy,
         // we'd need to parse all blocks. For now, GCT is a huge improvement over heuristics.
         let mut data = Vec::new();
         let mut file = File::open(path)?;
         file.read_to_end(&mut data)?;
-        
+
         // Basic scan for Image Descriptor (0x2C) to find LCT
         let mut max_palette = gct_colors;
         let mut current_pos = 13 + gct_byte_size;
-        
+
         while current_pos + 10 < data.len() {
             match data[current_pos] {
-                0x2C => { // Image Descriptor
+                0x2C => {
+                    // Image Descriptor
                     let packed_img = data[current_pos + 9];
                     let has_lct = (packed_img & 0x80) != 0;
                     if has_lct {
@@ -563,8 +567,11 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                     }
                     current_pos += 1;
                 }
-                0x21 => { // Extension
-                    if current_pos + 2 >= data.len() { break; }
+                0x21 => {
+                    // Extension
+                    if current_pos + 2 >= data.len() {
+                        break;
+                    }
                     current_pos += 2;
                     while current_pos < data.len() && data[current_pos] != 0 {
                         let block_size = data[current_pos] as usize;
@@ -643,7 +650,7 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
 
     // FFmpeg's jpegxl_anim decoder is incomplete and cannot properly detect JXL animation.
     // We need to convert to APNG first, then check frame count.
-    
+
     // Check if djxl is available
     if which::which("djxl").is_err() {
         // Fallback: try jxlinfo
@@ -658,35 +665,36 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
         }
         return false;
     }
-    
+
     // Create temporary APNG file
-    let temp_apng = match tempfile::Builder::new()
-        .suffix(".apng")
-        .tempfile()
-    {
+    let temp_apng = match tempfile::Builder::new().suffix(".apng").tempfile() {
         Ok(f) => f,
         Err(_) => return false,
     };
     let temp_apng_path = temp_apng.path();
-    
+
     // Convert JXL to APNG using djxl
     let djxl_result = Command::new("djxl")
         .arg(crate::safe_path_arg(path).as_ref())
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
         .output();
-    
+
     if djxl_result.is_err() || !temp_apng_path.exists() {
         return false;
     }
-    
+
     // Check frame count using ffprobe with -count_frames
     if let Ok(output) = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-select_streams", "v:0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
             "-count_frames",
-            "-show_entries", "stream=nb_read_frames",
-            "-of", "json",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "json",
             "--",
         ])
         .arg(crate::safe_path_arg(temp_apng_path).as_ref())
@@ -705,7 +713,7 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
             }
         }
     }
-    
+
     // temp_apng will be automatically cleaned up when dropped
     false
 }
@@ -796,7 +804,10 @@ pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizatio
     analyze_png_quantization_from_reader(&mut cursor, None)
 }
 
-pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mut reader: R, path: Option<&Path>) -> Result<PngQuantizationAnalysis> {
+pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
+    mut reader: R,
+    path: Option<&Path>,
+) -> Result<PngQuantizationAnalysis> {
     let png_info = parse_png_structure(&mut reader)?;
 
     let mut factors = PngQuantizationFactors::default();
@@ -951,16 +962,17 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
                     ));
                 }
 
-                let (entropy, max_entropy, entropy_ratio) = if let Some(p_size) = png_info.palette_size {
-                    let pe = calculate_palette_index_entropy(&img, p_size);
-                    (pe.0, pe.1, pe.2)
-                } else {
-                    let e = calculate_rgb_entropy(&img);
-                    let ps = 256.0f64;
-                    let me = ps.log2();
-                    let ratio = if me > 0.0 { e / me } else { 0.0 };
-                    (e, me, ratio)
-                };
+                let (entropy, max_entropy, entropy_ratio) =
+                    if let Some(p_size) = png_info.palette_size {
+                        let pe = calculate_palette_index_entropy(&img, p_size);
+                        (pe.0, pe.1, pe.2)
+                    } else {
+                        let e = calculate_rgb_entropy(&img);
+                        let ps = 256.0f64;
+                        let me = ps.log2();
+                        let ratio = if me > 0.0 { e / me } else { 0.0 };
+                        (e, me, ratio)
+                    };
                 let palette_size = png_info.palette_size.unwrap_or(256) as f64;
                 if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
                     factors.entropy_anomaly = 0.5 + (0.6 - entropy_ratio) * 0.5;
@@ -989,7 +1001,11 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
 
     let expected_size = estimate_uncompressed_size(&png_info);
     let actual_size = reader.seek(std::io::SeekFrom::End(0)).unwrap_or(0);
-    let compression_ratio = if expected_size > 0 { actual_size as f64 / expected_size as f64 } else { 1.0 };
+    let compression_ratio = if expected_size > 0 {
+        actual_size as f64 / expected_size as f64
+    } else {
+        1.0
+    };
 
     if png_info.color_type == 3
         && compression_ratio < 0.15
@@ -1013,8 +1029,11 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
 
     let metadata_score = factors.tool_signature;
 
-    let statistical_score =
-        (factors.dithering_detected + factors.color_count_anomaly + factors.gradient_banding + factors.color_frequency_distribution) / 4.0;
+    let statistical_score = (factors.dithering_detected
+        + factors.color_count_anomaly
+        + factors.gradient_banding
+        + factors.color_frequency_distribution)
+        / 4.0;
 
     let heuristic_score = (factors.size_efficiency_anomaly + factors.entropy_anomaly) / 2.0;
 
@@ -1128,7 +1147,9 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(mu
                         confidence: 0.65,
                         factor_scores: factors,
                         detected_tool: None,
-                        explanation: "Truecolor PNG — weak quantization signal, treating as lossless".to_string(),
+                        explanation:
+                            "Truecolor PNG — weak quantization signal, treating as lossless"
+                                .to_string(),
                     });
                 }
             }
@@ -1205,7 +1226,9 @@ struct PngQuantizationWeights {
     heuristic: f64,
 }
 
-pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> Result<PngStructureInfo> {
+pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
+    mut reader: R,
+) -> Result<PngStructureInfo> {
     use std::io::SeekFrom;
 
     fn skip_bytes<R: std::io::Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
@@ -1215,24 +1238,32 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> R
                 context
             ))
         })?;
-        reader
-            .seek(SeekFrom::Current(offset))
-            .map_err(|e| ImgQualityError::AnalysisError(format!("Failed to seek past {}: {}", context, e)))?;
+        reader.seek(SeekFrom::Current(offset)).map_err(|e| {
+            ImgQualityError::AnalysisError(format!("Failed to seek past {}: {}", context, e))
+        })?;
         Ok(())
     }
 
     let mut sig = [0u8; 8];
-    reader.read_exact(&mut sig).map_err(|_| ImgQualityError::AnalysisError("PNG too small".to_string()))?;
+    reader
+        .read_exact(&mut sig)
+        .map_err(|_| ImgQualityError::AnalysisError("PNG too small".to_string()))?;
     if sig != [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
-        return Err(ImgQualityError::AnalysisError("Invalid PNG signature".to_string()));
+        return Err(ImgQualityError::AnalysisError(
+            "Invalid PNG signature".to_string(),
+        ));
     }
 
     // Read IHDR
     let mut ihdr_header = [0u8; 8];
-    reader.read_exact(&mut ihdr_header).map_err(|_| ImgQualityError::AnalysisError("Missing IHDR".to_string()))?;
+    reader
+        .read_exact(&mut ihdr_header)
+        .map_err(|_| ImgQualityError::AnalysisError("Missing IHDR".to_string()))?;
     let mut ihdr_data = [0u8; 13];
-    reader.read_exact(&mut ihdr_data).map_err(|_| ImgQualityError::AnalysisError("IHDR data truncated".to_string()))?;
-    
+    reader
+        .read_exact(&mut ihdr_data)
+        .map_err(|_| ImgQualityError::AnalysisError("IHDR data truncated".to_string()))?;
+
     let width = u32::from_be_bytes([ihdr_data[0], ihdr_data[1], ihdr_data[2], ihdr_data[3]]);
     let height = u32::from_be_bytes([ihdr_data[4], ihdr_data[5], ihdr_data[6], ihdr_data[7]]);
     let bit_depth = ihdr_data[8];
@@ -1245,13 +1276,28 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> R
     let mut detected_tool: Option<String> = None;
 
     let signatures: &[(&str, &str)] = &[
-        ("pngquant", "pngquant"), ("pngnq", "pngnq"), ("TinyPNG", "TinyPNG"), ("tinypng", "TinyPNG"),
-        ("ImageOptim", "ImageOptim"), ("imageoptim", "ImageOptim"), ("posterize", "posterize"),
-        ("quantize", "quantize tool"), ("Quantized", "quantization"), ("color reduction", "color reduction"),
-        ("palette optimization", "palette optimization"), ("Squoosh", "Squoosh"), ("squoosh", "Squoosh"),
-        ("sharp", "sharp"), ("libvips", "sharp/libvips"), ("pngcrush", "pngcrush"), ("PNGOUT", "PNGOUT"),
-        ("pngout", "PNGOUT"), ("Fireworks", "Adobe Fireworks"), ("Adobe Fireworks", "Adobe Fireworks"),
-        ("Sketch", "Sketch"), ("com.bohemiancoding", "Sketch"),
+        ("pngquant", "pngquant"),
+        ("pngnq", "pngnq"),
+        ("TinyPNG", "TinyPNG"),
+        ("tinypng", "TinyPNG"),
+        ("ImageOptim", "ImageOptim"),
+        ("imageoptim", "ImageOptim"),
+        ("posterize", "posterize"),
+        ("quantize", "quantize tool"),
+        ("Quantized", "quantization"),
+        ("color reduction", "color reduction"),
+        ("palette optimization", "palette optimization"),
+        ("Squoosh", "Squoosh"),
+        ("squoosh", "Squoosh"),
+        ("sharp", "sharp"),
+        ("libvips", "sharp/libvips"),
+        ("pngcrush", "pngcrush"),
+        ("PNGOUT", "PNGOUT"),
+        ("pngout", "PNGOUT"),
+        ("Fireworks", "Adobe Fireworks"),
+        ("Adobe Fireworks", "Adobe Fireworks"),
+        ("Sketch", "Sketch"),
+        ("com.bohemiancoding", "Sketch"),
     ];
 
     let mut buf = [0u8; 8];
@@ -1333,7 +1379,16 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(mut reader: R) -> R
         }
     }
 
-    Ok(PngStructureInfo { width, height, bit_depth, color_type, palette_size, has_trns, has_text_chunks, detected_tool })
+    Ok(PngStructureInfo {
+        width,
+        height,
+        bit_depth,
+        color_type,
+        palette_size,
+        has_trns,
+        has_text_chunks,
+        detected_tool,
+    })
 }
 
 fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
@@ -1518,8 +1573,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let blocks_x = (width as usize).div_ceil(block_size);
     let blocks_y = (height as usize).div_ceil(block_size);
 
-    let mut color_freq: std::collections::HashMap<[u8; 4], u32> =
-        std::collections::HashMap::new();
+    let mut color_freq: std::collections::HashMap<[u8; 4], u32> = std::collections::HashMap::new();
     let mut sampled = 0u64;
 
     for by in 0..blocks_y {
@@ -1643,18 +1697,29 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
             let mut grad_len = 0u32;
             let mut steps = 0u32;
 
-            while { x += 1; y += 1; x < width && y < height } {
+            while {
+                x += 1;
+                y += 1;
+                x < width && y < height
+            } {
                 let val = gray.get_pixel(x, y)[0] as i16;
                 let diff = (val - prev_val).abs();
                 if diff > 0 && diff < 20 {
                     grad_len += 1;
-                    if diff > 3 { steps += 1; }
+                    if diff > 3 {
+                        steps += 1;
+                    }
                 } else if grad_len > 20 && steps > 0 {
                     let r = steps as f64 / grad_len as f64;
-                    if r > 0.08 && r < 0.5 { diag_banding += r; diag_regions += 1; }
-                    grad_len = 0; steps = 0;
+                    if r > 0.08 && r < 0.5 {
+                        diag_banding += r;
+                        diag_regions += 1;
+                    }
+                    grad_len = 0;
+                    steps = 0;
                 } else {
-                    grad_len = 0; steps = 0;
+                    grad_len = 0;
+                    steps = 0;
                 }
                 prev_val = val;
             }
@@ -1669,18 +1734,26 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
             let mut steps = 0u32;
 
             while x > 0 && y + 1 < height {
-                x -= 1; y += 1;
+                x -= 1;
+                y += 1;
                 let val = gray.get_pixel(x, y)[0] as i16;
                 let diff = (val - prev_val).abs();
                 if diff > 0 && diff < 20 {
                     grad_len += 1;
-                    if diff > 3 { steps += 1; }
+                    if diff > 3 {
+                        steps += 1;
+                    }
                 } else if grad_len > 20 && steps > 0 {
                     let r = steps as f64 / grad_len as f64;
-                    if r > 0.08 && r < 0.5 { diag_banding += r; diag_regions += 1; }
-                    grad_len = 0; steps = 0;
+                    if r > 0.08 && r < 0.5 {
+                        diag_banding += r;
+                        diag_regions += 1;
+                    }
+                    grad_len = 0;
+                    steps = 0;
                 } else {
-                    grad_len = 0; steps = 0;
+                    grad_len = 0;
+                    steps = 0;
                 }
                 prev_val = val;
             }
@@ -1699,16 +1772,17 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
 
 fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
     let bits_per_sample: u64 = match info.color_type {
-        0 => 1,                    // grayscale: 1 channel
-        2 => 3,                    // RGB: 3 channels
-        3 => 1,                    // indexed: 1 index per pixel
-        4 => 2,                    // grayscale + alpha: 2 channels
-        6 => 4,                    // RGBA: 4 channels
+        0 => 1, // grayscale: 1 channel
+        2 => 3, // RGB: 3 channels
+        3 => 1, // indexed: 1 index per pixel
+        4 => 2, // grayscale + alpha: 2 channels
+        6 => 4, // RGBA: 4 channels
         _ => 4,
     };
 
     // bit_depth applies per sample; for sub-byte depths (1, 2, 4) pixels are packed
-    let total_bits = info.width as u64 * info.height as u64 * bits_per_sample * info.bit_depth as u64;
+    let total_bits =
+        info.width as u64 * info.height as u64 * bits_per_sample * info.bit_depth as u64;
     // Round up to bytes
     total_bits.div_ceil(8)
 }
@@ -1821,7 +1895,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     let compression = detect_compression(&format, path)?;
 
-    let img = open_image_with_limits(path).map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?;
+    let img =
+        open_image_with_limits(path).map_err(|e| ImgQualityError::ImageReadError(e.to_string()))?;
     let (width, height) = img.dimensions();
     let has_alpha = img.color().has_alpha();
     let bit_depth = match img.color() {
@@ -1840,7 +1915,7 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
 
     #[allow(clippy::field_reassign_with_default)]
     let mut precision = PrecisionMetadata::default();
-    
+
     match format {
         DetectedFormat::PNG => {
             let data = std::fs::read(path)?;
@@ -1871,7 +1946,8 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
                     precision.is_lossless_deterministic = comp == CompressionType::Lossless;
                 }
             } else {
-                precision.is_lossless_deterministic = crate::image_formats::webp::is_lossless_from_bytes(&data);
+                precision.is_lossless_deterministic =
+                    crate::image_formats::webp::is_lossless_from_bytes(&data);
                 if !precision.is_lossless_deterministic {
                     precision.quality_estimate = estimate_webp_quality(path).ok();
                 }
@@ -1894,7 +1970,9 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
         _ => {}
     }
 
-    let mut estimated_quality = if format == DetectedFormat::JPEG || (format == DetectedFormat::WebP && compression == CompressionType::Lossy) {
+    let mut estimated_quality = if format == DetectedFormat::JPEG
+        || (format == DetectedFormat::WebP && compression == CompressionType::Lossy)
+    {
         precision.quality_estimate
     } else {
         None
@@ -1981,8 +2059,8 @@ fn estimate_lossy_quality_fallback(
     let entropy_adj = (7.5 / entropy.max(1.0)).sqrt().clamp(0.7, 1.3);
 
     let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
-    let bpp_quality = (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0)
-        as u8;
+    let bpp_quality =
+        (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0) as u8;
 
     crate::progress_mode::emit_stderr(&format!(
         "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
@@ -2037,7 +2115,8 @@ pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
         if chunk_type == b"acTL" {
             if pos + 4 <= data.len() {
                 // Read num_frames (first 4 bytes of acTL data)
-                let num_frames = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+                let num_frames =
+                    u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 return (true, num_frames.max(1));
             }
             return (true, 2); // Fallback if we can't read frame count
@@ -2119,28 +2198,35 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     // Each directory entry is 16 bytes, starting at offset 6
     for i in 0..image_count {
         let entry_offset = 6 + (i as u64) * 16;
-        file.seek(SeekFrom::Start(entry_offset)).map_err(ImgQualityError::IoError)?;
-        
+        file.seek(SeekFrom::Start(entry_offset))
+            .map_err(ImgQualityError::IoError)?;
+
         let mut entry = [0u8; 16];
-        if file.read_exact(&mut entry).is_err() { break; }
+        if file.read_exact(&mut entry).is_err() {
+            break;
+        }
 
         // Bytes 8-11: size of image data, bytes 12-15: offset of image data
         let img_size = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]) as u64;
         let img_offset = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]) as u64;
 
         // Peak into image data for PNG magic
-        file.seek(SeekFrom::Start(img_offset)).map_err(ImgQualityError::IoError)?;
+        file.seek(SeekFrom::Start(img_offset))
+            .map_err(ImgQualityError::IoError)?;
         let mut magic_peek = [0u8; 8];
         if file.read_exact(&mut magic_peek).is_ok() && magic_peek == png_magic {
             // Seek back to start of image data for full analysis
-            file.seek(SeekFrom::Start(img_offset)).map_err(ImgQualityError::IoError)?;
+            file.seek(SeekFrom::Start(img_offset))
+                .map_err(ImgQualityError::IoError)?;
             let mut img_reader = (&file).take(img_size);
             // Since analyze_png_quantization_from_reader needs Seek, and take() doesn't provide it easily,
             // we read the PNG part into memory. BUT: PNGs inside ICO are usually small (max 512KB for 256x256).
             // This is infinitely safer than loading the whole 64MB ICO.
             let mut png_data = Vec::with_capacity(img_size as usize);
-            img_reader.read_to_end(&mut png_data).map_err(ImgQualityError::IoError)?;
-            
+            img_reader
+                .read_to_end(&mut png_data)
+                .map_err(ImgQualityError::IoError)?;
+
             if let Ok(analysis) = analyze_png_quantization_from_bytes(&png_data) {
                 if analysis.is_quantized {
                     return Ok(CompressionType::Lossy);
@@ -2219,7 +2305,8 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
                 break;
             }
             let value_size =
-                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+                u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                    as usize;
             pos += 4;
 
             if name == b"compression" && value_size >= 1 && pos < data.len() {
@@ -2327,7 +2414,11 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
             eprintln!(
                 "   📊 JP2 COD wavelet: {} ({})",
                 wavelet,
-                if wavelet == 1 { "5/3 reversible — lossless" } else { "9/7 irreversible — lossy" }
+                if wavelet == 1 {
+                    "5/3 reversible — lossless"
+                } else {
+                    "9/7 irreversible — lossy"
+                }
             );
         }
         // If COD is lossy and no COC overrides, it's lossy
@@ -2343,7 +2434,11 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
                 "   📊 JP2 COC component {} wavelet: {} ({})",
                 component,
                 wavelet,
-                if *wavelet == 1 { "5/3 reversible — lossless" } else { "9/7 irreversible — lossy" }
+                if *wavelet == 1 {
+                    "5/3 reversible — lossless"
+                } else {
+                    "9/7 irreversible — lossy"
+                }
             );
         }
         // Any lossy component → entire file is lossy
@@ -2365,9 +2460,8 @@ fn detect_jp2_compression(path: &Path) -> Result<CompressionType> {
 fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([
-            data[pos], data[pos + 1], data[pos + 2], data[pos + 3],
-        ]) as usize;
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let box_type = &data[pos + 4..pos + 8];
 
         if box_type == b"jp2c" {
@@ -2377,10 +2471,18 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
         if size == 0 {
             break;
         } else if size == 1 {
-            if pos + 16 > data.len() { break; }
+            if pos + 16 > data.len() {
+                break;
+            }
             let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+                data[pos + 8],
+                data[pos + 9],
+                data[pos + 10],
+                data[pos + 11],
+                data[pos + 12],
+                data[pos + 13],
+                data[pos + 14],
+                data[pos + 15],
             ]) as usize;
             pos += ext;
         } else if size < 8 {
@@ -2457,7 +2559,9 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
         }
 
         // Skip marker segment
-        if pos + 4 > cs.len() { break; }
+        if pos + 4 > cs.len() {
+            break;
+        }
         let seg_len = u16::from_be_bytes([cs[pos + 2], cs[pos + 3]]) as usize;
         pos += 2 + seg_len;
     }
@@ -2494,7 +2598,11 @@ mod tests {
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "PNG format detection should succeed");
-        assert_eq!(result.unwrap(), DetectedFormat::PNG, "Should be detected as PNG format");
+        assert_eq!(
+            result.unwrap(),
+            DetectedFormat::PNG,
+            "Should be detected as PNG format"
+        );
     }
 
     #[test]
@@ -2524,7 +2632,11 @@ mod tests {
 
         let result = detect_format_from_bytes(file.path());
         assert!(result.is_ok(), "GIF format detection should succeed");
-        assert_eq!(result.unwrap(), DetectedFormat::GIF, "Should be detected as GIF format");
+        assert_eq!(
+            result.unwrap(),
+            DetectedFormat::GIF,
+            "Should be detected as GIF format"
+        );
     }
 
     #[test]
@@ -2555,7 +2667,10 @@ mod tests {
         file.write_all(&data).expect("Failed to write");
 
         let result = detect_format_from_bytes(file.path());
-        assert!(result.is_ok(), "Unknown format detection should succeed (return Unknown)");
+        assert!(
+            result.is_ok(),
+            "Unknown format detection should succeed (return Unknown)"
+        );
         match result.unwrap() {
             DetectedFormat::Unknown(_) => (),
             other => panic!("Should be detected as Unknown format, actual {:?}", other),

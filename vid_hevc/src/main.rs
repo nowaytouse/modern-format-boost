@@ -2,10 +2,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::info;
 
+use shared_utils::analysis_cache::AnalysisCache;
 use vid_hevc::{
     auto_convert_with_cache, detect_video, determine_strategy, ConversionConfig, VidQualityError,
 };
-use shared_utils::analysis_cache::AnalysisCache;
 
 #[derive(Parser)]
 #[command(name = "vid-hevc")]
@@ -66,10 +66,9 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
-    if let Err(e) = shared_utils::logging::init_logging(
-        "vid_hevc",
-        shared_utils::logging::LogConfig::default(),
-    ) {
+    if let Err(e) =
+        shared_utils::logging::init_logging("vid_hevc", shared_utils::logging::LogConfig::default())
+    {
         eprintln!("⚠️ Failed to initialize logging: {}", e);
     }
 
@@ -141,7 +140,11 @@ fn main() -> anyhow::Result<()> {
             shared_utils::progress_mode::set_verbose_mode(verbose);
             // Run 时自动创建并写入 ./logs/vid_hevc_run_<timestamp>.log，无需任何 flag
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_hevc") {
-                shared_utils::log_eprintln!("⚠️  {}: {}", "\x1b[33mCould not open run log file\x1b[0m", e);
+                shared_utils::log_eprintln!(
+                    "⚠️  {}: {}",
+                    "\x1b[33mCould not open run log file\x1b[0m",
+                    e
+                );
             }
             info!("🎬 Run Mode Conversion (HEVC/H.265)");
             info!("   Lossless sources → HEVC Lossless MKV");
@@ -172,7 +175,10 @@ fn main() -> anyhow::Result<()> {
             let cache = match AnalysisCache::default_local() {
                 Ok(cache) => Some(cache),
                 Err(e) => {
-                    shared_utils::log_eprintln!("⚠️ [Cache] Failed to initialize persistent cache: {}", e);
+                    shared_utils::log_eprintln!(
+                        "⚠️ [Cache] Failed to initialize persistent cache: {}",
+                        e
+                    );
                     None
                 }
             };
@@ -197,7 +203,10 @@ fn main() -> anyhow::Result<()> {
                     }),
                     resume,
                 },
-                |file| auto_convert_with_cache(file, &config, cache.as_ref()).map_err(|e: VidQualityError| anyhow::anyhow!(e)),
+                |file| {
+                    auto_convert_with_cache(file, &config, cache.as_ref())
+                        .map_err(|e: VidQualityError| anyhow::anyhow!(e))
+                },
             )?;
             shared_utils::progress_mode::xmp_merge_finalize();
             shared_utils::progress_mode::flush_log_file();

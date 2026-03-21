@@ -14,12 +14,12 @@
 //! - 错误透明：所有错误都包含详细上下文
 //! - 完整文档：每个函数都有清晰的文档和示例
 
+use crate::types::ProcessHistory;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
-use crate::types::ProcessHistory;
 
 #[inline]
 pub fn get_extension_lowercase(path: &Path) -> String {
@@ -245,7 +245,7 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 
 /// Recursively find a box by type and return its payload (excluding size + type).
 /// Used by ISO BMFF formats (AVIF, HEIC, JXL container).
-/// 
+///
 /// This version correctly handles:
 /// - Standard boxes (size + type + payload)
 /// - Extended size boxes (size=1, followed by 64-bit size)
@@ -254,16 +254,22 @@ pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option
     find_box_data_recursive_impl(data, box_type, 0, 32)
 }
 
-fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u32, max_depth: u32) -> Option<&'a [u8]> {
+fn find_box_data_recursive_impl<'a>(
+    data: &'a [u8],
+    box_type: &[u8; 4],
+    depth: u32,
+    max_depth: u32,
+) -> Option<&'a [u8]> {
     if depth >= max_depth {
         return None;
     }
-    
+
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let current_type = &data[pos + 4..pos + 8];
-        
+
         let (payload_start, next_pos) = if size == 0 {
             // Size 0 means "to end of file"
             (pos + 8, data.len())
@@ -274,8 +280,14 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
                 continue;
             }
             let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+                data[pos + 8],
+                data[pos + 9],
+                data[pos + 10],
+                data[pos + 11],
+                data[pos + 12],
+                data[pos + 13],
+                data[pos + 14],
+                data[pos + 15],
             ]) as usize;
             if ext < 16 || pos + ext > data.len() {
                 pos += 16;
@@ -293,18 +305,29 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
             }
             (pos + 8, pos + size)
         };
-        
+
         if current_type == box_type {
             if next_pos <= data.len() && payload_start < next_pos {
                 return Some(&data[payload_start..next_pos]);
             }
             return None;
         }
-        
+
         // Recursively search in container boxes
         // Common container boxes in HEIC: moov, trak, mdia, minf, stbl, meta, iprp, ipco
-        if matches!(current_type, b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"meta" | b"iprp" | b"ipco" | b"moof" | b"traf")
-            && next_pos > payload_start
+        if matches!(
+            current_type,
+            b"moov"
+                | b"trak"
+                | b"mdia"
+                | b"minf"
+                | b"stbl"
+                | b"meta"
+                | b"iprp"
+                | b"ipco"
+                | b"moof"
+                | b"traf"
+        ) && next_pos > payload_start
         {
             // For 'meta' box, skip version/flags (4 bytes) if present
             let sub_start = if current_type == b"meta" && payload_start + 4 <= next_pos {
@@ -312,15 +335,17 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
             } else {
                 payload_start
             };
-            
+
             if sub_start < next_pos {
                 let sub = &data[sub_start..next_pos];
-                if let Some(payload) = find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth) {
+                if let Some(payload) =
+                    find_box_data_recursive_impl(sub, box_type, depth + 1, max_depth)
+                {
                     return Some(payload);
                 }
             }
         }
-        
+
         pos = next_pos;
     }
     None
@@ -330,7 +355,8 @@ fn find_box_data_recursive_impl<'a>(data: &'a [u8], box_type: &[u8; 4], depth: u
 pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     let mut pos = 0;
     while pos + 8 <= data.len() {
-        let size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let current_type = &data[pos + 4..pos + 8];
         if current_type == box_type {
             return true;
@@ -343,8 +369,14 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
                 continue;
             }
             let ext = u64::from_be_bytes([
-                data[pos + 8], data[pos + 9], data[pos + 10], data[pos + 11],
-                data[pos + 12], data[pos + 13], data[pos + 14], data[pos + 15],
+                data[pos + 8],
+                data[pos + 9],
+                data[pos + 10],
+                data[pos + 11],
+                data[pos + 12],
+                data[pos + 13],
+                data[pos + 14],
+                data[pos + 15],
             ]) as usize;
             (pos + 16, (pos + ext).min(data.len()))
         } else if size < 8 {
@@ -353,7 +385,9 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
         } else {
             (pos + 8, (pos + size).min(data.len()))
         };
-        if next_pos > payload_start && find_any_box_recursive(&data[payload_start..next_pos], box_type) {
+        if next_pos > payload_start
+            && find_any_box_recursive(&data[payload_start..next_pos], box_type)
+        {
             return true;
         }
         pos = next_pos;

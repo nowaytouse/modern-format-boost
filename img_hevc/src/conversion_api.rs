@@ -120,9 +120,12 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         (ImageType::Animated, CompressionType::Lossless, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("MP4");
-            let fps = detection.fps.ok_or_else(|| ImgQualityError::AnalysisError(
-                format!("Cannot determine FPS for animated image: {}", input_path)
-            ))?;
+            let fps = detection.fps.ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "Cannot determine FPS for animated image: {}",
+                    input_path
+                ))
+            })?;
             Ok(ConversionStrategy {
                 target: TargetFormat::HEVCMP4,
                 reason:
@@ -148,9 +151,12 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
         (ImageType::Static, CompressionType::Lossy, _) => {
             let input_path = &detection.file_path;
             let output_path = Path::new(input_path).with_extension("AVIF");
-            let quality = detection.estimated_quality.ok_or_else(|| ImgQualityError::AnalysisError(
-                format!("Cannot determine estimated quality for lossy image: {}", input_path)
-            ))?;
+            let quality = detection.estimated_quality.ok_or_else(|| {
+                ImgQualityError::AnalysisError(format!(
+                    "Cannot determine estimated quality for lossy image: {}",
+                    input_path
+                ))
+            })?;
             Ok(ConversionStrategy {
                 target: TargetFormat::AVIF,
                 reason: "Static lossy image (non-JPEG), recommend AVIF for better compression"
@@ -205,8 +211,7 @@ pub fn execute_conversion(
         }
     };
 
-    let output_path =
-        resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
+    let output_path = resolve_output_path(input_path, config.output_dir.as_deref(), extension)?;
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(ImgQualityError::ConversionError)?;
 
@@ -248,8 +253,13 @@ pub fn execute_conversion(
         return Err(ImgQualityError::ConversionError(e.to_string()));
     }
 
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_path, &output_path, config.force, Some(input_path))
-        .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_path,
+        &output_path,
+        config.force,
+        Some(input_path),
+    )
+    .map_err(|e| ImgQualityError::ConversionError(e.to_string()))?
     {
         return Ok(ConversionOutput {
             original_path: detection.file_path.clone(),
@@ -305,13 +315,11 @@ pub fn execute_conversion(
     }
 
     if config.delete_original {
-        if let Err(e) =
-            shared_utils::conversion::safe_delete_original(
-                input_path,
-                &output_path,
-                shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
-            )
-        {
+        if let Err(e) = shared_utils::conversion::safe_delete_original(
+            input_path,
+            &output_path,
+            shared_utils::conversion::MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE,
+        ) {
             eprintln!("   ⚠️  Safe delete failed: {}", e);
         }
     }
@@ -347,9 +355,9 @@ fn resolve_output_path(
     output_dir: Option<&Path>,
     extension: &str,
 ) -> Result<PathBuf> {
-    let file_stem = input
-        .file_stem()
-        .ok_or_else(|| ImgQualityError::ConversionError("Invalid file path: no file stem".to_string()))?;
+    let file_stem = input.file_stem().ok_or_else(|| {
+        ImgQualityError::ConversionError("Invalid file path: no file stem".to_string())
+    })?;
     let output = if let Some(dir) = output_dir {
         dir.join(file_stem).with_extension(extension)
     } else {
@@ -411,7 +419,8 @@ fn convert_to_jxl(
     if let Err(e) = shared_utils::jxl_utils::verify_jxl_health(output) {
         cleanup_output_file(output, "unhealthy JXL output");
         return Err(ImgQualityError::ConversionError(format!(
-            "JXL health check failed: {}", e
+            "JXL health check failed: {}",
+            e
         )));
     }
 
@@ -450,7 +459,9 @@ fn convert_to_avif(
     config: &ConversionConfig,
 ) -> Result<()> {
     let q = quality
-        .ok_or_else(|| ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string()))?
+        .ok_or_else(|| {
+            ImgQualityError::AnalysisError("Missing quality for AVIF conversion".to_string())
+        })?
         .to_string();
     let input_abs = canonicalize_input(input);
     let output_abs = resolve_output_absolute(output);
@@ -480,7 +491,8 @@ fn convert_to_avif(
     if let Err(e) = shared_utils::avif_av1_health::verify_avif_health(output) {
         cleanup_output_file(output, "unhealthy AVIF output");
         return Err(ImgQualityError::ConversionError(format!(
-            "AVIF health check failed: {}", e
+            "AVIF health check failed: {}",
+            e
         )));
     }
 
@@ -509,7 +521,9 @@ fn convert_to_hevc_mp4(
 ) -> Result<()> {
     use shared_utils::ffmpeg_process::FfmpegProcess;
 
-    let fps_val = fps.ok_or_else(|| ImgQualityError::AnalysisError("Missing FPS for HEVC MP4 conversion".to_string()))?;
+    let fps_val = fps.ok_or_else(|| {
+        ImgQualityError::AnalysisError("Missing FPS for HEVC MP4 conversion".to_string())
+    })?;
     let fps_str = fps_val.to_string();
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
@@ -588,8 +602,6 @@ fn convert_to_hevc_mp4(
     Ok(())
 }
 
-
-
 fn preserve_timestamps(source: &Path, dest: &Path) -> Result<()> {
     shared_utils::copy_metadata(source, dest);
     Ok(())
@@ -618,15 +630,13 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
         base_dir: None,
         force: false,
         delete_original: false,
-        preserve_timestamps: true,  // Changed: Always preserve timestamps by default
-        preserve_metadata: true,     // Changed: Always preserve metadata by default
+        preserve_timestamps: true, // Changed: Always preserve timestamps by default
+        preserve_metadata: true,   // Changed: Always preserve metadata by default
         compress: false,
         apple_compat: false,
     };
     smart_convert(path, &config)
 }
-
-
 
 #[cfg(test)]
 mod tests {

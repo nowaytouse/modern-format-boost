@@ -75,7 +75,10 @@ pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
     let mut calculated = (cpu_count * effective_percentage / 100).max(1);
     calculated = calculated.clamp(config.min_threads, config.max_threads);
 
-    let memory_cap = match (system_memory::memory_pressure_level(), system_memory::is_low_memory_env()) {
+    let memory_cap = match (
+        system_memory::memory_pressure_level(),
+        system_memory::is_low_memory_env(),
+    ) {
         (_, true) | (Some(MemoryPressure::High), _) => 2,
         (Some(MemoryPressure::Normal), _) => 4,
         _ => calculated,

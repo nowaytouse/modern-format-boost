@@ -8,7 +8,6 @@
 //! - ���一的视觉风格
 //! - 调试级别控制
 
-
 /// 颜色管理器 - 确保颜色正确关闭
 pub struct ColorGuard {
     enabled: bool,

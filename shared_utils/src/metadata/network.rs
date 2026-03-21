@@ -64,8 +64,7 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
             Err(e) => {
                 eprintln!(
                     "⚠️ [metadata] Could not re-read source xattr '{}' during verification: {}",
-                    key,
-                    e
+                    key, e
                 );
             }
         }

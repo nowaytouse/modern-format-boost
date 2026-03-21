@@ -99,7 +99,11 @@ where
         anyhow::bail!("{}", e);
     }
 
-    let files = crate::collect_files_small_first(input, SUPPORTED_VIDEO_EXTENSIONS, recursive);
+    let files = crate::collect_video_files_for_perceived_speed(
+        input,
+        SUPPORTED_VIDEO_EXTENSIONS,
+        recursive,
+    );
 
     if files.is_empty() {
         anyhow::bail!(
@@ -112,6 +116,7 @@ where
     }
 
     info!("📂 Found {} video files to process", files.len());
+    info!("⚡ Queue Strategy: deeper paths → lighter workload → shorter duration → smaller files → lower resolution");
 
     // Pre-flight disk space check: require at least the total input size free on the output volume.
     // This catches "No space left on device" before encoding starts rather than mid-encode.
@@ -181,29 +186,39 @@ where
     let mut total_input_bytes: u64 = 0;
     let mut total_output_bytes: u64 = 0;
     let pause_controller = BatchPauseController::new();
+    let total_files = files.len();
+    let progress_bar = crate::CoarseProgressBar::new(total_files as u64, "Running");
+    let mut pending_files = files;
+    let mut recent_success_ext: Option<String> = None;
+    let mut recent_success_parent: Option<PathBuf> = None;
 
-    for file in &files {
+    while !pending_files.is_empty() {
         if pause_controller.is_paused() {
             break;
         }
 
+        let next_index = select_hot_start_file_index(
+            &pending_files,
+            recent_success_ext.as_deref(),
+            recent_success_parent.as_deref(),
+        );
+        let file = pending_files.remove(next_index);
+        progress_bar.set_message(&file.file_name().unwrap_or_default().to_string_lossy());
+
         // Fix extension by content first; after fix, only treat as video if extension still in list (avoids disguised-extension panic).
-        let fixed = match fix_extension_if_mismatch(file) {
+        let fixed = match fix_extension_if_mismatch(&file) {
             Ok(p) => p,
             Err(e) => {
                 error!("❌ Extension fix failed for {}: {}", file.display(), e);
                 if let Some(reason) = disk_full_pause_reason(&e.to_string()) {
-                    if pause_controller.request_pause(file, reason.clone()) {
+                    if pause_controller.request_pause(&file, reason.clone()) {
                         warn!("⏸️ Batch paused at {}: {}", file.display(), reason);
                     }
-                    batch_result.pause(
-                        file.clone(),
-                        reason,
-                        files.len().saturating_sub(batch_result.total),
-                    );
+                    batch_result.pause(file.clone(), reason, pending_files.len().saturating_add(1));
                     break;
                 }
                 batch_result.fail(file.clone(), e.to_string());
+                progress_bar.set(batch_result.total as u64);
                 continue;
             }
         };
@@ -224,6 +239,7 @@ where
                 }
             }
             batch_result.skip();
+            progress_bar.set(batch_result.total as u64);
             continue;
         }
 
@@ -231,6 +247,7 @@ where
         if let Some(ref cp) = checkpoint {
             if cp.is_completed(&fixed) {
                 batch_result.skip();
+                progress_bar.set(batch_result.total as u64);
                 continue;
             }
         }
@@ -255,6 +272,8 @@ where
                     crate::progress_mode::video_processed_success();
                     total_input_bytes += result.input_size();
                     total_output_bytes += result.output_size().unwrap_or(result.input_size());
+                    recent_success_ext = extension_lower(&fixed);
+                    recent_success_parent = fixed.parent().map(Path::to_path_buf);
 
                     // Mark as completed
                     if let Some(ref mut cp) = checkpoint {
@@ -274,7 +293,7 @@ where
                         batch_result.pause(
                             fixed.clone(),
                             reason,
-                            files.len().saturating_sub(batch_result.total),
+                            pending_files.len().saturating_add(1),
                         );
                         break;
                     }
@@ -302,7 +321,7 @@ where
                     batch_result.pause(
                         fixed.clone(),
                         reason,
-                        files.len().saturating_sub(batch_result.total),
+                        pending_files.len().saturating_add(1),
                     );
                     break;
                 } else {
@@ -326,6 +345,14 @@ where
                 }
             }
         }
+
+        progress_bar.set(batch_result.total as u64);
+    }
+
+    if batch_result.paused {
+        progress_bar.finish_and_clear();
+    } else {
+        progress_bar.finish();
     }
 
     // Cleanup checkpoint only on 100% success
@@ -388,6 +415,46 @@ where
     }
 
     Ok(())
+}
+
+fn extension_lower(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+}
+
+fn select_hot_start_file_index(
+    pending_files: &[PathBuf],
+    recent_success_ext: Option<&str>,
+    recent_success_parent: Option<&Path>,
+) -> usize {
+    if pending_files.is_empty() {
+        return 0;
+    }
+
+    let window = pending_files.len().min(48);
+    let mut best_index = 0usize;
+    let mut best_score = (i32::MIN, i32::MIN);
+
+    for (index, path) in pending_files.iter().take(window).enumerate() {
+        let ext_match = recent_success_ext
+            .and_then(|ext| extension_lower(path).map(|current| current == ext))
+            .unwrap_or(false);
+        let parent_match = recent_success_parent
+            .map(|parent| path.parent() == Some(parent))
+            .unwrap_or(false);
+
+        let hot_start_score = (ext_match as i32) * 4 + (parent_match as i32) * 2;
+        let proximity_score = (window - index) as i32;
+        let score = (hot_start_score, proximity_score);
+
+        if score > best_score {
+            best_score = score;
+            best_index = index;
+        }
+    }
+
+    best_index
 }
 
 fn process_single_file<F, R>(config: &CliRunnerConfig, converter: F) -> Result<()>
@@ -474,4 +541,34 @@ where
     info!("   Result: {}", result.message());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hot_start_prefers_same_extension_within_front_window() {
+        let pending = vec![
+            PathBuf::from("a/clip-01.mov"),
+            PathBuf::from("b/clip-02.mp4"),
+            PathBuf::from("c/clip-03.mov"),
+            PathBuf::from("d/clip-04.mp4"),
+        ];
+
+        let next = select_hot_start_file_index(&pending, Some("mp4"), None);
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn hot_start_prefers_same_parent_when_extension_ties() {
+        let pending = vec![
+            PathBuf::from("alpha/one.mov"),
+            PathBuf::from("beta/two.mov"),
+            PathBuf::from("alpha/three.mp4"),
+        ];
+
+        let next = select_hot_start_file_index(&pending, Some("mov"), Some(Path::new("beta")));
+        assert_eq!(next, 1);
+    }
 }

@@ -34,49 +34,59 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let temp_dir = tempfile::Builder::new()
         .prefix("webp_frames_")
         .tempdir()
-        .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp dir: {}", e)))?;
+        .map_err(|e| {
+            VidQualityError::ConversionError(format!("Failed to create temp dir: {}", e))
+        })?;
     let temp_dir_path = temp_dir.path();
-    
+
     // Get WebP info to determine frame count and duration
     let webpmux_info = Command::new("webpmux")
         .arg("-info")
         .arg(shared_utils::safe_path_arg(input).as_ref())
         .output()
         .map_err(|e| VidQualityError::ConversionError(format!("webpmux not found: {}", e)))?;
-    
+
     if !webpmux_info.status.success() {
-        return Err(VidQualityError::ConversionError("webpmux -info failed".to_string()));
+        return Err(VidQualityError::ConversionError(
+            "webpmux -info failed".to_string(),
+        ));
     }
-    
+
     let info_str = String::from_utf8_lossy(&webpmux_info.stdout);
-    
+
     // Parse frame count and duration
-    let frame_count = info_str.lines()
+    let frame_count = info_str
+        .lines()
         .find(|l| l.contains("Number of frames:"))
         .and_then(|l| l.split(':').nth(1))
         .and_then(|s| s.trim().parse::<u32>().ok())
-        .ok_or_else(|| VidQualityError::ConversionError("Failed to parse frame count".to_string()))?;
-    
+        .ok_or_else(|| {
+            VidQualityError::ConversionError("Failed to parse frame count".to_string())
+        })?;
+
     // Parse duration from first frame (assuming all frames have same duration)
-    let frame_duration_ms = info_str.lines()
+    let frame_duration_ms = info_str
+        .lines()
         .find(|l| l.contains("duration"))
-        .and_then(|l| {
-            l.split_whitespace()
-                .find_map(|s| s.parse::<u32>().ok())
-        })
-        .ok_or_else(|| VidQualityError::ConversionError("Failed to parse frame duration from WebP".to_string()))?;
-    
+        .and_then(|l| l.split_whitespace().find_map(|s| s.parse::<u32>().ok()))
+        .ok_or_else(|| {
+            VidQualityError::ConversionError("Failed to parse frame duration from WebP".to_string())
+        })?;
+
     let fps = 1000.0 / frame_duration_ms as f64;
-    
+
     if verbose {
-        eprintln!("   📊 WebP: {} frames, {}ms/frame, {:.2}fps", frame_count, frame_duration_ms, fps);
+        eprintln!(
+            "   📊 WebP: {} frames, {}ms/frame, {:.2}fps",
+            frame_count, frame_duration_ms, fps
+        );
     }
-    
+
     // Extract each frame using webpmux and convert to PNG
     for i in 1..=frame_count {
         let frame_webp_path = temp_dir_path.join(format!("frame_{:04}.webp", i));
         let frame_png_path = temp_dir_path.join(format!("frame_{:04}.png", i));
-        
+
         // Extract frame as WebP
         let extract_result = Command::new("webpmux")
             .arg("-get")
@@ -86,12 +96,17 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .arg("-o")
             .arg(&frame_webp_path)
             .output()
-            .map_err(|e| VidQualityError::ConversionError(format!("webpmux extract failed: {}", e)))?;
-        
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!("webpmux extract failed: {}", e))
+            })?;
+
         if !extract_result.status.success() {
-            return Err(VidQualityError::ConversionError(format!("Failed to extract frame {}", i)));
+            return Err(VidQualityError::ConversionError(format!(
+                "Failed to extract frame {}",
+                i
+            )));
         }
-        
+
         // Convert WebP frame to PNG using FFmpeg
         let convert_result = Command::new("ffmpeg")
             .arg("-y")
@@ -99,41 +114,57 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .arg(&frame_webp_path)
             .arg(&frame_png_path)
             .output()
-            .map_err(|e| VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {}", e)))?;
-        
+            .map_err(|e| {
+                VidQualityError::ConversionError(format!(
+                    "FFmpeg WebP→PNG conversion failed: {}",
+                    e
+                ))
+            })?;
+
         if !convert_result.status.success() {
             let stderr = String::from_utf8_lossy(&convert_result.stderr);
-            return Err(VidQualityError::ConversionError(format!("Failed to convert frame {} to PNG: {}", i, stderr)));
+            return Err(VidQualityError::ConversionError(format!(
+                "Failed to convert frame {} to PNG: {}",
+                i, stderr
+            )));
         }
     }
-    
+
     // Create APNG from PNG sequence using FFmpeg
     let pattern = temp_dir_path.join("frame_%04d.png");
     let ffmpeg_result = Command::new("ffmpeg")
         .arg("-y")
-        .arg("-r")  // Use -r for input frame rate
+        .arg("-r") // Use -r for input frame rate
         .arg(fps.to_string())
         .arg("-i")
         .arg(&pattern)
         .arg("-c:v")
-        .arg("apng")  // Use apng codec, not png
+        .arg("apng") // Use apng codec, not png
         .arg("-f")
         .arg("apng")
         .arg("-plays")
         .arg("0") // Loop forever
         .arg(shared_utils::safe_path_arg(output_apng).as_ref())
         .output()
-        .map_err(|e| VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {}", e)))?;
-    
+        .map_err(|e| {
+            VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {}", e))
+        })?;
+
     if !ffmpeg_result.status.success() {
         let stderr = String::from_utf8_lossy(&ffmpeg_result.stderr);
-        return Err(VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {}", stderr)));
+        return Err(VidQualityError::ConversionError(format!(
+            "FFmpeg APNG creation failed: {}",
+            stderr
+        )));
     }
-    
+
     if verbose {
-        shared_utils::progress_mode::emit_stderr(&format!("   ✅ WebP → APNG conversion successful ({} frames, {:.2}fps)", frame_count, fps));
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "   ✅ WebP → APNG conversion successful ({} frames, {:.2}fps)",
+            frame_count, fps
+        ));
     }
-    
+
     Ok(())
 }
 
@@ -268,8 +299,7 @@ fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
         input_size,
         output_size: None,
         size_reduction: None,
-        message: "Skipped: Static image (1 frame), use image conversion path instead"
-            .to_string(),
+        message: "Skipped: Static image (1 frame), use image conversion path instead".to_string(),
         skipped: true,
         skip_reason: Some("static_animated".to_string()),
     }
@@ -312,13 +342,13 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     }
 
     let input_size = fs::metadata(input)?.len();
-    
+
     let input_ext = input
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    
+
     let ext = if options.apple_compat { "mov" } else { "mp4" };
     let output = get_output_path(input, ext, options)?;
 
@@ -332,12 +362,12 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
     // Special handling for animated WebP: FFmpeg's WebP decoder is unreliable for animated WebP.
     // We must use webpmux to extract frames and create APNG with correct timing.
-    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose {
                 eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
             }
-            
+
             // Check if djxl is available
             if which::which("djxl").is_err() {
                 tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
@@ -355,24 +385,28 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                     skip_reason: Some("djxl_not_found".to_string()),
                 });
             }
-            
+
             // Create temporary APNG file
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
-                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                .map_err(|e| {
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            
+
             // Convert JXL to APNG using djxl
             let djxl_result = Command::new("djxl")
                 .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
                 .output();
-            
+
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        shared_utils::progress_mode::emit_stderr("   ✅ JXL → APNG conversion successful");
+                        shared_utils::progress_mode::emit_stderr(
+                            "   ✅ JXL → APNG conversion successful",
+                        );
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
@@ -397,7 +431,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
             if options.verbose {
                 eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
-            
+
             // Check if webpmux is available
             if which::which("webpmux").is_err() {
                 tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
@@ -415,14 +449,16 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                     skip_reason: Some("webpmux_not_found".to_string()),
                 });
             }
-            
+
             // Create temporary APNG file
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
-                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                .map_err(|e| {
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            
+
             // Extract WebP frames and create APNG with correct timing
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
                 Ok(_) => (temp_apng_path, Some(temp_apng)),
@@ -452,7 +488,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
 
     let max_threads = get_max_threads(options);
     let svtav1_params = format!("tune=0:film-grain=0:lp={}", max_threads);
-    
+
     // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
     // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
     let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
@@ -460,7 +496,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     } else {
         0 // Default to first stream
     };
-    
+
     // For APNG (converted from JXL/WebP), stream_idx should be 0 since APNG is single-stream
     // For AVIF/HEIC with multiple streams, use the stream_idx from probe
     let effective_stream_idx = if input_ext == "jxl" || input_ext == "webp" {
@@ -468,7 +504,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     } else {
         stream_idx
     };
-    
+
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-threads")
@@ -476,7 +512,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         .arg("-i")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
         .arg("-map")
-        .arg(format!("0:{}", effective_stream_idx))  // Select the correct stream
+        .arg(format!("0:{}", effective_stream_idx)) // Select the correct stream
         // NO -r parameter: preserve original frame rate
         .arg("-c:v")
         .arg("libsvtav1")
@@ -521,7 +557,12 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 });
             }
 
-            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+                &temp_output,
+                &output,
+                options.force,
+                Some(input),
+            )? {
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
@@ -581,7 +622,10 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!("AV1 encode failed; original copied (ffmpeg: {})", stderr.lines().last().unwrap_or("")),
+                message: format!(
+                    "AV1 encode failed; original copied (ffmpeg: {})",
+                    stderr.lines().last().unwrap_or("")
+                ),
                 skipped: true,
                 skip_reason: Some("av1_encode_failed".to_string()),
             })
@@ -599,7 +643,10 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!("AV1 encode failed (ffmpeg not found: {}); original copied", e),
+                message: format!(
+                    "AV1 encode failed (ffmpeg not found: {}); original copied",
+                    e
+                ),
                 skipped: true,
                 skip_reason: Some("av1_encode_failed".to_string()),
             })
@@ -643,13 +690,13 @@ pub fn convert_to_av1_mp4_matched(
     }
 
     let input_size = fs::metadata(input)?.len();
-    
+
     let input_ext = input
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
         .unwrap_or_default();
-    
+
     let ext = if options.apple_compat { "mov" } else { "mp4" };
     let output = get_output_path(input, ext, options)?;
 
@@ -660,7 +707,7 @@ pub fn convert_to_av1_mp4_matched(
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
     // Special handling for animated JXL/WebP: pre-convert to APNG
-    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose {
                 eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
@@ -684,7 +731,9 @@ pub fn convert_to_av1_mp4_matched(
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
-                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                .map_err(|e| {
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
             let djxl_result = Command::new("djxl")
                 .arg(shared_utils::safe_path_arg(input).as_ref())
@@ -693,7 +742,9 @@ pub fn convert_to_av1_mp4_matched(
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        shared_utils::progress_mode::emit_stderr("   ✅ JXL → APNG conversion successful");
+                        shared_utils::progress_mode::emit_stderr(
+                            "   ✅ JXL → APNG conversion successful",
+                        );
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
@@ -718,7 +769,7 @@ pub fn convert_to_av1_mp4_matched(
             if options.verbose {
                 eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
-            
+
             // Check if webpmux is available
             if which::which("webpmux").is_err() {
                 tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
@@ -736,14 +787,16 @@ pub fn convert_to_av1_mp4_matched(
                     skip_reason: Some("webpmux_not_found".to_string()),
                 });
             }
-            
+
             // Create temporary APNG file
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
-                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                .map_err(|e| {
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            
+
             // Extract WebP frames and create APNG with correct timing
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
                 Ok(_) => (temp_apng_path, Some(temp_apng)),
@@ -770,32 +823,48 @@ pub fn convert_to_av1_mp4_matched(
 
     // For multi-stream AVIF/HEIC, convert the correct stream to APNG
     // This ensures explore functions work with the correct stream
-    let (final_input, temp_stream_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
-        if (input_ext == "avif" || input_ext == "heic" || input_ext == "heif") && temp_apng_file.is_none() {
+    let (final_input, temp_stream_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
+        if (input_ext == "avif" || input_ext == "heic" || input_ext == "heif")
+            && temp_apng_file.is_none()
+        {
             if let Ok(probe) = shared_utils::probe_video(input) {
                 // Check if there are multiple video streams
                 let stream_count_output = Command::new("ffprobe")
-                    .args(["-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0"])
+                    .args([
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v",
+                        "-show_entries",
+                        "stream=index",
+                        "-of",
+                        "csv=p=0",
+                    ])
                     .arg(shared_utils::safe_path_arg(input).as_ref())
                     .output();
-                
+
                 let has_multiple_streams = stream_count_output
                     .map(|o| String::from_utf8_lossy(&o.stdout).lines().count() > 1)
                     .unwrap_or(false);
-                
+
                 if has_multiple_streams && probe.stream_index > 0 {
                     if options.verbose {
                         eprintln!("   🔧 Multi-stream {} detected, converting stream {} to APNG ({} frames)", 
                             input_ext.to_uppercase(), probe.stream_index, probe.frame_count);
                     }
-                    
+
                     // Create temporary APNG file
                     let temp_stream = tempfile::Builder::new()
                         .suffix(".apng")
                         .tempfile()
-                        .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                        .map_err(|e| {
+                            VidQualityError::ConversionError(format!(
+                                "Failed to create temp APNG: {}",
+                                e
+                            ))
+                        })?;
                     let temp_stream_path = temp_stream.path().to_path_buf();
-                    
+
                     // Convert the correct stream to APNG using FFmpeg
                     let extract_result = Command::new("ffmpeg")
                         .arg("-y")
@@ -811,11 +880,13 @@ pub fn convert_to_av1_mp4_matched(
                         .arg("0")
                         .arg(shared_utils::safe_path_arg(&temp_stream_path).as_ref())
                         .output();
-                    
+
                     match extract_result {
                         Ok(output) if output.status.success() && temp_stream_path.exists() => {
                             if options.verbose {
-                                shared_utils::progress_mode::emit_stderr("   ✅ Stream → APNG conversion successful");
+                                shared_utils::progress_mode::emit_stderr(
+                                    "   ✅ Stream → APNG conversion successful",
+                                );
                             }
                             (temp_stream_path, Some(temp_stream))
                         }
@@ -1008,11 +1079,18 @@ pub fn convert_to_av1_mp4_matched(
                 "Output discarded (quality/size check failed)".to_string(),
             )
         };
-        eprintln!("   ⚠️  {} │ 🛡️  {} │ 🗑️  {}", 
-            if !video_stream_compressed { "VIDEO STREAM COMPRESSION FAILED" } 
-            else if explore_result.ssim.is_none() { "SSIM CALCULATION FAILED" }
-            else { "QUALITY VALIDATION FAILED" },
-            protect_msg, delete_msg);
+        eprintln!(
+            "   ⚠️  {} │ 🛡️  {} │ 🗑️  {}",
+            if !video_stream_compressed {
+                "VIDEO STREAM COMPRESSION FAILED"
+            } else if explore_result.ssim.is_none() {
+                "SSIM CALCULATION FAILED"
+            } else {
+                "QUALITY VALIDATION FAILED"
+            },
+            protect_msg,
+            delete_msg
+        );
 
         if let Err(e) = shared_utils::copy_on_skip_or_fail(
             input,
@@ -1040,7 +1118,12 @@ pub fn convert_to_av1_mp4_matched(
         });
     }
 
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_output,
+        &output,
+        options.force,
+        Some(input),
+    )? {
         return Ok(skipped_output_exists(input, &output, input_size));
     }
 
@@ -1147,7 +1230,12 @@ pub fn convert_to_av1_mkv_lossless(
         Ok(output_cmd) if output_cmd.status.success() => {
             let output_size = fs::metadata(&temp_output)?.len();
 
-            if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+            if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+                &temp_output,
+                &output,
+                options.force,
+                Some(input),
+            )? {
                 return Ok(skipped_output_exists(input, &output, input_size));
             }
 
@@ -1168,11 +1256,17 @@ pub fn convert_to_av1_mkv_lossless(
 
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
-                format!("Lossless AV1: size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
+                format!(
+                    "Lossless AV1: size reduced \x1b[1;32m{:.1}%\x1b[0m",
+                    reduction_pct
+                )
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!("Lossless AV1: size increased \x1b[1;33m{}\x1b[0m", size_diff)
+                format!(
+                    "Lossless AV1: size increased \x1b[1;33m{}\x1b[0m",
+                    size_diff
+                )
             };
 
             Ok(ConversionResult {
@@ -1201,7 +1295,10 @@ pub fn convert_to_av1_mkv_lossless(
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!("Lossless AV1 failed; original copied ({})", stderr.lines().last().unwrap_or("")),
+                message: format!(
+                    "Lossless AV1 failed; original copied ({})",
+                    stderr.lines().last().unwrap_or("")
+                ),
                 skipped: true,
                 skip_reason: Some("av1_lossless_failed".to_string()),
             })
@@ -1219,7 +1316,10 @@ pub fn convert_to_av1_mkv_lossless(
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!("Lossless AV1 failed (ffmpeg not found: {}); original copied", e),
+                message: format!(
+                    "Lossless AV1 failed (ffmpeg not found: {}); original copied",
+                    e
+                ),
                 skipped: true,
                 skip_reason: Some("av1_lossless_failed".to_string()),
             })
@@ -1298,12 +1398,12 @@ pub fn convert_to_gif_apple_compat(
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
     // Special handling for animated WebP: FFmpeg's WebP decoder is unreliable for animated WebP.
     // We must use webpmux to extract frames and create APNG with correct timing.
-    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) = 
+    let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
         if input_ext == "jxl" {
             if options.verbose {
                 eprintln!("   🔧 Detected JXL format, pre-converting to APNG (FFmpeg's jpegxl_anim decoder is incomplete)");
             }
-            
+
             // Check if djxl is available
             if which::which("djxl").is_err() {
                 tracing::warn!(input = %input.display(), "djxl not found; cannot process animated JXL");
@@ -1321,24 +1421,28 @@ pub fn convert_to_gif_apple_compat(
                     skip_reason: Some("djxl_not_found".to_string()),
                 });
             }
-            
+
             // Create temporary APNG file
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
-                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                .map_err(|e| {
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            
+
             // Convert JXL to APNG using djxl
             let djxl_result = Command::new("djxl")
                 .arg(shared_utils::safe_path_arg(input).as_ref())
                 .arg(shared_utils::safe_path_arg(&temp_apng_path).as_ref())
                 .output();
-            
+
             match djxl_result {
                 Ok(output) if output.status.success() && temp_apng_path.exists() => {
                     if options.verbose {
-                        shared_utils::progress_mode::emit_stderr("   ✅ JXL → APNG conversion successful");
+                        shared_utils::progress_mode::emit_stderr(
+                            "   ✅ JXL → APNG conversion successful",
+                        );
                     }
                     (temp_apng_path, Some(temp_apng))
                 }
@@ -1363,7 +1467,7 @@ pub fn convert_to_gif_apple_compat(
             if options.verbose {
                 eprintln!("   🔧 Detected WebP format, extracting frames with webpmux");
             }
-            
+
             // Check if webpmux is available
             if which::which("webpmux").is_err() {
                 tracing::warn!(input = %input.display(), "webpmux not found; cannot process animated WebP");
@@ -1381,14 +1485,16 @@ pub fn convert_to_gif_apple_compat(
                     skip_reason: Some("webpmux_not_found".to_string()),
                 });
             }
-            
+
             // Create temporary APNG file
             let temp_apng = tempfile::Builder::new()
                 .suffix(".apng")
                 .tempfile()
-                .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e)))?;
+                .map_err(|e| {
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
-            
+
             // Extract WebP frames and create APNG with correct timing
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
                 Ok(_) => (temp_apng_path, Some(temp_apng)),
@@ -1414,7 +1520,7 @@ pub fn convert_to_gif_apple_compat(
         };
 
     let (width, height) = get_input_dimensions(&actual_input)?;
-    
+
     // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
     // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
     let stream_idx = if let Ok(probe) = shared_utils::probe_video(input) {
@@ -1422,7 +1528,7 @@ pub fn convert_to_gif_apple_compat(
     } else {
         0
     };
-    
+
     // For APNG (converted from JXL/WebP), stream_idx should be 0 since APNG is single-stream
     // For AVIF/HEIC with multiple streams, use the stream_idx from probe
     let effective_stream_idx = if input_ext == "jxl" || input_ext == "webp" {
@@ -1430,10 +1536,19 @@ pub fn convert_to_gif_apple_compat(
     } else {
         stream_idx
     };
-    
+
     // Check if file has multiple video streams
     let has_multiple_streams = if let Ok(output) = std::process::Command::new("ffprobe")
-        .args(["-v", "error", "-select_streams", "v", "-show_entries", "stream=index", "-of", "csv=p=0"])
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+        ])
         .arg(&actual_input)
         .output()
     {
@@ -1459,7 +1574,7 @@ pub fn convert_to_gif_apple_compat(
                 width, height
             )
         };
-        
+
         let res = Command::new("ffmpeg")
             .arg("-y")
             .arg("-i")
@@ -1488,16 +1603,15 @@ pub fn convert_to_gif_apple_compat(
             input_size: input_size_fb,
             output_size: None,
             size_reduction: None,
-            message: "GIF conversion failed (FFmpeg unavailable or failed); original copied".to_string(),
+            message: "GIF conversion failed (FFmpeg unavailable or failed); original copied"
+                .to_string(),
             skipped: true,
             skip_reason: Some("gif_encode_failed".to_string()),
         });
     }
 
     // Validate output
-    let output_size = fs::metadata(&temp_output)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let output_size = fs::metadata(&temp_output).map(|m| m.len()).unwrap_or(0);
     if output_size == 0 || get_input_dimensions(&temp_output).is_err() {
         cleanup_temp_output(&temp_output, input);
         tracing::warn!(input = %input.display(), "GIF output invalid (empty or unreadable); copying original");
@@ -1567,7 +1681,12 @@ pub fn convert_to_gif_apple_compat(
         });
     }
 
-    if !shared_utils::conversion::commit_temp_to_output_with_metadata(&temp_output, &output, options.force, Some(input))? {
+    if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+        &temp_output,
+        &output,
+        options.force,
+        Some(input),
+    )? {
         return Ok(ConversionResult {
             success: true,
             input_path: input.display().to_string(),
@@ -1596,11 +1715,17 @@ pub fn convert_to_gif_apple_compat(
 
     let reduction_pct = reduction * 100.0;
     let message = if reduction >= 0.0 {
-        format!("GIF (Apple Compat): size reduced \x1b[1;32m{:.1}%\x1b[0m", reduction_pct)
+        format!(
+            "GIF (Apple Compat): size reduced \x1b[1;32m{:.1}%\x1b[0m",
+            reduction_pct
+        )
     } else {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-        format!("GIF (Apple Compat): size increased \x1b[1;33m{}\x1b[0m", size_diff)
+        format!(
+            "GIF (Apple Compat): size increased \x1b[1;33m{}\x1b[0m",
+            size_diff
+        )
     };
 
     Ok(ConversionResult {

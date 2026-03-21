@@ -363,7 +363,12 @@ pub fn quick_calibrate(
                 cpu_cmd.arg(arg);
             }
 
-            let vf_joined: String = vf_args.iter().filter(|s| !s.is_empty()).cloned().collect::<Vec<_>>().join(";");
+            let vf_joined: String = vf_args
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(";");
             if !vf_joined.is_empty() {
                 cpu_cmd.arg("-vf").arg(vf_joined);
             }

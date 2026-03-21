@@ -51,8 +51,9 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     if components.len() <= 3 {
         let path_str = canonical.to_string_lossy();
         if (path_str.starts_with("/Users/") || path_str.starts_with("/home/"))
-            && components.len() <= 3 {
-                return Err(format!(
+            && components.len() <= 3
+        {
+            return Err(format!(
                     "🚨 DANGEROUS OPERATION BLOCKED!\n\
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
                      ❌ Target '{}' is too close to your home directory root.\n\
@@ -62,7 +63,7 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                     path.display()
                 ));
-            }
+        }
     }
 
     Ok(())
@@ -177,9 +178,13 @@ mod tests {
         .is_err());
 
         // Test safe paths
-        assert!(check_apple_photos_library(Path::new("/Users/test/Pictures/Exports/IMG_1234.jpg"))
-            .is_ok());
-        assert!(check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
-            .is_ok());
+        assert!(
+            check_apple_photos_library(Path::new("/Users/test/Pictures/Exports/IMG_1234.jpg"))
+                .is_ok()
+        );
+        assert!(
+            check_apple_photos_library(Path::new("/Users/test/Documents/photos/IMG_1234.jpg"))
+                .is_ok()
+        );
     }
 }

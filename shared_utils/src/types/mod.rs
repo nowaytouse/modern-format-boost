@@ -11,14 +11,14 @@
 pub mod crf;
 pub mod file_size;
 pub mod iteration;
-pub mod ssim;
 pub mod perception;
+pub mod ssim;
 
 pub use crf::{Av1Encoder, Crf, CrfError, EncoderBounds, HevcEncoder, Vp9Encoder, X264Encoder};
 pub use file_size::FileSize;
 pub use iteration::{IterationError, IterationGuard};
-pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 pub use perception::{ProcessHistory, VisualPerception};
+pub use ssim::{Ssim, SsimError, SSIM_EPSILON};
 
 #[cfg(test)]
 mod property_tests {

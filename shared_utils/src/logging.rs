@@ -54,9 +54,14 @@ where
     ) -> std::fmt::Result {
         let metadata = event.metadata();
         let level = *metadata.level();
+        let progress_line = crate::progress::active_progress_line();
 
         // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
         crate::ctrlc_guard::wait_if_prompt_active();
+
+        if progress_line.is_some() {
+            write!(writer, "\r\x1b[K")?;
+        }
 
         // 1. Level Design / Hierarchy
         let (icon, color, label) = match level {
@@ -96,7 +101,13 @@ where
             write!(writer, "  {}", stats)?;
         }
 
-        writeln!(writer)
+        writeln!(writer)?;
+
+        if let Some(progress_line) = progress_line {
+            write!(writer, "\r\x1b[K{}", progress_line)?;
+        }
+
+        Ok(())
     }
 }
 

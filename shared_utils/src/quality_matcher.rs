@@ -690,7 +690,9 @@ fn calculate_raw_bpp(analysis: &QualityAnalysis, pixels: u64) -> Result<f64, Str
     if analysis.file_size > 0 {
         if let Some(duration) = analysis.duration_secs {
             if duration > 0.0 {
-                let fps = analysis.fps.ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
+                let fps = analysis
+                    .fps
+                    .ok_or_else(|| "Missing FPS for BPP calculation".to_string())?;
                 let total_frames = (duration * fps) as u64;
                 let bits_per_frame = (analysis.file_size * 8) as f64 / total_frames.max(1) as f64;
                 return Ok(bits_per_frame / pixels as f64);
@@ -956,11 +958,10 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     }
 
     if let (Some(fps), Some(duration)) = (analysis.fps, analysis.duration_secs) {
-        if fps > 0.0 && duration > 0.0
-            && (1.0..=240.0).contains(&fps) {
-                score += 2.0;
-                max_score += 2.0;
-            }
+        if fps > 0.0 && duration > 0.0 && (1.0..=240.0).contains(&fps) {
+            score += 2.0;
+            max_score += 2.0;
+        }
     }
 
     if let (Some(video_bitrate), Some(fps)) = (analysis.video_bitrate, analysis.fps) {
@@ -1384,7 +1385,11 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     // Only when Apple-compat flag is on do we convert AV1/VP9/VVC/AV2 via should_skip_video_codec_apple_compat (skip HEVC only).
     let should_skip = matches!(
         codec,
-        SourceCodec::H265 | SourceCodec::Av1 | SourceCodec::Vp9 | SourceCodec::Vvc | SourceCodec::Av2
+        SourceCodec::H265
+            | SourceCodec::Av1
+            | SourceCodec::Vp9
+            | SourceCodec::Vvc
+            | SourceCodec::Av2
     );
 
     let reason = if should_skip {
@@ -2156,7 +2161,8 @@ mod tests {
             result.distance
         );
         assert!(
-            (result.analysis_details.confidence - calculate_confidence_v3(&jpeg)).abs() < f64::EPSILON,
+            (result.analysis_details.confidence - calculate_confidence_v3(&jpeg)).abs()
+                < f64::EPSILON,
             "JPEG estimated-quality path should use calculated confidence, got {}",
             result.analysis_details.confidence
         );

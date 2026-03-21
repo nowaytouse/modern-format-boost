@@ -45,8 +45,7 @@ pub fn calculate_ms_ssim_yuv(
     if !should_calculate {
         eprintln!(
             "   ⚠️  Quality verification: video too long ({:.1}min > {:.0}min), MS-SSIM skipped.",
-            duration_min,
-            max_duration_min
+            duration_min, max_duration_min
         );
         eprintln!("   📊 Using SSIM-only verification (faster; multi-scale not computed).");
         return None;
@@ -78,9 +77,15 @@ pub fn calculate_ms_ssim_yuv(
 
     let start_time = std::time::Instant::now();
 
-    let y_handle = thread::spawn(move || calculate_ms_ssim_channel_sampled(&input_y, &output_y, "y", sample_rate));
-    let u_handle = thread::spawn(move || calculate_ms_ssim_channel_sampled(&input_u, &output_u, "u", sample_rate));
-    let v_handle = thread::spawn(move || calculate_ms_ssim_channel_sampled(&input_v, &output_v, "v", sample_rate));
+    let y_handle = thread::spawn(move || {
+        calculate_ms_ssim_channel_sampled(&input_y, &output_y, "y", sample_rate)
+    });
+    let u_handle = thread::spawn(move || {
+        calculate_ms_ssim_channel_sampled(&input_u, &output_u, "u", sample_rate)
+    });
+    let v_handle = thread::spawn(move || {
+        calculate_ms_ssim_channel_sampled(&input_v, &output_v, "v", sample_rate)
+    });
 
     let y_ms_ssim = match y_handle.join() {
         Ok(Some(v)) => v,
@@ -376,7 +381,9 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
             eprintln!("\n      ❌ VMAF-Y calculation failed!");
             if stderr.contains("No such filter: 'libvmaf'") {
                 eprintln!("         Cause: libvmaf not available in this ffmpeg build");
-                eprintln!("         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf");
+                eprintln!(
+                    "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
+                );
             } else {
                 let error_lines: Vec<&str> = stderr
                     .lines()
@@ -402,10 +409,7 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
     let n_threads = num_cpus_capped();
 
-    let log_file = tempfile::Builder::new()
-        .suffix(".json")
-        .tempfile()
-        .ok()?;
+    let log_file = tempfile::Builder::new().suffix(".json").tempfile().ok()?;
     let log_path = log_file.path().to_path_buf();
 
     // libvmaf filter requires TWO inputs (main + reference).
@@ -442,8 +446,12 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
             eprintln!("\n      ❌ CAMBI calculation failed!");
             if stderr.contains("No such filter: 'libvmaf'") {
                 eprintln!("         Cause: libvmaf not available in this ffmpeg build");
-            } else if stderr.contains("cambi") && (stderr.contains("unknown") || stderr.contains("No such")) {
-                eprintln!("         Cause: libvmaf in this ffmpeg does not support the 'cambi' feature");
+            } else if stderr.contains("cambi")
+                && (stderr.contains("unknown") || stderr.contains("No such"))
+            {
+                eprintln!(
+                    "         Cause: libvmaf in this ffmpeg does not support the 'cambi' feature"
+                );
                 eprintln!("         Fix: upgrade to ffmpeg with libvmaf >= 2.x");
             } else {
                 let error_lines: Vec<&str> = stderr
@@ -467,11 +475,7 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
 /// Calculate PSNR for the U and V chroma channels independently.
 /// Returns `(psnr_u, psnr_v)` in dB, or None on failure.
 /// Uses `extractplanes` + ffmpeg's `psnr` filter (no libvmaf dependency).
-pub fn calculate_psnr_uv(
-    input: &Path,
-    output: &Path,
-    sample_rate: usize,
-) -> Option<(f64, f64)> {
+pub fn calculate_psnr_uv(input: &Path, output: &Path, sample_rate: usize) -> Option<(f64, f64)> {
     use std::thread;
 
     let input_u = input.to_path_buf();
@@ -479,8 +483,10 @@ pub fn calculate_psnr_uv(
     let input_v = input.to_path_buf();
     let output_v = output.to_path_buf();
 
-    let u_handle = thread::spawn(move || psnr_single_channel(&input_u, &output_u, "u", sample_rate));
-    let v_handle = thread::spawn(move || psnr_single_channel(&input_v, &output_v, "v", sample_rate));
+    let u_handle =
+        thread::spawn(move || psnr_single_channel(&input_u, &output_u, "u", sample_rate));
+    let v_handle =
+        thread::spawn(move || psnr_single_channel(&input_v, &output_v, "v", sample_rate));
 
     let psnr_u = match u_handle.join() {
         Ok(Some(v)) => v,
@@ -541,7 +547,11 @@ fn psnr_single_channel(
             parse_psnr_average_y_from_stderr(&stderr)
         }
         Err(e) => {
-            eprintln!("\n      ❌ PSNR-{} command failed: {}", channel.to_uppercase(), e);
+            eprintln!(
+                "\n      ❌ PSNR-{} command failed: {}",
+                channel.to_uppercase(),
+                e
+            );
             None
         }
     }
@@ -556,7 +566,9 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
             // Try "y:" field first (for single-plane extraction output)
             if let Some(pos) = line.find("y:") {
                 let after = &line[pos + 2..];
-                let end = after.find(|c: char| !c.is_numeric() && c != '.').unwrap_or(after.len());
+                let end = after
+                    .find(|c: char| !c.is_numeric() && c != '.')
+                    .unwrap_or(after.len());
                 if end > 0 {
                     if let Ok(v) = after[..end].parse::<f64>() {
                         if v.is_finite() && v > 0.0 {
@@ -568,7 +580,9 @@ fn parse_psnr_average_y_from_stderr(stderr: &str) -> Option<f64> {
             // Fallback: "average:" field
             if let Some(pos) = line.find("average:") {
                 let after = &line[pos + 8..];
-                let end = after.find(|c: char| !c.is_numeric() && c != '.').unwrap_or(after.len());
+                let end = after
+                    .find(|c: char| !c.is_numeric() && c != '.')
+                    .unwrap_or(after.len());
                 if end > 0 {
                     if let Ok(v) = after[..end].parse::<f64>() {
                         if v.is_finite() && v > 0.0 {
