@@ -455,40 +455,50 @@ pub fn auto_convert_with_cache(
 
                 let ultimate = flag_mode.is_ultimate();
 
-                // 🚀 CRF Hint Logic: Use cached best CRF if available for "warm start"
-                let initial_crf = if let Some(hint) = detection.precision.last_best_crf {
-                    info!("   💡 Using cached CRF hint: {:.1} (warm start)", hint);
-                    hint
+                let predicted_crf = calculate_matched_crf(&detection)? as f32;
+                let warm_start_crf = if let Some(hint) = detection.precision.last_best_crf {
+                    info!("   💡 Using cached CRF hint: {:.1} (warm start only)", hint);
+                    Some(hint)
+                } else if let Some(hint) = detection.precision.last_best_effort_crf {
+                    info!(
+                        "   💡 Using cached best-effort CRF hint: {:.1} (warm start only)",
+                        hint
+                    );
+                    Some(hint)
                 } else if let Some(hint) =
                     shared_utils::crf_constants::get_global_last_hit_crf_av1()
                 {
-                    info!("   💡 Using global last hit CRF: {:.1} (warm start)", hint);
-                    hint
+                    info!("   💡 Using global last hit CRF: {:.1} (warm start only)", hint);
+                    Some(hint)
                 } else {
-                    calculate_matched_crf(&detection)? as f32
+                    None
                 };
+                let search_crf = warm_start_crf.unwrap_or(predicted_crf);
                 info!(
-                    "   {} {}: CRF {:.1}",
+                    "   {} {}: base CRF {:.1} → search anchor {:.1}",
                     if ultimate { "🔥" } else { "🔬" },
                     flag_mode.description_en(),
-                    initial_crf
+                    predicted_crf,
+                    search_crf
                 );
                 let explore_result = if ultimate {
-                    shared_utils::explore_av1_with_gpu_coarse_ultimate(
+                    shared_utils::explore_av1_with_gpu_coarse_ultimate_warm_start(
                         input_path,
                         &temp_path,
                         vf_args,
-                        initial_crf as f32,
+                        predicted_crf,
+                        warm_start_crf,
                         ultimate,
                         config.allow_size_tolerance,
                         config.child_threads,
                     )
                 } else {
-                    shared_utils::explore_av1_with_gpu_coarse_full(
+                    shared_utils::explore_av1_with_gpu_coarse_full_warm_start(
                         input_path,
                         &temp_path,
                         vf_args,
-                        initial_crf as f32,
+                        predicted_crf,
+                        warm_start_crf,
                         ultimate,
                         config.force_ms_ssim_long,
                         config.allow_size_tolerance,
@@ -830,17 +840,33 @@ pub fn auto_convert_with_cache(
     // ... (This might need a bit more refactor if we want the full ExploreResult here)
     // For now, if we have final_crf and output_size, we can still update.
 
-    // 💾 Update cache with the new best CRF
-    if success_status_for_cache(strategy.target, &explore_result_opt) && final_crf > 0.0 {
+    let cache_exact_hint = success_status_for_cache(strategy.target, &explore_result_opt);
+    let cache_best_effort_hint =
+        best_effort_status_for_cache(strategy.target, &explore_result_opt, final_crf);
+
+    if cache_exact_hint && final_crf > 0.0 {
         shared_utils::crf_constants::update_global_last_hit_crf_av1(final_crf);
     }
     if let Some(cache) = cache {
-        if success_status_for_cache(strategy.target, &explore_result_opt) && final_crf > 0.0 {
-            detection.precision.last_best_crf = Some(final_crf);
-            if let Err(e) = cache.store_video_analysis(input, &detection) {
-                tracing::debug!("Failed to update video cache: {}", e);
+        if cache_exact_hint || cache_best_effort_hint {
+            if cache_exact_hint {
+                detection.precision.last_best_crf = Some(final_crf);
+                detection.precision.last_best_effort_crf = None;
             } else {
-                tracing::debug!("Updated video cache with best CRF: {:.1}", final_crf);
+                detection.precision.last_best_effort_crf = Some(final_crf);
+            }
+            if let Err(e) = cache.store_video_analysis(input, &detection) {
+                tracing::warn!("Failed to update video cache hint: {}", e);
+            } else {
+                tracing::debug!(
+                    "Updated video cache with {} CRF hint: {:.1}",
+                    if cache_exact_hint {
+                        "exact"
+                    } else {
+                        "best-effort"
+                    },
+                    final_crf
+                );
             }
         }
     }
@@ -1071,6 +1097,19 @@ fn success_status_for_cache(
         && explore_result
             .as_ref()
             .map(|r| r.quality_passed)
+            .unwrap_or(false)
+}
+
+fn best_effort_status_for_cache(
+    target: TargetVideoFormat,
+    explore_result: &Option<shared_utils::ExploreResult>,
+    final_crf: f32,
+) -> bool {
+    matches!(target, TargetVideoFormat::Av1Mp4)
+        && final_crf > 0.0
+        && explore_result
+            .as_ref()
+            .map(|r| !r.quality_passed)
             .unwrap_or(false)
 }
 
