@@ -575,13 +575,20 @@ impl AnalysisCache {
     /// Check schema version and handle migration/invalidation
     fn check_and_migrate_schema(conn: &Connection, _cache_path: &Path) -> Result<()> {
         // Try to get current schema version
-        let current_version: Option<i32> = conn
-            .query_row(
-                "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .ok();
+        let current_version: Option<i32> = match conn.query_row(
+            "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
+            [],
+            |row| row.get(0),
+        ) {
+            Ok(version) => Some(version),
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "⚠️  [Cache] Failed to read schema_version metadata; treating cache as unversioned"
+                );
+                None
+            }
+        };
 
         match current_version {
             Some(v) if v == CACHE_SCHEMA_VERSION => {
@@ -596,32 +603,26 @@ impl AnalysisCache {
                     info!("🔄 [Cache] Migrating schema from v2 to v3 (adding content fingerprint and checksum)");
                     
                     // Add new columns to existing tables
-                    let _ = conn.execute(
-                        "ALTER TABLE analysis_records ADD COLUMN content_fingerprint_hash BLOB",
-                        [],
-                    );
-                    let _ = conn.execute(
-                        "ALTER TABLE analysis_records ADD COLUMN data_checksum INTEGER",
-                        [],
-                    );
-                    
-                    let _ = conn.execute(
-                        "ALTER TABLE quality_records ADD COLUMN content_fingerprint_hash BLOB",
-                        [],
-                    );
-                    let _ = conn.execute(
-                        "ALTER TABLE quality_records ADD COLUMN data_checksum INTEGER",
-                        [],
-                    );
-                    
-                    let _ = conn.execute(
-                        "ALTER TABLE video_records ADD COLUMN content_fingerprint_hash BLOB",
-                        [],
-                    );
-                    let _ = conn.execute(
-                        "ALTER TABLE video_records ADD COLUMN data_checksum INTEGER",
-                        [],
-                    );
+                    for (table, column, column_type) in [
+                        ("analysis_records", "content_fingerprint_hash", "BLOB"),
+                        ("analysis_records", "data_checksum", "INTEGER"),
+                        ("quality_records", "content_fingerprint_hash", "BLOB"),
+                        ("quality_records", "data_checksum", "INTEGER"),
+                        ("video_records", "content_fingerprint_hash", "BLOB"),
+                        ("video_records", "data_checksum", "INTEGER"),
+                    ] {
+                        if let Err(err) = conn.execute(
+                            &format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, column_type),
+                            [],
+                        ) {
+                            warn!(
+                                table = table,
+                                column = column,
+                                error = %err,
+                                "⚠️  [Cache] Failed to migrate cache column"
+                            );
+                        }
+                    }
                     
                     info!("✅ [Cache] Schema migration v2 → v3 complete");
                 }
@@ -920,7 +921,13 @@ impl AnalysisCache {
         debug!("💾 [Cache] Stored analysis for {} (checksum: {})", 
             path.display(), checksum);
 
-        let _ = self.enforce_size_limit();
+        if let Err(err) = self.enforce_size_limit() {
+            warn!(
+                path = %self.cache_path.display(),
+                error = %err,
+                "⚠️  [Cache] Failed to enforce size limit after storing analysis"
+            );
+        }
         Ok(())
     }
 
@@ -957,7 +964,13 @@ impl AnalysisCache {
 
         debug!("💾 [Cache] Stored quality analysis for {} (checksum: {})", path.display(), checksum);
 
-        let _ = self.enforce_size_limit();
+        if let Err(err) = self.enforce_size_limit() {
+            warn!(
+                path = %self.cache_path.display(),
+                error = %err,
+                "⚠️  [Cache] Failed to enforce size limit after storing quality analysis"
+            );
+        }
         Ok(())
     }
 
@@ -1066,7 +1079,13 @@ impl AnalysisCache {
 
         debug!("💾 [Cache] Stored video analysis for {} (checksum: {})", path.display(), checksum);
 
-        let _ = self.enforce_size_limit();
+        if let Err(err) = self.enforce_size_limit() {
+            warn!(
+                path = %self.cache_path.display(),
+                error = %err,
+                "⚠️  [Cache] Failed to enforce size limit after storing video analysis"
+            );
+        }
         Ok(())
     }
 
@@ -1097,9 +1116,17 @@ impl AnalysisCache {
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
         
-        let db_size = std::fs::metadata(&self.cache_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let db_size = match std::fs::metadata(&self.cache_path) {
+            Ok(metadata) => metadata.len(),
+            Err(err) => {
+                warn!(
+                    path = %self.cache_path.display(),
+                    error = %err,
+                    "⚠️  [Cache] Failed to read cache database size"
+                );
+                0
+            }
+        };
         
         let analysis_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM analysis_records",
@@ -1144,11 +1171,20 @@ impl AnalysisCache {
             }
         }
         
-        let current_schema_version: i32 = conn.query_row(
+        let current_schema_version: i32 = match conn.query_row(
             "SELECT value FROM cache_metadata WHERE key = 'schema_version'",
             [],
             |row| row.get(0),
-        ).unwrap_or(1);
+        ) {
+            Ok(version) => version,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "⚠️  [Cache] Failed to read schema version while building statistics"
+                );
+                1
+            }
+        };
         
         Ok(CacheStatistics {
             db_size_bytes: db_size,
@@ -1167,7 +1203,14 @@ impl AnalysisCache {
     pub fn enforce_size_limit(&self) -> Result<()> {
         let current_size = match std::fs::metadata(&self.cache_path) {
             Ok(m) => m.len(),
-            Err(_) => return Ok(()),
+            Err(err) => {
+                warn!(
+                    path = %self.cache_path.display(),
+                    error = %err,
+                    "⚠️  [Cache] Failed to read cache size for size-limit enforcement"
+                );
+                return Ok(());
+            }
         };
 
         if current_size < CACHE_SIZE_LIMIT_BYTES {

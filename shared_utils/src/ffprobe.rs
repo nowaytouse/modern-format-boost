@@ -560,7 +560,7 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "quiet",
@@ -572,7 +572,17 @@ pub fn get_duration(path: &Path) -> Option<f64> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to launch ffprobe duration query"
+            );
+            return None;
+        }
+    };
 
     if !output.status.success() {
         warn!(
@@ -600,7 +610,7 @@ pub fn get_duration(path: &Path) -> Option<f64> {
 }
 
 pub fn get_frame_count(path: &Path) -> Option<u64> {
-    let output = Command::new("ffprobe")
+    let output = match Command::new("ffprobe")
         .args([
             "-v",
             "quiet",
@@ -615,7 +625,17 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
         ])
         .arg(crate::safe_path_arg(path).as_ref())
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to launch ffprobe frame-count query"
+            );
+            return None;
+        }
+    };
 
     if !output.status.success() {
         warn!(
