@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.91] - 2026-03-22
+
+### 🛡️ Integrity Protection
+- **Documentation Enforcement**: Bound `README.md` and `CHANGELOG.md` to the compilation process via `include_str!`. Compilation will now fail if these files are missing, ensuring the repository remains complete for all builds.
+
 ## [0.10.90] - 2026-03-22
 
 ### Fixed

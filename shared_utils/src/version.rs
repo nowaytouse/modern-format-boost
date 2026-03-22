@@ -18,6 +18,11 @@
 //! println!("Cache Algorithm: {}", cache_algorithm_version());
 //! println!("Cache Schema: {}", CACHE_SCHEMA_VERSION);
 //! ```
+//!
+//! ## Integrity Protection
+//!
+//! This module binds essential project documentation to the compilation process,
+//! ensuring that README.md and CHANGELOG.md must exist for a successful build.
 
 use std::sync::LazyLock;
 use tracing::info;
@@ -25,8 +30,14 @@ use tracing::info;
 /// 📦 Program Version (from Cargo.toml)
 ///
 /// This is the single source of truth for the program version.
-/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.85")
+/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.91")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// 🛡️ Integrity Protection: README.md must exist in the root directory for successful build.
+const _: &str = include_str!("../../README.md");
+
+/// 🛡️ Integrity Protection: CHANGELOG.md must exist in the root directory for successful build.
+const _: &str = include_str!("../../CHANGELOG.md");
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
@@ -56,6 +67,7 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1085: GUI/script launch hardening and narrow-terminal progress adaptation
 /// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
 /// - v1090: Intelligent checkpoint reset on output directory deletion
+/// - v1091: Integrity binding for project documentation (README/CHANGELOG)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
