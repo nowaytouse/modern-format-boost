@@ -157,12 +157,11 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             if (compat_flags & (1 << (31 - 4))) != 0 {
                 if chroma_format_idc == 3 {
                     return Ok(true);
-                } else {
-                    return Err(ImgQualityError::AnalysisError(format!(
-                        "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot determine — {}",
-                        chroma_format_idc, path.display()
-                    )));
                 }
+                return Err(ImgQualityError::AnalysisError(format!(
+                    "HEIC: RExt compatibility flag set but chroma {} (not 4:4:4); cannot determine — {}",
+                    chroma_format_idc, path.display()
+                )));
             }
 
             // Dimension 5: Parse SPS NAL units to check transquant_bypass_enabled_flag
@@ -351,9 +350,9 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
         limits.set_max_children_per_box(50000);
 
         // Increase other limits for complex HEIC files
-        limits.set_max_items(500000);
-        limits.set_max_components(50000);
-        limits.set_max_iloc_extents_per_item(50000);
+        limits.set_max_items(500_000);
+        limits.set_max_components(50_000);
+        limits.set_max_iloc_extents_per_item(50_000);
     }
 
     let data = std::fs::read(path)?;
@@ -394,9 +393,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                         // Set security limits on the new context
                         #[cfg(feature = "v1_21")]
                         {
-                            if let Err(limit_err) = file_ctx.set_security_limits(&limits) {
-                                return Err(limit_err);
-                            }
+                            file_ctx.set_security_limits(&limits)?;
                         }
 
                         // Try to read from file path
@@ -545,18 +542,20 @@ mod tests {
 
     #[test]
     fn test_is_heic_file() {
-        let mut heic = Builder::new()
+        let mut heic_asset_builder = Builder::new()
             .suffix(".heic")
             .tempfile()
             .expect("create temp heic");
-        heic.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
+        heic_asset_builder
+            .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
             .expect("write heic header");
 
-        let mut heif = Builder::new()
+        let mut heif_sample_builder = Builder::new()
             .suffix(".HEIF")
             .tempfile()
             .expect("create temp heif");
-        heif.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1'])
+        heif_sample_builder
+            .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1'])
             .expect("write heif header");
 
         let mut jpg = Builder::new()
@@ -566,8 +565,8 @@ mod tests {
         jpg.write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'j', b'p', b'e', b'g'])
             .expect("write jpg header");
 
-        assert!(is_heic_file(heic.path()));
-        assert!(is_heic_file(heif.path()));
+        assert!(is_heic_file(heic_asset_builder.path()));
+        assert!(is_heic_file(heif_sample_builder.path()));
         assert!(!is_heic_file(jpg.path()));
         assert!(!is_heic_file(Path::new("test.heic")));
     }

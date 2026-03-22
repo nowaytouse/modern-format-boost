@@ -230,7 +230,7 @@ fn encode_to_hevc(
         || config.max_cll.is_some()
         || matches!(
             config.color_trc.as_deref(),
-            Some("smpte2084") | Some("arib-std-b67")
+            Some("smpte2084" | "arib-std-b67")
         );
     if is_hdr_content {
         x265_cmd.arg("--hdr10-opt").arg("--repeat-headers");

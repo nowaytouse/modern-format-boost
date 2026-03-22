@@ -244,7 +244,7 @@ impl VideoDetectionResult {
             || self.max_cll.is_some()
             || matches!(
                 self.color_transfer.as_deref(),
-                Some("smpte2084") | Some("arib-std-b67")
+                Some("smpte2084" | "arib-std-b67")
             )
     }
 

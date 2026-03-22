@@ -398,8 +398,8 @@ pub mod gif {
                         break;
                     }
                     let img_packed = data[pos + 9];
-                    let has_lct = (img_packed & 0x80) != 0;
-                    let lct_size = if has_lct {
+                    let local_palette_active = (img_packed & 0x80) != 0;
+                    let lct_size = if local_palette_active {
                         3 * (1 << ((img_packed & 0x07) + 1))
                     } else {
                         0

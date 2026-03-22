@@ -8,7 +8,7 @@ pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
 
 pub const METADATA_MARGIN_MIN: u64 = 2048;
 
-pub const METADATA_MARGIN_MAX: u64 = 102400;
+pub const METADATA_MARGIN_MAX: u64 = 102_400;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileSize(u64);

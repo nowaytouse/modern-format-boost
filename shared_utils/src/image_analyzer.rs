@@ -889,10 +889,10 @@ fn check_png_animation(path: &Path) -> Result<bool> {
 
     // Stage 2: Feature Scan (Loose Bitstream Search)
     // Scan for acTL [61 63 54 4C] or fcTL [66 63 54 4C] markers
-    let has_actl = bytes.windows(4).any(|w| w == b"acTL");
-    let has_fctl = bytes.windows(4).any(|w| w == b"fcTL");
+    let apng_actl_found = bytes.windows(4).any(|w| w == b"acTL");
+    let apng_fctl_detected = bytes.windows(4).any(|w| w == b"fcTL");
 
-    if (has_actl || has_fctl) && !structural_is_animated {
+    if (apng_actl_found || apng_fctl_detected) && !structural_is_animated {
         // [Disagreement] Deep Internal Validation
         if deep_research_png_animation(&bytes) {
             log_eprintln!("🎞️  [Deep Research: APNG] Structural walk failed but internal byte-research confirmed fcTL markers: {}", path.display());

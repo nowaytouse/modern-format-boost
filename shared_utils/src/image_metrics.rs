@@ -171,29 +171,29 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
         return None;
     }
 
-    // Single-pass: compute sum_x, sum_y, sum_xx, sum_yy, sum_xy (no Vec allocation).
+    // Single-pass: compute sum_x, total_sum_y, sum_xx, sum_yy, products_sum_xy (no Vec allocation).
     let mut sum_x = 0.0f64;
-    let mut sum_y = 0.0f64;
+    let mut total_sum_y = 0.0f64;
     let mut sum_xx = 0.0f64;
     let mut sum_yy = 0.0f64;
-    let mut sum_xy = 0.0f64;
+    let mut products_sum_xy = 0.0f64;
     for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
         let x = p_orig[0] as f64;
         let y = p_conv[0] as f64;
         sum_x += x;
-        sum_y += y;
+        total_sum_y += y;
         sum_xx += x * x;
         sum_yy += y * y;
-        sum_xy += x * y;
+        products_sum_xy += x * y;
     }
 
     let mean_x = sum_x / n;
-    let mean_y = sum_y / n;
+    let mean_y = total_sum_y / n;
     // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
     let n1 = n - 1.0;
     let var_x = (sum_xx - n * mean_x * mean_x) / n1;
     let var_y = (sum_yy - n * mean_y * mean_y) / n1;
-    let cov_xy = (sum_xy - n * mean_x * mean_y) / n1;
+    let cov_xy = (products_sum_xy - n * mean_x * mean_y) / n1;
 
     let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
     let denominator = (mean_x.powi(2) + mean_y.powi(2) + C1) * (var_x + var_y + C2);

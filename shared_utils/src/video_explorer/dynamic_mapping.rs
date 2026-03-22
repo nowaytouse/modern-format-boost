@@ -153,16 +153,16 @@ pub fn quick_calibrate(
             anchor_crf
         );
 
-        let temp_gpu_file = tempfile::Builder::new()
+        let gpu_test_file = tempfile::Builder::new()
             .suffix(".mp4")
             .tempfile()
             .context("Failed to create temp file")?;
-        let temp_cpu_file = tempfile::Builder::new()
+        let cpu_test_file = tempfile::Builder::new()
             .suffix(".mp4")
             .tempfile()
             .context("Failed to create temp file")?;
-        let temp_gpu = temp_gpu_file.path().to_path_buf();
-        let temp_cpu = temp_cpu_file.path().to_path_buf();
+        let gpu_path = gpu_test_file.path().to_path_buf();
+        let cpu_path = cpu_test_file.path().to_path_buf();
 
         let gpu_result = Command::new("ffmpeg")
             .arg("-y")
@@ -176,12 +176,12 @@ pub fn quick_calibrate(
             .arg(format!("{:.0}", anchor_crf))
             .arg("-c:a")
             .arg("copy")
-            .arg(crate::safe_path_arg(temp_gpu.as_path()).as_ref())
+            .arg(crate::safe_path_arg(gpu_path.as_path()).as_ref())
             .output();
 
         let gpu_size = match gpu_result {
             Ok(out) if out.status.success() => {
-                fs::metadata(&temp_gpu).map(|m| m.len()).unwrap_or(0)
+                fs::metadata(&gpu_path).map(|m| m.len()).unwrap_or(0)
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
@@ -224,10 +224,10 @@ pub fn quick_calibrate(
             for arg in encoder.extra_args(max_threads) {
                 cpu_cmd.arg(arg);
             }
-            cpu_cmd.arg(crate::safe_path_arg(temp_cpu.as_path()).as_ref());
+            cpu_cmd.arg(crate::safe_path_arg(cpu_path.as_path()).as_ref());
             match cpu_cmd.output() {
                 Ok(out) if out.status.success() => {
-                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                    fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0)
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -336,8 +336,8 @@ pub fn quick_calibrate(
                 continue;
             }
 
-            match encode_with_x265(&temp_input, &temp_cpu, &config, vf_args) {
-                Ok(_) => fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0),
+            match encode_with_x265(&temp_input, &cpu_path, &config, vf_args) {
+                Ok(_) => fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0),
                 Err(e) => {
                     eprintln!(
                         "   ❌ CPU x265 encoding failed for CRF {:.1}: {}",
@@ -376,13 +376,13 @@ pub fn quick_calibrate(
             cpu_cmd
                 .arg("-c:a")
                 .arg("copy")
-                .arg(crate::safe_path_arg(temp_cpu.as_path()).as_ref());
+                .arg(crate::safe_path_arg(cpu_path.as_path()).as_ref());
 
             let cpu_result = cpu_cmd.output();
 
             match cpu_result {
                 Ok(out) if out.status.success() => {
-                    fs::metadata(&temp_cpu).map(|m| m.len()).unwrap_or(0)
+                    fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0)
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);

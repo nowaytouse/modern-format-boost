@@ -1,8 +1,8 @@
 //! Conversion Utilities Module
 //!
 //! Provides common conversion functionality shared across all tools:
-//! - ConversionResult: Unified result structure
-//! - ConvertOptions: Common conversion options
+//! - `ConversionResult`: Unified result structure
+//! - `ConvertOptions`: Common conversion options
 //! - Anti-duplicate mechanism: Track processed files
 //! - Result builders: Reduce boilerplate code
 //! - Size formatting: Unified message formatting
@@ -16,10 +16,10 @@
 //! **Any** `output_size >= input_size` (including equal) is rejected — goal not achieved.
 //! All size checks use `>=` for this; do not change to `>`.
 //!
-//! ## allow_size_tolerance (default true)
+//! ## `allow_size_tolerance` (default true)
 //! When true: "oversized" threshold is `output size increase < 1_048_576 bytes` (accept). Video path may treat
-//! `video_compression_ratio < 1.01` as acceptable when require_compression is checked.
-//! Does **not** mean "accept up to 1_048_576 bytes larger as success" for compress goal — compress still requires output < input.
+//! `video_compression_ratio < 1.01` as acceptable when `require_compression` is checked.
+//! Does **not** mean "accept up to `1_048_576` bytes larger as success" for compress goal — compress still requires output < input.
 
 #![cfg_attr(test, allow(clippy::field_reassign_with_default))]
 
@@ -917,8 +917,8 @@ pub fn check_size_tolerance(
         }
 
         // Beyond tolerance or tolerance disabled: reject
-        let size_change_kb = size_increase_bytes as f64 / 1024.0;
-        let size_change_mb = size_increase_bytes as f64 / (1024.0 * 1024.0);
+        let kb_delta = size_increase_bytes as f64 / 1024.0;
+        let mb_delta = size_increase_bytes as f64 / (1024.0 * 1024.0);
         let change_pct = if input_size == 0 {
             0.0
         } else {
@@ -936,7 +936,7 @@ pub fn check_size_tolerance(
                 format!("\x1b[2m{}\x1b[0m", input_size),
                 format!("\x1b[2m{}\x1b[0m", output_size)
             );
-        } else if size_change_mb >= 1.0 {
+        } else if mb_delta >= 1.0 {
             crate::log_eprintln!(
                 "   {} {} output discarded │ {}ratio: {:.1}%{} │ {}increase: +{:.2}MB{}",
                 symbols::CROSS,
@@ -945,7 +945,7 @@ pub fn check_size_tolerance(
                 change_pct + 100.0,
                 colors::RESET,
                 colors::MFB_ORANGE,
-                size_change_mb,
+                mb_delta,
                 colors::RESET
             );
             crate::log_eprintln!(
@@ -953,7 +953,7 @@ pub fn check_size_tolerance(
                 symbols::CHART,
                 format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
                 format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                size_change_mb
+                mb_delta
             );
         } else {
             crate::log_eprintln!(
@@ -964,7 +964,7 @@ pub fn check_size_tolerance(
                 change_pct + 100.0,
                 colors::RESET,
                 colors::MFB_ORANGE,
-                size_change_kb,
+                kb_delta,
                 colors::RESET
             );
             crate::log_eprintln!(
@@ -972,7 +972,7 @@ pub fn check_size_tolerance(
                 symbols::CHART,
                 format!("{}{}{} bytes", colors::DIM, input_size, colors::RESET),
                 format!("{}{}{} bytes", colors::MFB_RED, output_size, colors::RESET),
-                size_change_kb
+                kb_delta
             );
         }
 
@@ -1500,21 +1500,24 @@ mod tests {
 
     #[test]
     fn test_only_recommended_flags_valid_with_gpu_cpu() {
-        let mut opts_gpu = ConvertOptions::default();
-        opts_gpu.explore = true;
-        opts_gpu.match_quality = true;
-        opts_gpu.compress = true;
-        opts_gpu.use_gpu = true;
-        assert!(opts_gpu.flag_mode().is_ok());
+        let mut gpu_config = ConvertOptions::default();
+        gpu_config.explore = true;
+        gpu_config.match_quality = true;
+        gpu_config.compress = true;
+        gpu_config.use_gpu = true;
+        assert!(gpu_config.flag_mode().is_ok());
 
-        let mut opts_cpu = ConvertOptions::default();
-        opts_cpu.explore = true;
-        opts_cpu.match_quality = true;
-        opts_cpu.compress = true;
-        opts_cpu.use_gpu = false;
-        assert!(opts_cpu.flag_mode().is_ok());
+        let mut cpu_config = ConvertOptions::default();
+        cpu_config.explore = true;
+        cpu_config.match_quality = true;
+        cpu_config.compress = true;
+        cpu_config.use_gpu = false;
+        assert!(cpu_config.flag_mode().is_ok());
 
-        assert_eq!(opts_gpu.flag_mode().unwrap(), opts_cpu.flag_mode().unwrap());
+        assert_eq!(
+            gpu_config.flag_mode().unwrap(),
+            cpu_config.flag_mode().unwrap()
+        );
     }
 
     #[test]

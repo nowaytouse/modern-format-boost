@@ -78,58 +78,56 @@ impl DetectedCodec {
         }
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            DetectedCodec::FFV1 => "FFV1",
-            DetectedCodec::ProRes => "ProRes",
-            DetectedCodec::DNxHD => "DNxHD",
-            DetectedCodec::HuffYUV => "HuffYUV",
-            DetectedCodec::UTVideo => "UT Video",
-            DetectedCodec::RawVideo => "Raw Video",
-            DetectedCodec::H265 => "H.265/HEVC",
-            DetectedCodec::AV1 => "AV1",
-            DetectedCodec::AV2 => "AV2",
-            DetectedCodec::VP9 => "VP9",
-            DetectedCodec::VVC => "H.266/VVC",
-            DetectedCodec::H264 => "H.264/AVC",
-            DetectedCodec::VP8 => "VP8",
-            DetectedCodec::MPEG4 => "MPEG-4",
-            DetectedCodec::MPEG2 => "MPEG-2",
-            DetectedCodec::MPEG1 => "MPEG-1",
-            DetectedCodec::WMV => "WMV",
-            DetectedCodec::GIF => "GIF",
-            DetectedCodec::APNG => "APNG",
-            DetectedCodec::WebPAnim => "WebP (Animated)",
-            DetectedCodec::Unknown(s) => s,
+            Self::FFV1 => "FFV1",
+            Self::ProRes => "ProRes",
+            Self::DNxHD => "DNxHD",
+            Self::HuffYUV => "HuffYUV",
+            Self::UTVideo => "UT Video",
+            Self::RawVideo => "Raw Video",
+            Self::H265 => "H.265/HEVC",
+            Self::AV1 => "AV1",
+            Self::AV2 => "AV2",
+            Self::VP9 => "VP9",
+            Self::VVC => "H.266/VVC",
+            Self::H264 => "H.264/AVC",
+            Self::VP8 => "VP8",
+            Self::MPEG4 => "MPEG-4",
+            Self::MPEG2 => "MPEG-2",
+            Self::MPEG1 => "MPEG-1",
+            Self::WMV => "WMV",
+            Self::GIF => "GIF",
+            Self::APNG => "APNG",
+            Self::WebPAnim => "WebP (Animated)",
+            Self::Unknown(s) => s,
         }
     }
 
-    pub fn is_modern(&self) -> bool {
+    #[must_use]
+    pub const fn is_modern(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::H265
-                | DetectedCodec::AV1
-                | DetectedCodec::AV2
-                | DetectedCodec::VP9
-                | DetectedCodec::VVC
+            Self::H265 | Self::AV1 | Self::AV2 | Self::VP9 | Self::VVC
         )
     }
 
-    pub fn is_lossless(&self) -> bool {
+    #[must_use]
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::FFV1
-                | DetectedCodec::HuffYUV
-                | DetectedCodec::UTVideo
-                | DetectedCodec::RawVideo
+            Self::FFV1 | Self::HuffYUV | Self::UTVideo | Self::RawVideo
         )
     }
 
-    pub fn is_production(&self) -> bool {
-        matches!(self, DetectedCodec::ProRes | DetectedCodec::DNxHD)
+    #[must_use]
+    pub const fn is_production(&self) -> bool {
+        matches!(self, Self::ProRes | Self::DNxHD)
     }
 }
 
+#[must_use]
 pub fn get_codec_info(codec_name: &str) -> CodecInfo {
     match codec_name.to_lowercase().as_str() {
         "ffv1" => CodecInfo {
