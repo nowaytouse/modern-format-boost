@@ -4,7 +4,7 @@
 //!
 //! ## Architectural Design
 //!
-//! Due to the lack of libx265 support in the system FFmpeg, a three-step encoding process is used:
+//! Due to the lack of libx265 support in the system `FFmpeg`, a three-step encoding process is used:
 //! 1. `FFmpeg Decoding` → Y4M (raw YUV)
 //! 2. x265 Encoding → HEVC bitstream
 //! 3. `FFmpeg Muxing` → MP4 Container

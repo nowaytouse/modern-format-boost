@@ -1,7 +1,7 @@
 //! Lossless Converter Module
 //!
 //! Provides conversion API for verified lossless/lossy images
-//! Uses shared_utils for common functionality (anti-duplicate, ConversionResult, etc.)
+//! Uses `shared_utils` for common functionality (anti-duplicate, `ConversionResult`, etc.)
 
 use crate::{ImgQualityError, Result};
 use std::fs;
@@ -39,7 +39,7 @@ fn cleanup_temp_output(temp_output: &Path, input: &Path) {
 
 /// Finalize conversion with size check and metadata preservation.
 /// Common pattern: commit temp → check size → finalize.
-/// Returns ConversionResult on success or error.
+/// Returns `ConversionResult` on success or error.
 fn finalize_with_size_check(
     input: &Path,
     temp_output: &Path,
@@ -129,7 +129,7 @@ pub fn convert_to_jxl(
 
     // Extract ICC Profile from original input for preservation
     let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
-    let icc_path = _icc_temp.as_ref().map(|t| t.path());
+    let icc_path = _icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
     let max_threads = if options.child_threads > 0 {
         options.child_threads
@@ -138,7 +138,7 @@ pub fn convert_to_jxl(
     };
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
-        .arg(format!("{:.2}", distance))
+        .arg(format!("{distance:.2}"))
         .arg("-e")
         .arg("7")
         .arg("-j")
@@ -151,7 +151,7 @@ pub fn convert_to_jxl(
     // Add HDR metadata via CICP if available
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            cmd.arg(format!("--cicp={}", cicp));
+            cmd.arg(format!("--cicp={cicp}"));
         }
     }
 
@@ -241,18 +241,16 @@ pub fn convert_to_jxl(
         Ok(output_cmd) => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
-                "cjxl failed: {}",
-                stderr
+                "cjxl failed: {stderr}"
             )))
         }
         Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "cjxl not found: {}",
-            e
+            "cjxl not found: {e}"
         ))),
     }
 }
 
-/// True when cjxl failed with "JPEG bitstream reconstruction data could not be created" / "allow_jpeg_reconstruction".
+/// True when cjxl failed with "JPEG bitstream reconstruction data could not be created" / "`allow_jpeg_reconstruction`".
 fn is_jpeg_reconstruction_cjxl_error(stderr: &str) -> bool {
     stderr.contains("allow_jpeg_reconstruction")
         || stderr.contains("bitstream reconstruction data could not be created")
@@ -267,7 +265,7 @@ fn run_cjxl_jpeg_transcode(
     hdr_info: Option<&shared_utils::ColorInfo>,
 ) -> std::io::Result<std::process::Output> {
     let _icc_temp = shared_utils::jxl_utils::extract_icc_profile(input);
-    let icc_path = _icc_temp.as_ref().map(|t| t.path());
+    let icc_path = _icc_temp.as_ref().map(tempfile::NamedTempFile::path);
 
     let max_threads = shared_utils::thread_manager::get_ffmpeg_threads();
     let mut cmd = Command::new("cjxl");
@@ -283,7 +281,7 @@ fn run_cjxl_jpeg_transcode(
 
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            cmd.arg(format!("--cicp={}", cicp));
+            cmd.arg(format!("--cicp={cicp}"));
         }
     }
 
@@ -323,8 +321,7 @@ pub fn convert_jpeg_to_jxl(
         Ok(out) => out,
         Err(e) => {
             return Err(ImgQualityError::ToolNotFound(format!(
-                "cjxl not found: {}",
-                e
+                "cjxl not found: {e}"
             )));
         }
     };
@@ -375,10 +372,10 @@ pub fn convert_jpeg_to_jxl(
                 )? {
                     return Ok(ConversionResult::skipped_exists(input, &output));
                 }
-                let label = if source_to_use != input {
-                    "JPEG lossless transcode (sanitized tail)"
-                } else {
+                let label = if source_to_use == input {
                     "JPEG lossless transcode"
+                } else {
+                    "JPEG lossless transcode (sanitized tail)"
                 };
                 return finalize_conversion(input, &output, input_size, label, None, options)
                     .map_err(ImgQualityError::IoError);
@@ -418,8 +415,7 @@ pub fn convert_jpeg_to_jxl(
     }
 
     Err(ImgQualityError::ConversionError(format!(
-        "cjxl JPEG transcode failed: {}",
-        stderr
+        "cjxl JPEG transcode failed: {stderr}"
     )))
 }
 
@@ -500,13 +496,11 @@ pub fn convert_to_avif(
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
-                "avifenc failed: {}",
-                stderr
+                "avifenc failed: {stderr}"
             )))
         }
         Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "avifenc not found: {}",
-            e
+            "avifenc not found: {e}"
         ))),
     }
 }
@@ -590,13 +584,11 @@ pub fn convert_to_avif_lossless(
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
-                "avifenc lossless failed: {}",
-                stderr
+                "avifenc lossless failed: {stderr}"
             )))
         }
         Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "avifenc not found: {}",
-            e
+            "avifenc not found: {e}"
         ))),
     }
 }
@@ -635,7 +627,7 @@ fn calculate_matched_crf_for_animation(
         analysis.color_depth,
         analysis.has_alpha,
         file_size,
-        analysis.duration_secs.map(|d| d as f64),
+        analysis.duration_secs.map(f64::from),
         None,
         None,
     );
@@ -650,8 +642,7 @@ fn calculate_matched_crf_for_animation(
             Ok(result.crf)
         }
         Err(e) => Err(ImgQualityError::AnalysisError(format!(
-            "Quality analysis failed for animation: {}",
-            e
+            "Quality analysis failed for animation: {e}"
         ))),
     }
 }
@@ -684,8 +675,7 @@ pub fn calculate_matched_distance_for_static(
             Ok(result.distance)
         }
         Err(e) => Err(ImgQualityError::AnalysisError(format!(
-            "Quality analysis failed for static: {}",
-            e
+            "Quality analysis failed for static: {e}"
         ))),
     }
 }
@@ -731,12 +721,12 @@ pub fn convert_to_jxl_matched(
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
 
     let distance = calculate_matched_distance_for_static(analysis, input_size)?;
-    eprintln!("   🎯 Matched JXL distance: {:.2}", distance);
+    eprintln!("   🎯 Matched JXL distance: {distance:.2}");
 
     let max_threads = shared_utils::thread_manager::get_optimal_threads();
     let mut cmd = Command::new("cjxl");
     cmd.arg("-d")
-        .arg(format!("{:.2}", distance))
+        .arg(format!("{distance:.2}"))
         .arg("-e")
         .arg("7")
         .arg("-j")
@@ -749,7 +739,7 @@ pub fn convert_to_jxl_matched(
     // `analysis` passed in doesn't have hdr_info in signature, we get it from analysis
     if let Some(ref hdr) = analysis.hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
-            cmd.arg(format!("--cicp={}", cicp));
+            cmd.arg(format!("--cicp={cicp}"));
         }
     }
 
@@ -758,8 +748,7 @@ pub fn convert_to_jxl_matched(
         let is_jpeg = options
             .input_format
             .as_deref()
-            .map(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"))
-            .unwrap_or(false);
+            .is_some_and(|f| f.eq_ignore_ascii_case("jpeg") || f.eq_ignore_ascii_case("jpg"));
         if is_jpeg {
             cmd.arg("--lossless_jpeg=0");
         }
@@ -780,7 +769,7 @@ pub fn convert_to_jxl_matched(
                 return Err(e);
             }
 
-            let extra = format!("d={:.2}", distance);
+            let extra = format!("d={distance:.2}");
             finalize_with_size_check(
                 input,
                 &temp_output,
@@ -796,13 +785,11 @@ pub fn convert_to_jxl_matched(
             cleanup_temp_output(&temp_output, input);
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
             Err(ImgQualityError::ConversionError(format!(
-                "cjxl failed: {}",
-                stderr
+                "cjxl failed: {stderr}"
             )))
         }
         Err(e) => Err(ImgQualityError::ToolNotFound(format!(
-            "cjxl not found: {}",
-            e
+            "cjxl not found: {e}"
         ))),
     }
 }
@@ -872,8 +859,8 @@ fn prepare_input_for_cjxl(
     let detected_ext = shared_utils::common_utils::detect_real_extension(input);
     let literal_ext = input
         .extension()
-        .map(|e| e.to_ascii_lowercase())
-        .and_then(|e| e.to_str().map(|s| s.to_string()))
+        .map(std::ffi::OsStr::to_ascii_lowercase)
+        .and_then(|e| e.to_str().map(std::string::ToString::to_string))
         .unwrap_or_default();
 
     let ext = if let Some(real) = detected_ext {
@@ -907,7 +894,9 @@ fn prepare_input_for_cjxl(
                 })
                 .unwrap_or(false);
 
-            if !is_header_valid {
+            if is_header_valid {
+                Ok((input.to_path_buf(), None))
+            } else {
                 use console::style;
                 eprintln!(
                     "   {} {}",
@@ -944,8 +933,6 @@ fn prepare_input_for_cjxl(
                         Ok((input.to_path_buf(), None))
                     }
                 }
-            } else {
-                Ok((input.to_path_buf(), None))
             }
         }
 

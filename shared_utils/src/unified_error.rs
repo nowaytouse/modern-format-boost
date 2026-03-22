@@ -1,10 +1,10 @@
 //! Unified Error Handling Module
 //!
 //! This module integrates all error handling features:
-//! - Error type definitions (AppError, `ImgQualityError`, `VidQualityError`)
-//! - Error categorization (ErrorCategory)
+//! - Error type definitions (`AppError`, `ImgQualityError`, `VidQualityError`)
+//! - Error categorization (`ErrorCategory`)
 //! - Error handling (`handle_error`, `report_error`)
-//! - Error logging (ErrorSeverity, `log_enhanced_error`)
+//! - Error logging (`ErrorSeverity`, `log_enhanced_error`)
 //!
 //! ## Design Principles
 //! - No silent fallback: All errors must be handled explicitly

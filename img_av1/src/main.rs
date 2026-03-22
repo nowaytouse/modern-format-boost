@@ -134,7 +134,7 @@ fn main() -> anyhow::Result<()> {
     if let Err(e) =
         shared_utils::logging::init_logging("img_av1", shared_utils::logging::LogConfig::default())
     {
-        eprintln!("⚠️ Failed to initialize logging: {}", e);
+        eprintln!("⚠️ Failed to initialize logging: {e}");
     }
 
     let cache = AnalysisCache::default_local()
@@ -357,19 +357,19 @@ fn main() -> anyhow::Result<()> {
                                 } else {
                                     "❓ (future)"
                                 };
-                                println!("   v{}: {} records {}", version, count, marker);
+                                println!("   v{version}: {count} records {marker}");
                             }
 
                             let stale = stats.stale_records();
                             if stale > 0 {
-                                println!("\n⚠️  {} stale records detected (will be auto-invalidated on next run)", stale);
+                                println!("\n⚠️  {stale} stale records detected (will be auto-invalidated on next run)");
                             }
                         }
 
                         let usage_percent = (stats.db_size_bytes as f64
                             / shared_utils::analysis_cache::CACHE_SIZE_LIMIT_BYTES as f64)
                             * 100.0;
-                        println!("\n💾 Storage Usage: {:.1}% of 85 GB limit", usage_percent);
+                        println!("\n💾 Storage Usage: {usage_percent:.1}% of 85 GB limit");
 
                         if usage_percent > 80.0 {
                             println!("⚠️  Cache is approaching size limit!");
@@ -420,7 +420,7 @@ fn verify_conversion(
 
     let reduction =
         100.0 * (1.0 - converted_analysis.file_size as f64 / original_analysis.file_size as f64);
-    println!("   Size reduction: {:.2}%", reduction);
+    println!("   Size reduction: {reduction:.2}%");
 
     let orig_img = load_image_safe(original)?;
     let conv_img = load_image_safe(converted)?;
@@ -450,8 +450,7 @@ fn verify_conversion(
 fn load_image_safe(path: &Path) -> anyhow::Result<image::DynamicImage> {
     let is_jxl = path
         .extension()
-        .map(|e| e.to_string_lossy().to_lowercase() == "jxl")
-        .unwrap_or(false);
+        .is_some_and(|e| e.to_string_lossy().to_lowercase() == "jxl");
 
     if is_jxl {
         use std::process::Command;
@@ -459,7 +458,7 @@ fn load_image_safe(path: &Path) -> anyhow::Result<image::DynamicImage> {
         let temp_png_file = tempfile::Builder::new()
             .suffix(".png")
             .tempfile()
-            .map_err(|e| anyhow::anyhow!("Failed to create temp file: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to create temp file: {e}"))?;
 
         let temp_path = temp_png_file.path();
 
@@ -467,14 +466,14 @@ fn load_image_safe(path: &Path) -> anyhow::Result<image::DynamicImage> {
             .arg(shared_utils::safe_path_arg(path).as_ref())
             .arg(shared_utils::safe_path_arg(temp_path).as_ref())
             .status()
-            .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to execute djxl: {e}"))?;
 
         if !status.success() {
             return Err(anyhow::anyhow!("djxl failed to decode JXL file"));
         }
 
         let img = shared_utils::image_detection::open_image_with_limits(temp_path)
-            .map_err(|e| anyhow::anyhow!("Failed to open decoded PNG: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to open decoded PNG: {e}"))?;
 
         Ok(img)
     } else {
@@ -519,7 +518,7 @@ fn auto_convert_single_file(
 
     // Check for Apple Photos library before processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     }
 
@@ -586,7 +585,7 @@ fn auto_convert_single_file(
         quality_label = if quality_label.is_empty() {
             ct_str
         } else {
-            format!("{}: {}", ct_str, quality_label)
+            format!("{ct_str}: {quality_label}")
         };
     }
 
@@ -634,11 +633,7 @@ fn auto_convert_single_file(
         analysis.is_lossless,
         analysis.is_animated,
     ) {
-        ("WebP", true, false)
-        | ("AVIF", true, false)
-        | ("TIFF", true, false)
-        | ("HEIC", true, false)
-        | ("HEIF", true, false) => {
+        ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
             convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
         }
@@ -787,24 +782,22 @@ fn auto_convert_single_file(
             if meme_keep {
                 copy_original_if_adjacent_mode(input, config)?;
                 return Ok(make_skipped("GIF meme-score: keep as GIF"));
+            } else if is_lossless {
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "🔄 Animated {}→AV1 MP4 (CRF 0, {:.1}s): {}",
+                    format,
+                    duration,
+                    input.display()
+                ));
+                convert_to_av1_mp4(input, &options)?
             } else {
-                if is_lossless {
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "🔄 Animated {}→AV1 MP4 (CRF 0, {:.1}s): {}",
-                        format,
-                        duration,
-                        input.display()
-                    ));
-                    convert_to_av1_mp4(input, &options)?
-                } else {
-                    shared_utils::progress_mode::emit_stderr(&format!(
-                        "🔄 Animated {}→AV1 MP4 (SMART QUALITY, {:.1}s): {}",
-                        format,
-                        duration,
-                        input.display()
-                    ));
-                    convert_to_av1_mp4_matched(input, &options, &analysis)?
-                }
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "🔄 Animated {}→AV1 MP4 (SMART QUALITY, {:.1}s): {}",
+                    format,
+                    duration,
+                    input.display()
+                ));
+                convert_to_av1_mp4_matched(input, &options, &analysis)?
             }
         }
         (_, false, false) => {
@@ -847,13 +840,13 @@ fn auto_convert_directory(
 ) -> anyhow::Result<()> {
     // Check for Apple Photos library before any processing
     if let Err(e) = shared_utils::check_apple_photos_library(input) {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     }
 
     if config.delete_original || config.in_place {
         if let Err(e) = check_dangerous_directory(input) {
-            eprintln!("{}", e);
+            eprintln!("{e}");
             std::process::exit(1);
         }
     }
@@ -905,7 +898,7 @@ fn auto_convert_directory(
     }
 
     if config.verbose {
-        println!("📂 Found {} files to process", total);
+        println!("📂 Found {total} files to process");
         shared_utils::log_eprintln!(
             "⚡ Queue Strategy: deeper paths → fast JPEG/direct transcodes → smaller files → lower resolution"
         );
@@ -933,7 +926,7 @@ fn auto_convert_directory(
             }
             Err(e) => {
                 if config.verbose {
-                    println!("⚠️ [checkpoint] Failed to initialize: {}", e);
+                    println!("⚠️ [checkpoint] Failed to initialize: {e}");
                 }
                 None
             }
@@ -967,10 +960,9 @@ fn auto_convert_directory(
                 let required_gb = required as f64 / (1024.0 * 1024.0 * 1024.0);
                 eprintln!(
                     "❌ Insufficient disk space on output volume.\n\
-                     💾 Available: {:.2} GB\n\
-                     💾 Required:  {:.2} GB (input size + 1 GB headroom)\n\
-                     💡 Free up space or choose a different output location.",
-                    avail_gb, required_gb
+                     💾 Available: {avail_gb:.2} GB\n\
+                     💾 Required:  {required_gb:.2} GB (input size + 1 GB headroom)\n\
+                     💡 Free up space or choose a different output location."
                 );
                 std::process::exit(1);
             }
@@ -1021,7 +1013,7 @@ fn auto_convert_directory(
             rayon::ThreadPoolBuilder::new()
                 .num_threads(2)
                 .build()
-                .map_err(|e| anyhow::anyhow!("Failed to create fallback thread pool: {}", e))?
+                .map_err(|e| anyhow::anyhow!("Failed to create fallback thread pool: {e}"))?
         }
     };
 
@@ -1031,7 +1023,7 @@ fn auto_convert_directory(
             max_threads,
             child_threads,
             std::thread::available_parallelism()
-                .map(|n| n.get())
+                .map(std::num::NonZero::get)
                 .unwrap_or(4)
         );
         if let Some(hint) = shared_utils::thread_manager::memory_cap_hint() {

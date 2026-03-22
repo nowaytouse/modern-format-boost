@@ -29,14 +29,14 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
-/// Build the FFmpeg colour/HDR arguments that must be forwarded to every AV1 encode.
+/// Build the `FFmpeg` colour/HDR arguments that must be forwarded to every AV1 encode.
 ///
 /// This preserves:
-/// - color_primaries (e.g. bt2020)
-/// - color_trc / color_transfer (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
+/// - `color_primaries` (e.g. bt2020)
+/// - `color_trc` / `color_transfer` (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
 /// - colorspace (e.g. bt2020nc)
-/// - mastering_display (HDR10 static mastering display metadata)
-/// - max_cll (HDR10 content light level MaxCLL/MaxFALL)
+/// - `mastering_display` (HDR10 static mastering display metadata)
+/// - `max_cll` (HDR10 content light level MaxCLL/MaxFALL)
 ///
 /// Dolby Vision and HDR10+ layers are not currently preserved by libsvtav1 metadata pass-through.
 fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
@@ -107,10 +107,12 @@ fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     }
 }
 
+#[must_use] 
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, false)
 }
 
+#[must_use] 
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     apple_compat: bool,
@@ -194,9 +196,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
-    let output_dir = output_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf());
+    let output_dir = output_dir.map_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf(), std::path::Path::to_path_buf);
 
     std::fs::create_dir_all(&output_dir)?;
 
@@ -207,9 +207,9 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let output_path = if input_ext.eq_ignore_ascii_case("MP4") {
-        output_dir.join(format!("{}_av1.MP4", stem))
+        output_dir.join(format!("{stem}_av1.MP4"))
     } else {
-        output_dir.join(format!("{}.MP4", stem))
+        output_dir.join(format!("{stem}.MP4"))
     };
     shared_utils::conversion::validate_output_path(&output_path, None)
         .map_err(VidQualityError::ConversionError)?;
@@ -292,11 +292,11 @@ pub fn auto_convert_with_cache(
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: "".to_string(),
+            output_path: String::new(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: "Live Photo detected in Apple compat mode".to_string(),
-                command: "".to_string(),
+                command: String::new(),
                 preserve_audio: false,
                 crf: 0.0,
                 lossless: false,
@@ -347,7 +347,7 @@ pub fn auto_convert_with_cache(
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: "".to_string(),
+            output_path: String::new(),
             strategy,
             input_size: detection.file_size,
             output_size: 0,
@@ -376,9 +376,9 @@ pub fn auto_convert_with_cache(
     let source_is_gif = input_ext.eq_ignore_ascii_case("gif");
 
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext) {
-        output_dir.join(format!("{}_av1.{}", stem, target_ext))
+        output_dir.join(format!("{stem}_av1.{target_ext}"))
     } else {
-        output_dir.join(format!("{}.{}", stem, target_ext))
+        output_dir.join(format!("{stem}.{target_ext}"))
     };
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(VidQualityError::ConversionError)?;
@@ -455,7 +455,7 @@ pub fn auto_convert_with_cache(
 
                 let ultimate = flag_mode.is_ultimate();
 
-                let predicted_crf = calculate_matched_crf(&detection)? as f32;
+                let predicted_crf = f32::from(calculate_matched_crf(&detection)?);
                 let warm_start_crf = if let Some(hint) = detection.precision.last_best_crf {
                     info!("   💡 Using cached CRF hint: {:.1} (warm start only)", hint);
                     Some(hint)
@@ -521,14 +521,11 @@ pub fn auto_convert_with_cache(
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = match explore_result.ssim {
-                        Some(s) => s,
-                        None => {
-                            warn!("   ⚠️  SSIM not measured, cannot verify quality");
-                            return Err(VidQualityError::GeneralError(
-                                "Quality verification failed: SSIM not measured".to_string(),
-                            ));
-                        }
+                    let actual_ssim = if let Some(s) = explore_result.ssim { s } else {
+                        warn!("   ⚠️  SSIM not measured, cannot verify quality");
+                        return Err(VidQualityError::GeneralError(
+                            "Quality verification failed: SSIM not measured".to_string(),
+                        ));
                     };
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
@@ -561,7 +558,7 @@ pub fn auto_convert_with_cache(
                                 0.0
                             };
 
-                            use shared_utils::modern_ui::colors::*;
+                            use shared_utils::modern_ui::colors::{BRIGHT_YELLOW, RESET, DIM};
 
                             // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
                             let base_msg = if input_b < 1024.0 * 1024.0 {
@@ -587,26 +584,22 @@ pub fn auto_convert_with_cache(
                             // Create beautiful single-line format with visual separators
                             let additional_info = if total_file_compressed {
                                 format!(
-                                    "{}│{} Total file smaller but video stream larger",
-                                    DIM, RESET
+                                    "{DIM}│{RESET} Total file smaller but video stream larger"
                                 )
                             } else {
-                                format!("{}│{} Total file and video stream both larger", DIM, RESET)
+                                format!("{DIM}│{RESET} Total file and video stream both larger")
                             };
 
                             let final_msg = format!(
-                                "{} {} {}│{} File may already be highly optimized",
-                                base_msg, additional_info, DIM, RESET
+                                "{base_msg} {additional_info} {DIM}│{RESET} File may already be highly optimized"
                             );
                             warn!("   {}", final_msg);
                             (
                                 format!(
-                                    "Video stream compression failed: {:+.1}%",
-                                    stream_change_pct
+                                    "Video stream compression failed: {stream_change_pct:+.1}%"
                                 ),
                                 format!(
-                                    "Skipped: video stream larger ({:+.1}%)",
-                                    stream_change_pct
+                                    "Skipped: video stream larger ({stream_change_pct:+.1}%)"
                                 ),
                                 "Original file PROTECTED (output did not compress)".to_string(),
                                 "Output discarded (video stream larger than original)".to_string(),
@@ -626,12 +619,10 @@ pub fn auto_convert_with_cache(
                             );
                             (
                                 format!(
-                                    "Quality validation failed: SSIM {:.4} < {:.4}",
-                                    actual_ssim, threshold
+                                    "Quality validation failed: SSIM {actual_ssim:.4} < {threshold:.4}"
                                 ),
                                 format!(
-                                    "Skipped: SSIM {:.4} below threshold {:.4}",
-                                    actual_ssim, threshold
+                                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
                                 ),
                                 "Original file PROTECTED (quality below threshold)".to_string(),
                                 "Output discarded (quality below threshold)".to_string(),
@@ -643,8 +634,8 @@ pub fn auto_convert_with_cache(
                                 .unwrap_or("unknown reason");
                             warn!("   ⚠️  Quality validation FAILED: {}", reason);
                             (
-                                format!("Quality validation failed: {}", reason),
-                                format!("Skipped: {}", reason),
+                                format!("Quality validation failed: {reason}"),
+                                format!("Skipped: {reason}"),
                                 "Original file PROTECTED (quality/size check failed)".to_string(),
                                 "Output discarded (quality/size check failed)".to_string(),
                             )
@@ -740,14 +731,11 @@ pub fn auto_convert_with_cache(
                 }
 
                 if let Some(false) = explore_result.ms_ssim_passed {
-                    let ms_ssim_score = match explore_result.ms_ssim_score {
-                        Some(score) => score,
-                        None => {
-                            warn!("   ⚠️  MS-SSIM marked as failed but score not available");
-                            return Err(VidQualityError::GeneralError(
-                                "MS-SSIM verification failed: score not measured".to_string(),
-                            ));
-                        }
+                    let ms_ssim_score = if let Some(score) = explore_result.ms_ssim_score { score } else {
+                        warn!("   ⚠️  MS-SSIM marked as failed but score not available");
+                        return Err(VidQualityError::GeneralError(
+                            "MS-SSIM verification failed: score not measured".to_string(),
+                        ));
                     };
                     warn!("   QUALITY TARGET FAILED (score: {:.4}) │ 🛡️  Original file PROTECTED (quality below threshold) ❌", ms_ssim_score);
 
@@ -808,7 +796,7 @@ pub fn auto_convert_with_cache(
                         output_path: input.display().to_string(),
                         strategy: ConversionStrategy {
                             target: TargetVideoFormat::Skip,
-                            reason: format!("Quality target failed (score: {:.4})", ms_ssim_score),
+                            reason: format!("Quality target failed (score: {ms_ssim_score:.4})"),
                             command: String::new(),
                             preserve_audio: detection.has_audio,
                             crf: explore_result.optimal_crf,
@@ -988,8 +976,7 @@ pub fn auto_convert_with_cache(
                 size_ratio: total_size_ratio,
                 success: true,
                 message: format!(
-                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); compression check failed — total file not smaller enough, but file is AV1 and importable",
-                    final_crf, attempts
+                    "Apple compat fallback: kept best-effort output (CRF {final_crf:.1}, {attempts} iters); compression check failed — total file not smaller enough, but file is AV1 and importable"
                 ),
                 final_crf,
                 exploration_attempts: attempts,
@@ -1083,7 +1070,7 @@ pub fn auto_convert_with_cache(
         size_ratio,
         success: true,
         message: if attempts > 0 {
-            format!("Explored {} CRF values, final CRF: {}", attempts, final_crf)
+            format!("Explored {attempts} CRF values, final CRF: {final_crf}")
         } else {
             "Conversion successful".to_string()
         },
@@ -1099,8 +1086,7 @@ fn success_status_for_cache(
     matches!(target, TargetVideoFormat::Av1Mp4)
         && explore_result
             .as_ref()
-            .map(|r| r.quality_passed)
-            .unwrap_or(false)
+            .is_some_and(|r| r.quality_passed)
 }
 
 fn best_effort_status_for_cache(
@@ -1112,8 +1098,7 @@ fn best_effort_status_for_cache(
         && final_crf > 0.0
         && explore_result
             .as_ref()
-            .map(|r| !r.quality_passed)
-            .unwrap_or(false)
+            .is_some_and(|r| !r.quality_passed)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
@@ -1136,8 +1121,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
             Ok(result.crf.round() as u8)
         }
         Err(e) => Err(crate::VidQualityError::AnalysisError(format!(
-            "Quality analysis failed: {}",
-            e
+            "Quality analysis failed: {e}"
         ))),
     }
 }
@@ -1201,7 +1185,7 @@ fn execute_ffv1_conversion(
     }
 
     let size = std::fs::metadata(output).map_err(|e| {
-        VidQualityError::ConversionError(format!("Failed to read FFV1 output: {}", e))
+        VidQualityError::ConversionError(format!("Failed to read FFV1 output: {e}"))
     })?;
     let size = size.len();
     if size == 0 {
@@ -1227,7 +1211,7 @@ fn execute_av1_lossless(
 ) -> Result<u64> {
     warn!("⚠️  Mathematical lossless AV1 encoding (SVT-AV1) - this will be SLOW!");
 
-    let svt_params = format!("lossless=1:lp={}", max_threads);
+    let svt_params = format!("lossless=1:lp={max_threads}");
 
     let vf_args = shared_utils::get_ffmpeg_dimension_args(detection.width, detection.height, false);
     let input_arg = shared_utils::safe_path_arg(Path::new(&detection.file_path))
@@ -1281,7 +1265,7 @@ fn execute_av1_lossless(
     }
 
     let size = std::fs::metadata(output).map_err(|e| {
-        VidQualityError::ConversionError(format!("Failed to read AV1 output: {}", e))
+        VidQualityError::ConversionError(format!("Failed to read AV1 output: {e}"))
     })?;
     let size = size.len();
     if size == 0 {
