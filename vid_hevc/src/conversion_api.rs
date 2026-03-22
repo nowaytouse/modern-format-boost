@@ -259,12 +259,13 @@ fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10P
 }
 
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
-    determine_strategy_with_apple_compat(result, false)
+    determine_strategy_with_apple_compat(result, false, false)
 }
 
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     apple_compat: bool,
+    force: bool,
 ) -> ConversionStrategy {
     let skip_decision = if apple_compat {
         shared_utils::should_skip_video_codec_apple_compat(result.codec.as_str())
@@ -272,7 +273,7 @@ pub fn determine_strategy_with_apple_compat(
         shared_utils::should_skip_video_codec(result.codec.as_str())
     };
 
-    if skip_decision.should_skip {
+    if skip_decision.should_skip && !force {
         return ConversionStrategy {
             target: TargetVideoFormat::Skip,
             reason: skip_decision.reason,
@@ -497,7 +498,7 @@ pub fn auto_convert_with_cache(
         warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
     }
 
-    let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat);
+    let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat, config.force);
 
     if strategy.target == TargetVideoFormat::Skip {
         shared_utils::progress_mode::video_skipped(&strategy.reason);

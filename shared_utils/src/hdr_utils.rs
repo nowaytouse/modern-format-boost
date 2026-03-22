@@ -266,8 +266,7 @@ pub fn extract_hdr10plus_metadata(
     let json_path = temp_dir.join("hdr10plus.json");
 
     let mut cmd = Command::new("hdr10plus_tool");
-    cmd.arg("--skip-validation")
-        .arg("extract")
+    cmd.arg("extract")
         .arg("-i")
         .arg(raw_hevc)
         .arg("-o")
@@ -279,7 +278,27 @@ pub fn extract_hdr10plus_metadata(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("hdr10plus_tool extract failed: {}", stderr));
+        let stderr_lower = stderr.to_lowercase();
+        // Fallback for metadata with minor validation issues
+        if stderr_lower.contains("error:") && stderr_lower.contains("invalid") {
+            crate::log_eprintln!("⚠️  WRN  hdr10plus_tool exact extract validation failed, trying fallback with --skip-validation");
+            
+            let mut fb_cmd = Command::new("hdr10plus_tool");
+            fb_cmd.arg("extract")
+                .arg("--skip-validation")
+                .arg("-i")
+                .arg(raw_hevc)
+                .arg("-o")
+                .arg(&json_path);
+                
+            let fb_output = fb_cmd.output().map_err(|e| format!("failed to run hdr10plus_tool extract (fallback): {}", e))?;
+            if !fb_output.status.success() {
+                let fb_stderr = String::from_utf8_lossy(&fb_output.stderr);
+                return Err(format!("hdr10plus_tool extract fallback failed: {}", fb_stderr));
+            }
+        } else {
+            return Err(format!("hdr10plus_tool extract failed: {}", stderr));
+        }
     }
 
     Ok(json_path)

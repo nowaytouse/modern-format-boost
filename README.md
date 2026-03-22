@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.10.88-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.10.90-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="License">
@@ -29,6 +29,8 @@ Think of it as a "smart compressor" that **never degrades your media**:
 - 🎬 **Videos**: H.264/VP9/AV1 → HEVC with GPU-accelerated quality search
 - 🍎 **Apple ecosystem first**: Full Apple compatibility mode, Live Photo detection, AAE sidecar handling
 - 🔒 **Metadata guardian**: Preserves EXIF, XMP, ICC profiles, creation timestamps, macOS xattrs, Finder tags
+- ⚡ **Perceived Speed Optimization**: "Quick-Wins" sorting strategy—finishes small/shallow files first to provide instant feedback and maximum throughput.
+- 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via extraction sidecars and x265 SEI injection.
 
 ## ⚠️ Disclaimer & Important Notes
 
@@ -52,6 +54,7 @@ Think of it as a "smart compressor" that **never degrades your media**:
   - **Zero Workspace Pollution**: Centralized tracking (`~/.mfb_progress/`) keeps your media folders 100% clean. No hidden metadata files remain among your photos/videos.
   - **Conflict-Free Temp Files**: Every intermediate analysis file (YUV streams, analysis segments) is uniquely identified with a randomized UUID. This prevents multi-instance collisions and ensures "Surgical Precision" during cleanup.
   - **Scrub-on-Start Cleanup**: Whether a task completes successfully or is resumed after an interruption, the system automatically purges all transient data. This "Self-Cleaning" architecture ensures your disk remains free of abandoned processing leftovers.
+- **Intelligent Checkpoint Reset**: Automatically detects when a user manually deletes the output directory to "start over", triggering a full state reset even in resume mode.
 
 
 <details>
@@ -68,6 +71,8 @@ Every file goes through a multi-stage decision pipeline:
 1. **Phase 1: GPU Coarse Search**: Binary search on hardware encoders (VideoToolbox/NVENC) to find the "quality knee".
 2. **Phase 2: CPU Fine-Tune**: Maps GPU CRF to `x265` scale. Uses **Sprint & Backtrack** (double step on success, reset to 0.1 on overshoot).
 3. **Phase 3: Ultimate 3D Quality Gate**: Requires simultaneous pass of VMAF-Y ≥ 93.0, CAMBI ≤ 5.0 (banding), and PSNR-UV ≥ 35.0 dB. 
+   - **Fusion Scoring**: Combines MS-SSIM + SSIM_All (0.6/0.4 weight) for robust structural analysis.
+   - **Chroma Guard**: Automatically detects small resolutions that would crash libvmaf MS-SSIM and falls back to Y-only scoring to ensure processing reliability.
    - *Note: In `--ultimate` mode, the search only terminates after **50 consecutive samples** show zero quality gain, ensuring absolute saturation.*
 
 ### Metadata & HDR Preservation
@@ -138,7 +143,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | **HDR10** | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args |
 | **HLG** | color_trc = arib-std-b67 | Color primaries + TRC preserved |
 | **Dolby Vision** | DOVI side_data in streams/frames | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 auto-convert |
-| **HDR10+** | ST2094 dynamic metadata | Supported via `hdr10plus_tool` sidecar extraction and x265 injection |
+| **HDR10+** | ST2094-40 dynamic metadata | Supported via `hdr10plus_tool` sidecar extraction and x265 injection (Profile A/B metadata retention) |
 | **SDR** | No HDR markers | Standard processing (yuv420p) |
 
 ## ⬇️ Installation / 安装说明
@@ -271,6 +276,8 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 - 🎬 **视频**：H.264/VP9/AV1 → HEVC，配合 GPU 加速质量搜索
 - 🍎 **苹果生态优先**：完整的 Apple 兼容模式、Live Photo 检测、AAE 编辑指令保留
 - 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签
+- ⚡ **感官速度优化**：“先易后难”排序策略——优先处理小文件和浅层目录，提供即时反馈并最大化吞吐量。
+- 🎞️ **HDR10+ 动态元数据**：通过侧信道提取与 x265 SEI 注入，完整保留 SMPTE 2094-40 动态元数据。
 
 ## ⚠️ 免责声明与重要提示
 
@@ -294,6 +301,7 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
   - **零工作区污染**：集中式进度追踪（`~/.mfb_progress/`）实现了对媒体目录的“零足迹”访问。主目录下不再产生任何隐藏的进度文件。
   - **防冲突随机命名**：转换中产生的中间文件（如 YUV 原始流、分析切片）均采用 **UUID 随机命名**。这确保了在多窗口并发任务下互不干扰，并为“外科手术式”的定向清理提供了唯一识别号。
   - **自我净化机制**：无论是任务成功收尾，还是在任务中断后重启，系统都会先通过识别码“打扫战场”，彻底清除所有残留的临时数据。这确保了处理过程永远在净空状态下开始，硬盘空间不再被无主碎片占用。
+- **智能断点重置**：自动检测用户手动删除输出目录以“重新开始”的意图，即便是恢复模式也会触发状态重置，确保源文件与输出同步。
 
 
 <details>
@@ -309,11 +317,13 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 1. **第一阶段：GPU 粗搜索**：利用硬件编码器进行快速二分搜索，定位“画质拐点”。
 2. **第二阶段：CPU 精调**：将结果映射至 `x265` 刻度。使用 **Sprint & Backtrack（冲刺与回退）算法**：连续成功时步长翻倍，过冲时立即降至 0.1 步长。
 3. **第三阶段：极致 3D 质量门控**：必须同时通过 VMAF-Y ≥ 93.0（感知画质）、CAMBI ≤ 5.0（色带检测）及 PSNR-UV ≥ 35.0 dB。
+   - **融合得分系统**：结合 MS-SSIM + SSIM_All (0.6/0.4 权重)，提供超高精度的结构分析。
+   - **色度通道保护**：自动识别会导致 libvmaf MS-SSIM 崩溃的极小分辨率，并无缝回退至单通道 Y-only 评分，确保流程稳健。
    - *注：在 `--ultimate` 极致模式下，搜索算法要求连续 **50 次采样** 均达到零画质增益方可停机，确保绝对画质饱和。*
 
 ### 元数据与 HDR 保留
 - **HDR 守护**：强制透传 bt2020 原色、PQ/HLG 传输特性及母带显示数据。
-- **杜比视界**：通过 `dovi_tool` 提取 RPU 并注入编码器，支持 Profile 7 自动转 8.1 增强兼容性。
+- **杜比视界**：通过 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 增强兼容性。
 - **macOS 特性**：利用 `copyfile` 和 `setattrlist` 完美保留 Finder 标签、添加日期及原始创建时间。
 </details>
 
@@ -379,7 +389,7 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 | **HDR10** | 元数据 side_data 捕获 | 通过 FFmpeg 参数完整保留静态元数据并注入 |
 | **HLG** | 传输特性 TRC 识别 | 原色 (Primaries) 及 TRC 完整保留 |
 | **Dolby Vision** | DOVI RPU 数据流 | 经 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 |
-| **HDR10+** | ST2094 动态元数据 | 已通过 `hdr10plus_tool` sidecar extraction and x265 injection 实现完整支持 |
+| **HDR10+** | ST2094-40 动态元数据 | 已通过 `hdr10plus_tool` 侧信道提取与 x265 注入实现完整支持 (完美保留 Profile A/B 元数据) |
 | **SDR** | 无 HDR 标记 | 自动进入标准处理流 (yuv420p) |
 
 ## ⬇️ Installation / 安装说明
