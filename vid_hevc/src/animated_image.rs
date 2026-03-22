@@ -957,6 +957,7 @@ pub fn convert_to_hevc_mp4_matched(
             true,
             options.allow_size_tolerance,
             options.child_threads,
+            None,
         )
     } else {
         shared_utils::explore_hevc_with_gpu_coarse(
@@ -966,6 +967,7 @@ pub fn convert_to_hevc_mp4_matched(
             actual_initial_crf,
             options.allow_size_tolerance,
             options.child_threads,
+            None,
         )
     }
     .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;

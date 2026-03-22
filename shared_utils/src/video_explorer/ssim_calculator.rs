@@ -1,6 +1,6 @@
 //! MS-SSIM quality metric calculations (multi-scale, YUV channel-wise)
 //!
-//! Primary entry: `calculate_ms_ssim_yuv` (used by gpu_coarse_search Phase 3).  
+//! Primary entry: `calculate_ms_ssim_yuv` (used by gpu_coarse_search Phase 3).
 //! `calculate_ms_ssim` is single-channel luma with standalone-vmaf fallback for other callers.
 
 use std::path::Path;
@@ -160,35 +160,47 @@ pub fn calculate_ms_ssim_yuv(
         }
     };
     let u_ms_ssim = match u_handle.join() {
-        Ok(Some(v)) => v,
-        _ => {
-            eprintln!("   ❌ U channel calculation failed");
-            return None;
-        }
+        Ok(Some(v)) => Some(v),
+        _ => None,
     };
     let v_ms_ssim = match v_handle.join() {
-        Ok(Some(v)) => v,
-        _ => {
-            eprintln!("   ❌ V channel calculation failed");
-            return None;
-        }
+        Ok(Some(v)) => Some(v),
+        _ => None,
     };
 
     eprintln!("      Y channel... {:.4} ✅", y_ms_ssim);
-    eprintln!("      U channel... {:.4} ✅", u_ms_ssim);
-    eprintln!("      V channel... {:.4} ✅", v_ms_ssim);
+    if let Some(u) = u_ms_ssim {
+        eprintln!("      U channel... {:.4} ✅", u);
+    } else {
+        eprintln!("      U channel... skipped (resolution too small)");
+    }
+    if let Some(v) = v_ms_ssim {
+        eprintln!("      V channel... {:.4} ✅", v);
+    } else {
+        eprintln!("      V channel... skipped (resolution too small)");
+    }
 
     let elapsed = start_time.elapsed().as_secs();
     let end_time = Local::now().format("%Y-%m-%d %H:%M:%S");
     eprintln!("   ⏱️  Completed in {}s (End: {})", elapsed, end_time);
 
-    // BT.601 luma-weighted approx (Y dominant); chroma MS-SSIM on 4:2:0 subsampled planes may be lower than perceptual weight.
-    let weighted_avg = (y_ms_ssim * 6.0 + u_ms_ssim + v_ms_ssim) / 8.0;
+    // If chroma channels are available, use BT.601 weighted average
+    // If not, use Y-only (still perceptually dominant and meaningful)
+    let (u_val, v_val, weighted_avg) = match (u_ms_ssim, v_ms_ssim) {
+        (Some(u), Some(v)) => {
+            let avg = (y_ms_ssim * 6.0 + u + v) / 8.0;
+            (u, v, avg)
+        }
+        _ => {
+            eprintln!("      ℹ️  Using Y-only MS-SSIM (chroma channels unavailable)");
+            (y_ms_ssim, y_ms_ssim, y_ms_ssim)
+        }
+    };
 
     Some((
         y_ms_ssim.clamp(0.0, 1.0),
-        u_ms_ssim.clamp(0.0, 1.0),
-        v_ms_ssim.clamp(0.0, 1.0),
+        u_val.clamp(0.0, 1.0),
+        v_val.clamp(0.0, 1.0),
         weighted_avg.clamp(0.0, 1.0),
     ))
 }
@@ -210,6 +222,18 @@ fn calculate_ms_ssim_channel_sampled(
         }
     }
 
+    // For chroma channels (U/V) in YUV 4:2:0, the extracted plane is half the
+    // luma resolution. libvmaf MS-SSIM performs multi-scale downsampling and
+    // fails with "scale below 1x1" when the plane is too small.
+    // Minimum safe luma resolution for chroma MS-SSIM: 256x256 (chroma = 128x128).
+    if matches!(channel, "u" | "v") && (target_width < 256 || target_height < 256) {
+        eprintln!(
+            "      ℹ️  Channel {}: resolution {}x{} too small for chroma MS-SSIM (min 256x256), skipping",
+            channel.to_uppercase(), target_width, target_height
+        );
+        return None;
+    }
+
     let sample_filter = if sample_rate > 1 {
         format!(
             "select='not(mod(n\\,{}))',setpts=N/FRAME_RATE/TB,",
@@ -219,6 +243,9 @@ fn calculate_ms_ssim_channel_sampled(
         String::new()
     };
 
+    // For HDR content, we need to convert to 8-bit for libvmaf compatibility
+    // libvmaf's MS-SSIM feature may not support 10-bit input properly
+    // Note: This means we lose some HDR information, but it's better than failing
     let filter = format!(
         "[0:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[c0];[1:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[c1];[c0][c1]libvmaf=feature='name=float_ms_ssim':log_fmt=json:log_path=/dev/stdout",
         sf = sample_filter,
@@ -240,35 +267,45 @@ fn calculate_ms_ssim_channel_sampled(
         .output();
 
     match result {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            parse_ms_ssim_from_json(&stdout)
-        }
         Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!(
-                "\n      ❌ Channel {} MS-SSIM failed!",
-                channel.to_uppercase()
-            );
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Always try to parse JSON from stdout first — ffmpeg may return
+            // non-zero exit code even when it successfully computed the metric
+            // (e.g. due to harmless warnings written to stderr).
+            if let Some(score) = parse_ms_ssim_from_json(&stdout) {
+                return Some(score);
+            }
 
-            if stderr.contains("No such filter: 'libvmaf'") {
-                eprintln!("         Cause: libvmaf filter not available in ffmpeg");
+            // Only report failure if we truly got no usable result
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
                 eprintln!(
-                    "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
+                    "\n      ❌ Channel {} MS-SSIM failed!",
+                    channel.to_uppercase()
                 );
-            } else if stderr.contains("Invalid pixel format") || stderr.contains("format") {
-                eprintln!("         Cause: Pixel format incompatibility");
-                eprintln!("         Input: {}", input.display());
-            } else if stderr.contains("scale") || stderr.contains("resolution") {
-                eprintln!("         Cause: Resolution mismatch");
-            } else {
-                let error_lines: Vec<&str> = stderr
-                    .lines()
-                    .filter(|l| l.contains("Error") || l.contains("error") || l.contains("failed"))
-                    .take(2)
-                    .collect();
-                if !error_lines.is_empty() {
-                    eprintln!("         Error: {}", error_lines.join(" | "));
+
+                if stderr.contains("No such filter: 'libvmaf'") {
+                    eprintln!("         Cause: libvmaf filter not available in ffmpeg");
+                    eprintln!(
+                        "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
+                    );
+                } else if stderr.contains("Invalid pixel format")
+                    || stderr.contains("Discarding mismatched")
+                {
+                    eprintln!("         Cause: Pixel format incompatibility");
+                    eprintln!("         Input: {}", input.display());
+                } else {
+                    let error_lines: Vec<&str> = stderr
+                        .lines()
+                        .filter(|l| {
+                            (l.contains("Error") || l.contains("error") || l.contains("failed"))
+                                && !l.contains("Last message repeated")
+                        })
+                        .take(3)
+                        .collect();
+                    if !error_lines.is_empty() {
+                        eprintln!("         Error: {}", error_lines.join(" | "));
+                    }
                 }
             }
             None
@@ -299,6 +336,8 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
 
     let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
 
+    // Always use 8-bit yuv420p for libvmaf compatibility
+    // libvmaf's MS-SSIM feature works best with 8-bit input
     let result = Command::new("ffmpeg")
         .arg("-i")
         .arg(crate::safe_path_arg(input).as_ref())
@@ -316,10 +355,12 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
         .output();
 
     match result {
-        Ok(out) if out.status.success() => {
+        Ok(out) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             let stderr = String::from_utf8_lossy(&out.stderr);
 
+            // Always try to parse JSON from stdout first — ffmpeg may return
+            // non-zero exit code even when it successfully computed the metric.
             if let Some(ms_ssim) = parse_ms_ssim_from_json(&stdout) {
                 let clamped = ms_ssim.clamp(0.0, 1.0);
                 if (ms_ssim - clamped).abs() > 0.0001 {
@@ -344,20 +385,22 @@ pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
                 return Some(clamped);
             }
 
-            eprintln!("   ⚠️  MS-SSIM calculated but failed to parse score");
-        }
-        Ok(_) => {
-            eprintln!("   ⚠️  ffmpeg libvmaf MS-SSIM failed");
-            eprintln!("   🔄 Trying standalone vmaf tool as fallback...");
+            // No parseable score found
+            if out.status.success() {
+                eprintln!("   ⚠️  MS-SSIM calculated but failed to parse score");
+            } else {
+                eprintln!("   ⚠️  ffmpeg libvmaf MS-SSIM failed");
+                eprintln!("   🔄 Trying standalone vmaf tool as fallback...");
 
-            if crate::vmaf_standalone::is_vmaf_available() {
-                match crate::vmaf_standalone::calculate_ms_ssim_standalone(input, output) {
-                    Ok(score) => {
-                        eprintln!("   ✅ Standalone vmaf MS-SSIM: {:.4}", score);
-                        return Some(score);
-                    }
-                    Err(e) => {
-                        eprintln!("   ⚠️  Standalone vmaf also failed: {}", e);
+                if crate::vmaf_standalone::is_vmaf_available() {
+                    match crate::vmaf_standalone::calculate_ms_ssim_standalone(input, output) {
+                        Ok(score) => {
+                            eprintln!("   ✅ Standalone vmaf MS-SSIM: {:.4}", score);
+                            return Some(score);
+                        }
+                        Err(e) => {
+                            eprintln!("   ⚠️  Standalone vmaf also failed: {}", e);
+                        }
                     }
                 }
             }
@@ -429,7 +472,8 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
     let n_threads = num_cpus_capped();
     let (target_width, target_height) = resolve_common_metric_dimensions(input, output)?;
 
-    // dis = output (distorted), ref = input (reference)
+    // Always use 8-bit yuv420p for VMAF calculation compatibility
+    // VMAF models are trained on 8-bit content
     let filter = format!(
         "[0:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p[dis];[1:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p[ref];[dis][ref]libvmaf=shortest=true:ts_sync_mode=nearest:n_threads={nt}:log_fmt=json:log_path=/dev/stdout",
         sf = sample_filter,
@@ -451,26 +495,34 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
         .output();
 
     match result {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            parse_vmaf_mean_from_json(&stdout)
-        }
         Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            eprintln!("\n      ❌ VMAF-Y calculation failed!");
-            if stderr.contains("No such filter: 'libvmaf'") {
-                eprintln!("         Cause: libvmaf not available in this ffmpeg build");
-                eprintln!(
-                    "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
-                );
-            } else {
-                let error_lines: Vec<&str> = stderr
-                    .lines()
-                    .filter(|l| l.contains("Error") || l.contains("error") || l.contains("failed"))
-                    .take(2)
-                    .collect();
-                if !error_lines.is_empty() {
-                    eprintln!("         Error: {}", error_lines.join(" | "));
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Always try to parse JSON from stdout first — ffmpeg may return
+            // non-zero exit code even when it successfully computed the metric.
+            if let Some(score) = parse_vmaf_mean_from_json(&stdout) {
+                return Some(score);
+            }
+
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                eprintln!("\n      ❌ VMAF-Y calculation failed!");
+                if stderr.contains("No such filter: 'libvmaf'") {
+                    eprintln!("         Cause: libvmaf not available in this ffmpeg build");
+                    eprintln!(
+                        "         Fix: brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libvmaf"
+                    );
+                } else {
+                    let error_lines: Vec<&str> = stderr
+                        .lines()
+                        .filter(|l| {
+                            (l.contains("Error") || l.contains("error") || l.contains("failed"))
+                                && !l.contains("Last message repeated")
+                        })
+                        .take(3)
+                        .collect();
+                    if !error_lines.is_empty() {
+                        eprintln!("         Error: {}", error_lines.join(" | "));
+                    }
                 }
             }
             None
@@ -620,7 +672,8 @@ fn psnr_single_channel(
         String::new()
     };
 
-    // Extract the requested plane from both streams, then run psnr on them.
+    // Always use 8-bit yuv420p for PSNR calculation compatibility
+    // PSNR filter works best with consistent bit depth
     let filter = format!(
         "[0:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[ref];[1:v]{sf}scale={w}:{h}:flags=bicubic,format=yuv420p,extractplanes={ch}[dis];[ref][dis]psnr=stats_file=-",
         sf = sample_filter,

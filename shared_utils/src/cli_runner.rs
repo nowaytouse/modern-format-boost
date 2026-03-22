@@ -126,6 +126,12 @@ where
         match crate::checkpoint::CheckpointManager::new_with_context(input, config.output.as_deref())
         {
             Ok(cp) => {
+                // Detect when user deleted the output directory to start fresh:
+                // clear old checkpoint state so all files get reprocessed.
+                if let Err(e) = cp.reset_if_output_root_missing(config.output.as_deref()) {
+                    warn!("⚠️  Failed to check output root for checkpoint reset: {}", e);
+                }
+
                 if cp.is_resume_mode() {
                     info!(
                         "📂 Resume: skipping {} already completed files",

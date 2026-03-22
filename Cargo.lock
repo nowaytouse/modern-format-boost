@@ -894,7 +894,7 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#72dd959ce02de9b2e06295d97e8385a594da844a"
+source = "git+https://github.com/image-rs/image#c79d6091050646349ba062950f76472be48dbee0"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "img-av1"
-version = "0.10.87"
+version = "0.10.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "img-hevc"
-version = "0.10.87"
+version = "0.10.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "shared_utils"
-version = "0.10.87"
+version = "0.10.90"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2243,7 +2243,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vid-av1"
-version = "0.10.87"
+version = "0.10.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "vid-hevc"
-version = "0.10.87"
+version = "0.10.90"
 dependencies = [
  "anyhow",
  "clap",
