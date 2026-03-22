@@ -54,6 +54,8 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1070: Creation time preservation fix + cache version auto-binding + unified version management
 /// - v1084: Perceived-speed scheduling, progress refresh, and louder runtime failure reporting
 /// - v1085: GUI/script launch hardening and narrow-terminal progress adaptation
+/// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
+/// - v1090: Intelligent checkpoint reset on output directory deletion
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
