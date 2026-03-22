@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+
 ## [0.10.92] - 2026-03-22
 
 ### 🛠️ Code Quality & Robustness (Shared Utils)
@@ -56,11 +57,23 @@ All notable changes to this project will be documented in this file.
     - **Nightly (Edge)**: Synchronized with the absolute latest upstream iterations from GitHub Git sources (e.g., `image v0.25.x HEAD`) to support rapid iteration.
 - **Changelog Reconstruction**: Recovered 2200+ lines of archival history following repository restructuring.
 
-## [0.10.86] - 2026-03-21
+## [0.10.87-nightly] - 2026-03-22
 
-### Changed
-- 🔢 **Release finalized**: unified versioning bumped to 0.10.86 to seal the v0.10.85 feature set and documentation.
-- 🔢 **Version references are unified again**: workspace version bumped to 0.10.86, and cache-version examples/docs now match the real mapping (0.10.86 -> 1086).
+### 🔨 Other Changes
+- build(nightly): synchronize and update GitHub dependencies to latest upstream iterations (v0.10.87-nightly)
+
+## [0.10.86] - 2026-03-22
+
+### ✨ Features
+- release: v0.10.86 - finalized v0.10.85 features and documentation
+
+### 📝 Documentation
+- consolidate redundant documentation and release notes into docs/ directory
+
+### 🔨 Other Changes
+- merge v0.10.86: sealed release with updated notes
+- force sync nightly to remote to resolve diversion
+- merge v0.10.86: synchronized after dual-branch privacy purge
 
 ## [0.10.85] - 2026-03-20
 
@@ -95,6 +108,14 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - 🏷️ **Finder comment branding is now scoped to conversion output only**: `append_mfb_branding` was previously called inside `preserve_pro`, which fires on every metadata-preservation operation (including non-conversion paths). It is now called exclusively inside `commit_temp_to_output_with_metadata` after a successful atomic rename, ensuring the Finder comment is only written to files that were actually converted by MFB.
 - 🗑️ **Original-file deletion failures are no longer silent**: `safe_delete_original` errors in `finalize_conversion` are now propagated instead of being discarded with `let _ =`, so a failed delete surfaces as a conversion error rather than being silently ignored.
+
+## [0.10.82-v0] - 2026-03-22
+
+### 🐛 Bug Fixes
+- Fix odd-dimension metric normalization for animated quality checks
+
+### 📝 Documentation
+- integrate translated historical 'loud failure' notes into unified changelog (v0.10.82-v0.10.87)
 
 ## [0.10.82] - 2026-03-18
 
@@ -140,6 +161,11 @@ All notable changes to this project will be documented in this file.
 - 🛠️ **Robust Cleanup**: Updated `cache_cleaner.sh` to include centralized progress data in the purging process.
 - 🔒 **Thread-Safe Test Suite**: Refactored `CheckpointManager` unit tests for reliable multi-threaded execution.
 
+## [0.10.79] - 2026-03-21
+
+### 🔨 Other Changes
+- sync changelog for v0.10.79/0.10.80 and update progress tracking logic
+
 ## [0.10.78] - 2026-03-15
 
 ### 🏆 Documentation & Transparency
@@ -166,8 +192,18 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.76] - 2026-03-20
 
+### ✨ Features
+- level up AV1 tools maturity to parity with HEVC, implement CacheStats and GIF meme-score config parity; add GitHub workflow for nightly releases
+- complete av1 tools parity with hevc tools (small png optimization & finalize logic)
+
 ### 🐛 Bug Fixes
 - Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
+
+### 🔨 Other Changes
+- Merge branch 'main' into nightly
+
+### 🚀 Performance & Refactoring
+- restore clean crates.io dependencies for main branch
 
 ## [0.10.75] - 2026-03-19
 
@@ -189,10 +225,15 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.73] - 2026-03-19
 
+### ✨ Features
+- Add disk space pre-check to img-hevc
+
 ### 🐛 Bug Fixes
 - Compilation warnings fixed and unified version management
+- Script menu flow and disk space pre-check integration
 
 ### 🔨 Other Changes
+- main: Restore crates.io dependencies for stable production use
 - nightly: Restore GitHub dependencies for latest iterations
 
 ## [0.10.72] - 2026-03-16
@@ -214,10 +255,22 @@ All notable changes to this project will be documented in this file.
 ### 🐛 Bug Fixes
 - Complete metadata preservation fix
 
+### 🔨 Other Changes
+- nightly: Restore GitHub dependencies for latest iterations
+
 ## [0.10.69] - 2026-03-16
+
+### ✨ Features
+- Enhanced cache system v3 with content fingerprint and integrity verification
+- nightly branch uses GitHub dependencies for latest iterations
+- main branch uses stable crates.io dependencies
+- unified version management system
 
 ### 🐛 Bug Fixes
 - enable metadata preservation by default (v0.10.69)
+
+### 📝 Documentation
+- clarify nightly-only GitHub dependencies in Cargo.toml
 
 ## [0.10.68] - 2026-03-16
 
@@ -231,21 +284,24 @@ All notable changes to this project will be documented in this file.
 - resolve all clippy warnings in workspace
 - clippy warnings - simplify logic and add allow attributes
 
-## [0.10.66] - 2026-03-22
+## [0.10.66] - 2026-03-15
 
 ### 🐛 Bug Fixes
-- correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
-- enable v1_21 in shared_utils default feature (critical fix)
 - enable v1_21 feature in img_hevc/img_av1 + increase HEIC limits to 15GB (v0.10.66)
-- remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
+- enable v1_21 in shared_utils default feature (critical fix)
+- correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
+- clippy warnings - simplify logic and add allow attributes
+- resolve all clippy warnings in workspace
 
 ### 📝 Documentation
 - integrate core historical release notes (v0.10.66, v0.10.64, v0.10.9) into unified changelog
+- docs/app: restore macOS application bundle stripped during repository sanitization
 
 ## [0.10.65] - 2026-03-15
 
 ### 🐛 Bug Fixes
 - apply HEIC security limits before reading file (v0.10.65)
+- remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
 
 ## [0.10.64] - 2026-03-15
 
@@ -264,10 +320,12 @@ All notable changes to this project will be documented in this file.
 ## [0.10.63] - 2026-03-15
 
 ### 🐛 Bug Fixes
-- Fix compilation warning in nightly branch
+- remove .clippy.toml from .gitignore (should be tracked)
 
 ### 🔨 Other Changes
 - Increase HEIC security limits
+- Remove AI tool config folders from Git tracking
+- bump version to 0.10.64
 
 ## [0.10.62] - 2026-03-15
 
@@ -278,6 +336,9 @@ All notable changes to this project will be documented in this file.
 - Unify dependencies to GitHub nightly sources
 
 ## [0.10.61] - 2026-03-15
+
+### ✨ Features
+- Add WebP/AVIF lossless detection verification
 
 ### 🔨 Other Changes
 - Bind cache version to program version for automatic invalidation
@@ -312,12 +373,24 @@ All notable changes to this project will be documented in this file.
 
 ### ✨ Features
 - implement Video CRF search hint (warm start) v0.10.57
-- implement robust persistent cache with nanosecond change detection and SQL migration
-- implement 3-stage cross-audit with deep byte-level bitstream investigation
+- implement global CRF warm start cache for video and dynamic images
+- enhance detect_animation with ffprobe/libavformat fallback
 
 ### 🐛 Bug Fixes
-- resolve compilation errors and implement internal deep byte-research for joint audit
-- resolve GIF parser desync and implement performance-optimized Joint Audit
+- unnecessary parentheses around assigned value
+- remove extension fallback from format detection to prevent NoFtypBox false errors
+- use numeric value for LIBHEIF_SECURITY_LIMITS to prevent NoFtypBox error
+- add robust fallback to read_from_file and verify security limits
+- complete brand list (heix, hevc, hevx) and add diagnostic tag V3
+- final V4 cleanup, remove panic and restore security limits
+- set LIBHEIF_SECURITY_LIMITS at global program entry points
+
+### 🔨 Other Changes
+- update gitignore for local caches and tool configs
+
+### 🚀 Performance & Refactoring
+- fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
+- rename to analyze_heic_file_v4 and add V4 diagnostic tags
 
 ## [0.10.52] - 2026-03-15
 
@@ -331,10 +404,24 @@ All notable changes to this project will be documented in this file.
 ### 🚀 Performance & Refactoring
 - bump version to 0.10.52 and perfected meme scoring mechanism
 
-## [0.10.51] - 2026-03-14
+## [0.10.51] - 2026-03-15
+
+### ✨ Features
+- implement 3-stage cross-audit with deep byte-level bitstream investigation
+- implement robust persistent cache with nanosecond change detection and SQL migration
+
+### 🐛 Bug Fixes
+- simplify image classifiers usage and log all fallbacks
+- resolve GIF parser desync and implement performance-optimized Joint Audit
+- resolve compilation errors and implement internal deep byte-research for joint audit
+
+### 🔨 Other Changes
+- tune: refine gif meme-score heuristics for tiny stickers
+- tune: sharpen gif meme-score for stickers and social-cache names
 
 ### 🚀 Performance & Refactoring
 - remove dynamic compression adjustment and legacy routing (v0.10.51)
+- bump version to 0.10.52 and perfected meme scoring mechanism
 
 ## [0.10.50] - 2026-03-14
 
@@ -357,11 +444,15 @@ All notable changes to this project will be documented in this file.
 ## [0.10.46] - 2026-03-14
 
 ### ✨ Features
-- lossless routing for WebP/AVIF/TIFF → JXL; exclude HEIC/HEIF
+- add lossless HEIC/HEIF to JXL conversion route
+- Add HEVC transquant_bypass detection and mp4parse dependency
 
 ### 🐛 Bug Fixes
 - release v0.10.46 with enhanced modern-lossy-skip and heuristic fix
-
+- correct HEIC/HEIF skip logic to match WebP/AVIF pattern
+- restore safe fallback behavior for corrupted media files
+- silence cache debug logs and prevent stack overflow
+- enrich analysis cache and fix UI labels
 
 ## [0.10.45] - 2026-03-14
 
@@ -460,17 +551,33 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.37] - 2026-03-13
 
-### Added
-- **Security Enhancement: Unique Temp Files**: Added 8-character random string (e.g., `.tmp.A7b2K9xZ.mp4`) to temporary file names in `shared_utils`. This prevents collisions with user-named files, enables safe concurrent processing, and ensures that cleanup operations only target program-generated files.
-- **Sampling Duration Increase**: Increased GPU and CPU sampling duration in Ultimate Mode by 15.0s each.
-  - GPU: 45.0s → 60.0s (segmented: 50.0s → 65.0s)
-  - CPU (Calibration): 15.0s → 30.0s
-- **Phase 4 Metrics Display**: Added VMAF and PSNR (UV) display to Phase 4 (0.01-granularity fine-tune) logs for consistency with CPU/GPU phases.
-- **Diagnostic Logging**: Added temp file verification and detailed error messages before commit to diagnose "No such file or directory" errors.
+### ✨ Features
+- skip quality verification when early insight triggered
+- increase GPU utilization in ultimate mode with precise exploration
+- restore 0.5-0.1 GPU steps and lower Stage 1 threshold
+- enhance temp file security with unique IDs and update dependencies to v0.10.37
+- increase GPU and CPU sampling durations in ultimate mode by 15s
+- Optimize GPU search efficiency for low bitrate videos (<5Mbps)
 
-### Fixed
-- **Temp File Cleanup**: Temp files (`.tmp.` pattern) are now properly cleaned up when processing fails or is interrupted, preventing leftover files in output directory.
-- **Dependency Update**: Updated all workspace dependencies to their latest compatible versions.
+### 🐛 Bug Fixes
+- unified error handling, test fixes, and code cleanup (v0.10.37)
+- remove silent CRF defaults and fix Phase 2 algorithm issues
+- add VMAF/PSNR-UV early insight with integer-level improvement detection
+- skip 0.01-granularity when early insight triggered
+- early insight only triggers when quality meets thresholds
+- Fix early insight logic and CRF 40 fallback in GPU coarse search
+- Phase 2/3 algorithm bugs and logging improvements
+- add quality metrics to early insight log
+- enable GPU exploration for small files in ultimate mode
+- adjust GPU skip threshold to prevent hang on tiny files
+- use integer GPU step sizes to prevent hang, increase iterations
+- reduce GPU sample duration to prevent timeout hang
+- enable GPU search logs in ultimate mode for transparency
+- release 0.10.38 - Fix temp file cleanup, PSNR calc, and container overhead
+
+### 🔨 Other Changes
+- remove unused progress modules
+- Improve Phase 3 efficiency and GPU precision
 
 ## [0.10.36] - 2026-03-13
 
@@ -549,6 +656,21 @@ All notable changes to this project will be documented in this file.
   - ULTIMATE_REQUIRED_ZERO_GAINS: 20 → 50
   - ABSOLUTE_MIN_CRF: 10.0 → 0.0
 - **Missing Field Errors**: Fixed VideoDetectionResult tests with encoder_params and max_b_frames
+
+## [0.10.35] - 2026-03-13
+
+### ✨ Features
+- optimize quality insight mechanism and 1MB tolerance logic (v0.10.35)
+- Add sprint and backtrack mechanism in CPU 0.1 fine-tuning phase
+- restore 453c6e0 precision detection + hardware-aware logging [GPU/CPU]
+- restore 1103319 precision detection + hardware-aware logging [GPU/CPU]
+- unified error handling, enhanced logging & algorithm optimizations
+
+### 🔨 Other Changes
+- update test expectations for new constants
+
+### 🚀 Performance & Refactoring
+- enhance GPU/CPU phase distinction in logs & clean up fake fallbacks
 
 ## [0.10.34] - 2026-03-12
 
@@ -1463,6 +1585,26 @@ All notable changes to this project will be documented in this file.
   - Affected files: `img_hevc/src/lossless_converter.rs`, `img_av1/src/lossless_converter.rs`, `shared_utils/src/jxl_utils.rs`
   - `run_imagemagick_cjxl_pipeline` now returns `Result<(), ...>` instead of `Result<Output, ...>`
   - `try_imagemagick_fallback` now returns `io::Result<()>` instead of `io::Result<Output>`
+
+## [0.9.7] - 2026-03-03
+
+### 🔨 Other Changes
+- ci: install pkgconfiglite on Windows; bump v0.9.7
+
+## [0.9.6] - 2026-03-03
+
+### ✨ Features
+- ci: add meson to Linux deps; bump v0.9.6
+
+## [0.9.5] - 2026-03-03
+
+### 🐛 Bug Fixes
+- ci: fix dav1d version + macOS x86_64 cross-compile; bump v0.9.5
+
+## [0.9.4] - 2026-03-03
+
+### 🐛 Bug Fixes
+- ci: fix all platform dependency issues; bump to v0.9.4
 
 ## [0.9.1] - 2026-03-04
 
@@ -2700,14 +2842,6 @@ This section reconstructs the detailed development history, transforming 1400+ r
 ### 🔨 Other Changes
 - Improve GPU+CPU search accuracy
 
-## [5.2.0] - 2025-12-14
-
-### 🐛 Bug Fixes
-- 🔥 v5.2: Fix Stage naming + Add 0.1 fine-tuning when min_crf compresses
-- 🔥 v5.2: Fix GPU range design - GPU only narrows upper bound, not lower
-- 🔥 v5.2: Fix Stage B upward search - update best_boundary when finding lower CRF
-- Fix GPU/CPU CRF mapping display
-
 ## [5.2-v5.0] - 2026-02-23
 
 ### ✨ Features
@@ -2739,6 +2873,14 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - 🚀 Refactor: Simplification of project structure and dependencies
 - 📦 Refactor: Extract image and video analysis logic to shared_utils
 - remove unused simple_progress and realtime_progress modules
+
+## [5.2.0] - 2025-12-14
+
+### 🐛 Bug Fixes
+- 🔥 v5.2: Fix Stage naming + Add 0.1 fine-tuning when min_crf compresses
+- 🔥 v5.2: Fix GPU range design - GPU only narrows upper bound, not lower
+- 🔥 v5.2: Fix Stage B upward search - update best_boundary when finding lower CRF
+- Fix GPU/CPU CRF mapping display
 
 ## [5.1.4] - 2025-12-13
 
@@ -2999,731 +3141,6 @@ This section reconstructs the detailed development history, transforming 1400+ r
 - switch XMP merger from whitelist to blacklist approach
 - proactive input preprocessing for cjxl instead of fallback
 
-## [0.10.87] - 2026-03-22
-
-### ✨ Features
-- add real-time branch/version transparency to UI header (v0.10.87)
-
-### 📝 Documentation
-- re-anchor project documentation with complete README history purged
-- reconstruct and synchronize 2200-line changelog following repository sanitization (v0.10.87)
-- finalize v0.10.87 changelog with comprehensive official release notes (v0.10.78-v0.10.87)
-- RESTORED FULL ULTIMATE CHANGELOG via local Cursor history (2200+ lines)
-- append full 2200-commit ledger to changelog for complete historical accountability
-
-### 🔨 Other Changes
-- release: v0.10.87 - privacy hardened repository with segmented dependency architecture
-- build: finalize and lock drag-and-drop scripts for v0.10.87 release
-- build: restore modern English-only macOS app bundle (v0.10.87)
-- build: finalize app bundle versioning to v0.10.87 (2026-03-22)
-- build: truly restore original v0.10.87 app bundle and changelog
-
-### 🚀 Performance & Refactoring
-- build: remove redundant cleanup script and finalize unified project state
-
-## [0.10.87-nightly] - 2026-03-22
-
-### 🔨 Other Changes
-- build(nightly): synchronize and update GitHub dependencies to latest upstream iterations (v0.10.87-nightly)
-
-## [0.10.86] - 2026-03-22
-
-### ✨ Features
-- release: v0.10.86 - finalized v0.10.85 features and documentation
-
-### 📝 Documentation
-- consolidate redundant documentation and release notes into docs/ directory
-
-### 🔨 Other Changes
-- merge v0.10.86: sealed release with updated notes
-- force sync nightly to remote to resolve diversion
-- merge v0.10.86: synchronized after dual-branch privacy purge
-
-## [0.10.85] - 2026-03-21
-
-### 🐛 Bug Fixes
-- Fix nightly GitHub dependency build regression
-- Make temp output suffix rand-api agnostic
-- merge v0.10.85: documentation and latest fixes
-
-### 🔨 Other Changes
-- merge v0.10.85: environment hardening and terminal-aware progress
-- restore GitHub metadata and nightly patch section
-- merge v0.10.85 (with GitHub sources)
-- Surface more silent failures and reset stale checkpoints
-- Tighten resume validation with cache-bound checkpoints
-- Make checkpoint process probing portable and louder
-- Finish surfacing startup and runtime state failures
-- Refine video CRF warm-start cache hints
-
-## [0.10.83] - 2026-03-21
-
-### 🐛 Bug Fixes
-- merge v0.10.83: stability and metadata scoping fixes
-
-### 🔨 Other Changes
-- Improve perceived-speed scheduling and surface silent failures
-- Harden GUI launches and narrow-terminal progress
-
-## [0.10.82] - 2026-03-21
-
-### 🐛 Bug Fixes
-- merge v0.10.82 performance and stability fixes
-- merge v0.10.82: comprehensive hardening, path security, and error visibility fixes
-- scope Finder branding to conversion and surface more silent failures
-
-### 🔨 Other Changes
-- Harden error visibility and recovery paths
-- Surface cache and ffprobe failures
-- Pause batch runs on mid-process disk exhaustion
-- merge v0.10.82 update: pause batch runs on disk exhaustion
-- Scope Finder comment branding to conversion output only; surface delete failures
-- Surface more silent runtime degradation paths
-
-### 🚀 Performance & Refactoring
-- Tighten cleanup failure reporting
-
-## [0.10.82-v0] - 2026-03-22
-
-### 🐛 Bug Fixes
-- Fix odd-dimension metric normalization for animated quality checks
-
-### 📝 Documentation
-- integrate translated historical 'loud failure' notes into unified changelog (v0.10.82-v0.10.87)
-
-## [0.10.81] - 2026-03-21
-
-### ✨ Features
-- inject MFB branding into macOS Finder comments
-- restrict Finder branding to target formats (JXL, MOV, MP4)
-- security: remove sensitive prompts from history and add to gitignore
-
-### 🐛 Bug Fixes
-- remove #[ignore] from all tests and fix stale assertions in video_explorer
-- merge test fixes into main
-- atomic rename for Windows and FFmpeg stream mapping for cover art
-
-### 🔨 Other Changes
-- merge nightly v0.10.81 into main (maintaining stable dependencies)
-- merge macOS Finder branding into main
-- merge selective Finder branding
-- bump workspace version to 0.10.82
-- merge version bump to 0.10.82
-
-## [0.10.80] - 2026-03-21
-
-### 🐛 Bug Fixes
-- standardize output extensions to uppercase and fix formatting in simple mode
-- merge uppercase extensions and formatting fixes into main (maintaining stable dependencies)
-
-### 🔨 Other Changes
-- merge nightly v0.10.80 into main (maintaining stable dependencies)
-
-## [0.10.79] - 2026-03-21
-
-### 🔨 Other Changes
-- sync changelog for v0.10.79/0.10.80 and update progress tracking logic
-
-## [0.10.78] - 2026-03-21
-
-### 🐛 Bug Fixes
-- stabilize main branch by removing git dependencies and fixing version regressions
-- fix clippy warnings
-- Fix hardcoded JXL confidence and progress loading
-- Fix MS-SSIM resize chain on main deps
-- Clean dead helpers and fix validation regressions
-
-### 📝 Documentation
-- bump version to v0.10.78 and update docs
-
-### 🔨 Other Changes
-- Merge branch 'nightly'
-- Make MS-SSIM resize portable across image deps
-- Remove hardcoded Q85 lossy fallback
-- Make thread allocation react to multi-instance mode
-- Relax path validation for argv-safe paths
-- Harden app and drag-drop shell entrypoints
-- Remove stale explorer allows and duplicate modules
-- Surface tool stream read failures
-- Harden XMP matching and SSIM mapping
-- Harden XMP metadata discovery and sidecar matching
-
-## [0.10.76] - 2026-03-20
-
-### ✨ Features
-- level up AV1 tools maturity to parity with HEVC, implement CacheStats and GIF meme-score config parity; add GitHub workflow for nightly releases
-- complete av1 tools parity with hevc tools (small png optimization & finalize logic)
-
-### 🐛 Bug Fixes
-- Fix VMAF/SSIM/PSNR filter graph -22 EINVAL on odd-dimension video
-
-### 🔨 Other Changes
-- Merge branch 'main' into nightly
-
-### 🚀 Performance & Refactoring
-- restore clean crates.io dependencies for main branch
-
-## [0.10.75] - 2026-03-19
-
-### 🐛 Bug Fixes
-- Fix stride bias in color frequency distribution sampling
-
-## [0.10.74] - 2026-03-19
-
-### 🔨 Other Changes
-- PNG quantization heuristic accuracy overhaul
-
-## [0.10.73] - 2026-03-19
-
-### ✨ Features
-- Add disk space pre-check to img-hevc
-
-### 🐛 Bug Fixes
-- Compilation warnings fixed and unified version management
-- Script menu flow and disk space pre-check integration
-
-### 🔨 Other Changes
-- main: Restore crates.io dependencies for stable production use
-- nightly: Restore GitHub dependencies for latest iterations
-
-## [0.10.72] - 2026-03-16
-
-### 🐛 Bug Fixes
-- Fix ICC Profile & Metadata Preservation
-
-## [0.10.71] - 2026-03-16
-
-### 🐛 Bug Fixes
-- Complete metadata preservation fix
-
-### 🔨 Other Changes
-- nightly: Restore GitHub dependencies for latest iterations
-
-## [0.10.69] - 2026-03-16
-
-### ✨ Features
-- Enhanced cache system v3 with content fingerprint and integrity verification
-- nightly branch uses GitHub dependencies for latest iterations
-- main branch uses stable crates.io dependencies
-- unified version management system
-
-### 🐛 Bug Fixes
-- enable metadata preservation by default (v0.10.69)
-
-### 📝 Documentation
-- clarify nightly-only GitHub dependencies in Cargo.toml
-
-## [0.10.68] - 2026-03-16
-
-### 🐛 Bug Fixes
-- comprehensive metadata preservation across all platforms (v0.10.68)
-
-## [0.10.67] - 2026-03-16
-
-### 🐛 Bug Fixes
-- preserve file creation time and clean log output (v0.10.67)
-
-## [0.10.66] - 2026-03-22
-
-### 🐛 Bug Fixes
-- enable v1_21 feature in img_hevc/img_av1 + increase HEIC limits to 15GB (v0.10.66)
-- enable v1_21 in shared_utils default feature (critical fix)
-- correct HEIC security limits API usage + restore fallback 2 (v0.10.66)
-- clippy warnings - simplify logic and add allow attributes
-- resolve all clippy warnings in workspace
-
-### 📝 Documentation
-- integrate core historical release notes (v0.10.66, v0.10.64, v0.10.9) into unified changelog
-- docs/app: restore macOS application bundle stripped during repository sanitization
-
-## [0.10.65] - 2026-03-15
-
-### 🐛 Bug Fixes
-- apply HEIC security limits before reading file (v0.10.65)
-- remove LIBHEIF_SECURITY_LIMITS env var, use API-level limits only
-
-## [0.10.64] - 2026-03-15
-
-### ✨ Features
-- ci: restore release workflow and add v0.10.64 release notes
-
-## [0.10.63] - 2026-03-15
-
-### 🐛 Bug Fixes
-- remove .clippy.toml from .gitignore (should be tracked)
-
-### 🔨 Other Changes
-- Increase HEIC security limits
-- Remove AI tool config folders from Git tracking
-- bump version to 0.10.64
-
-## [0.10.62] - 2026-03-15
-
-### 🐛 Bug Fixes
-- Fix compilation warning in nightly branch
-
-### 🔨 Other Changes
-- Unify dependencies to GitHub nightly sources
-
-## [0.10.61] - 2026-03-15
-
-### ✨ Features
-- Add WebP/AVIF lossless detection verification
-
-### 🔨 Other Changes
-- Bind cache version to program version for automatic invalidation
-
-## [0.10.60] - 2026-03-15
-
-### 🔨 Other Changes
-- Log level optimization + dependency updates
-
-## [0.10.59] - 2026-03-15
-
-### 🐛 Bug Fixes
-- Cache version control + HEIC lossless detection fix
-
-## [0.10.57] - 2026-03-15
-
-### ✨ Features
-- implement Video CRF search hint (warm start) v0.10.57
-- implement global CRF warm start cache for video and dynamic images
-- enhance detect_animation with ffprobe/libavformat fallback
-
-### 🐛 Bug Fixes
-- unnecessary parentheses around assigned value
-- remove extension fallback from format detection to prevent NoFtypBox false errors
-- use numeric value for LIBHEIF_SECURITY_LIMITS to prevent NoFtypBox error
-- add robust fallback to read_from_file and verify security limits
-- complete brand list (heix, hevc, hevx) and add diagnostic tag V3
-- final V4 cleanup, remove panic and restore security limits
-- set LIBHEIF_SECURITY_LIMITS at global program entry points
-
-### 🔨 Other Changes
-- update gitignore for local caches and tool configs
-
-### 🚀 Performance & Refactoring
-- fully trust ffprobe for ISOBMFF formats like AVIF to avoid false positives
-- rename to analyze_heic_file_v4 and add V4 diagnostic tags
-
-## [0.10.51] - 2026-03-15
-
-### ✨ Features
-- implement 3-stage cross-audit with deep byte-level bitstream investigation
-- implement robust persistent cache with nanosecond change detection and SQL migration
-
-### 🐛 Bug Fixes
-- simplify image classifiers usage and log all fallbacks
-- resolve GIF parser desync and implement performance-optimized Joint Audit
-- resolve compilation errors and implement internal deep byte-research for joint audit
-
-### 🔨 Other Changes
-- tune: refine gif meme-score heuristics for tiny stickers
-- tune: sharpen gif meme-score for stickers and social-cache names
-
-### 🚀 Performance & Refactoring
-- remove dynamic compression adjustment and legacy routing (v0.10.51)
-- bump version to 0.10.52 and perfected meme scoring mechanism
-
-## [0.10.50] - 2026-03-14
-
-### ✨ Features
-- explicit size units in logs (v0.10.50)
-
-## [0.10.49] - 2026-03-14
-
-### 🐛 Bug Fixes
-- release: v0.10.49 - README overhaul and HEIC security fix
-
-## [0.10.46] - 2026-03-14
-
-### ✨ Features
-- add lossless HEIC/HEIF to JXL conversion route
-- Add HEVC transquant_bypass detection and mp4parse dependency
-
-### 🐛 Bug Fixes
-- release v0.10.46 with enhanced modern-lossy-skip and heuristic fix
-- correct HEIC/HEIF skip logic to match WebP/AVIF pattern
-- restore safe fallback behavior for corrupted media files
-- silence cache debug logs and prevent stack overflow
-- enrich analysis cache and fix UI labels
-
-## [0.10.45] - 2026-03-14
-
-### ✨ Features
-- lossless routing for WebP/AVIF/TIFF → JXL; exclude HEIC/HEIF
-
-### 🔨 Other Changes
-- release v0.10.45
-
-## [0.10.43] - 2026-03-14
-
-### ✨ Features
-- release v0.10.43
-
-### 🐛 Bug Fixes
-- eliminate hardcoded quality degradation in image routing
-- refine image quality routing and update startup logs
-- suppress deprecation warnings in routing logic
-
-## [0.10.39] - 2026-03-14
-
-### ✨ Features
-- add image quality metrics to logs and bump version to v0.10.39
-- implement JSON-based extensible image classification rule engine and expansion
-- hide JPEG transcoding logs from terminal by default (always in log file)
-- unified milestone statistics and enhanced log alignment
-- add MANGA category and refine DOCUMENT classification rules
-- remove format recommendation from image_classifiers.json
-- Full Logging System Overhaul with Premium Aesthetics
-- Minimalist Abbreviated Milestones for Video Mode
-- Add XMP shorthand (X:) support to Video Mode milestones
-
-### 🐛 Bug Fixes
-- Resolve duplicate milestone stats and clean up multi-line logs
-
-## [0.10.37] - 2026-03-13
-
-### ✨ Features
-- skip quality verification when early insight triggered
-- increase GPU utilization in ultimate mode with precise exploration
-- restore 0.5-0.1 GPU steps and lower Stage 1 threshold
-- enhance temp file security with unique IDs and update dependencies to v0.10.37
-- increase GPU and CPU sampling durations in ultimate mode by 15s
-- Optimize GPU search efficiency for low bitrate videos (<5Mbps)
-
-### 🐛 Bug Fixes
-- unified error handling, test fixes, and code cleanup (v0.10.37)
-- remove silent CRF defaults and fix Phase 2 algorithm issues
-- add VMAF/PSNR-UV early insight with integer-level improvement detection
-- skip 0.01-granularity when early insight triggered
-- early insight only triggers when quality meets thresholds
-- Fix early insight logic and CRF 40 fallback in GPU coarse search
-- Phase 2/3 algorithm bugs and logging improvements
-- add quality metrics to early insight log
-- enable GPU exploration for small files in ultimate mode
-- adjust GPU skip threshold to prevent hang on tiny files
-- use integer GPU step sizes to prevent hang, increase iterations
-- reduce GPU sample duration to prevent timeout hang
-- enable GPU search logs in ultimate mode for transparency
-- release 0.10.38 - Fix temp file cleanup, PSNR calc, and container overhead
-
-### 🔨 Other Changes
-- remove unused progress modules
-- Improve Phase 3 efficiency and GPU precision
-
-## [0.10.36] - 2026-03-13
-
-### 📝 Documentation
-- update CHANGELOG for v0.10.36
-
-### 🔨 Other Changes
-- Merge nightly into main - v0.10.36
-
-## [0.10.35] - 2026-03-13
-
-### ✨ Features
-- optimize quality insight mechanism and 1MB tolerance logic (v0.10.35)
-- Add sprint and backtrack mechanism in CPU 0.1 fine-tuning phase
-- restore 453c6e0 precision detection + hardware-aware logging [GPU/CPU]
-- restore 1103319 precision detection + hardware-aware logging [GPU/CPU]
-- unified error handling, enhanced logging & algorithm optimizations
-
-### 🔨 Other Changes
-- update test expectations for new constants
-
-### 🚀 Performance & Refactoring
-- enhance GPU/CPU phase distinction in logs & clean up fake fallbacks
-
-## [0.10.34] - 2026-03-12
-
-### ✨ Features
-- unified 10-sample integer quality insight mechanism across all phases (v0.10.34)
-
-## [0.10.26] - 2026-03-12
-
-### ✨ Features
-- implement quality fast-fail in upward search and increase saturation to 30 for Ultimate Mode
-- increase saturation to 30 and add 3-sample confirmation for quality fast-fail
-- implement 10-step confirmation window for Ultimate wall detection to avoid noise-induced early exit
-- implement sticky quality insights and 50-step extreme saturation for Ultimate Mode
-- remove CRF floor in Ultimate Mode to allow hitting true physical walls at any CRF
-- accelerated CPU fine-tuning with Sprint & Backtrack and removed CRF barriers
-
-### 🐛 Bug Fixes
-- prevent early termination in Ultimate Mode when hitting standard min_crf boundary
-
-### 🔨 Other Changes
-- release v0.10.26 - Precision-first metadata, Ultimate Wall Detection, and UI Overhaul
-
-### 🚀 Performance & Refactoring
-- implement 'Dead-Wall' fast-fail in downward search to prevent performance waste on non-recoverable quality
-
-## [0.10.19] - 2026-03-11
-
-### ✨ Features
-- implement precision-first quality detection for video (CRF/B-frames) and images (HEIC/AVIF/TIFF/JXL/JP2)
-- use precision-first strategy for image quality detection
-- sync AV1 animated image encoding with HEVC parity
-
-### 🐛 Bug Fixes
-- Fix emoji display issues
-- Update changelog for emoji bug fixes
-- script clear-screen, double Ctrl+C, milestone inline display
-- fix+refactor: compact milestone format, fix title padding leak, Ctrl+C race
-- Ctrl+C auto-resume logic, milestone alignment, title padding
-- Fix milestone persistent display and implement native Ctrl+C guard
-- Merge main fixes (no version bump)
-- Fix Ctrl+C guard and simplify GIF log format
-- Fix milestone display after GIF processing logs
-- Fix Ctrl+C guard signal handling in pipeline
-- Systematic fix for Ctrl+C guard signal handling
-- Fix milestone position and GIF log alignment
-- Restore log display fixes from previous attempts
-- Fix conversion message to use correct English term 'transcoding'
-- Fix conversion message to prevent truncation
-- modernize log format, fix terminal colors, rewrite ctrl+c guard, audit & update deps
-- make bash script compatible with Rust interactive features
-- robust SIGINT pipeline handling and inline terminal stats
-- restore ANSI colors stripped by refactoring, remove unused TTY code, and consolidate changelog
-- correctly terminate background title spinner on pipeline Ctrl+C interruptions
-- ensure colors render and subprocesses quit reliably on Ctrl+C
-- enforce thread suspension on Ctrl+C prompt & overhaul terminal UI aesthetics
-- implement precision-first quality detection across all formats and fix workspace build errors
-- fix clippy  warning in image_detection.rs
-
-### 🔨 Other Changes
-- Release v0.10.19: Update version numbers and documentation
-- 彻底修复 Ctrl+C 守卫信号处理
-- Remove all shell signal handling - let Rust handle Ctrl+C directly
-- Revert Ctrl+C guard to original working version
-- Remove redundant 'successful' text since ✅ emoji already indicates success
-- Change GIF text to 'Animation' in English
-- Merge branch 'main' into nightly
-- Standardized 1MB file size limits and translated Simplified Chinese internal outputs
-- updated dependencies and translated remaining test assertions to English
-- make can_compress_pure_video respect allow_size_tolerance flag
-
-### 🚀 Performance & Refactoring
-- Clean up all temporary test files
-
-## [0.10.14] - 2026-03-10
-
-### ✨ Features
-- Add compact duration formatting (1d2h3m4s) to progress displays
-- Add weeks unit and implement gradual spacing strategy
-- Add years and months units with comprehensive time duration support
-- Increase title bar padding from 30 to 30000 spaces for complete coverage
-- Add separators to success cases for unified CRF log format
-- Add emoji feedback for x265 encoding steps
-
-### 🐛 Bug Fixes
-- fix all clippy warnings (format! in format! args)
-- Fix emoji logic: use ❌ for failed QUALITY GATE
-- Fix terminal running-time residue: remove tee /dev/tty from binary pipeline
-- clear spinner line after processing, restore normal output display
-- stop spinner before binary runs to prevent terminal line collision
-- restore Running spinner display during processing
-- restore Running spinner display during processing (nightly)
-- pause spinner during binary execution, resume after
-- keep spinner visible by capturing binary output silently
-- move spinner to terminal title bar to eliminate residue
-- Unify per-file log: emoji at tail, fixed-width filename column
-- script syntax error and inconsistent clear-screen on double-click
-- restore per-file success lines suppressed by quiet mode in batch
-- fix+feat: raise image decode limit for large JPEGs; add Ctrl+C guard
-- fix+feat+refactor: periodic clear fix, emoji prefixes, remove pb/lossless/Simple
-- remove leading blank line from milestone status lines to prevent terminal badges
-
-### 📝 Documentation
-- unify version to v0.10.14 across README and Cargo.toml
-
-### 🔨 Other Changes
-- Update duration format to detailed style with milliseconds
-- Beautify duration format with elegant standard time notation
-- Beautify duration format with proper spacing and normalization
-- Beautify duration format with spaces for better readability
-- Optimize duration format spacing for better balance
-- Implement progressive spacing strategy for enhanced visual hierarchy
-- Restore multi-line log format for better visual presentation
-- Create beautiful single-line log format with visual separators
-- Move single emoji to QUALITY GATE position for better meaning
-- Ensure exactly 4 emojis in both success and failure cases
-- Update CHANGELOG.md with log beautification improvements
-- Update bash spinner time format to match Rust compact duration format
-- Merge branch 'main' into nightly
-- Simplify title bar spinner: show only ⏱ elapsed time
-- Sync title bar timer format with Rust format_duration_compact()
-- Combine WALL HIT and Backtrack messages into single line
-- Improve WALL HIT log format for better readability and aesthetics
-- Revert to single-line WALL HIT format with emoji at end
-- Unify emoji placement for all CRF search logs - move to end
-- Simplify x265 encoding logs to reduce CLI parameter confusion
-- Replace 🔥 fire emoji with 🔍 magnifying glass for Ultimate Explore
-
-### 🚀 Performance & Refactoring
-- Consolidate redundant log messages for cleaner output
-- Clean up all test-related temporary files
-
-## [0.10.13] - 2026-03-10
-
-### ✨ Features
-- replace [Info] with 📊 emoji on stats lines; add visual separation
-
-## [0.10.5] - 2026-03-10
-
-### ✨ Features
-- Enhanced error logging system with severity levels and auto-classification
-- Colorized output, English-only UI, standardized logging macros
-
-### 🐛 Bug Fixes
-- Release v0.10.5: Add animated JXL support and fix static JXL detection
-- Fix clippy warnings: code quality improvements
-- Fix AVIF GBR colorspace bug, WebP dimension detection, and add WebP pre-processing
-- Fix WebP APNG duration detection using FFmpeg
-- Fix WebP frame extraction and timing using webpmux
-- Fix multi-stream AVIF/HEIC stream selection bug
-- Fix clippy warning: use .find() instead of .skip_while().next()
-- Fix ffprobe failures on filenames with special characters ([]{%})
-- Fix misleading quality check messages and improve timestamp verification diagnostics
-- Fix ffprobe image2 demuxer pattern matching and silent errors
-- Fixed compress mode to respect tolerance setting
-- Colors now render in terminal when launched via drag-drop script or app
-
-### 🔨 Other Changes
-- Update release workflow to use RELEASE_NOTES file if available
-- Change stream_size ffprobe from -v quiet to -v error
-- Enhanced size check logging and copy-on-fail feedback
-- Changed size tolerance from percentage to KB-level
-
-## [0.10.4] - 2026-03-09
-
-### 🔨 Other Changes
-- Release v0.10.4: Remove ImageMagick fallback, unify GIF conversion pipeline
-
-## [0.10.3] - 2026-03-09
-
-### 🐛 Bug Fixes
-- Fix multi-stream animated files frame loss + preserve FPS
-
-## [0.10.2] - 2026-03-09
-
-### 🔨 Other Changes
-- Enhanced meme detection with filename and loop frequency analysis
-
-## [0.9.9-3] - 2026-03-09
-
-### 🐛 Bug Fixes
-- Fix tests: add is_variable_frame_rate field to test cases
-- 临时文件清理、FPS预检查、分辨率修正
-- skip audio demux from image containers in x265 mux step
-- downgrade NotRecommended precheck from warn to info
-- Fix FFmpeg libx265 error for image containers (AVIF/HEIC/GIF/WebP)
-
-### 📝 Documentation
-- add MIT license file
-
-### 🔨 Other Changes
-- release: v0.9.9-3 - Improved VFR detection & AAE file handling
-- Merge branch 'nightly'
-- style: clippy and quality improvements
-- update dependencies
-- upgrade dependencies to latest including incompatible ones
-- bump version to 0.10.1
-- Update dependencies to nightly versions using git sources
-- Revert to stable dependencies - nightly git sources cause version conflicts
-
-## [0.9.8] - 2026-03-05
-
-### ✨ Features
-- add Apple Photos library protection
-
-### 🐛 Bug Fixes
-- remove fabricated ExitStatus::default() from fallback pipelines; bump v0.9.8
-- propagate copy_on_skip_or_fail errors; fix Linux ACL apply to dst
-- detect animated AVIF/JXL/HEIC instead of hardcoding is_animated=false
-- deep audit — routing, error propagation, and cjxl precision fixes
-- bypass size/quality guard in apple_compat mode for animated image→HEVC
-- fallback to ImageMagick when ffmpeg cannot decode animated WebP for GIF
-- ImageMagick-first GIF encoding; copy original on all animated conversion failures
-- iPhone slow-motion VFR handling & fix AA/AEE orphan files
-
-### 📝 Documentation
-- improve VFR detection algorithm for iPhone slow-motion videos
-
-### 🔨 Other Changes
-- Improve VFR detection: use Apple slow-mo tag and frame rate ratio
-
-### 🚀 Performance & Refactoring
-- unify animated routing to meme-score strategy, remove 4.5s hardcoded threshold
-
-## [0.9.7] - 2026-03-03
-
-### 🔨 Other Changes
-- ci: install pkgconfiglite on Windows; bump v0.9.7
-
-## [0.9.6] - 2026-03-03
-
-### ✨ Features
-- ci: add meson to Linux deps; bump v0.9.6
-
-## [0.9.5] - 2026-03-03
-
-### 🐛 Bug Fixes
-- ci: fix dav1d version + macOS x86_64 cross-compile; bump v0.9.5
-
-## [0.9.4] - 2026-03-03
-
-### 🐛 Bug Fixes
-- ci: fix all platform dependency issues; bump to v0.9.4
-
-## [0.9.0] - 2026-03-03
-
-### ✨ Features
-- ci: add GitHub Actions workflow for cross-platform release builds
-
-### 🐛 Bug Fixes
-- release: v0.9.0 — fix CAMBI 3D gate, tighten thresholds, consolidate docs
-- replace outdated 4.5s duration cutoff with meme-score for GIF
-- Improve grayscale PNG + RGB ICC profile error detection
-- Skip palette-quantized (lossy) PNG to avoid generational loss
-- Lossy PNG → JXL d=1.0 (try compress, skip if larger); update README
-- Suppress spurious 'ExifTool failed: ' warnings when stderr is empty
-- Static GIF → JXL d=1.0 (was lossless d=0.0, always oversized)
-- BMP/ICO/PNM/TGA/HDR/EXR etc. → lossless JXL; complete format_to_string
-
-### 🔨 Other Changes
-- ci: include full scripts folder and documentation in release artifacts
-
-## [0.8.9] - 2026-03-03
-
-### ✨ Features
-- Add subtitle and audio channel support for MKV/MP4 containers
-- 实现 HDR 图像保留功能
-- Add Live Photo detection and skip in Apple compat mode
-- Add Dolby Vision (DV) support with dovi_tool integration
-- Add HEIC HDR/Dolby Vision detection and skip
-- ultimate mode 3D quality gate (VMAF-Y + CAMBI + PSNR-UV)
-- GIF multi-dimensional meme-score to replace duration-only skip logic
-- GIF judgment — five-layer edge-case suppression strategy
-
-### 🐛 Bug Fixes
-- use portable bash shebang in drag_and_drop_processor.sh
-- relax duration tolerance for animated images (GIF/WebP/AVIF)
-- resolve clippy warnings in gif_meme_score and animated_image
-- CAMBI calculation broken — libvmaf requires two inputs
-
-### 📝 Documentation
-- add code quality audit results to CHANGELOG for v0.8.9
-- improve README.md with detailed technical architecture and update libheif-rs
-
-### 🔨 Other Changes
-- Release v0.8.9
-- i18n: translate all shell scripts to English
-
-### 🚀 Performance & Refactoring
-- add performance optimization to CHANGELOG for v0.8.9
-
 ## [v1.0.0-alpha] - 2025-12-11
 
 ### ✨ Features
@@ -3738,4 +3155,3 @@ This section reconstructs the detailed development history, transforming 1400+ r
 
 ### 🚀 Performance & Refactoring
 - modularize skip logic with VVC/AV2 support
-
