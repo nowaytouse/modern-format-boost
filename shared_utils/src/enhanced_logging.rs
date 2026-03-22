@@ -1,17 +1,17 @@
-//! Enhanced Logging System - 增强的日志系统
+//! Enhanced Logging System
 //!
-//! ## 功能特性
-//! - 完整的日志级别层次 (ERROR > WARN > INFO > DEBUG > TRACE)
-//! - 24位真彩色终端输出
-//! - 结构化日志到文件（包含emoji、完整调用栈）
-//! - 终端简洁输出（仅关键摘要）
-//! - 禁止静默上游工具日志
+//! ## Features
+//! - Full log level hierarchy (ERROR > WARN > INFO > DEBUG > TRACE)
+//! - 24-bit `TrueColor` terminal output
+//! - Structured logging to file (includes emojis, full call stack)
+//! - Concise terminal output (key summaries only)
+//! - Prevents silencing of upstream tool logs
 //!
-//! ## 设计原则
-//! - 终端：仅显示关键信息和进度
-//! - 文件：记录完整详细信息
-//! - 颜色：现代、美观、一致的24位真彩色
-//! - 透明度：忠实反映运行时状态，快速识别bug
+//! ## Design Principles
+//! - Terminal: Displays only key information and progress
+//! - File: Records full detailed information
+//! - Color: Modern, aesthetic, and consistent 24-bit `TrueColor`
+//! - Transparency: Faithfully reflects runtime state for quick bug identification
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -26,91 +26,101 @@ use tracing_subscriber::{
 
 // ─── Color Palette (24-bit True Color) ─────────────────────────────────────
 
-/// 24位真彩色定义
+/// 24-bit `TrueColor` definition
 pub mod colors {
-    /// 成功绿色 - RGB(76, 175, 80)
+    /// Success Green - `RGB(76, 175, 80)`
     pub const SUCCESS: &str = "\x1b[38;2;76;175;80m";
-    /// 警告黄色 - RGB(255, 193, 7)
+    /// Warning Yellow - `RGB(255, 193, 7)`
     pub const WARNING: &str = "\x1b[38;2;255;193;7m";
-    /// 错误红色 - RGB(244, 67, 54)
+    /// Error Red - `RGB(244, 67, 54)`
     pub const ERROR: &str = "\x1b[38;2;244;67;54m";
-    /// 信息蓝色 - RGB(33, 150, 243)
+    /// Info Blue - `RGB(33, 150, 243)`
     pub const INFO: &str = "\x1b[38;2;33;150;243m";
-    /// 调试青色 - RGB(0, 188, 212)
+    /// Debug Cyan - `RGB(0, 188, 212)`
     pub const DEBUG: &str = "\x1b[38;2;0;188;212m";
-    /// 追踪紫色 - RGB(156, 39, 176)
+    /// Trace Purple - `RGB(156, 39, 176)`
     pub const TRACE: &str = "\x1b[38;2;156;39;176m";
-    /// 关键品红 - RGB(233, 30, 99)
+    /// Critical Magenta - `RGB(233, 30, 99)`
     pub const CRITICAL: &str = "\x1b[38;2;233;30;99m";
-    /// 值橙色 - RGB(255, 152, 0)
+    /// Value Orange - `RGB(255, 152, 0)`
     pub const VALUE: &str = "\x1b[38;2;255;152;0m";
-    /// 重置所有样式
+    /// Reset all styles
     pub const RESET: &str = "\x1b[0m";
-    /// 粗体
+    /// Bold
     pub const BOLD: &str = "\x1b[1m";
-    /// 暗淡
+    /// Dim
     pub const DIM: &str = "\x1b[2m";
 }
 
-/// 终端颜色助手
+/// Terminal Color Helper
 pub struct TerminalColor;
 
 impl TerminalColor {
-    /// 应用颜色到文本
+    /// Applies color to text
+    #[must_use]
     pub fn colorize(text: &str, color: &str) -> String {
-        format!("{}{}{}", color, text, colors::RESET)
+        format!("{color}{text}{}", colors::RESET)
     }
 
-    /// 成功消息（绿色）
+    /// Success message (Green)
+    #[must_use]
     pub fn success(text: &str) -> String {
         Self::colorize(text, colors::SUCCESS)
     }
 
-    /// 警告消息（黄色）
+    /// Warning message (Yellow)
+    #[must_use]
     pub fn warning(text: &str) -> String {
         Self::colorize(text, colors::WARNING)
     }
 
-    /// 错误消息（红色）
+    /// Error message (Red)
+    #[must_use]
     pub fn error(text: &str) -> String {
         Self::colorize(text, colors::ERROR)
     }
 
-    /// 信息消息（蓝色）
+    /// Info message (Blue)
+    #[must_use]
     pub fn info(text: &str) -> String {
         Self::colorize(text, colors::INFO)
     }
 
-    /// 调试消息（青色）
+    /// Debug message (Cyan)
+    #[must_use]
     pub fn debug(text: &str) -> String {
         Self::colorize(text, colors::DEBUG)
     }
 
-    /// 追踪消息（紫色）
+    /// Trace message (Purple)
+    #[must_use]
     pub fn trace(text: &str) -> String {
         Self::colorize(text, colors::TRACE)
     }
 
-    /// 关键消息（品红）
+    /// Critical message (Magenta)
+    #[must_use]
     pub fn critical(text: &str) -> String {
         Self::colorize(text, colors::CRITICAL)
     }
 
-    /// 值高亮（橙色）
+    /// Value highlight (Orange)
+    #[must_use]
     pub fn value(text: &str) -> String {
         Self::colorize(text, colors::VALUE)
     }
 
-    /// 移除所有ANSI颜色码（用于文件日志）
+    /// Removes all ANSI color codes (for file logs)
+    #[must_use]
     pub fn strip_ansi(text: &str) -> String {
-        // 简单的 ANSI 转义序列移除（不依赖 regex）
+        // Simple ANSI escape sequence removal (no regex)
         let mut result = String::new();
         let mut chars = text.chars().peekable();
         while let Some(c) = chars.next() {
             if c == '\x1b' {
-                // 跳过转义序列 ESC[ ... m
+                // Skip escape sequence ESC[ ... m
                 if chars.next() == Some('[') {
-                    // 跳过直到找到字母
+                    // Skip until letter is found
                     while let Some(&next) = chars.peek() {
                         chars.next();
                         if next.is_ascii_alphabetic() {
@@ -128,7 +138,7 @@ impl TerminalColor {
 
 // ─── Log Level Icons & Formatting ───────────────────────────────────────────
 
-/// 日志级别图标
+/// Log level icons
 pub mod icons {
     pub const ERROR: &str = "❌";
     pub const WARN: &str = "⚠️ ";
@@ -141,7 +151,8 @@ pub mod icons {
     pub const END: &str = "🏁";
 }
 
-/// 格式化日志级别标签（带颜色和图标）
+/// Formats log level tag (with color and icon)
+#[must_use]
 pub fn format_level(level: Level) -> String {
     match level {
         Level::ERROR => TerminalColor::error(&format!("{} ERROR", icons::ERROR)),
@@ -152,7 +163,8 @@ pub fn format_level(level: Level) -> String {
     }
 }
 
-/// 格式化日志级别标签（纯文本，用于文件）
+/// Formats log level tag (plain text, for file)
+#[must_use]
 pub fn format_level_plain(level: Level) -> String {
     match level {
         Level::ERROR => format!("[ERROR] {}", icons::ERROR),
@@ -165,15 +177,15 @@ pub fn format_level_plain(level: Level) -> String {
 
 // ─── Enhanced Log Levels ────────────────────────────────────────────────────
 
-/// 增强的日志级别分类
+/// Enhanced log level classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
-    Critical, // 最高优先级：数据丢失、损坏
-    Error,    // 错误：操作失败
-    Warn,     // 警告：潜在问题
-    Info,     // 信息：正常操作
-    Debug,    // 调试：详细诊断信息
-    Trace,    // 追踪：最详细的执行路径
+    Critical, // Highest priority: Data loss, corruption
+    Error,    // Error: Operation failed
+    Warn,     // Warning: Potential issues
+    Info,     // Information: Normal operation
+    Debug,    // Debug: Detailed diagnostic info
+    Trace,    // Trace: Most detailed execution path
 }
 
 impl From<Level> for LogLevel {
@@ -189,12 +201,14 @@ impl From<Level> for LogLevel {
 }
 
 impl LogLevel {
-    /// 检查是否应该记录此级别
+    /// Checks if this level should be logged
+    #[must_use] 
     pub fn should_log(self, max_level: LogLevel) -> bool {
         self <= max_level
     }
 
-    /// 转换为tracing Level
+    /// Converts to tracing Level
+    #[must_use] 
     pub fn to_tracing_level(self) -> Level {
         match self {
             LogLevel::Critical | LogLevel::Error => Level::ERROR,
@@ -208,29 +222,30 @@ impl LogLevel {
 
 // ─── Terminal vs File Log Routing ───────────────────────────────────────────
 
-/// 日志输出目标
+/// Log output target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogTarget {
-    /// 终端输出（简洁、��色）
+    /// Terminal output (concise, colorized)
     Terminal,
-    /// 文件输出（完整、纯文本）
+    /// File output (complete, plain text)
     File,
-    /// 两者都输出
+    /// Output to both
     Both,
 }
 
-/// 日志路由器 - 根据内容决定输出目标
+/// Log Router - Determines output target based on content
 pub struct LogRouter {
-    /// 当前日志级别
+    /// Current log level
     max_level: LogLevel,
-    /// 是否启用文件日志
+    /// Whether file logging is enabled
     file_enabled: bool,
-    /// 文件日志写入器（如果启用）
+    /// File log writer (if enabled)
     file_writer: Option<Mutex<Box<dyn Write + Send>>>,
 }
 
 impl LogRouter {
-    /// 创建新的日志路由器
+    /// Creates a new log router
+    #[must_use] 
     pub fn new(max_level: LogLevel) -> Self {
         Self {
             max_level,
@@ -239,16 +254,16 @@ impl LogRouter {
         }
     }
 
-    /// 设置文件日志写入器
+    /// Sets the file log writer
     pub fn set_file_writer(&mut self, writer: Box<dyn Write + Send>) {
         self.file_writer = Some(Mutex::new(writer));
         self.file_enabled = true;
     }
 
-    /// 路由日志消息
+    /// Routes log messages
     pub fn route(&self, level: LogLevel, _message: &str) -> LogTarget {
-        // 始终输出到终端（根据级别过滤）
-        // 详细调试信息仅输出到文件
+        // Always output to terminal (filtered by level)
+        // Detailed debug info only goes to file
         if level <= LogLevel::Info {
             LogTarget::Both
         } else {
@@ -256,7 +271,7 @@ impl LogRouter {
         }
     }
 
-    /// 写入日志
+    /// Writes log
     pub fn log(&self, level: LogLevel, message: &str, context: &str) {
         if !level.should_log(self.max_level) {
             return;
@@ -268,7 +283,7 @@ impl LogRouter {
             LogTarget::Terminal | LogTarget::Both => {
                 self.write_terminal(level, message, context);
             }
-            _ => {}
+            LogTarget::File => {}
         }
 
         if (target == LogTarget::File || target == LogTarget::Both) && self.file_enabled {
@@ -276,20 +291,21 @@ impl LogRouter {
         }
     }
 
-    /// 写入终端（彩色、简洁）
+    /// Writes to terminal (colorized, concise)
     fn write_terminal(&self, level: LogLevel, message: &str, context: &str) {
+        let _ = self; // Acknowledge self to resolve unused_self if it's part of a trait or intended for future use
         let level_str = format_level(level.to_tracing_level());
-        let colored_msg = format!("{} {} {}", level_str, context, message);
-        eprintln!("{}", colored_msg);
+        let colored_msg = format!("{level_str} {context} {message}");
+        eprintln!("{colored_msg}");
     }
 
-    /// 写入文件（纯文本、完整）
+    /// Writes to file (plain text, complete)
     fn write_file(&self, level: LogLevel, message: &str, context: &str) {
         if let Some(ref writer) = self.file_writer {
             let plain_level = format_level_plain(level.to_tracing_level());
-            let plain_msg = format!("{} {} {}", plain_level, context, message);
+            let plain_msg = format!("{plain_level} {context} {message}");
             if let Ok(mut w) = writer.lock() {
-                let _ = writeln!(w, "{}", plain_msg);
+                let _ = writeln!(w, "{plain_msg}");
                 let _ = w.flush();
             }
         }
@@ -298,100 +314,99 @@ impl LogRouter {
 
 // ─── Convenience Macros ─────────────────────────────────────────────────────
 
-/// 记录关键错误
+/// Logs critical error
 #[macro_export]
 macro_rules! log_enhanced_critical {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        let colored = format!("\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m {}", msg);
-        eprintln!("{}", colored);
-        tracing::error!("{}", msg);
+        let colored = format!("\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m {msg}");
+        eprintln!("{colored}");
+        tracing::error!("{msg}");
     }};
 }
 
-/// 记录成功
+/// Logs success
 #[macro_export]
 macro_rules! log_enhanced_success {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        eprintln!("✅ {}", msg);
-        tracing::info!("{}", msg);
+        eprintln!("✅ {msg}");
+        tracing::info!("{msg}");
     }};
 }
 
-/// 记录操作开始
+/// Logs operation start
 #[macro_export]
 macro_rules! log_enhanced_start {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        eprintln!("🚀 {}", msg);
-        tracing::info!("{}", msg);
+        eprintln!("🚀 {msg}");
+        tracing::info!("{msg}");
     }};
 }
 
-/// 记录操作结束
+/// Logs operation end
 #[macro_export]
 macro_rules! log_enhanced_end {
     ($($arg:tt)*) => {{
         let msg = format!($($arg)*);
-        eprintln!("🏁 {}", msg);
-        tracing::info!("{}", msg);
+        eprintln!("🏁 {msg}");
+        tracing::info!("{msg}");
     }};
 }
 
 // ─── Upstream Tool Logging ──────────────────────────────────────────────────
 
-/// 上游工具日志记录器 - **绝不静默上游工具输出**
+/// Upstream tool logger - **Never silences upstream tool output**
 pub struct UpstreamToolLogger {
     tool_name: String,
 }
 
 impl UpstreamToolLogger {
-    /// 创建上游工具日志记录器
+    /// Creates an upstream tool logger
     pub fn new(tool_name: impl Into<String>) -> Self {
         Self {
             tool_name: tool_name.into(),
         }
     }
 
-    /// 记录工具命令
+    /// Logs tool command
     pub fn log_command(&self, command: &str) {
         eprintln!(
-            "\x1b[38;2;33;150;243m▶ {}\x1b[0m Executing: \x1b[38;2;255;152;0m{}\x1b[0m",
-            self.tool_name, command
+            "\x1b[38;2;33;150;243m▶ {}\x1b[0m Executing: \x1b[38;2;255;152;0m{command}\x1b[0m",
+            self.tool_name
         );
-        tracing::info!("[{}] Executing: {}", self.tool_name, command);
+        tracing::info!("[{}] Executing: {command}", self.tool_name);
     }
 
-    /// 记录工具输出
+    /// Logs tool output
     pub fn log_output(&self, output: &str) {
-        // 详细输出记录到文件，不在终端显示
-        tracing::debug!("[{}] stdout: {}", self.tool_name, output);
+        // Detailed output recorded to file, not shown in terminal
+        tracing::debug!("[{}] stdout: {output}", self.tool_name);
     }
 
-    /// 记录工具错误
+    /// Logs tool error
     pub fn log_error(&self, error: &str) {
-        tracing::warn!("[{}] stderr: {}", self.tool_name, error);
-        // 错误始终显示在终端
+        tracing::warn!("[{}] stderr: {error}", self.tool_name);
+        // Errors always shown in terminal
         eprintln!(
-            "⚠️  {} error: \x1b[38;2;244;67;54m{}\x1b[0m",
-            self.tool_name, error
+            "⚠️  {} error: \x1b[38;2;244;67;54m{error}\x1b[0m",
+            self.tool_name
         );
     }
 
-    /// 记录工具退出码
+    /// Logs tool exit code
     pub fn log_exit(&self, exit_code: i32) {
         if exit_code == 0 {
             tracing::debug!("[{}] exited with code 0", self.tool_name);
         } else {
             eprintln!(
-                "\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m [{}] exited with non-zero code: {}",
-                self.tool_name, exit_code
+                "\x1b[38;2;233;30;99m🚨 CRITICAL\x1b[0m [{}] exited with non-zero code: {exit_code}",
+                self.tool_name
             );
             tracing::error!(
-                "[{}] exited with non-zero code: {}",
-                self.tool_name,
-                exit_code
+                "[{}] exited with non-zero code: {exit_code}",
+                self.tool_name
             );
         }
     }
@@ -399,7 +414,11 @@ impl UpstreamToolLogger {
 
 // ─── Integration with tracing ───────────────────────────────────────────────
 
-/// 初始化增强的日志系统
+/// Initialize the enhanced logging system.
+///
+/// # Errors
+///
+/// Returns an error if an IO error or configuration error occurs during initialization.
 pub fn init_enhanced_logging(
     program_name: &str,
     log_level: LogLevel,
@@ -423,7 +442,7 @@ pub fn init_enhanced_logging(
 
         let file_layer = fmt::layer()
             .with_writer(file_appender)
-            .with_ansi(false) // 文件中不使用颜色
+            .with_ansi(false) // Do not use colors in files
             .with_span_events(FmtSpan::FULL);
 
         tracing_subscriber::registry()
@@ -439,8 +458,7 @@ pub fn init_enhanced_logging(
     }
 
     eprintln!(
-        "🚀 {} logging initialized at level {:?}",
-        program_name, log_level
+        "🚀 {program_name} logging initialized at level {log_level:?}"
     );
     tracing::info!(
         "{} logging initialized at level {:?}",
@@ -488,7 +506,7 @@ mod tests {
     fn test_strip_ansi_simple() {
         let colored = "\x1b[31mError\x1b[0m message";
         let plain = TerminalColor::strip_ansi(colored);
-        assert!(!plain.contains("\x1b"));
+        assert!(!plain.contains('\x1b'));
         assert!(plain.contains("Error message"));
     }
 }

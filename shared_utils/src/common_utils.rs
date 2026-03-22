@@ -1,18 +1,18 @@
 //! Common Utilities Module
 //!
-//! 🔥 v7.8: 通用工具函数集合
+//! 🔥 v7.8: Collection of common utility functions
 //!
-//! 本模块提取了项目中重复出现的常见模式，包括：
-//! - 文件操作辅助函数
-//! - 字符串处理工具
-//! - 命令执行辅助函数
-//! - 路径处理工具
+//! This module extracts common patterns recurring in the project, including:
+//! - File operation helper functions
+//! - String processing tools
+//! - Command execution helper functions
+//! - Path processing tools
 //!
-//! ## 设计原则
-//! - 单一职责：每个函数只做一件事
-//! - 可复用性：函数设计通用，不依赖特定上下文
-//! - 错误透明：所有错误都包含详细上下文
-//! - 完整文档：每个函数都有清晰的文档和示例
+//! ## Design Principles
+//! - Single Responsibility: Each function does one thing
+//! - Reusability: Functions are designed to be generic and context-independent
+//! - Error Transparency: All errors include detailed context
+//! - Comprehensive Documentation: Each function has clear docs and examples
 
 use crate::types::ProcessHistory;
 use anyhow::{Context, Result};
@@ -22,14 +22,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
 #[inline]
+#[must_use] 
 pub fn get_extension_lowercase(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default()
 }
 
 /// Returns the current processing history (version and timestamp)
+#[must_use] 
 pub fn get_current_history() -> ProcessHistory {
     ProcessHistory {
         software_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -41,21 +43,22 @@ pub fn get_current_history() -> ProcessHistory {
 }
 
 #[inline]
+#[must_use] 
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| extensions.iter().any(|ext| ext.eq_ignore_ascii_case(e)))
-        .unwrap_or(false)
+        .is_some_and(|e| extensions.iter().any(|ext| ext.eq_ignore_ascii_case(e)))
 }
 
 #[inline]
+#[must_use] 
 pub fn is_hidden_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with('.'))
-        .unwrap_or(false)
+        .is_some_and(|n| n.starts_with('.'))
 }
 
+#[must_use] 
 pub fn extract_suggested_extension(error_msg: &str) -> Option<String> {
     if let Some(start) = error_msg.find("looks more like a ") {
         let rest = &error_msg[start + "looks more like a ".len()..];
@@ -78,10 +81,9 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[must_use] 
 pub fn compute_relative_path(path: &Path, base: &Path) -> PathBuf {
-    path.strip_prefix(base)
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|_| path.to_path_buf())
+    path.strip_prefix(base).map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
 }
 
 pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
@@ -94,6 +96,7 @@ pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
     })
 }
 
+#[must_use] 
 pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
@@ -178,6 +181,7 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     None
 }
 
+#[must_use] 
 pub fn normalize_path_string(path_str: &str) -> String {
     let mut result = path_str.replace('\\', "/");
     while result.contains("//") {
@@ -186,6 +190,7 @@ pub fn normalize_path_string(path_str: &str) -> String {
     result
 }
 
+#[must_use] 
 pub fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -196,16 +201,18 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
+#[must_use] 
 pub fn extract_digits(s: &str) -> String {
-    s.chars().filter(|c| c.is_ascii_digit()).collect()
+    s.chars().filter(char::is_ascii_digit).collect()
 }
 
+#[must_use] 
 pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     s.parse::<f64>().unwrap_or(default)
 }
 
 pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
-    let command_str = format!("{:?}", cmd);
+    let command_str = format!("{cmd:?}");
 
     info!(
         command = %command_str,
@@ -214,7 +221,7 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 
     let output = cmd
         .output()
-        .with_context(|| format!("Failed to execute command: {}", command_str))?;
+        .with_context(|| format!("Failed to execute command: {command_str}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -250,6 +257,7 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 /// - Standard boxes (size + type + payload)
 /// - Extended size boxes (size=1, followed by 64-bit size)
 /// - Full boxes (with version + flags after type)
+#[must_use] 
 pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     find_box_data_recursive_impl(data, box_type, 0, 32)
 }
@@ -352,6 +360,7 @@ fn find_box_data_recursive_impl<'a>(
 }
 
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
+#[must_use] 
 pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     let mut pos = 0;
     while pos + 8 <= data.len() {
@@ -395,6 +404,7 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     false
 }
 
+#[must_use] 
 pub fn is_command_available(command_name: &str) -> bool {
     Command::new(command_name)
         .arg("--version")
@@ -404,6 +414,7 @@ pub fn is_command_available(command_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[must_use] 
 pub fn get_command_version(command_name: &str) -> Option<String> {
     let output = Command::new(command_name)
         .arg("--version")
@@ -413,12 +424,13 @@ pub fn get_command_version(command_name: &str) -> Option<String> {
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().next().map(|s| s.to_string())
+        stdout.lines().next().map(std::string::ToString::to_string)
     } else {
         None
     }
 }
 
+#[must_use] 
 pub fn format_command_string(command: &str, args: &[&str]) -> String {
     if args.is_empty() {
         command.to_string()
@@ -448,9 +460,7 @@ pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyho
 
     if size > max_bytes {
         anyhow::bail!(
-            "File is too large ({} bytes > {} max allowed)",
-            size,
-            max_bytes
+            "File is too large ({size} bytes > {max_bytes} max allowed)"
         );
     }
 
@@ -459,6 +469,7 @@ pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyho
 
 /// Escape a path for safe display in error messages.
 /// Prevents ANSI escape code injection by escaping control characters.
+#[must_use] 
 pub fn escape_path_for_display(path: &std::path::Path) -> String {
     path.display().to_string().escape_default().to_string()
 }

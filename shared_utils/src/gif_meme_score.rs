@@ -4,7 +4,7 @@
 //! (skipped from video conversion) or converted to HEVC video:
 //!
 //! 1. **Veto rules** (hard constraints): extreme cases bypass scoring entirely
-//!    - NEW: known meme-CDN app-extension blocks (GIPHY / Tenor) → hard KeepGif
+//!    - NEW: known meme-CDN app-extension blocks (GIPHY / Tenor) → hard `KeepGif`
 //! 2. **Dynamic weighting**: dimension scores adjust based on inter-relationships
 //! 3. **Confidence intervals**: uncertain cases (0.40-0.60) default to keeping GIF
 //! 4. **Compression ratio**: bytes-per-pixel as a zero-cost strong feature
@@ -19,11 +19,11 @@
 //!   - sharpness       (0.38): Low bytes/pixel → simple palette → meme-like
 //!   - resolution      (0.18): Small canvas → meme-like (≤200² ≈ 1.0, ≥1080p ≈ 0.0)
 //!   - duration        (0.20): Short loop → meme-like (≤1 s ≈ 1.0, ≥10 s ≈ 0.0)
-//!   - aspect_ratio    (0.09): Square canvas → meme-like
+//!   - `aspect_ratio`    (0.09): Square canvas → meme-like
 //!   - filename        (0.08): Human single-word name → meme-like (complexity-hedged)
-//!   - loop_frequency  (0.04): High loop rate → meme-like
+//!   - `loop_frequency`  (0.04): High loop rate → meme-like
 //!   - palette         (0.05): Small power-of-2 palette → synthetic/meme-like (NEW)
-//!   - fps             (0.00): DEPRECATED — High frame rate memes (Live2D) exist.
+//!   - fps             (0.00): DEPRECATED — High frame rate memes (`Live2D`) exist.
 //!
 //! ## Filename complexity hedging
 //!
@@ -36,12 +36,12 @@
 //!
 //! where `phys_complexity = 0.6 × spatial + 0.4 × temporal` and `attenuation`
 //! depends on naming origin:
-//!   - HumanSemantic  (e.g. "laugh", "滑稽"):  attenuation = 0.85
-//!   - MachineGenerated (hash / mmexport / ts):  attenuation = 0.95  (near-neutral for HD)
+//!   - `HumanSemantic`  (e.g. "laugh", "funny"):  attenuation = 0.85
+//!   - `MachineGenerated` (hash / mmexport / ts):  attenuation = 0.95  (near-neutral for HD)
 //!   - Ambiguous (multi-word etc.):              attenuation = 1.00
 //!   - filename        (0.08): Single-word name → meme-like (NEW)
-//!   - loop_frequency  (0.04): High loop rate → meme-like (NEW)
-//!   - fps             (0.00): DEPRECATED - High frame rate memes (Live2D) exist.
+//!   - `loop_frequency`  (0.04): High loop rate → meme-like (NEW)
+//!   - fps             (0.00): DEPRECATED - High frame rate memes (`Live2D`) exist.
 
 /// Meta-information about an animated GIF derived from ffprobe / image-analyzer.
 #[derive(Debug, Clone)]
@@ -96,7 +96,7 @@ pub struct MemeScore {
     pub filename_score: f64,
     /// Loop frequency score.
     pub loop_frequency_score: f64,
-    /// Palette-entropy score (0.5 when palette_size is unavailable).
+    /// Palette-entropy score (0.5 when `palette_size` is unavailable).
     pub palette_score: f64,
     /// Raw bytes-per-pixel value (diagnostic only).
     pub bytes_per_pixel: f64,
@@ -145,7 +145,7 @@ const CONF_CONVERT: f64 = 0.40;
 
 // ── Known meme-platform app-extension prefixes ────────────────────────────────
 /// If any app-extension vendor string *starts with* one of these, the GIF
-/// originates from a meme CDN and is vetoed as KeepGif regardless of resolution.
+/// originates from a meme CDN and is vetoed as `KeepGif` regardless of resolution.
 const MEME_PLATFORM_PREFIXES: &[&str] = &[
     "GIPHY    ", // GIPHY (8-byte padded as per GIF spec)
     "TENOR    ",
@@ -185,7 +185,7 @@ fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
     };
 
     // Strip extension
-    let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+    let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
 
     // ── Machine-generated patterns ─────────────────────────────────────────
     // MD5-style 32-char hex → social-media cache name
@@ -377,7 +377,7 @@ fn score_loop_frequency(duration_secs: f64, frame_count: u64) -> f64 {
 /// Apply veto rules based on extreme metadata values.
 /// Returns `KeepGif` / `ConvertVideo` for clear-cut cases; `Undecided` otherwise.
 fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
-    let pixel_count = (meta.width as u64 * meta.height as u64) as f64;
+    let pixel_count = (u64::from(meta.width) * u64::from(meta.height)) as f64;
 
     // ── Hard KEEP via meme-platform signature ─────────────────────────────
     // If the GIF carries an application-extension block from a known meme CDN,
@@ -438,8 +438,9 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
 ///   MachineGenerated → 0.95   (almost zero contribution at 1080p)
 ///   Ambiguous        → 1.00
 /// ```
+#[must_use] 
 pub fn score_gif(meta: &GifMeta) -> MemeScore {
-    let pixels = (meta.width as u64 * meta.height as u64).max(1);
+    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1);
     let total_frames = meta.frame_count.max(1);
     let bytes_per_pixel = meta.file_size_bytes as f64 / (pixels * total_frames) as f64;
 
@@ -452,7 +453,7 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let fps_score = 0.5; // deprecated; neutral
 
     let ratio = if meta.height > 0 {
-        meta.width as f64 / meta.height as f64
+        f64::from(meta.width) / f64::from(meta.height)
     } else {
         1.0
     };
@@ -552,11 +553,12 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
 /// Decide whether to keep a GIF as-is or convert it to video.
 ///
 /// ## Decision pipeline
-/// 1. **Veto** (app-extension CDN marker → KeepGif; extreme physical → convert/keep)
+/// 1. **Veto** (app-extension CDN marker → `KeepGif`; extreme physical → convert/keep)
 /// 2. **Weighted score** with complexity-hedged filename signal
 /// 3. **Confidence interval**: ≥0.60 keep · ≤0.40 convert · middle → keep
+#[must_use] 
 pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
-    let pixels = (meta.width as u64 * meta.height as u64).max(1) as f64;
+    let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1) as f64;
     let bpp = meta.file_size_bytes as f64 / (pixels * meta.frame_count.max(1) as f64);
 
     match apply_veto(meta, bpp) {
@@ -610,6 +612,7 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
 /// Returns `None` if the probe has no usable video dimensions.
 /// `palette_size` and `app_extensions` are left `None`; populate them via
 /// [`scan_gif_headers`] if a cheap header-scan is acceptable.
+#[must_use] 
 pub fn gif_meta_from_probe(
     probe: &crate::ffprobe::FFprobeResult,
     file_size_bytes: u64,
@@ -633,6 +636,7 @@ pub fn gif_meta_from_probe(
 /// Build a [`GifMeta`] from probe result + file path.
 /// Does NOT perform a GIF header scan; call [`scan_gif_headers`] separately
 /// if palette / app-extension data is needed.
+#[must_use] 
 pub fn gif_meta_from_probe_with_path(
     probe: &crate::ffprobe::FFprobeResult,
     file_size_bytes: u64,
@@ -644,7 +648,7 @@ pub fn gif_meta_from_probe_with_path(
     let file_name = file_path
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let duration = if probe.duration > 0.0 {
         probe.duration
@@ -708,7 +712,7 @@ pub fn scan_gif_headers(
     let packed = buf[10];
     let has_gct = (packed & 0x80) != 0;
     let palette_size: Option<u32> = if has_gct {
-        let n = (packed & 0x07) as u32;
+        let n = u32::from(packed & 0x07);
         Some(2u32.pow(n + 1))
     } else {
         None
@@ -1000,7 +1004,7 @@ mod tests {
 
     #[test]
     fn filename_chinese_single_char() {
-        let meta = make_meta_with_name(3.0, 300, 300, 12.0, 36, 200_000, "笑");
+        let meta = make_meta_with_name(3.0, 300, 300, 12.0, 36, 200_000, "laugh");
         let s = score_gif(&meta);
         assert!(
             s.filename_score >= 0.9,

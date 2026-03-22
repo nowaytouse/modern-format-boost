@@ -1,12 +1,12 @@
-//! MS-SSIM 心跳检测模块
+//! MS-SSIM Heartbeat Module
 //!
-//! 🔥 v7.6: 定期输出活动状态，防止用户误以为程序卡死
+//! 🔥 v7.6: Periodically outputs activity status to prevent users from thinking the program is frozen.
 //!
-//! ## 功能
-//! - 每30秒输出一次心跳信息
-//! - 显示北京时间（UTC+8）
-//! - 线程安全的启动和停止
-//! - RAII模式自动清理
+//! ## Features
+//! - Outputs heartbeat info every 30 seconds
+//! - Displays Beijing Time (UTC+8)
+//! - Thread-safe start and stop
+//! - RAII pattern for automatic cleanup
 
 #[cfg(test)]
 use chrono::Timelike;
@@ -33,6 +33,7 @@ fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
 }
 
 impl Heartbeat {
+    #[must_use] 
     pub fn start(interval_secs: u64) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
@@ -43,7 +44,7 @@ impl Heartbeat {
 
                 if running_clone.load(Ordering::Relaxed) {
                     let beijing_time = Self::get_beijing_time();
-                    eprintln!("💓 Heartbeat: Active (Beijing Time: {})", beijing_time);
+                    eprintln!("💓 Heartbeat: Active (Beijing Time: {beijing_time})");
                 }
             }
         });
@@ -73,6 +74,7 @@ impl Heartbeat {
         beijing_time.format("%Y-%m-%d %H:%M:%S").to_string()
     }
 
+    #[must_use] 
     pub fn beijing_time_now() -> String {
         Self::get_beijing_time()
     }

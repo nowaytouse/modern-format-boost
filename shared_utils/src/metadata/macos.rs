@@ -1,7 +1,7 @@
 //! macOS native metadata preservation
 //!
 //! Uses `unsafe` only for FFI to system C APIs (`copyfile`, `getattrlist`).
-//! Invariants: CStrings and pointers are valid for the duration of each call; paths come from Rust `Path`.
+//! Invariants: `CStrings` and pointers are valid for the duration of each call; paths come from Rust `Path`.
 
 use std::ffi::CString;
 use std::io;
@@ -109,8 +109,8 @@ pub fn get_added_time(path: &Path) -> io::Result<std::time::SystemTime> {
     let ret = unsafe {
         getattrlist(
             c_path.as_ptr(),
-            &mut attr_list,
-            &mut buf as *mut _ as *mut std::ffi::c_void,
+            &raw mut attr_list,
+            (&raw mut buf).cast::<std::ffi::c_void>(),
             std::mem::size_of::<AttrBufAddedTime>(),
             0,
         )
@@ -148,14 +148,14 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
         .map_err(io::Error::other)?;
     let mut buf = Timespec {
         tv_sec: duration.as_secs() as i64,
-        tv_nsec: duration.subsec_nanos() as i64,
+        tv_nsec: i64::from(duration.subsec_nanos()),
     };
     // SAFETY: c_path and local buffers are valid; setattrlist is synchronous and does not retain pointers.
     let ret = unsafe {
         setattrlist(
             c_path.as_ptr(),
-            &mut attr_list,
-            &mut buf as *mut _ as *mut std::ffi::c_void,
+            &raw mut attr_list,
+            (&raw mut buf).cast::<std::ffi::c_void>(),
             std::mem::size_of::<Timespec>(),
             0,
         )
@@ -167,7 +167,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
 }
 
 /// Appends MFB branding to the macOS Finder comment (kMDItemFinderComment).
-/// This uses AppleScript to ensure we interact properly with the Finder's database,
+/// This uses `AppleScript` to ensure we interact properly with the Finder's database,
 /// as raw xattr writes for 'com.apple.metadata:kMDItemFinderComment' require
 /// complex binary plist encoding and may not trigger Spotlight index updates correctly.
 pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
@@ -193,7 +193,7 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
                 set comment of theFile to newComment
             end if
         end tell",
-        path = path_str.replace("\"", "\\\""),
+        path = path_str.replace('"', "\\\""),
         branding = branding
     );
 
@@ -201,7 +201,7 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(io::Error::other(format!("AppleScript failed: {}", err)));
+        return Err(io::Error::other(format!("AppleScript failed: {err}")));
     }
 
     Ok(())

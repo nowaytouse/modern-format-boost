@@ -2,14 +2,14 @@ use std::borrow::Cow;
 use std::path::Path;
 
 #[inline]
+#[must_use] 
 pub fn safe_path_arg(path: &Path) -> Cow<'_, str> {
     let s = path.to_string_lossy();
 
     // Log warning if lossy conversion occurred (non-UTF-8 path)
     if matches!(s, Cow::Owned(_)) && path.to_str().is_none() {
         eprintln!(
-            "Warning: Non-UTF-8 path encountered, using lossy conversion: {:?}",
-            path
+            "Warning: Non-UTF-8 path encountered, using lossy conversion: {path:?}"
         );
     }
 

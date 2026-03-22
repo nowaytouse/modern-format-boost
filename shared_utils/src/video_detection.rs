@@ -3,7 +3,7 @@
 //! Pure analysis layer - detects video properties using ffprobe.
 //! Determines codec type, compression level, and archival suitability.
 //!
-//! Migrated from vid_hevc/vid_av1 detection_api.rs to eliminate duplication.
+//! Migrated from `vid_hevc/vid_av1` `detection_api.rs` to eliminate duplication.
 
 use crate::ffprobe::{probe_video, FFprobeError};
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,7 @@ impl Default for DetectedCodec {
 }
 
 impl DetectedCodec {
+    #[must_use] 
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
             "ffv1" => DetectedCodec::FFV1,
@@ -73,6 +74,7 @@ impl DetectedCodec {
         }
     }
 
+    #[must_use] 
     pub fn is_lossless(&self) -> bool {
         matches!(
             self,
@@ -83,6 +85,7 @@ impl DetectedCodec {
         )
     }
 
+    #[must_use] 
     pub fn can_be_lossless(&self) -> bool {
         matches!(
             self,
@@ -95,6 +98,7 @@ impl DetectedCodec {
         )
     }
 
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         match self {
             DetectedCodec::FFV1 => "FFV1",
@@ -126,6 +130,7 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         match self {
             CompressionType::Lossless => "Lossless",
@@ -153,6 +158,7 @@ impl Default for ColorSpace {
 }
 
 impl ColorSpace {
+    #[must_use] 
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "bt709" => ColorSpace::BT709,
@@ -163,6 +169,7 @@ impl ColorSpace {
         }
     }
 
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         match self {
             ColorSpace::BT709 => "bt709",
@@ -201,9 +208,9 @@ pub struct VideoDetectionResult {
     pub encoder_params: Option<String>,
     pub video_bitrate: Option<u64>,
     pub bits_per_pixel: f64,
-    /// color_primaries from ffprobe (e.g. "bt2020", "bt709")
+    /// `color_primaries` from ffprobe (e.g. "bt2020", "bt709")
     pub color_primaries: Option<String>,
-    /// color_transfer (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67", "bt709")
+    /// `color_transfer` (TRC) from ffprobe (e.g. "smpte2084", "arib-std-b67", "bt709")
     pub color_transfer: Option<String>,
     /// HDR10 mastering display metadata in ffmpeg format
     pub mastering_display: Option<String>,
@@ -237,6 +244,7 @@ pub struct VideoDetectionResult {
 
 impl VideoDetectionResult {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    #[must_use] 
     pub fn is_hdr(&self) -> bool {
         self.is_dolby_vision
             || self.is_hdr10_plus
@@ -249,6 +257,7 @@ impl VideoDetectionResult {
     }
 
     /// Returns true for high-bitrate archival-grade content
+    #[must_use] 
     pub fn is_high_fidelity(&self) -> bool {
         self.bit_depth >= 10
             && matches!(
@@ -258,11 +267,13 @@ impl VideoDetectionResult {
     }
 
     /// High-precision VFR detection including slow-motion recording analysis
+    #[must_use] 
     pub fn is_apple_slow_mo(&self) -> bool {
         self.tags.contains_key("com.apple.quicktime.fullframerate")
     }
 }
 
+#[must_use] 
 pub fn determine_compression_type(
     codec: &DetectedCodec,
     bitrate: u64,
@@ -290,9 +301,8 @@ pub fn determine_compression_type(
             return CompressionType::HighQuality;
         } else if crf <= 30.0 {
             return CompressionType::Standard;
-        } else {
-            return CompressionType::LowQuality;
         }
+        return CompressionType::LowQuality;
     }
 
     if matches!(codec, DetectedCodec::ProRes | DetectedCodec::DNxHD) {
@@ -300,7 +310,7 @@ pub fn determine_compression_type(
     }
 
     // BPP (Bits Per Pixel) thresholding for generic streams
-    let pixels_per_second = (width as f64) * (height as f64) * fps;
+    let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     if pixels_per_second > 0.0 {
         let bits_per_pixel = (bitrate as f64 * 8.0) / pixels_per_second;
         if bits_per_pixel > 2.0 {
@@ -314,6 +324,7 @@ pub fn determine_compression_type(
     CompressionType::LowQuality
 }
 
+#[must_use] 
 pub fn calculate_quality_score(
     compression: &CompressionType,
     bit_depth: u8,
@@ -337,7 +348,7 @@ pub fn calculate_quality_score(
     (base_score + depth_bonus + res_bonus).min(100)
 }
 
-/// Analyzes a video file with optional SQLite caching.
+/// Analyzes a video file with optional `SQLite` caching.
 pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
@@ -381,7 +392,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
 
     let codec = DetectedCodec::from_ffprobe(&probe.video_codec);
 
-    let pixels_per_second = (probe.width as f64) * (probe.height as f64) * probe.frame_rate;
+    let pixels_per_second = f64::from(probe.width) * f64::from(probe.height) * probe.frame_rate;
     let bits_per_pixel = if pixels_per_second > 0.0 {
         (probe.bit_rate as f64) / pixels_per_second
     } else {
@@ -406,8 +417,7 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let color_space = probe
         .color_space
         .as_ref()
-        .map(|s| ColorSpace::parse(s))
-        .unwrap_or(ColorSpace::Unknown("unknown".to_string()));
+        .map_or(ColorSpace::Unknown("unknown".to_string()), |s| ColorSpace::parse(s));
 
     let quality_score = calculate_quality_score(
         &compression,
@@ -516,7 +526,7 @@ fn extract_video_precision(
             let sub = &lower[preset_pos + 7..];
             let val: String = sub
                 .chars()
-                .take_while(|c| c.is_ascii_alphanumeric())
+                .take_while(char::is_ascii_alphanumeric)
                 .collect();
             if !val.is_empty() {
                 precision.original_preset = Some(val);

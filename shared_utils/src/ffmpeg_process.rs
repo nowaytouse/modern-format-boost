@@ -1,18 +1,18 @@
-//! 🔥 v6.4.7: `FFmpeg` 进程管理模块 - 防止管道死锁
+//! 🔥 v6.4.7: `FFmpeg` Process Management Module - Deadlock Prevention
 //!
-//! ## 问题背景
+//! ## Problem Background
 //!
-//! 当同时 pipe stdout 和 stderr 但只读取 stdout 时，如果 `FFmpeg` 输出大量
-//! stderr 日志（超过 64KB 缓冲区），会导致死锁：
-//! - `FFmpeg` 因 stderr 缓冲区满而阻塞
-//! - Rust 程序因等待 stdout 而阻塞
-//! - 两者互相等待，程序卡死
+//! When both stdout and stderr are piped but only stdout is read, if `FFmpeg` outputs a large amount of
+//! stderr logs (exceeding the 64KB buffer), a deadlock occurs:
+//! - `FFmpeg` blocks due to a full stderr buffer
+//! - The Rust program blocks while waiting for stdout
+//! - Both wait for each other, and the program freezes
 //!
-//! ## 解决方案
+//! ## Solution
 //!
-//! 使用独立线程并发消耗 stderr，确保缓冲区不会满。
+//! Use a separate thread to concurrently consume stderr, ensuring the buffer never fills up.
 //!
-//! ## 使用示例
+//! ## Usage Example
 //!
 //! ```ignore
 //! use shared_utils::ffmpeg_process::FfmpegProcess;
@@ -23,12 +23,12 @@
 //!
 //! let mut process = FfmpegProcess::spawn(&mut cmd)?;
 //!
-//! // 读取 stdout 进度
+//! // Read stdout progress
 //! if let Some(stdout) = process.stdout() {
-//!     // 处理进度...
+//!     // Handle progress...
 //! }
 //!
-//! // 等待完成
+//! // Wait for completion
 //! let (status, stderr) = process.wait_with_output()?;
 //! ```
 
@@ -525,7 +525,7 @@ mod prop_tests {
             total in 1_u64..10000
         ) {
             let mut parser = FfmpegProgressParser::new(Some(total));
-            let line = format!("frame={}", current);
+            let line = format!("frame={current}");
             let progress = parser.parse_line(&line);
 
             if current > 0 {
@@ -545,10 +545,10 @@ mod prop_tests {
             total_duration in 1.0f64..86400.0
         ) {
             let mut parser = FfmpegProgressParser::with_duration(total_duration);
-            let line = format!("time={:02}:{:02}:{:02}.00", hours, minutes, seconds);
+            let line = format!("time={hours:02}:{minutes:02}:{seconds:02}.00");
             let progress = parser.parse_line(&line);
 
-            let current_seconds = hours as f64 * 3600.0 + minutes as f64 * 60.0 + seconds as f64;
+            let current_seconds = f64::from(hours) * 3600.0 + f64::from(minutes) * 60.0 + f64::from(seconds);
             if current_seconds > 0.0 {
                 let expected = (current_seconds / total_duration).min(1.0);
                 prop_assert!(progress.is_some());
@@ -571,7 +571,7 @@ mod prop_tests {
             prefix in "[a-zA-Z ]{0,50}",
             suffix in "[a-zA-Z ]{0,50}"
         ) {
-            let stderr = format!("{}\nError: test error message\n{}", prefix, suffix);
+            let stderr = format!("{prefix}\nError: test error message\n{suffix}");
             let error = format_ffmpeg_error(&stderr);
             prop_assert!(error.contains("Error"),
                 "Should contain 'Error', got: {}", error);

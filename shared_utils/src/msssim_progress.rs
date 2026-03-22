@@ -1,12 +1,12 @@
-//! MS-SSIM 进度监控模块
+//! MS-SSIM Progress Monitoring Module
 //!
-//! 🔥 v7.6: 实时进度显示和ETA估算
+//! 🔥 v7.6: Real-time progress display and ETA estimation.
 //!
-//! ## 功能
-//! - 解析ffmpeg的progress输出
-//! - 计算完成百分比
-//! - 估算剩余时间（ETA）
-//! - 每10%输出一次进度
+//! ## Features
+//! - Parses ffmpeg progress output
+//! - Calculates completion percentage
+//! - Estimates remaining time (ETA)
+//! - Outputs progress every 10%
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
@@ -23,6 +23,7 @@ pub struct MsssimProgressMonitor {
 }
 
 impl MsssimProgressMonitor {
+    #[must_use] 
     pub fn new(duration_secs: f64, _total_frames: u64) -> Self {
         Self {
             duration_secs,
@@ -56,7 +57,7 @@ impl MsssimProgressMonitor {
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let eta_secs = if progress_pct > 0 {
-            let total_estimated = elapsed * 100.0 / progress_pct as f64;
+            let total_estimated = elapsed * 100.0 / f64::from(progress_pct);
             (total_estimated - elapsed).max(0.0)
         } else {
             0.0
@@ -108,7 +109,7 @@ impl MsssimProgressMonitor {
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| format!("❌ Failed to spawn ffmpeg: {}", e))?;
+            .map_err(|e| format!("❌ Failed to spawn ffmpeg: {e}"))?;
 
         let stdout = child
             .stdout
@@ -119,7 +120,7 @@ impl MsssimProgressMonitor {
         let mut last_printed_pct = 0u32;
 
         for line in reader.lines() {
-            let line = line.map_err(|e| format!("❌ Failed to read ffmpeg output: {}", e))?;
+            let line = line.map_err(|e| format!("❌ Failed to read ffmpeg output: {e}"))?;
 
             if let Some(progress_pct) = self.update_from_line(&line) {
                 if progress_pct >= last_printed_pct + 10 || progress_pct == 100 {
@@ -131,10 +132,10 @@ impl MsssimProgressMonitor {
 
         let status = child
             .wait()
-            .map_err(|e| format!("❌ Failed to wait for ffmpeg: {}", e))?;
+            .map_err(|e| format!("❌ Failed to wait for ffmpeg: {e}"))?;
 
         if !status.success() {
-            return Err(format!("❌ FFmpeg exited with status: {}", status));
+            return Err(format!("❌ FFmpeg exited with status: {status}"));
         }
 
         Ok(())
@@ -232,7 +233,7 @@ mod tests {
                 let duration_secs = 100.0;
                 let monitor = MsssimProgressMonitor::new(duration_secs, 2500);
 
-                let line = format!("out_time_us={}", time_us);
+                let line = format!("out_time_us={time_us}");
                 let progress = monitor.update_from_line(&line);
 
                 prop_assert!(progress.is_some());
@@ -251,7 +252,7 @@ mod tests {
             ) {
                 let monitor = MsssimProgressMonitor::new(duration_secs, 1000);
 
-                let line = format!("out_time_us={}", time_us);
+                let line = format!("out_time_us={time_us}");
                 if let Some(pct) = monitor.update_from_line(&line) {
                     prop_assert!(pct <= 100);
                 }

@@ -1,9 +1,9 @@
 //! Metadata Preservation Module
 //!
-//! 分层保留：Internal (ExifTool) / Network / System (ACL, xattr, timestamps)。
-//! 时间戳统一入口：单文件经 `apply_file_timestamps(src, dst)`，目录树经
-//! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`，
-//! 避免多处重复实现。exiftool 会改写文件，故时间戳一律在写操作之后设置。
+//! Layered preservation: Internal (`ExifTool`) / Network / System (ACL, xattr, timestamps).
+//! Unified entry point for timestamps: single files via `apply_file_timestamps(src, dst)`, directory trees via
+//! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`,
+//! Avoids redundant implementations. ExifTool rewrites files, so timestamps are always set after write operations.
 
 use std::io;
 use std::path::Path;
@@ -41,7 +41,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
         if let Ok(created) = m.created() {
             debug!("Original creation time: {:?}", created);
             if let Err(e) = macos::set_creation_time(dst, created) {
-                eprintln!("⚠️ [metadata] Failed to set creation time: {}", e);
+                eprintln!("⚠️ [metadata] Failed to set creation time: {e}");
                 debug!("Creation time error details: {:?}", e);
             } else {
                 debug!("Set creation time successfully");
@@ -88,7 +88,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     let atime = filetime::FileTime::from_last_access_time(&m);
     let mtime = filetime::FileTime::from_last_modification_time(&m);
     if let Err(e) = filetime::set_file_times(dst, atime, mtime) {
-        eprintln!("⚠️ [metadata] Failed to set file times: {}", e);
+        eprintln!("⚠️ [metadata] Failed to set file times: {e}");
     } else {
         debug!("Set atime/mtime successfully");
     }
@@ -100,7 +100,7 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
         if let Ok(created) = m.created() {
             debug!("Re-applying creation time after atime/mtime: {:?}", created);
             if let Err(e) = macos::set_creation_time(dst, created) {
-                eprintln!("⚠️ [metadata] Failed to re-set creation time: {}", e);
+                eprintln!("⚠️ [metadata] Failed to re-set creation time: {e}");
             }
         }
     }
@@ -123,9 +123,9 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
                 };
                 if diff.as_secs() > 1 {
                     eprintln!("⚠️ [metadata] Creation time mismatch after setting!");
-                    eprintln!("   Expected: {:?}", expected_created);
-                    eprintln!("   Got:      {:?}", actual_created);
-                    eprintln!("   Diff:     {:?}", diff);
+                    eprintln!("   Expected: {expected_created:?}");
+                    eprintln!("   Got:      {actual_created:?}");
+                    eprintln!("   Diff:     {diff:?}");
                 }
             }
         }
@@ -137,17 +137,17 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     {
         // copyfile: copies ACL + STAT + xattr in one syscall
         if let Err(e) = macos::copy_native_metadata(src, dst) {
-            eprintln!("⚠️ [metadata] macOS native copy failed: {}", e);
+            eprintln!("⚠️ [metadata] macOS native copy failed: {e}");
             // Fallback: manual xattr copy if copyfile failed
             copy_xattrs_manual(src, dst);
         }
         // ExifTool: EXIF/IPTC/XMP internal tags
         if let Err(e) = exif::preserve_internal_metadata(src, dst) {
-            eprintln!("⚠️ [metadata] Internal metadata failed: {}", e);
+            eprintln!("⚠️ [metadata] Internal metadata failed: {e}");
         }
         // Network xattrs (WhereFroms, UserTags) — copy + verify
         if let Err(e) = network::preserve_network_metadata(src, dst) {
-            eprintln!("⚠️ [metadata] Network metadata preservation failed: {}", e);
+            eprintln!("⚠️ [metadata] Network metadata preservation failed: {e}");
         }
 
         // Unix permission bits (copyfile covers STAT but be explicit)
@@ -156,8 +156,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             let mode = meta.permissions().mode();
             if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
                 eprintln!(
-                    "⚠️ [metadata] Failed to preserve macOS permission bits: {}",
-                    e
+                    "⚠️ [metadata] Failed to preserve macOS permission bits: {e}"
                 );
             }
         }
@@ -216,7 +215,7 @@ pub fn merge_xmp_sidecar_into_dest(src: &Path, dst: &Path) {
 
 pub fn copy_metadata(src: &Path, dst: &Path) {
     if let Err(e) = preserve_metadata(src, dst) {
-        eprintln!("⚠️ Failed to preserve metadata: {}", e);
+        eprintln!("⚠️ Failed to preserve metadata: {e}");
     }
     merge_xmp_sidecar(src, dst);
     apply_file_timestamps(src, dst);
@@ -235,7 +234,7 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
         collect_dir_metadata(src_dir, &mut dir_metadata)?;
     }
 
-    for (src_path, metadata) in dir_metadata.iter() {
+    for (src_path, metadata) in &dir_metadata {
         let rel_path = src_path.strip_prefix(src_dir).unwrap_or(src_path);
         let dst_path = dst_dir.join(rel_path);
 
@@ -322,7 +321,7 @@ pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result
 pub fn preserve_directory_metadata_with_log(base_dir: &Path, output_dir: &Path) {
     println!("\n📁 Preserving directory metadata...");
     if let Err(e) = preserve_directory_metadata(base_dir, output_dir) {
-        eprintln!("⚠️ Failed to preserve directory metadata: {}", e);
+        eprintln!("⚠️ Failed to preserve directory metadata: {e}");
     } else {
         println!("✅ Directory metadata preserved");
     }
@@ -368,8 +367,7 @@ pub fn restore_directory_timestamps(
 
     if failed_count > 0 {
         eprintln!(
-            "⚠️  TIMESTAMP VERIFICATION: {}/{} directories failed (possible filesystem protection or network mount)",
-            failed_count, total_count
+            "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} directories failed (possible filesystem protection or network mount)"
         );
     }
 }
@@ -401,8 +399,7 @@ pub fn apply_saved_timestamps_to_dst(
 
     if failed_count > 0 {
         eprintln!(
-            "⚠️  TIMESTAMP VERIFICATION: {}/{} destination directories failed (possible filesystem protection or network mount)",
-            failed_count, total_count
+            "⚠️  TIMESTAMP VERIFICATION: {failed_count}/{total_count} destination directories failed (possible filesystem protection or network mount)"
         );
     }
 }
@@ -417,7 +414,6 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
     ];
     for entry in walkdir::WalkDir::new(dst_root)
         .follow_links(false)
-        .into_iter()
     {
         let entry = match entry {
             Ok(entry) => entry,
@@ -445,7 +441,7 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
         }
         let src_parent = src_root.join(parent);
         for ext in SOURCE_EXTENSIONS {
-            let src_file = src_parent.join(format!("{}.{}", stem, ext));
+            let src_file = src_parent.join(format!("{stem}.{ext}"));
             if src_file.exists() && src_file.is_file() {
                 copy_file_timestamps_only(&src_file, dst_path);
                 break;
@@ -551,7 +547,7 @@ fn try_merge_xmp_exiv2(xmp_path: &Path, dst: &Path) -> bool {
         .file_stem()
         .map(|s| s.to_string_lossy())
         .unwrap_or_default();
-    let sidecar_for_exiv2 = parent.join(format!("{}.xmp", stem));
+    let sidecar_for_exiv2 = parent.join(format!("{stem}.xmp"));
     if sidecar_for_exiv2 == *xmp_path {
         return false;
     }

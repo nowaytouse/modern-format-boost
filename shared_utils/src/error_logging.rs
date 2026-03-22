@@ -22,6 +22,7 @@ pub enum ErrorSeverity {
 
 impl ErrorSeverity {
     /// Short label used in log lines (no color — for file logs)
+    #[must_use] 
     pub fn label(&self) -> &'static str {
         match self {
             Self::Critical => "[CRITICAL]",
@@ -34,6 +35,7 @@ impl ErrorSeverity {
     }
 
     /// Colored label for terminal output
+    #[must_use] 
     pub fn label_colored(&self) -> String {
         match self {
             Self::Critical => "\x1b[1;31m🚨 CRITICAL\x1b[0m".to_string(),
@@ -68,6 +70,7 @@ pub fn log_enhanced_error(severity: ErrorSeverity, context: &str, detail: &str) 
 }
 
 /// Auto-classify an error message by pattern matching.
+#[must_use] 
 pub fn classify_error(msg: &str) -> ErrorSeverity {
     let lower = msg.to_lowercase();
 

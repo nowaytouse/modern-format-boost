@@ -7,9 +7,9 @@ use std::path::Path;
 use super::calibration;
 use super::dynamic_mapping;
 use super::precheck;
-use super::*;
+use super::{bail, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, calculate_ssim_all, calculate_ms_ssim_yuv, calculate_adaptive_max_walls, CrfCache, VERY_LONG_VIDEO_THRESHOLD_SECS, LONG_VIDEO_THRESHOLD_SECS, NORMAL_MAX_WALL_HITS, calculate_zero_gains_for_duration_and_range, calculate_max_iterations_for_duration, calculate_ssim_enhanced, compression_target_size, ConfidenceBreakdown, calculate_smart_thresholds};
 
-/// Build the colour/HDR FFmpeg arguments from an FFprobeResult.
+/// Build the colour/HDR `FFmpeg` arguments from an `FFprobeResult`.
 /// These arguments must be appended to every final HEVC/AV1/H.264 encode so that
 /// colour metadata (primaries, TRC, matrix, mastering display, CLL) is preserved.
 fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<String> {
@@ -73,7 +73,7 @@ fn stream_size_change_pct(output_size: u64, input_size: u64) -> f64 {
     (output_size as f64 / denom - 1.0) * 100.0
 }
 
-/// Format the QualityCheck log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
+/// Format the `QualityCheck` log line from result; used for logging and unit tests (regression: enhanced failure shows reason, not "total file not smaller").
 pub(crate) fn format_quality_check_line(
     result: &ExploreResult,
     quality_verification_skipped_for_format: bool,
@@ -86,8 +86,7 @@ pub(crate) fn format_quality_check_line(
         (Some(true), false) => {
             if let Some(ref reason) = result.enhanced_verify_fail_reason {
                 format!(
-                    "   QualityCheck: FAILED (quality met but enhanced verification failed: {})",
-                    reason
+                    "   QualityCheck: FAILED (quality met but enhanced verification failed: {reason})"
                 )
             } else {
                 "   QualityCheck: FAILED (quality met but total file not smaller)".to_string()
@@ -101,7 +100,7 @@ pub(crate) fn format_quality_check_line(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::similar_names)]
 pub fn explore_with_gpu_coarse_search(
     input: &Path,
     output: &Path,
@@ -169,13 +168,12 @@ pub fn explore_with_gpu_coarse_search(
     };
     let duration: f32 = probe_result
         .as_ref()
-        .map(|p| p.duration as f32)
-        .unwrap_or(crate::gpu_accel::GPU_SAMPLE_DURATION);
+        .map_or(crate::gpu_accel::GPU_SAMPLE_DURATION, |p| p.duration as f32);
 
     // [New Logic] Bitrate-based GPU Start Condition
     // Low bitrate videos (animation/PPT < 5Mbps) don't benefit from GPU pre-scan
     let bitrate_bps = if duration > 0.0 {
-        (input_size as f64 * 8.0) / duration as f64
+        (input_size as f64 * 8.0) / f64::from(duration)
     } else {
         0.0
     };
@@ -196,16 +194,13 @@ pub fn explore_with_gpu_coarse_search(
         let gpu_encoder_name = match encoder {
             VideoEncoder::Hevc => gpu
                 .get_hevc_encoder()
-                .map(|e| e.ffmpeg_name())
-                .unwrap_or("hevc_videotoolbox"),
+                .map_or("hevc_videotoolbox", super::super::gpu_accel::GpuEncoder::ffmpeg_name),
             VideoEncoder::Av1 => gpu
                 .get_av1_encoder()
-                .map(|e| e.ffmpeg_name())
-                .unwrap_or("av1"),
+                .map_or("av1", super::super::gpu_accel::GpuEncoder::ffmpeg_name),
             VideoEncoder::H264 => gpu
                 .get_h264_encoder()
-                .map(|e| e.ffmpeg_name())
-                .unwrap_or("h264_videotoolbox"),
+                .map_or("h264_videotoolbox", super::super::gpu_accel::GpuEncoder::ffmpeg_name),
         };
 
         let sample_dur = if ultimate_mode {
@@ -217,7 +212,7 @@ pub fn explore_with_gpu_coarse_search(
             input_size
         } else {
             let ratio = sample_dur / duration;
-            (input_size as f64 * ratio as f64) as u64
+            (input_size as f64 * f64::from(ratio)) as u64
         };
 
         let gpu_step = if ultimate_mode { 0.5 } else { 2.0 };
@@ -233,7 +228,7 @@ pub fn explore_with_gpu_coarse_search(
         let gpu_progress = crate::UnifiedProgressBar::new_iteration(
             "[GPU] Coarse Search",
             gpu_sample_input_size,
-            gpu_config.max_iterations as u64,
+            u64::from(gpu_config.max_iterations),
         );
 
         let progress_callback = |crf: f32, size: u64| {
@@ -636,50 +631,40 @@ pub fn explore_with_gpu_coarse_search(
                 const CAMBI_MAX: f64 = 5.0;
                 const PSNR_UV_MIN: f64 = 35.0;
 
-                let vmaf_ok = vmaf_y.map(|v| v >= VMAF_Y_THRESHOLD).unwrap_or(false);
-                let cambi_ok = cambi.map(|c| c <= CAMBI_MAX).unwrap_or(false);
+                let vmaf_ok = vmaf_y.is_some_and(|v| v >= VMAF_Y_THRESHOLD);
+                let cambi_ok = cambi.is_some_and(|c| c <= CAMBI_MAX);
                 let chroma_ok = psnr_uv
-                    .map(|(u, v): (f64, f64)| u.min(v) >= PSNR_UV_MIN)
-                    .unwrap_or(false);
+                    .is_some_and(|(u, v): (f64, f64)| u.min(v) >= PSNR_UV_MIN);
 
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");
                 crate::log_eprintln!("   Quality Verification (Ultimate Mode):");
 
-                match vmaf_y {
-                    Some(v) => crate::log_eprintln!(
-                        "      VMAF-Y: {:6.2} ≥ {:.1} {}",
-                        v,
-                        VMAF_Y_THRESHOLD,
-                        if vmaf_ok { "✅" } else { "❌" }
-                    ),
-                    None => crate::log_eprintln!("      VMAF-Y: N/A (calculation failed) ❌"),
-                }
+                if let Some(v) = vmaf_y { crate::log_eprintln!(
+                    "      VMAF-Y: {:6.2} ≥ {:.1} {}",
+                    v,
+                    VMAF_Y_THRESHOLD,
+                    if vmaf_ok { "✅" } else { "❌" }
+                ); } else { crate::log_eprintln!("      VMAF-Y: N/A (calculation failed) ❌") }
 
-                match cambi {
-                    Some(c) => crate::log_eprintln!(
-                        "      CAMBI:  {:6.2} ≤ {:.1} {} (lower=better)",
-                        c,
-                        CAMBI_MAX,
-                        if cambi_ok { "✅" } else { "❌" }
-                    ),
-                    None => crate::log_eprintln!("      CAMBI: N/A (calculation failed) ❌"),
-                }
+                if let Some(c) = cambi { crate::log_eprintln!(
+                    "      CAMBI:  {:6.2} ≤ {:.1} {} (lower=better)",
+                    c,
+                    CAMBI_MAX,
+                    if cambi_ok { "✅" } else { "❌" }
+                ); } else { crate::log_eprintln!("      CAMBI: N/A (calculation failed) ❌") }
 
-                match psnr_uv {
-                    Some((pu, pv)) => {
-                        let u_pass = pu >= PSNR_UV_MIN;
-                        let v_pass = pv >= PSNR_UV_MIN;
-                        crate::log_eprintln!(
-                            "      PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ {:.1} dB)",
-                            pu,
-                            if u_pass { "✅" } else { "❌" },
-                            pv,
-                            if v_pass { "✅" } else { "❌" },
-                            PSNR_UV_MIN
-                        );
-                    }
-                    None => crate::log_eprintln!("      PSNR-UV: N/A (calculation failed) ❌"),
-                }
+                if let Some((pu, pv)) = psnr_uv {
+                    let u_pass = pu >= PSNR_UV_MIN;
+                    let v_pass = pv >= PSNR_UV_MIN;
+                    crate::log_eprintln!(
+                        "      PSNR-UV: U={:.2} dB {}, V={:.2} dB {} (min ≥ {:.1} dB)",
+                        pu,
+                        if u_pass { "✅" } else { "❌" },
+                        pv,
+                        if v_pass { "✅" } else { "❌" },
+                        PSNR_UV_MIN
+                    );
+                } else { crate::log_eprintln!("      PSNR-UV: N/A (calculation failed) ❌") }
 
                 crate::log_eprintln!("   ───────────────────────────────────────────────────");
 
@@ -696,9 +681,7 @@ pub fn explore_with_gpu_coarse_search(
                 } else {
                     crate::log_eprintln!("   ❌ QUALITY GATE: FAILED");
                     if !vmaf_ok {
-                        let v_str = vmaf_y
-                            .map(|v| format!("{:.2}", v))
-                            .unwrap_or_else(|| "N/A".to_string());
+                        let v_str = vmaf_y.map_or_else(|| "N/A".to_string(), |v| format!("{v:.2}"));
                         crate::log_eprintln!(
                             "      FAILED VMAF-Y {} < {:.1} (perceptual quality too low)",
                             v_str,
@@ -706,9 +689,7 @@ pub fn explore_with_gpu_coarse_search(
                         );
                     }
                     if !cambi_ok {
-                        let c_str = cambi
-                            .map(|c| format!("{:.2}", c))
-                            .unwrap_or_else(|| "N/A".to_string());
+                        let c_str = cambi.map_or_else(|| "N/A".to_string(), |c| format!("{c:.2}"));
                         crate::log_eprintln!(
                             "      FAILED CAMBI {} > {:.1} (banding detected)",
                             c_str,
@@ -716,8 +697,7 @@ pub fn explore_with_gpu_coarse_search(
                         );
                     }
                     if !chroma_ok {
-                        let uv_str = psnr_uv
-                            .map(|(u, v): (f64, f64)| {
+                        let uv_str = psnr_uv.map_or_else(|| "N/A".to_string(), |(u, v): (f64, f64)| {
                                 let u_pass = u >= PSNR_UV_MIN;
                                 let v_pass = v >= PSNR_UV_MIN;
                                 format!(
@@ -727,8 +707,7 @@ pub fn explore_with_gpu_coarse_search(
                                     v,
                                     if v_pass { "✅" } else { "❌" }
                                 )
-                            })
-                            .unwrap_or_else(|| "N/A".to_string());
+                            });
                         crate::log_eprintln!(
                             "      FAILED PSNR-UV {} < {:.1} dB (chroma quality too low)",
                             uv_str,
@@ -753,9 +732,7 @@ pub fn explore_with_gpu_coarse_search(
                 crate::log_eprintln!("   ═══════════════════════════════════════════════════");
                 crate::log_eprintln!("   Quality Metrics:");
                 let ssim_str = result
-                    .ssim
-                    .map(|s| format!("{:.6}", s))
-                    .unwrap_or_else(|| "N/A".to_string());
+                    .ssim.map_or_else(|| "N/A".to_string(), |s| format!("{s:.6}"));
                 crate::log_eprintln!("      SSIM (explore): {}", ssim_str);
 
                 let quality_target = result.actual_min_ssim.max(0.90);
@@ -966,8 +943,7 @@ pub fn explore_with_gpu_coarse_search(
     let input_size = fs::metadata(input).ok().map(|m| m.len());
     let output_size_actual = fs::metadata(output)
         .ok()
-        .map(|m| m.len())
-        .unwrap_or(result.output_size);
+        .map_or(result.output_size, |m| m.len());
     let size_change_line =
         if let (Some(in_sz), Some(out_sz)) = (input_size, Some(output_size_actual)) {
             if in_sz == 0 {
@@ -975,7 +951,7 @@ pub fn explore_with_gpu_coarse_search(
             } else {
                 let ratio = out_sz as f64 / in_sz as f64;
                 let pct = (ratio - 1.0) * 100.0;
-                format!("   SizeChange: {:.2}x ({:+.1}%) vs original", ratio, pct)
+                format!("   SizeChange: {ratio:.2}x ({pct:+.1}%) vs original")
             }
         } else {
             "   SizeChange: N/A (missing original or output size)".to_string()
@@ -986,10 +962,10 @@ pub fn explore_with_gpu_coarse_search(
         "   Quality: N/A (quality check failed)".to_string()
     } else if let Some(score) = result.ms_ssim_score {
         let pct = (score * 100.0 * 10.0).round() / 10.0;
-        format!("   Quality: {:.1}% (MS-SSIM={:.4})", pct, score)
+        format!("   Quality: {pct:.1}% (MS-SSIM={score:.4})")
     } else if let Some(s) = result.ssim {
         let pct = (s * 100.0 * 10.0).round() / 10.0;
-        format!("   Quality: {:.1}% (SSIM={:.4}, approx.)", pct, s)
+        format!("   Quality: {pct:.1}% (SSIM={s:.4}, approx.)")
     } else {
         "   Quality: N/A (quality check failed)".to_string()
     };
@@ -1030,8 +1006,7 @@ fn is_image_container(path: &Path) -> bool {
         "avif" | "heic" | "heif" | "gif" | "webp" | "png" | "jpg" | "jpeg" | "bmp" | "tiff"
     )
 }
-
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::similar_names)]
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
     output: &Path,
@@ -1076,7 +1051,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     let estimated_iterations = if ultimate_mode {
         let crf_range = max_crf - min_crf;
         let adaptive_walls = calculate_adaptive_max_walls(crf_range);
-        (adaptive_walls + 10) as u64
+        u64::from(adaptive_walls + 10)
     } else {
         15
     };
@@ -1102,9 +1077,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             .to_lowercase();
         let is_mov_mp4 = output_ext == "mov" || output_ext == "mp4" || output_ext == "m4v";
 
-        if !is_mov_mp4 {
-            AudioTranscodeStrategy::Copy
-        } else {
+        if is_mov_mp4 {
             let audio_codec = probe_info
                 .and_then(|info| info.audio_codec.as_ref())
                 .map(|s| s.to_lowercase())
@@ -1144,6 +1117,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
                 AudioTranscodeStrategy::AacMedium
             }
+        } else {
+            AudioTranscodeStrategy::Copy
         }
     };
 
@@ -1169,7 +1144,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         cmd.arg("-c:v")
             .arg(encoder.ffmpeg_name())
             .arg("-crf")
-            .arg(format!("{:.2}", crf));
+            .arg(format!("{crf:.2}"));
 
         for arg in encoder.extra_args_with_preset(
             max_threads,
@@ -1261,7 +1236,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut last_fps = 0.0_f64;
             let mut last_speed = String::new();
             let mut last_time_us = 0_i64;
-            let duration_secs = duration as f64;
+            let duration_secs = f64::from(duration);
 
             for line in reader.lines() {
                 let line = match line {
@@ -1291,8 +1266,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     if duration_secs > 0.0 {
                         let pct = (current_secs / duration_secs * 100.0).min(100.0);
                         eprint!(
-                            "\r      ⏳ CRF {:.1} | {:.1}% | {:.1}s/{:.1}s | {:.0}fps | {}   ",
-                            crf, pct, current_secs, duration_secs, last_fps, last_speed
+                            "\r      ⏳ CRF {crf:.1} | {pct:.1}% | {current_secs:.1}s/{duration_secs:.1}s | {last_fps:.0}fps | {last_speed}   "
                         );
                     }
                     let _ = std::io::stderr().flush();
@@ -1336,11 +1310,11 @@ fn cpu_fine_tune_from_gpu_boundary(
                             || l.contains("failed")
                     })
                     .collect();
-                if !error_lines.is_empty() {
-                    format!("\n   FFmpeg error: {}", error_lines.join("\n   "))
-                } else {
+                if error_lines.is_empty() {
                     let last_lines: Vec<&str> = stderr_content.lines().rev().take(3).collect();
-                    if !last_lines.is_empty() {
+                    if last_lines.is_empty() {
+                        String::new()
+                    } else {
                         format!(
                             "\n   FFmpeg output: {}",
                             last_lines
@@ -1349,14 +1323,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 .collect::<Vec<_>>()
                                 .join("\n   ")
                         )
-                    } else {
-                        String::new()
                     }
+                } else {
+                    format!("\n   FFmpeg error: {}", error_lines.join("\n   "))
                 }
             } else {
                 String::new()
             };
-            anyhow::bail!("❌ Encoding failed at CRF {:.1}{}", crf, error_detail);
+            anyhow::bail!("❌ Encoding failed at CRF {crf:.1}{error_detail}");
         }
 
         if let Err(err) = std::fs::remove_file(&stderr_file) {
@@ -1372,7 +1346,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(fs::metadata(output)?.len())
     };
 
-    use crate::modern_ui::colors::*;
+    use crate::modern_ui::colors::{CYAN, BRIGHT_CYAN, RESET, YELLOW, DIM, BRIGHT_YELLOW, BRIGHT_GREEN};
 
     crate::verbose_eprintln!(
         "{}CPU Fine-Tune ({:?}) - Maximum SSIM Search{}",
@@ -1385,7 +1359,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         CYAN,
         crate::modern_ui::format_size(input_size),
         input_size,
-        crate::modern_ui::format_duration(duration as f64)
+        crate::modern_ui::format_duration(f64::from(duration))
     );
     crate::verbose_eprintln!(
         "{}Goal: min(CRF) where output < input (Highest SSIM + Must Compress){}",
@@ -1515,22 +1489,22 @@ fn cpu_fine_tune_from_gpu_boundary(
             let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
             let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
             if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
-                let chroma_avg = (u + v_score) / 2.0;
-                gpu_ultimate_metrics_str = format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
+                let chroma_avg = f64::midpoint(u, v_score);
+                gpu_ultimate_metrics_str = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
                 *best_vmaf_tracked = Some(v);
                 *best_psnr_uv_tracked = Some((u, v_score));
             }
         }
 
         let metrics_display = if ultimate_mode && !gpu_ultimate_metrics_str.is_empty() {
-            format!(" │ {}", gpu_ultimate_metrics_str)
+            format!(" │ {gpu_ultimate_metrics_str}")
         } else if let Some(s) = gpu_ssim {
-            format!(" │ SSIM:{:.4}", s)
+            format!(" │ SSIM:{s:.4}")
         } else {
             " │ SSIM N/A".to_string()
         };
 
-        use crate::modern_ui::colors::*;
+        use crate::modern_ui::colors::{RESET, BRIGHT_GREEN, CYAN, BRIGHT_CYAN, DIM, BRIGHT_MAGENTA, BRIGHT_YELLOW, BRIGHT_RED};
         let source_label = if gpu_executed { "[GPU]" } else { "[Initial]" };
         crate::log_eprintln!(
             "{}{}   {}✓{} {} {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
@@ -1633,16 +1607,13 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
 
-        let gpu_ssim_baseline = match gpu_ssim {
-            Some(s) => s,
-            None => {
-                crate::log_eprintln!(
-                    "   {}⚠️  GPU SSIM not measured, cannot establish baseline{}",
-                    BRIGHT_YELLOW,
-                    RESET
-                );
-                bail!("GPU SSIM baseline not available");
-            }
+        let gpu_ssim_baseline = if let Some(s) = gpu_ssim { s } else {
+            crate::log_eprintln!(
+                "   {}⚠️  GPU SSIM not measured, cannot establish baseline{}",
+                BRIGHT_YELLOW,
+                RESET
+            );
+            bail!("GPU SSIM baseline not available");
         };
         crate::verbose_eprintln!(
             "   {}GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
@@ -1719,191 +1690,182 @@ fn cpu_fine_tune_from_gpu_boundary(
                 best_crf = Some(test_crf);
                 best_size = Some(size);
 
-                let should_stop = match (current_ssim_opt, prev_ssim_opt) {
-                    (Some(current_ssim), Some(prev_ssim)) => {
-                        let ssim_gain = current_ssim - prev_ssim;
+                let should_stop = if let (Some(current_ssim), Some(prev_ssim)) = (current_ssim_opt, prev_ssim_opt) {
+                    let ssim_gain = current_ssim - prev_ssim;
 
-                        let ssim_vs_gpu = current_ssim / gpu_ssim_baseline;
-                        let _gpu_comparison = if ssim_vs_gpu > 1.01 {
-                            format!("{}×{:.3} GPU{}", BRIGHT_GREEN, ssim_vs_gpu, RESET)
-                        } else if ssim_vs_gpu > 1.001 {
-                            format!("{}×{:.4} GPU{}", GREEN, ssim_vs_gpu, RESET)
-                        } else {
-                            format!("{}≈GPU{}", DIM, RESET)
-                        };
+                    let ssim_vs_gpu = current_ssim / gpu_ssim_baseline;
+                    let _gpu_comparison = if ssim_vs_gpu > 1.01 {
+                        format!("{BRIGHT_GREEN}×{ssim_vs_gpu:.3} GPU{RESET}")
+                    } else if ssim_vs_gpu > 1.001 {
+                        format!("{GREEN}×{ssim_vs_gpu:.4} GPU{RESET}")
+                    } else {
+                        format!("{DIM}≈GPU{RESET}")
+                    };
 
-                        let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
+                    let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
 
-                        // Ultimate Mode: Unified Multi-Metric Tracking
-                        let mut ultimate_metrics_str = String::new();
-                        let mut quality_saturated = false;
+                    // Ultimate Mode: Unified Multi-Metric Tracking
+                    let mut ultimate_metrics_str = String::new();
+                    let mut quality_saturated = false;
 
-                        if ultimate_mode {
-                            let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
-                            let psnr_uv =
-                                super::ssim_calculator::calculate_psnr_uv(input, output, 6);
+                    if ultimate_mode {
+                        let vmaf = super::ssim_calculator::calculate_vmaf_y(input, output, 6);
+                        let psnr_uv =
+                            super::ssim_calculator::calculate_psnr_uv(input, output, 6);
 
-                            if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
-                                let chroma_avg = (u + v_score) / 2.0;
+                        if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
+                            let chroma_avg = f64::midpoint(u, v_score);
 
-                                // Check for integer-level improvement
-                                let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
-                                let prev_best_psnr = best_psnr_uv_tracked
-                                    .map(|(u, v)| (u + v) / 2.0)
-                                    .unwrap_or(0.0);
-                                let vmaf_improved = v.floor() > prev_best_vmaf.floor();
-                                let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
+                            // Check for integer-level improvement
+                            let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
+                            let prev_best_psnr = best_psnr_uv_tracked
+                                .map(|(u, v)| f64::midpoint(u, v))
+                                .unwrap_or(0.0);
+                            let vmaf_improved = v.floor() > prev_best_vmaf.floor();
+                            let psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
 
-                                ultimate_metrics_str =
-                                    format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
+                            ultimate_metrics_str =
+                                format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
 
-                                // Update best tracked values
-                                if vmaf_improved || best_vmaf_tracked.is_none() {
-                                    *best_vmaf_tracked = Some(v);
-                                }
-                                if psnr_improved || best_psnr_uv_tracked.is_none() {
-                                    *best_psnr_uv_tracked = Some((u, v_score));
-                                }
-
-                                // Early insight: only trigger if quality fails threshold AND no improvement
-                                const VMAF_Y_MIN: f64 = 93.0;
-                                const PSNR_UV_MIN: f64 = 35.0;
-                                let any_metric_fails =
-                                    v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
-
-                                if !vmaf_improved && !psnr_improved && any_metric_fails {
-                                    failure_credibility += 1.0;
-                                    if failure_credibility >= 3.0 {
-                                        crate::log_eprintln!(
-                                            "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
-                                            BRIGHT_RED, RESET
-                                        );
-                                        early_insight_triggered = true;
-                                        break;
-                                    }
-                                } else {
-                                    failure_credibility = 0.0;
-                                }
-
-                                // Saturation Check: In high quality zones (>97), we monitor for gain stop
-                                if v > 97.0 || chroma_avg > 47.0 {
-                                    quality_saturated = true;
-                                }
+                            // Update best tracked values
+                            if vmaf_improved || best_vmaf_tracked.is_none() {
+                                *best_vmaf_tracked = Some(v);
                             }
-                        }
-
-                        if current_step <= MIN_STEP + 0.01 {
-                            // Unified saturation counter: SSIM flat OR Quality high and flat
-                            if is_zero_gain || quality_saturated {
-                                consecutive_zero_gains += 1;
-                            } else {
-                                consecutive_zero_gains = 0;
+                            if psnr_improved || best_psnr_uv_tracked.is_none() {
+                                *best_psnr_uv_tracked = Some((u, v_score));
                             }
-                        }
 
-                        // THE RED LINE: Hit the wall when either:
-                        // 1. We reached 30 consecutive zero gains (Physical Saturation)
-                        // 2. We reached required_zero_gains (Normal mode)
-                        let quality_wall_triggered = current_step <= MIN_STEP + 0.01
-                            && consecutive_zero_gains >= required_zero_gains;
-
-                        // HIGH CONFIDENCE GATE: If we hit the wall but quality is still garbage,
-                        // this encode is not credible. Abort immediately.
-                        if ultimate_mode && quality_wall_triggered {
+                            // Early insight: only trigger if quality fails threshold AND no improvement
                             const VMAF_Y_MIN: f64 = 93.0;
                             const PSNR_UV_MIN: f64 = 35.0;
+                            let any_metric_fails =
+                                v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
 
-                            let vmaf_metric = match best_vmaf_tracked {
-                                Some(v) => v,
-                                None => {
+                            if !vmaf_improved && !psnr_improved && any_metric_fails {
+                                failure_credibility += 1.0;
+                                if failure_credibility >= 3.0 {
                                     crate::log_eprintln!(
-                                        "   {}⚠️  VMAF not measured at quality wall{}",
-                                        BRIGHT_YELLOW,
-                                        RESET
+                                        "   {}❌ QUALITY PLATEAU REACHED (3/3):{} No integer improvement over 3 insights. Stopping.",
+                                        BRIGHT_RED, RESET
                                     );
-                                    bail!("Quality wall hit but VMAF not measured");
+                                    early_insight_triggered = true;
+                                    break;
                                 }
-                            };
-                            let uvmaf_metric = match best_psnr_uv_tracked {
-                                Some((u, v)) => (*u).min(*v),
-                                None => {
-                                    crate::log_eprintln!(
-                                        "   {}⚠️  PSNR UV not measured at quality wall{}",
-                                        BRIGHT_YELLOW,
-                                        RESET
-                                    );
-                                    bail!("Quality wall hit but PSNR UV not measured");
-                                }
-                            };
+                            } else {
+                                failure_credibility = 0.0;
+                            }
 
-                            if *vmaf_metric < VMAF_Y_MIN || uvmaf_metric < PSNR_UV_MIN {
-                                crate::log_eprintln!(
-                                    "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
-                                    vmaf_metric, uvmaf_metric
-                                );
-                                quality_wall_hit = true;
-                                break;
+                            // Saturation Check: In high quality zones (>97), we monitor for gain stop
+                            if v > 97.0 || chroma_avg > 47.0 {
+                                quality_saturated = true;
                             }
                         }
+                    }
 
-                        let sat_status =
-                            if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
-                                format!(
-                                    " {}[SAT:{}/{}]{}",
-                                    if ultimate_mode { BRIGHT_MAGENTA } else { DIM },
-                                    consecutive_zero_gains,
-                                    required_zero_gains,
-                                    RESET
-                                )
-                            } else {
-                                String::new()
-                            };
-
-                        let metrics_display = if ultimate_mode && !ultimate_metrics_str.is_empty() {
-                            format!("{}{}{}", BRIGHT_MAGENTA, ultimate_metrics_str, RESET)
+                    if current_step <= MIN_STEP + 0.01 {
+                        // Unified saturation counter: SSIM flat OR Quality high and flat
+                        if is_zero_gain || quality_saturated {
+                            consecutive_zero_gains += 1;
                         } else {
-                            format!(" │ SSIM:{:.4} Δ{:+.4}", current_ssim, ssim_gain)
+                            consecutive_zero_gains = 0;
+                        }
+                    }
+
+                    // THE RED LINE: Hit the wall when either:
+                    // 1. We reached 30 consecutive zero gains (Physical Saturation)
+                    // 2. We reached required_zero_gains (Normal mode)
+                    let quality_wall_triggered = current_step <= MIN_STEP + 0.01
+                        && consecutive_zero_gains >= required_zero_gains;
+
+                    // HIGH CONFIDENCE GATE: If we hit the wall but quality is still garbage,
+                    // this encode is not credible. Abort immediately.
+                    if ultimate_mode && quality_wall_triggered {
+                        const VMAF_Y_MIN: f64 = 93.0;
+                        const PSNR_UV_MIN: f64 = 35.0;
+
+                        let vmaf_metric = if let Some(v) = best_vmaf_tracked { v } else {
+                            crate::log_eprintln!(
+                                "   {}⚠️  VMAF not measured at quality wall{}",
+                                BRIGHT_YELLOW,
+                                RESET
+                            );
+                            bail!("Quality wall hit but VMAF not measured");
+                        };
+                        let uvmaf_metric = if let Some((u, v)) = best_psnr_uv_tracked { (*u).min(*v) } else {
+                            crate::log_eprintln!(
+                                "   {}⚠️  PSNR UV not measured at quality wall{}",
+                                BRIGHT_YELLOW,
+                                RESET
+                            );
+                            bail!("Quality wall hit but PSNR UV not measured");
                         };
 
-                        use crate::modern_ui::colors::*;
-                        crate::log_eprintln!(
-                            "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
-                            RESET,
-                            RESET,
-                            BRIGHT_GREEN,
-                            RESET,
-                            CYAN,
-                            test_crf,
-                            RESET,
-                            MFB_BLUE,
-                            total_size_pct,
-                            RESET,
-                            metrics_display,
-                            sat_status
-                        );
-
-                        if quality_wall_triggered {
+                        if *vmaf_metric < VMAF_Y_MIN || uvmaf_metric < PSNR_UV_MIN {
+                            crate::log_eprintln!(
+                                "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
+                                vmaf_metric, uvmaf_metric
+                            );
                             quality_wall_hit = true;
+                            break;
                         }
-                        quality_wall_triggered
                     }
-                    _ => {
-                        use crate::modern_ui::colors::*;
-                        crate::log_eprintln!(
-                            "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
-                            RESET,
-                            RESET,
-                            BRIGHT_GREEN,
-                            RESET,
-                            CYAN,
-                            test_crf,
-                            RESET,
-                            MFB_BLUE,
-                            total_size_pct,
-                            RESET
-                        );
-                        false
+
+                    let sat_status =
+                        if consecutive_zero_gains > 0 && current_step <= MIN_STEP + 0.01 {
+                            format!(
+                                " {}[SAT:{}/{}]{}",
+                                if ultimate_mode { BRIGHT_MAGENTA } else { DIM },
+                                consecutive_zero_gains,
+                                required_zero_gains,
+                                RESET
+                            )
+                        } else {
+                            String::new()
+                        };
+
+                    let metrics_display = if ultimate_mode && !ultimate_metrics_str.is_empty() {
+                        format!("{BRIGHT_MAGENTA}{ultimate_metrics_str}{RESET}")
+                    } else {
+                        format!(" │ SSIM:{current_ssim:.4} Δ{ssim_gain:+.4}")
+                    };
+
+                    use crate::modern_ui::colors::{BRIGHT_GREEN, RESET, GREEN, DIM, BRIGHT_RED, BRIGHT_YELLOW, BRIGHT_MAGENTA, CYAN, MFB_BLUE};
+                    crate::log_eprintln!(
+                        "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
+                        RESET,
+                        RESET,
+                        BRIGHT_GREEN,
+                        RESET,
+                        CYAN,
+                        test_crf,
+                        RESET,
+                        MFB_BLUE,
+                        total_size_pct,
+                        RESET,
+                        metrics_display,
+                        sat_status
+                    );
+
+                    if quality_wall_triggered {
+                        quality_wall_hit = true;
                     }
+                    quality_wall_triggered
+                } else {
+                    use crate::modern_ui::colors::{RESET, BRIGHT_GREEN, CYAN, MFB_BLUE};
+                    crate::log_eprintln!(
+                        "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
+                        RESET,
+                        RESET,
+                        BRIGHT_GREEN,
+                        RESET,
+                        CYAN,
+                        test_crf,
+                        RESET,
+                        MFB_BLUE,
+                        total_size_pct,
+                        RESET
+                    );
+                    false
                 };
 
                 if should_stop {
@@ -1912,8 +1874,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         domain_wall_hit = true;
                         let msg = if consecutive_zero_gains >= required_zero_gains {
                             format!(
-                                "SSIM saturated after {} consecutive zero-gains",
-                                consecutive_zero_gains
+                                "SSIM saturated after {consecutive_zero_gains} consecutive zero-gains"
                             )
                         } else {
                             "VMAF(Y) + PSNR(UV) absolute quality ceiling reached".to_string()
@@ -1954,14 +1915,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                 };
 
                 let phase_info = if wall_hits == 1 {
-                    format!("decay ×{:.1}", DECAY_FACTOR)
+                    format!("decay ×{DECAY_FACTOR:.1}")
                 } else if new_step <= MIN_STEP + 0.01 {
                     "→ FINE TUNING".to_string()
                 } else {
-                    format!("decay {}×{:.1}^{}", DIM, DECAY_FACTOR, wall_hits)
+                    format!("decay {DIM}×{DECAY_FACTOR:.1}^{wall_hits}")
                 };
 
-                use crate::modern_ui::colors::*;
+                use crate::modern_ui::colors::{DIM, RESET, BRIGHT_RED, CYAN, BRIGHT_YELLOW};
                 crate::log_eprintln!(
                     "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
                     RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
@@ -2045,7 +2006,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             }
         }
     } else {
-        use crate::modern_ui::colors::*;
+        use crate::modern_ui::colors::{RESET, BRIGHT_RED, CYAN, BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_YELLOW};
         crate::log_eprintln!(
             "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌ (TOO LARGE)",
             RESET,
@@ -2098,12 +2059,12 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
 
                 if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
-                    let chroma_avg = (u + v_score) / 2.0;
+                    let chroma_avg = f64::midpoint(u, v_score);
 
                     // Track best metrics to check for improvement
                     let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
                     let prev_best_psnr = best_psnr_uv_tracked
-                        .map(|(u, v)| (u + v) / 2.0)
+                        .map(|(u, v)| f64::midpoint(u, v))
                         .unwrap_or(0.0);
 
                     // Check for integer-level improvement (ignoring decimals)
@@ -2114,7 +2075,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     } else {
                         "→"
                     };
-                    use crate::modern_ui::colors::*;
+                    use crate::modern_ui::colors::{RESET, BRIGHT_RED, CYAN, DIM};
                     crate::log_eprintln!(
                         "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
                         RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
@@ -2161,7 +2122,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_size = Some(size);
                 }
                 found_compress_point = true;
-                use crate::modern_ui::colors::*;
+                use crate::modern_ui::colors::{RESET, BRIGHT_GREEN, CYAN};
                 crate::log_eprintln!(
                     "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} │ FOUND! ✅",
                     RESET,
@@ -2177,7 +2138,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
                 break; // Stop Phase 2 after finding first compression point
             } else if !ultimate_mode {
-                use crate::modern_ui::colors::*;
+                use crate::modern_ui::colors::{RESET, BRIGHT_RED, CYAN};
                 crate::log_eprintln!(
                     "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌",
                     RESET,
@@ -2195,15 +2156,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             test_crf += step_size_upward;
         }
 
-        if !found_compress_point {
-            crate::log_eprintln!("⚠️ Cannot compress even at max CRF {:.1}!", max_crf);
-            crate::log_eprintln!("   File may be already optimally compressed");
-            // Use best tested CRF instead of fallback to max_crf
-            if best_crf.is_none() {
-                best_crf = Some(best_tested_crf);
-                best_size = Some(best_tested_size);
-            }
-        } else {
+        if found_compress_point {
             crate::log_eprintln!();
             crate::log_eprintln!(
                 "{}Phase 3: [CPU] Search DOWNWARD with Sprint & Backtrack (min step {:.2}){}",
@@ -2252,16 +2205,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                     let psnr_uv = super::ssim_calculator::calculate_psnr_uv(input, output, 6);
 
                     if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
-                        let chroma_avg = (u + v_score) / 2.0;
+                        let chroma_avg = f64::midpoint(u, v_score);
                         let prev_best_vmaf = best_vmaf_tracked.unwrap_or(0.0);
                         let prev_best_psnr = best_psnr_uv_tracked
-                            .map(|(u, v)| (u + v) / 2.0)
+                            .map(|(u, v)| f64::midpoint(u, v))
                             .unwrap_or(0.0);
 
                         vmaf_improved = v.floor() > prev_best_vmaf.floor();
                         psnr_improved = chroma_avg.floor() > prev_best_psnr.floor();
 
-                        metrics_info = format!("VMAF:{:.2} UV:{:.2}", v, chroma_avg);
+                        metrics_info = format!("VMAF:{v:.2} UV:{chroma_avg:.2}");
 
                         current_vmaf_val = Some(v);
                         current_psnr_val = Some((u, v_score));
@@ -2305,8 +2258,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
                     let _insight_msg = if ultimate_mode {
                         format!(
-                            "{} (Index: {:.0}/3) {}",
-                            metrics_info, failure_credibility, improvement_indicator
+                            "{metrics_info} (Index: {failure_credibility:.0}/3) {improvement_indicator}"
                         )
                     } else {
                         String::new()
@@ -2321,16 +2273,15 @@ fn cpu_fine_tune_from_gpu_boundary(
                         let vmaf_metric = *best_vmaf_tracked;
                         let uvmaf_metric = *best_psnr_uv_tracked;
                         if let (Some(v), Some((u, v_score))) = (vmaf_metric, uvmaf_metric) {
-                            let chroma_avg = (u + v_score) / 2.0;
+                            let chroma_avg = f64::midpoint(u, v_score);
                             format!(
-                                " │ VMAF:{:.2} UV:{:.2} ({:.0}/3 {})",
-                                v, chroma_avg, failure_credibility, improvement_indicator
+                                " │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.0}/3 {improvement_indicator})"
                             )
                         } else {
                             String::new()
                         }
                     } else if let Some(current_ssim) = current_ssim_opt {
-                        format!(" │ SSIM:{:.4} Δ{:+.4}", current_ssim, ssim_gain)
+                        format!(" │ SSIM:{current_ssim:.4} Δ{ssim_gain:+.4}")
                     } else {
                         " │ SSIM N/A".to_string()
                     };
@@ -2432,10 +2383,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                         let vmaf_metric = *best_vmaf_tracked;
                         let uvmaf_metric = *best_psnr_uv_tracked;
                         if let (Some(v), Some((u, v_score))) = (vmaf_metric, uvmaf_metric) {
-                            let chroma_avg = (u + v_score) / 2.0;
+                            let chroma_avg = f64::midpoint(u, v_score);
                             format!(
-                                " │ VMAF:{:.2} UV:{:.2} ({:.0}/3 →)",
-                                v, chroma_avg, failure_credibility
+                                " │ VMAF:{v:.2} UV:{chroma_avg:.2} ({failure_credibility:.0}/3 →)"
                             )
                         } else {
                             String::new()
@@ -2533,6 +2483,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                 }
             }
+        } else {
+            crate::log_eprintln!("⚠️ Cannot compress even at max CRF {:.1}!", max_crf);
+            crate::log_eprintln!("   File may be already optimally compressed");
+            // Use best tested CRF instead of fallback to max_crf
+            if best_crf.is_none() {
+                best_crf = Some(best_tested_crf);
+                best_size = Some(best_tested_size);
+            }
         }
     }
 
@@ -2540,7 +2498,7 @@ fn cpu_fine_tune_from_gpu_boundary(
         if let Some(best) = best_crf {
             if best < max_crf {
                 crate::log_eprintln!();
-                use crate::modern_ui::colors::*;
+                use crate::modern_ui::colors::{BRIGHT_MAGENTA, RESET, DIM, BRIGHT_GREEN, CYAN, BRIGHT_CYAN, BRIGHT_RED, BRIGHT_YELLOW};
                 crate::log_eprintln!(
                     "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack){}",
                     BRIGHT_MAGENTA, RESET
@@ -2588,7 +2546,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                         consecutive_successes += 1;
 
                         let step_info = if current_step > base_step + 0.001 {
-                            format!("SPRINT step {:.2}", current_step)
+                            format!("SPRINT step {current_step:.2}")
                         } else {
                             "0.01-GRANULARITY GAIN".to_string()
                         };
@@ -2601,8 +2559,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 super::ssim_calculator::calculate_psnr_uv(input, output, 6);
 
                             if let (Some(v), Some((u, v_score))) = (vmaf, psnr_uv) {
-                                let chroma_avg = (u + v_score) / 2.0;
-                                metrics_info = format!(" │ VMAF:{:.2} UV:{:.2}", v, chroma_avg);
+                                let chroma_avg = f64::midpoint(u, v_score);
+                                metrics_info = format!(" │ VMAF:{v:.2} UV:{chroma_avg:.2}");
                             }
                         }
 
@@ -2832,11 +2790,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     let is_animated_image = input
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| {
+        .is_some_and(|e| {
             let ext = e.to_lowercase();
             matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif")
-        })
-        .unwrap_or(false);
+        });
 
     let verify_options = if is_animated_image {
         crate::verbose_eprintln!(

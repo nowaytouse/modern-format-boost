@@ -25,7 +25,7 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
             Ok(Some(value)) => {
                 if let Err(e) = xattr::set(dst, key, &value) {
                     // Non-fatal: target filesystem may not support xattrs (e.g. FAT32, some network mounts)
-                    eprintln!("⚠️ [metadata] Could not copy xattr '{}': {}", key, e);
+                    eprintln!("⚠️ [metadata] Could not copy xattr '{key}': {e}");
                 }
             }
             Ok(None) => {} // not present on source, nothing to do
@@ -47,8 +47,7 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
                 Ok(Some(_)) => {}
                 Ok(None) => {
                     eprintln!(
-                        "⚠️ [metadata] xattr '{}' present on source but missing on destination after copy attempt.",
-                        key
+                        "⚠️ [metadata] xattr '{key}' present on source but missing on destination after copy attempt."
                     );
                 }
                 Err(e) => {
@@ -63,8 +62,7 @@ pub fn preserve_network_metadata(src: &Path, dst: &Path) -> io::Result<()> {
             Ok(None) => {}
             Err(e) => {
                 eprintln!(
-                    "⚠️ [metadata] Could not re-read source xattr '{}' during verification: {}",
-                    key, e
+                    "⚠️ [metadata] Could not re-read source xattr '{key}' during verification: {e}"
                 );
             }
         }

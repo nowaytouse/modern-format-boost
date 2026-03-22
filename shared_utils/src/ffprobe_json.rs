@@ -1,5 +1,5 @@
-//! 🔥 v6.5: FFprobe JSON 解析模块
-//! 使用 serde_json 替代手动字符串解析
+//! 🔥 v6.5: `FFprobe` JSON Parsing Module
+//! Uses `serde_json` instead of manual string parsing
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -72,6 +72,7 @@ pub struct ColorInfo {
 
 impl ColorInfo {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
+    #[must_use] 
     pub fn is_hdr(&self) -> bool {
         self.is_dolby_vision
             || self.is_hdr10_plus
@@ -196,7 +197,7 @@ fn parse_side_data_list(
         }
         if sd_type.contains("content light level") && max_cll.is_none() {
             if let (Some(mc), Some(ma)) = (sd.max_content, sd.max_average) {
-                *max_cll = Some(format!("{},{}", mc, ma));
+                *max_cll = Some(format!("{mc},{ma}"));
             }
         }
     }
@@ -314,12 +315,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         }
     };
 
-    let stream = match parsed.streams.first() {
-        Some(s) => s,
-        None => {
-            warn!(input = %input_str, "FFPROBE JSON contained no video streams");
-            return ColorInfo::default();
-        }
+    let stream = if let Some(s) = parsed.streams.first() { s } else {
+        warn!(input = %input_str, "FFPROBE JSON contained no video streams");
+        return ColorInfo::default();
     };
 
     let bit_depth = stream
@@ -446,8 +444,7 @@ mod prop_tests {
             bd in 8u8..=16
         ) {
             let json = format!(
-                r#"{{"streams":[{{"color_space":"{}","pix_fmt":"{}","bits_per_raw_sample":"{}"}}]}}"#,
-                cs, pf, bd
+                r#"{{"streams":[{{"color_space":"{cs}","pix_fmt":"{pf}","bits_per_raw_sample":"{bd}"}}]}}"#
             );
             let parsed: Result<FfprobeOutput, _> = serde_json::from_str(&json);
             prop_assert!(parsed.is_ok());

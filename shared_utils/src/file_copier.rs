@@ -1,18 +1,18 @@
 //! File Copier Module
 //!
-//! 🔥 v6.9.13: 无遗漏设计 - 复制不支持的文件
-//! 🔥 v7.8: 增强错误处理 - 添加文件路径上下文，批量操作弹性
+//! 🔥 v6.9.13: No-Omissions Design - Copying unsupported files
+//! 🔥 v7.8: Enhanced Error Handling - Adding file path context and batch operation resilience
 //!
-//! 确保输出目录包含所有文件：
-//! - 支持的格式：由主程序转换
-//! - 不支持的格式：直接复制
-//! - XMP边车：已被合并，不单独复制
+//! Ensures the output directory contains all files:
+//! - Supported formats: Converted by the main program
+//! - Unsupported formats: Copied directly
+//! - XMP sidecars: Merged, not copied separately
 //!
-//! ## 错误处理策略
-//! - 所有IO错误都包含文件路径上下文
-//! - 批量操作在部分失败时继续处理（弹性设计）
-//! - 所有失败都记录到日志和错误列表
-//! - 响亮报错，不静默失败
+//! ## Error Handling Strategy
+//! - All IO errors include file path context
+//! - Batch operations continue processing upon partial failure (resilient design)
+//! - All failures are recorded in logs and error lists
+//! - Report errors loudly; do not fail silently
 
 use std::path::{Path, PathBuf};
 use tracing::{debug, error, info, warn};
@@ -31,8 +31,8 @@ pub const IMAGE_EXTENSIONS_FOR_CONVERT: &[&str] = &[
 ];
 
 /// Video extensions for conversion input. **Do not exclude mov/mp4** by extension:
-/// .mov can contain ProRes (must convert) or HEVC (skip by codec); .mp4 can contain H.264 or HEVC.
-/// Skip vs convert is decided by **codec detection** (e.g. should_skip_video_codec), not by extension.
+/// .mov can contain `ProRes` (must convert) or HEVC (skip by codec); .mp4 can contain H.264 or HEVC.
+/// Skip vs convert is decided by **codec detection** (e.g. `should_skip_video_codec`), not by extension.
 pub const SUPPORTED_VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mov", "avi", "mkv", "webm", "m4v", "wmv", "flv", "mpg", "mpeg", "ts", "mts", "m2ts",
     "m2v", "3gp", "3g2", "ogv", "f4v", "asf",
@@ -54,6 +54,7 @@ pub struct CopyResult {
 }
 
 impl CopyResult {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             total_files: 0,
@@ -75,14 +76,13 @@ fn should_copy_file(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     if path
         .file_name()
         .and_then(|n| n.to_str())
-        .map(|n| n.starts_with('.'))
-        .unwrap_or(false)
+        .is_some_and(|n| n.starts_with('.'))
     {
         return false;
     }
@@ -119,7 +119,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
     };
 
     let mut total_files = 0usize;
-    for entry in walker.into_iter() {
+    for entry in walker {
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_file() && should_copy_file(entry.path()) {
@@ -141,7 +141,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
     let _heartbeat = if total_files > 10 {
         Some(crate::universal_heartbeat::HeartbeatGuard::new(
             crate::universal_heartbeat::HeartbeatConfig::medium("Batch File Copy")
-                .with_info(format!("{} files", total_files)),
+                .with_info(format!("{total_files} files")),
         ))
     } else {
         None
@@ -153,15 +153,13 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         WalkDir::new(input_dir).max_depth(1)
     };
 
-    for entry in walker.into_iter() {
+    for entry in walker {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
                 let path = err
-                    .path()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| input_dir.to_path_buf());
-                let error_msg = format!("Directory traversal failed: {}", err);
+                    .path().map_or_else(|| input_dir.to_path_buf(), Path::to_path_buf);
+                let error_msg = format!("Directory traversal failed: {err}");
                 warn!(
                     path = %path.display(),
                     error = %err,
@@ -188,7 +186,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
         let rel_path = match path.strip_prefix(input_dir) {
             Ok(p) => p,
             Err(e) => {
-                let error_msg = format!("Failed to compute relative path: {}", e);
+                let error_msg = format!("Failed to compute relative path: {e}");
                 error!(
                     file = %path.display(),
                     input_dir = %input_dir.display(),
@@ -208,7 +206,7 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
 
         if let Some(parent) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                let error_msg = format!("Failed to create directory: {}", e);
+                let error_msg = format!("Failed to create directory: {e}");
                 error!(
                     file = %path.display(),
                     dest_dir = %parent.display(),
@@ -260,13 +258,13 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
                             error = %e,
                             "XMP merge failed, trying to copy sidecar"
                         );
-                        println!("⚠️ XMP merge failed ({}), trying to copy sidecar...", e);
+                        println!("⚠️ XMP merge failed ({e}), trying to copy sidecar...");
                         copy_xmp_sidecar_if_exists(path, &dest);
                     }
                 }
             }
             Err(e) => {
-                let error_msg = format!("Copy failed: {}", e);
+                let error_msg = format!("Copy failed: {e}");
                 error!(
                     source = %path.display(),
                     dest = %dest.display(),
@@ -310,15 +308,15 @@ fn copy_xmp_sidecar_if_exists(source: &Path, dest: &Path) {
     let dest_str = dest.to_string_lossy();
 
     let xmp_patterns = [
-        format!("{}.xmp", source_str),
-        format!("{}.XMP", source_str),
+        format!("{source_str}.xmp"),
+        format!("{source_str}.XMP"),
         source.with_extension("xmp").to_string_lossy().to_string(),
     ];
 
     for xmp_source in &xmp_patterns {
         let xmp_path = Path::new(xmp_source);
         if xmp_path.exists() {
-            let xmp_dest = format!("{}.xmp", dest_str);
+            let xmp_dest = format!("{dest_str}.xmp");
 
             match std::fs::copy(xmp_path, &xmp_dest) {
                 Ok(_) => {
@@ -366,6 +364,7 @@ pub struct FileStats {
 }
 
 impl FileStats {
+    #[must_use] 
     pub fn expected_output(&self) -> usize {
         self.total - self.sidecars
     }
@@ -386,7 +385,7 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
         WalkDir::new(dir).max_depth(1)
     };
 
-    for entry in walker.into_iter() {
+    for entry in walker {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
@@ -408,8 +407,7 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .map(|n| n.starts_with('.'))
-            .unwrap_or(false)
+            .is_some_and(|n| n.starts_with('.'))
         {
             continue;
         }
@@ -419,7 +417,7 @@ pub fn count_files(dir: &Path, recursive: bool) -> FileStats {
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| e.to_lowercase())
+            .map(str::to_lowercase)
             .unwrap_or_default();
 
         if SUPPORTED_IMAGE_EXTENSIONS.contains(&ext.as_str()) {
@@ -445,6 +443,7 @@ pub struct VerifyResult {
     pub message: String,
 }
 
+#[must_use] 
 pub fn verify_output_completeness(
     input_dir: &Path,
     output_dir: &Path,
@@ -460,14 +459,13 @@ pub fn verify_output_completeness(
     let (passed, message) = if diff == 0 {
         (
             true,
-            format!("✅ Verification passed: {} files (no loss)", actual),
+            format!("✅ Verification passed: {actual} files (no loss)"),
         )
     } else if diff > 0 {
         (
             false,
             format!(
-                "❌ Verification FAILED: missing {} files! (expected {}, got {})",
-                diff, expected, actual
+                "❌ Verification FAILED: missing {diff} files! (expected {expected}, got {actual})"
             ),
         )
     } else {

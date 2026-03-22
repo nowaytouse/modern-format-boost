@@ -1,17 +1,17 @@
-//! Unified Error Handler Module - 统一错误处理策略
+//! Unified Error Handler Module
 //!
-//! 🔥 v5.72: 解决错误处理不一致问题
-//! 🔥 v7.8: 增强错误报告功能 - 响亮报错，透明诊断
+//! 🔥 v5.72: Resolved error handling inconsistency issues
+//! 🔥 v7.8: Enhanced error reporting - loud reporting, transparent diagnostics
 //!
-//! ## 错误分类
-//! - Recoverable: 可恢复错误，记录警告并使用回退
-//! - Fatal: 致命错误，传播错误并中断
-//! - Optional: 可选操作失败，记录并继续
+//! ## Error Categories
+//! - Recoverable: Recoverable error, log warning and use fallback
+//! - Fatal: Fatal error, propagate error and abort
+//! - Optional: Optional operation failed, log and continue
 //!
-//! ## 错误报告功能
-//! - `report_error()`: 响亮报错到 stderr 和日志
-//! - `add_context()`: 为 Result 添加上下文信息
-//! - Panic handler: 在程序崩溃前记录详细信息
+//! ## Error Reporting Features
+//! - `report_error()`: Loudly report errors to stderr and logs
+//! - `add_context()`: Add contextual information to Result
+//! - Panic handler: Log detailed information before program crash
 
 use std::fmt;
 use std::panic;
@@ -50,21 +50,21 @@ pub fn handle_error<E: std::error::Error + Send + Sync + 'static>(
     match category {
         ErrorCategory::Recoverable => {
             tracing::warn!("[{}] {}: {}", category, context, error);
-            eprintln!("⚠️ [{}] {}: {}", category, context, error);
-            eprintln!("   → Suggested action: {}", suggestion_str);
+            eprintln!("⚠️ [{category}] {context}: {error}");
+            eprintln!("   → Suggested action: {suggestion_str}");
             eprintln!("   → Continuing with fallback behavior...");
             ErrorAction::Continue
         }
         ErrorCategory::Fatal => {
             tracing::error!("[{}] {}: {}", category, context, error);
-            eprintln!("❌ [{}] {}: {}", category, context, error);
-            eprintln!("   → Suggested action: {}", suggestion_str);
+            eprintln!("❌ [{category}] {context}: {error}");
+            eprintln!("   → Suggested action: {suggestion_str}");
             eprintln!("   → Operation aborted.");
-            ErrorAction::Abort(anyhow::anyhow!("{}: {}", context, error))
+            ErrorAction::Abort(anyhow::anyhow!("{context}: {error}"))
         }
         ErrorCategory::Optional => {
             tracing::info!("[{}] {}: {}", category, context, error);
-            eprintln!("ℹ️ [{}] {}: {}", category, context, error);
+            eprintln!("ℹ️ [{category}] {context}: {error}");
             eprintln!("   → This is non-critical, continuing...");
             ErrorAction::Continue
         }
@@ -132,12 +132,12 @@ macro_rules! handle_fatal {
 }
 
 pub fn report_error<E: std::error::Error + ?Sized>(error: &E) {
-    eprintln!("🔥 ERROR: {}", error);
+    eprintln!("🔥 ERROR: {error}");
 
     let mut source = error.source();
     let mut level = 1;
     while let Some(err) = source {
-        eprintln!("   {}. Caused by: {}", level, err);
+        eprintln!("   {level}. Caused by: {err}");
         source = err.source();
         level += 1;
     }
@@ -183,8 +183,8 @@ pub fn install_panic_handler() {
         };
 
         eprintln!("💥 PANIC occurred!");
-        eprintln!("   Message: {}", message);
-        eprintln!("   Location: {}", location);
+        eprintln!("   Message: {message}");
+        eprintln!("   Location: {location}");
         eprintln!("   This is a bug! Please report it.");
 
         tracing::error!("PANIC: {} at {}", message, location);

@@ -1,7 +1,7 @@
 //! Path Validation Module
 //!
 //! Provides path sanitization and validation to prevent command injection attacks.
-//! 路径验证模块，防止命令注入攻击。
+//! Path validation module to prevent command injection attacks.
 
 use std::fmt;
 use std::path::Path;
@@ -22,8 +22,7 @@ impl fmt::Display for PathValidationError {
             PathValidationError::DangerousCharacter { character, path } => {
                 write!(
                     f,
-                    "❌ PATH SECURITY ERROR: Dangerous character '{}' found in path: {}",
-                    character, path
+                    "❌ PATH SECURITY ERROR: Dangerous character '{character}' found in path: {path}"
                 )
             }
             PathValidationError::EmptyPath => {
@@ -32,15 +31,13 @@ impl fmt::Display for PathValidationError {
             PathValidationError::NullByte(path) => {
                 write!(
                     f,
-                    "❌ PATH SECURITY ERROR: Null byte found in path: {}",
-                    path
+                    "❌ PATH SECURITY ERROR: Null byte found in path: {path}"
                 )
             }
             PathValidationError::InputOutputConflict { path } => {
                 write!(
                     f,
-                    "❌ PATH CONFLICT ERROR: Input and output paths are identical: {}",
-                    path
+                    "❌ PATH CONFLICT ERROR: Input and output paths are identical: {path}"
                 )
             }
         }
@@ -73,17 +70,18 @@ pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
             path_display: path.to_string_lossy().to_string(),
             reason: "Path contains non-UTF-8 characters".to_string(),
         };
-        eprintln!("{}", err);
+        eprintln!("{err}");
         err
     })
 }
 
+#[must_use] 
 pub fn path_to_string_lossy(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
 pub fn path_to_string_safe(path: &Path) -> Result<String, PathConversionError> {
-    path_to_str_safe(path).map(|s| s.to_string())
+    path_to_str_safe(path).map(std::string::ToString::to_string)
 }
 
 pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
@@ -95,15 +93,14 @@ pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     }
 
     if path_str.contains('\0') {
-        eprintln!("⚠️ PATH VALIDATION FAILED: Null byte in: {}", path_str);
+        eprintln!("⚠️ PATH VALIDATION FAILED: Null byte in: {path_str}");
         return Err(PathValidationError::NullByte(path_str.to_string()));
     }
 
     for &c in DANGEROUS_CHARS {
         if path_str.contains(c) {
             eprintln!(
-                "⚠️ PATH VALIDATION FAILED: Dangerous character '{}' in: {}",
-                c, path_str
+                "⚠️ PATH VALIDATION FAILED: Dangerous character '{c}' in: {path_str}"
             );
             return Err(PathValidationError::DangerousCharacter {
                 character: c,
@@ -129,12 +126,10 @@ pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), Pa
         output
             .canonicalize()
             .unwrap_or_else(|_| output.to_path_buf())
+    } else if output.is_relative() {
+        std::env::current_dir().unwrap_or_default().join(output)
     } else {
-        if output.is_relative() {
-            std::env::current_dir().unwrap_or_default().join(output)
-        } else {
-            output.to_path_buf()
-        }
+        output.to_path_buf()
     };
 
     if input_canonical == output_canonical {
@@ -160,16 +155,15 @@ mod tests {
             "../parent_dir.webm",
             "/path/with-dashes_and_underscores.mp4",
             "/path/with.multiple.dots.mp4",
-            "/中文路径/视频.mp4",
-            "/日本語/ビデオ.mp4",
+            "/unicode_path_test/video_video.mp4",
+            "/japanese_path_test/video_video.mp4",
         ];
 
         for path_str in &safe_paths {
             let path = Path::new(path_str);
             assert!(
                 validate_path(path).is_ok(),
-                "Path should be safe: {}",
-                path_str
+                "Path should be safe: {path_str}"
             );
         }
     }
@@ -191,8 +185,7 @@ mod tests {
             let path = Path::new(path_str);
             assert!(
                 validate_path(path).is_ok(),
-                "parameterized command paths should allow '{}'",
-                path_str
+                "parameterized command paths should allow '{path_str}'"
             );
         }
     }
@@ -231,7 +224,7 @@ mod tests {
             character: '\n',
             path: "/test/path".to_string(),
         };
-        let msg = format!("{}", err);
+        let msg = format!("{err}");
         assert!(msg.contains("Dangerous character"));
         assert!(msg.contains('\n'));
     }
@@ -239,12 +232,11 @@ mod tests {
     #[test]
     fn test_all_dangerous_chars_detected() {
         for &c in DANGEROUS_CHARS {
-            let path_str = format!("/home/user/test{}file.mp4", c);
+            let path_str = format!("/home/user/test{c}file.mp4");
             let path = Path::new(&path_str);
             assert!(
                 validate_path(path).is_err(),
-                "Dangerous char '{}' should be detected",
-                c
+                "Dangerous char '{c}' should be detected"
             );
         }
     }

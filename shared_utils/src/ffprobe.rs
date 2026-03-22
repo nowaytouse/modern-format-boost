@@ -342,7 +342,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
     let bit_depth = detect_bit_depth(&pix_fmt);
 
-    let profile = video_stream["profile"].as_str().map(|s| s.to_string());
+    let profile = video_stream["profile"].as_str().map(std::string::ToString::to_string);
     let level = video_stream["level"]
         .as_u64()
         .map(|l| format!("{:.1}", l as f64 / 10.0));
@@ -356,7 +356,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         .as_str()
         .or_else(|| video_stream["tags"]["x264-params"].as_str())
         .or_else(|| video_stream["tags"]["encoder_settings"].as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     let video_bit_rate = video_stream["bit_rate"]
         .as_str()
@@ -369,7 +369,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let has_audio = audio_stream.is_some();
     let audio_codec = audio_stream
         .and_then(|s| s["codec_name"].as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
     let audio_bit_rate = audio_stream
         .and_then(|s| s["bit_rate"].as_str())
         .and_then(|s| s.parse::<u64>().ok());
@@ -386,7 +386,7 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     let has_subtitles = subtitle_stream.is_some();
     let subtitle_codec = subtitle_stream
         .and_then(|s| s["codec_name"].as_str())
-        .map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
 
     Ok(FFprobeResult {
         format_name,
@@ -431,10 +431,10 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 }
 
 /// Recursively scan all `side_data` arrays in a ffprobe JSON value to detect:
-/// - Dolby Vision RPU (side_data_type contains "Dolby Vision")
+/// - Dolby Vision RPU (`side_data_type` contains "Dolby Vision")
 /// - HDR10+ dynamic metadata (SMPTE ST 2094-40)
 /// - Mastering display colour volume (HDR10 static metadata)
-/// - Content light level (MaxCLL / MaxFALL)
+/// - Content light level (`MaxCLL` / `MaxFALL`)
 ///
 /// Parsed HDR side data from ffprobe JSON.
 struct HdrSideData {
@@ -561,7 +561,7 @@ fn parse_luminance_to_10k(s: &str) -> Option<u64> {
     }
 }
 
-/// Build the ffmpeg `-master_display` string from a mastering_display side_data object.
+/// Build the ffmpeg `-master_display` string from a `mastering_display` `side_data` object.
 /// Format: "G(gx,gy)B(bx,by)R(rx,ry)WP(wx,wy)L(lmax,lmin)"
 fn build_mastering_display_string(sd: &serde_json::Value) -> Option<String> {
     let get_coord = |field: &str| -> Option<u64> {

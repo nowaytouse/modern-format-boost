@@ -18,7 +18,7 @@
 //!
 //! ## Reliability and limitations
 //!
-//! - **PNG "lossy"** here means *palette-quantized* (e.g. pngquant, TinyPNG). 16-bit and
+//! - **PNG "lossy"** here means *palette-quantized* (e.g. pngquant, `TinyPNG`). 16-bit and
 //!   truecolor PNG without tool signature are treated as lossless. Indexed PNG uses a
 //!   **conservative threshold 0.58**: only scores ≥0.58 are marked lossy; gray zone
 //!   [0.40, 0.58] is treated as lossless to reduce false positives (e.g. natural palette art).
@@ -27,16 +27,16 @@
 //!   We do *not* detect "PNG exported from a lossy source" (e.g. JPEG→PNG screenshot).
 //! - **WebP**: VP8L vs VP8 chunk; animated WebP traverses all ANMF frames (any VP8→lossy).
 //! - **TIFF**: Compression tag (259) across ALL IFDs; JPEG (6,7)→lossy, others→lossless.
-//!   Supports both standard TIFF and BigTIFF (0x002B). No tag → assumed lossless.
+//!   Supports both standard TIFF and `BigTIFF` (0x002B). No tag → assumed lossless.
 //! - **AVIF**: Multi-dimension (av1C chroma 4:2:0/4:2:2→lossy; 4:4:4 + colr Identity MC u16[8..9]/pixi/high bit depth→lossless; 4:4:4 ambiguous→Err). Err when av1C missing or 4:4:4 without definitive indicators.
-//! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy; Main/Main10/MSP→lossy; RExt/SCC + 4:4:4→lossless; RExt without 4:4:4→Err). Err when hvcC missing.
-//! - **JXL**: Container jbrd box→lossless (naked codestream skips jbrd scan); codestream xyb_encoded→lossy/modular; Err only when no jbrd and header unparseable.
+//! - **HEIC**: Multi-dimension (hvcC chromaFormatIdc 4:2:0/4:2:2→lossy; Main/Main10/MSP→lossy; RExt/SCC + 4:4:4→lossless; `RExt` without 4:4:4→Err). Err when hvcC missing.
+//! - **JXL**: Container jbrd box→lossless (naked codestream skips jbrd scan); codestream `xyb_encoded→lossy/modular`; Err only when no jbrd and header unparseable.
 //! - **JPEG**: Always lossy; JXL transcoding does not require quality judgment.
 //! - **EXR**: Parses compression attribute (NONE/RLE/ZIPS/ZIP/PIZ→lossless; PXR24/B44/B44A/DWAA/DWAB→lossy).
 //! - **QOI, FLIF, PNM**: Treated as lossless. **JP2**: COD marker wavelet transform (9/7 irreversible→lossy, 5/3 reversible→lossless); fallback lossy if COD not found.
 //! - **ICO**: Parses directory entries; embedded PNG checked for quantization (tRNS + indexed, tool signatures). BMP/DIB entries → lossless.
 //! - **TGA, PSD, DDS**: Treated as lossless.
-//! - **Format detection**: `mif1`/`msf1` major brand scans compatible_brands to disambiguate AVIF vs HEIC.
+//! - **Format detection**: `mif1`/`msf1` major brand scans `compatible_brands` to disambiguate AVIF vs HEIC.
 //!
 //! ## Quality judgment reliability audit (conclusion)
 //!
@@ -48,10 +48,10 @@
 //! |--------|-------------|----------------|----------------|
 //! | PNG    | Medium–High | No (score)     | Gray zone [0.40,0.58] → lossless; palette-index entropy + zTXt signatures. |
 //! | WebP   | High        | Yes (VP8L/VP8)| Animated: traverses all ANMF frames. |
-//! | TIFF   | High        | Yes (tag 259) | All IFDs + BigTIFF. No tag → lossless. |
+//! | TIFF   | High        | Yes (tag 259) | All IFDs + `BigTIFF`. No tag → lossless. |
 //! | JPEG   | N/A         | Yes (always)  | Always lossy. |
 //! | AVIF   | High        | Multi (av1C)  | Err if no av1C or ambiguous 4:4:4. colr MC u16 fix. |
-//! | HEIC   | High        | Multi (hvcC)  | chromaFormatIdc + profile. Err if no hvcC or RExt w/o 4:4:4. |
+//! | HEIC   | High        | Multi (hvcC)  | chromaFormatIdc + profile. Err if no hvcC or `RExt` w/o 4:4:4. |
 //! | JXL    | High        | Multi (jbrd/xyb)| Container-only jbrd. Err if unparseable. |
 //! | GIF    | Assumed     | N/A           | Treated as lossless. |
 //! | EXR    | High        | Yes (attr)    | Parses compression attr. No attr → lossless. |
@@ -60,7 +60,7 @@
 //! | ICO    | Medium      | Partial       | Embedded PNG checked for quantization. |
 //! | TGA/PSD/DDS | Assumed | N/A         | Treated as lossless. |
 //!
-//! **Call chain**: `analyze_image` → format (HEIC/JXL/AVIF/…) → `detect_lossless` / `detect_compression` → `Result<CompressionType>`.  
+//! **Call chain**: `analyze_image` → format (HEIC/JXL/AVIF/…) → `detect_lossless` / `detect_compression` → `Result<CompressionType>`.\
 //! **Error propagation**: AVIF/HEIC/JXL `Err` propagates via `?` in `analyze_heic_image`, `analyze_jxl_image`, and `detect_lossless`; conversion path fails loudly with path in message.
 
 use crate::img_errors::{ImgQualityError, Result};
@@ -72,7 +72,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
-/// Increases max_alloc from default ~512MB to 2GB for legitimate large images.
+/// Increases `max_alloc` from default ~512MB to 2GB for legitimate large images.
 /// Still protects against malicious images (2GB is reasonable for 100MP+ images).
 pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, image::ImageError> {
     use image::Limits;
@@ -167,6 +167,7 @@ pub enum DetectedFormat {
 }
 
 impl DetectedFormat {
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         match self {
             DetectedFormat::PNG => "PNG",
@@ -192,6 +193,7 @@ impl DetectedFormat {
         }
     }
 
+    #[must_use] 
     pub fn is_modern_format(&self) -> bool {
         matches!(
             self,
@@ -356,9 +358,9 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
     Ok(DetectedFormat::Unknown("Unknown format".to_string()))
 }
 
-/// Resolve mif1/msf1 major brand by scanning compatible_brands in the ftyp box.
+/// Resolve mif1/msf1 major brand by scanning `compatible_brands` in the ftyp box.
 /// AVIF spec allows mif1 as major brand; without this, such files get routed to
-/// detect_heic_compression (hvcC lookup) which always fails → Err.
+/// `detect_heic_compression` (hvcC lookup) which always fails → Err.
 fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> DetectedFormat {
     // Read enough for ftyp box (typically < 64 bytes, but can be larger)
     let data = match std::fs::read(path) {
@@ -589,7 +591,8 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
 }
 
 /// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
-/// Checks major_brand and compatible_brands for known sequence brand codes.
+/// Checks `major_brand` and `compatible_brands` for known sequence brand codes.
+#[must_use] 
 pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
     const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
@@ -814,7 +817,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     let mut explanations: Vec<String> = Vec::new();
 
     if png_info.color_type == 3 {
-        let pixel_count = png_info.width as u64 * png_info.height as u64;
+        let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
         let is_large_image = pixel_count > 100_000;
         let is_medium_image = pixel_count > 10_000;
 
@@ -833,7 +836,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     }
 
     if let Some(palette_size) = png_info.palette_size {
-        let pixel_count = png_info.width as u64 * png_info.height as u64;
+        let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
         let is_large_image = pixel_count > 100_000;
         let is_medium_image = pixel_count > 10_000;
 
@@ -848,14 +851,12 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         if palette_size > 240 {
             factors.large_palette = 0.95;
             explanations.push(format!(
-                "Near-max palette ({} colors) - definitely quantized",
-                palette_size
+                "Near-max palette ({palette_size} colors) - definitely quantized"
             ));
         } else if palette_size > 200 {
             factors.large_palette = 0.85;
             explanations.push(format!(
-                "Large palette ({} colors) - likely quantized",
-                palette_size
+                "Large palette ({palette_size} colors) - likely quantized"
             ));
         } else if is_large_image && palette_size > 64 {
             factors.large_palette = 0.80;
@@ -866,8 +867,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         } else if is_large_image && palette_size > 32 {
             factors.large_palette = 0.60;
             explanations.push(format!(
-                "Large image with small palette ({} colors)",
-                palette_size
+                "Large image with small palette ({palette_size} colors)"
             ));
         } else if is_medium_image && palette_size > 128 {
             factors.large_palette = 0.50;
@@ -884,8 +884,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
             factors.large_palette = factors.large_palette.max(0.70);
             if !explanations.iter().any(|e| e.contains("colors/MP")) {
                 explanations.push(format!(
-                    "Low color density ({:.1} colors/MP)",
-                    colors_per_megapixel
+                    "Low color density ({colors_per_megapixel:.1} colors/MP)"
                 ));
             }
         }
@@ -894,7 +893,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     if let Some(ref tool) = png_info.detected_tool {
         factors.tool_signature = 1.0;
         detected_tool = Some(tool.clone());
-        explanations.push(format!("Tool signature detected: {}", tool));
+        explanations.push(format!("Tool signature detected: {tool}"));
     }
 
     if png_info.color_type == 3 {
@@ -904,14 +903,13 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 factors.dithering_detected = dithering_score;
                 if dithering_score > 0.5 {
                     explanations.push(format!(
-                        "Dithering pattern detected (score: {:.2})",
-                        dithering_score
+                        "Dithering pattern detected (score: {dithering_score:.2})"
                     ));
                 }
 
                 let (unique_colors, _expected_colors) =
                     analyze_color_distribution(&img, png_info.palette_size);
-                let pixel_count = png_info.width as u64 * png_info.height as u64;
+                let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
                 let is_large_image = pixel_count > 100_000;
 
                 if let Some(palette_size) = png_info.palette_size {
@@ -945,8 +943,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 factors.gradient_banding = banding_score;
                 if banding_score > 0.5 {
                     explanations.push(format!(
-                        "Gradient banding detected (score: {:.2})",
-                        banding_score
+                        "Gradient banding detected (score: {banding_score:.2})"
                     ));
                 }
 
@@ -954,8 +951,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 factors.color_frequency_distribution = freq_score;
                 if freq_score > 0.5 {
                     explanations.push(format!(
-                        "Color frequency concentrated (score: {:.2}) — quantization indicator",
-                        freq_score
+                        "Color frequency concentrated (score: {freq_score:.2}) — quantization indicator"
                     ));
                 }
 
@@ -985,8 +981,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
                     if factors.entropy_anomaly > 0.4 {
                         explanations.push(format!(
-                            "Low entropy ({:.2} vs max {:.2}) — quantization indicator",
-                            entropy, max_entropy
+                            "Low entropy ({entropy:.2} vs max {max_entropy:.2}) — quantization indicator"
                         ));
                     }
                 } else if palette_size >= 64.0 && entropy_ratio < 0.5 && pixel_count > 5_000 {
@@ -1022,7 +1017,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         heuristic: 0.10,
     };
 
-    let structural_score = (factors.indexed_with_alpha + factors.large_palette) / 2.0;
+    let structural_score = f64::midpoint(factors.indexed_with_alpha, factors.large_palette);
 
     let metadata_score = factors.tool_signature;
 
@@ -1032,7 +1027,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         + factors.color_frequency_distribution)
         / 4.0;
 
-    let heuristic_score = (factors.size_efficiency_anomaly + factors.entropy_anomaly) / 2.0;
+    let heuristic_score = f64::midpoint(factors.size_efficiency_anomaly, factors.entropy_anomaly);
 
     let final_score = structural_score * weights.structural
         + metadata_score * weights.metadata
@@ -1074,8 +1069,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
             heuristic_score * weights.heuristic
         );
         eprintln!(
-            "         FINAL SCORE: {:.3} (threshold: {:.2} for lossy, gray zone: [{:.2}, {:.2}] → lossless)",
-            final_score, LOSSY_THRESHOLD, GRAY_ZONE_LOW, LOSSY_THRESHOLD
+            "         FINAL SCORE: {final_score:.3} (threshold: {LOSSY_THRESHOLD:.2} for lossy, gray zone: [{GRAY_ZONE_LOW:.2}, {LOSSY_THRESHOLD:.2}] → lossless)"
         );
     }
 
@@ -1093,7 +1087,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         // Analyze truecolor for quantization signals (conservative: need 2+ strong signals)
         if let Some(p) = path {
             if let Ok(img) = open_image_with_limits(p) {
-                let pixel_count = png_info.width as u64 * png_info.height as u64;
+                let pixel_count = u64::from(png_info.width) * u64::from(png_info.height);
 
                 // Signal 1: color frequency concentration
                 let freq_signal = detect_color_frequency_distribution(&img);
@@ -1120,8 +1114,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
 
                 if std::env::var("IMGQUALITY_DEBUG").is_ok() {
                     eprintln!(
-                        "      🎨 Truecolor analysis: freq={:.2}, entropy={:.2} (raw={:.2}), band={:.2}, strong={}",
-                        freq_signal, entropy_signal, rgb_entropy, banding_signal, strong_signals
+                        "      🎨 Truecolor analysis: freq={freq_signal:.2}, entropy={entropy_signal:.2} (raw={rgb_entropy:.2}), band={banding_signal:.2}, strong={strong_signals}"
                     );
                 }
 
@@ -1133,8 +1126,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                         factor_scores: factors,
                         detected_tool: None,
                         explanation: format!(
-                            "Truecolor quantization detected (freq={:.2}, entropy={:.2}, band={:.2})",
-                            freq_signal, entropy_signal, banding_signal
+                            "Truecolor quantization detected (freq={freq_signal:.2}, entropy={entropy_signal:.2}, band={banding_signal:.2})"
                         ),
                     });
                 } else if strong_signals == 1 {
@@ -1188,9 +1180,9 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
 
     let explanation = if explanations.is_empty() {
         if is_quantized {
-            format!("Quantization detected (score: {:.2})", final_score)
+            format!("Quantization detected (score: {final_score:.2})")
         } else {
-            format!("No quantization indicators (score: {:.2})", final_score)
+            format!("No quantization indicators (score: {final_score:.2})")
         }
     } else {
         explanations.join("; ")
@@ -1231,12 +1223,11 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
     fn skip_bytes<R: std::io::Seek>(reader: &mut R, bytes: u64, context: &str) -> Result<()> {
         let offset = i64::try_from(bytes).map_err(|_| {
             ImgQualityError::AnalysisError(format!(
-                "PNG chunk too large to seek while parsing {}",
-                context
+                "PNG chunk too large to seek while parsing {context}"
             ))
         })?;
         reader.seek(SeekFrom::Current(offset)).map_err(|e| {
-            ImgQualityError::AnalysisError(format!("Failed to seek past {}: {}", context, e))
+            ImgQualityError::AnalysisError(format!("Failed to seek past {context}: {e}"))
         })?;
         Ok(())
     }
@@ -1304,12 +1295,11 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => {
                 return Err(ImgQualityError::AnalysisError(format!(
-                    "Failed to read PNG chunk header: {}",
-                    e
+                    "Failed to read PNG chunk header: {e}"
                 )));
             }
         }
-        let chunk_len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as u64;
+        let chunk_len = u64::from(u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]));
         let chunk_type = &buf[4..8];
 
         match chunk_type {
@@ -1326,8 +1316,7 @@ pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
                 let mut payload = vec![0u8; chunk_len as usize];
                 reader.read_exact(&mut payload).map_err(|e| {
                     ImgQualityError::AnalysisError(format!(
-                        "Failed to read PNG text chunk payload: {}",
-                        e
+                        "Failed to read PNG text chunk payload: {e}"
                     ))
                 })?;
                 if chunk_type == b"zTXt" {
@@ -1399,7 +1388,7 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
     let mut high_freq_count = 0u64;
     let mut total_comparisons = 0u64;
 
-    let step = ((width * height) as f64 / 10000.0).max(1.0) as u32;
+    let step = (f64::from(width * height) / 10000.0).max(1.0) as u32;
 
     for y in 1..height - 1 {
         for x in 1..width - 1 {
@@ -1477,10 +1466,10 @@ fn detect_dithering_pattern(img: &DynamicImage) -> f64 {
 /// under-weights green differences and over-weights blue, causing dithering
 /// detection to miss green-channel artifacts and false-trigger on blue noise.
 fn color_difference(a: &Rgba<u8>, b: &Rgba<u8>) -> f64 {
-    let rmean = (a[0] as f64 + b[0] as f64) / 2.0;
-    let dr = a[0] as f64 - b[0] as f64;
-    let dg = a[1] as f64 - b[1] as f64;
-    let db = a[2] as f64 - b[2] as f64;
+    let rmean = f64::midpoint(f64::from(a[0]), f64::from(b[0]));
+    let dr = f64::from(a[0]) - f64::from(b[0]);
+    let dg = f64::from(a[1]) - f64::from(b[1]);
+    let db = f64::from(a[2]) - f64::from(b[2]);
     // Weights shift with mean red: redder pixels → more red weight, bluer → more blue weight
     let wr = 2.0 + rmean / 256.0;
     let wg = 4.0;
@@ -1599,7 +1588,7 @@ fn detect_color_frequency_distribution(img: &DynamicImage) -> f64 {
     let mut cumulative = 0u64;
     let mut colors_for_85pct = 0usize;
     for &f in &freqs {
-        cumulative += f as u64;
+        cumulative += u64::from(f);
         colors_for_85pct += 1;
         if cumulative >= target {
             break;
@@ -1641,13 +1630,13 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         let mut gradient_regions = 0u32;
 
         for y in (0..height).step_by(4) {
-            let mut prev_val = rgba.get_pixel(0, y)[ch] as i16;
+            let mut prev_val = i16::from(rgba.get_pixel(0, y)[ch]);
             let mut gradient_length = 0u32;
             let mut step_count = 0u32;
             let mut last_step_x = 0u32;
 
             for x in 1..width {
-                let val = rgba.get_pixel(x, y)[ch] as i16;
+                let val = i16::from(rgba.get_pixel(x, y)[ch]);
                 let diff = (val - prev_val).abs();
 
                 if diff > 0 && diff < 20 {
@@ -1659,7 +1648,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                     }
                 } else if gradient_length > 20 {
                     if step_count > 0 {
-                        let step_ratio = step_count as f64 / gradient_length as f64;
+                        let step_ratio = f64::from(step_count) / f64::from(gradient_length);
                         if step_ratio > 0.08 && step_ratio < 0.5 {
                             banding_score += step_ratio;
                             gradient_regions += 1;
@@ -1674,7 +1663,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         }
 
         let ch_score = if gradient_regions > 0 {
-            (banding_score / gradient_regions as f64).min(1.0)
+            (banding_score / f64::from(gradient_regions)).min(1.0)
         } else {
             0.0
         };
@@ -1692,7 +1681,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         if start_offset < width {
             let mut x = start_offset;
             let mut y = 0u32;
-            let mut prev_val = gray.get_pixel(x, y)[0] as i16;
+            let mut prev_val = i16::from(gray.get_pixel(x, y)[0]);
             let mut grad_len = 0u32;
             let mut steps = 0u32;
 
@@ -1701,7 +1690,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                 y += 1;
                 x < width && y < height
             } {
-                let val = gray.get_pixel(x, y)[0] as i16;
+                let val = i16::from(gray.get_pixel(x, y)[0]);
                 let diff = (val - prev_val).abs();
                 if diff > 0 && diff < 20 {
                     grad_len += 1;
@@ -1709,7 +1698,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                         steps += 1;
                     }
                 } else if grad_len > 20 && steps > 0 {
-                    let r = steps as f64 / grad_len as f64;
+                    let r = f64::from(steps) / f64::from(grad_len);
                     if r > 0.08 && r < 0.5 {
                         diag_banding += r;
                         diag_regions += 1;
@@ -1728,14 +1717,14 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
         if start_offset < width && start_offset > 0 {
             let mut x = start_offset;
             let mut y = 0u32;
-            let mut prev_val = gray.get_pixel(x, y)[0] as i16;
+            let mut prev_val = i16::from(gray.get_pixel(x, y)[0]);
             let mut grad_len = 0u32;
             let mut steps = 0u32;
 
             while x > 0 && y + 1 < height {
                 x -= 1;
                 y += 1;
-                let val = gray.get_pixel(x, y)[0] as i16;
+                let val = i16::from(gray.get_pixel(x, y)[0]);
                 let diff = (val - prev_val).abs();
                 if diff > 0 && diff < 20 {
                     grad_len += 1;
@@ -1743,7 +1732,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
                         steps += 1;
                     }
                 } else if grad_len > 20 && steps > 0 {
-                    let r = steps as f64 / grad_len as f64;
+                    let r = f64::from(steps) / f64::from(grad_len);
                     if r > 0.08 && r < 0.5 {
                         diag_banding += r;
                         diag_regions += 1;
@@ -1760,7 +1749,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     }
 
     let diag_score = if diag_regions > 0 {
-        (diag_banding / diag_regions as f64).min(1.0)
+        (diag_banding / f64::from(diag_regions)).min(1.0)
     } else {
         0.0
     };
@@ -1781,11 +1770,12 @@ fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
 
     // bit_depth applies per sample; for sub-byte depths (1, 2, 4) pixels are packed
     let total_bits =
-        info.width as u64 * info.height as u64 * bits_per_sample * info.bit_depth as u64;
+        u64::from(info.width) * u64::from(info.height) * bits_per_sample * u64::from(info.bit_depth);
     // Round up to bytes
     total_bits.div_ceil(8)
 }
 
+#[must_use] 
 pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     let gray = img.to_luma8();
     let mut histogram = [0u64; 256];
@@ -1813,14 +1803,14 @@ pub fn calculate_entropy(img: &DynamicImage) -> f64 {
 /// Returns the mean of R, G, B channel entropies.
 /// Palette-index frequency entropy for indexed PNG.
 ///
-/// Counts how many pixels use each palette index (0..palette_size), computes
-/// Shannon entropy H = -Σ freq[i]*log2(freq[i]), and returns (H, max_H, ratio).
+/// Counts how many pixels use each palette index (`0..palette_size`), computes
+/// Shannon entropy H = -Σ freq[i]*log2(freq[i]), and returns (H, `max_H`, ratio).
 /// Quantized images have uneven palette usage (few dominant entries) → low ratio.
 /// Natural palette art uses entries more uniformly → ratio close to 1.0.
 fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (f64, f64, f64) {
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
-    let total = (width as u64 * height as u64) as f64;
+    let total = (u64::from(width) * u64::from(height)) as f64;
     if total == 0.0 || palette_size == 0 {
         return (0.0, 0.0, 0.0);
     }
@@ -2027,7 +2017,7 @@ fn estimate_lossy_quality_fallback(
     frame_count: u32,
     entropy: f64,
 ) -> Result<u8> {
-    let pixels = (width as u64) * (height as u64);
+    let pixels = u64::from(width) * u64::from(height);
     if pixels == 0 || file_size == 0 {
         crate::progress_mode::emit_stderr(&format!(
             "   \x1b[1;31m🚨 [CRITICAL FALLBACK]\x1b[0m \x1b[31mQuality detection failed and heuristic fallback is impossible.\x1b[0m\n\
@@ -2042,7 +2032,7 @@ fn estimate_lossy_quality_fallback(
     }
 
     // Heuristic v2: Multi-factor quality estimation
-    let raw_bpp = (file_size * 8) as f64 / pixels as f64 / (frame_count.max(1) as f64);
+    let raw_bpp = (file_size * 8) as f64 / pixels as f64 / f64::from(frame_count.max(1));
 
     // Format efficiency multiplier (relative to JPEG)
     // AVIF/HEIC ~ 3.0x, WebP ~ 1.5x
@@ -2089,7 +2079,7 @@ fn estimate_webp_quality(path: &Path) -> Result<u8> {
 }
 
 /// Parse APNG (Animated PNG) frame count from PNG data
-/// Returns (is_animated, frame_count)
+/// Returns (`is_animated`, `frame_count`)
 pub(crate) fn parse_apng_frames(data: &[u8]) -> (bool, u32) {
     // Look for acTL (Animation Control) chunk
     let mut pos = 8; // Skip PNG signature
@@ -2141,7 +2131,7 @@ fn detect_webp_animation_compression(data: &[u8]) -> Result<CompressionType> {
     }
 }
 
-/// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and BigTIFF.
+/// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and `BigTIFF`.
 fn detect_tiff_compression(path: &Path) -> Result<CompressionType> {
     if crate::image_formats::tiff::is_lossless(path)? {
         Ok(CompressionType::Lossless)
@@ -2206,8 +2196,8 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
         }
 
         // Bytes 8-11: size of image data, bytes 12-15: offset of image data
-        let img_size = u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]) as u64;
-        let img_offset = u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]) as u64;
+        let img_size = u64::from(u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]));
+        let img_offset = u64::from(u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]));
 
         // Peak into image data for PNG magic
         file.seek(SeekFrom::Start(img_offset))
@@ -2237,7 +2227,7 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
     Ok(CompressionType::Lossless)
 }
 
-/// Detect OpenEXR compression type by parsing the header attributes.
+/// Detect `OpenEXR` compression type by parsing the header attributes.
 ///
 /// EXR header: magic (76 2F 31 01) + version (4 bytes) + attributes until empty name.
 /// Each attribute: null-terminated name + null-terminated type + size (u32 LE) + value.
@@ -2371,7 +2361,7 @@ fn detect_exr_compression(path: &Path) -> Result<CompressionType> {
 
 /// Detect JPEG 2000 lossless vs lossy by parsing COD and COC markers.
 ///
-/// COD (Coding style Default, FF 52) contains default SPcod parameters; the last byte
+/// COD (Coding style Default, FF 52) contains default `SPcod` parameters; the last byte
 /// is the wavelet transform type:
 ///   - 0 = 9/7 irreversible (lossy)
 ///   - 1 = 5/3 reversible (lossless)
@@ -2494,7 +2484,7 @@ fn find_jp2c_offset(data: &[u8]) -> Option<usize> {
 }
 
 /// Scan JPEG 2000 codestream for COD and COC markers, extract wavelet transform types.
-/// Returns (COD wavelet, Vec<(component_index, COC wavelet)>).
+/// Returns (COD wavelet, Vec<(`component_index`, COC wavelet)>).
 /// COD: Some(0) for 9/7 irreversible (lossy), Some(1) for 5/3 reversible (lossless).
 /// COC: component-specific overrides.
 fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
@@ -2549,7 +2539,7 @@ fn find_jp2_wavelets(cs: &[u8]) -> (Option<u8>, Vec<(u16, u8)>) {
             let transform_offset = spcoc_offset + 1 + 4; // SPcoc[4] = transform
 
             if component_offset < cs.len() && transform_offset < cs.len() && seg_len >= 7 {
-                let component = cs[component_offset] as u16;
+                let component = u16::from(cs[component_offset]);
                 let wavelet = cs[transform_offset];
                 if wavelet <= 1 {
                     coc_wavelets.push((component, wavelet));
@@ -2673,7 +2663,7 @@ mod tests {
         );
         match result.unwrap() {
             DetectedFormat::Unknown(_) => (),
-            other => panic!("Should be detected as Unknown format, actual {:?}", other),
+            other => panic!("Should be detected as Unknown format, actual {other:?}"),
         }
     }
 
@@ -2740,7 +2730,7 @@ mod tests {
                 assert!(message.contains("Cannot estimate quality"));
                 assert!(message.contains("invalid dimensions"));
             }
-            other => panic!("expected AnalysisError, got {:?}", other),
+            other => panic!("expected AnalysisError, got {other:?}"),
         }
     }
 }

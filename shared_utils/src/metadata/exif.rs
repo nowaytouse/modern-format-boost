@@ -1,14 +1,14 @@
-//! ExifTool wrapper for internal metadata preservation
+//! `ExifTool` wrapper for internal metadata preservation
 //!
 //! Performance optimizations:
 //! - Cached exiftool availability check
 //! - Minimal argument set for common cases
 //! - Fast path for same-format conversions
 //!
-//! 🔥 视频元数据特殊处理：
-//! - QuickTime Create Date / Modify Date 需要从源文件日期推断
-//! - GIF/PNG 等图像格式转视频时，源文件没有 QuickTime 元数据
-//! - 需要从 XMP:DateCreated 或文件修改时间设置 QuickTime 日期
+//! 🔥 Special handling for video metadata:
+//! - `QuickTime` Create Date / Modify Date needs to be inferred from source file dates.
+//! - When converting image formats like GIF/PNG to video, source files lack `QuickTime` metadata.
+//! - `QuickTime` dates need to be set from XMP:DateCreated or file modification time.
 
 use std::io;
 use std::path::Path;
@@ -24,8 +24,7 @@ fn is_exiftool_available() -> bool {
 fn is_video_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| crate::SUPPORTED_VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
-        .unwrap_or(false)
+        .is_some_and(|e| crate::SUPPORTED_VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
 }
 
 fn get_best_date_from_source(src: &Path) -> Option<String> {
@@ -62,25 +61,25 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
 
 pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     match preserve_internal_metadata_core(src, dst) {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(e) => {
             let err_str = e.to_string();
             if err_str.contains("Not a valid") || err_str.contains("looks more like") {
-                eprintln!("⚠️ Metadata preservation failed: {}", err_str);
+                eprintln!("⚠️ Metadata preservation failed: {err_str}");
                 eprintln!("⚠️ Attempting content-aware fallback...");
 
                 let hint = crate::extract_suggested_extension(&err_str);
                 if let Some(ref h) = hint {
-                    eprintln!("💡 ExifTool suggests content is: {}", h);
+                    eprintln!("💡 ExifTool suggests content is: {h}");
                 }
 
                 match preserve_internal_metadata_fallback(src, dst, hint.as_deref()) {
-                    Ok(_) => {
+                    Ok(()) => {
                         eprintln!("✅ Metadata fallback successful for {}", dst.display());
                         return Ok(());
                     }
                     Err(fallback_err) => {
-                        eprintln!("❌ Metadata fallback failed: {}", fallback_err);
+                        eprintln!("❌ Metadata fallback failed: {fallback_err}");
                     }
                 }
             }
@@ -108,14 +107,12 @@ fn preserve_internal_metadata_fallback(
 
     if detected_ext.eq_ignore_ascii_case(&current_ext) {
         return Err(io::Error::other(format!(
-            "Extension matches content ({}), fallback skipped",
-            detected_ext
+            "Extension matches content ({detected_ext}), fallback skipped"
         )));
     }
 
     eprintln!(
-        "⚠️ Temporary rename to .{} for metadata preservation...",
-        detected_ext
+        "⚠️ Temporary rename to .{detected_ext} for metadata preservation..."
     );
 
     let temp_path = dst.with_extension(&detected_ext);
@@ -161,8 +158,8 @@ fn preserve_internal_metadata_fallback(
     result
 }
 
-/// Extract a meaningful error message from an ExifTool output.
-/// ExifTool with `-q` writes errors to stdout (not stderr); stderr is often empty on failure.
+/// Extract a meaningful error message from an `ExifTool` output.
+/// `ExifTool` with `-q` writes errors to stdout (not stderr); stderr is often empty on failure.
 /// Returns Some(msg) only when there is a real actionable error (not just warnings or empty output).
 fn exiftool_error_message(output: &std::process::Output) -> Option<String> {
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -295,14 +292,14 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
                         String::from_utf8_lossy(&out.stderr)
                     );
                     if let Some(msg) = exiftool_error_message(&output) {
-                        return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
+                        return Err(io::Error::other(format!("ExifTool failed: {msg}")));
                     }
                 }
             }
             Err(e) => {
-                eprintln!("⚠️  [Structural Repair] magick unavailable：{}", e);
+                eprintln!("⚠️  [Structural Repair] magick unavailable：{e}");
                 if let Some(msg) = exiftool_error_message(&output) {
-                    return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
+                    return Err(io::Error::other(format!("ExifTool failed: {msg}")));
                 }
             }
         }
@@ -310,7 +307,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
     if !output.status.success() {
         if let Some(msg) = exiftool_error_message(&output) {
-            return Err(io::Error::other(format!("ExifTool failed: {}", msg)));
+            return Err(io::Error::other(format!("ExifTool failed: {msg}")));
         }
     }
 
@@ -337,26 +334,23 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     // Always sync all QuickTime date fields from source — don't skip if dst already has a date,
     // because the date may have been reset to encode time rather than original capture time.
-    let best_date = match get_best_date_from_source(src) {
-        Some(date) => date,
-        None => {
-            eprintln!("⚠️ [metadata] Cannot determine date for QuickTime metadata");
-            return Ok(());
-        }
+    let best_date = if let Some(date) = get_best_date_from_source(src) { date } else {
+        eprintln!("⚠️ [metadata] Cannot determine date for QuickTime metadata");
+        return Ok(());
     };
 
     let output = Command::new("exiftool")
-        .arg(format!("-QuickTime:CreateDate={}", best_date))
-        .arg(format!("-QuickTime:ModifyDate={}", best_date))
-        .arg(format!("-QuickTime:TrackCreateDate={}", best_date))
-        .arg(format!("-QuickTime:TrackModifyDate={}", best_date))
-        .arg(format!("-QuickTime:MediaCreateDate={}", best_date))
-        .arg(format!("-QuickTime:MediaModifyDate={}", best_date))
+        .arg(format!("-QuickTime:CreateDate={best_date}"))
+        .arg(format!("-QuickTime:ModifyDate={best_date}"))
+        .arg(format!("-QuickTime:TrackCreateDate={best_date}"))
+        .arg(format!("-QuickTime:TrackModifyDate={best_date}"))
+        .arg(format!("-QuickTime:MediaCreateDate={best_date}"))
+        .arg(format!("-QuickTime:MediaModifyDate={best_date}"))
         // Also sync EXIF/XMP date fields for maximum compatibility
-        .arg(format!("-EXIF:DateTimeOriginal={}", best_date))
-        .arg(format!("-EXIF:CreateDate={}", best_date))
-        .arg(format!("-XMP:DateCreated={}", best_date))
-        .arg(format!("-XMP:CreateDate={}", best_date))
+        .arg(format!("-EXIF:DateTimeOriginal={best_date}"))
+        .arg(format!("-EXIF:CreateDate={best_date}"))
+        .arg(format!("-XMP:DateCreated={best_date}"))
+        .arg(format!("-XMP:CreateDate={best_date}"))
         .arg("-overwrite_original")
         .arg("-q")
         .arg("-m")
@@ -390,7 +384,7 @@ mod tests {
             return;
         }
         let temp = TempDir::new().unwrap();
-        let complex_dir = temp.path().join("测试 dir/来源/小红书");
+        let complex_dir = temp.path().join("test dir/source/xiaohongshu");
         fs::create_dir_all(&complex_dir).unwrap();
 
         let src_path = complex_dir.join("src_image.png");
@@ -409,7 +403,7 @@ mod tests {
         let result = preserve_internal_metadata(&src_path, &dst_path);
 
         if let Err(e) = &result {
-            println!("Test failed with error: {}", e);
+            println!("Test failed with error: {e}");
         }
         assert!(
             result.is_ok(),

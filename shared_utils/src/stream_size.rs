@@ -1,13 +1,13 @@
-//! 🔥 v6.7: 纯视频流大小提取模块
+//! 🔥 v6.7: Pure Video Stream Size Extraction Module
 //!
-//! 使用 ffprobe 精确提取视频流和音频流大小，
-//! 用于探索阶段和最终验证阶段的纯媒体对比。
+//! Accurately extract video and audio stream sizes using ffprobe,
+//! used for pure media comparison during exploration and final verification stages.
 //!
-//! ## 核心功能
-//! - 提取纯视频流大小（排除容器开销）
-//! - 提取音频流大小（如有）
-//! - 计算容器开销
-//! - 支持多种提取方法（ffprobe 直接 / bitrate 计算 / 估算）
+//! ## Core Features
+//! - Extract pure video stream size (excluding container overhead)
+//! - Extract audio stream size (if present)
+//! - Calculate container overhead
+//! - Supports multiple extraction methods (direct ffprobe / bitrate calculation / estimation)
 
 use serde::Deserialize;
 use std::path::Path;
@@ -22,6 +22,7 @@ pub enum ExtractionMethod {
 }
 
 impl ExtractionMethod {
+    #[must_use] 
     pub fn description(&self) -> &'static str {
         match self {
             ExtractionMethod::FfprobeDirect => "ffprobe direct",
@@ -30,6 +31,7 @@ impl ExtractionMethod {
         }
     }
 
+    #[must_use] 
     pub fn confidence(&self) -> f64 {
         match self {
             ExtractionMethod::FfprobeDirect => 0.99,
@@ -52,10 +54,12 @@ pub struct StreamSizeInfo {
 }
 
 impl StreamSizeInfo {
+    #[must_use] 
     pub fn pure_media_size(&self) -> u64 {
         self.video_stream_size + self.audio_stream_size
     }
 
+    #[must_use] 
     pub fn container_overhead_percent(&self) -> f64 {
         if self.total_file_size == 0 {
             return 0.0;
@@ -63,6 +67,7 @@ impl StreamSizeInfo {
         self.container_overhead as f64 / self.total_file_size as f64 * 100.0
     }
 
+    #[must_use] 
     pub fn is_overhead_excessive(&self) -> bool {
         self.container_overhead_percent() > 10.0
     }
@@ -95,11 +100,12 @@ pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
 pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
 pub const DEFAULT_OVERHEAD_PERCENT: f64 = 0.002;
 
+#[must_use] 
 pub fn get_container_overhead_percent(path: &Path) -> f64 {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     match ext.as_str() {
@@ -289,6 +295,7 @@ pub fn can_compress_pure_video(
     result
 }
 
+#[must_use] 
 pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
     extract_stream_sizes(output_path).video_stream_size
 }

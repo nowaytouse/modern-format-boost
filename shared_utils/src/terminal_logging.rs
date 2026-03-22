@@ -1,40 +1,43 @@
-//! Terminal Logging Module - 终端日志模块
+//! Terminal Logging Module
 //!
-//! 提供现代化、美观、颜色安全的终端日志输出
+//! Provides modern, aesthetic, and color-safe terminal log output
 //!
-//! ## 特性
-//! - 自动颜色管理（防止溢出）
-//! - 简洁的API
-//! - ���一的视觉风格
-//! - 调试级别控制
+//! ## Features
+//! - Automatic color management (prevents overflow)
+//! - Concise API
+//! - Unified visual style
+//! - Debug level control
 
-/// 颜色管理器 - 确保颜色正确关闭
+/// Color Manager - Ensures colors are correctly closed
 pub struct ColorGuard {
     enabled: bool,
 }
 
 impl ColorGuard {
-    /// 启用颜色
+    /// Enables colors
+    #[must_use] 
     pub fn enable() -> Self {
         Self { enabled: true }
     }
 
-    /// 禁用颜色
+    /// Disables colors
+    #[must_use] 
     pub fn disable() -> Self {
         Self { enabled: false }
     }
 
-    /// 应用颜色到文本
+    /// Applies color to text
+    #[must_use] 
     pub fn colorize(&self, text: &str, ansi_code: &str) -> String {
         if self.enabled {
-            format!("\x1b[{}m{}\x1b[0m", ansi_code, text)
+            format!("\x1b[{ansi_code}m{text}\x1b[0m")
         } else {
             text.to_string()
         }
     }
 }
 
-/// ANSI颜色代码
+/// ANSI color codes
 pub mod ansi {
     pub const RESET: &str = "0";
     pub const BOLD: &str = "1";
@@ -42,7 +45,7 @@ pub mod ansi {
     pub const ITALIC: &str = "3";
     pub const UNDERLINE: &str = "4";
 
-    // 前景色
+    // Foreground colors
     pub const FG_BLACK: &str = "30";
     pub const FG_RED: &str = "31";
     pub const FG_GREEN: &str = "32";
@@ -52,7 +55,7 @@ pub mod ansi {
     pub const FG_CYAN: &str = "36";
     pub const FG_WHITE: &str = "37";
 
-    // 明亮前景色
+    // Bright foreground colors
     pub const FG_BRIGHT_BLACK: &str = "90";
     pub const FG_BRIGHT_RED: &str = "91";
     pub const FG_BRIGHT_GREEN: &str = "92";
@@ -62,7 +65,7 @@ pub mod ansi {
     pub const FG_BRIGHT_CYAN: &str = "96";
     pub const FG_BRIGHT_WHITE: &str = "97";
 
-    // 背景色
+    // Background colors
     pub const BG_BLACK: &str = "40";
     pub const BG_RED: &str = "41";
     pub const BG_GREEN: &str = "42";
@@ -73,14 +76,15 @@ pub mod ansi {
     pub const BG_WHITE: &str = "47";
 }
 
-/// 终端日志助手
+/// Terminal Log Helper
 pub struct TerminalLogger {
     use_colors: bool,
     debug_mode: bool,
 }
 
 impl TerminalLogger {
-    /// 创建新的终端日志器
+    /// Creates a new terminal logger
+    #[must_use] 
     pub fn new(use_colors: bool, debug_mode: bool) -> Self {
         Self {
             use_colors,
@@ -88,107 +92,116 @@ impl TerminalLogger {
         }
     }
 
-    /// 应用颜色（如果启用）
+    /// Applies color (if enabled)
     fn color(&self, text: &str, code: &str) -> String {
         if self.use_colors {
-            format!("\x1b[{}m{}\x1b[0m", code, text)
+            format!("\x1b[{code}m{text}\x1b[0m")
         } else {
             text.to_string()
         }
     }
 
-    /// 成功消息（绿色）
+    /// Success message (Green)
+    #[must_use] 
     pub fn success(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_GREEN)
     }
 
-    /// 错误消息（红色）
+    /// Error message (Red)
+    #[must_use] 
     pub fn error(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_RED)
     }
 
-    /// 警告消息（黄色）
+    /// Warning message (Yellow)
+    #[must_use] 
     pub fn warning(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_YELLOW)
     }
 
-    /// 信息消息（蓝色）
+    /// Info message (Blue)
+    #[must_use] 
     pub fn info(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_BLUE)
     }
 
-    /// 调试消息（青色）
+    /// Debug message (Cyan)
+    #[must_use] 
     pub fn debug(&self, text: &str) -> String {
         self.color(text, ansi::FG_CYAN)
     }
 
-    /// 关键消息（品红）
+    /// Critical message (Magenta)
+    #[must_use] 
     pub fn critical(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_MAGENTA)
     }
 
-    /// 值高亮（白色粗体）
+    /// Value highlight (Bold White)
+    #[must_use] 
     pub fn value(&self, text: &str) -> String {
         if self.use_colors {
-            format!("\x1b[1;97m{}\x1b[0m", text)
+            format!("\x1b[1;97m{text}\x1b[0m")
         } else {
             text.to_string()
         }
     }
 
-    /// 打印成功消息
+    /// Prints success message
     pub fn print_success(&self, text: &str) {
         eprintln!("✅ {}", self.success(text));
     }
 
-    /// 打印错误消息
+    /// Prints error message
     pub fn print_error(&self, text: &str) {
         eprintln!("❌ {}", self.error(text));
     }
 
-    /// 打印警告消息
+    /// Prints warning message
     pub fn print_warning(&self, text: &str) {
         eprintln!("⚠️  {}", self.warning(text));
     }
 
-    /// 打印信息消息
+    /// Prints info message
     pub fn print_info(&self, text: &str) {
         eprintln!("ℹ️  {}", self.info(text));
     }
 
-    /// 打印调试消息（仅在调试模式）
+    /// Prints debug message (Debug mode only)
     pub fn print_debug(&self, text: &str) {
         if self.debug_mode {
             eprintln!("🔍 {}", self.debug(text));
         }
     }
 
-    /// 打印关键消息
+    /// Prints critical message
     pub fn print_critical(&self, text: &str) {
         eprintln!("🚨 {}", self.critical(text));
     }
 
-    /// 打印阶段标题
+    /// Prints stage title
     pub fn print_stage(&self, title: &str, description: &str) {
         eprintln!("▶ {}  {}", self.info(title), description);
     }
 
-    /// 打印子阶段
+    /// Prints sub-stage
     pub fn print_substage(&self, description: &str) {
-        eprintln!("  └─ {}", description);
+        eprintln!("  └─ {description}");
     }
 
-    /// 打印分隔线
+    /// Prints separator line
     pub fn print_separator(&self) {
         eprintln!("{}", "─".repeat(60));
     }
 
-    /// 打印格式化的大小
+    /// Prints formatted size
+    #[must_use] 
     pub fn format_size(&self, bytes: u64) -> String {
         const KB: u64 = 1024;
         const MB: u64 = KB * 1024;
         const GB: u64 = MB * 1024;
 
+        #[allow(clippy::cast_precision_loss)]
         if bytes >= GB {
             format!("{:.2} GB", bytes as f64 / GB as f64)
         } else if bytes >= MB {
@@ -196,11 +209,11 @@ impl TerminalLogger {
         } else if bytes >= KB {
             format!("{:.2} KB", bytes as f64 / KB as f64)
         } else {
-            format!("{} B", bytes)
+            format!("{bytes} B")
         }
     }
 
-    /// 打印大小变化
+    /// Prints size change
     pub fn print_size_change(&self, old: u64, new: u64) {
         let old_str = self.format_size(old);
         let new_str = self.format_size(new);
@@ -211,7 +224,7 @@ impl TerminalLogger {
         };
 
         let sign = if percent >= 0.0 { "+" } else { "" };
-        let percent_str = format!("{}{:.1}%", sign, percent);
+        let percent_str = format!("{sign}{percent:.1}%");
 
         let change_color = if percent < 0.0 {
             self.success(&percent_str)
@@ -221,16 +234,16 @@ impl TerminalLogger {
             self.warning(&percent_str)
         };
 
-        eprintln!("{} → {} ({})", old_str, new_str, change_color);
+        eprintln!("{old_str} → {new_str} ({change_color})");
     }
 }
 
 use std::sync::OnceLock;
 
-/// 全局终端日志器实例
+/// Global terminal logger instance
 static GLOBAL_LOGGER: OnceLock<TerminalLogger> = OnceLock::new();
 
-/// 初始化全局终端日志器
+/// Initialize global terminal logger
 pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
     if GLOBAL_LOGGER
         .set(TerminalLogger::new(use_colors, debug_mode))
@@ -240,16 +253,20 @@ pub fn init_terminal_logger(use_colors: bool, debug_mode: bool) {
     }
 }
 
-/// 获取全局终端日志器
+/// Get global terminal logger instance
+///
+/// # Panics
+///
+/// Panics if the terminal logger has not been initialized (via `init_terminal_logger`).
 pub fn terminal_logger() -> &'static TerminalLogger {
     GLOBAL_LOGGER
         .get()
         .expect("Terminal logger not initialized. Call init_terminal_logger first.")
 }
 
-// ─── 便捷宏 ─────────────────────────────────────────────────────────────────
+// ─── Convenience Macros ─────────────────────────────────────────────────────
 
-/// 打印成功消息
+/// Prints success message
 #[macro_export]
 macro_rules! log_success {
     ($($arg:tt)*) => {{
@@ -258,7 +275,7 @@ macro_rules! log_success {
     }};
 }
 
-/// 打印错误消息
+/// Prints error message
 #[macro_export]
 macro_rules! log_error {
     ($($arg:tt)*) => {{
@@ -267,7 +284,7 @@ macro_rules! log_error {
     }};
 }
 
-/// 打印警告消息
+/// Prints warning message
 #[macro_export]
 macro_rules! log_warn {
     ($($arg:tt)*) => {{
@@ -276,7 +293,7 @@ macro_rules! log_warn {
     }};
 }
 
-/// 打印信息消息
+/// Prints info message
 #[macro_export]
 macro_rules! log_info {
     ($($arg:tt)*) => {{
@@ -285,7 +302,7 @@ macro_rules! log_info {
     }};
 }
 
-/// 打印调试消息
+/// Prints debug message
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => {{
@@ -294,7 +311,7 @@ macro_rules! log_debug {
     }};
 }
 
-/// 打印关键消息
+/// Prints critical message
 #[macro_export]
 macro_rules! log_term_critical {
     ($($arg:tt)*) => {{
@@ -303,7 +320,7 @@ macro_rules! log_term_critical {
     }};
 }
 
-/// 打印阶段
+/// Prints phase header
 #[macro_export]
 macro_rules! log_stage {
     ($title:expr, $desc:expr) => {{
@@ -312,7 +329,7 @@ macro_rules! log_stage {
     }};
 }
 
-/// 打印子阶段
+/// Prints sub-phase header
 #[macro_export]
 macro_rules! log_substage {
     ($desc:expr) => {{

@@ -1,15 +1,15 @@
-//! Unified Error Handling Module - 统一错误处理系统
+//! Unified Error Handling Module
 //!
-//! 此模块整合了所有错误处理功能：
-//! - 错误类型定义（AppError, ImgQualityError, VidQualityError）
-//! - 错误分类（ErrorCategory）
-//! - 错误处理（handle_error, report_error）
-//! - 错误日志（ErrorSeverity, log_enhanced_error）
+//! This module integrates all error handling features:
+//! - Error type definitions (AppError, `ImgQualityError`, `VidQualityError`)
+//! - Error categorization (ErrorCategory)
+//! - Error handling (`handle_error`, `report_error`)
+//! - Error logging (ErrorSeverity, `log_enhanced_error`)
 //!
-//! ## 设计原则
-//! - 无静默回退：所有错误必须显式处理
-//! - 透明诊断：完整的错误链和上下文信息
-//! - 统一接口：所有错误类型实现相同的接口
+//! ## Design Principles
+//! - No silent fallback: All errors must be handled explicitly
+//! - Transparent diagnostics: Full error chain and contextual information
+//! - Unified interface: All error types implement the same interface
 
 use std::fmt;
 use std::path::PathBuf;
@@ -102,11 +102,13 @@ pub enum UnifiedError {
 
 impl UnifiedError {
     /// Check if error is recoverable
+    #[must_use] 
     pub fn is_recoverable(&self) -> bool {
         true
     }
 
     /// Get error category
+    #[must_use] 
     pub fn category(&self) -> ErrorCategory {
         match self {
             UnifiedError::FileNotFound { .. }
@@ -143,19 +145,20 @@ impl UnifiedError {
     }
 
     /// Get user-friendly error message with emoji indicators
+    #[must_use] 
     pub fn user_message(&self) -> String {
         match self {
             UnifiedError::FileNotFound { path, operation } => {
                 let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
             UnifiedError::DirectoryNotFound { path, operation } => {
                 let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
@@ -166,7 +169,7 @@ impl UnifiedError {
             } => {
                 let mut msg = format!("❌ Failed to read file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
@@ -177,18 +180,18 @@ impl UnifiedError {
             } => {
                 let mut msg = format!("❌ Failed to write file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
             UnifiedError::VideoFormatNotSupported(fmt) => {
-                format!("❌ Video format not supported: {}", fmt)
+                format!("❌ Video format not supported: {fmt}")
             }
             UnifiedError::VideoReadError(err) => {
-                format!("❌ Failed to read video: {}", err)
+                format!("❌ Failed to read video: {err}")
             }
             UnifiedError::FFprobeError(err) => {
-                format!("❌ FFprobe failed: {}", err)
+                format!("❌ FFprobe failed: {err}")
             }
             UnifiedError::FFmpegError {
                 message,
@@ -198,60 +201,59 @@ impl UnifiedError {
                 file_path,
             } => {
                 let code_str = exit_code
-                    .map(|c| format!(" (exit code: {})", c))
+                    .map(|c| format!(" (exit code: {c})"))
                     .unwrap_or_default();
-                let mut msg = format!("❌ FFmpeg failed{}: {}", code_str, message);
+                let mut msg = format!("❌ FFmpeg failed{code_str}: {message}");
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   Command: {}", cmd));
+                    msg.push_str(&format!("\n   Command: {cmd}"));
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   Error output: {}", stderr));
+                    msg.push_str(&format!("\n   Error output: {stderr}"));
                 }
                 msg
             }
             UnifiedError::ConversionError(err) => {
-                format!("❌ Conversion failed: {}", err)
+                format!("❌ Conversion failed: {err}")
             }
             UnifiedError::AnalysisError(err) => {
-                format!("❌ Analysis failed: {}", err)
+                format!("❌ Analysis failed: {err}")
             }
             UnifiedError::GeneralError(err) => {
-                format!("❌ Error: {}", err)
+                format!("❌ Error: {err}")
             }
             UnifiedError::ImageFormatNotSupported(fmt) => {
-                format!("❌ Image format not supported: {}", fmt)
+                format!("❌ Image format not supported: {fmt}")
             }
             UnifiedError::ImageReadError(err) => {
-                format!("❌ Failed to read image: {}", err)
+                format!("❌ Failed to read image: {err}")
             }
             UnifiedError::ImageAnalysisError(err) => {
-                format!("❌ Failed to analyze image: {}", err)
+                format!("❌ Failed to analyze image: {err}")
             }
             UnifiedError::ImageProcessingError(err) => {
-                format!("❌ Image processing error: {}", err)
+                format!("❌ Image processing error: {err}")
             }
             UnifiedError::InvalidCrf(e) => {
-                format!("❌ Invalid CRF value: {}", e)
+                format!("❌ Invalid CRF value: {e}")
             }
             UnifiedError::InvalidSsim(e) => {
-                format!("❌ Invalid SSIM value: {}", e)
+                format!("❌ Invalid SSIM value: {e}")
             }
             UnifiedError::IterationLimitExceeded(e) => {
-                format!("⚠️ Iteration limit exceeded: {}", e)
+                format!("⚠️ Iteration limit exceeded: {e}")
             }
             UnifiedError::ToolNotFound {
                 tool_name,
                 operation,
             } => {
                 let mut msg = format!(
-                    "❌ Tool not found: {}\n💡 Please ensure {} is installed and in PATH",
-                    tool_name, tool_name
+                    "❌ Tool not found: {tool_name}\n💡 Please ensure {tool_name} is installed and in PATH"
                 );
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Needed for: {}", op));
+                    msg.push_str(&format!("\n   Needed for: {op}"));
                 }
                 msg
             }
@@ -262,8 +264,7 @@ impl UnifiedError {
             } => {
                 let ratio = *output_size as f64 / *input_size as f64 * 100.0;
                 let mut msg = format!(
-                    "❌ Compression failed: output ({} bytes) >= input ({} bytes), ratio {:.1}%",
-                    output_size, input_size, ratio
+                    "❌ Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
                 );
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
@@ -276,8 +277,7 @@ impl UnifiedError {
                 file_path,
             } => {
                 let mut msg = format!(
-                    "❌ Quality validation failed: expected SSIM >= {:.4}, actual {:.4}",
-                    expected_ssim, actual_ssim
+                    "❌ Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual {actual_ssim:.4}"
                 );
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
@@ -287,26 +287,27 @@ impl UnifiedError {
             UnifiedError::OutputExists { path, operation } => {
                 let mut msg = format!("⏭️  Output file exists: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
             UnifiedError::Io(e) => {
-                format!("❌ IO error: {}", e)
+                format!("❌ IO error: {e}")
             }
             UnifiedError::NotImplemented(msg) => {
-                format!("❌ Not implemented: {}", msg)
+                format!("❌ Not implemented: {msg}")
             }
             UnifiedError::SkipFile(msg) => {
-                format!("⏭️  Skip file: {}", msg)
+                format!("⏭️  Skip file: {msg}")
             }
             UnifiedError::Other(e) => {
-                format!("❌ Error: {}", e)
+                format!("❌ Error: {e}")
             }
         }
     }
 
     /// Check if this error should skip the file
+    #[must_use] 
     pub fn is_skip(&self) -> bool {
         matches!(
             self,
@@ -435,14 +436,14 @@ impl fmt::Display for UnifiedError {
             UnifiedError::FileNotFound { path, operation } => {
                 write!(f, "File not found: {}", path.display())?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
             UnifiedError::DirectoryNotFound { path, operation } => {
                 write!(f, "Directory not found: {}", path.display())?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
@@ -453,7 +454,7 @@ impl fmt::Display for UnifiedError {
             } => {
                 write!(f, "Failed to read {}: {}", path.display(), source)?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
@@ -464,15 +465,15 @@ impl fmt::Display for UnifiedError {
             } => {
                 write!(f, "Failed to write {}: {}", path.display(), source)?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
             UnifiedError::VideoFormatNotSupported(fmt) => {
-                write!(f, "Video format not supported: {}", fmt)
+                write!(f, "Video format not supported: {fmt}")
             }
-            UnifiedError::VideoReadError(err) => write!(f, "Failed to read video: {}", err),
-            UnifiedError::FFprobeError(err) => write!(f, "FFprobe error: {}", err),
+            UnifiedError::VideoReadError(err) => write!(f, "Failed to read video: {err}"),
+            UnifiedError::FFprobeError(err) => write!(f, "FFprobe error: {err}"),
             UnifiedError::FFmpegError {
                 message,
                 stderr,
@@ -480,42 +481,42 @@ impl fmt::Display for UnifiedError {
                 command,
                 file_path,
             } => {
-                write!(f, "FFmpeg error: {}", message)?;
+                write!(f, "FFmpeg error: {message}")?;
                 if let Some(code) = exit_code {
-                    write!(f, " (exit code: {})", code)?;
+                    write!(f, " (exit code: {code})")?;
                 }
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
                 }
                 if let Some(cmd) = command {
-                    write!(f, "\n  Command: {}", cmd)?;
+                    write!(f, "\n  Command: {cmd}")?;
                 }
                 if !stderr.is_empty() {
-                    write!(f, "\n  Stderr: {}", stderr)?;
+                    write!(f, "\n  Stderr: {stderr}")?;
                 }
                 Ok(())
             }
-            UnifiedError::ConversionError(err) => write!(f, "Conversion error: {}", err),
-            UnifiedError::AnalysisError(err) => write!(f, "Analysis error: {}", err),
-            UnifiedError::GeneralError(err) => write!(f, "General error: {}", err),
+            UnifiedError::ConversionError(err) => write!(f, "Conversion error: {err}"),
+            UnifiedError::AnalysisError(err) => write!(f, "Analysis error: {err}"),
+            UnifiedError::GeneralError(err) => write!(f, "General error: {err}"),
             UnifiedError::ImageFormatNotSupported(fmt) => {
-                write!(f, "Image format not supported: {}", fmt)
+                write!(f, "Image format not supported: {fmt}")
             }
-            UnifiedError::ImageReadError(err) => write!(f, "Failed to read image: {}", err),
-            UnifiedError::ImageAnalysisError(err) => write!(f, "Failed to analyze image: {}", err),
+            UnifiedError::ImageReadError(err) => write!(f, "Failed to read image: {err}"),
+            UnifiedError::ImageAnalysisError(err) => write!(f, "Failed to analyze image: {err}"),
             UnifiedError::ImageProcessingError(err) => {
-                write!(f, "Image processing error: {}", err)
+                write!(f, "Image processing error: {err}")
             }
-            UnifiedError::InvalidCrf(e) => write!(f, "Invalid CRF: {}", e),
-            UnifiedError::InvalidSsim(e) => write!(f, "Invalid SSIM: {}", e),
-            UnifiedError::IterationLimitExceeded(e) => write!(f, "{}", e),
+            UnifiedError::InvalidCrf(e) => write!(f, "Invalid CRF: {e}"),
+            UnifiedError::InvalidSsim(e) => write!(f, "Invalid SSIM: {e}"),
+            UnifiedError::IterationLimitExceeded(e) => write!(f, "{e}"),
             UnifiedError::ToolNotFound {
                 tool_name,
                 operation,
             } => {
-                write!(f, "Tool not found: {}", tool_name)?;
+                write!(f, "Tool not found: {tool_name}")?;
                 if let Some(op) = operation {
-                    write!(f, " (needed for: {})", op)?;
+                    write!(f, " (needed for: {op})")?;
                 }
                 Ok(())
             }
@@ -526,8 +527,7 @@ impl fmt::Display for UnifiedError {
             } => {
                 write!(
                     f,
-                    "Compression failed: output ({}) >= input ({})",
-                    output_size, input_size
+                    "Compression failed: output ({output_size}) >= input ({input_size})"
                 )?;
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
@@ -541,8 +541,7 @@ impl fmt::Display for UnifiedError {
             } => {
                 write!(
                     f,
-                    "Quality validation failed: expected SSIM >= {:.4}, got {:.4}",
-                    expected_ssim, actual_ssim
+                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
                 )?;
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
@@ -552,14 +551,14 @@ impl fmt::Display for UnifiedError {
             UnifiedError::OutputExists { path, operation } => {
                 write!(f, "Output exists: {}", path.display())?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
-            UnifiedError::Io(e) => write!(f, "IO error: {}", e),
-            UnifiedError::NotImplemented(msg) => write!(f, "Not implemented: {}", msg),
-            UnifiedError::SkipFile(msg) => write!(f, "Skip file: {}", msg),
-            UnifiedError::Other(e) => write!(f, "{}", e),
+            UnifiedError::Io(e) => write!(f, "IO error: {e}"),
+            UnifiedError::NotImplemented(msg) => write!(f, "Not implemented: {msg}"),
+            UnifiedError::SkipFile(msg) => write!(f, "Skip file: {msg}"),
+            UnifiedError::Other(e) => write!(f, "{e}"),
         }
     }
 }

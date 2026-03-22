@@ -14,7 +14,7 @@ pub fn print_summary_report(
     output_bytes: u64,
     operation_name: &str,
 ) {
-    use crate::modern_ui::colors::*;
+    use crate::modern_ui::colors::{MFB_BLUE, RESET, BOLD, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, BRIGHT_CYAN, DIM};
 
     let reduction = if input_bytes > 0 {
         (1.0 - output_bytes as f64 / input_bytes as f64) * 100.0
@@ -24,8 +24,7 @@ pub fn print_summary_report(
 
     println!();
     println!(
-        "{}╭────────────────────────────────────────────────────────────────────────────╮{}",
-        MFB_BLUE, RESET
+        "{MFB_BLUE}╭────────────────────────────────────────────────────────────────────────────╮{RESET}"
     );
     println!(
         "{}│{}  {}📊 {} Summary Report{}{}                                        {}│{}",
@@ -39,8 +38,7 @@ pub fn print_summary_report(
         RESET
     );
     println!(
-        "{}├────────────────────────────────────────────────────────────────────────────┤{}",
-        MFB_BLUE, RESET
+        "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
     );
     println!(
         "{}│{}  📁 Files Processed:    {:>10}                                         {}│{}",
@@ -75,8 +73,7 @@ pub fn print_summary_report(
         MFB_BLUE, RESET, BRIGHT_CYAN, RESET, rate_color, result.success_rate(), RESET, MFB_BLUE, RESET
     );
     println!(
-        "{}├────────────────────────────────────────────────────────────────────────────┤{}",
-        MFB_BLUE, RESET
+        "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
     );
     println!(
         "{}│{}  💾 Input Size:         {}{:>10}{}                                         {}│{}",
@@ -105,12 +102,10 @@ pub fn print_summary_report(
         RESET
     );
     println!(
-        "{}│{}  📉 Size Reduction:     {}{:>9.1}%{}                                         {}│{}",
-        MFB_BLUE, RESET, out_color, reduction, RESET, MFB_BLUE, RESET
+        "{MFB_BLUE}│{RESET}  📉 Size Reduction:     {out_color}{reduction:>9.1}%{RESET}                                         {MFB_BLUE}│{RESET}"
     );
     println!(
-        "{}├────────────────────────────────────────────────────────────────────────────┤{}",
-        MFB_BLUE, RESET
+        "{MFB_BLUE}├────────────────────────────────────────────────────────────────────────────┤{RESET}"
     );
     println!(
         "{}│{}  ⏱️  Total Time:         {}{:>10}{}                                         {}│{}",
@@ -125,23 +120,20 @@ pub fn print_summary_report(
     if result.total > 0 {
         let avg_time = duration.as_secs_f64() / result.total as f64;
         println!(
-            "{}│{}  ⏱️  Avg Time/File:      {}{:>9.2}s{}                                         {}│{}",
-            MFB_BLUE, RESET, DIM, avg_time, RESET, MFB_BLUE, RESET
+            "{MFB_BLUE}│{RESET}  ⏱️  Avg Time/File:      {DIM}{avg_time:>9.2}s{RESET}                                         {MFB_BLUE}│{RESET}"
         );
     } else {
-        println!("{}│{}                                                                            {}│{}", MFB_BLUE, RESET, MFB_BLUE, RESET);
+        println!("{MFB_BLUE}│{RESET}                                                                            {MFB_BLUE}│{RESET}");
     }
     println!(
-        "{}╰────────────────────────────────────────────────────────────────────────────╯{}",
-        MFB_BLUE, RESET
+        "{MFB_BLUE}╰────────────────────────────────────────────────────────────────────────────╯{RESET}"
     );
 
     if !result.errors.is_empty() {
         println!();
-        println!("{}❌ Errors encountered:{}", BRIGHT_RED, RESET);
+        println!("{BRIGHT_RED}❌ Errors encountered:{RESET}");
         println!(
-            "{}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{}",
-            BRIGHT_RED, RESET
+            "{BRIGHT_RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}"
         );
         for (path, error) in &result.errors {
             println!("   {}{} → {}{}", DIM, path.display(), RESET, error);
@@ -150,7 +142,7 @@ pub fn print_summary_report(
 
     if let Some(pause) = &result.pause_info {
         println!();
-        println!("{}⏸️ Batch Paused:{}", BRIGHT_YELLOW, RESET);
+        println!("{BRIGHT_YELLOW}⏸️ Batch Paused:{RESET}");
         println!("   {}File:{} {}", DIM, RESET, pause.path.display());
         println!("   {}Reason:{} {}", DIM, RESET, pause.reason);
         println!(
@@ -179,12 +171,11 @@ pub fn print_health_report(passed: usize, failed: usize, warnings: usize) {
     println!("╔══════════════════════════════════════════════╗");
     println!("║        🏥 Media Health Report                ║");
     println!("╠══════════════════════════════════════════════╣");
-    println!("║  ✅ Passed:                        {:>6}  ║", passed);
-    println!("║  ❌ Failed:                        {:>6}  ║", failed);
-    println!("║  ⚠️  Warnings:                     {:>6}  ║", warnings);
+    println!("║  ✅ Passed:                        {passed:>6}  ║");
+    println!("║  ❌ Failed:                        {failed:>6}  ║");
+    println!("║  ⚠️  Warnings:                     {warnings:>6}  ║");
     println!(
-        "║  📊 Health Rate:                  {:>5.1}%  ║",
-        health_rate
+        "║  📊 Health Rate:                  {health_rate:>5.1}%  ║"
     );
     println!("╚══════════════════════════════════════════════╝");
 }
@@ -269,7 +260,7 @@ mod tests {
         let warnings = 0;
         let total = passed + failed + warnings;
         let health_rate = if total > 0 {
-            (passed as f64 / total as f64) * 100.0
+            (f64::from(passed) / f64::from(total)) * 100.0
         } else {
             100.0
         };
@@ -279,7 +270,7 @@ mod tests {
         let failed = 5;
         let warnings = 0;
         let total = passed + failed + warnings;
-        let health_rate = (passed as f64 / total as f64) * 100.0;
+        let health_rate = (f64::from(passed) / f64::from(total)) * 100.0;
         assert!((health_rate - 50.0).abs() < 0.01);
 
         let passed = 0;
@@ -287,7 +278,7 @@ mod tests {
         let warnings = 0;
         let total = passed + failed + warnings;
         let health_rate = if total > 0 {
-            (passed as f64 / total as f64) * 100.0
+            (f64::from(passed) / f64::from(total)) * 100.0
         } else {
             100.0
         };
@@ -301,8 +292,7 @@ mod tests {
         let avg_time = duration.as_secs_f64() / total_files as f64;
         assert!(
             (avg_time - 10.0).abs() < 0.001,
-            "STRICT: 100s / 10 files = 10s/file, got {}",
-            avg_time
+            "STRICT: 100s / 10 files = 10s/file, got {avg_time}"
         );
 
         let total_files = 3usize;
@@ -310,8 +300,7 @@ mod tests {
         let avg_time = duration.as_secs_f64() / total_files as f64;
         assert!(
             (avg_time - 3.0).abs() < 0.001,
-            "STRICT: 9s / 3 files = 3s/file, got {}",
-            avg_time
+            "STRICT: 9s / 3 files = 3s/file, got {avg_time}"
         );
     }
 }

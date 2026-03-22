@@ -35,12 +35,11 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
             return Err(format!(
                 "🚨 DANGEROUS OPERATION BLOCKED!\n\
                  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
-                 ❌ Target directory '{}' is a protected system directory.\n\
+                 ❌ Target directory '{dangerous}' is a protected system directory.\n\
                  ❌ Operating on this directory could cause IRREVERSIBLE DAMAGE to your system.\n\
                  \n\
                  💡 Please specify a safe subdirectory instead.\n\
-                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                dangerous
+                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ));
         }
     }
@@ -88,11 +87,11 @@ pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), St
     Ok(())
 }
 
+#[must_use] 
 pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| whitelist.contains(&e.to_lowercase().as_str()))
-        .unwrap_or(false)
+        .is_some_and(|e| whitelist.contains(&e.to_lowercase().as_str()))
 }
 
 /// Check if a path is inside an Apple Photos library package

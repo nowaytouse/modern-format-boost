@@ -1,13 +1,13 @@
-//! Heartbeat Manager - 全局心跳管理器
+//! Heartbeat Manager - Global heartbeat manager
 //!
-//! 🔥 v7.7: 管理进度条状态和心跳注册
+//! 🔥 v7.7: Manages progress bar state and heartbeat registration
 //!
-//! ## 核心功能
-//! - 进度条计数: 跟踪活动进度条数量
-//! - 智能静默: 有进度条时心跳自动静默
-//! - 心跳注册: 跟踪活动心跳数量
-//! - 嵌套检测: 检测嵌套心跳(只显示最内层)
-//! - 线程安全: 使用原子操作
+//! ## Core Features
+//! - Progress Bar Counting: Tracks the number of active progress bars
+//! - Intelligent Silencing: Heartbeats automatically silence when a progress bar is present
+//! - Heartbeat Registration: Tracks the number of active heartbeats
+//! - Nesting Detection: Detects nested heartbeats (only the innermost is displayed)
+//! - Thread-Safe: Uses atomic operations
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -101,6 +101,7 @@ impl HeartbeatManager {
         ACTIVE_HEARTBEATS.load(Ordering::Relaxed)
     }
 
+    #[must_use] 
     pub fn get_active_heartbeats() -> Vec<(String, usize)> {
         let registry = lock_registry();
         if let Some(map) = registry.as_ref() {
@@ -120,6 +121,7 @@ impl HeartbeatManager {
 pub struct ProgressBarGuard;
 
 impl ProgressBarGuard {
+    #[must_use] 
     pub fn new() -> Self {
         HeartbeatManager::register_progress_bar();
         Self

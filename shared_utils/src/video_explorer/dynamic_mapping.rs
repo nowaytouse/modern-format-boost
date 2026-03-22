@@ -19,6 +19,7 @@ pub struct DynamicCrfMapper {
 }
 
 impl DynamicCrfMapper {
+    #[must_use] 
     pub fn new(input_size: u64) -> Self {
         Self {
             anchors: Vec::new(),
@@ -57,6 +58,7 @@ impl DynamicCrfMapper {
     }
 
     /// Maps GPU CRF to CPU CRF. `max_crf`: HEVC/H264 use 51.0, AV1 use 63.0.
+    #[must_use] 
     pub fn gpu_to_cpu(&self, gpu_crf: f32, base_offset: f32, max_crf: f32) -> (f32, f64) {
         if self.anchors.is_empty() {
             return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5);
@@ -173,7 +175,7 @@ pub fn quick_calibrate(
             .arg("-c:v")
             .arg(gpu_encoder)
             .arg("-crf")
-            .arg(format!("{:.0}", anchor_crf))
+            .arg(format!("{anchor_crf:.0}"))
             .arg("-c:a")
             .arg("copy")
             .arg(crate::safe_path_arg(gpu_path.as_path()).as_ref())
@@ -185,16 +187,16 @@ pub fn quick_calibrate(
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                eprintln!("   ❌ GPU calibration failed for CRF {:.1}", anchor_crf);
+                eprintln!("   ❌ GPU calibration failed for CRF {anchor_crf:.1}");
                 if stderr.contains("No such encoder") {
-                    eprintln!("      Cause: GPU encoder '{}' not available", gpu_encoder);
+                    eprintln!("      Cause: GPU encoder '{gpu_encoder}' not available");
                 } else if stderr.contains("Invalid") {
                     eprintln!("      Cause: Invalid parameters");
                 }
                 continue;
             }
             Err(e) => {
-                eprintln!("   ❌ GPU calibration command failed: {}", e);
+                eprintln!("   ❌ GPU calibration command failed: {e}");
                 continue;
             }
         };
@@ -220,7 +222,7 @@ pub fn quick_calibrate(
                 .arg("-c:v")
                 .arg("libx265")
                 .arg("-crf")
-                .arg(format!("{:.0}", anchor_crf));
+                .arg(format!("{anchor_crf:.0}"));
             for arg in encoder.extra_args(max_threads) {
                 cpu_cmd.arg(arg);
             }
@@ -232,8 +234,7 @@ pub fn quick_calibrate(
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!(
-                        "   ❌ CPU calibration (GIF/libx265) failed for CRF {:.1}",
-                        anchor_crf
+                        "   ❌ CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}"
                     );
                     let error_lines: Vec<&str> = stderr
                         .lines()
@@ -253,7 +254,7 @@ pub fn quick_calibrate(
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("   ❌ CPU calibration (GIF) command failed: {}", e);
+                    eprintln!("   ❌ CPU calibration (GIF) command failed: {e}");
                     continue;
                 }
             }
@@ -295,8 +296,7 @@ pub fn quick_calibrate(
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     eprintln!(
-                        "   ❌ Failed to extract input sample for CRF {:.1}",
-                        anchor_crf
+                        "   ❌ Failed to extract input sample for CRF {anchor_crf:.1}"
                     );
                     let error_lines: Vec<&str> = stderr
                         .lines()
@@ -316,7 +316,7 @@ pub fn quick_calibrate(
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("   ❌ Extract command failed: {}", e);
+                    eprintln!("   ❌ Extract command failed: {e}");
                     continue;
                 }
             }
@@ -330,8 +330,7 @@ pub fn quick_calibrate(
             let y4m_size = fs::metadata(&temp_input).map(|m| m.len()).unwrap_or(0);
             if y4m_size == 0 {
                 eprintln!(
-                    "   ❌ Extracted y4m sample is empty for CRF {:.1} (ffmpeg exited 0 but wrote nothing); skipping",
-                    anchor_crf
+                    "   ❌ Extracted y4m sample is empty for CRF {anchor_crf:.1} (ffmpeg exited 0 but wrote nothing); skipping"
                 );
                 continue;
             }
@@ -340,8 +339,7 @@ pub fn quick_calibrate(
                 Ok(_) => fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0),
                 Err(e) => {
                     eprintln!(
-                        "   ❌ CPU x265 encoding failed for CRF {:.1}: {}",
-                        anchor_crf, e
+                        "   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}"
                     );
                     continue;
                 }
@@ -357,7 +355,7 @@ pub fn quick_calibrate(
                 .arg("-c:v")
                 .arg(encoder.ffmpeg_name())
                 .arg("-crf")
-                .arg(format!("{:.0}", anchor_crf));
+                .arg(format!("{anchor_crf:.0}"));
 
             for arg in encoder.extra_args(max_threads) {
                 cpu_cmd.arg(arg);
@@ -386,14 +384,14 @@ pub fn quick_calibrate(
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!("   ❌ CPU encoding failed for CRF {:.1}", anchor_crf);
+                    eprintln!("   ❌ CPU encoding failed for CRF {anchor_crf:.1}");
                     if stderr.contains("No such encoder") {
                         eprintln!("      Cause: CPU encoder not available");
                     }
                     continue;
                 }
                 Err(e) => {
-                    eprintln!("   ❌ CPU command failed: {}", e);
+                    eprintln!("   ❌ CPU command failed: {e}");
                     continue;
                 }
             }
@@ -418,7 +416,7 @@ pub fn quick_calibrate(
 
     if !calibration_success {
         eprintln!("⚠️ All CPU calibration attempts failed, using static offset");
-        eprintln!("   Tried CRF values: {:?}", calibration_crfs);
+        eprintln!("   Tried CRF values: {calibration_crfs:?}");
         eprintln!("   This may affect GPU→CPU mapping accuracy");
         return Ok(mapper);
     }

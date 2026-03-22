@@ -11,7 +11,7 @@ use rayon::prelude::*;
 const K1: f64 = 0.01;
 const K2: f64 = 0.03;
 const L: f64 = 255.0;
-/// Wang et al. SSIM stability constants: (k_i * L)^2 to avoid division-by-zero in low-contrast regions.
+/// Wang et al. SSIM stability constants: (`k_i` * L)^2 to avoid division-by-zero in low-contrast regions.
 const C1: f64 = (K1 * L) * (K1 * L);
 const C2: f64 = (K2 * L) * (K2 * L);
 
@@ -40,6 +40,7 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
     window
 }
 
+#[must_use] 
 pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -58,9 +59,9 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
         .par_iter()
         .zip(conv_pixels.par_iter())
         .map(|(p1, p2)| {
-            let r_diff = p1[0] as f64 - p2[0] as f64;
-            let g_diff = p1[1] as f64 - p2[1] as f64;
-            let b_diff = p1[2] as f64 - p2[2] as f64;
+            let r_diff = f64::from(p1[0]) - f64::from(p2[0]);
+            let g_diff = f64::from(p1[1]) - f64::from(p2[1]);
+            let b_diff = f64::from(p1[2]) - f64::from(p2[2]);
             r_diff * r_diff + g_diff * g_diff + b_diff * b_diff
         })
         .sum();
@@ -76,6 +77,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
     Some(psnr)
 }
 
+#[must_use] 
 pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -129,8 +131,8 @@ fn calculate_window_ssim(
         for (j, _) in row.iter().enumerate() {
             let px = x + j;
             let py = y + i;
-            buf_x[i][j] = orig.get_pixel(px as u32, py as u32)[0] as f64;
-            buf_y[i][j] = conv.get_pixel(px as u32, py as u32)[0] as f64;
+            buf_x[i][j] = f64::from(orig.get_pixel(px as u32, py as u32)[0]);
+            buf_y[i][j] = f64::from(conv.get_pixel(px as u32, py as u32)[0]);
         }
     }
 
@@ -166,7 +168,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let orig_gray = original.to_luma8();
     let conv_gray = converted.to_luma8();
 
-    let n = (orig_gray.width() * orig_gray.height()) as f64;
+    let n = f64::from(orig_gray.width() * orig_gray.height());
     if n < 2.0 {
         return None;
     }
@@ -178,8 +180,8 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let mut sum_yy = 0.0f64;
     let mut products_sum_xy = 0.0f64;
     for (p_orig, p_conv) in orig_gray.pixels().zip(conv_gray.pixels()) {
-        let x = p_orig[0] as f64;
-        let y = p_conv[0] as f64;
+        let x = f64::from(p_orig[0]);
+        let y = f64::from(p_conv[0]);
         sum_x += x;
         total_sum_y += y;
         sum_xx += x * x;
@@ -203,6 +205,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     Some(numerator / denominator)
 }
 
+#[must_use] 
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
     let weights = [0.0448, 0.2856, 0.3001, 0.2363, 0.1333];
@@ -246,6 +249,7 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     Some(ms_ssim.powf(1.0 / used_weight_sum))
 }
 
+#[must_use] 
 pub fn psnr_quality_description(psnr: f64) -> &'static str {
     if psnr.is_infinite() {
         "Identical (lossless)"
@@ -262,6 +266,7 @@ pub fn psnr_quality_description(psnr: f64) -> &'static str {
     }
 }
 
+#[must_use] 
 pub fn ssim_quality_description(ssim: f64) -> &'static str {
     if ssim >= 0.999 {
         "Identical"
@@ -286,6 +291,7 @@ mod tests {
     #[test]
     fn test_identical_images() {
         let img1 = DynamicImage::ImageRgb8(RgbImage::from_fn(100, 100, |x, y| {
+            #[allow(clippy::cast_possible_truncation)]
             image::Rgb([(x % 256) as u8, (y % 256) as u8, 128])
         }));
         let img2 = img1.clone();
@@ -344,8 +350,7 @@ mod tests {
         assert!(ssim.is_some());
         assert!(
             (ssim.unwrap() - 1.0).abs() < 0.01,
-            "identical 8x8 should give SSIM ≈ 1, got {:?}",
-            ssim
+            "identical 8x8 should give SSIM ≈ 1, got {ssim:?}"
         );
     }
 
@@ -362,6 +367,7 @@ mod tests {
     #[test]
     fn test_ms_ssim_identical() {
         let img = DynamicImage::ImageRgb8(RgbImage::from_fn(64, 64, |x, y| {
+            #[allow(clippy::cast_possible_truncation)]
             image::Rgb([(x.wrapping_add(y) % 256) as u8, 128, 200])
         }));
         let result = calculate_ms_ssim(&img, &img);

@@ -1,17 +1,17 @@
-//! MS-SSIM 智能采样策略模块
+//! MS-SSIM Smart Sampling Strategy Module
 //!
-//! 🔥 v7.6: 根据视频时长自动选择采样率，优化长视频的MS-SSIM计算性能
+//! 🔥 v7.6: Automatically selects sampling rate based on video duration, optimizing MS-SSIM calculation performance for long videos
 //!
-//! ## 核心策略
-//! - ≤60秒: 全量计算（1/1采样）
-//! - 60-300秒: 1/3采样
-//! - 300-1800秒: 1/10采样
-//! - >1800秒: 跳过MS-SSIM，仅使用SSIM
+//! ## Core Strategy
+//! - ≤60s: Full calculation (1/1 sampling)
+//! - 60-300s: 1/3 sampling
+//! - 300-1800s: 1/10 sampling
+//! - >1800s: Skip MS-SSIM, use SSIM only
 //!
-//! ## 性能目标
-//! - 48秒视频: 从~180秒降至~30秒（6倍加速）
-//! - 5分钟视频: 从~600秒降至~60秒（10倍加速）
-//! - 30分钟视频: ~120秒内完成
+//! ## Performance Goals
+//! - 48s video: Reduced from ~180s to ~30s (6x speedup)
+//! - 5m video: Reduced from ~600s to ~60s (10x speedup)
+//! - 30m video: Completed within ~120s
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SamplingStrategy {
@@ -22,6 +22,7 @@ pub enum SamplingStrategy {
 }
 
 impl SamplingStrategy {
+    #[must_use] 
     pub fn from_duration(duration_secs: f64) -> Self {
         if duration_secs <= 60.0 {
             Self::Full
@@ -34,6 +35,7 @@ impl SamplingStrategy {
         }
     }
 
+    #[must_use] 
     pub fn sampling_rate(&self) -> Option<u32> {
         match self {
             Self::Full => Some(1),
@@ -43,6 +45,7 @@ impl SamplingStrategy {
         }
     }
 
+    #[must_use] 
     pub fn ffmpeg_filter(&self) -> Option<String> {
         match self {
             Self::Full => None,
@@ -52,6 +55,7 @@ impl SamplingStrategy {
         }
     }
 
+    #[must_use] 
     pub fn accuracy_description(&self) -> &'static str {
         match self {
             Self::Full => "100%",
@@ -73,6 +77,7 @@ pub struct SamplingConfig {
 }
 
 impl SamplingConfig {
+    #[must_use] 
     pub fn new(duration_secs: f64, total_frames: u64, force_full: bool, force_skip: bool) -> Self {
         let strategy = if force_skip {
             SamplingStrategy::Skip
@@ -100,27 +105,24 @@ impl SamplingConfig {
     }
 
     pub fn print_info(&self) {
-        match self.strategy {
-            SamplingStrategy::Skip => {
-                eprintln!(
-                    "⚠️  Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM only).",
-                    self.duration_secs
-                );
-            }
-            _ => {
-                let rate = self.strategy.sampling_rate().unwrap();
-                let accuracy = self.strategy.accuracy_description();
-                eprintln!(
-                    "📊 MS-SSIM: Sampling 1/{} frames (duration: {:.1}s, accuracy: {})",
-                    rate, self.duration_secs, accuracy
-                );
-                eprintln!(
-                    "   Frames: {} → {} (speedup: {:.1}x)",
-                    self.total_frames,
-                    self.sampled_frames,
-                    self.total_frames as f64 / self.sampled_frames.max(1) as f64
-                );
-            }
+        if self.strategy == SamplingStrategy::Skip {
+            eprintln!(
+                "⚠️  Quality verification: video too long ({:.1}s), MS-SSIM skipped (using SSIM only).",
+                self.duration_secs
+            );
+        } else {
+            let rate = self.strategy.sampling_rate().unwrap();
+            let accuracy = self.strategy.accuracy_description();
+            eprintln!(
+                "📊 MS-SSIM: Sampling 1/{} frames (duration: {:.1}s, accuracy: {})",
+                rate, self.duration_secs, accuracy
+            );
+            eprintln!(
+                "   Frames: {} → {} (speedup: {:.1}x)",
+                self.total_frames,
+                self.sampled_frames,
+                self.total_frames as f64 / self.sampled_frames.max(1) as f64
+            );
         }
     }
 }

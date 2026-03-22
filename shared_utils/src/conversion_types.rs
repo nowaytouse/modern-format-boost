@@ -11,6 +11,7 @@ pub enum TargetVideoFormat {
 }
 
 impl TargetVideoFormat {
+    #[must_use] 
     pub fn extension(&self) -> &str {
         match self {
             TargetVideoFormat::Ffv1Mkv | TargetVideoFormat::HevcLosslessMkv => "MKV",
@@ -19,6 +20,7 @@ impl TargetVideoFormat {
         }
     }
 
+    #[must_use] 
     pub fn as_str(&self) -> &str {
         match self {
             TargetVideoFormat::Ffv1Mkv => "FFV1 MKV (Archival)",
@@ -60,7 +62,7 @@ pub struct ConversionConfig {
 
     pub child_threads: usize,
     /// When true (default): "oversized" threshold is size increase < 1MB (KB-level tolerance). Video path may treat
-    /// `video_compression_ratio < 1.01` as acceptable for require_compression / Apple fallback.
+    /// `video_compression_ratio < 1.01` as acceptable for `require_compression` / Apple fallback.
     /// Does not relax compress goal: compress still requires output < input.
     pub allow_size_tolerance: bool,
 }
@@ -89,6 +91,7 @@ impl Default for ConversionConfig {
 }
 
 impl ConversionConfig {
+    #[must_use] 
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }

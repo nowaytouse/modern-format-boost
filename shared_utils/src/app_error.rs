@@ -1,6 +1,6 @@
-//! AppError - 统一的应用错误类型
+//! `AppError` - Unified application error type
 //!
-//! 提供清晰的错误分类，区分可恢复和不可恢复错误。
+//! Provides clear error categorization, distinguishing between recoverable and non-recoverable errors.
 
 use crate::error_handler::ErrorCategory;
 use crate::types::{CrfError, IterationError, SsimError};
@@ -80,10 +80,12 @@ pub enum AppError {
 }
 
 impl AppError {
+    #[must_use] 
     pub fn is_recoverable(&self) -> bool {
         true
     }
 
+    #[must_use] 
     pub fn category(&self) -> ErrorCategory {
         match self {
             AppError::FileNotFound { .. } | AppError::DirectoryNotFound { .. } => {
@@ -112,19 +114,20 @@ impl AppError {
         }
     }
 
+    #[must_use] 
     pub fn user_message(&self) -> String {
         match self {
             AppError::FileNotFound { path, operation } => {
                 let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
             AppError::DirectoryNotFound { path, operation } => {
                 let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
@@ -135,7 +138,7 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ Failed to read file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
@@ -146,18 +149,18 @@ impl AppError {
             } => {
                 let mut msg = format!("❌ Failed to write file {}: {}", path.display(), source);
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
             AppError::InvalidCrf(e) => {
-                format!("❌ Invalid CRF value: {}", e)
+                format!("❌ Invalid CRF value: {e}")
             }
             AppError::InvalidSsim(e) => {
-                format!("❌ Invalid SSIM value: {}", e)
+                format!("❌ Invalid SSIM value: {e}")
             }
             AppError::IterationLimitExceeded(e) => {
-                format!("⚠️ Iteration limit exceeded: {}", e)
+                format!("⚠️ Iteration limit exceeded: {e}")
             }
             AppError::FfmpegError {
                 message,
@@ -167,17 +170,17 @@ impl AppError {
                 file_path,
             } => {
                 let code_str = exit_code
-                    .map(|c| format!(" (exit code: {})", c))
+                    .map(|c| format!(" (exit code: {c})"))
                     .unwrap_or_default();
-                let mut msg = format!("❌ FFmpeg failed{}: {}", code_str, message);
+                let mut msg = format!("❌ FFmpeg failed{code_str}: {message}");
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   Command: {}", cmd));
+                    msg.push_str(&format!("\n   Command: {cmd}"));
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   Error output: {}", stderr));
+                    msg.push_str(&format!("\n   Error output: {stderr}"));
                 }
                 msg
             }
@@ -187,15 +190,15 @@ impl AppError {
                 command,
                 file_path,
             } => {
-                let mut msg = format!("❌ FFprobe failed: {}", message);
+                let mut msg = format!("❌ FFprobe failed: {message}");
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
                 }
                 if let Some(cmd) = command {
-                    msg.push_str(&format!("\n   Command: {}", cmd));
+                    msg.push_str(&format!("\n   Command: {cmd}"));
                 }
                 if !stderr.is_empty() {
-                    msg.push_str(&format!("\n   Error output: {}", stderr));
+                    msg.push_str(&format!("\n   Error output: {stderr}"));
                 }
                 msg
             }
@@ -204,11 +207,10 @@ impl AppError {
                 operation,
             } => {
                 let mut msg = format!(
-                    "❌ Tool not found: {}\n💡 Please ensure {} is installed and in PATH",
-                    tool_name, tool_name
+                    "❌ Tool not found: {tool_name}\n💡 Please ensure {tool_name} is installed and in PATH"
                 );
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Needed for: {}", op));
+                    msg.push_str(&format!("\n   Needed for: {op}"));
                 }
                 msg
             }
@@ -219,8 +221,7 @@ impl AppError {
             } => {
                 let ratio = *output_size as f64 / *input_size as f64 * 100.0;
                 let mut msg = format!(
-                    "❌ Compression failed: output ({} bytes) >= input ({} bytes), ratio {:.1}%",
-                    output_size, input_size, ratio
+                    "❌ Compression failed: output ({output_size} bytes) >= input ({input_size} bytes), ratio {ratio:.1}%"
                 );
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
@@ -233,8 +234,7 @@ impl AppError {
                 file_path,
             } => {
                 let mut msg = format!(
-                    "❌ Quality validation failed: expected SSIM >= {:.4}, actual {:.4}",
-                    expected_ssim, actual_ssim
+                    "❌ Quality validation failed: expected SSIM >= {expected_ssim:.4}, actual {actual_ssim:.4}"
                 );
                 if let Some(path) = file_path {
                     msg.push_str(&format!("\n   File: {}", path.display()));
@@ -244,19 +244,20 @@ impl AppError {
             AppError::OutputExists { path, operation } => {
                 let mut msg = format!("⏭️ Output file exists: {}", path.display());
                 if let Some(op) = operation {
-                    msg.push_str(&format!("\n   Operation: {}", op));
+                    msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
             AppError::Io(e) => {
-                format!("❌ IO error: {}", e)
+                format!("❌ IO error: {e}")
             }
             AppError::Other(e) => {
-                format!("❌ Error: {}", e)
+                format!("❌ Error: {e}")
             }
         }
     }
 
+    #[must_use] 
     pub fn is_skip(&self) -> bool {
         matches!(self, AppError::OutputExists { .. })
     }
@@ -393,14 +394,14 @@ impl fmt::Display for AppError {
             AppError::FileNotFound { path, operation } => {
                 write!(f, "File not found: {}", path.display())?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
             AppError::DirectoryNotFound { path, operation } => {
                 write!(f, "Directory not found: {}", path.display())?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
@@ -411,7 +412,7 @@ impl fmt::Display for AppError {
             } => {
                 write!(f, "Failed to read {}: {}", path.display(), source)?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
@@ -422,13 +423,13 @@ impl fmt::Display for AppError {
             } => {
                 write!(f, "Failed to write {}: {}", path.display(), source)?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
-            AppError::InvalidCrf(e) => write!(f, "Invalid CRF: {}", e),
-            AppError::InvalidSsim(e) => write!(f, "Invalid SSIM: {}", e),
-            AppError::IterationLimitExceeded(e) => write!(f, "{}", e),
+            AppError::InvalidCrf(e) => write!(f, "Invalid CRF: {e}"),
+            AppError::InvalidSsim(e) => write!(f, "Invalid SSIM: {e}"),
+            AppError::IterationLimitExceeded(e) => write!(f, "{e}"),
             AppError::FfmpegError {
                 message,
                 stderr,
@@ -436,18 +437,18 @@ impl fmt::Display for AppError {
                 command,
                 file_path,
             } => {
-                write!(f, "FFmpeg error: {}", message)?;
+                write!(f, "FFmpeg error: {message}")?;
                 if let Some(code) = exit_code {
-                    write!(f, " (exit code: {})", code)?;
+                    write!(f, " (exit code: {code})")?;
                 }
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
                 }
                 if let Some(cmd) = command {
-                    write!(f, "\n  Command: {}", cmd)?;
+                    write!(f, "\n  Command: {cmd}")?;
                 }
                 if !stderr.is_empty() {
-                    write!(f, "\n  Stderr: {}", stderr)?;
+                    write!(f, "\n  Stderr: {stderr}")?;
                 }
                 Ok(())
             }
@@ -457,15 +458,15 @@ impl fmt::Display for AppError {
                 command,
                 file_path,
             } => {
-                write!(f, "FFprobe error: {}", message)?;
+                write!(f, "FFprobe error: {message}")?;
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
                 }
                 if let Some(cmd) = command {
-                    write!(f, "\n  Command: {}", cmd)?;
+                    write!(f, "\n  Command: {cmd}")?;
                 }
                 if !stderr.is_empty() {
-                    write!(f, "\n  Stderr: {}", stderr)?;
+                    write!(f, "\n  Stderr: {stderr}")?;
                 }
                 Ok(())
             }
@@ -473,9 +474,9 @@ impl fmt::Display for AppError {
                 tool_name,
                 operation,
             } => {
-                write!(f, "Tool not found: {}", tool_name)?;
+                write!(f, "Tool not found: {tool_name}")?;
                 if let Some(op) = operation {
-                    write!(f, " (needed for: {})", op)?;
+                    write!(f, " (needed for: {op})")?;
                 }
                 Ok(())
             }
@@ -486,8 +487,7 @@ impl fmt::Display for AppError {
             } => {
                 write!(
                     f,
-                    "Compression failed: output ({}) >= input ({})",
-                    output_size, input_size
+                    "Compression failed: output ({output_size}) >= input ({input_size})"
                 )?;
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
@@ -501,8 +501,7 @@ impl fmt::Display for AppError {
             } => {
                 write!(
                     f,
-                    "Quality validation failed: expected SSIM >= {:.4}, got {:.4}",
-                    expected_ssim, actual_ssim
+                    "Quality validation failed: expected SSIM >= {expected_ssim:.4}, got {actual_ssim:.4}"
                 )?;
                 if let Some(path) = file_path {
                     write!(f, "\n  File: {}", path.display())?;
@@ -512,12 +511,12 @@ impl fmt::Display for AppError {
             AppError::OutputExists { path, operation } => {
                 write!(f, "Output exists: {}", path.display())?;
                 if let Some(op) = operation {
-                    write!(f, " (during: {})", op)?;
+                    write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
-            AppError::Io(e) => write!(f, "IO error: {}", e),
-            AppError::Other(e) => write!(f, "{}", e),
+            AppError::Io(e) => write!(f, "IO error: {e}"),
+            AppError::Other(e) => write!(f, "{e}"),
         }
     }
 }
@@ -593,7 +592,7 @@ mod tests {
 
         let error = AppError::FfmpegError {
             message: "test".to_string(),
-            stderr: "".to_string(),
+            stderr: String::new(),
             exit_code: Some(1),
             command: None,
             file_path: None,
@@ -648,7 +647,7 @@ mod tests {
             file_path: None,
         };
         let error = error.with_file_path("/test/video.mp4");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("/test/video.mp4"));
     }
 
@@ -659,7 +658,7 @@ mod tests {
             operation: None,
         };
         let error = error.with_operation("converting to HEVC");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("converting to HEVC"));
     }
 
@@ -667,13 +666,13 @@ mod tests {
     fn test_with_command() {
         let error = AppError::FfmpegError {
             message: "encoding failed".to_string(),
-            stderr: "".to_string(),
+            stderr: String::new(),
             exit_code: Some(1),
             command: None,
             file_path: None,
         };
         let error = error.with_command("ffmpeg -i input.mp4 output.mp4");
-        let msg = format!("{}", error);
+        let msg = format!("{error}");
         assert!(msg.contains("ffmpeg -i input.mp4 output.mp4"));
     }
 }

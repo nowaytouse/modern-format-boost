@@ -117,12 +117,12 @@ impl Default for ImageAnalysis {
 }
 
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
-/// Quality is then derived via detect_lossless / detect_compression per format; no conversion is done here.
+/// Quality is then derived via `detect_lossless` / `detect_compression` per format; no conversion is done here.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     analyze_image_with_cache(path, None)
 }
 
-/// Analyzes an image file with optional SQLite caching.
+/// Analyzes an image file with optional `SQLite` caching.
 pub fn analyze_image_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
@@ -133,8 +133,7 @@ pub fn analyze_image_with_cache(
     let is_jpeg_hint = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
-        .map(|e| e == "jpg" || e == "jpeg")
-        .unwrap_or(false);
+        .is_some_and(|e| e == "jpg" || e == "jpeg");
 
     if is_jpeg_hint && cache.is_some() {
         if let Ok(analysis) = analyze_image_internal(path) {
@@ -244,9 +243,9 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
     }
 
     let mut reader = image::ImageReader::open(path)
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {}", e)))?
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {e}")))?
         .with_guessed_format()
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to guess format: {}", e)))?;
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to guess format: {e}")))?;
     {
         use image::Limits;
         let mut limits = Limits::default();
@@ -296,15 +295,14 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
              );
 
             apple_warning = format!(
-                 "⚠️ Extension mismatch (.{} vs {}). This will prevent Apple Photos import. Run repair_apple_photos.sh to fix.",
-                 ext_str, format_str
+                 "⚠️ Extension mismatch (.{ext_str} vs {format_str}). This will prevent Apple Photos import. Run repair_apple_photos.sh to fix."
              );
         }
     }
 
     let img = reader
         .decode()
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {}", e)))?;
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode image: {e}")))?;
 
     let (width, height) = img.dimensions();
     let has_alpha = has_alpha_channel(&img);
@@ -358,7 +356,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         );
         metadata.insert(
             "format_warning".to_string(),
-            format!("Content is actually {}", format_str),
+            format!("Content is actually {format_str}"),
         );
     }
 
@@ -407,6 +405,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
 impl ImageAnalysis {
     /// Returns a human-readable quality summary label (e.g. "Q=95 Excellence", "Lossless").
+    #[must_use] 
     pub fn quality_summary(&self) -> String {
         if let Some(ref jpeg) = self.jpeg_analysis {
             format!("Q={} {}", jpeg.estimated_quality, jpeg.quality_description)
@@ -476,7 +475,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             )
         }
         Err(e) => {
-            let error_msg = format!("{}", e);
+            let error_msg = format!("{e}");
             log_eprintln!(
                 "⚠️ Deep HEIC analysis failed (falling back to detect_compression): {}",
                 error_msg
@@ -486,9 +485,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             let is_lossless_fallback = crate::image_detection::detect_compression(
                 &crate::image_detection::DetectedFormat::HEIC,
                 path,
-            )
-            .map(|c| c == crate::image_detection::CompressionType::Lossless)
-            .unwrap_or_else(|_| pixel_fallback_lossless(path));
+            ).map_or_else(|_| pixel_fallback_lossless(path), |c| c == crate::image_detection::CompressionType::Lossless);
 
             (
                 0,
@@ -506,7 +503,7 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
 
     let jxl_indicator = JxlIndicator {
         should_convert: false,
-        reason: format!("HEIC is already a modern efficient format ({})", codec),
+        reason: format!("HEIC is already a modern efficient format ({codec})"),
         command: String::new(),
         benefit: String::new(),
     };
@@ -657,8 +654,7 @@ fn generate_jxl_indicator(
             should_convert: true,
             reason: "Lossless image; strongly recommend converting to JXL".to_string(),
             command: format!(
-                "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
-                file_path, output_path
+                "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"
             ),
             benefit: "30-60% size reduction while preserving full quality".to_string(),
         },
@@ -667,8 +663,8 @@ fn generate_jxl_indicator(
                 let quality_info = format!("original quality Q={}", jpeg.estimated_quality);
                 JxlIndicator {
                     should_convert: true,
-                    reason: format!("JPEG ({}), lossless transcode to JXL", quality_info),
-                    command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
+                    reason: format!("JPEG ({quality_info}), lossless transcode to JXL"),
+                    command: format!("cjxl '{file_path}' '{output_path}' --lossless_jpeg=1"),
                     benefit:
                         "Keeps original JPEG DCT coefficients, reversible, ~20% size reduction"
                             .to_string(),
@@ -677,7 +673,7 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: "JPEG can be losslessly transcoded to JXL".to_string(),
-                    command: format!("cjxl '{}' '{}' --lossless_jpeg=1", file_path, output_path),
+                    command: format!("cjxl '{file_path}' '{output_path}' --lossless_jpeg=1"),
                     benefit: "Keeps original JPEG DCT coefficients, reversible".to_string(),
                 }
             }
@@ -688,8 +684,7 @@ fn generate_jxl_indicator(
                     should_convert: true,
                     reason: "Lossless WebP; recommend converting to JXL".to_string(),
                     command: format!(
-                        "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
-                        file_path, output_path
+                        "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"
                     ),
                     benefit: "JXL is typically more efficient than lossless WebP".to_string(),
                 }
@@ -708,8 +703,7 @@ fn generate_jxl_indicator(
                     should_convert: true,
                     reason: "Lossless AVIF; recommend converting to JXL".to_string(),
                     command: format!(
-                        "cjxl '{}' '{}' -d 0.0 --modular=1 -e 9",
-                        file_path, output_path
+                        "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"
                     ),
                     benefit: "JXL modular mode is typically more efficient than AVIF lossless"
                         .to_string(),
@@ -755,7 +749,7 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
     };
 
     let raw_size =
-        (width as u64) * (height as u64) * (channels as u64) * (bits_per_channel as u64 / 8);
+        u64::from(width) * u64::from(height) * (channels as u64) * (bits_per_channel as u64 / 8);
 
     let compression_ratio = if raw_size > 0 {
         file_size as f64 / raw_size as f64
@@ -795,21 +789,21 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
 fn estimate_psnr_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => 45.0 + (quality as f64 - 95.0) * 0.5,
-        85..=94 => 38.0 + (quality as f64 - 85.0) * 0.7,
-        75..=84 => 32.0 + (quality as f64 - 75.0) * 0.6,
-        60..=74 => 28.0 + (quality as f64 - 60.0) * 0.27,
-        _ => 20.0 + (quality as f64) * 0.13,
+        95..=100 => 45.0 + (f64::from(quality) - 95.0) * 0.5,
+        85..=94 => 38.0 + (f64::from(quality) - 85.0) * 0.7,
+        75..=84 => 32.0 + (f64::from(quality) - 75.0) * 0.6,
+        60..=74 => 28.0 + (f64::from(quality) - 60.0) * 0.27,
+        _ => 20.0 + f64::from(quality) * 0.13,
     }
 }
 
 fn estimate_ssim_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => 0.98 + (quality as f64 - 95.0) * 0.004,
-        85..=94 => 0.95 + (quality as f64 - 85.0) * 0.003,
-        75..=84 => 0.90 + (quality as f64 - 75.0) * 0.005,
-        60..=74 => 0.80 + (quality as f64 - 60.0) * 0.0067,
-        _ => 0.60 + (quality as f64) * 0.003,
+        95..=100 => 0.98 + (f64::from(quality) - 95.0) * 0.004,
+        85..=94 => 0.95 + (f64::from(quality) - 85.0) * 0.003,
+        75..=84 => 0.90 + (f64::from(quality) - 75.0) * 0.005,
+        60..=74 => 0.80 + (f64::from(quality) - 60.0) * 0.0067,
+        _ => 0.60 + f64::from(quality) * 0.003,
     }
 }
 
@@ -829,7 +823,7 @@ fn format_to_string(format: &ImageFormat) -> String {
         ImageFormat::Farbfeld => "Farbfeld".to_string(),
         ImageFormat::OpenExr => "OpenEXR".to_string(),
         ImageFormat::Qoi => "QOI".to_string(),
-        _ => format!("{:?}", format),
+        _ => format!("{format:?}"),
     }
 }
 
@@ -1026,8 +1020,9 @@ fn deep_research_png_animation(bytes: &[u8]) -> bool {
     confirmed_fctl > 0 // Even 1 fcTL usually means it's an APNG (the first frame might have it)
 }
 
-/// Public entry for retrying animation duration (e.g. from main when analysis.duration_secs is None).
-/// Tries ffprobe, ImageMagick, WebP native parse, and GIF frame-count estimate.
+/// Public entry for retrying animation duration (e.g. from main when `analysis.duration_secs` is None).
+/// Tries ffprobe, `ImageMagick`, WebP native parse, and GIF frame-count estimate.
+#[must_use] 
 pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
     get_animation_duration(path)
 }
@@ -1304,9 +1299,10 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
         .ok()
 }
 
-/// Returns (duration_secs, frame_count) from ImageMagick `identify -format "%T"`.
-/// Works for any format ImageMagick can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
+/// Returns (`duration_secs`, `frame_count`) from `ImageMagick` `identify -format "%T"`.
+/// Works for any format `ImageMagick` can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
 /// Use as fallback when ffprobe has no stream/format duration. Emits a warning log when used.
+#[must_use] 
 pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
     use std::process::Command;
 
@@ -1328,15 +1324,12 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
         })
         .ok();
 
-    let output = match output {
-        Some(output) => output,
-        None => {
-            log_eprintln!(
-                "⚠️  [Duration Fallback] Failed to spawn ImageMagick identify for {}",
-                path.display()
-            );
-            return None;
-        }
+    let output = if let Some(output) = output { output } else {
+        log_eprintln!(
+            "⚠️  [Duration Fallback] Failed to spawn ImageMagick identify for {}",
+            path.display()
+        );
+        return None;
     };
 
     if !output.status.success() {
@@ -1368,22 +1361,21 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
         return None;
     }
 
-    let duration_secs = total_cs as f64 / 100.0;
+    let duration_secs = f64::from(total_cs) / 100.0;
     log_eprintln!(
         "📊  [Duration Fallback] ImageMagick animation detected: {} frames, {:.2}s ({})",
         frame_count,
         duration_secs,
         path.display()
     );
-    Some((duration_secs, frame_count as u64))
+    Some((duration_secs, u64::from(frame_count)))
 }
 
 fn try_imagemagick_identify(path: &Path) -> Option<f32> {
     if let Some((duration_secs, frame_count)) = get_animation_duration_and_frames_imagemagick(path)
     {
         let msg = format!(
-            "📊 ImageMagick: animation detected ({} frames, {:.2}s)",
-            frame_count, duration_secs
+            "📊 ImageMagick: animation detected ({frame_count} frames, {duration_secs:.2}s)"
         );
         crate::progress_mode::emit_stderr(&msg);
         return Some(duration_secs as f32);
@@ -1444,7 +1436,7 @@ fn try_get_frame_count(path: &Path) -> Option<u32> {
 }
 
 /// Determines if the image is stored in a lossless way for conversion decisions.
-/// Uses image_detection::detect_compression for PNG, TIFF, WebP, AVIF (and HEIC/JXL in their own analyzers).
+/// Uses `image_detection::detect_compression` for PNG, TIFF, WebP, AVIF (and HEIC/JXL in their own analyzers).
 fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
     use crate::image_detection::{
         detect_compression, detect_format_from_bytes, CompressionType, DetectedFormat,
@@ -1489,7 +1481,7 @@ fn check_webp_lossless(path: &Path) -> Result<bool> {
     Ok(crate::image_formats::webp::is_lossless_from_bytes(&bytes))
 }
 
-/// Pixel-level fallback for is_lossless when format-level detection returns Err or is unavailable.
+/// Pixel-level fallback for `is_lossless` when format-level detection returns Err or is unavailable.
 /// Decodes the image and logs classification metrics as a diagnostic warning.
 /// Does **not** attempt routing decisions anymore; returns false conservatively when used.
 fn pixel_fallback_lossless(path: &Path) -> bool {
@@ -1498,25 +1490,22 @@ fn pixel_fallback_lossless(path: &Path) -> bool {
         path.display()
     );
 
-    match crate::image_quality_detector::analyze_image_quality_from_path(path) {
-        Some(analysis) => {
-            log_eprintln!(
-                "   📊 Fallback analysis: content_type={} complexity={:.3} edge_density={:.3} color_diversity={:.3}",
-                analysis.content_type.name,
-                analysis.complexity,
-                analysis.edge_density,
-                analysis.color_diversity,
-            );
-            // 保守策略：不再根据旧 RoutingDecision 决定是否视为无损，统一视为有损
-            false
-        }
-        None => {
-            log_eprintln!(
-                "⚠️  [Lossless Fallback] Pixel-level analysis failed for {}; treating as lossy",
-                path.display()
-            );
-            false
-        }
+    if let Some(analysis) = crate::image_quality_detector::analyze_image_quality_from_path(path) {
+        log_eprintln!(
+            "   📊 Fallback analysis: content_type={} complexity={:.3} edge_density={:.3} color_diversity={:.3}",
+            analysis.content_type.name,
+            analysis.complexity,
+            analysis.edge_density,
+            analysis.color_diversity,
+        );
+        // Conservative strategy: no longer decide whether to treat as lossless based on old RoutingDecision; universally treat as lossy.
+        false
+    } else {
+        log_eprintln!(
+            "⚠️  [Lossless Fallback] Pixel-level analysis failed for {}; treating as lossy",
+            path.display()
+        );
+        false
     }
 }
 
@@ -1552,16 +1541,14 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
         } else {
             (0, 0, false, 8)
         }
+    } else if let Ok(probe) = crate::probe_video(path) {
+        (probe.width, probe.height, false, 8)
     } else {
-        if let Ok(probe) = crate::probe_video(path) {
-            (probe.width, probe.height, false, 8)
-        } else {
-            log_eprintln!(
-                "⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable"
-            );
-            log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
-            (0, 0, false, 8)
-        }
+        log_eprintln!(
+            "⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable"
+        );
+        log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
+        (0, 0, false, 8)
     };
 
     let metadata = extract_metadata(path)?;
@@ -1569,9 +1556,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     let is_lossless = crate::image_detection::detect_compression(
         &crate::image_detection::DetectedFormat::JXL,
         path,
-    )
-    .map(|c| c == crate::image_detection::CompressionType::Lossless)
-    .unwrap_or_else(|_| pixel_fallback_lossless(path));
+    ).map_or_else(|_| pixel_fallback_lossless(path), |c| c == crate::image_detection::CompressionType::Lossless);
 
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);
@@ -1750,8 +1735,8 @@ fn parse_jxlinfo_output(output: &str) -> (u32, u32, bool, u8) {
             let dims = dims.trim();
             let parts: Vec<&str> = dims.split('x').collect();
             if parts.len() == 2 {
-                let w_str: String = parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
-                let h_str: String = parts[1].chars().filter(|c| c.is_ascii_digit()).collect();
+                let w_str: String = parts[0].chars().filter(char::is_ascii_digit).collect();
+                let h_str: String = parts[1].chars().filter(char::is_ascii_digit).collect();
                 width = w_str.parse().unwrap_or(0);
                 height = h_str.parse().unwrap_or(0);
             }
