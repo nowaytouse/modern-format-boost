@@ -4,11 +4,28 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.10.88] - 2026-03-22
+## [0.10.90] - 2026-03-22
+
+### Fixed
+- 🔄 **Intelligent Checkpoint & Resume Reset**: Deleting a manually created output directory (e.g. `_optimized`) now correctly triggers a full re-conversion of the source directory, even in resume mode. The system now detects when the "optimized" destination is missing and clears stale progress state to ensure synchronization between source and output.
+- 🧪 **MS-SSIM/VMAF Quality Verification Re-engineering**: 
+    - **Exit Code Tolerance**: Prefers prioritized stdout JSON parsing over exit-code checks, eliminating false "Pixel format incompatibility" errors on legitimate HDR/10-bit video streams.
+    - **Chroma Resolution Guard**: Implemented a safety threshold (256×256 min) for MS-SSIM chroma channels. Fails with Y-only scoring instead of crashing on small-resolution chroma planes (downsampling protection).
+    - **False Error Suppression**: Tightened stderr parsing to ignore harmless logging fragments (like codec descriptions/metadata headers) that previously triggered false quality verification failures.
+
+## [0.10.89] - 2026-03-22
 
 ### ✨ Features
-- 🎞️ **HDR10+ Dynamic Metadata Retention**: Added full support for extracting SMPTE 2094-40 (HDR10+) metadata sidecars using `hdr10plus_tool` and injecting them into the libx265 encoding stream via `--dhdr10-info`. This ensures dynamic brightness curves are preserved rather than falling back to static HDR10.
-- 🛠️ **Infrastructure Plumbed**: Updated `VideoExplorer` and GPU/CPU search engines to pass HDR10+ parameters through all search phases, protecting metadata while maintaining VideoToolbox compatibility.
+- 🎞️ **HDR10+ Dynamic Metadata Retention**: Full support for extracting SMPTE 2094-40 metadata via `hdr10plus_tool` and injecting it into x265 outputs via `--dhdr10-info`.
+- 🛠️ **Testing Bypass**: Enhanced the `--force` flag to explicitly bypass the "already modern format" skip logic, enabling metadata retention testing on existing HEVC/AV1 content.
+- 🛡️ **Robust Extraction Strategy**: Implemented a "Strict-first, Skip-validation-fallback" strategy for HDR10+ extraction. The tool now prioritizes standard-compliant parsing but will gracefully fallback for real-world files with minor metadata quirks.
+
+### Fixed
+- 🧪 **MS-SSIM/VMAF Exit Code Tolerance**: Fixed false "Pixel format incompatibility" errors in quality verification. The ffmpeg libvmaf pipeline now parses stdout for valid JSON results regardless of exit code, since ffmpeg can return non-zero even when metrics are successfully computed.
+- 📐 **Chroma Channel Resolution Guard**: Added minimum resolution check (256×256) for U/V chroma MS-SSIM channels. libvmaf MS-SSIM requires multi-scale downsampling and fails with "scale below 1x1" on small chroma planes. Now gracefully falls back to Y-only MS-SSIM instead of reporting a cryptic error.
+- 🔍 **False Error Detection Fix**: Tightened stderr error matching — previously `stderr.contains("format")` triggered on harmless ffmpeg log lines (e.g. codec format descriptions), causing false "Pixel format incompatibility" reports on every HDR video.
+
+## [0.10.88] - 2026-03-22
 
 ## [0.10.87] - 2026-03-22
 
