@@ -811,7 +811,10 @@ impl AnalysisCache {
                         let data: Vec<u8> = row.get(0)?;
                         if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
                             if calculate_checksum(&data) != stored_checksum {
-                                warn!("⚠️  [Cache] Checksum mismatch for {}. Invalidating.", path.display());
+                                warn!(
+                                    "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
+                                    path.display()
+                                );
                                 return Ok(None);
                             }
                         }
@@ -845,7 +848,10 @@ impl AnalysisCache {
                     let data: Vec<u8> = row.get(0)?;
                     if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
                         if calculate_checksum(&data) != stored_checksum {
-                            warn!("⚠️  [Cache] Checksum mismatch for {}. Invalidating.", path.display());
+                            warn!(
+                                "⚠️  [Cache] Checksum mismatch for {}. Invalidating.",
+                                path.display()
+                            );
                             return Ok(None);
                         }
                     }

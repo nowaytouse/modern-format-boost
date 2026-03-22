@@ -99,19 +99,25 @@ pub enum WorkloadType {
 }
 
 /// Apply memory-pressure caps so we don't spawn too many heavy workers and trigger OOM.
+/// Enhanced to be more aggressive in preventing OOM kills during image processing.
 fn apply_memory_cap(parallel_tasks: usize, child_threads: usize) -> (usize, usize) {
     let pressure = system_memory::memory_pressure_level();
     let low_mem_env = system_memory::is_low_memory_env();
 
+    // More aggressive caps to prevent cjxl/ImageMagick OOM kills
     if low_mem_env || pressure == Some(MemoryPressure::High) {
         return (1, 1);
     }
     if pressure == Some(MemoryPressure::Normal) {
+        // Reduce parallelism more aggressively for memory-intensive operations
         let pt = parallel_tasks.min(2);
         let ct = child_threads.min(2);
         return (pt, ct);
     }
-    (parallel_tasks, child_threads)
+    // Even with low pressure, cap parallel tasks to avoid sudden memory spikes
+    let pt = parallel_tasks.min(6);
+    let ct = child_threads.min(4);
+    (pt, ct)
 }
 
 fn apply_multi_instance_cap(

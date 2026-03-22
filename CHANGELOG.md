@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.93] - 2026-03-23
+
+### 🐛 Bug Fixes
+- **cjxl Process Termination Detection**: Enhanced error handling in `jxl_utils.rs` to properly detect when cjxl is terminated by signal (SIGKILL/SIGSEGV). Now logs "Process terminated by signal (possible crash or OOM kill)" instead of generic "exit code: None", helping diagnose OOM issues.
+- **FFprobe Warning Reduction**: Improved error filtering in `ffprobe_json.rs` to reduce unnecessary warnings for JPEG/image files where ffprobe failure is expected (not video streams). Only logs warnings for genuine errors.
+- **ImageMagick Fallback Error Messages**: Added detailed error context when all ImageMagick+cjxl pipeline attempts fail, explaining possible causes (corrupted data, unsupported format, cjxl crash/OOM).
+
+### ⚡ Performance & Memory Management
+- **Enhanced OOM Prevention**: Strengthened memory pressure detection thresholds in `system_memory.rs`:
+  - Low pressure: now requires 30% available RAM (up from 25%) and 3GB minimum (up from 2GB)
+  - Normal pressure: now requires 15% available RAM (up from 10%) and 1.5GB minimum (up from 1GB)
+- **Aggressive Parallelism Caps**: Updated `thread_manager.rs` to cap parallel tasks at 6 and child threads at 4 even under low memory pressure, preventing sudden memory spikes during heavy image processing operations (cjxl/ImageMagick).
+- **Multi-Instance Optimization**: Improved thread allocation to better handle concurrent instances, reducing OOM risk when multiple conversion processes run simultaneously.
+
 ## [0.10.92] - 2026-03-22
 
 ### 🛠️ Code Quality & Robustness (Shared Utils)

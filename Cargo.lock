@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "img-av1"
-version = "0.10.92"
+version = "0.10.93"
 dependencies = [
  "anyhow",
  "clap",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "img-hevc"
-version = "0.10.92"
+version = "0.10.93"
 dependencies = [
  "anyhow",
  "clap",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "shared_utils"
-version = "0.10.92"
+version = "0.10.93"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2243,7 +2243,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vid-av1"
-version = "0.10.92"
+version = "0.10.93"
 dependencies = [
  "anyhow",
  "clap",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "vid-hevc"
-version = "0.10.92"
+version = "0.10.93"
 dependencies = [
  "anyhow",
  "clap",
