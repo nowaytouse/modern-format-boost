@@ -158,7 +158,7 @@ fn main() -> anyhow::Result<()> {
             };
 
             shared_utils::progress_mode::set_verbose_mode(verbose);
-            // Run 时自动创建并写入 ./logs/vid_av1_run_<timestamp>.log
+            // Automatically created and written to ./logs/vid_av1_run_<timestamp>.log during run.
             if let Err(e) = shared_utils::progress_mode::set_default_run_log_file("vid_av1") {
                 shared_utils::log_eprintln!(
                     "⚠️  {}: {}",
