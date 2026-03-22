@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 - **Installed Tool Awareness**: Optional checks now auto-detect installed Cargo subcommands (`audit`, `deny`, `machete`, `udeps`, `geiger`, `bloat`, `hack`, `miri`) and skip missing tools with explicit reasons.
 - **Network-Safe Security Checks**: `cargo audit` and `cargo deny` default to no-fetch mode for stable local runs, with an opt-in `--fetch-advisory-db` switch when fresh advisory sync is needed.
 - **Operational Modes**: Added `--required-only`, `--no-expensive`, and help output for CI and local debugging workflows.
+- **Sandbox-Aware Deny Handling**: `check_all.sh` now auto-skips `cargo deny` when the advisory DB path is read-only or missing, preventing false-negative warnings in restricted environments.
 
 ### 🐛 Quality Fixes
 - **Clippy Compliance (Shared Utils)**: Fixed strict lint blockers in `ffmpeg_process.rs` by replacing newline `write!` with `writeln!` and simplifying `JoinHandle` result handling with `unwrap_or_else`.
@@ -21,6 +22,8 @@ All notable changes to this project will be documented in this file.
 - **Filesystem-Safe Test Paths**: Reworked affected image converter tests (`img_av1` and `img_hevc`) to use `tempfile` + canonicalized temp roots instead of hard-coded absolute paths (e.g. `/path`, `/output`, `/var`) that violate current path safety rules.
 - **Integrity Signature Refresh**: Updated `shared_utils/src/version.rs` expected README/CHANGELOG signatures to match current normalized documentation content after changelog updates.
 - **Formatting Consistency**: Applied `cargo fmt --all` to keep workspace formatting and CI checks aligned.
+- **Unused Dependency Cleanup**: Removed stale direct dependencies in `shared_utils`, `vid_av1`, `vid_hevc`, `img_av1`, and `img_hevc` so `cargo machete` reports zero unused crates.
+- **Workspace Patch Hygiene**: Removed unused `rand`/`rand_core` `[patch.crates-io]` overrides from root `Cargo.toml` to eliminate cargo patch-noise warnings.
 
 ## [0.10.93] - 2026-03-23
 

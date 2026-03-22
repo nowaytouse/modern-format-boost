@@ -10,17 +10,8 @@ description = "High-performance image quality analyzer - AV1/AVIF format convert
 clap = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 rayon = { workspace = true }
-indicatif = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-which = { workspace = true }
-walkdir = { workspace = true }
-filetime = { workspace = true }
-libc = { workspace = true }
-xattr = { workspace = true }
-libheif-rs = { workspace = true }
 shared_utils = { workspace = true }
 vid-av1 = { path = "../vid_av1" }
 tempfile = { workspace = true }

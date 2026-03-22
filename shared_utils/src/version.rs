@@ -48,8 +48,8 @@ pub const EXPECTED_README_SIGNATURE: (&str, usize) = (
     498,
 );
 pub const EXPECTED_CHANGELOG_SIGNATURE: (&str, usize) = (
-    "65b703c7a730c1021c203488ec36639baa6fbd9456c54df340437d57b7d489b2",
-    3188,
+    "8bc1bb5333e3d064ea54c25f6d07ce872bd82ddbbab4dd29a78d1ddf491e81ac",
+    3191,
 );
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
