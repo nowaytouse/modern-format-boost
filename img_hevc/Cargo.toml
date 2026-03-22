@@ -10,17 +10,8 @@ description = "High-performance image quality analyzer - HEVC version for animat
 clap = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 rayon = { workspace = true }
-indicatif = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
-which = { workspace = true }
-walkdir = { workspace = true }
-filetime = { workspace = true }
-libc = { workspace = true }
-xattr = { workspace = true }
-libheif-rs = { workspace = true }
 shared_utils = { workspace = true }
 vid-hevc = { path = "../vid_hevc" }
 tempfile = { workspace = true }

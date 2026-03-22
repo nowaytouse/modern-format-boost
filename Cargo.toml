@@ -85,8 +85,6 @@ blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }
 # Force all transitive dependencies to use GitHub nightly (eliminate duplicates)
 getrandom = { git = "https://github.com/rust-random/getrandom" }
 hashbrown = { git = "https://github.com/rust-lang/hashbrown" }
-rand = { git = "https://github.com/rust-random/rand" }
-rand_core = { git = "https://github.com/rust-random/rand_core" }
 
 [profile.release]
 lto            = true

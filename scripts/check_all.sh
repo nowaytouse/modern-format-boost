@@ -86,6 +86,16 @@ has_rust_component() {
     rustup component list --installed 2>/dev/null | awk '{print $1}' | grep -Eq "^$1($|-)"
 }
 
+advisory_db_dir() {
+    printf '%s/advisory-dbs' "${CARGO_HOME:-$HOME/.cargo}"
+}
+
+advisory_db_writable() {
+    local db_dir
+    db_dir="$(advisory_db_dir)"
+    [[ -d "${db_dir}" && -w "${db_dir}" ]]
+}
+
 declare -i step=0
 declare -i passed=0
 declare -i failed=0
@@ -189,11 +199,19 @@ if [[ ${RUN_OPTIONAL} -eq 1 ]]; then
 
     if has_cargo_subcommand deny; then
         if [[ ${ALLOW_FETCH} -eq 1 ]]; then
-            run_optional "cargo deny check --hide-inclusion-graph" \
-                cargo deny check --hide-inclusion-graph
+            if advisory_db_writable; then
+                run_optional "cargo deny check --hide-inclusion-graph" \
+                    cargo deny check --hide-inclusion-graph
+            else
+                skip_optional "cargo deny check" "advisory DB is missing or read-only ($(advisory_db_dir))"
+            fi
         else
-            run_optional "cargo deny check --disable-fetch --hide-inclusion-graph" \
-                cargo deny check --disable-fetch --hide-inclusion-graph
+            if advisory_db_writable; then
+                run_optional "cargo deny check --disable-fetch --hide-inclusion-graph" \
+                    cargo deny check --disable-fetch --hide-inclusion-graph
+            else
+                skip_optional "cargo deny check --disable-fetch" "advisory DB is missing or read-only ($(advisory_db_dir))"
+            fi
         fi
     else
         skip_optional "cargo deny check" "cargo-deny not installed"
