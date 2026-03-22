@@ -15,6 +15,13 @@ All notable changes to this project will be documented in this file.
 - **Network-Safe Security Checks**: `cargo audit` and `cargo deny` default to no-fetch mode for stable local runs, with an opt-in `--fetch-advisory-db` switch when fresh advisory sync is needed.
 - **Operational Modes**: Added `--required-only`, `--no-expensive`, and help output for CI and local debugging workflows.
 
+### 🐛 Quality Fixes
+- **Clippy Compliance (Shared Utils)**: Fixed strict lint blockers in `ffmpeg_process.rs` by replacing newline `write!` with `writeln!` and simplifying `JoinHandle` result handling with `unwrap_or_else`.
+- **HEVC Strategy Test Compilation Repair**: Updated `vid_hevc/src/conversion_api.rs` tests to match the current `determine_strategy_with_apple_compat(result, apple_compat, force)` signature.
+- **Filesystem-Safe Test Paths**: Reworked affected image converter tests (`img_av1` and `img_hevc`) to use `tempfile` + canonicalized temp roots instead of hard-coded absolute paths (e.g. `/path`, `/output`, `/var`) that violate current path safety rules.
+- **Integrity Signature Refresh**: Updated `shared_utils/src/version.rs` expected README/CHANGELOG signatures to match current normalized documentation content after changelog updates.
+- **Formatting Consistency**: Applied `cargo fmt --all` to keep workspace formatting and CI checks aligned.
+
 ## [0.10.93] - 2026-03-23
 
 ### 🐛 Bug Fixes

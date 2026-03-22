@@ -341,7 +341,10 @@ fn run_imagemagick_cjxl_pipeline(
             } else {
                 crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
                 if !cjxl_stderr.is_empty() {
-                    crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {}", cjxl_stderr));
+                    crate::progress_mode::emit_stderr(&format!(
+                        "   📋 cjxl stderr: {}",
+                        cjxl_stderr
+                    ));
                 }
             }
             false

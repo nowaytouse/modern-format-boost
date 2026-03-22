@@ -620,6 +620,7 @@ pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<Conversi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_jpeg_strategy() {
@@ -699,10 +700,11 @@ mod tests {
 
     #[test]
     fn test_execute_conversion_skips_when_output_exists() {
-        let temp = std::env::temp_dir().join("img_av1_conv_test");
-        let _ = std::fs::create_dir_all(&temp);
-        let output_path = temp.join("input.jxl");
-        let _ = std::fs::write(&output_path, b"existing");
+        let temp_dir = tempdir().expect("create temp dir");
+        let temp = std::fs::canonicalize(temp_dir.path()).expect("canonicalize temp dir");
+        let output_path = temp.join("input.JXL");
+        std::fs::write(&output_path, b"existing").expect("seed output file");
+        std::fs::write(temp.join("input.png"), b"png").expect("seed input file");
         let detection = DetectionResult {
             file_path: temp.join("input.png").display().to_string(),
             format: DetectedFormat::PNG,
@@ -728,8 +730,6 @@ mod tests {
         let out = execute_conversion(&detection, &strategy, &config).unwrap();
         assert!(out.skipped);
         assert!(out.message.contains("already exists"));
-        let _ = std::fs::remove_file(&output_path);
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]

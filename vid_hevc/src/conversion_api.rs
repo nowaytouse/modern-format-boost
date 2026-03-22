@@ -1757,7 +1757,7 @@ mod tests {
             ..Default::default()
         };
 
-        let strategy = determine_strategy_with_apple_compat(&detection, true);
+        let strategy = determine_strategy_with_apple_compat(&detection, true, false);
         assert_ne!(
             strategy.target,
             TargetVideoFormat::Skip,
@@ -1822,7 +1822,7 @@ mod tests {
             "HEVC should be skipped in normal mode"
         );
 
-        let apple = determine_strategy_with_apple_compat(&detection, true);
+        let apple = determine_strategy_with_apple_compat(&detection, true, false);
         assert_eq!(
             apple.target,
             TargetVideoFormat::Skip,
@@ -1882,7 +1882,7 @@ mod tests {
             "H.264 should NOT be skipped in normal mode"
         );
 
-        let apple = determine_strategy_with_apple_compat(&detection, true);
+        let apple = determine_strategy_with_apple_compat(&detection, true, false);
         assert_ne!(
             apple.target,
             TargetVideoFormat::Skip,
@@ -1950,7 +1950,7 @@ mod tests {
             let detection = make_detection(codec.clone());
 
             let normal = determine_strategy(&detection);
-            let apple = determine_strategy_with_apple_compat(&detection, true);
+            let apple = determine_strategy_with_apple_compat(&detection, true, false);
 
             let is_skip_normal = normal.target == TargetVideoFormat::Skip;
             let is_skip_apple = apple.target == TargetVideoFormat::Skip;
@@ -2014,7 +2014,7 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true);
+        let s = determine_strategy_with_apple_compat(&det, true, false);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
         assert!(!s.lossless);
     }
@@ -2064,7 +2064,7 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true);
+        let s = determine_strategy_with_apple_compat(&det, true, false);
         assert_ne!(
             s.target,
             TargetVideoFormat::Skip,
@@ -2228,7 +2228,7 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true);
+        let s = determine_strategy_with_apple_compat(&det, true, false);
         assert_eq!(
             s.target,
             TargetVideoFormat::HevcLosslessMkv,
@@ -2282,7 +2282,7 @@ mod tests {
             tags: std::collections::HashMap::new(),
             ..Default::default()
         };
-        let s = determine_strategy_with_apple_compat(&det, true);
+        let s = determine_strategy_with_apple_compat(&det, true, false);
         assert_eq!(s.target, TargetVideoFormat::HevcMp4);
         assert!(
             (s.crf - 18.0).abs() < 0.1,
@@ -2342,7 +2342,7 @@ mod tests {
             TargetVideoFormat::Skip,
             "Unknown(\"vp9\") skipped in normal mode"
         );
-        let apple = determine_strategy_with_apple_compat(&det, true);
+        let apple = determine_strategy_with_apple_compat(&det, true, false);
         assert_ne!(apple.target, TargetVideoFormat::Skip);
     }
 
