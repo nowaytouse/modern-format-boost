@@ -382,8 +382,8 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     }
 
     let compat_data = &data[16..ftyp_end];
-    let mut has_heic = false;
-    let mut has_heif = false;
+    let mut brand_heic_found = false;
+    let mut format_heif_detected = false;
 
     for chunk in compat_data.chunks_exact(4) {
         let cb: &[u8; 4] = chunk.try_into().unwrap();
@@ -392,16 +392,16 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
             return DetectedFormat::AVIF;
         }
         if cb == b"heic" || cb == b"heix" || cb == b"hevc" || cb == b"hev1" {
-            has_heic = true;
+            brand_heic_found = true;
         }
         if cb == b"heif" {
-            has_heif = true;
+            format_heif_detected = true;
         }
     }
 
-    if has_heic {
+    if brand_heic_found {
         DetectedFormat::HEIC
-    } else if has_heif {
+    } else if format_heif_detected {
         DetectedFormat::HEIF
     } else {
         // mif1/msf1 with no recognizable compatible brands
@@ -474,9 +474,8 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
             if let Some(explicit_count) = crate::ffprobe::get_frame_count(path) {
                 if explicit_count > 1 {
                     return Ok((true, explicit_count as u32, fps));
-                } else {
-                    return Ok((false, 1, fps));
                 }
+                return Ok((false, 1, fps));
             }
         }
     }
@@ -551,8 +550,8 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
                 0x2C => {
                     // Image Descriptor
                     let packed_img = data[current_pos + 9];
-                    let has_lct = (packed_img & 0x80) != 0;
-                    if has_lct {
+                    let local_color_table_flag = (packed_img & 0x80) != 0;
+                    if local_color_table_flag {
                         let lct_size_exp = packed_img & 0x07;
                         let lct_colors = 1 << (lct_size_exp + 1);
                         max_palette = max_palette.max(lct_colors);
@@ -828,10 +827,8 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                 "Large indexed PNG ({}x{}) - likely quantized",
                 png_info.width, png_info.height
             ));
-        } else if is_medium_image {
-            factors.indexed_with_alpha = 0.45;
         } else {
-            factors.indexed_with_alpha = 0.15;
+            factors.indexed_with_alpha = if is_medium_image { 0.45 } else { 0.15 };
         }
     }
 
@@ -1043,7 +1040,6 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
         + heuristic_score * weights.heuristic;
 
     const LOSSY_THRESHOLD: f64 = 0.58;
-    const GRAY_ZONE_LOW: f64 = 0.40;
 
     if std::env::var("IMGQUALITY_DEBUG").is_ok() {
         eprintln!("      📈 Score breakdown:");
@@ -1176,6 +1172,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     // Conservative strategy: only mark as lossy when confidence is high.
     // Gray zone [0.40, 0.58] without tool signature → treat as lossless to avoid
     // false positives (e.g. natural palette art misclassified as quantized).
+    const GRAY_ZONE_LOW: f64 = 0.40;
     let (is_quantized, confidence) = if final_score >= 0.70 {
         (true, 0.9 + (final_score - 0.70) * 0.33)
     } else if final_score >= LOSSY_THRESHOLD {
@@ -1510,9 +1507,11 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
     let samples_per_block = (target_samples / (grid_size * grid_size) as usize).max(1);
 
     // Simple LCG for deterministic pseudo-random sampling (no need for rand crate)
-    let mut rng_state: u64 = 0x123456789ABCDEF0;
+    let mut rng_state: u64 = 0x1234_5678_9ABC_DEF0;
     let lcg_next = |state: &mut u64| -> u32 {
-        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
         (*state >> 32) as u32
     };
 
@@ -1522,9 +1521,9 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
             let y0 = by * block_h;
             let x1 = ((bx + 1) * block_w).min(width);
             let y1 = ((by + 1) * block_h).min(height);
-            let block_w_actual = x1 - x0;
-            let block_h_actual = y1 - y0;
-            let block_pixels = (block_w_actual * block_h_actual) as usize;
+            let current_block_width = x1 - x0;
+            let current_block_height = y1 - y0;
+            let block_pixels = (current_block_width * current_block_height) as usize;
             if block_pixels == 0 {
                 continue;
             }
@@ -1532,8 +1531,8 @@ fn analyze_color_distribution(img: &DynamicImage, _palette_size: Option<usize>) 
             // Random sampling within this block
             let n_samples = samples_per_block.min(block_pixels);
             for _ in 0..n_samples {
-                let rand_x = x0 + (lcg_next(&mut rng_state) % block_w_actual);
-                let rand_y = y0 + (lcg_next(&mut rng_state) % block_h_actual);
+                let rand_x = x0 + (lcg_next(&mut rng_state) % current_block_width);
+                let rand_y = y0 + (lcg_next(&mut rng_state) % current_block_height);
                 let pixel = rgba.get_pixel(rand_x, rand_y);
                 let key = [pixel[0], pixel[1], pixel[2], pixel[3]];
                 *color_set.entry(key).or_insert(0) += 1;
@@ -2586,6 +2585,7 @@ fn detect_jxl_compression(path: &Path) -> Result<CompressionType> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use tempfile::Builder;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -2675,6 +2675,25 @@ mod tests {
             DetectedFormat::Unknown(_) => (),
             other => panic!("Should be detected as Unknown format, actual {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_is_heic_file() {
+        let mut heic_test_builder = Builder::new()
+            .suffix(".heic")
+            .tempfile()
+            .expect("create temp heic");
+        heic_test_builder
+            .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c'])
+            .expect("write heic header");
+
+        let mut heif_sample_builder = Builder::new()
+            .suffix(".HEIF")
+            .tempfile()
+            .expect("create temp heif");
+        heif_sample_builder
+            .write_all(&[0, 0, 0, 12, b'f', b't', b'y', b'p', b'm', b'i', b'f', b'1'])
+            .expect("write heif header");
     }
 
     #[test]

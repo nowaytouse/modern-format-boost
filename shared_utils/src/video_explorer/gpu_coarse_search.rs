@@ -1813,7 +1813,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             const VMAF_Y_MIN: f64 = 93.0;
                             const PSNR_UV_MIN: f64 = 35.0;
 
-                            let v_val = match best_vmaf_tracked {
+                            let vmaf_metric = match best_vmaf_tracked {
                                 Some(v) => v,
                                 None => {
                                     crate::log_eprintln!(
@@ -1824,7 +1824,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                                     bail!("Quality wall hit but VMAF not measured");
                                 }
                             };
-                            let uv_val = match best_psnr_uv_tracked {
+                            let uvmaf_metric = match best_psnr_uv_tracked {
                                 Some((u, v)) => (*u).min(*v),
                                 None => {
                                     crate::log_eprintln!(
@@ -1836,10 +1836,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                                 }
                             };
 
-                            if *v_val < VMAF_Y_MIN || uv_val < PSNR_UV_MIN {
+                            if *vmaf_metric < VMAF_Y_MIN || uvmaf_metric < PSNR_UV_MIN {
                                 crate::log_eprintln!(
                                     "   \x1b[1;31m❌ QUALITY CEILING HIT (NOT CREDIBLE):\x1b[0m Saturated at VMAF:{:.2}, UV:{:.2}. Below mandatory gate. Aborting.",
-                                    v_val, uv_val
+                                    vmaf_metric, uvmaf_metric
                                 );
                                 quality_wall_hit = true;
                                 break;
@@ -2318,9 +2318,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     };
 
                     let metrics_str = if ultimate_mode {
-                        let v_val = *best_vmaf_tracked;
-                        let uv_val = *best_psnr_uv_tracked;
-                        if let (Some(v), Some((u, v_score))) = (v_val, uv_val) {
+                        let vmaf_metric = *best_vmaf_tracked;
+                        let uvmaf_metric = *best_psnr_uv_tracked;
+                        if let (Some(v), Some((u, v_score))) = (vmaf_metric, uvmaf_metric) {
                             let chroma_avg = (u + v_score) / 2.0;
                             format!(
                                 " │ VMAF:{:.2} UV:{:.2} ({:.0}/3 {})",
@@ -2429,9 +2429,9 @@ fn cpu_fine_tune_from_gpu_boundary(
                     consecutive_failures += 1;
 
                     let metrics_str = if ultimate_mode {
-                        let v_val = *best_vmaf_tracked;
-                        let uv_val = *best_psnr_uv_tracked;
-                        if let (Some(v), Some((u, v_score))) = (v_val, uv_val) {
+                        let vmaf_metric = *best_vmaf_tracked;
+                        let uvmaf_metric = *best_psnr_uv_tracked;
+                        if let (Some(v), Some((u, v_score))) = (vmaf_metric, uvmaf_metric) {
                             let chroma_avg = (u + v_score) / 2.0;
                             format!(
                                 " │ VMAF:{:.2} UV:{:.2} ({:.0}/3 →)",
@@ -2991,6 +2991,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     input: &Path,
     output: &Path,

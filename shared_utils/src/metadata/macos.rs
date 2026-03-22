@@ -54,8 +54,8 @@ struct Attrlist {
     forkattr: u32,
 }
 
-const ATTR_CMN_CRTIME: u32 = 0x00000200;
-const ATTR_CMN_ADDEDTIME: u32 = 0x10000000;
+const ATTR_CMN_CRTIME: u32 = 0x0000_0200;
+const ATTR_CMN_ADDEDTIME: u32 = 0x1000_0000;
 const ATTR_BIT_MAP_COUNT: u16 = 5;
 
 #[repr(C)]
@@ -201,10 +201,7 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("AppleScript failed: {}", err),
-        ));
+        return Err(io::Error::other(format!("AppleScript failed: {}", err)));
     }
 
     Ok(())

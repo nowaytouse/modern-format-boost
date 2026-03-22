@@ -201,7 +201,7 @@ mod tests {
     fn test_version_parsing() {
         assert_eq!(parse_version_to_code("0.10.85", "Test"), 1085);
         assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);
-        assert_eq!(parse_version_to_code("10.20.30", "Test"), 102030);
+        assert_eq!(parse_version_to_code("10.20.30", "Test"), 102_030);
     }
 
     #[test]

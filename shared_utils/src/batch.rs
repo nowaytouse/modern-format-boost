@@ -467,8 +467,7 @@ fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> 
         snapshot.recursive,
         "image",
     )?;
-    let content = serde_json::to_string_pretty(snapshot)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let content = serde_json::to_string_pretty(snapshot).map_err(io::Error::other)?;
     fs::write(cache_file, content)
 }
 
@@ -489,8 +488,7 @@ fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> 
         snapshot.recursive,
         "video",
     )?;
-    let content = serde_json::to_string_pretty(snapshot)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+    let content = serde_json::to_string_pretty(snapshot).map_err(io::Error::other)?;
     fs::write(cache_file, content)
 }
 
@@ -979,8 +977,8 @@ mod tests {
         let rate2 = result.success_rate();
         let rate3 = result.success_rate();
 
-        assert!((rate1 - rate2).abs() < 0.0000001);
-        assert!((rate2 - rate3).abs() < 0.0000001);
+        assert!((rate1 - rate2).abs() < 1e-7);
+        assert!((rate2 - rate3).abs() < 1e-7);
     }
 
     #[test]

@@ -204,14 +204,13 @@ fn get_process_start_time() -> Option<u64> {
 #[cfg(unix)]
 fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
     use std::process::Command;
-    let mut saw_real_error = false;
 
     for field in ["etimes", "etime"] {
         let output = match Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", &format!("{}=", field)])
             .output()
         {
-            Ok(output) => output,
+            Ok(o) => o,
             Err(err) => {
                 eprintln!(
                     "⚠️ [checkpoint] Failed to query process age for PID {} via ps {}: {}",
@@ -222,17 +221,7 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
         };
 
         if output.status.success() {
-            let stdout = match String::from_utf8(output.stdout) {
-                Ok(stdout) => stdout,
-                Err(err) => {
-                    eprintln!(
-                        "⚠️ [checkpoint] Non-UTF-8 process age output for PID {} via ps {}: {}",
-                        pid, field, err
-                    );
-                    return None;
-                }
-            };
-
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let elapsed_secs = match field {
                 "etimes" => stdout.trim().parse::<u64>().ok(),
                 "etime" => parse_ps_etime_to_secs(&stdout),
@@ -249,7 +238,6 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
                 field,
                 stdout.trim()
             );
-            saw_real_error = true;
             continue;
         }
 
@@ -264,14 +252,9 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
             pid,
             stderr.trim()
         );
-        saw_real_error = true;
     }
 
-    if saw_real_error {
-        None
-    } else {
-        None
-    }
+    None
 }
 
 #[cfg(unix)]
