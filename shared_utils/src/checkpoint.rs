@@ -296,8 +296,9 @@ fn parse_ps_etime_to_secs(raw: &str) -> Option<u64> {
 
     let parts: Vec<_> = clock.split(':').collect();
     let clock_secs = match parts.as_slice() {
-        [minutes, seconds] => minutes.trim().parse::<u64>().ok()? * 60
-            + seconds.trim().parse::<u64>().ok()?,
+        [minutes, seconds] => {
+            minutes.trim().parse::<u64>().ok()? * 60 + seconds.trim().parse::<u64>().ok()?
+        }
         [hours, minutes, seconds] => {
             hours.trim().parse::<u64>().ok()? * 3600
                 + minutes.trim().parse::<u64>().ok()? * 60

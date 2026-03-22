@@ -132,7 +132,7 @@ impl FileSignature {
 /// 1. Input content fingerprint (size + mtime + optional content hash)
 /// 2. Encoding parameters (CRF, quality, preset, effort, feature flags)
 /// 3. Dependency library versions (ffmpeg, libjxl, libavif, etc.)
-/// 4. Encoder backend (VideoToolbox vs CPU, GPU vs CPU)
+/// 4. Encoder backend (`VideoToolbox` vs CPU, GPU vs CPU)
 /// 5. Heuristic configuration (thresholds, weights)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnhancedCacheKey {
@@ -223,10 +223,9 @@ pub enum EncoderBackend {
     /// CPU-based encoding
     CPU,
 
-    /// GPU-accelerated encoding (CUDA, OpenCL, etc.)
-    GPU,
-
-    /// Apple VideoToolbox (hardware acceleration on macOS/iOS)
+    /// `GPU`-accelerated encoding (`CUDA`, `OpenCL`, etc.)
+    Gpu,
+    /// Apple `VideoToolbox` (hardware acceleration on `macOS`/`iOS`)
     VideoToolbox,
 
     /// Intel Quick Sync Video
@@ -276,15 +275,14 @@ impl EncodingParams {
         let mut hasher = DefaultHasher::new();
 
         // Hash all parameters
-        self.crf.map(|v| v.to_bits()).hash(&mut hasher);
-        self.quality.hash(&mut hasher);
+        self.crf.map(f32::to_bits).hash(&mut hasher);
         self.preset.hash(&mut hasher);
         self.effort.hash(&mut hasher);
         self.ultimate_mode.hash(&mut hasher);
         self.gpu_enabled.hash(&mut hasher);
         self.apple_compat.hash(&mut hasher);
-        self.vmaf_threshold.map(|v| v.to_bits()).hash(&mut hasher);
-        self.psnr_threshold.map(|v| v.to_bits()).hash(&mut hasher);
+        self.vmaf_threshold.map(f32::to_bits).hash(&mut hasher);
+        self.psnr_threshold.map(f32::to_bits).hash(&mut hasher);
 
         // Hash codec options (sorted for determinism)
         let mut sorted_options: Vec<_> = self.codec_options.iter().collect();
@@ -301,7 +299,7 @@ impl EncodingParams {
 /// 📚 Dependency Versions - Track versions of critical libraries
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DependencyVersions {
-    /// FFmpeg version (libavcodec, libavformat)
+    /// `FFmpeg` version (`libavcodec`, `libavformat`)
     pub ffmpeg_version: Option<String>,
 
     /// libjxl version

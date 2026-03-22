@@ -1006,6 +1006,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
     use tempfile::TempDir;
 
     #[test]
@@ -1179,7 +1180,7 @@ mod tests {
         ];
         fs::write(&jpg_path, png_data).unwrap();
 
-        let xmp_content = r#"<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>
+        let xmp_content = r"<?xpacket begin='﻿' id='W5M0MpCehiHzreSzNTczkc9d'?>
 <x:xmpmeta xmlns:x='adobe:ns:meta/' x:xmptk='Image::ExifTool 12.00'>
 <rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
  <rdf:Description rdf:about=''
@@ -1192,7 +1193,7 @@ mod tests {
  </rdf:Description>
 </rdf:RDF>
 </x:xmpmeta>
-<?xpacket end='w'?>"#;
+<?xpacket end='w'?>";
         fs::write(&xmp_path, xmp_content).unwrap();
 
         let config = XmpMergerConfig {

@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_ssim_display_precision() {
-        let ssim = Ssim::new(0.123456789).unwrap();
+        let ssim = Ssim::new(0.123_456_789).unwrap();
         let display = ssim.display();
         assert_eq!(display, "0.123457");
         assert_eq!(display.len(), 8);

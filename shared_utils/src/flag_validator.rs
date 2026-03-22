@@ -15,10 +15,10 @@ pub enum FlagMode {
 impl fmt::Display for FlagMode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FlagMode::PreciseQualityWithCompress => {
+            Self::PreciseQualityWithCompress => {
                 write!(f, "--explore --match-quality --compress")
             }
-            FlagMode::UltimateExplore => {
+            Self::UltimateExplore => {
                 write!(f, "--explore --match-quality --compress --ultimate")
             }
         }
@@ -28,13 +28,13 @@ impl fmt::Display for FlagMode {
 impl FlagMode {
     pub fn description_en(&self) -> &'static str {
         match self {
-            FlagMode::PreciseQualityWithCompress => "Precise quality match + must compress",
-            FlagMode::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
+            Self::PreciseQualityWithCompress => "Precise quality match + must compress",
+            Self::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
         }
     }
 
     pub fn is_ultimate(&self) -> bool {
-        matches!(self, FlagMode::UltimateExplore)
+        matches!(self, Self::UltimateExplore)
     }
 }
 

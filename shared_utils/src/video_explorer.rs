@@ -649,7 +649,12 @@ impl VideoEncoder {
         self.extra_args_with_preset(max_threads, EncoderPreset::default(), None)
     }
 
-    pub fn extra_args_with_preset(&self, max_threads: usize, preset: EncoderPreset, hdr_x265_params: Option<String>) -> Vec<String> {
+    pub fn extra_args_with_preset(
+        &self,
+        max_threads: usize,
+        preset: EncoderPreset,
+        hdr_x265_params: Option<String>,
+    ) -> Vec<String> {
         match self {
             VideoEncoder::Hevc => {
                 let mut x265_params = format!("log-level=error:pools={}", max_threads);
@@ -665,7 +670,7 @@ impl VideoEncoder {
                     "-x265-params".to_string(),
                     x265_params,
                 ]
-            },
+            }
             VideoEncoder::Av1 => vec![
                 "-svtav1-params".to_string(),
                 format!(
@@ -2302,10 +2307,11 @@ impl VideoExplorer {
             .arg("0.5");
 
         if !self.use_gpu {
-            for arg in self
-                .encoder
-                .extra_args_with_preset(self.max_threads, self.preset, self.hdr_x265_params.clone())
-            {
+            for arg in self.encoder.extra_args_with_preset(
+                self.max_threads,
+                self.preset,
+                self.hdr_x265_params.clone(),
+            ) {
                 cmd.arg(arg);
             }
         }
@@ -4359,7 +4365,8 @@ mod tests {
 
         assert_eq!(
             calculate_adaptive_max_walls(100000.0),
-            (100000.0f32.log2().ceil() as u32 + ADAPTIVE_WALL_LOG_BASE).min(ULTIMATE_MAX_WALL_HITS)
+            (100_000.0_f32.log2().ceil() as u32 + ADAPTIVE_WALL_LOG_BASE)
+                .min(ULTIMATE_MAX_WALL_HITS)
         );
     }
 

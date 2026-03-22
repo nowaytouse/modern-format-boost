@@ -468,7 +468,10 @@ pub fn auto_convert_with_cache(
                 } else if let Some(hint) =
                     shared_utils::crf_constants::get_global_last_hit_crf_av1()
                 {
-                    info!("   💡 Using global last hit CRF: {:.1} (warm start only)", hint);
+                    info!(
+                        "   💡 Using global last hit CRF: {:.1} (warm start only)",
+                        hint
+                    );
                     Some(hint)
                 } else {
                     None

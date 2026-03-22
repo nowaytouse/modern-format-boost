@@ -351,8 +351,8 @@ mod tests {
             container_overhead: 100,
             extraction_method: ExtractionMethod::BitrateCalculation,
             duration_secs: 10.0,
-            video_bitrate: Some(800000),
-            audio_bitrate: Some(128000),
+            video_bitrate: Some(800_000),
+            audio_bitrate: Some(128_000),
         };
 
         assert_eq!(info.pure_media_size(), 1100);

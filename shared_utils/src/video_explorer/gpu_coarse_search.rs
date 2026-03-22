@@ -1171,7 +1171,11 @@ fn cpu_fine_tune_from_gpu_boundary(
             .arg("-crf")
             .arg(format!("{:.2}", crf));
 
-        for arg in encoder.extra_args_with_preset(max_threads, crate::video_explorer::EncoderPreset::default(), hdr_x265_params.clone()) {
+        for arg in encoder.extra_args_with_preset(
+            max_threads,
+            crate::video_explorer::EncoderPreset::default(),
+            hdr_x265_params.clone(),
+        ) {
             cmd.arg(arg);
         }
 
@@ -3001,7 +3005,9 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
-    let search_anchor_crf = warm_start_crf.unwrap_or(baseline_crf).clamp(ABSOLUTE_MIN_CRF, max_crf);
+    let search_anchor_crf = warm_start_crf
+        .unwrap_or(baseline_crf)
+        .clamp(ABSOLUTE_MIN_CRF, max_crf);
     explore_with_gpu_coarse_search(
         input,
         output,
@@ -3132,7 +3138,9 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Av1);
-    let search_anchor_crf = warm_start_crf.unwrap_or(baseline_crf).clamp(ABSOLUTE_MIN_CRF, max_crf);
+    let search_anchor_crf = warm_start_crf
+        .unwrap_or(baseline_crf)
+        .clamp(ABSOLUTE_MIN_CRF, max_crf);
     explore_with_gpu_coarse_search(
         input,
         output,
