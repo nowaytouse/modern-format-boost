@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.88] - 2026-03-22
+
+### ✨ Features
+- 🎞️ **HDR10+ Dynamic Metadata Retention**: Added full support for extracting SMPTE 2094-40 (HDR10+) metadata sidecars using `hdr10plus_tool` and injecting them into the libx265 encoding stream via `--dhdr10-info`. This ensures dynamic brightness curves are preserved rather than falling back to static HDR10.
+- 🛠️ **Infrastructure Plumbed**: Updated `VideoExplorer` and GPU/CPU search engines to pass HDR10+ parameters through all search phases, protecting metadata while maintaining VideoToolbox compatibility.
+
 ## [0.10.87] - 2026-03-22
 
 ### Fixed

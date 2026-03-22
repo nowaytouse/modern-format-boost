@@ -191,6 +191,7 @@ pub struct ExploreContext {
     pub use_gpu: bool,
     pub preset: EncoderPreset,
     pub config: ExploreConfig,
+    pub hdr_x265_params: Option<String>,
 
     size_cache: CrfCache<u64>,
     ssim_cache: CrfCache<SsimResult>,
@@ -212,6 +213,7 @@ impl ExploreContext {
         use_gpu: bool,
         preset: EncoderPreset,
         config: ExploreConfig,
+        hdr_x265_params: Option<String>,
     ) -> Self {
         Self {
             input_path,
@@ -223,6 +225,7 @@ impl ExploreContext {
             use_gpu,
             preset,
             config,
+            hdr_x265_params,
             size_cache: CrfCache::new(),
             ssim_cache: CrfCache::new(),
             progress: None,
@@ -451,7 +454,7 @@ impl ExploreContext {
             .arg("-preset")
             .arg(self.preset.x26x_name());
 
-        for arg in self.encoder.extra_args(self.max_threads) {
+        for arg in self.encoder.extra_args_with_preset(self.max_threads, self.preset, self.hdr_x265_params.clone()) {
             cmd.arg(arg);
         }
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.10.81-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.10.88-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="License">
@@ -138,7 +138,7 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | **HDR10** | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args |
 | **HLG** | color_trc = arib-std-b67 | Color primaries + TRC preserved |
 | **Dolby Vision** | DOVI side_data in streams/frames | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 auto-convert |
-| **HDR10+** | ST2094 dynamic metadata | ⚠️ Dynamic metadata stripped; static HDR10 layer preserved |
+| **HDR10+** | ST2094 dynamic metadata | Supported via `hdr10plus_tool` sidecar extraction and x265 injection |
 | **SDR** | No HDR markers | Standard processing (yuv420p) |
 
 ## ⬇️ Installation / 安装说明
@@ -163,7 +163,8 @@ tar -xzf modern-format-boost-aarch64-apple-darwin.tar.gz
 | **ImageMagick** | ✅ | 图片格式中转 | `brew install imagemagick` |
 | **libwebp** | ✅ | WebP 原生解码 | `brew install webp` |
 | **dovi_tool** | ✅ | 杜比视界 RPU 提取 | `cargo install dovi_tool` |
-| **libheif** | ✅ | HEIC/HEIF 解码 | `brew install libheif` |
+| **libheif** | ✅ | HEIC/HEIF decode | `brew install libheif` |
+| **hdr10plus_tool**| ✅ | HDR10+ metadata extraction | `cargo install hdr10plus_tool` |
 
 #### macOS (Homebrew)
 ```bash
@@ -233,7 +234,7 @@ vid-hevc run /path/to/media
 Partially native on macOS Sonoma (14) + iOS 17+. Also supported in Chrome 91+ and Firefox 128+. Note: Animated JXL is currently broken on macOS (static only). JXL remains the best for bit-exact archival.
 
 **2. What happens to HDR10+?**  
-⚠️ Dynamic metadata is stripped due to `libx265` limits; static HDR10 layer is fully preserved.
+Fully supported! We use `hdr10plus_tool` to extract the dynamic metadata and inject it back into `libx265` via `--dhdr10-info`. Ensure the tool is installed for this feature.
 
 **3. Why skip WebP/AVIF/HEIC?**  
 They are already modern lossy formats. Re-encoding causes "generational loss," which we strictly avoid.
@@ -341,7 +342,7 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 
 ### 图片格式决策矩阵
 
-| 格式 | 无损? | 动图? | 处理 | 输出 | 算法与方式 |
+| 输入格式 | 无损? | 动图? | 处理 | 输出 | 算法与方式 |
 |:-------------|:---------:|:---------:|:-------|:-------|:-------|
 | JPEG | — | 否 | **无损成分重建** | `.jxl` | VarDCT (位一致) |
 | PNG | ✅ | 否 | **无损转换** | `.jxl` | Modular d=0.0 |
@@ -378,10 +379,10 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 | **HDR10** | 元数据 side_data 捕获 | 通过 FFmpeg 参数完整保留静态元数据并注入 |
 | **HLG** | 传输特性 TRC 识别 | 原色 (Primaries) 及 TRC 完整保留 |
 | **Dolby Vision** | DOVI RPU 数据流 | 经 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 |
-| **HDR10+** | ST2094 动态元数据 | ⚠️ 动态层丢失；保留底层的 HDR10 静态核心数据 |
+| **HDR10+** | ST2094 动态元数据 | 已通过 `hdr10plus_tool` sidecar extraction and x265 injection 实现完整支持 |
 | **SDR** | 无 HDR 标记 | 自动进入标准处理流 (yuv420p) |
 
-## ⬇️ 安装说明
+## ⬇️ Installation / 安装说明
 
 ### 前置要求
 
@@ -395,6 +396,7 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 | **libwebp** | ✅ | WebP 原生解码 | `brew install webp` |
 | **dovi_tool** | ✅ | 杜比视界 RPU 提取 | `cargo install dovi_tool` |
 | **libheif** | ✅ | HEIC/HEIF 解码 | `brew install libheif` |
+| **hdr10plus_tool**| ✅ | HDR10+ 元数据提取 | `cargo install hdr10plus_tool` |
 
 ### macOS (Homebrew)
 ```bash
@@ -413,6 +415,7 @@ sudo apt update && sudo apt install ffmpeg libimage-exiftool-perl imagemagick we
 推荐使用 **winget** 一键安装所有依赖：
 ```powershell
 winget install ffmpeg.ffmpeg ImageMagick.ImageMagick OliverBetz.ExifTool
+# Note: dovi_tool must be installed via cargo or manual binary download
 ```
 
 ### 从源码构建
@@ -464,7 +467,7 @@ vid-hevc run /视频/路径
 虽然 macOS 14 (Sonoma) 及 iOS 17+ 已提供初步原生支持，但仍存在诸多已知缺陷（如动图暂无法播放）。此外 Chrome 91+ 及 Firefox 128+ 也已原生支持。建议将其作为位一致的无损档案格式进行战略存储。
 
 **2. 为什么 HDR10+ 动态视频会失效？**  
-⚠️ 受限于底层 `libx265` 能力，目前会丢弃动态层元数据，但保留 HDR10 静态基础层。
+现已完美支持。我们通过 `hdr10plus_tool` 提取动态元数据并重新注入 `libx265` 的 `--dhdr10-info` 参数中。请确保已安装该工具。
 
 **3. 为什么程序会自动跳过我的 WebP / AVIF / HEIC 图像？**  
 因为这三种格式已经是现代有损编码。二次编码会导致画质代际损伤。

@@ -114,6 +114,7 @@ pub fn explore_with_gpu_coarse_search(
     force_ms_ssim_long: bool,
     allow_size_tolerance: bool,
     max_threads: usize,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
 
@@ -479,6 +480,7 @@ pub fn explore_with_gpu_coarse_search(
         &mut best_vmaf_tracked,
         &mut best_psnr_uv_tracked,
         gpu_executed,
+        hdr_x265_params,
     )?;
 
     result.log.clear();
@@ -1047,6 +1049,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     best_vmaf_tracked: &mut Option<f64>,
     best_psnr_uv_tracked: &mut Option<(f64, f64)>,
     gpu_executed: bool,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let log = Vec::new();
     let mut early_insight_triggered = false;
@@ -1168,7 +1171,7 @@ fn cpu_fine_tune_from_gpu_boundary(
             .arg("-crf")
             .arg(format!("{:.2}", crf));
 
-        for arg in encoder.extra_args(max_threads) {
+        for arg in encoder.extra_args_with_preset(max_threads, crate::video_explorer::EncoderPreset::default(), hdr_x265_params.clone()) {
             cmd.arg(arg);
         }
 
@@ -2914,6 +2917,7 @@ pub fn explore_hevc_with_gpu_coarse(
     initial_crf: f32,
     allow_size_tolerance: bool,
     max_threads: usize,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full(
@@ -2926,6 +2930,7 @@ pub fn explore_hevc_with_gpu_coarse(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        hdr_x265_params,
     )
 }
 
@@ -2938,6 +2943,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
     ultimate_mode: bool,
     allow_size_tolerance: bool,
     max_threads: usize,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full_warm_start(
@@ -2951,6 +2957,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        hdr_x265_params,
     )
 }
 
@@ -2962,6 +2969,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     ultimate_mode: bool,
     allow_size_tolerance: bool,
     max_threads: usize,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let (_, min_ssim) = calculate_smart_thresholds(initial_crf, VideoEncoder::Hevc);
     explore_hevc_with_gpu_coarse_full_warm_start(
@@ -2975,6 +2983,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        hdr_x265_params,
     )
 }
 
@@ -2989,6 +2998,7 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     allow_size_tolerance: bool,
     min_ssim: f64,
     max_threads: usize,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     let (max_crf, _) = calculate_smart_thresholds(baseline_crf, VideoEncoder::Hevc);
     let search_anchor_crf = warm_start_crf.unwrap_or(baseline_crf).clamp(ABSOLUTE_MIN_CRF, max_crf);
@@ -3004,6 +3014,7 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
         force_ms_ssim_long,
         allow_size_tolerance,
         max_threads,
+        hdr_x265_params,
     )
 }
 
@@ -3017,6 +3028,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
     allow_size_tolerance: bool,
     min_ssim: f64,
     max_threads: usize,
+    hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     explore_hevc_with_gpu_coarse_full_warm_start(
         input,
@@ -3029,6 +3041,7 @@ pub fn explore_hevc_with_gpu_coarse_full(
         allow_size_tolerance,
         min_ssim,
         max_threads,
+        hdr_x265_params,
     )
 }
 
@@ -3078,6 +3091,7 @@ pub fn explore_av1_with_gpu_coarse(
         false,
         allow_size_tolerance,
         max_threads,
+        None,
     )
 }
 
@@ -3131,6 +3145,7 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
         force_ms_ssim_long,
         allow_size_tolerance,
         max_threads,
+        None,
     )
 }
 

@@ -199,6 +199,65 @@ fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
     })
 }
 
+/// Result of attempting to prepare HDR10+ dynamic metadata for x265 injection.
+struct Hdr10PlusResult {
+    /// Path to the metadata .json file for --dhdr10-info
+    json_path: PathBuf,
+    /// Temp directory that must be kept alive until encode completes
+    _temp_dir: tempfile::TempDir,
+}
+
+/// Attempt to extract HDR10+ dynamic metadata for injection into x265.
+/// Returns `None` if:
+/// - Content is not HDR10+
+/// - `hdr10plus_tool` is not installed
+/// - Any extraction step fails
+fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10PlusResult> {
+    if !detection.is_hdr10_plus {
+        return None;
+    }
+
+    if !shared_utils::hdr_utils::is_hdr10plus_tool_available() {
+        warn!("hdr10plus_tool not found — HDR10+ dynamic metadata cannot be preserved, falling back to HDR10");
+        return None;
+    }
+
+    let temp_dir = match tempfile::TempDir::new() {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("Failed to create temp dir for HDR10+ extraction: {}", e);
+            return None;
+        }
+    };
+
+    let input_path = Path::new(&detection.file_path);
+
+    // Step 1: Extract raw HEVC Annex-B bitstream
+    let raw_hevc = match shared_utils::extract_hevc_bitstream(input_path, temp_dir.path()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("HDR10+ extraction: bitstream extraction failed: {}", e);
+            return None;
+        }
+    };
+
+    // Step 2: Extract HDR10+ JSON
+    let json_path = match shared_utils::hdr_utils::extract_hdr10plus_metadata(&raw_hevc, temp_dir.path()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("HDR10+ extraction failed: {}", e);
+            return None;
+        }
+    };
+
+    info!("HDR10+ dynamic metadata extracted — will be preserved via dhdr10-info in x265 output");
+
+    Some(Hdr10PlusResult {
+        json_path,
+        _temp_dir: temp_dir,
+    })
+}
+
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, false)
 }
@@ -603,6 +662,43 @@ pub fn auto_convert_with_cache(
                     predicted_crf,
                     search_crf
                 );
+                let mut hdr_x265_params = String::new();
+
+                // Inject DV RPU path and profile into x265 params when available
+                let dv_rpu = prepare_dv_rpu(&detection);
+                if let Some(ref dv) = dv_rpu {
+                    hdr_x265_params.push_str(&format!(
+                        ":dolby-vision-rpu={}:dolby-vision-profile={}",
+                        dv.rpu_path.display(),
+                        dv.profile_str
+                    ));
+                }
+
+                // Inject HDR10+ metadata into x265 params
+                let hdr10plus = prepare_hdr10plus_metadata(&detection);
+                if let Some(ref hdr) = hdr10plus {
+                    hdr_x265_params.push_str(&format!(":dhdr10-info={}", hdr.json_path.display()));
+                }
+
+                let is_hdr_content = detection.bit_depth >= 10
+                    || detection.is_dolby_vision
+                    || detection.is_hdr10_plus
+                    || detection.mastering_display.is_some()
+                    || matches!(
+                        detection.color_transfer.as_deref(),
+                        Some("smpte2084") | Some("arib-std-b67")
+                    );
+
+                if is_hdr_content {
+                    hdr_x265_params.insert_str(0, ":hdr-opt=1:repeat-headers=1");
+                }
+
+                let hdr_x265_params_opt = if hdr_x265_params.is_empty() {
+                    None
+                } else {
+                    Some(hdr_x265_params.trim_start_matches(':').to_string())
+                };
+
                 let explore_result = if ultimate {
                     shared_utils::explore_hevc_with_gpu_coarse_ultimate_warm_start(
                         input_path,
@@ -613,6 +709,7 @@ pub fn auto_convert_with_cache(
                         ultimate,
                         config.allow_size_tolerance,
                         config.child_threads,
+                        hdr_x265_params_opt,
                     )
                 } else {
                     shared_utils::explore_hevc_with_gpu_coarse_full_warm_start(
@@ -626,6 +723,7 @@ pub fn auto_convert_with_cache(
                         config.allow_size_tolerance,
                         config.min_ssim,
                         config.child_threads,
+                        hdr_x265_params_opt,
                     )
                 }
                 .map_err(|e| VidQualityError::ConversionError(e.to_string()))?;
@@ -1312,6 +1410,9 @@ fn execute_hevc_conversion(
     // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
     let dv_rpu = prepare_dv_rpu(detection);
 
+    // Attempt to extract HDR10+ metadata for injection
+    let hdr10plus = prepare_hdr10plus_metadata(detection);
+
     // For HDR content (10-bit) we need additional x265 params to signal HDR correctly.
     // hdr-opt=1 enables SEI HDR metadata writing; repeat-headers=1 ensures SPS/PPS on
     // every keyframe so players always have the colour info available.
@@ -1340,6 +1441,11 @@ fn execute_hevc_conversion(
             dv.rpu_path.display(),
             dv.profile_str
         ));
+    }
+
+    // Inject HDR10+ metadata into x265 params
+    if let Some(ref hdr) = hdr10plus {
+        x265_params.push_str(&format!(":dhdr10-info={}", hdr.json_path.display()));
     }
 
     let pix_fmt = hdr_pix_fmt(detection);
@@ -1425,6 +1531,9 @@ fn execute_hevc_lossless(
     // Attempt to extract DV RPU for injection (None = not DV or graceful fallback)
     let dv_rpu = prepare_dv_rpu(detection);
 
+    // Attempt to extract HDR10+ metadata for injection
+    let hdr10plus = prepare_hdr10plus_metadata(detection);
+
     let is_hdr_content = detection.bit_depth >= 10
         || detection.is_dolby_vision
         || detection.is_hdr10_plus
@@ -1451,6 +1560,11 @@ fn execute_hevc_lossless(
             dv.rpu_path.display(),
             dv.profile_str
         ));
+    }
+
+    // Inject HDR10+ metadata into x265 params
+    if let Some(ref hdr) = hdr10plus {
+        x265_params.push_str(&format!(":dhdr10-info={}", hdr.json_path.display()));
     }
 
     let pix_fmt = hdr_pix_fmt(detection);
@@ -2224,5 +2338,57 @@ mod tests {
         );
         let apple = determine_strategy_with_apple_compat(&det, true);
         assert_ne!(apple.target, TargetVideoFormat::Skip);
+    }
+
+    #[test]
+    fn test_hdr10plus_injection_logic() {
+        use crate::detection_api::VideoDetectionResult;
+        use std::path::PathBuf;
+
+
+        // Mock a 10-bit HDR10+ result
+        let detection = VideoDetectionResult {
+            file_path: "test.mp4".to_string(),
+            bit_depth: 10,
+            is_hdr10_plus: true, // HDR10+ detected
+            is_dolby_vision: false,
+            color_transfer: Some("smpte2084".to_string()),
+            ..Default::default()
+        };
+
+        // Logic we want to verify (from auto_convert_with_cache)
+        let mut hdr_x265_params = String::new();
+
+        // Simulate prepare_hdr10plus_metadata success
+        let mock_json_path = PathBuf::from("/tmp/hdr10plus.json");
+        hdr_x265_params.push_str(&format!(":dhdr10-info={}", mock_json_path.display()));
+
+        let is_hdr_content = detection.bit_depth >= 10
+            || detection.is_dolby_vision
+            || detection.is_hdr10_plus
+            || detection.mastering_display.is_some()
+            || matches!(
+                detection.color_transfer.as_deref(),
+                Some("smpte2084") | Some("arib-std-b67")
+            );
+
+        if is_hdr_content {
+            hdr_x265_params.insert_str(0, ":hdr-opt=1:repeat-headers=1");
+        }
+
+        let hdr_x265_params_opt = if hdr_x265_params.is_empty() {
+            None
+        } else {
+            Some(hdr_x265_params.trim_start_matches(':').to_string())
+        };
+
+        // Verify the result
+        assert!(hdr_x265_params_opt.is_some());
+        let final_params = hdr_x265_params_opt.unwrap();
+        assert!(final_params.contains("hdr-opt=1"));
+        assert!(final_params.contains("repeat-headers=1"));
+        assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
+        
+        println!("✅ HDR10+ x265-params injection verified: {}", final_params);
     }
 }

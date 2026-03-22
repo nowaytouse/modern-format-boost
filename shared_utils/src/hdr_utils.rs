@@ -177,6 +177,15 @@ pub fn is_dovi_tool_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Check if `hdr10plus_tool` binary is available on PATH.
+pub fn is_hdr10plus_tool_available() -> bool {
+    Command::new("hdr10plus_tool")
+        .arg("--help")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// Extract raw HEVC Annex-B bitstream from a container using ffmpeg.
 /// Returns the path to the raw `.hevc` file inside `temp_dir`.
 pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
@@ -246,6 +255,34 @@ pub fn extract_dv_rpu(
     }
 
     Ok(rpu_path)
+}
+
+/// Extract HDR10+ dynamic metadata from a raw HEVC Annex-B bitstream using `hdr10plus_tool`.
+/// Returns the path to the `.json` metadata file.
+pub fn extract_hdr10plus_metadata(
+    raw_hevc: &Path,
+    temp_dir: &Path,
+) -> Result<PathBuf, String> {
+    let json_path = temp_dir.join("hdr10plus.json");
+
+    let mut cmd = Command::new("hdr10plus_tool");
+    cmd.arg("--skip-validation")
+        .arg("extract")
+        .arg("-i")
+        .arg(raw_hevc)
+        .arg("-o")
+        .arg(&json_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| format!("failed to run hdr10plus_tool extract: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("hdr10plus_tool extract failed: {}", stderr));
+    }
+
+    Ok(json_path)
 }
 
 /// Map DV profile + compatibility ID to the x265 `dolby-vision-profile` string.

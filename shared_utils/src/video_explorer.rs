@@ -646,19 +646,26 @@ impl VideoEncoder {
     }
 
     pub fn extra_args(&self, max_threads: usize) -> Vec<String> {
-        self.extra_args_with_preset(max_threads, EncoderPreset::default())
+        self.extra_args_with_preset(max_threads, EncoderPreset::default(), None)
     }
 
-    pub fn extra_args_with_preset(&self, max_threads: usize, preset: EncoderPreset) -> Vec<String> {
+    pub fn extra_args_with_preset(&self, max_threads: usize, preset: EncoderPreset, hdr_x265_params: Option<String>) -> Vec<String> {
         match self {
-            VideoEncoder::Hevc => vec![
-                "-preset".to_string(),
-                preset.x26x_name().to_string(),
-                "-tag:v".to_string(),
-                "hvc1".to_string(),
-                "-x265-params".to_string(),
-                format!("log-level=error:pools={}", max_threads),
-            ],
+            VideoEncoder::Hevc => {
+                let mut x265_params = format!("log-level=error:pools={}", max_threads);
+                if let Some(params) = hdr_x265_params {
+                    x265_params.push(':');
+                    x265_params.push_str(&params);
+                }
+                vec![
+                    "-preset".to_string(),
+                    preset.x26x_name().to_string(),
+                    "-tag:v".to_string(),
+                    "hvc1".to_string(),
+                    "-x265-params".to_string(),
+                    x265_params,
+                ]
+            },
             VideoEncoder::Av1 => vec![
                 "-svtav1-params".to_string(),
                 format!(
@@ -804,6 +811,7 @@ pub struct VideoExplorer {
     max_threads: usize,
     preset: EncoderPreset,
     input_video_stream_size: u64,
+    hdr_x265_params: Option<String>,
 }
 
 impl VideoExplorer {
@@ -816,6 +824,7 @@ impl VideoExplorer {
         use_gpu: Option<bool>,
         preset: EncoderPreset,
         max_threads: usize,
+        hdr_x265_params: Option<String>,
     ) -> Result<Self> {
         crate::path_validator::validate_path(input).map_err(|e| anyhow::anyhow!("{}", e))?;
         crate::path_validator::validate_path(output).map_err(|e| anyhow::anyhow!("{}", e))?;
@@ -855,6 +864,7 @@ impl VideoExplorer {
             use_gpu,
             preset,
             input_video_stream_size,
+            hdr_x265_params,
         })
     }
 
@@ -865,6 +875,7 @@ impl VideoExplorer {
         vf_args: Vec<String>,
         config: ExploreConfig,
         max_threads: usize,
+        hdr_x265_params: Option<String>,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -875,6 +886,7 @@ impl VideoExplorer {
             None,
             EncoderPreset::default(),
             max_threads,
+            hdr_x265_params,
         )
     }
 
@@ -886,6 +898,7 @@ impl VideoExplorer {
         config: ExploreConfig,
         use_gpu: bool,
         max_threads: usize,
+        hdr_x265_params: Option<String>,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -896,6 +909,7 @@ impl VideoExplorer {
             Some(use_gpu),
             EncoderPreset::default(),
             max_threads,
+            hdr_x265_params,
         )
     }
 
@@ -907,6 +921,7 @@ impl VideoExplorer {
         config: ExploreConfig,
         preset: EncoderPreset,
         max_threads: usize,
+        hdr_x265_params: Option<String>,
     ) -> Result<Self> {
         Self::build(
             input,
@@ -917,6 +932,7 @@ impl VideoExplorer {
             None,
             preset,
             max_threads,
+            hdr_x265_params,
         )
     }
 
@@ -946,6 +962,7 @@ impl VideoExplorer {
             self.use_gpu,
             self.preset,
             self.config.clone(),
+            self.hdr_x265_params.clone(),
         );
 
         let strategy = create_strategy(self.config.mode);
@@ -2287,7 +2304,7 @@ impl VideoExplorer {
         if !self.use_gpu {
             for arg in self
                 .encoder
-                .extra_args_with_preset(self.max_threads, self.preset)
+                .extra_args_with_preset(self.max_threads, self.preset, self.hdr_x265_params.clone())
             {
                 cmd.arg(arg);
             }
@@ -2901,7 +2918,7 @@ pub fn explore_size_only(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::size_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
 pub fn explore_quality_match(
@@ -2913,7 +2930,7 @@ pub fn explore_quality_match(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::quality_match(predicted_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
 pub fn explore_precise_quality_match(
@@ -2927,7 +2944,7 @@ pub fn explore_precise_quality_match(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::precise_quality_match(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
 pub fn explore_precise_quality_match_with_compression(
@@ -2942,7 +2959,7 @@ pub fn explore_precise_quality_match_with_compression(
 ) -> Result<ExploreResult> {
     let config =
         ExploreConfig::precise_quality_match_with_compression(initial_crf, max_crf, min_ssim);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
 pub fn explore_compress_only(
@@ -2955,7 +2972,7 @@ pub fn explore_compress_only(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_only(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
 pub fn explore_compress_with_quality(
@@ -2968,7 +2985,7 @@ pub fn explore_compress_with_quality(
     max_threads: usize,
 ) -> Result<ExploreResult> {
     let config = ExploreConfig::compress_with_quality(initial_crf, max_crf);
-    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads)?.explore()
+    VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
 pub fn explore_precise_quality_match_with_compression_gpu(
@@ -2992,6 +3009,7 @@ pub fn explore_precise_quality_match_with_compression_gpu(
         config,
         use_gpu,
         max_threads,
+        None,
     )?
     .explore()
 }
@@ -3016,6 +3034,7 @@ pub fn explore_precise_quality_match_gpu(
         config,
         use_gpu,
         max_threads,
+        None,
     )?
     .explore()
 }
@@ -3039,6 +3058,7 @@ pub fn explore_compress_only_gpu(
         config,
         use_gpu,
         max_threads,
+        None,
     )?
     .explore()
 }
@@ -3062,6 +3082,7 @@ pub fn explore_compress_with_quality_gpu(
         config,
         use_gpu,
         max_threads,
+        None,
     )?
     .explore()
 }
@@ -3085,6 +3106,7 @@ pub fn explore_size_only_gpu(
         config,
         use_gpu,
         max_threads,
+        None,
     )?
     .explore()
 }
@@ -3107,6 +3129,7 @@ pub fn explore_quality_match_gpu(
         config,
         use_gpu,
         max_threads,
+        None,
     )?
     .explore()
 }
