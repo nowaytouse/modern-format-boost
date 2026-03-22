@@ -81,6 +81,11 @@ Every file goes through a multi-stage decision pipeline:
 - **macOS xattrs**: Preserves Finder Tags, Date Added, and creation timestamps via `copyfile` and `setattrlist`.
 </details>
 
+### 🖥️ Runtime
+![Runtime](assets/runtime.png)
+<p align="center">Runtime</p>
+
+
 
 ### The Four Binaries
 
@@ -326,6 +331,11 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 - **杜比视界**：通过 `dovi_tool` 提取 RPU 并注入编码器；Profile 7 自动转 8.1 增强兼容性。
 - **macOS 特性**：利用 `copyfile` 和 `setattrlist` 完美保留 Finder 标签、添加日期及原始创建时间。
 </details>
+
+### 🖥️ 运行演示 (Runtime)
+![Runtime](assets/runtime.png)
+<p align="center">Runtime</p>
+
 
 
 ### 四个二进制工具
