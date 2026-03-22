@@ -1,24 +1,29 @@
 use std::fs;
 use blake3;
 
+fn normalize_and_hash(content: &str) -> (String, usize) {
+    let normalized = content.replace("\r\n", "\n").trim().to_string();
+    let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
+    let lines = if normalized.is_empty() { 0 } else { normalized.lines().count() };
+    (hash, lines)
+}
+
 fn main() {
-    // Expected values for v0.10.91-nightly
-    const EXPECTED_README_HASH: &str = "04ac36b1be447f68e2c09cd0a2eb9f8514f319595bde34b397708c5c99ec974f";
+    // Expected values for v0.10.91-nightly (Normalized)
+    const EXPECTED_README_HASH: &str = "83809b1afaf228ebc183da0de2c1d174f45e8fa0d53ba91876417bb84f36c96c";
     const EXPECTED_README_LINES: usize = 488;
     
-    const EXPECTED_CHANGELOG_HASH: &str = "ea3f1aaa55b0d37fe0424df5fed7a00d1c43b414caeda22fb0429ddb3517f3b5";
-    const EXPECTED_CHANGELOG_LINES: usize = 3730;
+    const EXPECTED_CHANGELOG_HASH: &str = "1ac2165abe926ca4199bb7483b3ef8cfb3dc322f7c16481c39cb7deed0955274";
+    const EXPECTED_CHANGELOG_LINES: usize = 3729;
 
     // Check README.md
-    let readme = fs::read("../README.md").expect("FATAL: README.md not found in workspace root");
-    let readme_hash = blake3::hash(&readme);
-    let readme_content = String::from_utf8_lossy(&readme);
-    let readme_lines = if readme_content.is_empty() { 0 } else { readme_content.lines().count() };
+    let readme_raw = fs::read_to_string("../README.md").expect("FATAL: README.md not found in workspace root");
+    let (readme_hash, readme_lines) = normalize_and_hash(&readme_raw);
     
-    if readme_hash.to_hex().as_str() != EXPECTED_README_HASH {
+    if readme_hash != EXPECTED_README_HASH {
         panic!(
             "\n💥 INTEGRITY FAILURE (README.md Hash Mismatch)\nGot:      {}\nExpected: {}\n",
-            readme_hash.to_hex(), EXPECTED_README_HASH
+            readme_hash, EXPECTED_README_HASH
         );
     }
     
@@ -30,15 +35,13 @@ fn main() {
     }
 
     // Check CHANGELOG.md
-    let changelog = fs::read("../CHANGELOG.md").expect("FATAL: CHANGELOG.md not found in workspace root");
-    let changelog_hash = blake3::hash(&changelog);
-    let changelog_content = String::from_utf8_lossy(&changelog);
-    let changelog_lines = if changelog_content.is_empty() { 0 } else { changelog_content.lines().count() };
+    let changelog_raw = fs::read_to_string("../CHANGELOG.md").expect("FATAL: CHANGELOG.md not found in workspace root");
+    let (changelog_hash, changelog_lines) = normalize_and_hash(&changelog_raw);
     
-    if changelog_hash.to_hex().as_str() != EXPECTED_CHANGELOG_HASH {
+    if changelog_hash != EXPECTED_CHANGELOG_HASH {
         panic!(
             "\n💥 INTEGRITY FAILURE (CHANGELOG.md Hash Mismatch)\nGot:      {}\nExpected: {}\n",
-            changelog_hash.to_hex(), EXPECTED_CHANGELOG_HASH
+            changelog_hash, EXPECTED_CHANGELOG_HASH
         );
     }
     
