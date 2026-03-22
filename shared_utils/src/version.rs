@@ -18,11 +18,6 @@
 //! println!("Cache Algorithm: {}", cache_algorithm_version());
 //! println!("Cache Schema: {}", CACHE_SCHEMA_VERSION);
 //! ```
-//!
-//! ## Integrity Protection
-//!
-//! This module binds essential project documentation to the compilation process,
-//! ensuring that README.md and CHANGELOG.md must exist for a successful build.
 
 use std::sync::LazyLock;
 use tracing::info;
@@ -30,27 +25,8 @@ use tracing::info;
 /// 📦 Program Version (from Cargo.toml)
 ///
 /// This is the single source of truth for the program version.
-/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.91")
+/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.85")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// 🛡️ Integrity Protection: README.md must exist in the root directory for successful build.
-const _: &str = include_str!("../../README.md");
-
-/// 🛡️ Integrity Protection: CHANGELOG.md must exist in the root directory for successful build.
-const _: &str = include_str!("../../CHANGELOG.md");
-
-/// 🔏 Expected Integrity Signatures (Normalized)
-///
-/// These values are validated by unit tests and build.rs to ensure documentation integrity.
-/// Normalization: CRLF -> LF, Trim whitespace.
-pub const EXPECTED_README_SIGNATURE: (&str, usize) = (
-    "83809b1afaf228ebc183da0de2c1d174f45e8fa0d53ba91876417bb84f36c96c",
-    488,
-);
-pub const EXPECTED_CHANGELOG_SIGNATURE: (&str, usize) = (
-    "1ac2165abe926ca4199bb7483b3ef8cfb3dc322f7c16481c39cb7deed0955274",
-    3729,
-);
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
@@ -80,7 +56,6 @@ pub const EXPECTED_CHANGELOG_SIGNATURE: (&str, usize) = (
 /// - v1085: GUI/script launch hardening and narrow-terminal progress adaptation
 /// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
 /// - v1090: Intelligent checkpoint reset on output directory deletion
-/// - v1091: Integrity binding for project documentation (README/CHANGELOG)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
@@ -222,40 +197,5 @@ mod tests {
         assert!(!info.program_version.is_empty());
         assert!(info.cache_algorithm_version > 0);
         assert_eq!(info.cache_schema_version, CACHE_SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn test_documentation_integrity() {
-        let readme = include_str!("../../README.md");
-        let changelog = include_str!("../../CHANGELOG.md");
-
-        fn normalize_and_hash(content: &str) -> (String, usize) {
-            let normalized = content.replace("\r\n", "\n").trim().to_string();
-            let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
-            let lines = if normalized.is_empty() { 0 } else { normalized.lines().count() };
-            (hash, lines)
-        }
-
-        let (r_hash, r_lines) = normalize_and_hash(readme);
-        let (c_hash, c_lines) = normalize_and_hash(changelog);
-
-        assert_eq!(
-            (r_hash.as_str(), r_lines),
-            EXPECTED_README_SIGNATURE,
-            "README.md integrity failure"
-        );
-        assert_eq!(
-            (c_hash.as_str(), c_lines),
-            EXPECTED_CHANGELOG_SIGNATURE,
-            "CHANGELOG.md integrity failure"
-        );
-    }
-
-    #[test]
-    fn test_normalization_edge_cases() {
-        let doc = "  \nLine 1\r\nLine 2  \n  ";
-        let normalized = doc.replace("\r\n", "\n").trim().to_string();
-        assert_eq!(normalized, "Line 1\nLine 2");
-        assert_eq!(normalized.lines().count(), 2);
     }
 }

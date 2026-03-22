@@ -468,7 +468,7 @@ fn save_cached_image_tree(snapshot: &CachedImageTreeSnapshot) -> io::Result<()> 
         "image",
     )?;
     let content = serde_json::to_string_pretty(snapshot)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        .map_err(io::Error::other)?;
     fs::write(cache_file, content)
 }
 
@@ -490,7 +490,7 @@ fn save_cached_video_tree(snapshot: &CachedVideoTreeSnapshot) -> io::Result<()> 
         "video",
     )?;
     let content = serde_json::to_string_pretty(snapshot)
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        .map_err(io::Error::other)?;
     fs::write(cache_file, content)
 }
 

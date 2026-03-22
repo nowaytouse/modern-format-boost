@@ -267,11 +267,8 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
         saw_real_error = true;
     }
 
-    if saw_real_error {
-        None
-    } else {
-        None
-    }
+    let _ = saw_real_error;
+    None
 }
 
 #[cfg(unix)]

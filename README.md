@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.10.91-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.10.90-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="License">

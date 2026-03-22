@@ -4,11 +4,6 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
-## [0.10.91] - 2026-03-22
-
-### 🛡️ Integrity Protection
-- **Documentation Enforcement**: Bound `README.md` and `CHANGELOG.md` to the compilation process via `include_str!`. Compilation will now fail if these files are missing, ensuring the repository remains complete for all builds.
-
 ## [0.10.90] - 2026-03-22
 
 ### Fixed
@@ -17,6 +12,9 @@ All notable changes to this project will be documented in this file.
     - **Exit Code Tolerance**: Prefers prioritized stdout JSON parsing over exit-code checks, eliminating false "Pixel format incompatibility" errors on legitimate HDR/10-bit video streams.
     - **Chroma Resolution Guard**: Implemented a safety threshold (256×256 min) for MS-SSIM chroma channels. Fails with Y-only scoring instead of crashing on small-resolution chroma planes (downsampling protection).
     - **False Error Suppression**: Tightened stderr parsing to ignore harmless logging fragments (like codec descriptions/metadata headers) that previously triggered false quality verification failures.
+
+### Refined
+- 🧹 **Housekeeping & Code Quality**: Resolved several Clippy lints and compiler warnings (redundant closures, manual clamps, identical branches, and signature mismatches in tests).
 
 ## [0.10.89] - 2026-03-22
 

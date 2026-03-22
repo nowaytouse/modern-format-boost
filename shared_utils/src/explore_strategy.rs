@@ -1063,8 +1063,7 @@ mod prop_tests {
                 4,
                 false,
                 EncoderPreset::Medium,
-                ExploreConfig::default(),
-                None,
+                ExploreConfig::default(), None,
             );
 
             let result = SsimResult::actual(ssim_value, Some(psnr_value));
@@ -1115,8 +1114,7 @@ mod prop_tests {
                 4,
                 false,
                 EncoderPreset::Medium,
-                ExploreConfig::default(),
-                None,
+                ExploreConfig::default(), None,
             );
 
             ctx.cache_size(crf, size);

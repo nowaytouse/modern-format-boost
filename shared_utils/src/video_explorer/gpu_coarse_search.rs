@@ -2987,6 +2987,7 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     input: &Path,
     output: &Path,

@@ -201,8 +201,7 @@ pub fn append_mfb_branding(path: &Path) -> io::Result<()> {
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             format!("AppleScript failed: {}", err),
         ));
     }

@@ -70,13 +70,13 @@ fn dynamic_bar_width(terminal_width: usize, reserved_width: usize) -> usize {
     let preferred = remaining.min(progress_style::BAR_WIDTH);
 
     if terminal_width >= 120 {
-        preferred.max(14).min(progress_style::BAR_WIDTH)
+        preferred.clamp(14, progress_style::BAR_WIDTH)
     } else if terminal_width >= 96 {
-        preferred.max(10).min(24)
+        preferred.clamp(10, 24)
     } else if terminal_width >= 72 {
-        preferred.max(8).min(16)
+        preferred.clamp(8, 16)
     } else {
-        preferred.max(6).min(10)
+        preferred.clamp(6, 10)
     }
 }
 
