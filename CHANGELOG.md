@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.94] - 2026-03-23
+
+### 🛠️ Code Quality Tooling
+- **`scripts/check_all.sh` Reliability Rewrite**: Reworked the quality scan script with strict shell safety (`set -Eeuo pipefail`), deterministic repo-root execution, and structured pass/fail/warn/skip summaries.
+- **Nightly-First Branch Policy**: Added default git-branch enforcement to run checks on `nightly` unless explicitly bypassed with `--allow-non-nightly`.
+- **Required vs Optional Gates**: Split checks into required gates (`fmt`/`clippy`/tests) and optional deep scans, with required failures now correctly returning a non-zero exit code.
+- **Installed Tool Awareness**: Optional checks now auto-detect installed Cargo subcommands (`audit`, `deny`, `machete`, `udeps`, `geiger`, `bloat`, `hack`, `miri`) and skip missing tools with explicit reasons.
+- **Network-Safe Security Checks**: `cargo audit` and `cargo deny` default to no-fetch mode for stable local runs, with an opt-in `--fetch-advisory-db` switch when fresh advisory sync is needed.
+- **Operational Modes**: Added `--required-only`, `--no-expensive`, and help output for CI and local debugging workflows.
+
 ## [0.10.93] - 2026-03-23
 
 ### 🐛 Bug Fixes
