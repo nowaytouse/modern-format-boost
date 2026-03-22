@@ -1544,41 +1544,54 @@ fn verify_jxl_health(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use tempfile::tempdir;
 
     #[test]
     fn test_get_output_path() {
-        let input = Path::new("/path/to/image.png");
+        let tmp = tempdir().expect("create temp dir");
+        let root = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let input_dir = root.join("path").join("to");
+        std::fs::create_dir_all(&input_dir).expect("create input dir");
+        let input = input_dir.join("image.png");
+        std::fs::write(&input, b"png").expect("create input file");
         let options = ConvertOptions {
             output_dir: None,
             base_dir: None,
             ..Default::default()
         };
-        let output = get_output_path(input, "jxl", &options).unwrap();
-        assert_eq!(output, Path::new("/path/to/image.JXL"));
+        let output = get_output_path(&input, "jxl", &options).unwrap();
+        assert_eq!(output, input_dir.join("image.JXL"));
     }
 
     #[test]
     fn test_get_output_path_with_dir() {
-        let input = Path::new("/path/to/image.png");
+        let tmp = tempdir().expect("create temp dir");
+        let root = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let input_dir = root.join("path").join("to");
+        std::fs::create_dir_all(&input_dir).expect("create input dir");
+        let input = input_dir.join("image.png");
+        std::fs::write(&input, b"png").expect("create input file");
+        let output_dir = root.join("output");
         let options = ConvertOptions {
-            output_dir: Some(PathBuf::from("/output")),
+            output_dir: Some(output_dir.clone()),
             base_dir: None,
             ..Default::default()
         };
-        let output = get_output_path(input, "avif", &options).unwrap();
-        assert_eq!(output, Path::new("/output/image.AVIF"));
+        let output = get_output_path(&input, "avif", &options).unwrap();
+        assert_eq!(output, output_dir.join("image.AVIF"));
     }
 
     #[test]
     fn test_get_output_path_same_file_error() {
-        let input = Path::new("/path/to/image.JXL");
+        let tmp = tempdir().expect("create temp dir");
+        let root = std::fs::canonicalize(tmp.path()).expect("canonicalize temp dir");
+        let input = root.join("image.JXL");
         let options = ConvertOptions {
             output_dir: None,
             base_dir: None,
             ..Default::default()
         };
-        let result = get_output_path(input, "jxl", &options);
+        let result = get_output_path(&input, "jxl", &options);
         assert!(result.is_err());
     }
 

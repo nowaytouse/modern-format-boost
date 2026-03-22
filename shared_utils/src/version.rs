@@ -44,12 +44,12 @@ const _: &str = include_str!("../../CHANGELOG.md");
 /// These values are validated by unit tests and build.rs to ensure documentation integrity.
 /// Normalization: CRLF -> LF, Trim whitespace.
 pub const EXPECTED_README_SIGNATURE: (&str, usize) = (
-    "83809b1afaf228ebc183da0de2c1d174f45e8fa0d53ba91876417bb84f36c96c",
-    488,
+    "8f2e302d0ddde440ce5801666fe6872c362be0280771d5d53fa97ae01d027733",
+    498,
 );
 pub const EXPECTED_CHANGELOG_SIGNATURE: (&str, usize) = (
-    "1ac2165abe926ca4199bb7483b3ef8cfb3dc322f7c16481c39cb7deed0955274",
-    3729,
+    "65b703c7a730c1021c203488ec36639baa6fbd9456c54df340437d57b7d489b2",
+    3188,
 );
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version

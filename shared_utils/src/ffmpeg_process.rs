@@ -76,7 +76,7 @@ impl FfmpegProcess {
                     }
                     Err(err) => {
                         error!("Failed to read FFmpeg stderr: {err}");
-                        let _ = write!(buf, "[stderr read error: {err}]\n");
+                        let _ = writeln!(buf, "[stderr read error: {err}]");
                         break;
                     }
                 }
@@ -127,13 +127,10 @@ impl FfmpegProcess {
             }
         }
         let stderr = self.stderr_thread.take().map_or_else(String::new, |t| {
-            t.join().map_or_else(
-                |_| {
-                    warn!("FFmpeg stderr reader thread panicked");
-                    String::new()
-                },
-                |output| output,
-            )
+            t.join().unwrap_or_else(|_| {
+                warn!("FFmpeg stderr reader thread panicked");
+                String::new()
+            })
         });
 
         if status.success() {
