@@ -123,13 +123,18 @@ where
     // Skip if MFB_SKIP_DISK_PRECHECK=1 (script has already done the check).
     // Initialize checkpoint manager if resume is enabled
     let mut checkpoint = if config.resume {
-        match crate::checkpoint::CheckpointManager::new_with_context(input, config.output.as_deref())
-        {
+        match crate::checkpoint::CheckpointManager::new_with_context(
+            input,
+            config.output.as_deref(),
+        ) {
             Ok(cp) => {
                 // Detect when user deleted the output directory to start fresh:
                 // clear old checkpoint state so all files get reprocessed.
                 if let Err(e) = cp.reset_if_output_root_missing(config.output.as_deref()) {
-                    warn!("⚠️  Failed to check output root for checkpoint reset: {}", e);
+                    warn!(
+                        "⚠️  Failed to check output root for checkpoint reset: {}",
+                        e
+                    );
                 }
 
                 if cp.is_resume_mode() {

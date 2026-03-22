@@ -10,7 +10,7 @@ fn main() {
             "/usr/local/lib"
         };
 
-        println!("cargo:rustc-link-search=native={}", homebrew_lib);
+        println!("cargo:rustc-link-search=native={homebrew_lib}");
 
         let homebrew_opt = if cfg!(target_arch = "aarch64") {
             "/opt/homebrew/opt"
@@ -18,9 +18,6 @@ fn main() {
             "/usr/local/opt"
         };
 
-        println!(
-            "cargo:rustc-link-search=native={}/libheif/lib",
-            homebrew_opt
-        );
+        println!("cargo:rustc-link-search=native={homebrew_opt}/libheif/lib");
     }
 }

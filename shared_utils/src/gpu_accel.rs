@@ -1930,20 +1930,24 @@ fn gpu_coarse_search_with_log_impl(
                             if let Ok(time_us) = val.parse::<u64>() {
                                 if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
                                     let current_secs = time_us as f64 / 1_000_000.0;
-                                    let pct = (current_secs / actual_sample_duration as f64 * 100.0)
+                                    let pct = (current_secs / actual_sample_duration as f64
+                                        * 100.0)
                                         .min(100.0);
                                     let elapsed_secs = start_time.elapsed().as_secs_f64();
-                                    let eta = if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
-                                        let speed = current_secs / elapsed_secs;
-                                        if speed > 0.0 {
-                                            ((actual_sample_duration as f64 - current_secs) / speed)
-                                                .max(0.0) as u64
+                                    let eta =
+                                        if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
+                                            let speed = current_secs / elapsed_secs;
+                                            if speed > 0.0 {
+                                                ((actual_sample_duration as f64 - current_secs)
+                                                    / speed)
+                                                    .max(0.0)
+                                                    as u64
+                                            } else {
+                                                0
+                                            }
                                         } else {
                                             0
-                                        }
-                                    } else {
-                                        0
-                                    };
+                                        };
                                     let speed = if current_secs > 0.0 {
                                         start_time.elapsed().as_secs_f64() / current_secs
                                     } else {

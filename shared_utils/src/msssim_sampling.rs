@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(SamplingStrategy::from_duration(0.0), SamplingStrategy::Full);
         assert_eq!(SamplingStrategy::from_duration(1.0), SamplingStrategy::Full);
         assert_eq!(
-            SamplingStrategy::from_duration(100000.0),
+            SamplingStrategy::from_duration(100_000.0),
             SamplingStrategy::Skip
         );
     }

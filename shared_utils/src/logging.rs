@@ -421,9 +421,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     }
 
     if CURRENT_LOG_LEVEL.set(config.level).is_err() {
-        eprintln!(
-            "⚠️ [Logging] log level was already initialized earlier; keeping previous level"
-        );
+        eprintln!("⚠️ [Logging] log level was already initialized earlier; keeping previous level");
     }
     std::fs::create_dir_all(&config.log_dir)
         .with_context(|| format!("Failed to create log directory: {:?}", config.log_dir))?;

@@ -282,15 +282,14 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
         as u32;
     if width == 0 || height == 0 {
         return Err(FFprobeError::ParseError(format!(
-            "Invalid dimensions: {}x{}",
-            width, height
+            "Invalid dimensions: {width}x{height}"
         )));
     }
 
     let frame_rate = parse_frame_rate(video_stream["r_frame_rate"].as_str().unwrap_or("0/1"))
-        .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {}", e)))?;
+        .map_err(|e| FFprobeError::ParseError(format!("Invalid r_frame_rate: {e}")))?;
     let avg_frame_rate = parse_frame_rate(video_stream["avg_frame_rate"].as_str().unwrap_or("0/1"))
-        .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {}", e)))?;
+        .map_err(|e| FFprobeError::ParseError(format!("Invalid avg_frame_rate: {e}")))?;
 
     // Enhanced VFR detection with slow-motion handling
     let is_variable_frame_rate =
@@ -592,7 +591,7 @@ fn build_max_cll_string(sd: &serde_json::Value) -> Option<String> {
     let max_average = sd["max_average"]
         .as_u64()
         .or_else(|| sd["MaxFALL"].as_u64())?;
-    Some(format!("{},{}", max_content, max_average))
+    Some(format!("{max_content},{max_average}"))
 }
 
 pub fn get_duration(path: &Path) -> Option<f64> {
@@ -704,10 +703,10 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
         if parts.len() == 2 {
             let num = parts[0]
                 .parse::<f64>()
-                .map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {}", e)))?;
+                .map_err(|e| FFprobeError::ParseError(format!("Invalid numerator: {e}")))?;
             let den = parts[1]
                 .parse::<f64>()
-                .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {}", e)))?;
+                .map_err(|e| FFprobeError::ParseError(format!("Invalid denominator: {e}")))?;
             if den > 0.0 {
                 let rate = num / den;
                 if rate > 0.0 {
@@ -719,8 +718,7 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     match s.parse::<f64>() {
         Ok(v) if v > 0.0 => Ok(v),
         _ => Err(FFprobeError::ParseError(format!(
-            "Could not parse frame rate: '{}'",
-            s
+            "Could not parse frame rate: '{s}'"
         ))),
     }
 }
@@ -778,10 +776,7 @@ mod tests {
             let result = parse_frame_rate(input).unwrap();
             assert!(
                 (result - expected).abs() < *tolerance,
-                "parse_frame_rate({:?}): expected {}, got {}",
-                input,
-                expected,
-                result
+                "parse_frame_rate({input:?}): expected {expected}, got {result}"
             );
         }
     }
@@ -826,8 +821,7 @@ mod tests {
             assert_eq!(
                 detect_bit_depth(fmt),
                 *expected,
-                "detect_bit_depth({:?}) mismatch",
-                fmt
+                "detect_bit_depth({fmt:?}) mismatch"
             );
         }
     }

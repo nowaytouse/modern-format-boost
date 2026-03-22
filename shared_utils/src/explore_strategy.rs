@@ -454,7 +454,11 @@ impl ExploreContext {
             .arg("-preset")
             .arg(self.preset.x26x_name());
 
-        for arg in self.encoder.extra_args_with_preset(self.max_threads, self.preset, self.hdr_x265_params.clone()) {
+        for arg in self.encoder.extra_args_with_preset(
+            self.max_threads,
+            self.preset,
+            self.hdr_x265_params.clone(),
+        ) {
             cmd.arg(arg);
         }
 

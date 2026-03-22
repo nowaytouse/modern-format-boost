@@ -242,13 +242,14 @@ fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10P
     };
 
     // Step 2: Extract HDR10+ JSON
-    let json_path = match shared_utils::hdr_utils::extract_hdr10plus_metadata(&raw_hevc, temp_dir.path()) {
-        Ok(p) => p,
-        Err(e) => {
-            warn!("HDR10+ extraction failed: {}", e);
-            return None;
-        }
-    };
+    let json_path =
+        match shared_utils::hdr_utils::extract_hdr10plus_metadata(&raw_hevc, temp_dir.path()) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("HDR10+ extraction failed: {}", e);
+                return None;
+            }
+        };
 
     info!("HDR10+ dynamic metadata extracted — will be preserved via dhdr10-info in x265 output");
 
@@ -498,7 +499,8 @@ pub fn auto_convert_with_cache(
         warn!("HDR10+ detected: dynamic metadata will be stripped to HDR10 static layer");
     }
 
-    let strategy = determine_strategy_with_apple_compat(&detection, config.apple_compat, config.force);
+    let strategy =
+        determine_strategy_with_apple_compat(&detection, config.apple_compat, config.force);
 
     if strategy.target == TargetVideoFormat::Skip {
         shared_utils::progress_mode::video_skipped(&strategy.reason);
@@ -650,7 +652,10 @@ pub fn auto_convert_with_cache(
                 } else if let Some(hint) =
                     shared_utils::crf_constants::get_global_last_hit_crf_hevc()
                 {
-                    info!("   💡 Using global last hit CRF: {:.1} (warm start only)", hint);
+                    info!(
+                        "   💡 Using global last hit CRF: {:.1} (warm start only)",
+                        hint
+                    );
                     Some(hint)
                 } else {
                     None
@@ -2346,7 +2351,6 @@ mod tests {
         use crate::detection_api::VideoDetectionResult;
         use std::path::PathBuf;
 
-
         // Mock a 10-bit HDR10+ result
         let detection = VideoDetectionResult {
             file_path: "test.mp4".to_string(),
@@ -2389,7 +2393,7 @@ mod tests {
         assert!(final_params.contains("hdr-opt=1"));
         assert!(final_params.contains("repeat-headers=1"));
         assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
-        
+
         println!("✅ HDR10+ x265-params injection verified: {}", final_params);
     }
 }

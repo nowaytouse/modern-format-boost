@@ -232,7 +232,11 @@ mod tests {
         fn normalize_and_hash(content: &str) -> (String, usize) {
             let normalized = content.replace("\r\n", "\n").trim().to_string();
             let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
-            let lines = if normalized.is_empty() { 0 } else { normalized.lines().count() };
+            let lines = if normalized.is_empty() {
+                0
+            } else {
+                normalized.lines().count()
+            };
             (hash, lines)
         }
 
