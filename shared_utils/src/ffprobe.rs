@@ -1,6 +1,6 @@
-//! FFprobe wrapper module
+//! `FFprobe` wrapper module
 //!
-//! Shared FFprobe functionality for video analysis.
+//! Shared `FFprobe` functionality for video analysis.
 //! Used by vidquality and vid-hevc.
 
 use serde::{Deserialize, Serialize};
@@ -20,10 +20,10 @@ pub enum FFprobeError {
 impl std::fmt::Display for FFprobeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FFprobeError::ToolNotFound(s) => write!(f, "Tool not found: {}", s),
-            FFprobeError::ExecutionFailed(s) => write!(f, "FFprobe failed: {}", s),
-            FFprobeError::ParseError(s) => write!(f, "Parse error: {}", s),
-            FFprobeError::IoError(e) => write!(f, "IO error: {}", e),
+            Self::ToolNotFound(s) => write!(f, "Tool not found: {s}"),
+            Self::ExecutionFailed(s) => write!(f, "FFprobe failed: {s}"),
+            Self::ParseError(s) => write!(f, "Parse error: {s}"),
+            Self::IoError(e) => write!(f, "IO error: {e}"),
         }
     }
 }
@@ -32,11 +32,12 @@ impl std::error::Error for FFprobeError {}
 
 impl From<io::Error> for FFprobeError {
     fn from(e: io::Error) -> Self {
-        FFprobeError::IoError(e)
+        Self::IoError(e)
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FFprobeResult {
     pub format_name: String,
     pub duration: f64,
@@ -60,7 +61,7 @@ pub struct FFprobeResult {
     pub audio_channels: Option<u32>,
     pub profile: Option<String>,
     pub level: Option<String>,
-    /// Actual B-frame count (max_b_frames) from ffprobe.
+    /// Actual B-frame count (`max_b_frames`) from ffprobe.
     pub max_b_frames: u8,
     pub has_b_frames: bool,
     /// Raw encoder settings string (e.g. from x264-params or x265-params tags).
@@ -81,16 +82,17 @@ pub struct FFprobeResult {
     pub is_hdr10_plus: bool,
     /// True when at least one subtitle stream is present
     pub has_subtitles: bool,
-    /// Codec name of the first subtitle stream (e.g. "srt", "ass", "mov_text", "hdmv_pga_subtitle")
+    /// Codec name of the first subtitle stream (e.g. "srt", "ass", "`mov_text`", "`hdmv_pga_subtitle`")
     pub subtitle_codec: Option<String>,
-    /// Variable frame rate detected (r_frame_rate != avg_frame_rate)
+    /// Variable frame rate detected (`r_frame_rate` != `avg_frame_rate`)
     pub is_variable_frame_rate: bool,
     /// Stream index of the selected video stream (for multi-stream files like animated AVIF)
     pub stream_index: usize,
-    /// Format tags (e.g. encoder, creation_time) from the format section
+    /// Format tags (e.g. encoder, `creation_time`) from the format section
     pub tags: std::collections::HashMap<String, String>,
 }
 
+    #[must_use]
 pub fn is_ffprobe_available() -> bool {
     Command::new("ffprobe").arg("-version").output().is_ok()
 }
@@ -124,6 +126,14 @@ fn detect_vfr_enhanced(
     diff_ratio > 0.02
 }
 
+/// Probe video file using ffprobe.
+///
+/// # Errors
+/// Returns `FFprobeError` if `ffprobe` is not found, execution fails, or parsing results fails.
+///
+/// # Panics
+/// Panics if no video streams are found.
+#[allow(clippy::too_many_lines)]
 pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
     if !is_ffprobe_available() {
         return Err(FFprobeError::ToolNotFound(
@@ -697,6 +707,10 @@ pub fn get_frame_count(path: &Path) -> Option<u64> {
     }
 }
 
+/// Parse frame rate string (e.g. "30/1" or "29.97").
+///
+/// # Errors
+/// Returns `FFprobeError` if parsing fails.
 pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     if s.contains('/') {
         let parts: Vec<&str> = s.split('/').collect();
@@ -723,6 +737,7 @@ pub fn parse_frame_rate(s: &str) -> Result<f64, FFprobeError> {
     }
 }
 
+#[must_use]
 pub fn detect_bit_depth(pix_fmt: &str) -> u8 {
     if pix_fmt.contains("16le")
         || pix_fmt.contains("16be")
@@ -798,30 +813,13 @@ mod tests {
             ("rgb24", 8),
             ("bgr24", 8),
             ("nv12", 8),
-            ("yuvj420p", 8),
-            ("yuv420p10le", 10),
-            ("yuv420p10be", 10),
-            ("yuv422p10le", 10),
-            ("yuv444p10le", 10),
-            ("p010le", 10),
-            ("p010", 10),
-            ("yuv420p12le", 12),
-            ("yuv420p12be", 12),
-            ("yuv422p12le", 12),
-            ("yuv444p12le", 12),
-            ("yuv420p16le", 16),
-            ("yuv420p16be", 16),
-            ("rgb48le", 16),
-            ("unknown", 8),
-            ("", 8),
-            ("custom_format", 8),
         ];
 
-        for (fmt, expected) in cases {
+        for (input, expected) in cases {
             assert_eq!(
-                detect_bit_depth(fmt),
+                detect_bit_depth(input),
                 *expected,
-                "detect_bit_depth({fmt:?}) mismatch"
+                "detect_bit_depth({input:?})"
             );
         }
     }

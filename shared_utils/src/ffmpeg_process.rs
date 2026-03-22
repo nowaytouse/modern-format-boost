@@ -1,10 +1,10 @@
-//! 🔥 v6.4.7: FFmpeg 进程管理模块 - 防止管道死锁
+//! 🔥 v6.4.7: `FFmpeg` 进程管理模块 - 防止管道死锁
 //!
 //! ## 问题背景
 //!
-//! 当同时 pipe stdout 和 stderr 但只读取 stdout 时，如果 FFmpeg 输出大量
+//! 当同时 pipe stdout 和 stderr 但只读取 stdout 时，如果 `FFmpeg` 输出大量
 //! stderr 日志（超过 64KB 缓冲区），会导致死锁：
-//! - FFmpeg 因 stderr 缓冲区满而阻塞
+//! - `FFmpeg` 因 stderr 缓冲区满而阻塞
 //! - Rust 程序因等待 stdout 而阻塞
 //! - 两者互相等待，程序卡死
 //!
@@ -33,6 +33,7 @@
 //! ```
 
 use anyhow::{Context, Result};
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
@@ -44,8 +45,12 @@ pub struct FfmpegProcess {
 }
 
 impl FfmpegProcess {
+    /// Spawn a new `FFmpeg` process.
+    ///
+    /// # Errors
+    /// Returns error if spawning fails or stderr cannot be captured.
     pub fn spawn(cmd: &mut Command) -> Result<Self> {
-        let command_str = format!("{:?}", cmd);
+        let command_str = format!("{cmd:?}");
         info!(
             command = %command_str,
             "Executing FFmpeg command"
@@ -70,8 +75,8 @@ impl FfmpegProcess {
                         buf.push('\n');
                     }
                     Err(err) => {
-                        error!("Failed to read FFmpeg stderr: {}", err);
-                        buf.push_str(&format!("[stderr read error: {}]\n", err));
+                        error!("Failed to read FFmpeg stderr: {err}");
+                        let _ = write!(buf, "[stderr read error: {err}]\n");
                         break;
                     }
                 }
@@ -93,6 +98,10 @@ impl FfmpegProcess {
         self.child.stdout.take()
     }
 
+    /// Wait for `FFmpeg` process to complete and return its output.
+    ///
+    /// # Errors
+    /// Returns error if waiting for child process fails.
     pub fn wait_with_output(mut self) -> Result<(ExitStatus, String)> {
         // If caller never took stdout, drain it in background so FFmpeg does not block on write (pipe buffer full).
         let stdout_drain = self.child.stdout.take().map(|stdout| {
@@ -117,16 +126,15 @@ impl FfmpegProcess {
                 Err(_) => warn!("FFmpeg stdout drain thread panicked"),
             }
         }
-        let stderr = match self.stderr_thread.take() {
-            Some(t) => match t.join() {
-                Ok(output) => output,
-                Err(_) => {
+        let stderr = self.stderr_thread.take().map_or_else(String::new, |t| {
+            t.join().map_or_else(
+                |_| {
                     warn!("FFmpeg stderr reader thread panicked");
                     String::new()
-                }
-            },
-            None => String::new(),
-        };
+                },
+                |output| output,
+            )
+        });
 
         if status.success() {
             info!(
@@ -148,12 +156,20 @@ impl FfmpegProcess {
         Ok((status, stderr))
     }
 
+    /// Check if process has finished.
+    ///
+    /// # Errors
+    /// Returns error if checking status fails.
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>> {
         self.child
             .try_wait()
             .context("Failed to check FFmpeg status")
     }
 
+    /// Kill the process.
+    ///
+    /// # Errors
+    /// Returns error if killing fails.
     pub fn kill(&mut self) -> Result<()> {
         self.child.kill().context("Failed to kill FFmpeg process")
     }
@@ -170,7 +186,8 @@ pub struct FfmpegProgressParser {
 }
 
 impl FfmpegProgressParser {
-    pub fn new(total_frames: Option<u64>) -> Self {
+    #[must_use]
+    pub const fn new(total_frames: Option<u64>) -> Self {
         Self {
             total_frames,
             total_duration: None,
@@ -181,7 +198,8 @@ impl FfmpegProgressParser {
         }
     }
 
-    pub fn with_duration(total_duration: f64) -> Self {
+    #[must_use]
+    pub const fn with_duration(total_duration: f64) -> Self {
         Self {
             total_frames: None,
             total_duration: Some(total_duration),
@@ -231,12 +249,13 @@ impl FfmpegProgressParser {
         let minutes: f64 = parts[1].parse().ok()?;
         let seconds: f64 = parts[2].parse().ok()?;
 
-        Some(hours * 3600.0 + minutes * 60.0 + seconds)
+        Some(hours.mul_add(3600.0, minutes.mul_add(60.0, seconds)))
     }
 
     fn calculate_progress(&self) -> Option<f64> {
         if let Some(total) = self.total_frames {
             if total > 0 && self.current_frame > 0 {
+                #[allow(clippy::cast_precision_loss)]
                 return Some((self.current_frame as f64 / total as f64).min(1.0));
             }
         }
@@ -250,23 +269,28 @@ impl FfmpegProgressParser {
         None
     }
 
-    pub fn current_frame(&self) -> u64 {
+    #[must_use]
+    pub const fn current_frame(&self) -> u64 {
         self.current_frame
     }
 
-    pub fn current_time(&self) -> f64 {
+    #[must_use]
+    pub const fn current_time(&self) -> f64 {
         self.current_time
     }
 
-    pub fn current_fps(&self) -> f64 {
+    #[must_use]
+    pub const fn current_fps(&self) -> f64 {
         self.current_fps
     }
 
-    pub fn current_speed(&self) -> f64 {
+    #[must_use]
+    pub const fn current_speed(&self) -> f64 {
         self.current_speed
     }
 }
 
+#[must_use]
 pub fn format_ffmpeg_error(stderr: &str) -> String {
     if let Some(error_line) = stderr
         .lines()
@@ -286,10 +310,10 @@ pub fn format_ffmpeg_error(stderr: &str) -> String {
                 && !trimmed.starts_with("fps=")
                 && !trimmed.starts_with("size=")
         })
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "Unknown FFmpeg error".to_string())
+        .map_or_else(|| "Unknown FFmpeg error".to_string(), |s| s.trim().to_string())
 }
 
+#[must_use]
 pub fn is_recoverable_error(stderr: &str) -> bool {
     let recoverable_patterns = [
         "Resource temporarily unavailable",
@@ -317,11 +341,11 @@ impl std::fmt::Display for FfmpegError {
         writeln!(f, "❌ FFMPEG ERROR")?;
         writeln!(f, "   Command: {}", self.command)?;
         if let Some(code) = self.exit_code {
-            writeln!(f, "   Exit code: {}", code)?;
+            writeln!(f, "   Exit code: {code}")?;
         }
         writeln!(f, "   Error: {}", format_ffmpeg_error(&self.stderr))?;
         if let Some(ref suggestion) = self.suggestion {
-            writeln!(f, "   💡 Suggestion: {}", suggestion)?;
+            writeln!(f, "   💡 Suggestion: {suggestion}")?;
         }
         Ok(())
     }
@@ -329,6 +353,7 @@ impl std::fmt::Display for FfmpegError {
 
 impl std::error::Error for FfmpegError {}
 
+#[must_use]
 pub fn get_error_suggestion(stderr: &str) -> Option<String> {
     let patterns = [
         ("No such file or directory", "Check input file path"),
@@ -364,12 +389,16 @@ pub fn get_error_suggestion(stderr: &str) -> Option<String> {
 
     for (pattern, suggestion) in patterns {
         if stderr.contains(pattern) {
-            return Some(suggestion.to_string());
+            return Some((*suggestion).to_string());
         }
     }
     None
 }
 
+/// Run `FFmpeg` command and report error details if it fails.
+///
+/// # Errors
+/// Returns error if command fails, also prints error details to stderr.
 pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Output> {
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(args);
@@ -389,10 +418,10 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
 
         let error = FfmpegError {
             command: command_str,
-            stdout: stdout.clone(),
-            stderr: stderr.clone(),
+            stdout,
+            stderr,
             exit_code: output.status.code(),
-            suggestion: get_error_suggestion(&stderr),
+            suggestion: get_error_suggestion(String::from_utf8_lossy(&output.stderr).as_ref()),
         };
 
         error!(
@@ -404,7 +433,7 @@ pub fn run_ffmpeg_with_error_report(args: &[&str]) -> Result<std::process::Outpu
             "FFmpeg command failed"
         );
 
-        eprintln!("{}", error);
+        eprintln!("{error}");
 
         return Err(anyhow::anyhow!(error));
     }
@@ -428,10 +457,10 @@ mod tests {
 
     #[test]
     fn test_format_ffmpeg_error_with_error_line() {
-        let stderr = r#"
+        let stderr = r"
 frame=  100 fps=25.0 q=28.0 size=    1024kB time=00:00:04.00 bitrate=2097.2kbits/s
 [libx265 @ 0x7f8b8c000000] Error: invalid parameter
-"#;
+";
         let error = format_ffmpeg_error(stderr);
         assert!(error.contains("Error"));
         assert!(error.contains("invalid parameter"));
@@ -439,10 +468,10 @@ frame=  100 fps=25.0 q=28.0 size=    1024kB time=00:00:04.00 bitrate=2097.2kbits
 
     #[test]
     fn test_format_ffmpeg_error_no_error_line() {
-        let stderr = r#"
+        let stderr = r"
 frame=  100 fps=25.0 q=28.0 size=    1024kB time=00:00:04.00
 Conversion failed!
-"#;
+";
         let error = format_ffmpeg_error(stderr);
         assert_eq!(error, "Conversion failed!");
     }
@@ -493,7 +522,7 @@ mod prop_tests {
         #[test]
         fn prop_progress_parser_frame_accuracy(
             current in 0u64..10000,
-            total in 1u64..10000
+            total in 1_u64..10000
         ) {
             let mut parser = FfmpegProgressParser::new(Some(total));
             let line = format!("frame={}", current);

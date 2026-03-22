@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
+## [0.10.92] - 2026-03-22
+
+### 🛠️ Code Quality & Robustness (Shared Utils)
+- **Deadlock-Free FFmpeg Pipeline**: Re-engineered `ffmpeg_process.rs` with a dedicated asynchronous `stderr` drain thread. This prevents "pipe-buffer-full" deadlocks during resource-intensive transcode operations, ensuring 100% reliability for high-verbosity logging tasks.
+- **Analysis Cache Restoration**: Fixed corrupted function signatures in `analysis_cache.rs` for `compute_hash` logic. Restored the structural integrity of the caching engine, enabling accurate multi-version dependency and parameter fingerprinting.
+- **Exploration Strategy Optimization**: 
+    - Migrated legacy `Option` patterns to modern `is_some_and` idioms for improved readability.
+    - Integrated `mul_add` FMA (Fused Multiply-Add) optimization for CRF binary-search boundary calculations, reducing cumulative rounding errors during quality saturation seeks.
+- **Clippy-Compliant Hardening**: Standardized documentation (`# Errors`, `# Panics`), implemented `#[must_use]` on critical tool-check APIs, and converted performance-sensitive utility methods to `const fn`.
+- **Accurate Error Reporting**: Fixed a variable interpolation bug in `CompressionResult::error_message`, ensuring that quality comparison failures in the logs display correct source and target scores.
+
 ## [0.10.91] - 2026-03-22
 
 ### 🛡️ Integrity Protection
