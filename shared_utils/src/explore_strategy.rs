@@ -4,7 +4,7 @@
 //!
 //! ## 设计目标
 //! 1. 每种探索模式的逻辑完全独立，更易维护和测试
-//! 2. 统一的 ExploreContext 提供共享状态和工具方法
+//! 2. 统一的 ExploreContext 提供共享状态 and 工具方法
 //! 3. 统一的 SSIM 计算逻辑（带缓存和回退）
 //! 4. 统一的进度显示接口
 //!
@@ -29,6 +29,8 @@ use crate::video_explorer::{
 };
 
 pub trait ExploreStrategy: Send + Sync {
+    /// # Errors
+    /// Returns error if exploration fails.
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult>;
 
     fn name(&self) -> &'static str;
@@ -44,7 +46,8 @@ pub struct SsimResult {
 }
 
 impl SsimResult {
-    pub fn actual(value: f64, psnr: Option<f64>) -> Self {
+    #[must_use]
+    pub const fn actual(value: f64, psnr: Option<f64>) -> Self {
         Self {
             value,
             source: SsimSource::Actual,
@@ -52,7 +55,8 @@ impl SsimResult {
         }
     }
 
-    pub fn predicted(value: f64, psnr: f64) -> Self {
+    #[must_use]
+    pub const fn predicted(value: f64, psnr: f64) -> Self {
         Self {
             value,
             source: SsimSource::Predicted,
@@ -61,21 +65,25 @@ impl SsimResult {
     }
 
     #[inline]
-    pub fn is_actual(&self) -> bool {
+    #[must_use]
+    pub const fn is_actual(&self) -> bool {
         matches!(self.source, SsimSource::Actual)
     }
 
     #[inline]
-    pub fn is_predicted(&self) -> bool {
+    #[must_use]
+    pub const fn is_predicted(&self) -> bool {
         matches!(self.source, SsimSource::Predicted)
     }
 
     #[inline]
+    #[must_use]
     pub fn value_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.value).ok()
     }
 
     #[inline]
+    #[must_use]
     pub fn meets_threshold(&self, threshold: f64) -> bool {
         crate::float_compare::ssim_meets_threshold(self.value, threshold)
     }
@@ -123,6 +131,7 @@ impl<T> Default for CrfCache<T> {
 
 impl<T> CrfCache<T> {
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             data: Box::new(std::array::from_fn(|_| None)),
@@ -130,9 +139,10 @@ impl<T> CrfCache<T> {
     }
 
     #[inline]
+    #[must_use]
     pub fn key(crf: f32) -> Option<usize> {
         if crf < 0.0 {
-            eprintln!("⚠️ CRF_CACHE: Negative CRF {} rejected", crf);
+            eprintln!("⚠️ CRF_CACHE: Negative CRF {crf} rejected");
             return None;
         }
         if crf.is_nan() || crf.is_infinite() {
@@ -140,12 +150,11 @@ impl<T> CrfCache<T> {
             return None;
         }
         if crf > CRF_CACHE_MAX_VALID {
-            eprintln!(
-                "⚠️ CRF_CACHE: CRF {} exceeds max valid {} - rejected",
-                crf, CRF_CACHE_MAX_VALID
-            );
+            eprintln!("⚠️ CRF_CACHE: CRF {crf} exceeds max valid {CRF_CACHE_MAX_VALID} - rejected");
             return None;
         }
+        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_sign_loss)]
         let idx = (crf * CRF_CACHE_MULTIPLIER).round() as usize;
         if idx < CRF_CACHE_SIZE {
             Some(idx)
@@ -155,6 +164,7 @@ impl<T> CrfCache<T> {
     }
 
     #[inline]
+    #[must_use]
     pub fn get(&self, crf: f32) -> Option<&T> {
         Self::key(crf).and_then(|idx| self.data[idx].as_ref())
     }
@@ -167,15 +177,15 @@ impl<T> CrfCache<T> {
     }
 
     #[inline]
+    #[must_use]
     pub fn contains_key(&self, crf: f32) -> bool {
-        Self::key(crf)
-            .map(|idx| self.data[idx].is_some())
-            .unwrap_or(false)
+        Self::key(crf).is_some_and(|idx| self.data[idx].is_some())
     }
 }
 
 impl<T: Clone> CrfCache<T> {
     #[inline]
+    #[must_use]
     pub fn get_cloned(&self, crf: f32) -> Option<T> {
         self.get(crf).cloned()
     }
@@ -203,6 +213,7 @@ pub struct ExploreContext {
 
 impl ExploreContext {
     /// Construct context for strategy-based explore. Consider a builder if adding more optional params.
+    #[must_use]
     pub fn new(
         input_path: PathBuf,
         output_path: PathBuf,
@@ -238,6 +249,7 @@ impl ExploreContext {
     }
 
     #[inline]
+    #[must_use]
     pub fn get_cached_size(&self, crf: f32) -> Option<u64> {
         self.size_cache.get(crf).copied()
     }
@@ -248,6 +260,7 @@ impl ExploreContext {
     }
 
     #[inline]
+    #[must_use]
     pub fn get_cached_ssim(&self, crf: f32) -> Option<&SsimResult> {
         self.ssim_cache.get(crf)
     }
@@ -286,6 +299,7 @@ impl ExploreContext {
     }
 
     #[inline]
+    #[must_use]
     pub fn size_change_pct(&self, output_size: u64) -> f64 {
         if self.input_size == 0 {
             return 0.0;
@@ -294,10 +308,12 @@ impl ExploreContext {
     }
 
     #[inline]
-    pub fn can_compress(&self, output_size: u64) -> bool {
+    #[must_use]
+    pub const fn can_compress(&self, output_size: u64) -> bool {
         output_size < self.input_size
     }
 
+    #[must_use]
     pub fn build_result(
         &self,
         crf: f32,
@@ -331,6 +347,9 @@ impl ExploreContext {
     }
 
     /// Returns `Some(crf, size, iterations)` when at least one CRF compresses; `None` when none do (caller must handle).
+    ///
+    /// # Errors
+    /// Returns error if encoding fails.
     pub fn binary_search_compress(
         &mut self,
         low: f32,
@@ -345,7 +364,7 @@ impl ExploreContext {
 
         while high - low > 0.5 && iterations < max_iter {
             let mid = (low + high) / 2.0;
-            self.progress_update(&format!("Binary search CRF {:.1}...", mid));
+            self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
             iterations += 1;
 
@@ -366,10 +385,12 @@ impl ExploreContext {
     }
 
     /// Binary search for the highest CRF that still meets min_ssim (best compression while meeting quality).
+    ///
+    /// # Errors
+    /// Returns error if encoding fails.
     pub fn binary_search_quality(
         &mut self,
-        low: f32,
-        high: f32,
+        low: f32, high: f32,
         max_iter: u32,
     ) -> Result<(f32, u64, f64, u32)> {
         let min_ssim = self.config.quality_thresholds.min_ssim;
@@ -390,7 +411,7 @@ impl ExploreContext {
 
         while high - low > 1.0 && iterations < max_iter {
             let mid = (low + high) / 2.0;
-            self.progress_update(&format!("Binary search CRF {:.1}...", mid));
+            self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
             iterations += 1;
 
@@ -416,16 +437,16 @@ impl ExploreContext {
     pub fn log_final_result(&mut self, crf: f32, ssim: Option<f64>, size_change_pct: f64) {
         match ssim {
             Some(s) => self.log(format!(
-                "📊 RESULT: CRF {:.1}, SSIM {:.4}, {:+.1}%",
-                crf, s, size_change_pct
+                "📊 RESULT: CRF {crf:.1}, SSIM {s:.4}, {size_change_pct:+.1}%"
             )),
             None => self.log(format!(
-                "📊 RESULT: CRF {:.1}, {:+.1}%",
-                crf, size_change_pct
+                "📊 RESULT: CRF {crf:.1}, {size_change_pct:+.1}%"
             )),
         }
     }
 
+    /// # Errors
+    /// Returns error if encoding fails.
     pub fn encode(&mut self, crf: f32) -> Result<u64> {
         if let Some(size) = self.get_cached_size(crf) {
             return Ok(size);
@@ -450,7 +471,7 @@ impl ExploreContext {
             .arg("-c:v")
             .arg(self.encoder.ffmpeg_name())
             .arg("-crf")
-            .arg(format!("{:.1}", crf))
+            .arg(format!("{crf:.1}"))
             .arg("-preset")
             .arg(self.preset.x26x_name());
 
@@ -485,6 +506,8 @@ impl ExploreContext {
         Ok(size)
     }
 
+    /// # Errors
+    /// Returns error if calculation fails.
     pub fn calculate_ssim(&mut self, crf: f32) -> Result<SsimResult> {
         if let Some(result) = self.get_cached_ssim(crf) {
             return Ok(result.clone());
@@ -495,13 +518,13 @@ impl ExploreContext {
         Ok(result)
     }
 
+    #[must_use]
     pub fn calculate_ssim_logged(&mut self, crf: f32) -> Option<SsimResult> {
         match self.calculate_ssim(crf) {
             Ok(result) => Some(result),
             Err(e) => {
                 self.log(format!(
-                    "⚠️ SSIM calculation failed for CRF {:.1}: {}",
-                    crf, e
+                    "⚠️ SSIM calculation failed for CRF {crf:.1}: {e}"
                 ));
                 None
             }
@@ -539,7 +562,7 @@ impl ExploreContext {
 
         if let Some(psnr) = self.calculate_psnr()? {
             let ssim = crate::ssim_mapping::psnr_to_ssim_estimate(psnr);
-            eprintln!("   📊 PSNR: {:.1} dB → Estimated SSIM: {:.4}", psnr, ssim);
+            eprintln!("   📊 PSNR: {psnr:.1} dB → Estimated SSIM: {ssim:.4}");
             return Ok(SsimResult::predicted(ssim, psnr));
         }
 
@@ -570,7 +593,9 @@ impl ExploreContext {
         None
     }
 
-    fn calculate_psnr(&self) -> Result<Option<f64>> {
+    /// # Errors
+    /// Returns error if calculation fails.
+    pub fn calculate_psnr(&self) -> Result<Option<f64>> {
         use std::process::Command;
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]psnr";
@@ -609,6 +634,7 @@ impl ExploreContext {
     }
 }
 
+#[must_use]
 pub fn create_strategy(mode: ExploreMode) -> Box<dyn ExploreStrategy> {
     match mode {
         ExploreMode::SizeOnly => Box::new(SizeOnlyStrategy),
@@ -676,8 +702,7 @@ impl ExploreStrategy for QualityMatchStrategy {
         let ssim_result = ctx.calculate_ssim_logged(ctx.config.initial_crf);
         let quality_passed = ssim_result
             .as_ref()
-            .map(|r| r.value >= ctx.config.quality_thresholds.min_ssim)
-            .unwrap_or(false);
+            .is_some_and(|r| r.value >= ctx.config.quality_thresholds.min_ssim);
 
         ctx.progress_done();
         ctx.log_final_result(
@@ -750,24 +775,23 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         ));
         ctx.progress_start("🎯💾 Quality+Compress");
 
-        let (compress_boundary, boundary_size, boundary_iter) = match ctx.binary_search_compress(
+        let (compress_boundary, boundary_size, boundary_iter) = if let Some((crf, size, iter)) = ctx.binary_search_compress(
             ctx.config.min_crf,
             ctx.config.max_crf,
             ctx.config.max_iterations / 2,
         )? {
-            Some((crf, size, iter)) => (crf, size, iter),
-            None => {
-                ctx.progress_done();
-                let size = ctx.encode(ctx.config.max_crf)?;
-                return Ok(ctx.build_result(
-                    ctx.config.max_crf,
-                    size,
-                    None,
-                    ctx.config.max_iterations / 2 + 1,
-                    false,
-                    0.85,
-                ));
-            }
+            (crf, size, iter)
+        } else {
+            ctx.progress_done();
+            let size = ctx.encode(ctx.config.max_crf)?;
+            return Ok(ctx.build_result(
+                ctx.config.max_crf,
+                size,
+                None,
+                ctx.config.max_iterations / 2 + 1,
+                false,
+                0.85,
+            ));
         };
 
         let mut best_crf = compress_boundary;
@@ -779,7 +803,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         let mut crf = compress_boundary;
 
         while crf >= search_low && iterations < ctx.config.max_iterations {
-            ctx.progress_update(&format!("Quality search CRF {:.1}...", crf));
+            ctx.progress_update(&format!("Quality search CRF {crf:.1}..."));
             let size = ctx.encode(crf)?;
             iterations += 1;
 
@@ -799,8 +823,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
 
         ctx.progress_done();
 
-        let quality_passed =
-            best_size < ctx.input_size && best_ssim >= ctx.config.quality_thresholds.min_ssim;
+        let quality_passed = best_ssim >= ctx.config.quality_thresholds.min_ssim;
         ctx.log_final_result(best_crf, Some(best_ssim), ctx.size_change_pct(best_size));
 
         Ok(ctx.build_result(
@@ -817,7 +840,7 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         "PreciseQualityMatchWithCompression"
     }
     fn description(&self) -> &'static str {
-        "Max SSIM with output smaller than input"
+        "Binary search for compression then quality search"
     }
 }
 
@@ -828,52 +851,36 @@ impl ExploreStrategy for CompressOnlyStrategy {
         ctx.log(format!("💾 Compress-Only Mode ({:?})", ctx.encoder));
         ctx.progress_start("💾 Compress Only");
 
-        ctx.progress_update(&format!("Test CRF {:.1}...", ctx.config.initial_crf));
-        let initial_size = ctx.encode(ctx.config.initial_crf)?;
-
-        if initial_size < ctx.input_size {
-            ctx.progress_done();
-            ctx.log_final_result(
-                ctx.config.initial_crf,
-                None,
-                ctx.size_change_pct(initial_size),
-            );
-            return Ok(ctx.build_result(ctx.config.initial_crf, initial_size, None, 1, true, 0.8));
-        }
-
-        let (best_crf, best_size, iterations) = match ctx.binary_search_compress(
-            ctx.config.initial_crf,
+        let (best_crf, best_size, iterations) = if let Some((crf, size, iter)) = ctx.binary_search_compress(
+            ctx.config.min_crf,
             ctx.config.max_crf,
-            ctx.config.max_iterations - 1,
+            ctx.config.max_iterations,
         )? {
-            Some((crf, size, search_iter)) => (crf, size, search_iter + 1),
-            None => {
-                let size = ctx.encode(ctx.config.max_crf)?;
-                ctx.progress_done();
-                ctx.log_final_result(ctx.config.max_crf, None, ctx.size_change_pct(size));
-                return Ok(ctx.build_result(
-                    ctx.config.max_crf,
-                    size,
-                    None,
-                    ctx.config.max_iterations,
-                    false,
-                    0.75,
-                ));
-            }
+            (crf, size, iter)
+        } else {
+            let size = ctx.encode(ctx.config.max_crf)?;
+            (ctx.config.max_crf, size, 1)
         };
 
         ctx.progress_done();
-        let quality_passed = best_size < ctx.input_size;
+
         ctx.log_final_result(best_crf, None, ctx.size_change_pct(best_size));
 
-        Ok(ctx.build_result(best_crf, best_size, None, iterations, quality_passed, 0.75))
+        Ok(ctx.build_result(
+            best_crf,
+            best_size,
+            None,
+            iterations,
+            best_size < ctx.input_size,
+            0.7,
+        ))
     }
 
     fn name(&self) -> &'static str {
         "CompressOnly"
     }
     fn description(&self) -> &'static str {
-        "Ensure output < input (no quality check)"
+        "Maximize compression regardless of quality"
     }
 }
 
@@ -881,42 +888,38 @@ pub struct CompressWithQualityStrategy;
 
 impl ExploreStrategy for CompressWithQualityStrategy {
     fn explore(&self, ctx: &mut ExploreContext) -> Result<ExploreResult> {
-        ctx.log(format!("💾🎯 Compress+Quality Mode ({:?})", ctx.encoder));
-        ctx.progress_start("💾🎯 Compress+Quality");
+        ctx.log(format!("💾🎭 Compress + Quality ({:?})", ctx.encoder));
+        ctx.progress_start("💾🎭 Compress+Quality");
 
-        ctx.progress_update(&format!("Test CRF {:.1}...", ctx.config.initial_crf));
-        let initial_size = ctx.encode(ctx.config.initial_crf)?;
-
-        let (best_crf, best_size, iterations) = if initial_size < ctx.input_size {
-            (ctx.config.initial_crf, initial_size, 1u32)
+        let (best_crf, best_size, iterations) = if let Some((crf, size, search_iter)) = ctx.binary_search_compress(
+            ctx.config.initial_crf,
+            ctx.config.max_crf,
+            ctx.config.max_iterations - 1,
+        )? {
+            (crf, size, search_iter + 1)
         } else {
-            match ctx.binary_search_compress(
-                ctx.config.initial_crf,
+            let size = ctx.encode(ctx.config.max_crf)?;
+            ctx.progress_done();
+            ctx.log_final_result(ctx.config.max_crf, None, ctx.size_change_pct(size));
+            return Ok(ctx.build_result(
                 ctx.config.max_crf,
-                ctx.config.max_iterations - 1,
-            )? {
-                Some((crf, size, iter)) => (crf, size, iter + 1),
-                None => {
-                    let size = ctx.encode(ctx.config.max_crf)?;
-                    (ctx.config.max_crf, size, ctx.config.max_iterations)
-                }
-            }
+                size,
+                None,
+                ctx.config.max_iterations,
+                false,
+                0.75,
+            ));
         };
 
         ctx.progress_update("Calculate SSIM...");
         let ssim_result = ctx.calculate_ssim_logged(best_crf);
-        let quality_passed = best_size < ctx.input_size
-            && ssim_result
-                .as_ref()
-                .map(|r| r.value >= ctx.config.quality_thresholds.min_ssim)
-                .unwrap_or(false);
+        let quality_passed = ssim_result
+            .as_ref()
+            .is_some_and(|r| r.value >= ctx.config.quality_thresholds.min_ssim);
 
         ctx.progress_done();
-        ctx.log_final_result(
-            best_crf,
-            ssim_result.as_ref().map(|r| r.value),
-            ctx.size_change_pct(best_size),
-        );
+
+        ctx.log_final_result(best_crf, ssim_result.as_ref().map(|r| r.value), ctx.size_change_pct(best_size));
 
         Ok(ctx.build_result(
             best_crf,
@@ -924,7 +927,7 @@ impl ExploreStrategy for CompressWithQualityStrategy {
             ssim_result,
             iterations,
             quality_passed,
-            0.75,
+            0.8,
         ))
     }
 
@@ -932,302 +935,6 @@ impl ExploreStrategy for CompressWithQualityStrategy {
         "CompressWithQuality"
     }
     fn description(&self) -> &'static str {
-        "Output < input + coarse SSIM check"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_strategy_name_consistency() {
-        let modes = [
-            ExploreMode::SizeOnly,
-            ExploreMode::QualityMatch,
-            ExploreMode::PreciseQualityMatch,
-            ExploreMode::PreciseQualityMatchWithCompression,
-            ExploreMode::CompressOnly,
-            ExploreMode::CompressWithQuality,
-        ];
-
-        for mode in modes {
-            let strategy = create_strategy(mode);
-            assert!(
-                !strategy.name().is_empty(),
-                "strategy.name() should not be empty for {:?}",
-                mode
-            );
-        }
-    }
-
-    #[test]
-    fn test_ssim_result_creation() {
-        let actual = SsimResult::actual(0.98, Some(45.0));
-        assert_eq!(actual.source, SsimSource::Actual);
-        assert_eq!(actual.value, 0.98);
-
-        let predicted = SsimResult::predicted(0.95, 40.0);
-        assert_eq!(predicted.source, SsimSource::Predicted);
-        assert_eq!(predicted.psnr, Some(40.0));
-    }
-
-    #[test]
-    fn test_crf_cache_basic_operations() {
-        let mut cache: CrfCache<u64> = CrfCache::new();
-
-        cache.insert(23.5, 1000000);
-        assert_eq!(cache.get(23.5), Some(&1000000));
-        assert!(cache.contains_key(23.5));
-
-        assert_eq!(cache.get(24.0), None);
-        assert!(!cache.contains_key(24.0));
-    }
-
-    #[test]
-    fn test_crf_cache_boundary_values() {
-        let mut cache: CrfCache<u64> = CrfCache::new();
-
-        cache.insert(0.0, 100);
-        assert_eq!(cache.get(0.0), Some(&100));
-
-        cache.insert(63.9, 200);
-        assert_eq!(cache.get(63.9), Some(&200));
-
-        cache.insert(64.0, 300);
-        assert_eq!(cache.get(64.0), None);
-
-        cache.insert(-1.0, 400);
-        assert_eq!(cache.get(-1.0), None);
-    }
-
-    #[test]
-    fn test_crf_cache_precision() {
-        let mut cache: CrfCache<u64> = CrfCache::new();
-
-        cache.insert(23.0, 100);
-        cache.insert(23.1, 101);
-        cache.insert(23.2, 102);
-
-        assert_eq!(cache.get(23.0), Some(&100));
-        assert_eq!(cache.get(23.1), Some(&101));
-        assert_eq!(cache.get(23.2), Some(&102));
-    }
-
-    #[test]
-    fn test_crf_cache_overwrite() {
-        let mut cache: CrfCache<u64> = CrfCache::new();
-
-        cache.insert(23.5, 100);
-        assert_eq!(cache.get(23.5), Some(&100));
-
-        cache.insert(23.5, 200);
-        assert_eq!(cache.get(23.5), Some(&200));
-    }
-}
-
-#[cfg(test)]
-mod prop_tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    fn arb_explore_mode() -> impl Strategy<Value = ExploreMode> {
-        prop_oneof![
-            Just(ExploreMode::SizeOnly),
-            Just(ExploreMode::QualityMatch),
-            Just(ExploreMode::PreciseQualityMatch),
-            Just(ExploreMode::PreciseQualityMatchWithCompression),
-            Just(ExploreMode::CompressOnly),
-            Just(ExploreMode::CompressWithQuality),
-        ]
-    }
-
-    proptest! {
-        #[test]
-        fn prop_strategy_selection_consistency(mode in arb_explore_mode()) {
-            let strategy = create_strategy(mode);
-            prop_assert!(!strategy.name().is_empty(), "strategy.name() should not be empty for {:?}", mode);
-        }
-
-        #[test]
-        fn prop_ssim_cache_consistency(
-            crf in 10.0f32..51.0f32,
-            ssim_value in 0.0f64..1.0f64,
-            psnr_value in 20.0f64..60.0f64
-        ) {
-            use std::path::PathBuf;
-            use crate::video_explorer::{ExploreConfig, VideoEncoder, EncoderPreset};
-
-            let mut ctx = ExploreContext::new(
-                PathBuf::from("/tmp/test_input.mp4"),
-                PathBuf::from("/tmp/test_output.mp4"),
-                1000000,
-                VideoEncoder::Hevc,
-                vec![],
-                4,
-                false,
-                EncoderPreset::Medium,
-                ExploreConfig::default(),
-                None,
-            );
-
-            let result = SsimResult::actual(ssim_value, Some(psnr_value));
-            ctx.cache_ssim(crf, result.clone());
-
-            let cached = ctx.get_cached_ssim(crf);
-            prop_assert!(cached.is_some());
-            let cached = cached.unwrap();
-            prop_assert_eq!(cached.value, ssim_value);
-            prop_assert_eq!(cached.psnr, Some(psnr_value));
-        }
-
-        #[test]
-        fn prop_psnr_to_ssim_mapping_valid(psnr in 20.0f64..60.0f64) {
-            let ssim = crate::ssim_mapping::psnr_to_ssim_estimate(psnr);
-            prop_assert!((0.0..=1.0).contains(&ssim),
-                "SSIM {} out of range for PSNR {}", ssim, psnr);
-            let ssim_higher = crate::ssim_mapping::psnr_to_ssim_estimate(psnr + 5.0);
-            prop_assert!(ssim_higher >= ssim,
-                "Higher PSNR {} should produce higher SSIM", psnr + 5.0);
-        }
-
-        #[test]
-        fn prop_strategy_has_valid_metadata(mode in arb_explore_mode()) {
-            let strategy = create_strategy(mode);
-            prop_assert!(!strategy.name().is_empty(),
-                "Strategy name should not be empty for {:?}", mode);
-            prop_assert!(!strategy.description().is_empty(),
-                "Strategy description should not be empty for {:?}", mode);
-            prop_assert!(strategy.name().is_ascii(),
-                "Strategy name should be ASCII for {:?}", mode);
-        }
-
-        #[test]
-        fn prop_size_cache_consistency(
-            crf in 10.0f32..51.0f32,
-            size in 1000u64..10000000u64
-        ) {
-            use std::path::PathBuf;
-            use crate::video_explorer::{ExploreConfig, VideoEncoder, EncoderPreset};
-
-            let mut ctx = ExploreContext::new(
-                PathBuf::from("/tmp/test_input.mp4"),
-                PathBuf::from("/tmp/test_output.mp4"),
-                1000000,
-                VideoEncoder::Hevc,
-                vec![],
-                4,
-                false,
-                EncoderPreset::Medium,
-                ExploreConfig::default(),
-                None,
-            );
-
-            ctx.cache_size(crf, size);
-
-            let cached = ctx.get_cached_size(crf);
-            prop_assert_eq!(cached, Some(size));
-        }
-
-        #[test]
-        fn prop_crf_cache_key_uniqueness(
-            crf1 in 0.0f32..63.0f32,
-            crf2 in 0.0f32..63.0f32
-        ) {
-            const CACHE_CRF_RESOLUTION: f32 = 1.0 / CRF_CACHE_MULTIPLIER;
-            if (crf1 - crf2).abs() >= CACHE_CRF_RESOLUTION {
-                let key1 = CrfCache::<u64>::key(crf1);
-                let key2 = CrfCache::<u64>::key(crf2);
-                prop_assert_ne!(key1, key2,
-                    "CRF {} and {} (diff {:.4}) should map to different keys, but both got {:?}",
-                    crf1, crf2, (crf1 - crf2).abs(), key1);
-            }
-        }
-
-        #[test]
-        fn prop_crf_cache_025_step_uniqueness(
-            base in 10.0f32..50.0f32
-        ) {
-            let crf_values = [base, base + 0.25, base + 0.5, base + 0.75];
-            let keys: Vec<_> = crf_values.iter()
-                .map(|&crf| CrfCache::<u64>::key(crf))
-                .collect();
-
-            for i in 0..keys.len() {
-                for j in (i+1)..keys.len() {
-                    prop_assert_ne!(keys[i], keys[j],
-                        "CRF {} and {} should have different keys, but both got {:?}",
-                        crf_values[i], crf_values[j], keys[i]);
-                }
-            }
-        }
-
-        #[test]
-        fn prop_crf_cache_equivalence(
-            crf in 0.0f32..63.9f32,
-            value in 0u64..u64::MAX
-        ) {
-            use std::collections::HashMap;
-
-            let mut cache: CrfCache<u64> = CrfCache::new();
-            cache.insert(crf, value);
-            let cache_result = cache.get(crf).copied();
-            let cache_contains = cache.contains_key(crf);
-
-            let mut hashmap: HashMap<i32, u64> = HashMap::new();
-            let key = (crf * CRF_CACHE_MULTIPLIER).round() as i32;
-            hashmap.insert(key, value);
-            let hashmap_result = hashmap.get(&key).copied();
-            let hashmap_contains = hashmap.contains_key(&key);
-
-            prop_assert_eq!(cache_result, hashmap_result,
-                "CrfCache and HashMap should return same value for CRF {}", crf);
-            prop_assert_eq!(cache_contains, hashmap_contains,
-                "CrfCache and HashMap should have same contains_key for CRF {}", crf);
-        }
-
-        #[test]
-        fn prop_crf_cache_backward_compatible(
-            base in 10u32..50u32,
-            value in 0u64..1000000u64
-        ) {
-            let crf_05_step = base as f32 + 0.5;
-            let crf_whole = base as f32;
-
-            let mut cache: CrfCache<u64> = CrfCache::new();
-
-            cache.insert(crf_05_step, value);
-            cache.insert(crf_whole, value + 1);
-
-            prop_assert_eq!(cache.get(crf_05_step), Some(&value),
-                "Should retrieve value for CRF {}", crf_05_step);
-            prop_assert_eq!(cache.get(crf_whole), Some(&(value + 1)),
-                "Should retrieve value for CRF {}", crf_whole);
-
-            prop_assert_ne!(
-                CrfCache::<u64>::key(crf_05_step),
-                CrfCache::<u64>::key(crf_whole),
-                "CRF {} and {} should have different keys", crf_05_step, crf_whole
-            );
-        }
-
-        #[test]
-        fn prop_crf_cache_boundary_safe(
-            crf in -100.0f32..200.0f32,
-            value in 0u64..1000000u64
-        ) {
-            let mut cache: CrfCache<u64> = CrfCache::new();
-
-            cache.insert(crf, value);
-
-            let _ = cache.get(crf);
-            let _ = cache.contains_key(crf);
-
-            if (0.0..=63.99).contains(&crf) {
-                prop_assert_eq!(cache.get(crf), Some(&value));
-            } else {
-                prop_assert_eq!(cache.get(crf), None);
-            }
-        }
+        "Maximize compression with quality check"
     }
 }

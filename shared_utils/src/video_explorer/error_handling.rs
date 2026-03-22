@@ -14,18 +14,27 @@ pub struct QualityMetric {
 
 impl QualityMetric {
     /// Get MS-SSIM score or return error if not measured
+    ///
+    /// # Errors
+    /// Returns error if MS-SSIM was not measured.
     pub fn ms_ssim_or_err(&self) -> Result<f64> {
         self.ms_ssim
             .ok_or_else(|| anyhow::anyhow!("MS-SSIM not measured"))
     }
 
     /// Get SSIM score or return error if not measured
+    ///
+    /// # Errors
+    /// Returns error if SSIM was not measured.
     pub fn ssim_or_err(&self) -> Result<f64> {
         self.ssim
             .ok_or_else(|| anyhow::anyhow!("SSIM not measured"))
     }
 
     /// Get VMAF score or return error if not measured
+    ///
+    /// # Errors
+    /// Returns error if VMAF was not measured.
     pub fn vmaf_or_err(&self) -> Result<f64> {
         self.vmaf_y
             .ok_or_else(|| anyhow::anyhow!("VMAF not measured"))
@@ -59,68 +68,74 @@ pub enum CompressionResult {
 
 impl CompressionResult {
     /// Check if this is a real success (not a fallback)
-    pub fn is_real_success(&self) -> bool {
-        matches!(self, CompressionResult::Success { .. })
+    #[must_use]
+    pub const fn is_real_success(&self) -> bool {
+        matches!(self, Self::Success { .. })
     }
 
     /// Get the CRF value, regardless of success/failure
-    pub fn crf(&self) -> f32 {
+    #[must_use]
+    pub const fn crf(&self) -> f32 {
         match self {
-            CompressionResult::Success { crf, .. } => *crf,
-            CompressionResult::QualityFailed { attempted_crf, .. } => *attempted_crf,
-            CompressionResult::SizeFailed { attempted_crf, .. } => *attempted_crf,
-            CompressionResult::NoCompressionPossible { fallback_crf, .. } => *fallback_crf,
+            Self::Success { crf, .. } => *crf,
+            Self::QualityFailed { attempted_crf, .. }
+            | Self::SizeFailed { attempted_crf, .. } => *attempted_crf,
+            Self::NoCompressionPossible { fallback_crf, .. } => *fallback_crf,
         }
     }
 
     /// Get error message for failed compressions
+    #[must_use]
     pub fn error_message(&self) -> Option<String> {
         match self {
-            CompressionResult::Success { .. } => None,
-            CompressionResult::QualityFailed {
+            Self::Success { .. } => None,
+            Self::QualityFailed {
                 reason,
                 actual_score,
                 target_score,
                 ..
-            } => Some(format!(
-                "Quality check failed: {} (score: {:.4}, target: {:.2})",
-                reason,
-                actual_score.unwrap_or(0.0),
-                target_score
-            )),
-            CompressionResult::SizeFailed {
+            } => {
+                let score = actual_score.unwrap_or(0.0);
+                Some(format!(
+                    "Quality check failed: {reason} (score: {score:.4}, target: {target_score:.2})"
+                ))
+            }
+            Self::SizeFailed {
                 output_size,
                 input_size,
                 ..
             } => Some(format!(
-                "Size target failed: output {} bytes >= input {} bytes",
-                output_size, input_size
+                "Size target failed: output {output_size} bytes >= input {input_size} bytes"
             )),
-            CompressionResult::NoCompressionPossible { reason, .. } => {
-                Some(format!("No compression possible: {}", reason))
+            Self::NoCompressionPossible { reason, .. } => {
+                Some(format!("No compression possible: {reason}"))
             }
         }
     }
 }
 
 /// Validate quality score against target, return explicit error
+///
+/// # Errors
+/// Returns error if score is below target or not measured.
 pub fn validate_quality_score(score: Option<f64>, target: f64, metric_name: &str) -> Result<f64> {
     match score {
         Some(s) if s >= target => Ok(s),
-        Some(s) => bail!("{} score {:.4} below target {:.2}", metric_name, s, target),
-        None => bail!("{} not measured", metric_name),
+        Some(s) => bail!("{metric_name} score {s:.4} below target {target:.2}"),
+        None => bail!("{metric_name} not measured"),
     }
 }
 
 /// Validate size reduction, return explicit error if failed
+///
+/// # Errors
+/// Returns error if output size is not smaller than input size.
 pub fn validate_size_reduction(output_size: u64, input_size: u64) -> Result<()> {
     if output_size < input_size {
         Ok(())
     } else {
         bail!(
-            "Output size {} bytes >= input size {} bytes ({:+.1}%)",
-            output_size,
-            input_size,
+            "Output size {output_size} bytes >= input size {input_size} bytes ({:+.1}%)",
             ((output_size as f64 / input_size as f64) - 1.0) * 100.0
         )
     }

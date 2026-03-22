@@ -2,14 +2,14 @@
 //!
 //! 🔥 v3.0: Enhanced cache with content fingerprint + integrity verification
 //!
-//! Provides a highly efficient, persistent cache for image analysis results using SQLite and MessagePack.
+//! Provides a highly efficient, persistent cache for image analysis results using SQLite and `MessagePack`.
 //! This ensures that expensive operations like pixel-based entropy calculation, deep HEIC/AVIF parsing,
 //! and quantization detection are only performed once per file content.
 //!
 //! ## Strategy
 //! 1. **Path-Metadata Check**: Fast lookup by (path, mtime, size).
 //! 2. **Content Hash (BLAKE3)**: If path-metadata fails, calculate BLAKE3 hash to find matches by content.
-//! 3. **Binary Storage**: Analysis results are packed using MessagePack (rmp-serde) for minimal disk footprint and maximum speed.
+//! 3. **Binary Storage**: Analysis results are packed using `MessagePack` (rmp-serde) for minimal disk footprint and maximum speed.
 //! 4. **Version Control**: Algorithm version tracking to auto-invalidate stale cache entries.
 //! 5. **Integrity Verification**: CRC32 checksum for all cached data to detect corruption.
 //!
@@ -80,12 +80,20 @@ struct FileSignature {
 }
 
 impl FileSignature {
-    fn from_path(path: &Path) -> Result<Self> {
+    /// ### Errors
+    ///
+    /// Returns `io::Error` if metadata cannot be read.
+    pub fn from_path(path: &Path) -> Result<Self> {
         let metadata = std::fs::metadata(path)?;
-        let size = metadata.len() as i64;
+        let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
 
         // Use nanoseconds for maximum rigor as requested
-        let mtime = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+        let mtime = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)?
+            .as_nanos()
+            .try_into()
+            .unwrap_or(i64::MAX);
 
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
@@ -99,22 +107,18 @@ impl FileSignature {
         let ctime = mtime;
 
         // Birthtime (btime)
-        let btime = match metadata.created() {
-            Ok(t) => t
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as i64)
-                .unwrap_or(ctime),
-            Err(_) => ctime,
-        };
+        let btime = metadata.created().map_or(ctime, |t| {
+            t.duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos().try_into().unwrap_or(ctime))
+                .unwrap_or(ctime)
+        });
 
         // Atime (last access)
-        let atime = match metadata.accessed() {
-            Ok(t) => t
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as i64)
-                .unwrap_or(mtime),
-            Err(_) => mtime,
-        };
+        let atime = metadata.accessed().map_or(mtime, |t| {
+            t.duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos().try_into().unwrap_or(mtime))
+                .unwrap_or(mtime)
+        });
 
         Ok(Self {
             mtime,
@@ -174,22 +178,33 @@ pub enum ContentFingerprint {
 
 impl ContentFingerprint {
     /// Create lightweight fingerprint (size + mtime)
+    /// ### Errors
+    ///
+    /// Returns `io::Error` or `SystemTimeError` if metadata is inaccessible.
     pub fn from_metadata(path: &Path) -> Result<Self> {
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len();
-        let mtime_ns = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_nanos() as i64;
+        let mtime_ns = metadata
+            .modified()?
+            .duration_since(UNIX_EPOCH)?
+            .as_nanos()
+            .try_into()
+            .unwrap_or(i64::MAX);
 
         Ok(Self::SizeMtime { size, mtime_ns })
     }
 
     /// Create partial hash fingerprint (first N bytes)
+    /// ### Errors
+    ///
+    /// Returns error if file reading or metadata fails.
     pub fn from_partial_hash(path: &Path, bytes_to_hash: usize) -> Result<Self> {
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len();
 
         let mut file = std::fs::File::open(path)?;
         let mut hasher = Hasher::new();
-        let mut buffer = vec![0u8; bytes_to_hash.min(size as usize)];
+        let mut buffer = vec![0u8; bytes_to_hash.min(usize::try_from(size).unwrap_or(usize::MAX))];
         let bytes_read = file.read(&mut buffer)?;
         hasher.update(&buffer[..bytes_read]);
 
@@ -203,6 +218,9 @@ impl ContentFingerprint {
     }
 
     /// Create full hash fingerprint (entire file)
+    /// ### Errors
+    ///
+    /// Returns error if full file reading fails.
     pub fn from_full_hash(path: &Path) -> Result<Self> {
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len();
@@ -267,7 +285,7 @@ pub struct EncodingParams {
 }
 
 impl EncodingParams {
-    /// Compute hash of all encoding parameters
+    #[must_use]
     pub fn compute_hash(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -320,6 +338,7 @@ pub struct DependencyVersions {
 
 impl DependencyVersions {
     /// Detect versions of installed dependencies
+    #[must_use]
     pub fn detect() -> Self {
         Self {
             ffmpeg_version: Self::get_ffmpeg_version(),
@@ -369,7 +388,7 @@ impl DependencyVersions {
         line.map(ToString::to_string)
     }
 
-    /// Compute hash of all dependency versions
+    #[must_use]
     pub fn compute_hash(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -401,7 +420,7 @@ impl DependencyVersions {
         Self::get_command_version_line("avifenc", &["--version"])
     }
 
-    fn get_libheif_version() -> Option<String> {
+    const fn get_libheif_version() -> Option<String> {
         // libheif version is typically embedded in the library
         // For now, return None (can be enhanced with dynamic library inspection)
         None
@@ -448,7 +467,7 @@ impl Default for HeuristicConfig {
 }
 
 impl HeuristicConfig {
-    /// Compute hash of configuration
+    #[must_use]
     pub fn compute_hash(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -472,6 +491,11 @@ pub struct AnalysisCache {
 
 impl AnalysisCache {
     /// Opens or creates the analysis cache at the specified path.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if the SQLite database cannot be opened or schema migration fails.
+    #[allow(clippy::too_many_lines)]
     pub fn new(cache_path: &Path) -> Result<Self> {
         let conn = Connection::open_with_flags(
             cache_path,
@@ -576,7 +600,7 @@ impl AnalysisCache {
         // Add algorithm_version column to existing tables if missing
         for table in &["analysis_records", "quality_records", "video_records"] {
             let existing_columns: std::collections::HashSet<String> = conn
-                .prepare(&format!("PRAGMA table_info({})", table))?
+                .prepare(&format!("PRAGMA table_info({table})"))?
                 .query_map([], |row| row.get::<_, String>(1))?
                 .collect::<Result<_, _>>()?;
 
@@ -608,6 +632,10 @@ impl AnalysisCache {
     }
 
     /// Check schema version and handle migration/invalidation
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database queries or updates fail during schema check/migration.
     fn check_and_migrate_schema(conn: &Connection, _cache_path: &Path) -> Result<()> {
         // Try to get current schema version
         let current_version: Option<i32> = match conn.query_row(
@@ -686,6 +714,10 @@ impl AnalysisCache {
     }
 
     /// Invalidate cache entries created with old algorithm versions
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database queries or deletions fail.
     fn invalidate_old_algorithm_entries(conn: &Connection) -> Result<()> {
         let tables = ["analysis_records", "quality_records", "video_records"];
         let mut total_invalidated = 0;
@@ -700,7 +732,7 @@ impl AnalysisCache {
 
             if count > 0 {
                 conn.execute(
-                    &format!("DELETE FROM {} WHERE algorithm_version < ?", table),
+                    &format!("DELETE FROM {table} WHERE algorithm_version < ?"),
                     params![current_version],
                 )?;
                 total_invalidated += count;
@@ -730,6 +762,11 @@ impl AnalysisCache {
     }
 
     /// Default project-local cache location
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if the current directory cannot be determined,
+    /// cache directory cannot be created, or `AnalysisCache::new` fails.
     pub fn default_local() -> Result<Self> {
         let mut path = std::env::current_dir()?;
         path.push(".cache");
@@ -740,209 +777,191 @@ impl AnalysisCache {
 
     /// Try to get analysis result for a file.
     /// Returns Ok(Some(result)) if cached and still valid (metadata match or hash match).
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database read fails, mutex lock fails, or deserialization fails.
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
-
         // 1. Try path index first (FASTEST)
-        let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, r.algorithm_version, r.data_checksum, p.atime, p.ctime, p.btime FROM path_index p 
-             JOIN analysis_records r ON p.content_hash = r.content_hash
-             WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
-        )?;
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
-        if let Some(row) = rows.next()? {
-            let algorithm_version: i32 = row.get(1)?;
+            let mut stmt = conn.prepare(
+                "SELECT r.analysis_data, r.algorithm_version, r.data_checksum, p.ctime, p.btime FROM path_index p 
+                 JOIN analysis_records r ON p.content_hash = r.content_hash
+                 WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?"
+            )?;
 
-            // Check if algorithm version is current
-            if algorithm_version < cache_algorithm_version() {
-                debug!(
-                    "🔄 [Cache] Stale algorithm version (v{} < v{}) for {}",
-                    algorithm_version,
-                    cache_algorithm_version(),
-                    path.display()
-                );
-                // Fall through to recompute
-            } else {
-                // Strict Invalidation: Check ctime and btime too
-                let _cached_atime: i64 = row.get(3)?;
-                let cached_ctime: i64 = row.get(4)?;
-                let cached_btime: i64 = row.get(5)?;
+            let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
+            if let Some(row) = rows.next()? {
+                let algorithm_version: i32 = row.get(1)?;
+                if algorithm_version >= cache_algorithm_version() {
+                    let cached_ctime: i64 = row.get(3)?;
+                    let cached_btime: i64 = row.get(4)?;
 
-                // Use XOR or direct compare for maximum rigor
-                let strict_match = (cached_ctime == 0 || cached_ctime == sig.ctime)
-                    && (cached_btime == 0 || cached_btime == sig.btime);
-
-                if !strict_match {
-                    warn!("⚠️  [Cache] Path Match but Metadata Discrepancy (ctime/btime changed). Invalidating entry for {}", path.display());
-                } else {
-                    let data: Vec<u8> = row.get(0)?;
-
-                    // Verify checksum for integrity
-                    if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
-                        let computed_checksum = calculate_checksum(&data);
-                        if computed_checksum != stored_checksum {
-                            warn!("⚠️  [Cache] Checksum mismatch for {} (stored: {}, computed: {}). Data corrupted, invalidating.", 
-                                path.display(), stored_checksum, computed_checksum);
-                            return Ok(None);
+                    if (cached_ctime == 0 || cached_ctime == sig.ctime)
+                        && (cached_btime == 0 || cached_btime == sig.btime)
+                    {
+                        let data: Vec<u8> = row.get(0)?;
+                        if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
+                            if calculate_checksum(&data) != stored_checksum {
+                                warn!("⚠️  [Cache] Checksum mismatch for {}. Invalidating.", path.display());
+                                return Ok(None);
+                            }
                         }
-                        debug!("✅ [Cache] Checksum verified for {}", path.display());
-                    }
 
-                    let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
-                        .context("Failed to unpack cached analysis data (path hit)")?;
-                    analysis.file_path = path.display().to_string();
-                    debug!("🚀 [Cache] HIT (Path) - {}", path.display());
-                    return Ok(Some(analysis));
+                        let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
+                            .context("Failed to unpack cached analysis data (path hit)")?;
+                        analysis.file_path = path.display().to_string();
+                        debug!("🚀 [Cache] HIT (Path) - {}", path.display());
+                        return Ok(Some(analysis));
+                    }
                 }
             }
         }
 
         // 2. Fallback to Content Hash (BLAKE3)
         let content_hash = calculate_blake3(path)?;
-        let mut stmt = conn.prepare(
-            "SELECT analysis_data, algorithm_version, data_checksum FROM analysis_records WHERE content_hash = ?"
-        )?;
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        let mut rows = stmt.query(params![content_hash.as_bytes()])?;
-        if let Some(row) = rows.next()? {
-            let algorithm_version: i32 = row.get(1)?;
-
-            // Check algorithm version
-            if algorithm_version < cache_algorithm_version() {
-                debug!(
-                    "🔄 [Cache] Stale algorithm version (v{} < v{}) for {}",
-                    algorithm_version,
-                    cache_algorithm_version(),
-                    path.display()
-                );
-                return Ok(None); // Force recompute
-            }
-
-            let data: Vec<u8> = row.get(0)?;
-
-            // Verify checksum for integrity
-            if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
-                let computed_checksum = calculate_checksum(&data);
-                if computed_checksum != stored_checksum {
-                    warn!("⚠️  [Cache] Checksum mismatch for {} (stored: {}, computed: {}). Data corrupted, invalidating.", 
-                        path.display(), stored_checksum, computed_checksum);
-                    return Ok(None);
-                }
-                debug!("✅ [Cache] Checksum verified for {}", path.display());
-            }
-
-            let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
-                .context("Failed to unpack cached analysis data (hash hit)")?;
-
-            // Back-fill the path index for this exact file to speed up next check
-            conn.execute(
-                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+            let mut stmt = conn.prepare(
+                "SELECT analysis_data, algorithm_version, data_checksum FROM analysis_records WHERE content_hash = ?"
             )?;
 
-            analysis.file_path = path.display().to_string();
-            debug!("💎 [Cache] HIT (Hash) - {}", path.display());
-            return Ok(Some(analysis));
+            let mut rows = stmt.query(params![content_hash.as_bytes()])?;
+            if let Some(row) = rows.next()? {
+                let algorithm_version: i32 = row.get(1)?;
+                if algorithm_version >= cache_algorithm_version() {
+                    let data: Vec<u8> = row.get(0)?;
+                    if let Some(stored_checksum) = row.get::<_, Option<u32>>(2)? {
+                        if calculate_checksum(&data) != stored_checksum {
+                            warn!("⚠️  [Cache] Checksum mismatch for {}. Invalidating.", path.display());
+                            return Ok(None);
+                        }
+                    }
+
+                    let mut analysis: ImageAnalysis = rmp_serde::from_slice(&data)
+                        .context("Failed to unpack cached analysis data (hash hit)")?;
+
+                    // Back-fill path index
+                    conn.execute(
+                        "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+                    )?;
+
+                    analysis.file_path = path.display().to_string();
+                    debug!("💎 [Cache] HIT (Hash) - {}", path.display());
+                    return Ok(Some(analysis));
+                }
+            }
         }
 
         Ok(None)
     }
 
     /// Try to get quality analysis result for a file.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database read fails, mutex lock fails, or deserialization fails.
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
-
         // 1. Path Index
-        let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, r.data_checksum, p.ctime, p.btime FROM path_index p 
-             JOIN quality_records r ON p.content_hash = r.content_hash
-             WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?",
-        )?;
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
-        if let Some(row) = rows.next()? {
-            let cached_ctime: i64 = row.get(2)?;
-            let cached_btime: i64 = row.get(3)?;
+            let mut stmt = conn.prepare(
+                "SELECT r.analysis_data, r.data_checksum, p.ctime, p.btime FROM path_index p 
+                 JOIN quality_records r ON p.content_hash = r.content_hash
+                 WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?",
+            )?;
 
-            if (cached_ctime == 0 || cached_ctime == sig.ctime)
-                && (cached_btime == 0 || cached_btime == sig.btime)
-            {
-                let data: Vec<u8> = row.get(0)?;
+            let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
+            if let Some(row) = rows.next()? {
+                let cached_ctime: i64 = row.get(2)?;
+                let cached_btime: i64 = row.get(3)?;
 
-                // Verify checksum for integrity
-                if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
-                    let computed_checksum = calculate_checksum(&data);
-                    if computed_checksum != stored_checksum {
-                        warn!("⚠️  [Cache] Quality checksum mismatch for {}. Data corrupted, invalidating.", path.display());
-                        return Ok(None);
+                if (cached_ctime == 0 || cached_ctime == sig.ctime)
+                    && (cached_btime == 0 || cached_btime == sig.btime)
+                {
+                    let data: Vec<u8> = row.get(0)?;
+                    if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                        if calculate_checksum(&data) != stored_checksum {
+                            warn!("⚠️  [Cache] Quality checksum mismatch (Path). Invalidating.");
+                            return Ok(None);
+                        }
                     }
-                    debug!(
-                        "✅ [Cache] Quality checksum verified for {}",
-                        path.display()
-                    );
-                }
 
-                let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
-                    .context("Failed to unpack cached quality data (path hit)")?;
-                debug!("📊 [Cache] Quality HIT (Path) - {}", path.display());
-                return Ok(Some(analysis));
+                    let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
+                        .context("Failed to unpack cached quality data (path hit)")?;
+                    debug!("📊 [Cache] Quality HIT (Path) - {}", path.display());
+                    return Ok(Some(analysis));
+                }
             }
         }
 
         // 2. Hash Index
         let content_hash = calculate_blake3(path)?;
-        let mut stmt = conn.prepare(
-            "SELECT analysis_data, data_checksum FROM quality_records WHERE content_hash = ?",
-        )?;
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
-        let mut rows = stmt.query(params![content_hash.as_bytes()])?;
-        if let Some(row) = rows.next()? {
-            let data: Vec<u8> = row.get(0)?;
-
-            // Verify checksum for integrity
-            if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
-                let computed_checksum = calculate_checksum(&data);
-                if computed_checksum != stored_checksum {
-                    warn!("⚠️  [Cache] Quality checksum mismatch for {}. Data corrupted, invalidating.", path.display());
-                    return Ok(None);
-                }
-                debug!(
-                    "✅ [Cache] Quality checksum verified for {}",
-                    path.display()
-                );
-            }
-
-            let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
-                .context("Failed to unpack cached quality data (hash hit)")?;
-
-            conn.execute(
-                "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
-                params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+            let mut stmt = conn.prepare(
+                "SELECT analysis_data, data_checksum FROM quality_records WHERE content_hash = ?",
             )?;
 
-            debug!("📊 [Cache] Quality HIT (Hash) - {}", path.display());
-            return Ok(Some(analysis));
+            let mut rows = stmt.query(params![content_hash.as_bytes()])?;
+            if let Some(row) = rows.next()? {
+                let data: Vec<u8> = row.get(0)?;
+                if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                    if calculate_checksum(&data) != stored_checksum {
+                        warn!("⚠️  [Cache] Quality checksum mismatch (Hash). Invalidating.");
+                        return Ok(None);
+                    }
+                }
+
+                let analysis: ImageQualityAnalysis = rmp_serde::from_slice(&data)
+                    .context("Failed to unpack cached quality data (hash hit)")?;
+
+                // Back-fill path index
+                conn.execute(
+                    "INSERT OR REPLACE INTO path_index (file_path, content_hash, mtime, file_size, atime, ctime, btime) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params![path_str, content_hash.as_bytes(), sig.mtime, sig.size, sig.atime, sig.ctime, sig.btime],
+                )?;
+
+                debug!("📊 [Cache] Quality HIT (Hash) - {}", path.display());
+                return Ok(Some(analysis));
+            }
         }
 
         Ok(None)
     }
 
     /// Stores an analysis result in the cache.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if file metadata cannot be read, BLAKE3 hash calculation fails,
+    /// `MessagePack` serialization fails, mutex lock fails, or database write fails.
     pub fn store_analysis(&self, path: &Path, analysis: &ImageAnalysis) -> Result<()> {
         // 🧠 Smart Cache: Never store results that failed analysis.
         // This prevents "ghost errors" from persisting after a code fix.
@@ -965,18 +984,22 @@ impl AnalysisCache {
         // Calculate checksum for integrity verification
         let checksum = calculate_checksum(&packed_data);
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
         // Perform in transaction for atomicity
         conn.execute(
             "INSERT OR REPLACE INTO analysis_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], checksum as i64],
+            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
         )?;
 
         conn.execute(
@@ -991,6 +1014,9 @@ impl AnalysisCache {
             checksum
         );
 
+        // Explicitly drop the mutex guard to release the lock before enforce_size_limit might acquire it again
+        drop(conn);
+
         if let Err(err) = self.enforce_size_limit() {
             warn!(
                 path = %self.cache_path.display(),
@@ -1002,6 +1028,11 @@ impl AnalysisCache {
     }
 
     /// Stores a quality analysis result in the cache.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if file metadata cannot be read, BLAKE3 hash calculation fails,
+    /// `MessagePack` serialization fails, mutex lock fails, or database write fails.
     pub fn store_quality_analysis(
         &self,
         path: &Path,
@@ -1017,17 +1048,21 @@ impl AnalysisCache {
 
         let checksum = calculate_checksum(&packed_data);
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
         conn.execute(
             "INSERT OR REPLACE INTO quality_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], checksum as i64],
+            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
         )?;
 
         conn.execute(
@@ -1042,6 +1077,9 @@ impl AnalysisCache {
             checksum
         );
 
+        // Explicitly drop the mutex guard to release the lock before enforce_size_limit might acquire it again
+        drop(conn);
+
         if let Err(err) = self.enforce_size_limit() {
             warn!(
                 path = %self.cache_path.display(),
@@ -1053,48 +1091,12 @@ impl AnalysisCache {
     }
 
     /// Try to get a cached video analysis result.
-    pub fn get_video_analysis(&self, path: &Path) -> Result<Option<VideoDetectionResult>> {
-        let sig = FileSignature::from_path(path)?;
-        let path_str = path.to_string_lossy();
-
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
-
-        // 1. Path Index
-        let mut stmt = conn.prepare(
-            "SELECT r.analysis_data, r.data_checksum, p.ctime, p.btime FROM path_index p 
-             JOIN video_records r ON p.content_hash = r.content_hash
-             WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?",
-        )?;
-
-        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
-        if let Some(row) = rows.next()? {
-            let cached_ctime: i64 = row.get(2)?;
-            let cached_btime: i64 = row.get(3)?;
-
-            if (cached_ctime == 0 || cached_ctime == sig.ctime)
-                && (cached_btime == 0 || cached_btime == sig.btime)
-            {
-                let data: Vec<u8> = row.get(0)?;
-
-                // Verify checksum for integrity
-                if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
-                    let computed_checksum = calculate_checksum(&data);
-                    if computed_checksum != stored_checksum {
-                        warn!("⚠️  [Cache] Video checksum mismatch for {}. Data corrupted, invalidating.", path.display());
-                        return Ok(None);
-                    }
-                    debug!("✅ [Cache] Video checksum verified for {}", path.display());
-                }
-
-                let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
-                    .context("Failed to unpack cached video data (path hit)")?;
-                return Ok(Some(analysis));
-            }
-        }
-
+    fn get_video_analysis_hash_match(
+        conn: &Connection,
+        path: &Path,
+        path_str: &str,
+        sig: &FileSignature,
+    ) -> Result<Option<VideoDetectionResult>> {
         // 2. Hash Index (Content Match)
         let content_hash = calculate_blake3(path)?;
         let mut stmt = conn.prepare(
@@ -1134,7 +1136,79 @@ impl AnalysisCache {
         Ok(None)
     }
 
+    /// Try to get a cached video analysis result.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database read fails, mutex lock fails, or deserialization fails.
+    /// Try to get a cached video analysis result.
+    ///
+    /// # Errors
+    /// Returns `anyhow::Error` if database read fails, mutex lock fails, or deserialization fails.
+    pub fn get_video_analysis(&self, path: &Path) -> Result<Option<VideoDetectionResult>> {
+        let sig = FileSignature::from_path(path)?;
+        let path_str = path.to_string_lossy();
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
+
+        if let Some(res) = Self::get_video_analysis_path_match(&conn, path, &path_str, &sig)? {
+            return Ok(Some(res));
+        }
+
+        Self::get_video_analysis_hash_match(&conn, path, &path_str, &sig)
+    }
+
+    fn get_video_analysis_path_match(
+        conn: &Connection,
+        path: &Path,
+        path_str: &str,
+        sig: &FileSignature,
+    ) -> Result<Option<VideoDetectionResult>> {
+        // 1. Path Index
+        let mut stmt = conn.prepare(
+            "SELECT r.analysis_data, r.data_checksum, p.ctime, p.btime FROM path_index p 
+             JOIN video_records r ON p.content_hash = r.content_hash
+             WHERE p.file_path = ? AND p.mtime = ? AND p.file_size = ?",
+        )?;
+
+        let mut rows = stmt.query(params![path_str, sig.mtime, sig.size])?;
+        if let Some(row) = rows.next()? {
+            let cached_ctime: i64 = row.get(2)?;
+            let cached_btime: i64 = row.get(3)?;
+
+            if (cached_ctime == 0 || cached_ctime == sig.ctime)
+                && (cached_btime == 0 || cached_btime == sig.btime)
+            {
+                let data: Vec<u8> = row.get(0)?;
+
+                // Verify checksum for integrity
+                if let Some(stored_checksum) = row.get::<_, Option<u32>>(1)? {
+                    let computed_checksum = calculate_checksum(&data);
+                    if computed_checksum != stored_checksum {
+                        warn!("⚠️  [Cache] Video checksum mismatch for {}. Data corrupted, invalidating.", path.display());
+                        return Ok(None);
+                    }
+                    debug!("✅ [Cache] Video checksum verified for {}", path.display());
+                }
+
+                let analysis: VideoDetectionResult = rmp_serde::from_slice(&data)
+                    .context("Failed to unpack cached video data (path hit)")?;
+                return Ok(Some(analysis));
+            }
+        }
+        Ok(None)
+    }
+
     /// Stores a video analysis result in the cache.
+    /// Stores video analysis results for the given path into the cache.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if file metadata cannot be read, BLAKE3 hash calculation fails,
+    /// `MessagePack` serialization fails, mutex lock fails, or database write fails.
     pub fn store_video_analysis(&self, path: &Path, analysis: &VideoDetectionResult) -> Result<()> {
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
@@ -1147,17 +1221,21 @@ impl AnalysisCache {
 
         let checksum = calculate_checksum(&packed_data);
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
         conn.execute(
             "INSERT OR REPLACE INTO video_records (content_hash, file_size, analysis_data, created_at, algorithm_version, content_fingerprint_hash, data_checksum) 
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], checksum as i64],
+            params![content_hash.as_bytes(), sig.size, packed_data, now, cache_algorithm_version(), &content_fingerprint[..], i64::from(checksum)],
         )?;
 
         conn.execute(
@@ -1172,6 +1250,9 @@ impl AnalysisCache {
             checksum
         );
 
+        // Explicitly drop the mutex guard to release the lock before enforce_size_limit might acquire it again
+        drop(conn);
+
         if let Err(err) = self.enforce_size_limit() {
             warn!(
                 path = %self.cache_path.display(),
@@ -1183,14 +1264,23 @@ impl AnalysisCache {
     }
 
     /// Garbage collection: remove records older than specified duration (sec)
+    /// Cleans up cache records older than the specified age.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database deletion fails or mutex lock fails.
     pub fn cleanup_old_records(&self, max_age_secs: i64) -> Result<usize> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_secs()
+            .try_into()
+            .unwrap_or(i64::MAX);
         let threshold = now - max_age_secs;
 
         let conn = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
         let removed = conn.execute(
             "DELETE FROM analysis_records WHERE created_at < ?",
@@ -1203,15 +1293,21 @@ impl AnalysisCache {
             conn.execute("VACUUM", [])?;
         }
 
+        drop(conn); // Explicitly drop the mutex guard
         Ok(removed)
     }
 
     /// 📊 Get cache statistics
+    /// Retrieves summary statistics about the cache contents.
+    ///
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database queries fail or mutex lock fails.
     pub fn get_statistics(&self) -> Result<CacheStatistics> {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
         let db_size = match std::fs::metadata(&self.cache_path) {
             Ok(metadata) => metadata.len(),
@@ -1244,14 +1340,12 @@ impl AnalysisCache {
 
         for table in &["analysis_records", "quality_records", "video_records"] {
             let mut stmt = conn.prepare(&format!(
-                "SELECT algorithm_version, COUNT(*) FROM {} GROUP BY algorithm_version",
-                table
+                "SELECT algorithm_version, COUNT(*) FROM {table} GROUP BY algorithm_version"
             ))?;
 
-            let rows =
-                stmt.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?;
-
-            for row in rows {
+            for row in
+                stmt.query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i64>(1)?)))?
+            {
                 let (version, count) = row?;
                 *version_dist.entry(version).or_insert(0) += count;
             }
@@ -1272,12 +1366,15 @@ impl AnalysisCache {
             }
         };
 
+        // Explicitly drop the mutex guard before returning
+        drop(conn);
+
         Ok(CacheStatistics {
             db_size_bytes: db_size,
-            analysis_records: analysis_count as usize,
-            quality_records: quality_count as usize,
-            video_records: video_count as usize,
-            path_index_entries: path_index_count as usize,
+            analysis_records: usize::try_from(analysis_count).unwrap_or(usize::MAX),
+            quality_records: usize::try_from(quality_count).unwrap_or(usize::MAX),
+            video_records: usize::try_from(video_count).unwrap_or(usize::MAX),
+            path_index_entries: usize::try_from(path_index_count).unwrap_or(usize::MAX),
             schema_version: current_schema_version,
             algorithm_version_distribution: version_dist,
             current_algorithm_version: cache_algorithm_version(),
@@ -1286,6 +1383,9 @@ impl AnalysisCache {
 
     /// ⚖️ Enforce size limit (85GB).
     /// If DB exceeds limit, prune oldest records until it's back under 90% of limit.
+    /// ### Errors
+    ///
+    /// Returns `anyhow::Error` if database query fails or mutex lock fails.
     pub fn enforce_size_limit(&self) -> Result<()> {
         let current_size = match std::fs::metadata(&self.cache_path) {
             Ok(m) => m.len(),
@@ -1312,7 +1412,7 @@ impl AnalysisCache {
         let conn = self
             .conn
             .lock()
-            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Mutex lock failed: {e}"))?;
 
         // Prune 15% of the oldest records to provide headroom
         let total_records: i64 =
@@ -1346,7 +1446,7 @@ impl AnalysisCache {
 
         // Vacuum to actually shrink the file
         conn.execute("VACUUM", [])?;
-
+        drop(conn);
         Ok(())
     }
 }
@@ -1356,7 +1456,7 @@ fn calculate_blake3(path: &Path) -> Result<blake3::Hash> {
     let mut hasher = Hasher::new();
 
     // Efficiency: Use chunked reading for hash
-    let mut buffer = [0u8; 65536]; // 64KB
+    let mut buffer = vec![0u8; 65536].into_boxed_slice();
     loop {
         let bytes_read = file.read(&mut buffer)?;
         if bytes_read == 0 {
@@ -1378,7 +1478,7 @@ fn calculate_content_fingerprint(path: &Path) -> Result<[u8; 32]> {
     let mut hasher = Hasher::new();
 
     // Hash first 64KB only for speed
-    let mut buffer = [0u8; 65536]; // 64KB
+    let mut buffer = vec![0u8; 65536].into_boxed_slice();
     let bytes_read = file.read(&mut buffer)?;
     hasher.update(&buffer[..bytes_read]);
 
