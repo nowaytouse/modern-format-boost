@@ -42,3 +42,5 @@ proptest = { workspace = true }
 [features]
 default = ["v1_21"]
 v1_21 = ["libheif-rs/v1_21"]
+[build-dependencies]
+blake3 = { git = "https://github.com/BLAKE3-team/BLAKE3" }
