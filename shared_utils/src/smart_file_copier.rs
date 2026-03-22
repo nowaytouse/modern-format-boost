@@ -10,7 +10,7 @@
 //!
 //! ## Extension Correction & Validation Order
 //! - `fix_extension_if_mismatch` corrects extension based on file magic bytes (prevents panics/misjudgment due to faked extensions).
-//! - Design convention: **Fix first, then branch by extension**. All entry points (cli_runner, img_*) call fix_extension before processing. All subsequent "extension-only" logic should be based on the fixed path. See `CODE_AUDIT.md` §36.
+//! - Design convention: **Fix first, then branch by extension**. All entry points (`cli_runner`, img_*) call `fix_extension` before processing. All subsequent "extension-only" logic should be based on the fixed path. See `CODE_AUDIT.md` §36.
 
 use anyhow::{Context, Result};
 use std::fs;

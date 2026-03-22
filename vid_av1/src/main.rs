@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
     if let Err(e) =
         shared_utils::logging::init_logging("vid_av1", shared_utils::logging::LogConfig::default())
     {
-        eprintln!("⚠️ Failed to initialize logging: {}", e);
+        eprintln!("⚠️ Failed to initialize logging: {e}");
     }
 
     shared_utils::ctrlc_guard::init();
@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
                 compress,
                 ultimate,
             ) {
-                eprintln!("{}", e);
+                eprintln!("{e}");
                 std::process::exit(1);
             }
 

@@ -1,6 +1,6 @@
-//! FFprobe wrapper module
+//! `FFprobe` wrapper module
 //!
-//! Re-exports from shared_utils::ffprobe to eliminate duplication.
+//! Re-exports from `shared_utils::ffprobe` to eliminate duplication.
 //! Provides a thin wrapper for error type conversion.
 
 pub use shared_utils::ffprobe::{

@@ -30,14 +30,14 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
-/// Build the FFmpeg colour/HDR arguments that must be forwarded to every HEVC encode.
+/// Build the `FFmpeg` colour/HDR arguments that must be forwarded to every HEVC encode.
 ///
 /// This preserves:
-/// - color_primaries (e.g. bt2020)
-/// - color_trc / color_transfer (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
+/// - `color_primaries` (e.g. bt2020)
+/// - `color_trc` / `color_transfer` (e.g. smpte2084 for PQ, arib-std-b67 for HLG)
 /// - colorspace (e.g. bt2020nc)
-/// - mastering_display (HDR10 static mastering display metadata)
-/// - max_cll (HDR10 content light level MaxCLL/MaxFALL)
+/// - `mastering_display` (HDR10 static mastering display metadata)
+/// - `max_cll` (HDR10 content light level MaxCLL/MaxFALL)
 ///
 /// Dolby Vision and HDR10+ cannot be remuxed losslessly through libx265, so they are preserved
 /// as HDR10 (their static layer) by forwarding all static metadata — the dynamic layer is
@@ -173,18 +173,15 @@ fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
         };
 
     // Step 3: Determine x265 profile string
-    let profile_str = match shared_utils::dv_x265_profile_string(
+    let profile_str = if let Some(s) = shared_utils::dv_x265_profile_string(
         detection.dv_profile,
         detection.dv_bl_signal_compatibility_id,
-    ) {
-        Some(s) => s,
-        None => {
-            warn!(
-                "Unsupported DV profile {:?} for x265 — falling back to HDR10",
-                detection.dv_profile
-            );
-            return None;
-        }
+    ) { s } else {
+        warn!(
+            "Unsupported DV profile {:?} for x265 — falling back to HDR10",
+            detection.dv_profile
+        );
+        return None;
     };
 
     info!(
@@ -259,10 +256,12 @@ fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10P
     })
 }
 
+#[must_use] 
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, false, false)
 }
 
+#[must_use] 
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     apple_compat: bool,
@@ -352,9 +351,7 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
-    let output_dir = output_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf());
+    let output_dir = output_dir.map_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf(), std::path::Path::to_path_buf);
 
     std::fs::create_dir_all(&output_dir)?;
 
@@ -365,9 +362,9 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     let input_ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let output_path = if input_ext.eq_ignore_ascii_case("MP4") {
-        output_dir.join(format!("{}_hevc.MP4", stem))
+        output_dir.join(format!("{stem}_hevc.MP4"))
     } else {
-        output_dir.join(format!("{}.MP4", stem))
+        output_dir.join(format!("{stem}.MP4"))
     };
     shared_utils::conversion::validate_output_path(&output_path, None)
         .map_err(VidQualityError::ConversionError)?;
@@ -465,11 +462,11 @@ pub fn auto_convert_with_cache(
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: "".to_string(),
+            output_path: String::new(),
             strategy: ConversionStrategy {
                 target: TargetVideoFormat::Skip,
                 reason: "Live Photo detected in Apple compat mode".to_string(),
-                command: "".to_string(),
+                command: String::new(),
                 preserve_audio: false,
                 crf: 0.0,
                 lossless: false,
@@ -515,7 +512,7 @@ pub fn auto_convert_with_cache(
 
         return Ok(ConversionOutput {
             input_path: input.display().to_string(),
-            output_path: "".to_string(),
+            output_path: String::new(),
             strategy,
             input_size: detection.file_size,
             output_size: 0,
@@ -560,9 +557,9 @@ pub fn auto_convert_with_cache(
     let output_path = if input_ext.eq_ignore_ascii_case(target_ext)
         || (config.apple_compat && input_ext.eq_ignore_ascii_case("mov"))
     {
-        output_dir.join(format!("{}_hevc.{}", stem, target_ext))
+        output_dir.join(format!("{stem}_hevc.{target_ext}"))
     } else {
-        output_dir.join(format!("{}.{}", stem, target_ext))
+        output_dir.join(format!("{stem}.{target_ext}"))
     };
     shared_utils::conversion::validate_output_path(&output_path, config.base_dir.as_deref())
         .map_err(VidQualityError::ConversionError)?;
@@ -692,7 +689,7 @@ pub fn auto_convert_with_cache(
                     || detection.mastering_display.is_some()
                     || matches!(
                         detection.color_transfer.as_deref(),
-                        Some("smpte2084") | Some("arib-std-b67")
+                        Some("smpte2084" | "arib-std-b67")
                     );
 
                 if is_hdr_content {
@@ -742,18 +739,15 @@ pub fn auto_convert_with_cache(
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = match explore_result.ssim {
-                        Some(s) => s,
-                        None => {
-                            warn!("   ⚠️  SSIM not measured, cannot verify quality");
-                            cleanup_output_file(
-                                &temp_path,
-                                "temporary output cleanup after missing SSIM",
-                            );
-                            return Err(VidQualityError::GeneralError(
-                                "Quality verification failed: SSIM not measured".to_string(),
-                            ));
-                        }
+                    let actual_ssim = if let Some(s) = explore_result.ssim { s } else {
+                        warn!("   ⚠️  SSIM not measured, cannot verify quality");
+                        cleanup_output_file(
+                            &temp_path,
+                            "temporary output cleanup after missing SSIM",
+                        );
+                        return Err(VidQualityError::GeneralError(
+                            "Quality verification failed: SSIM not measured".to_string(),
+                        ));
                     };
                     let threshold = explore_result.actual_min_ssim;
                     let video_stream_compressed = explore_result.output_video_stream_size
@@ -810,18 +804,15 @@ pub fn auto_convert_with_cache(
                             };
 
                             let final_msg = format!(
-                                "{} {} │ File may already be highly optimized",
-                                base_msg, additional_info
+                                "{base_msg} {additional_info} │ File may already be highly optimized"
                             );
                             tracing::debug!("   {}", final_msg);
                             (
                                 format!(
-                                    "Video stream compression failed: {:+.1}%",
-                                    stream_change_pct
+                                    "Video stream compression failed: {stream_change_pct:+.1}%"
                                 ),
                                 format!(
-                                    "Skipped: video stream larger ({:+.1}%)",
-                                    stream_change_pct
+                                    "Skipped: video stream larger ({stream_change_pct:+.1}%)"
                                 ),
                                 "Original file PROTECTED (output did not compress)".to_string(),
                                 "Output discarded (video stream larger than original)".to_string(),
@@ -841,12 +832,10 @@ pub fn auto_convert_with_cache(
                             );
                             (
                                 format!(
-                                    "Quality validation failed: SSIM {:.4} < {:.4}",
-                                    actual_ssim, threshold
+                                    "Quality validation failed: SSIM {actual_ssim:.4} < {threshold:.4}"
                                 ),
                                 format!(
-                                    "Skipped: SSIM {:.4} below threshold {:.4}",
-                                    actual_ssim, threshold
+                                    "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
                                 ),
                                 "Original file PROTECTED (quality below threshold)".to_string(),
                                 "Output discarded (quality below threshold)".to_string(),
@@ -858,8 +847,8 @@ pub fn auto_convert_with_cache(
                                 .unwrap_or("unknown reason");
                             warn!("   ⚠️  Quality validation FAILED: {}", reason);
                             (
-                                format!("Quality validation failed: {}", reason),
-                                format!("Skipped: {}", reason),
+                                format!("Quality validation failed: {reason}"),
+                                format!("Skipped: {reason}"),
                                 "Original file PROTECTED (quality/size check failed)".to_string(),
                                 "Output discarded (quality/size check failed)".to_string(),
                             )
@@ -1032,9 +1021,7 @@ pub fn auto_convert_with_cache(
     if let Some(ref result) = explore_result_opt {
         if let Some(false) = result.ms_ssim_passed {
             let score_str = result
-                .ms_ssim_score
-                .map(|s| format!("{:.4}", s))
-                .unwrap_or_else(|| "Unknown".to_string());
+                .ms_ssim_score.map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
             // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
             // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
             // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
@@ -1098,7 +1085,7 @@ pub fn auto_convert_with_cache(
                 output_path: input.display().to_string(),
                 strategy: ConversionStrategy {
                     target: TargetVideoFormat::Skip,
-                    reason: format!("Quality target failed (score: {})", score_str),
+                    reason: format!("Quality target failed (score: {score_str})"),
                     command: String::new(),
                     preserve_audio: detection.has_audio,
                     crf: result.optimal_crf,
@@ -1108,7 +1095,7 @@ pub fn auto_convert_with_cache(
                 output_size: detection.file_size,
                 size_ratio: 1.0,
                 success: false,
-                message: format!("Skipped: MS-SSIM {} below target 0.90", score_str),
+                message: format!("Skipped: MS-SSIM {score_str} below target 0.90"),
                 final_crf: result.optimal_crf,
                 exploration_attempts: result.iterations as u8,
             });
@@ -1218,9 +1205,7 @@ pub fn auto_convert_with_cache(
                 size_ratio: total_size_ratio,
                 success: true,
                 message: format!(
-                    "Apple compat fallback: kept best-effort output (CRF {:.1}, {} iters); compression check failed — total file not smaller enough, but file is HEVC and importable",
-                    final_crf,
-                    attempts
+                    "Apple compat fallback: kept best-effort output (CRF {final_crf:.1}, {attempts} iters); compression check failed — total file not smaller enough, but file is HEVC and importable"
                 ),
                 final_crf,
                 exploration_attempts: attempts,
@@ -1323,7 +1308,7 @@ pub fn auto_convert_with_cache(
         size_ratio,
         success: true,
         message: if attempts > 0 {
-            format!("Explored {} CRF values, final CRF: {}", attempts, final_crf)
+            format!("Explored {attempts} CRF values, final CRF: {final_crf}")
         } else {
             "Conversion successful".to_string()
         },
@@ -1339,8 +1324,7 @@ fn success_status_for_cache(
     matches!(target, TargetVideoFormat::HevcMp4)
         && explore_result
             .as_ref()
-            .map(|r| r.quality_passed)
-            .unwrap_or(false)
+            .is_some_and(|r| r.quality_passed)
 }
 
 fn best_effort_status_for_cache(
@@ -1352,8 +1336,7 @@ fn best_effort_status_for_cache(
         && final_crf > 0.0
         && explore_result
             .as_ref()
-            .map(|r| !r.quality_passed)
-            .unwrap_or(false)
+            .is_some_and(|r| !r.quality_passed)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {
@@ -1401,8 +1384,7 @@ pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {
             Ok(result.crf)
         }
         Err(e) => Err(crate::VidQualityError::AnalysisError(format!(
-            "Quality analysis failed: {}",
-            e
+            "Quality analysis failed: {e}"
         ))),
     }
 }
@@ -1428,16 +1410,15 @@ fn execute_hevc_conversion(
         || detection.mastering_display.is_some()
         || matches!(
             detection.color_transfer.as_deref(),
-            Some("smpte2084") | Some("arib-std-b67")
+            Some("smpte2084" | "arib-std-b67")
         );
 
     let mut x265_params = if is_hdr_content {
         format!(
-            "log-level=error:pools={}:hdr-opt=1:repeat-headers=1",
-            max_threads
+            "log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1"
         )
     } else {
-        format!("log-level=error:pools={}", max_threads)
+        format!("log-level=error:pools={max_threads}")
     };
 
     // Inject DV RPU path and profile into x265 params when available
@@ -1546,17 +1527,16 @@ fn execute_hevc_lossless(
         || detection.mastering_display.is_some()
         || matches!(
             detection.color_transfer.as_deref(),
-            Some("smpte2084") | Some("arib-std-b67")
+            Some("smpte2084" | "arib-std-b67")
         );
 
     // hdr-opt=1 + repeat-headers=1 ensure HDR SEI metadata is written into the bitstream.
     let mut x265_params = if is_hdr_content {
         format!(
-            "lossless=1:log-level=error:pools={}:hdr-opt=1:repeat-headers=1",
-            max_threads
+            "lossless=1:log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1"
         )
     } else {
-        format!("lossless=1:log-level=error:pools={}", max_threads)
+        format!("lossless=1:log-level=error:pools={max_threads}")
     };
 
     // Inject DV RPU path and profile into x265 params when available
@@ -1957,14 +1937,12 @@ mod tests {
 
             assert_eq!(
                 is_skip_normal, expected_skip_normal,
-                "STRICT: {:?} normal mode: expected skip={}, got skip={}",
-                codec, expected_skip_normal, is_skip_normal
+                "STRICT: {codec:?} normal mode: expected skip={expected_skip_normal}, got skip={is_skip_normal}"
             );
 
             assert_eq!(
                 is_skip_apple, expected_skip_apple,
-                "STRICT: {:?} Apple compat mode: expected skip={}, got skip={}",
-                codec, expected_skip_apple, is_skip_apple
+                "STRICT: {codec:?} Apple compat mode: expected skip={expected_skip_apple}, got skip={is_skip_apple}"
             );
         }
     }
@@ -2120,13 +2098,11 @@ mod tests {
         let crf = calculate_matched_crf(&det).unwrap();
         assert!(
             (0.0..=35.0).contains(&crf),
-            "CRF {:.1} should be in [0, 35]",
-            crf
+            "CRF {crf:.1} should be in [0, 35]"
         );
         assert!(
             (18.0..=28.0).contains(&crf),
-            "CRF {:.1} should be ~18-28 for 6Mbps 1080p",
-            crf
+            "CRF {crf:.1} should be ~18-28 for 6Mbps 1080p"
         );
     }
 
@@ -2178,8 +2154,7 @@ mod tests {
         let crf = calculate_matched_crf(&det).unwrap();
         assert!(
             (0.0..=22.0).contains(&crf),
-            "High bitrate AV1 should get CRF <= 22, got {:.1}",
-            crf
+            "High bitrate AV1 should get CRF <= 22, got {crf:.1}"
         );
     }
 
@@ -2374,7 +2349,7 @@ mod tests {
             || detection.mastering_display.is_some()
             || matches!(
                 detection.color_transfer.as_deref(),
-                Some("smpte2084") | Some("arib-std-b67")
+                Some("smpte2084" | "arib-std-b67")
             );
 
         if is_hdr_content {
@@ -2394,6 +2369,6 @@ mod tests {
         assert!(final_params.contains("repeat-headers=1"));
         assert!(final_params.contains("dhdr10-info=/tmp/hdr10plus.json"));
 
-        println!("✅ HDR10+ x265-params injection verified: {}", final_params);
+        println!("✅ HDR10+ x265-params injection verified: {final_params}");
     }
 }

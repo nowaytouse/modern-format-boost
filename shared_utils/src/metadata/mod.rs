@@ -3,7 +3,7 @@
 //! Layered preservation: Internal (`ExifTool`) / Network / System (ACL, xattr, timestamps).
 //! Unified entry point for timestamps: single files via `apply_file_timestamps(src, dst)`, directory trees via
 //! `save_directory_timestamps` → `apply_saved_timestamps_to_dst` / `restore_directory_timestamps`,
-//! Avoids redundant implementations. ExifTool rewrites files, so timestamps are always set after write operations.
+//! Avoids redundant implementations. `ExifTool` rewrites files, so timestamps are always set after write operations.
 
 use std::io;
 use std::path::Path;

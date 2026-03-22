@@ -1,9 +1,9 @@
 //! Animated Image → Video Conversion Module
 //!
 //! Handles conversion of animated images (GIF, WebP, AVIF, etc.) to video formats.
-//! Migrated from img_hevc to vid_hevc for clearer separation of concerns:
-//! - img_av1: image analysis, format detection, quality estimation
-//! - vid_av1: all video encoding (including animated image → video)
+//! Migrated from `img_hevc` to `vid_hevc` for clearer separation of concerns:
+//! - `img_av1`: image analysis, format detection, quality estimation
+//! - `vid_av1`: all video encoding (including animated image → video)
 
 use crate::{Result, VidQualityError};
 use shared_utils::conversion::{ConversionResult, ConvertOptions};
@@ -35,7 +35,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         .prefix("webp_frames_")
         .tempdir()
         .map_err(|e| {
-            VidQualityError::ConversionError(format!("Failed to create temp dir: {}", e))
+            VidQualityError::ConversionError(format!("Failed to create temp dir: {e}"))
         })?;
     let temp_dir_path = temp_dir.path();
 
@@ -44,7 +44,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         .arg("-info")
         .arg(shared_utils::safe_path_arg(input).as_ref())
         .output()
-        .map_err(|e| VidQualityError::ConversionError(format!("webpmux not found: {}", e)))?;
+        .map_err(|e| VidQualityError::ConversionError(format!("webpmux not found: {e}")))?;
 
     if !webpmux_info.status.success() {
         return Err(VidQualityError::ConversionError(
@@ -73,19 +73,18 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             VidQualityError::ConversionError("Failed to parse frame duration from WebP".to_string())
         })?;
 
-    let fps = 1000.0 / frame_duration_ms as f64;
+    let fps = 1000.0 / f64::from(frame_duration_ms);
 
     if verbose {
         eprintln!(
-            "   📊 WebP: {} frames, {}ms/frame, {:.2}fps",
-            frame_count, frame_duration_ms, fps
+            "   📊 WebP: {frame_count} frames, {frame_duration_ms}ms/frame, {fps:.2}fps"
         );
     }
 
     // Extract each frame using webpmux and convert to PNG
     for i in 1..=frame_count {
-        let frame_webp_path = temp_dir_path.join(format!("frame_{:04}.webp", i));
-        let frame_png_path = temp_dir_path.join(format!("frame_{:04}.png", i));
+        let frame_webp_path = temp_dir_path.join(format!("frame_{i:04}.webp"));
+        let frame_png_path = temp_dir_path.join(format!("frame_{i:04}.png"));
 
         // Extract frame as WebP
         let extract_result = Command::new("webpmux")
@@ -97,13 +96,12 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .arg(&frame_webp_path)
             .output()
             .map_err(|e| {
-                VidQualityError::ConversionError(format!("webpmux extract failed: {}", e))
+                VidQualityError::ConversionError(format!("webpmux extract failed: {e}"))
             })?;
 
         if !extract_result.status.success() {
             return Err(VidQualityError::ConversionError(format!(
-                "Failed to extract frame {}",
-                i
+                "Failed to extract frame {i}"
             )));
         }
 
@@ -116,16 +114,14 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .output()
             .map_err(|e| {
                 VidQualityError::ConversionError(format!(
-                    "FFmpeg WebP→PNG conversion failed: {}",
-                    e
+                    "FFmpeg WebP→PNG conversion failed: {e}"
                 ))
             })?;
 
         if !convert_result.status.success() {
             let stderr = String::from_utf8_lossy(&convert_result.stderr);
             return Err(VidQualityError::ConversionError(format!(
-                "Failed to convert frame {} to PNG: {}",
-                i, stderr
+                "Failed to convert frame {i} to PNG: {stderr}"
             )));
         }
     }
@@ -147,21 +143,19 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
         .arg(shared_utils::safe_path_arg(output_apng).as_ref())
         .output()
         .map_err(|e| {
-            VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {}", e))
+            VidQualityError::ConversionError(format!("FFmpeg APNG creation failed: {e}"))
         })?;
 
     if !ffmpeg_result.status.success() {
         let stderr = String::from_utf8_lossy(&ffmpeg_result.stderr);
         return Err(VidQualityError::ConversionError(format!(
-            "FFmpeg APNG creation failed: {}",
-            stderr
+            "FFmpeg APNG creation failed: {stderr}"
         )));
     }
 
     if verbose {
         shared_utils::progress_mode::emit_stderr(&format!(
-            "   ✅ WebP → APNG conversion successful ({} frames, {:.2}fps)",
-            frame_count, fps
+            "   ✅ WebP → APNG conversion successful ({frame_count} frames, {fps:.2}fps)"
         ));
     }
 
@@ -206,15 +200,16 @@ fn get_max_threads(options: &ConvertOptions) -> usize {
         options.child_threads
     } else {
         (std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(4)
             / 2)
         .clamp(1, 4)
     }
 }
 
+#[must_use] 
 pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
-    let total_pixels = width as u64 * height as u64;
+    let total_pixels = u64::from(width) * u64::from(height);
     width >= 1280 || height >= 720 || total_pixels >= 921600
 }
 
@@ -256,7 +251,7 @@ fn is_gif_meme(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
     if ext != "gif" {
         return false;
@@ -271,12 +266,12 @@ fn is_gif_meme(path: &Path) -> bool {
 }
 
 /// Returns true if the file is an animated image format but effectively static (0 or negligible duration).
-/// Callers should skip video conversion and treat as static image (e.g. route to JXL in img_av1).
+/// Callers should skip video conversion and treat as static image (e.g. route to JXL in `img_av1`).
 fn is_static_animated_image(path: &Path) -> bool {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
     if !matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif") {
         return false;
@@ -346,7 +341,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     let input_ext = input
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     let ext = if options.apple_compat { "mov" } else { "mp4" };
@@ -391,7 +386,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| {
-                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {e}"))
                 })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
 
@@ -455,13 +450,13 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| {
-                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {e}"))
                 })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Extract WebP frames and create APNG with correct timing
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
-                Ok(_) => (temp_apng_path, Some(temp_apng)),
+                Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
                     tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
                     copy_original_on_skip(input, options);
@@ -473,7 +468,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                         input_size,
                         output_size: None,
                         size_reduction: None,
-                        message: format!("WebP extraction failed: {}", e),
+                        message: format!("WebP extraction failed: {e}"),
                         skipped: true,
                         skip_reason: Some("webp_extraction_failed".to_string()),
                     });
@@ -487,7 +482,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
     let max_threads = get_max_threads(options);
-    let svtav1_params = format!("tune=0:film-grain=0:lp={}", max_threads);
+    let svtav1_params = format!("tune=0:film-grain=0:lp={max_threads}");
 
     // Probe ORIGINAL input to get stream index for multi-stream files (animated AVIF/HEIC)
     // For JXL/WebP, actual_input is APNG (single stream), so we probe the original input
@@ -512,7 +507,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
         .arg("-i")
         .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
         .arg("-map")
-        .arg(format!("0:{}", effective_stream_idx)) // Select the correct stream
+        .arg(format!("0:{effective_stream_idx}")) // Select the correct stream
         // NO -r parameter: preserve original frame rate
         .arg("-c:v")
         .arg("libsvtav1")
@@ -584,15 +579,13 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
                 format!(
-                    "AV1 conversion successful: size reduced \x1b[1;32m{:.1}%\x1b[0m",
-                    reduction_pct
+                    "AV1 conversion successful: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
                 )
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
                 format!(
-                    "AV1 conversion successful: size increased \x1b[1;33m{}\x1b[0m",
-                    size_diff
+                    "AV1 conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m"
                 )
             };
 
@@ -644,8 +637,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
                 output_size: None,
                 size_reduction: None,
                 message: format!(
-                    "AV1 encode failed (ffmpeg not found: {}); original copied",
-                    e
+                    "AV1 encode failed (ffmpeg not found: {e}); original copied"
                 ),
                 skipped: true,
                 skip_reason: Some("av1_encode_failed".to_string()),
@@ -694,7 +686,7 @@ pub fn convert_to_av1_mp4_matched(
     let input_ext = input
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     let ext = if options.apple_compat { "mov" } else { "mp4" };
@@ -732,7 +724,7 @@ pub fn convert_to_av1_mp4_matched(
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| {
-                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {e}"))
                 })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
             let djxl_result = Command::new("djxl")
@@ -793,13 +785,13 @@ pub fn convert_to_av1_mp4_matched(
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| {
-                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {e}"))
                 })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Extract WebP frames and create APNG with correct timing
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
-                Ok(_) => (temp_apng_path, Some(temp_apng)),
+                Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
                     tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
                     copy_original_on_skip(input, options);
@@ -811,7 +803,7 @@ pub fn convert_to_av1_mp4_matched(
                         input_size,
                         output_size: None,
                         size_reduction: None,
-                        message: format!("WebP extraction failed: {}", e),
+                        message: format!("WebP extraction failed: {e}"),
                         skipped: true,
                         skip_reason: Some("webp_extraction_failed".to_string()),
                     });
@@ -859,8 +851,7 @@ pub fn convert_to_av1_mp4_matched(
                         .tempfile()
                         .map_err(|e| {
                             VidQualityError::ConversionError(format!(
-                                "Failed to create temp APNG: {}",
-                                e
+                                "Failed to create temp APNG: {e}"
                             ))
                         })?;
                     let temp_stream_path = temp_stream.path().to_path_buf();
@@ -922,7 +913,7 @@ pub fn convert_to_av1_mp4_matched(
     let mut actual_initial_crf = initial_crf;
     if let Some(hint) = shared_utils::crf_constants::get_global_last_hit_crf_av1() {
         if options.verbose {
-            eprintln!("   💡 Using global last hit CRF: {:.1} (warm start)", hint);
+            eprintln!("   💡 Using global last hit CRF: {hint:.1} (warm start)");
         }
         actual_initial_crf = hint;
     }
@@ -967,7 +958,7 @@ pub fn convert_to_av1_mp4_matched(
     drop(temp_stream_file);
 
     for log in &explore_result.log {
-        eprintln!("{}", log);
+        eprintln!("{log}");
     }
 
     let tolerance_ratio = if options.allow_size_tolerance {
@@ -986,17 +977,15 @@ pub fn convert_to_av1_mp4_matched(
         let size_increase_pct =
             ((explore_result.output_size as f64 / input_size as f64) - 1.0) * 100.0;
         if let Err(e) = fs::remove_file(&temp_output) {
-            eprintln!("⚠️ [cleanup] Failed to remove oversized AV1 output: {}", e);
+            eprintln!("⚠️ [cleanup] Failed to remove oversized AV1 output: {e}");
         }
         if options.allow_size_tolerance {
             eprintln!(
-                "   ⏭️  Skipping: AV1 output larger than input by {:.1}% (tolerance: 1.0%)",
-                size_increase_pct
+                "   ⏭️  Skipping: AV1 output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
             );
         } else {
             eprintln!(
-                "   ⏭️  Skipping: AV1 output larger than input by {:.1}% (strict mode: no tolerance)",
-                size_increase_pct
+                "   ⏭️  Skipping: AV1 output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)"
             );
         }
         eprintln!(
@@ -1012,8 +1001,7 @@ pub fn convert_to_av1_mp4_matched(
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: AV1 output larger than input by {:.1}% ({}x{}, tolerance exceeded)",
-                size_increase_pct, width, height
+                "Skipped: AV1 output larger than input by {size_increase_pct:.1}% ({width}x{height}, tolerance exceeded)"
             ),
             skipped: true,
             skip_reason: Some("size_increase_beyond_tolerance".to_string()),
@@ -1043,8 +1031,7 @@ pub fn convert_to_av1_mp4_matched(
             };
             tracing::warn!(input = %input.display(), "Video stream compression failed: {:.1}KB → {:.1}KB", input_stream_kb, output_stream_kb);
             eprintln!(
-                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {:.1} KB → {:.1} KB ({:+.1}%) │ File may already be highly optimized",
-                input_stream_kb, output_stream_kb, stream_change_pct
+                "   ⚠️  VIDEO STREAM COMPRESSION FAILED: {input_stream_kb:.1} KB → {output_stream_kb:.1} KB ({stream_change_pct:+.1}%) │ File may already be highly optimized"
             );
             (
                 "Original file PROTECTED (output did not compress)".to_string(),
@@ -1060,8 +1047,7 @@ pub fn convert_to_av1_mp4_matched(
         } else if actual_ssim < threshold {
             tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, "Quality validation failed");
             eprintln!(
-                "   ⚠️  Quality validation FAILED: SSIM {:.4} < {:.4}",
-                actual_ssim, threshold
+                "   ⚠️  Quality validation FAILED: SSIM {actual_ssim:.4} < {threshold:.4}"
             );
             (
                 "Original file PROTECTED (quality below threshold)".to_string(),
@@ -1073,7 +1059,7 @@ pub fn convert_to_av1_mp4_matched(
                 .as_deref()
                 .unwrap_or("unknown reason");
             tracing::warn!(input = %input.display(), reason, "Quality validation failed");
-            eprintln!("   ⚠️  Quality validation FAILED: {}", reason);
+            eprintln!("   ⚠️  Quality validation FAILED: {reason}");
             (
                 "Original file PROTECTED (quality/size check failed)".to_string(),
                 "Output discarded (quality/size check failed)".to_string(),
@@ -1110,8 +1096,7 @@ pub fn convert_to_av1_mp4_matched(
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: SSIM {:.4} below threshold {:.4}",
-                actual_ssim, threshold
+                "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
             ),
             skipped: true,
             skip_reason: Some("quality_failed".to_string()),
@@ -1142,7 +1127,7 @@ pub fn convert_to_av1_mp4_matched(
 
     let reduction_pct = -explore_result.size_change_pct;
     let explored_msg = if (explore_result.optimal_crf - actual_initial_crf).abs() > 0.1 {
-        format!(" (explored from CRF {:.1})", actual_initial_crf)
+        format!(" (explored from CRF {actual_initial_crf:.1})")
     } else {
         String::new()
     };
@@ -1153,7 +1138,7 @@ pub fn convert_to_av1_mp4_matched(
 
     let ssim_msg = explore_result
         .ssim
-        .map(|s| format!(", SSIM: {:.4}", s))
+        .map(|s| format!(", SSIM: {s:.4}"))
         .unwrap_or_default();
 
     let message = format!(
@@ -1203,7 +1188,7 @@ pub fn convert_to_av1_mkv_lossless(
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
 
     let max_threads = get_max_threads(options);
-    let svtav1_params = format!("lossless=1:tune=0:film-grain=0:lp={}", max_threads);
+    let svtav1_params = format!("lossless=1:tune=0:film-grain=0:lp={max_threads}");
     let mut cmd = Command::new("ffmpeg");
     cmd.arg("-y")
         .arg("-threads")
@@ -1257,15 +1242,13 @@ pub fn convert_to_av1_mkv_lossless(
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
                 format!(
-                    "Lossless AV1: size reduced \x1b[1;32m{:.1}%\x1b[0m",
-                    reduction_pct
+                    "Lossless AV1: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
                 )
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
                 format!(
-                    "Lossless AV1: size increased \x1b[1;33m{}\x1b[0m",
-                    size_diff
+                    "Lossless AV1: size increased \x1b[1;33m{size_diff}\x1b[0m"
                 )
             };
 
@@ -1317,8 +1300,7 @@ pub fn convert_to_av1_mkv_lossless(
                 output_size: None,
                 size_reduction: None,
                 message: format!(
-                    "Lossless AV1 failed (ffmpeg not found: {}); original copied",
-                    e
+                    "Lossless AV1 failed (ffmpeg not found: {e}); original copied"
                 ),
                 skipped: true,
                 skip_reason: Some("av1_lossless_failed".to_string()),
@@ -1353,7 +1335,7 @@ pub fn convert_to_gif_apple_compat(
     let input_ext = input
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     if input_ext == "gif" {
@@ -1427,7 +1409,7 @@ pub fn convert_to_gif_apple_compat(
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| {
-                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {e}"))
                 })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
 
@@ -1491,13 +1473,13 @@ pub fn convert_to_gif_apple_compat(
                 .suffix(".apng")
                 .tempfile()
                 .map_err(|e| {
-                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {}", e))
+                    VidQualityError::ConversionError(format!("Failed to create temp APNG: {e}"))
                 })?;
             let temp_apng_path = temp_apng.path().to_path_buf();
 
             // Extract WebP frames and create APNG with correct timing
             match extract_webp_to_apng(input, &temp_apng_path, options.verbose) {
-                Ok(_) => (temp_apng_path, Some(temp_apng)),
+                Ok(()) => (temp_apng_path, Some(temp_apng)),
                 Err(e) => {
                     tracing::warn!(input = %input.display(), error = %e, "WebP extraction failed");
                     copy_original_on_skip(input, options);
@@ -1509,7 +1491,7 @@ pub fn convert_to_gif_apple_compat(
                         input_size,
                         output_size: None,
                         size_reduction: None,
-                        message: format!("WebP extraction failed: {}", e),
+                        message: format!("WebP extraction failed: {e}"),
                         skipped: true,
                         skip_reason: Some("webp_extraction_failed".to_string()),
                     });
@@ -1564,14 +1546,12 @@ pub fn convert_to_gif_apple_compat(
         let filter = if has_multiple_streams {
             // Multi-stream: specify stream in filter
             format!(
-                "[0:{}]scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
-                effective_stream_idx, width, height
+                "[0:{effective_stream_idx}]scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer"
             )
         } else {
             // Single-stream: simple filter
             format!(
-                "scale={}:{}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer",
-                width, height
+                "scale={width}:{height}:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256[p];[s1][p]paletteuse=dither=bayer"
             )
         };
 
@@ -1646,22 +1626,19 @@ pub fn convert_to_gif_apple_compat(
     if size_guard_active && output_size > max_allowed_size {
         let size_increase_pct = ((output_size as f64 / input_size as f64) - 1.0) * 100.0;
         if let Err(e) = fs::remove_file(&temp_output) {
-            eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {}", e);
+            eprintln!("⚠️ [cleanup] Failed to remove oversized GIF output: {e}");
         }
         if options.allow_size_tolerance {
             eprintln!(
-                "   ⏭️  Skipping: GIF output larger than input by {:.1}% (tolerance: 1.0%)",
-                size_increase_pct
+                "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (tolerance: 1.0%)"
             );
         } else {
             eprintln!(
-                "   ⏭️  Skipping: GIF output larger than input by {:.1}% (strict mode: no tolerance)",
-                size_increase_pct
+                "   ⏭️  Skipping: GIF output larger than input by {size_increase_pct:.1}% (strict mode: no tolerance)"
             );
         }
         eprintln!(
-            "   📊 Size comparison: {} → {} bytes (+{:.1}%)",
-            input_size, output_size, size_increase_pct
+            "   📊 Size comparison: {input_size} → {output_size} bytes (+{size_increase_pct:.1}%)"
         );
         copy_original_on_skip(input, options);
         mark_as_processed(input);
@@ -1673,8 +1650,7 @@ pub fn convert_to_gif_apple_compat(
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: GIF output larger than input by {:.1}% (tolerance exceeded)",
-                size_increase_pct
+                "Skipped: GIF output larger than input by {size_increase_pct:.1}% (tolerance exceeded)"
             ),
             skipped: true,
             skip_reason: Some("size_increase_beyond_tolerance".to_string()),
@@ -1716,15 +1692,13 @@ pub fn convert_to_gif_apple_compat(
     let reduction_pct = reduction * 100.0;
     let message = if reduction >= 0.0 {
         format!(
-            "GIF (Apple Compat): size reduced \x1b[1;32m{:.1}%\x1b[0m",
-            reduction_pct
+            "GIF (Apple Compat): size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
         )
     } else {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
         format!(
-            "GIF (Apple Compat): size increased \x1b[1;33m{}\x1b[0m",
-            size_diff
+            "GIF (Apple Compat): size increased \x1b[1;33m{size_diff}\x1b[0m"
         )
     };
 
