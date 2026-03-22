@@ -7,8 +7,11 @@ All notable changes to this project will be documented in this file.
 ## [0.10.90] - 2026-03-22
 
 ### Fixed
-- 🔄 **Checkpoint Reset Logic**: Deleting a manually created output directory (e.g. `_optimized`) now correctly triggers a full re-conversion of the source directory, even in resume mode. The system now detects when the "optimized" destination is missing and clears stale progress state to ensure synchronization between source and output.
-- 🧪 **MS-SSIM/VMAF Quality Verification**: Further refined FFmpeg exit code tolerance and error detection to eliminate false negatives in high-bit-depth video quality reporting.
+- 🔄 **Intelligent Checkpoint & Resume Reset**: Deleting a manually created output directory (e.g. `_optimized`) now correctly triggers a full re-conversion of the source directory, even in resume mode. The system now detects when the "optimized" destination is missing and clears stale progress state to ensure synchronization between source and output.
+- 🧪 **MS-SSIM/VMAF Quality Verification Re-engineering**: 
+    - **Exit Code Tolerance**: Prefers prioritized stdout JSON parsing over exit-code checks, eliminating false "Pixel format incompatibility" errors on legitimate HDR/10-bit video streams.
+    - **Chroma Resolution Guard**: Implemented a safety threshold (256×256 min) for MS-SSIM chroma channels. Fails with Y-only scoring instead of crashing on small-resolution chroma planes (downsampling protection).
+    - **False Error Suppression**: Tightened stderr parsing to ignore harmless logging fragments (like codec descriptions/metadata headers) that previously triggered false quality verification failures.
 
 ## [0.10.89] - 2026-03-22
 
