@@ -92,7 +92,7 @@ pub struct FFprobeResult {
     pub tags: std::collections::HashMap<String, String>,
 }
 
-    #[must_use]
+#[must_use]
 pub fn is_ffprobe_available() -> bool {
     Command::new("ffprobe").arg("-version").output().is_ok()
 }

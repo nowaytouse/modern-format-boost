@@ -280,7 +280,15 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
                     }
                 }
             } else {
-                warn!(input = %input_str, stderr = %stderr.trim(), "FFPROBE FAILED: non-zero exit");
+                // For JPEG/image files, ffprobe failure is often expected (not a video stream)
+                // Only log as warning if stderr suggests a real error (not just "no video stream")
+                let stderr_lower = stderr.to_lowercase();
+                if !stderr_lower.contains("no such file")
+                    && !stderr_lower.contains("invalid data")
+                    && !stderr_lower.is_empty()
+                {
+                    warn!(input = %input_str, stderr = %stderr.trim(), "FFPROBE FAILED: non-zero exit");
+                }
                 return ColorInfo::default();
             }
         }

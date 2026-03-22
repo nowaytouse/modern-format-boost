@@ -390,7 +390,8 @@ impl ExploreContext {
     /// Returns error if encoding fails.
     pub fn binary_search_quality(
         &mut self,
-        low: f32, high: f32,
+        low: f32,
+        high: f32,
         max_iter: u32,
     ) -> Result<(f32, u64, f64, u32)> {
         let min_ssim = self.config.quality_thresholds.min_ssim;
@@ -439,9 +440,7 @@ impl ExploreContext {
             Some(s) => self.log(format!(
                 "📊 RESULT: CRF {crf:.1}, SSIM {s:.4}, {size_change_pct:+.1}%"
             )),
-            None => self.log(format!(
-                "📊 RESULT: CRF {crf:.1}, {size_change_pct:+.1}%"
-            )),
+            None => self.log(format!("📊 RESULT: CRF {crf:.1}, {size_change_pct:+.1}%")),
         }
     }
 
@@ -523,9 +522,7 @@ impl ExploreContext {
         match self.calculate_ssim(crf) {
             Ok(result) => Some(result),
             Err(e) => {
-                self.log(format!(
-                    "⚠️ SSIM calculation failed for CRF {crf:.1}: {e}"
-                ));
+                self.log(format!("⚠️ SSIM calculation failed for CRF {crf:.1}: {e}"));
                 None
             }
         }
@@ -775,11 +772,12 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         ));
         ctx.progress_start("🎯💾 Quality+Compress");
 
-        let (compress_boundary, boundary_size, boundary_iter) = if let Some((crf, size, iter)) = ctx.binary_search_compress(
-            ctx.config.min_crf,
-            ctx.config.max_crf,
-            ctx.config.max_iterations / 2,
-        )? {
+        let (compress_boundary, boundary_size, boundary_iter) = if let Some((crf, size, iter)) = ctx
+            .binary_search_compress(
+                ctx.config.min_crf,
+                ctx.config.max_crf,
+                ctx.config.max_iterations / 2,
+            )? {
             (crf, size, iter)
         } else {
             ctx.progress_done();
@@ -851,11 +849,12 @@ impl ExploreStrategy for CompressOnlyStrategy {
         ctx.log(format!("💾 Compress-Only Mode ({:?})", ctx.encoder));
         ctx.progress_start("💾 Compress Only");
 
-        let (best_crf, best_size, iterations) = if let Some((crf, size, iter)) = ctx.binary_search_compress(
-            ctx.config.min_crf,
-            ctx.config.max_crf,
-            ctx.config.max_iterations,
-        )? {
+        let (best_crf, best_size, iterations) = if let Some((crf, size, iter)) = ctx
+            .binary_search_compress(
+                ctx.config.min_crf,
+                ctx.config.max_crf,
+                ctx.config.max_iterations,
+            )? {
             (crf, size, iter)
         } else {
             let size = ctx.encode(ctx.config.max_crf)?;
@@ -891,11 +890,12 @@ impl ExploreStrategy for CompressWithQualityStrategy {
         ctx.log(format!("💾🎭 Compress + Quality ({:?})", ctx.encoder));
         ctx.progress_start("💾🎭 Compress+Quality");
 
-        let (best_crf, best_size, iterations) = if let Some((crf, size, search_iter)) = ctx.binary_search_compress(
-            ctx.config.initial_crf,
-            ctx.config.max_crf,
-            ctx.config.max_iterations - 1,
-        )? {
+        let (best_crf, best_size, iterations) = if let Some((crf, size, search_iter)) = ctx
+            .binary_search_compress(
+                ctx.config.initial_crf,
+                ctx.config.max_crf,
+                ctx.config.max_iterations - 1,
+            )? {
             (crf, size, search_iter + 1)
         } else {
             let size = ctx.encode(ctx.config.max_crf)?;
@@ -919,7 +919,11 @@ impl ExploreStrategy for CompressWithQualityStrategy {
 
         ctx.progress_done();
 
-        ctx.log_final_result(best_crf, ssim_result.as_ref().map(|r| r.value), ctx.size_change_pct(best_size));
+        ctx.log_final_result(
+            best_crf,
+            ssim_result.as_ref().map(|r| r.value),
+            ctx.size_change_pct(best_size),
+        );
 
         Ok(ctx.build_result(
             best_crf,

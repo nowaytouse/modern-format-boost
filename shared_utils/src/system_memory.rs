@@ -40,15 +40,17 @@ pub fn get_total_memory_mb() -> Option<u64> {
 }
 
 /// Classify current memory pressure from available/total. None if unknown.
+/// Enhanced thresholds to prevent OOM kills during heavy image processing.
 pub fn memory_pressure_level() -> Option<MemoryPressure> {
     let (available_mb, total_mb) = get_memory_mb()?;
     if total_mb == 0 {
         return None;
     }
     let ratio = available_mb as f64 / total_mb as f64;
-    let level = if ratio >= 0.25 && available_mb >= 2048 {
+    // More conservative thresholds to prevent OOM during cjxl/ImageMagick operations
+    let level = if ratio >= 0.30 && available_mb >= 3072 {
         MemoryPressure::Low
-    } else if ratio >= 0.10 || available_mb >= 1024 {
+    } else if ratio >= 0.15 || available_mb >= 1536 {
         MemoryPressure::Normal
     } else {
         MemoryPressure::High

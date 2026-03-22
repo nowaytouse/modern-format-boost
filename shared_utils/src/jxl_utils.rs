@@ -326,9 +326,23 @@ fn run_imagemagick_cjxl_pipeline(
         Ok(status) if status.success() => true,
         Ok(status) => {
             let exit_code = status.code();
-            crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
-            if !cjxl_stderr.is_empty() {
-                crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {}", cjxl_stderr));
+            // exit_code is None when process was terminated by signal (SIGKILL, SIGSEGV, etc.)
+            if exit_code.is_none() {
+                crate::log_pipeline_broken!(
+                    "cjxl",
+                    "Process terminated by signal (possible crash or OOM kill)"
+                );
+                if !cjxl_stderr.is_empty() {
+                    crate::progress_mode::emit_stderr(&format!(
+                        "   📋 cjxl stderr before termination: {}",
+                        cjxl_stderr
+                    ));
+                }
+            } else {
+                crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
+                if !cjxl_stderr.is_empty() {
+                    crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {}", cjxl_stderr));
+                }
             }
             false
         }
@@ -618,6 +632,11 @@ pub fn try_imagemagick_fallback(
         "   {} All ImageMagick fallback attempts exhausted",
         style("❌").red()
     ));
+    crate::log_upstream_error!(
+        "Image conversion",
+        "Failed {}: All ImageMagick+cjxl pipeline attempts failed. Possible causes: corrupted image data, unsupported format variant, or cjxl crash/OOM",
+        input.display()
+    );
     Err(std::io::Error::other(
         "ImageMagick fallback pipeline failed",
     ))

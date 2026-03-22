@@ -78,8 +78,9 @@ impl CompressionResult {
     pub const fn crf(&self) -> f32 {
         match self {
             Self::Success { crf, .. } => *crf,
-            Self::QualityFailed { attempted_crf, .. }
-            | Self::SizeFailed { attempted_crf, .. } => *attempted_crf,
+            Self::QualityFailed { attempted_crf, .. } | Self::SizeFailed { attempted_crf, .. } => {
+                *attempted_crf
+            }
             Self::NoCompressionPossible { fallback_crf, .. } => *fallback_crf,
         }
     }

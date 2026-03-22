@@ -310,7 +310,10 @@ pub fn format_ffmpeg_error(stderr: &str) -> String {
                 && !trimmed.starts_with("fps=")
                 && !trimmed.starts_with("size=")
         })
-        .map_or_else(|| "Unknown FFmpeg error".to_string(), |s| s.trim().to_string())
+        .map_or_else(
+            || "Unknown FFmpeg error".to_string(),
+            |s| s.trim().to_string(),
+        )
 }
 
 #[must_use]
