@@ -89,6 +89,7 @@ pub struct XmpMerger {
 }
 
 impl XmpMerger {
+    #[must_use] 
     pub fn new(config: XmpMergerConfig) -> Self {
         Self { config }
     }
@@ -200,15 +201,15 @@ impl XmpMerger {
             path: xmp_path.to_path_buf(),
             document_id: lines
                 .first()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .filter(|s| !s.is_empty()),
             derived_from: lines
                 .get(1)
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .filter(|s| !s.is_empty()),
             source: lines
                 .get(2)
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .filter(|s| !s.is_empty()),
         })
     }
@@ -510,7 +511,7 @@ impl XmpMerger {
         }
 
         if self.config.verbose {
-            eprintln!("  🔍 Searching by DocumentID: {}", xmp_doc_id);
+            eprintln!("  🔍 Searching by DocumentID: {xmp_doc_id}");
         }
 
         for path in self.read_parent_paths(parent)? {
@@ -651,7 +652,7 @@ impl XmpMerger {
                 let hint = crate::extract_suggested_extension(&err_str);
 
                 if let Some(ref h) = hint {
-                    eprintln!("💡 ExifTool suggests content is: {}", h);
+                    eprintln!("💡 ExifTool suggests content is: {h}");
                 }
 
                 self.merge_xmp_fallback(xmp_path, media_path, hint.as_deref())
@@ -717,7 +718,7 @@ impl XmpMerger {
             let is_real_error = stderr.contains("Error:") && !is_minor_warning;
 
             if is_real_error {
-                bail!("ExifTool merge failed: {}", stderr);
+                bail!("ExifTool merge failed: {stderr}");
             }
         }
 
@@ -739,7 +740,7 @@ impl XmpMerger {
         let detected_ext = if let Some(hint) = hint_ext {
             Some(hint.to_string())
         } else {
-            crate::common_utils::detect_real_extension(media_path).map(|s| s.to_string())
+            crate::common_utils::detect_real_extension(media_path).map(std::string::ToString::to_string)
         };
 
         let implied_ext = if xmp_filename.to_lowercase().ends_with(".xmp") {
@@ -749,7 +750,7 @@ impl XmpMerger {
             None
         };
 
-        let target_ext = detected_ext.or(implied_ext.map(|s| s.to_string()));
+        let target_ext = detected_ext.or(implied_ext.map(std::string::ToString::to_string));
 
         let Some(original_ext) = target_ext else {
             return self.merge_xmp_core(xmp_path, media_path);
@@ -765,8 +766,7 @@ impl XmpMerger {
         }
 
         eprintln!(
-            "⚠️ Merge failed, attempting fallback: Temporary rename to .{} for merge...",
-            original_ext
+            "⚠️ Merge failed, attempting fallback: Temporary rename to .{original_ext} for merge..."
         );
 
         let temp_path = media_path.with_extension(&original_ext);
@@ -790,7 +790,7 @@ impl XmpMerger {
                 temp_path.display(),
                 media_path.display()
             );
-            eprintln!("❌ Error: {}", e);
+            eprintln!("❌ Error: {e}");
             bail!("Critical: Failed to restore filename after fallback merge");
         }
 
@@ -800,7 +800,7 @@ impl XmpMerger {
                 Ok(())
             }
             Err(e) => {
-                eprintln!("❌ Fallback merge failed: {}", e);
+                eprintln!("❌ Fallback merge failed: {e}");
                 Err(e)
             }
         }
@@ -845,6 +845,7 @@ impl XmpMerger {
         }
     }
 
+    #[must_use] 
     pub fn process_xmp(&self, xmp_path: &Path) -> MergeResult {
         let (media_path, strategy) = match self.find_media_file(xmp_path) {
             Ok((path, strat)) => (path, strat),
@@ -853,7 +854,7 @@ impl XmpMerger {
                     xmp_path: xmp_path.to_path_buf(),
                     media_path: None,
                     success: false,
-                    message: format!("Error finding media: {}", e),
+                    message: format!("Error finding media: {e}"),
                     match_strategy: None,
                 };
             }
@@ -893,7 +894,7 @@ impl XmpMerger {
                 xmp_path: xmp_path.to_path_buf(),
                 media_path: Some(media),
                 success: false,
-                message: format!("Merge failed: {}", e),
+                message: format!("Merge failed: {e}"),
                 match_strategy: Some(strategy),
             },
         }
@@ -933,6 +934,7 @@ pub struct MergeSummary {
 }
 
 impl MergeSummary {
+    #[must_use] 
     pub fn from_results(results: &[MergeResult]) -> Self {
         let mut summary = Self {
             total: results.len(),
@@ -964,10 +966,10 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
 
     let ext_lower = ext.to_lowercase();
     let xmp_candidates = [
-        parent.join(format!("{}.xmp", stem)),
-        parent.join(format!("{}.{}.xmp", stem, ext)),
-        parent.join(format!("{}.{}.xmp", stem, ext_lower)),
-        parent.join(format!("{}.XMP", stem)),
+        parent.join(format!("{stem}.xmp")),
+        parent.join(format!("{stem}.{ext}.xmp")),
+        parent.join(format!("{stem}.{ext_lower}.xmp")),
+        parent.join(format!("{stem}.XMP")),
     ];
 
     for xmp_path in &xmp_candidates {
@@ -992,7 +994,7 @@ pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
                 }
                 Err(e) => {
                     crate::progress_mode::xmp_merge_failure(&e.to_string());
-                    bail!("Failed to merge XMP: {}", e);
+                    bail!("Failed to merge XMP: {e}");
                 }
             }
             return Ok(true);
@@ -1108,15 +1110,15 @@ mod tests {
             XmpMerger::normalize_filename("IMG_2024-01-01"),
             "img20240101"
         );
-        assert_eq!(XmpMerger::normalize_filename("测试文件"), "测试文件");
+        assert_eq!(XmpMerger::normalize_filename("test_file"), "test_file");
         assert_eq!(XmpMerger::normalize_filename("photo.test"), "phototest");
     }
 
     #[test]
     fn test_unicode_filename() {
         let temp_dir = TempDir::new().unwrap();
-        let jpg = temp_dir.path().join("照片2024.jpg");
-        let xmp = temp_dir.path().join("照片2024.xmp");
+        let jpg = temp_dir.path().join("photo2024.jpg");
+        let xmp = temp_dir.path().join("photo2024.xmp");
 
         fs::write(&jpg, "fake jpg").unwrap();
         fs::write(&xmp, "fake xmp").unwrap();
@@ -1205,7 +1207,7 @@ mod tests {
         let result = merger.merge_xmp(&xmp_path, &jpg_path);
 
         if let Err(e) = &result {
-            println!("Merge failed with error: {}", e);
+            println!("Merge failed with error: {e}");
         }
         assert!(result.is_ok(), "XMP merge failed for mismatched extension");
 

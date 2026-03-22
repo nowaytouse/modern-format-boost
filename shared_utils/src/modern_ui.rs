@@ -1,10 +1,10 @@
-//! 🔥 v5.19: 现代化 UI/UX 模块
+//! 🔥 v5.19: Modern UI/UX Module
 //!
-//! 提供现代化的终端交互和视觉效果：
-//! - 动态 Spinner 动画
-//! - 渐变色进度条
-//! - 实时状态更新
-//! - 美化的结果展示
+//! Provides modern terminal interactions and visual effects:
+//! - Dynamic Spinner animations
+//! - Gradient progress bars
+//! - Real-time status updates
+//! - Beautified result presentation
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,14 +61,16 @@ pub mod colors {
 }
 
 pub mod gradients {
-    use super::colors::*;
+    use super::colors::{MFB_BLUE, RESET, MFB_PURPLE};
 
+    #[must_use] 
     pub fn blue_to_cyan(text: &str) -> String {
-        format!("{}{}{}", MFB_BLUE, text, RESET) // Simplified for now, real gradient logic would iterate chars
+        format!("{MFB_BLUE}{text}{RESET}") // Simplified for now, real gradient logic would iterate chars
     }
 
+    #[must_use] 
     pub fn purple_to_pink(text: &str) -> String {
-        format!("{}{}{}", MFB_PURPLE, text, RESET)
+        format!("{MFB_PURPLE}{text}{RESET}")
     }
 }
 
@@ -147,6 +149,7 @@ pub enum ProgressStyle {
     Blocks,
 }
 
+#[must_use] 
 pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) -> String {
     let progress = progress.clamp(0.0, 1.0);
     let filled = (progress * width as f64).round() as usize;
@@ -191,8 +194,9 @@ pub fn render_progress_bar(progress: f64, width: usize, style: ProgressStyle) ->
     }
 }
 
+#[must_use] 
 pub fn render_colored_progress(progress: f64, width: usize) -> String {
-    use colors::*;
+    use colors::{BRIGHT_GREEN, BRIGHT_CYAN, BRIGHT_YELLOW, BRIGHT_RED, RESET};
 
     let bar = render_progress_bar(progress, width, ProgressStyle::Modern);
     let pct = (progress * 100.0) as u32;
@@ -207,7 +211,7 @@ pub fn render_colored_progress(progress: f64, width: usize) -> String {
         BRIGHT_RED
     };
 
-    format!("{}{}{}", color, bar, RESET)
+    format!("{color}{bar}{RESET}")
 }
 
 pub struct ExploreProgressState {
@@ -221,6 +225,7 @@ pub struct ExploreProgressState {
 }
 
 impl ExploreProgressState {
+    #[must_use] 
     pub fn new(stage: &str) -> Self {
         Self {
             stage: stage.to_string(),
@@ -247,8 +252,8 @@ impl ExploreProgressState {
     }
 
     pub fn display(&self) {
-        use colors::*;
-        use symbols::*;
+        use colors::{BRIGHT_GREEN, BRIGHT_YELLOW, DIM, RESET, CYAN};
+        use symbols::{SAVE, WARNING, BULLET};
 
         // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
         crate::ctrlc_guard::wait_if_prompt_active();
@@ -263,12 +268,12 @@ impl ExploreProgressState {
 
         let ssim_str = self
             .ssim
-            .map(|s| format!(" {}SSIM {:.4}{}", DIM, s, RESET))
+            .map(|s| format!(" {DIM}SSIM {s:.4}{RESET}"))
             .unwrap_or_default();
 
         let best_str = self
             .best_crf
-            .map(|b| format!(" {}Best: {:.1}{}", DIM, b, RESET))
+            .map(|b| format!(" {DIM}Best: {b:.1}{RESET}"))
             .unwrap_or_default();
 
         eprint!(
@@ -294,25 +299,25 @@ impl ExploreProgressState {
     }
 
     pub fn finish(&self, final_crf: f32, final_size_pct: f64, final_ssim: Option<f64>) {
-        use colors::*;
-        use symbols::*;
+        use colors::{BRIGHT_GREEN, RESET, BRIGHT_YELLOW, BOLD};
+        use symbols::{SUCCESS, CHECK, WARNING, SAVE, BULLET};
 
         let elapsed = self.start_time.elapsed().as_secs_f64();
 
         eprint!("\r\x1b[K");
 
         let (ssim_str, ssim_rating) = match final_ssim {
-            Some(s) if s >= 0.99 => (format!("SSIM {:.4}", s), format!("{} Excellent", SUCCESS)),
-            Some(s) if s >= 0.98 => (format!("SSIM {:.4}", s), format!("{} Very Good", SUCCESS)),
-            Some(s) if s >= 0.95 => (format!("SSIM {:.4}", s), format!("{}  Good", CHECK)),
-            Some(s) => (format!("SSIM {:.4}", s), format!("{}  Fair", WARNING)),
+            Some(s) if s >= 0.99 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Excellent")),
+            Some(s) if s >= 0.98 => (format!("SSIM {s:.4}"), format!("{SUCCESS} Very Good")),
+            Some(s) if s >= 0.95 => (format!("SSIM {s:.4}"), format!("{CHECK}  Good")),
+            Some(s) => (format!("SSIM {s:.4}"), format!("{WARNING}  Fair")),
             None => (String::new(), String::new()),
         };
 
         let size_str = if final_size_pct < 0.0 {
-            format!("{}{:+.1}%{} {}", BRIGHT_GREEN, final_size_pct, RESET, SAVE)
+            format!("{BRIGHT_GREEN}{final_size_pct:+.1}%{RESET} {SAVE}")
         } else {
-            format!("{}{:+.1}%{}", BRIGHT_YELLOW, final_size_pct, RESET)
+            format!("{BRIGHT_YELLOW}{final_size_pct:+.1}%{RESET}")
         };
 
         eprintln!(
@@ -334,7 +339,7 @@ impl ExploreProgressState {
 }
 
 pub fn print_result_box(title: &str, lines: &[&str]) {
-    use colors::*;
+    use colors::{MFB_BLUE, RESET, BOLD, BRIGHT_WHITE};
 
     let max_width = lines
         .iter()
@@ -387,11 +392,10 @@ pub fn print_result_box(title: &str, lines: &[&str]) {
 }
 
 pub fn print_success_banner(msg: &str) {
-    use colors::*;
-    use symbols::*;
+    use colors::{BOLD, MFB_GREEN, RESET};
+    use symbols::SPARKLE;
     eprintln!(
-        "\n   {}{}{} {}  {}{}{}",
-        BOLD, MFB_GREEN, SPARKLE, msg, SPARKLE, RESET, RESET
+        "\n   {BOLD}{MFB_GREEN}{SPARKLE} {msg}  {SPARKLE}{RESET}{RESET}"
     );
 }
 
@@ -415,7 +419,7 @@ fn strip_ansi(s: &str) -> String {
 }
 
 pub fn print_stage(_icon: &str, title: &str) {
-    use colors::*;
+    use colors::{MFB_BLUE, BOLD, RESET};
     eprintln!(
         "{} {} {}{}{}",
         MFB_BLUE,
@@ -428,30 +432,31 @@ pub fn print_stage(_icon: &str, title: &str) {
 }
 
 pub fn print_substage(title: &str) {
-    use colors::*;
+    use colors::RESET;
     eprintln!("   {} {} {}{}", colors::DIM, symbols::BULLET, RESET, title);
 }
 
 pub fn print_success(msg: &str) {
-    use colors::*;
+    use colors::{BRIGHT_GREEN, RESET};
     eprintln!("{}{} {}{}", BRIGHT_GREEN, symbols::SUCCESS, msg, RESET);
 }
 
 pub fn print_warning(msg: &str) {
-    use colors::*;
+    use colors::{BRIGHT_YELLOW, RESET};
     eprintln!("{}{} {}{}", BRIGHT_YELLOW, symbols::WARNING, msg, RESET);
 }
 
 pub fn print_error(msg: &str) {
-    use colors::*;
+    use colors::{BRIGHT_RED, RESET};
     eprintln!("{}{} {}{}", BRIGHT_RED, symbols::ERROR, msg, RESET);
 }
 
 pub fn print_info(msg: &str) {
-    use colors::*;
+    use colors::{BRIGHT_CYAN, RESET};
     eprintln!("{}{} {}{}", BRIGHT_CYAN, symbols::INFO, msg, RESET);
 }
 
+#[must_use] 
 pub fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -464,39 +469,42 @@ pub fn format_size(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
+#[must_use] 
 pub fn format_duration(secs: f64) -> String {
     if secs >= 3600.0 {
         let h = (secs / 3600.0).floor() as u32;
         let m = ((secs % 3600.0) / 60.0).floor() as u32;
         let s = (secs % 60.0).floor() as u32;
-        format!("{}h {:02}m {:02}s", h, m, s)
+        format!("{h}h {m:02}m {s:02}s")
     } else if secs >= 60.0 {
         let m = (secs / 60.0).floor() as u32;
         let s = (secs % 60.0).floor() as u32;
-        format!("{}m {:02}s", m, s)
+        format!("{m}m {s:02}s")
     } else {
-        format!("{:.1}s", secs)
+        format!("{secs:.1}s")
     }
 }
 
+#[must_use] 
 pub fn format_size_change(pct: f64) -> String {
-    use colors::*;
+    use colors::{BRIGHT_GREEN, RESET, BRIGHT_YELLOW, BRIGHT_RED};
 
     if pct < -50.0 {
         format!("{}{:+.1}%{} {}", BRIGHT_GREEN, pct, RESET, symbols::SPARKLE)
     } else if pct < 0.0 {
         format!("{}{:+.1}%{} {}", BRIGHT_GREEN, pct, RESET, symbols::SAVE)
     } else if pct < 10.0 {
-        format!("{}{:+.1}%{}", BRIGHT_YELLOW, pct, RESET)
+        format!("{BRIGHT_YELLOW}{pct:+.1}%{RESET}")
     } else {
         format!("{}{:+.1}%{} {}", BRIGHT_RED, pct, RESET, symbols::WARNING)
     }
 }
 
+#[must_use] 
 pub fn format_size_diff(diff_bytes: i64) -> String {
     let abs_diff = diff_bytes.unsigned_abs();
     let sign = if diff_bytes >= 0 { "+" } else { "-" };
@@ -509,7 +517,7 @@ pub fn format_size_diff(diff_bytes: i64) -> String {
     } else if abs_diff >= KB {
         format!("{}{:.1} KB", sign, abs_diff as f64 / KB as f64)
     } else {
-        format!("{}{} B", sign, abs_diff)
+        format!("{sign}{abs_diff} B")
     }
 }
 

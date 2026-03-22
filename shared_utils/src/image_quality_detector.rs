@@ -2,7 +2,7 @@
 //!
 //! This module provides **pixel-based image classification** and quality dimensions.
 //! It is used to generate UI labels (e.g., PHOTO, SCREENSHOT) and detailed quality metrics
-//! for logging. Routing and compression decisions are handled by image_analyzer/recommender.
+//! for logging. Routing and compression decisions are handled by `image_analyzer/recommender`.
 //!
 //! ## Functions
 //! - **Image Content Classification**: Categorizes images into logical types (Icon, Photo, etc.)
@@ -135,7 +135,7 @@ pub fn analyze_image_quality(
         return Err("❌ Invalid dimensions: width or height is 0".to_string());
     }
 
-    let pixels = (width as u64) * (height as u64);
+    let pixels = u64::from(width) * u64::from(height);
 
     let edge_density = calculate_edge_density(rgba_data, width, height);
 
@@ -224,15 +224,15 @@ fn calculate_edge_density(rgba: &[u8], width: u32, height: u32) -> f64 {
         for x in (1..(width - 1) as usize).step_by(step) {
             let get_gray = |px: usize, py: usize| -> i32 {
                 let idx = (py * w + px) * 4;
-                let r = rgba[idx] as i32;
-                let g = rgba[idx + 1] as i32;
-                let b = rgba[idx + 2] as i32;
+                let r = i32::from(rgba[idx]);
+                let g = i32::from(rgba[idx + 1]);
+                let b = i32::from(rgba[idx + 2]);
                 (r * 299 + g * 587 + b * 114) / 1000
             };
 
             let gx = get_gray(x + 1, y) - get_gray(x - 1, y);
             let gy = get_gray(x, y + 1) - get_gray(x, y - 1);
-            let gradient = ((gx * gx + gy * gy) as f64).sqrt();
+            let gradient = f64::from(gx * gx + gy * gy).sqrt();
 
             if gradient > 25.0 {
                 edge_count += 1;
@@ -312,16 +312,16 @@ fn calculate_texture_variance(rgba: &[u8], width: u32, height: u32) -> f64 {
                     let py = (y as i32 + dy) as usize;
                     let idx = (py * width as usize + px) * 4;
 
-                    let gray = (rgba[idx] as i32 * 299
-                        + rgba[idx + 1] as i32 * 587
-                        + rgba[idx + 2] as i32 * 114)
+                    let gray = (i32::from(rgba[idx]) * 299
+                        + i32::from(rgba[idx + 1]) * 587
+                        + i32::from(rgba[idx + 2]) * 114)
                         / 1000;
                     sum += gray;
-                    sq_sum += (gray as i64) * (gray as i64);
+                    sq_sum += i64::from(gray) * i64::from(gray);
                 }
             }
 
-            let mean = sum as f64 / 9.0;
+            let mean = f64::from(sum) / 9.0;
             let variance = (sq_sum as f64 / 9.0) - (mean * mean);
             variance_sum += variance.sqrt();
             sample_count += 1;
@@ -360,17 +360,17 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
             let idx_down = idx + (width as usize * 4);
 
             if idx_down + 2 < rgba.len() {
-                let curr = (rgba[idx] as i32 + rgba[idx + 1] as i32 + rgba[idx + 2] as i32) / 3;
-                let right = (rgba[idx_right] as i32
-                    + rgba[idx_right + 1] as i32
-                    + rgba[idx_right + 2] as i32)
+                let curr = (i32::from(rgba[idx]) + i32::from(rgba[idx + 1]) + i32::from(rgba[idx + 2])) / 3;
+                let right = (i32::from(rgba[idx_right])
+                    + i32::from(rgba[idx_right + 1])
+                    + i32::from(rgba[idx_right + 2]))
                     / 3;
                 let down =
-                    (rgba[idx_down] as i32 + rgba[idx_down + 1] as i32 + rgba[idx_down + 2] as i32)
+                    (i32::from(rgba[idx_down]) + i32::from(rgba[idx_down + 1]) + i32::from(rgba[idx_down + 2]))
                         / 3;
 
-                diff_sum += (curr - right).abs() as f64;
-                diff_sum += (curr - down).abs() as f64;
+                diff_sum += f64::from((curr - right).abs());
+                diff_sum += f64::from((curr - down).abs());
                 sample_count += 2;
             }
         }
@@ -403,7 +403,7 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let get_gray = |x: usize, y: usize| -> i32 {
         let idx = (y * width as usize + x) * 4;
-        (rgba[idx] as i32 * 299 + rgba[idx + 1] as i32 * 587 + rgba[idx + 2] as i32 * 114) / 1000
+        (i32::from(rgba[idx]) * 299 + i32::from(rgba[idx + 1]) * 587 + i32::from(rgba[idx + 2]) * 114) / 1000
     };
 
     for y in (1..(height - 1) as usize).step_by(step) {
@@ -415,7 +415,7 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
             let right = get_gray(x + 1, y);
 
             let laplacian = (4 * center - top - bottom - left - right).abs();
-            laplacian_sum += laplacian as f64;
+            laplacian_sum += f64::from(laplacian);
             sample_count += 1;
         }
     }
@@ -446,7 +446,7 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
             let gray =
-                (rgba[idx] as u64 * 299 + rgba[idx + 1] as u64 * 587 + rgba[idx + 2] as u64 * 114)
+                (u64::from(rgba[idx]) * 299 + u64::from(rgba[idx + 1]) * 587 + u64::from(rgba[idx + 2]) * 114)
                     / 1000;
             sum += gray;
             sq_sum += gray * gray;
@@ -499,7 +499,7 @@ fn classify_content_type(
     width: u32,
     height: u32,
 ) -> ImageContentType {
-    let aspect_ratio = width as f64 / height.max(1) as f64;
+    let aspect_ratio = f64::from(width) / f64::from(height.max(1));
     let rules = get_classifier_rules();
 
     let mut best_rule: Option<&ClassifierRule> = None;
@@ -559,12 +559,12 @@ fn classify_content_type(
             }
         }
         if let Some(r) = &cond.width {
-            if !r.matches(width as f64) {
+            if !r.matches(f64::from(width)) {
                 continue;
             }
         }
         if let Some(r) = &cond.height {
-            if !r.matches(height as f64) {
+            if !r.matches(f64::from(height)) {
                 continue;
             }
         }
@@ -611,6 +611,7 @@ fn calculate_analysis_confidence(
     confidence.clamp(0.0, 1.0)
 }
 
+#[must_use] 
 pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalysis> {
     analyze_image_quality_with_cache(path, None)
 }
@@ -622,8 +623,7 @@ pub fn analyze_image_quality_with_cache(
     let is_jpeg_hint = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
-        .map(|e| e == "jpg" || e == "jpeg")
-        .unwrap_or(false);
+        .is_some_and(|e| e == "jpg" || e == "jpeg");
 
     if is_jpeg_hint {
         return None;
@@ -662,9 +662,7 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
     let rgba = img.to_rgba8();
     let file_size = std::fs::metadata(path).ok()?.len();
     let format = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_uppercase())
-        .unwrap_or_else(|| "unknown".to_string());
+        .extension().map_or_else(|| "unknown".to_string(), |e| e.to_string_lossy().to_uppercase());
     analyze_image_quality(
         width,
         height,

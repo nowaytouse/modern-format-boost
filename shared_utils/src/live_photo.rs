@@ -7,11 +7,12 @@ use std::path::Path;
 /// Check if a file is part of a Live Photo pair
 ///
 /// Live Photos consist of:
-/// - A HEIC/HEIF image file (e.g., IMG_1234.HEIC)
-/// - A companion MOV video file (e.g., IMG_1234.MOV)
+/// - A HEIC/HEIF image file (e.g., `IMG_1234.HEIC`)
+/// - A companion MOV video file (e.g., `IMG_1234.MOV`)
 ///
 /// This function checks if the given file has a companion file with the same
 /// stem but different extension (.mov/.MOV for images, .heic/.HEIC for videos)
+#[must_use] 
 pub fn is_live_photo(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
@@ -31,8 +32,8 @@ pub fn is_live_photo(path: &Path) -> bool {
     // Check if this is a HEIC/HEIF file with a companion MOV
     if matches!(ext_lower.as_str(), "heic" | "heif" | "hif") {
         // Look for companion .mov or .MOV file
-        let mov_path = parent.join(format!("{}.mov", stem));
-        let mov_upper_path = parent.join(format!("{}.MOV", stem));
+        let mov_path = parent.join(format!("{stem}.mov"));
+        let mov_upper_path = parent.join(format!("{stem}.MOV"));
 
         if mov_path.exists() || mov_upper_path.exists() {
             return true;
@@ -42,10 +43,10 @@ pub fn is_live_photo(path: &Path) -> bool {
     // Check if this is a MOV file with a companion HEIC/HEIF
     if ext_lower == "mov" {
         // Look for companion HEIC/HEIF files
-        let heic_path = parent.join(format!("{}.heic", stem));
-        let heic_upper_path = parent.join(format!("{}.HEIC", stem));
-        let heif_path = parent.join(format!("{}.heif", stem));
-        let heif_upper_path = parent.join(format!("{}.HEIF", stem));
+        let heic_path = parent.join(format!("{stem}.heic"));
+        let heic_upper_path = parent.join(format!("{stem}.HEIC"));
+        let heif_path = parent.join(format!("{stem}.heif"));
+        let heif_upper_path = parent.join(format!("{stem}.HEIF"));
 
         if heic_path.exists()
             || heic_upper_path.exists()

@@ -4,7 +4,7 @@
 //! - Maximizes performance on Apple Silicon chips
 //! - Prevents system overload during multi-instance scenarios
 //! - Reduces parallelism when system memory is low (avoids OOM kills)
-//! - Allows environment-based configuration (MFB_LOW_MEMORY, MFB_MULTI_INSTANCE)
+//! - Allows environment-based configuration (`MFB_LOW_MEMORY`, `MFB_MULTI_INSTANCE`)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -33,6 +33,7 @@ impl Default for ThreadConfig {
 }
 
 impl ThreadConfig {
+    #[must_use] 
     pub fn conservative() -> Self {
         Self {
             core_percentage: 50,
@@ -42,6 +43,7 @@ impl ThreadConfig {
         }
     }
 
+    #[must_use] 
     pub fn aggressive() -> Self {
         Self {
             core_percentage: 90,
@@ -51,6 +53,7 @@ impl ThreadConfig {
         }
     }
 
+    #[must_use] 
     pub fn video_processing() -> Self {
         Self {
             core_percentage: 60,
@@ -61,9 +64,10 @@ impl ThreadConfig {
     }
 }
 
+#[must_use] 
 pub fn calculate_optimal_threads(config: &ThreadConfig) -> usize {
     let cpu_count = std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(4);
 
     let effective_percentage = if config.multi_instance_aware && is_multi_instance() {
@@ -135,9 +139,10 @@ fn apply_multi_instance_cap(
     }
 }
 
+#[must_use] 
 pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
     let total_cores = std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(4);
 
     let reserved = (total_cores as f64 * 0.2).ceil() as usize;
@@ -168,11 +173,13 @@ pub fn get_balanced_thread_config(workload: WorkloadType) -> ThreadAllocation {
     }
 }
 
+#[must_use] 
 pub fn get_optimal_threads() -> usize {
     get_balanced_thread_config(WorkloadType::Image).parallel_tasks
 }
 
 /// Optional hint for logging when parallelism was reduced due to memory (e.g. "low memory: reduced parallelism").
+#[must_use] 
 pub fn memory_cap_hint() -> Option<&'static str> {
     if system_memory::is_low_memory_env() {
         return Some("MFB_LOW_MEMORY=1: reduced parallelism");
@@ -184,6 +191,7 @@ pub fn memory_cap_hint() -> Option<&'static str> {
     }
 }
 
+#[must_use] 
 pub fn get_ffmpeg_threads() -> usize {
     calculate_optimal_threads(&ThreadConfig::video_processing())
 }
@@ -215,6 +223,7 @@ pub fn get_rsync_path() -> &'static str {
     })
 }
 
+#[must_use] 
 pub fn get_rsync_version() -> Option<String> {
     use std::process::Command;
 

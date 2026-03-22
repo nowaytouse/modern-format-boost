@@ -1,18 +1,18 @@
 //! 🔥 v6.3: Strategy Pattern for Video Explorer
 //!
-//! 将探索模式重构为独立的 Strategy 结构体，统一 SSIM 计算和进度显示接口。
+//! Refactors exploration modes into independent Strategy structs, unifying SSIM calculation and progress display interface.
 //!
-//! ## 设计目标
-//! 1. 每种探索模式的逻辑完全独立，更易维护和测试
-//! 2. 统一的 ExploreContext 提供共享状态 and 工具方法
-//! 3. 统一的 SSIM 计算逻辑（带缓存和回退）
-//! 4. 统一的进度显示接口
+//! ## Design Goals
+//! 1. Fully independent logic for each explore mode, better maintainability and testability
+//! 2. Unified `ExploreContext` providing shared states and utility methods
+//! 3. Unified SSIM calculation logic (with caching and fallbacks)
+//! 4. Unified progress display interface
 //!
-//! ## 🔥 v6.4.4: 辅助方法重构
-//! 添加 `build_result()`, `binary_search_compress()`, `log_final_result()` 等辅助方法，
-//! 减少 6 个 Strategy 实现中约 40% 的重复代码。
+//! ## 🔥 v6.4.4: Utility Methods Refactor
+//! Added `build_result()`, `binary_search_compress()`, `log_final_result()`, etc.,
+//! reducing boilerplate in 6 Strategy implementations by ~40%.
 //!
-//! ## 使用示例
+//! ## Usage Example
 //! ```ignore
 //! use shared_utils::explore_strategy::{create_strategy, ExploreContext};
 //!
@@ -363,7 +363,7 @@ impl ExploreContext {
         let mut iterations = 0u32;
 
         while high - low > 0.5 && iterations < max_iter {
-            let mid = (low + high) / 2.0;
+            let mid = f32::midpoint(low, high);
             self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
             iterations += 1;
@@ -384,7 +384,7 @@ impl ExploreContext {
         }
     }
 
-    /// Binary search for the highest CRF that still meets min_ssim (best compression while meeting quality).
+    /// Binary search for the highest CRF that still meets `min_ssim` (best compression while meeting quality).
     ///
     /// # Errors
     /// Returns error if encoding fails.
@@ -411,7 +411,7 @@ impl ExploreContext {
         iterations += 1;
 
         while high - low > 1.0 && iterations < max_iter {
-            let mid = (low + high) / 2.0;
+            let mid = f32::midpoint(low, high);
             self.progress_update(&format!("Binary search CRF {mid:.1}..."));
             let size = self.encode(mid)?;
             iterations += 1;
@@ -528,7 +528,7 @@ impl ExploreContext {
         }
     }
 
-    /// SSIM is computed from current input_path vs output_path on disk. Cache key is CRF; value is valid only if output was produced by encode(crf) and not overwritten. Call calculate_ssim immediately after encode when using the same output path.
+    /// SSIM is computed from current `input_path` vs `output_path` on disk. Cache key is CRF; value is valid only if output was produced by encode(crf) and not overwritten. Call `calculate_ssim` immediately after encode when using the same output path.
     fn do_calculate_ssim(&self) -> Result<SsimResult> {
         use std::process::Command;
 

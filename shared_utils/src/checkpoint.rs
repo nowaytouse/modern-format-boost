@@ -1,4 +1,4 @@
-//! Checkpoint & Resume Module (断点续传)
+//! Checkpoint & Resume Module (Progress Tracking)
 //!
 //! Provides atomic operation protection and resume capability for all conversion tools:
 //! - Progress tracking: Record completed files for resume after interruption
@@ -79,6 +79,7 @@ struct CheckpointEntry {
 }
 
 impl CheckpointEntry {
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     fn from_path(path: &Path) -> io::Result<Self> {
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len() as i64;
@@ -89,9 +90,10 @@ impl CheckpointEntry {
             .as_nanos() as i64;
 
         #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-        #[cfg(unix)]
-        let ctime = metadata.ctime_nsec();
+        let ctime = {
+            use std::os::unix::fs::MetadataExt;
+            metadata.ctime_nsec()
+        };
         #[cfg(windows)]
         use std::os::windows::fs::MetadataExt;
         #[cfg(windows)]
@@ -207,14 +209,13 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
 
     for field in ["etimes", "etime"] {
         let output = match Command::new("ps")
-            .args(["-p", &pid.to_string(), "-o", &format!("{}=", field)])
+            .args(["-p", &pid.to_string(), "-o", &format!("{field}=")])
             .output()
         {
             Ok(o) => o,
             Err(err) => {
                 eprintln!(
-                    "⚠️ [checkpoint] Failed to query process age for PID {} via ps {}: {}",
-                    pid, field, err
+                    "⚠️ [checkpoint] Failed to query process age for PID {pid} via ps {field}: {err}"
                 );
                 return None;
             }
@@ -247,9 +248,7 @@ fn get_process_start_time_for_pid(pid: u32) -> Option<u64> {
         }
 
         eprintln!(
-            "⚠️ [checkpoint] ps {} returned non-zero while querying PID {}: {}",
-            field,
-            pid,
+            "⚠️ [checkpoint] ps {field} returned non-zero while querying PID {pid}: {}",
             stderr.trim()
         );
     }
@@ -303,12 +302,10 @@ fn get_hostname() -> String {
     {
         use std::process::Command;
         match Command::new("hostname").output() {
-            Ok(output) if output.status.success() => String::from_utf8(output.stdout)
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|err| {
-                    eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {}", err);
+            Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(|err| {
+                    eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {err}");
                     "unknown".to_string()
-                }),
+                }, |s| s.trim().to_string()),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!(
@@ -318,7 +315,7 @@ fn get_hostname() -> String {
                 "unknown".to_string()
             }
             Err(err) => {
-                eprintln!("⚠️ [checkpoint] Failed to query hostname: {}", err);
+                eprintln!("⚠️ [checkpoint] Failed to query hostname: {err}");
                 "unknown".to_string()
             }
         }
@@ -341,10 +338,16 @@ pub struct CheckpointManager {
 }
 
 impl CheckpointManager {
+    /// # Errors
+    ///
+    /// Returns an error if the progress directory cannot be created or if initialization fails.
     pub fn new(target_dir: &Path) -> io::Result<Self> {
         Self::new_with_context(target_dir, None)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the progress directory cannot be created or if initialization fails.
     pub fn new_with_context(target_dir: &Path, output_root: Option<&Path>) -> io::Result<Self> {
         let canonical_target = Self::normalize_path_to_buf(target_dir);
         let dir_hash = Self::hash_path(&canonical_target);
@@ -353,15 +356,15 @@ impl CheckpointManager {
         let central_dir = get_central_progress_dir();
         fs::create_dir_all(&central_dir)?;
 
-        let progress_file = central_dir.join(format!("{}.txt", dir_hash));
-        let lock_file = central_dir.join(format!("{}.lock", dir_hash));
+        let progress_file = central_dir.join(format!("{dir_hash}.txt"));
+        let lock_file = central_dir.join(format!("{dir_hash}.lock"));
 
         let loaded = Self::load_progress(&progress_file)?;
         let (completed_set, resume_mode, reset_reason) =
             Self::validate_loaded_state(&loaded, &header, output_root);
 
         if let Some(reason) = reset_reason.as_deref() {
-            eprintln!("⚠️ [checkpoint] {}", reason);
+            eprintln!("⚠️ [checkpoint] {reason}");
             if progress_file.exists() {
                 if let Err(err) = fs::remove_file(&progress_file) {
                     eprintln!(
@@ -385,8 +388,7 @@ impl CheckpointManager {
         if manager.resume_mode.load(Ordering::Relaxed) {
             if let Err(err) = manager.rewrite_progress_file() {
                 eprintln!(
-                    "⚠️ [checkpoint] Failed to compact validated checkpoint state: {}",
-                    err
+                    "⚠️ [checkpoint] Failed to compact validated checkpoint state: {err}"
                 );
             }
         }
@@ -394,6 +396,9 @@ impl CheckpointManager {
         Ok(manager)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the lock file cannot be read.
     pub fn check_lock(&self) -> io::Result<Option<u32>> {
         if !self.lock_file.exists() {
             return Ok(None);
@@ -404,7 +409,7 @@ impl CheckpointManager {
         if let Ok(lock_info) = serde_json::from_str::<LockInfo>(&content) {
             if lock_info.pid == std::process::id() {
                 if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {}", e);
+                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {e}");
                 }
                 return Ok(None);
             }
@@ -412,7 +417,7 @@ impl CheckpointManager {
             if lock_info.is_stale() {
                 eprintln!("⚠️ LOCK STALE: Lock file older than 24 hours, removing");
                 if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                    eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
                 }
                 return Ok(None);
             }
@@ -427,8 +432,8 @@ impl CheckpointManager {
                     Ok(status) => status.success(),
                     Err(err) => {
                         eprintln!(
-                            "⚠️ [checkpoint] Failed to probe lock owner PID {} via kill -0: {}",
-                            lock_info.pid, err
+                            "⚠️ [checkpoint] Failed to probe lock owner PID {} via kill -0: {err}",
+                            lock_info.pid
                         );
                         false
                     }
@@ -440,7 +445,7 @@ impl CheckpointManager {
                         lock_info.pid
                     );
                     if let Err(e) = fs::remove_file(&self.lock_file) {
-                        eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                        eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
                     }
                     return Ok(None);
                 }
@@ -452,7 +457,7 @@ impl CheckpointManager {
                             lock_info.pid
                         );
                         if let Err(e) = fs::remove_file(&self.lock_file) {
-                            eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {}", e);
+                            eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
                         }
                         return Ok(None);
                     }
@@ -470,7 +475,7 @@ impl CheckpointManager {
         if let Ok(pid) = content.trim().parse::<u32>() {
             if pid == std::process::id() {
                 if let Err(e) = fs::remove_file(&self.lock_file) {
-                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {}", e);
+                    eprintln!("⚠️ [checkpoint] Failed to remove own lock file: {e}");
                 }
                 return Ok(None);
             }
@@ -480,8 +485,7 @@ impl CheckpointManager {
                         if elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS {
                             if let Err(e) = fs::remove_file(&self.lock_file) {
                                 eprintln!(
-                                    "⚠️ [checkpoint] Failed to remove stale lock file: {}",
-                                    e
+                                    "⚠️ [checkpoint] Failed to remove stale lock file: {e}"
                                 );
                             }
                             return Ok(None);
@@ -494,11 +498,14 @@ impl CheckpointManager {
 
         eprintln!("⚠️ LOCK INVALID: Cannot parse lock file, removing");
         if let Err(e) = fs::remove_file(&self.lock_file) {
-            eprintln!("⚠️ [checkpoint] Failed to remove invalid lock file: {}", e);
+            eprintln!("⚠️ [checkpoint] Failed to remove invalid lock file: {e}");
         }
         Ok(None)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the lock cannot be acquired or if the lock file exists and is not stale.
     pub fn acquire_lock(&self) -> io::Result<()> {
         let lock_info = LockInfo::new();
         let json = serde_json::to_string_pretty(&lock_info)
@@ -518,7 +525,7 @@ impl CheckpointManager {
                     if let Some(pid) = self.check_lock()? {
                         return Err(io::Error::new(
                             io::ErrorKind::AlreadyExists,
-                            format!("Checkpoint lock already held by PID {}", pid),
+                            format!("Checkpoint lock already held by PID {pid}"),
                         ));
                     }
                 }
@@ -527,6 +534,9 @@ impl CheckpointManager {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the lock file cannot be removed.
     pub fn release_lock(&self) -> io::Result<()> {
         if self.lock_file.exists() {
             fs::remove_file(&self.lock_file)?;
@@ -539,14 +549,14 @@ impl CheckpointManager {
     }
 
     pub fn completed_count(&self) -> usize {
-        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         completed.len()
     }
 
     pub fn is_completed(&self, path: &Path) -> bool {
         let key = Self::normalize_path(path);
         let maybe_entry = {
-            let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+            let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             completed.get(&key).cloned()
         };
 
@@ -575,11 +585,14 @@ impl CheckpointManager {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the file metadata cannot be read or if the progress file cannot be written.
     pub fn mark_completed(&self, path: &Path) -> io::Result<()> {
         let entry = CheckpointEntry::from_path(path)?;
         let key = entry.path.clone();
         {
-            let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+            let mut completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if completed.contains_key(&key) {
                 return Ok(());
             }
@@ -596,7 +609,7 @@ impl CheckpointManager {
             .open(&self.progress_file)?;
         let record = serde_json::to_string(&CheckpointRecord::Entry(entry))
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        writeln!(file, "{}", record)?;
+        writeln!(file, "{record}")?;
 
         // Also sync to the global processed list in conversion module
         crate::conversion::mark_as_processed(path);
@@ -604,14 +617,17 @@ impl CheckpointManager {
     }
 
     pub fn sync_to_processed_list(&self) {
-        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for path_str in completed.keys() {
             crate::conversion::mark_as_processed(Path::new(path_str));
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the progress file cannot be removed.
     pub fn clear_progress(&self) -> io::Result<()> {
-        let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let mut completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         completed.clear();
         self.resume_mode.store(false, Ordering::Relaxed);
         if self.progress_file.exists() {
@@ -620,6 +636,9 @@ impl CheckpointManager {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if progress clearing fails.
     pub fn reset_if_output_root_missing(&self, output_root: Option<&Path>) -> io::Result<bool> {
         let Some(output_root) = output_root else {
             return Ok(false);
@@ -640,6 +659,9 @@ impl CheckpointManager {
         Ok(true)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the progress or lock files cannot be removed.
     pub fn cleanup(&self) -> io::Result<()> {
         if self.progress_file.exists() {
             if let Err(err) = fs::remove_file(&self.progress_file) {
@@ -690,8 +712,7 @@ impl CheckpointManager {
     fn normalize_path(path: &Path) -> String {
         Self::normalize_path_to_buf(path)
             .to_str()
-            .map(String::from)
-            .unwrap_or_else(|| path.display().to_string())
+            .map_or_else(|| path.display().to_string(), String::from)
     }
 
     fn load_progress(progress_file: &Path) -> io::Result<LoadedCheckpointState> {
@@ -721,7 +742,7 @@ impl CheckpointManager {
                                     if read_error.is_none() {
                                         read_error = Some(io::Error::new(
                                             io::ErrorKind::InvalidData,
-                                            format!("Failed to parse checkpoint record: {}", err),
+                                            format!("Failed to parse checkpoint record: {err}"),
                                         ));
                                     }
                                 }
@@ -819,16 +840,14 @@ impl CheckpointManager {
                 HashMap::new(),
                 false,
                 Some(format!(
-                    "All saved checkpoint entries became invalid during startup validation (changed: {}, missing: {}, unreadable: {}). Clearing stale resume state.",
-                    changed, missing, unreadable
+                    "All saved checkpoint entries became invalid during startup validation (changed: {changed}, missing: {missing}, unreadable: {unreadable}). Clearing stale resume state."
                 )),
             );
         }
 
         if changed > 0 || missing > 0 || unreadable > 0 {
             eprintln!(
-                "⚠️ [checkpoint] Dropped stale resume entries during validation (changed: {}, missing: {}, unreadable: {}).",
-                changed, missing, unreadable
+                "⚠️ [checkpoint] Dropped stale resume entries during validation (changed: {changed}, missing: {missing}, unreadable: {unreadable})."
             );
         }
 
@@ -845,15 +864,15 @@ impl CheckpointManager {
 
     fn rewrite_progress_file(&self) -> io::Result<()> {
         let temp_path = self.progress_file.with_extension("txt.tmp");
-        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut file = File::create(&temp_path)?;
         let header = serde_json::to_string(&CheckpointRecord::Header(self.header.clone()))
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        writeln!(file, "{}", header)?;
+        writeln!(file, "{header}")?;
         for entry in completed.values() {
             let line = serde_json::to_string(&CheckpointRecord::Entry(entry.clone()))
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-            writeln!(file, "{}", line)?;
+            writeln!(file, "{line}")?;
         }
         file.sync_all()?;
         drop(file);
@@ -863,7 +882,7 @@ impl CheckpointManager {
 
     fn drop_completed_entry(&self, key: &str) {
         let became_empty = {
-            let mut completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+            let mut completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             completed.remove(key);
             completed.is_empty()
         };
@@ -872,8 +891,7 @@ impl CheckpointManager {
         }
         if let Err(err) = self.rewrite_progress_file() {
             eprintln!(
-                "⚠️ [checkpoint] Failed to rewrite checkpoint state after dropping stale entry: {}",
-                err
+                "⚠️ [checkpoint] Failed to rewrite checkpoint state after dropping stale entry: {err}"
             );
         }
     }
@@ -883,21 +901,23 @@ impl Drop for CheckpointManager {
     fn drop(&mut self) {
         if let Err(err) = self.release_lock() {
             eprintln!(
-                "⚠️ [checkpoint] Failed to release lock on drop {}: {}",
-                self.lock_file.display(),
-                err
+                "⚠️ [checkpoint] Failed to release lock on drop {}: {err}",
+                self.lock_file.display()
             );
         }
     }
 }
 
+/// # Errors
+///
+/// Returns an error if the output file is missing, empty, or smaller than `min_size`.
 pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), String> {
     if !output.exists() {
         return Err("Output file does not exist".to_string());
     }
 
     let metadata =
-        fs::metadata(output).map_err(|e| format!("Cannot read output metadata: {}", e))?;
+        fs::metadata(output).map_err(|e| format!("Cannot read output metadata: {e}"))?;
 
     if metadata.len() == 0 {
         return Err("Output file is empty (0 bytes)".to_string());
@@ -911,22 +931,27 @@ pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), Strin
         ));
     }
 
-    let mut file = File::open(output).map_err(|e| format!("Cannot open output file: {}", e))?;
+    let mut file = File::open(output).map_err(|e| format!("Cannot open output file: {e}"))?;
 
     let mut buffer = [0u8; 16];
     file.read(&mut buffer)
-        .map_err(|e| format!("Cannot read output file: {}", e))?;
+        .map_err(|e| format!("Cannot read output file: {e}"))?;
 
     Ok(())
 }
 
+/// Attempt to safely delete the original source file.
+///
+/// # Errors
+///
+/// Returns an error if the source file does not exist, is not a regular file, or is protected.
 pub fn safe_delete_original(input: &Path, output: &Path, min_output_size: u64) -> io::Result<()> {
     if let Err(reason) = verify_output_integrity(output, min_output_size) {
-        eprintln!("   ⚠️  Output integrity check FAILED: {}", reason);
+        eprintln!("   ⚠️  Output integrity check FAILED: {reason}");
         eprintln!("   🛡️  Original file PROTECTED: {}", input.display());
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("Output integrity check failed: {}", reason),
+            format!("Output integrity check failed: {reason}"),
         ));
     }
 
@@ -942,7 +967,7 @@ mod tests {
     static TEST_LOCK: std_mutex<()> = std_mutex::new(());
 
     fn setup_test_env() -> (TempDir, TempDir, std::sync::MutexGuard<'static, ()>) {
-        let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp_target = TempDir::new().unwrap();
         let temp_progress = TempDir::new().unwrap();
         std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path());
@@ -1273,8 +1298,8 @@ mod tests {
 
         let files: Vec<PathBuf> = (1..=5)
             .map(|i| {
-                let path = target.join(format!("video{}.mp4", i));
-                fs::write(&path, format!("content {}", i)).unwrap();
+                let path = target.join(format!("video{i}.mp4"));
+                fs::write(&path, format!("content {i}")).unwrap();
                 path
             })
             .collect();

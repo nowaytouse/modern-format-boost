@@ -1,11 +1,11 @@
 //! File Sorting Module
 //!
-//! 🎯 优先处理小文件策略：
-//! - 快速看到进度反馈
-//! - 小文件处理快，可以更早发现问题
-//! - 大文件留到后面，避免长时间卡住
+//! 🎯 Small-file-first strategy:
+//! - Quick progress feedback
+//! - Small files process quickly, allowing for earlier issue detection
+//! - Large files are left for later to avoid long freezes
 //!
-//! 模块化设计，便于维护和测试
+//! Modular design for easy maintenance and testing
 
 use std::fs;
 use std::path::PathBuf;
@@ -17,6 +17,7 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
+    #[must_use] 
     pub fn new(path: PathBuf) -> Option<Self> {
         fs::metadata(&path).ok().map(|meta| FileInfo {
             path,
@@ -38,10 +39,12 @@ pub struct FileSorter {
 }
 
 impl FileSorter {
+    #[must_use] 
     pub fn new(strategy: SortStrategy) -> Self {
         Self { strategy }
     }
 
+    #[must_use] 
     pub fn sort(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         match self.strategy {
             SortStrategy::None => files,
@@ -71,14 +74,17 @@ impl FileSorter {
     }
 }
 
+#[must_use] 
 pub fn sort_by_size_ascending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeAscending).sort(files)
 }
 
+#[must_use] 
 pub fn sort_by_size_descending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeDescending).sort(files)
 }
 
+#[must_use] 
 pub fn sort_by_name(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::NameAscending).sort(files)
 }
@@ -222,7 +228,7 @@ mod tests {
         let mut files = Vec::new();
 
         for (i, size) in size_samples.iter().enumerate() {
-            let file = create_test_file(temp_dir.path(), &format!("file{}.txt", i), *size);
+            let file = create_test_file(temp_dir.path(), &format!("file{i}.txt"), *size);
             files.push(file);
         }
 

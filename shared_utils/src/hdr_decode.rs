@@ -1,8 +1,8 @@
 //! HDR Image Decoding Module
 //!
-//! Provides HDR-aware image decoding using FFmpeg to preserve high bit-depth content.
+//! Provides HDR-aware image decoding using `FFmpeg` to preserve high bit-depth content.
 //! Standard Rust image decoders (image crate, libheif-rs) decode to 8-bit RGB,
-//! losing HDR information. This module uses FFmpeg to decode HDR images to 16-bit PNG.
+//! losing HDR information. This module uses `FFmpeg` to decode HDR images to 16-bit PNG.
 
 use crate::ffprobe_json::ColorInfo;
 use crate::hdr_utils::{get_hdr_pix_fmt, should_use_hdr_decode};
@@ -10,7 +10,7 @@ use crate::img_errors::{ImgQualityError, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Decode an HDR image to a high bit-depth PNG using FFmpeg.
+/// Decode an HDR image to a high bit-depth PNG using `FFmpeg`.
 /// Returns the path to the temporary 16-bit PNG file.
 ///
 /// # Arguments
@@ -22,7 +22,7 @@ use std::process::Command;
 /// * `Err(ImgQualityError)` - Decoding failed
 ///
 /// # Note
-/// The caller must keep the NamedTempFile guard alive to prevent automatic cleanup.
+/// The caller must keep the `NamedTempFile` guard alive to prevent automatic cleanup.
 ///
 /// # Example
 /// ```no_run
@@ -71,13 +71,12 @@ pub fn decode_hdr_image_to_png16(
 
     let output = cmd
         .output()
-        .map_err(|e| ImgQualityError::ConversionError(format!("FFmpeg spawn failed: {}", e)))?;
+        .map_err(|e| ImgQualityError::ConversionError(format!("FFmpeg spawn failed: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(ImgQualityError::ConversionError(format!(
-            "FFmpeg HDR decode failed: {}",
-            stderr
+            "FFmpeg HDR decode failed: {stderr}"
         )));
     }
 

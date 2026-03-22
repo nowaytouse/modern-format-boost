@@ -1,10 +1,10 @@
 //! Progress Bar Module v5.30
 //!
-//! 🔥 统一进度条系统：
-//! - 全项目统一样式: ████████▓▓░░░░░░
-//! - 更粗更显眼的进度条
-//! - 固定在终端底部显示
-//! - 详细进度参数（当前文件、剩余时间、处理速度、SSIM、CRF等）
+//! 🔥 Unified Progress Bar System:
+//! - Project-wide unified style: ████████▓▓░░░░░░
+//! - Thicker and more prominent progress bars
+//! - Fixed display at the bottom of the terminal
+//! - Detailed progress parameters (current file, ETA, speed, SSIM, CRF, etc.)
 //!
 //! Reference: media/CONTRIBUTING.md - Visual Progress Bar requirement
 
@@ -92,8 +92,8 @@ fn build_coarse_progress_line(
     terminal_width: usize,
 ) -> String {
     let color = "\x1b[32m";
-    let percent_str = format!("{:>5.1}%", percent);
-    let counts_str = format!("{}/{}", current, total);
+    let percent_str = format!("{percent:>5.1}%");
+    let counts_str = format!("{current}/{total}");
     let elapsed_str = format_duration_compact(elapsed);
 
     struct Variant {
@@ -259,8 +259,7 @@ fn build_coarse_progress_line(
     }
 
     format!(
-        "{}{} {} • {}\x1b[0m{}",
-        color, prefix, percent_str, counts_str, stats
+        "{color}{prefix} {percent_str} • {counts_str}\x1b[0m{stats}"
     )
 }
 
@@ -297,11 +296,12 @@ pub fn active_progress_line() -> Option<String> {
         .and_then(|guard| guard.clone())
 }
 
+#[must_use] 
 pub fn wrap_output_for_active_progress(line: &str) -> String {
     if let Some(progress_line) = active_progress_line() {
-        format!("\r\x1b[K{}\n\r\x1b[K{}", line, progress_line)
+        format!("\r\x1b[K{line}\n\r\x1b[K{progress_line}")
     } else {
-        format!("{}\n", line)
+        format!("{line}\n")
     }
 }
 
@@ -358,7 +358,7 @@ impl CoarseProgressBar {
 
     pub fn println(&self, msg: &str) {
         if self.is_finished.load(Ordering::Relaxed) {
-            eprintln!("{}", msg);
+            eprintln!("{msg}");
             return;
         }
 
@@ -366,7 +366,7 @@ impl CoarseProgressBar {
             eprint!("\r\x1b[K");
             let _ = io::stderr().flush();
 
-            eprintln!("{}", msg);
+            eprintln!("{msg}");
         }
 
         if self.enabled {
@@ -412,7 +412,7 @@ impl CoarseProgressBar {
 
         if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
             set_active_progress_line(None);
-            eprint!("\r\x1b[K{}", line);
+            eprint!("\r\x1b[K{line}");
             set_active_progress_line(Some(line));
             let _ = io::stderr().flush();
         }
@@ -433,7 +433,7 @@ impl CoarseProgressBar {
 
         if let Ok(_guard) = PROGRESS_STDERR_LOCK.lock() {
             set_active_progress_line(None);
-            eprint!("\r\x1b[K{}\n", line);
+            eprint!("\r\x1b[K{line}\n");
 
             eprint!("\x1b[?25h");
             let _ = io::stderr().flush();
@@ -471,7 +471,7 @@ pub struct DetailedCoarseProgressBar {
     input_size: u64,
     current_crf: AtomicU64,
     current_size: AtomicU64,
-    /// SSIM bits; meaning depends on has_ssim (0.0 is a valid value).
+    /// SSIM bits; meaning depends on `has_ssim` (0.0 is a valid value).
     current_ssim: AtomicU64,
     has_ssim: AtomicBool,
     best_crf: AtomicU64,
@@ -481,6 +481,7 @@ pub struct DetailedCoarseProgressBar {
 }
 
 impl DetailedCoarseProgressBar {
+    #[must_use] 
     pub fn new(prefix: &str, input_size: u64, total_iterations: u64) -> Self {
         eprint!("\x1b[?25l");
         let _ = io::stderr().flush();
@@ -505,7 +506,7 @@ impl DetailedCoarseProgressBar {
         let iter = self.current_iteration.fetch_add(1, Ordering::Relaxed) + 1;
 
         self.current_crf
-            .store(crf.to_bits() as u64, Ordering::Relaxed);
+            .store(u64::from(crf.to_bits()), Ordering::Relaxed);
         self.current_size.store(size, Ordering::Relaxed);
         if let Some(s) = ssim {
             self.current_ssim.store(s.to_bits(), Ordering::Relaxed);
@@ -513,7 +514,7 @@ impl DetailedCoarseProgressBar {
         }
 
         if size < self.input_size {
-            self.best_crf.store(crf.to_bits() as u64, Ordering::Relaxed);
+            self.best_crf.store(u64::from(crf.to_bits()), Ordering::Relaxed);
         }
 
         self.render(iter, crf, size, ssim);
@@ -555,14 +556,14 @@ impl DetailedCoarseProgressBar {
         };
 
         let ssim_str = if let Some(s) = ssim {
-            format!("SSIM {:.4}", s)
+            format!("SSIM {s:.4}")
         } else {
             String::new()
         };
 
         let best_crf = f32::from_bits(self.best_crf.load(Ordering::Relaxed) as u32);
         let best_str = if best_crf > 0.0 {
-            format!("Best: {:.1}", best_crf)
+            format!("Best: {best_crf:.1}")
         } else {
             String::new()
         };
@@ -591,14 +592,14 @@ impl DetailedCoarseProgressBar {
 
     pub fn println(&self, msg: &str) {
         if self.is_finished.load(Ordering::Relaxed) {
-            eprintln!("{}", msg);
+            eprintln!("{msg}");
             return;
         }
 
         eprint!("\r\x1b[K");
         let _ = io::stderr().flush();
 
-        eprintln!("{}", msg);
+        eprintln!("{msg}");
 
         let iter = self.current_iteration.load(Ordering::Relaxed);
         let crf = f32::from_bits(self.current_crf.load(Ordering::Relaxed) as u32);
@@ -610,7 +611,7 @@ impl DetailedCoarseProgressBar {
         };
 
         if let Ok(mut last) = self.last_render.lock() {
-            *last = Instant::now() - Duration::from_secs(1);
+            *last = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         }
         self.render(iter, crf, size, ssim);
     }
@@ -629,7 +630,7 @@ impl DetailedCoarseProgressBar {
         };
 
         let ssim_str = final_ssim
-            .map(|s| format!("SSIM {:.4}", s))
+            .map(|s| format!("SSIM {s:.4}"))
             .unwrap_or_default();
 
         let icon = if size_pct < 0.0 { "✅" } else { "⚠️" };
@@ -689,7 +690,7 @@ fn format_eta_simple(seconds: u64) -> String {
     } else if seconds >= 60 {
         format!("{}m{}s", seconds / 60, seconds % 60)
     } else {
-        format!("{}s", seconds)
+        format!("{seconds}s")
     }
 }
 
@@ -708,6 +709,7 @@ pub struct FixedBottomProgress {
 }
 
 impl FixedBottomProgress {
+    #[must_use] 
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
 
@@ -861,6 +863,7 @@ pub struct ExploreProgress {
 }
 
 impl ExploreProgress {
+    #[must_use] 
     pub fn new(input_size: u64) -> Self {
         Self {
             start_time: Instant::now(),
@@ -921,9 +924,7 @@ impl ExploreProgress {
         };
 
         let elapsed = self.start_time.elapsed();
-        let ssim_str = ssim
-            .map(|s| format!("{:.4}", s))
-            .unwrap_or_else(|| "---".to_string());
+        let ssim_str = ssim.map_or_else(|| "---".to_string(), |s| format!("{s:.4}"));
         let compress_icon = if size < self.input_size { "✅" } else { "❌" };
 
         eprint!("\r\x1b[K");
@@ -966,6 +967,7 @@ pub struct ExploreLogger {
 }
 
 impl ExploreLogger {
+    #[must_use] 
     pub fn new(input_size: u64, show_progress_bar: bool) -> Self {
         Self {
             input_size,
@@ -980,7 +982,7 @@ impl ExploreLogger {
 
     pub fn stage(&mut self, name: &str) {
         if self.show_progress_bar {
-            eprintln!("\n   📍 {}", name);
+            eprintln!("\n   📍 {name}");
         }
     }
 
@@ -990,11 +992,10 @@ impl ExploreLogger {
         let compress_ok = size < self.input_size;
 
         if self.show_progress_bar {
-            let ssim_str = ssim.map(|s| format!("SSIM {:.4}", s)).unwrap_or_default();
+            let ssim_str = ssim.map(|s| format!("SSIM {s:.4}")).unwrap_or_default();
             let icon = if compress_ok { "✅" } else { "❌" };
             eprint!(
-                "\r\x1b[K   🔄 CRF {:.1}: {:+.1}% {} {}",
-                crf, size_change, icon, ssim_str
+                "\r\x1b[K   🔄 CRF {crf:.1}: {size_change:+.1}% {icon} {ssim_str}"
             );
             let _ = io::stderr().flush();
         }
@@ -1012,13 +1013,13 @@ impl ExploreLogger {
 
     pub fn direction(&self, msg: &str) {
         if self.show_progress_bar {
-            eprintln!("\r\x1b[K      {}", msg);
+            eprintln!("\r\x1b[K      {msg}");
         }
     }
 
     pub fn early_stop(&self, reason: &str) {
         if self.show_progress_bar {
-            eprintln!("\r\x1b[K   ⚡ Early stop: {}", reason);
+            eprintln!("\r\x1b[K   ⚡ Early stop: {reason}");
         }
     }
 
@@ -1060,6 +1061,7 @@ impl ExploreLogger {
     }
 }
 
+#[must_use] 
 pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
 
@@ -1078,6 +1080,7 @@ pub fn create_professional_spinner(prefix: &str) -> ProgressBar {
     pb
 }
 
+#[must_use] 
 pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
 
@@ -1099,6 +1102,7 @@ pub fn create_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     pb
 }
 
+#[must_use] 
 pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
 
@@ -1119,6 +1123,7 @@ pub fn create_detailed_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     pb
 }
 
+#[must_use] 
 pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
 
@@ -1137,6 +1142,7 @@ pub fn create_compact_progress_bar(total: u64, prefix: &str) -> ProgressBar {
     pb
 }
 
+#[must_use] 
 pub fn create_progress_bar_with_eta(total: u64, prefix: &str) -> SmartProgressBar {
     SmartProgressBar::new(total, prefix)
 }
@@ -1151,6 +1157,7 @@ pub struct SmartProgressBar {
 }
 
 impl SmartProgressBar {
+    #[must_use] 
     pub fn new(total: u64, prefix: &str) -> Self {
         let bar = ProgressBar::new(total);
 
@@ -1200,7 +1207,7 @@ impl SmartProgressBar {
             "calculating...".to_string()
         };
 
-        self.bar.set_message(format!("{} | {}", eta, message));
+        self.bar.set_message(format!("{eta} | {message}"));
     }
 
     pub fn finish(&self) {
@@ -1209,6 +1216,7 @@ impl SmartProgressBar {
             .finish_with_message(format!("Done in {}", format_duration(total_time)));
     }
 
+    #[must_use] 
     pub fn bar(&self) -> &ProgressBar {
         &self.bar
     }
@@ -1230,10 +1238,11 @@ fn format_eta(seconds: f64) -> String {
     } else if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 
+#[must_use] 
 pub fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
 
@@ -1252,6 +1261,7 @@ pub fn create_spinner(message: &str) -> ProgressBar {
     spinner
 }
 
+#[must_use] 
 pub fn create_multi_progress() -> MultiProgress {
     MultiProgress::new()
 }
@@ -1266,6 +1276,7 @@ pub struct BatchProgress {
 }
 
 impl BatchProgress {
+    #[must_use] 
     pub fn new(total: u64, prefix: &str) -> Self {
         Self {
             total,
@@ -1280,21 +1291,21 @@ impl BatchProgress {
     pub fn success(&mut self, message: &str) {
         self.processed += 1;
         self.succeeded += 1;
-        self.bar.set_message(format!("✅ {}", message));
+        self.bar.set_message(format!("✅ {message}"));
         self.bar.inc(1);
     }
 
     pub fn fail(&mut self, message: &str) {
         self.processed += 1;
         self.failed += 1;
-        self.bar.set_message(format!("❌ {}", message));
+        self.bar.set_message(format!("❌ {message}"));
         self.bar.inc(1);
     }
 
     pub fn skip(&mut self, message: &str) {
         self.processed += 1;
         self.skipped += 1;
-        self.bar.set_message(format!("⏭️  {}", message));
+        self.bar.set_message(format!("⏭️  {message}"));
         self.bar.inc(1);
     }
 
@@ -1305,6 +1316,7 @@ impl BatchProgress {
         ));
     }
 
+    #[must_use] 
     pub fn bar(&self) -> &ProgressBar {
         &self.bar
     }
@@ -1321,6 +1333,7 @@ fn truncate_filename(filename: &str, max_len: usize) -> String {
     }
 }
 
+#[must_use] 
 pub fn format_bytes(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -1333,10 +1346,11 @@ pub fn format_bytes(bytes: u64) -> String {
     } else if bytes >= KB {
         format!("{:.2} KB", bytes as f64 / KB as f64)
     } else {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     }
 }
 
+#[must_use] 
 pub fn format_duration(duration: Duration) -> String {
     let secs = duration.as_secs();
     if secs >= 3600 {
@@ -1344,7 +1358,7 @@ pub fn format_duration(duration: Duration) -> String {
     } else if secs >= 60 {
         format!("{}m {}s", secs / 60, secs % 60)
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 
@@ -1355,6 +1369,7 @@ pub struct GlobalProgressManager {
 }
 
 impl GlobalProgressManager {
+    #[must_use] 
     pub fn new() -> Self {
         Self {
             multi: MultiProgress::new(),

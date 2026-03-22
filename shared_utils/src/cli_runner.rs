@@ -57,7 +57,7 @@ pub struct CliRunnerConfig {
     pub resume: bool,
 }
 
-/// Resolve base_dir for video `run` command. Shared by vid_hevc and vid_av1 to reduce duplication.
+/// Resolve `base_dir` for video `run` command. Shared by `vid_hevc` and `vid_av1` to reduce duplication.
 /// Returns: explicit override, or when recursive and input is a dir then input, else parent of input.
 pub fn resolve_video_run_base_dir(
     input: &Path,
@@ -96,7 +96,7 @@ where
 
     // Check for Apple Photos library before processing
     if let Err(e) = crate::safety::check_apple_photos_library(input) {
-        anyhow::bail!("{}", e);
+        anyhow::bail!("{e}");
     }
 
     let files = crate::collect_video_files_for_perceived_speed(
@@ -132,8 +132,7 @@ where
                 // clear old checkpoint state so all files get reprocessed.
                 if let Err(e) = cp.reset_if_output_root_missing(config.output.as_deref()) {
                     warn!(
-                        "⚠️  Failed to check output root for checkpoint reset: {}",
-                        e
+                        "⚠️  Failed to check output root for checkpoint reset: {e}"
                     );
                 }
 
@@ -148,7 +147,7 @@ where
                 Some(cp)
             }
             Err(e) => {
-                warn!("⚠️  Could not initialize checkpoint manager: {}", e);
+                warn!("⚠️  Could not initialize checkpoint manager: {e}");
                 None
             }
         }
@@ -180,11 +179,9 @@ where
                 let required_gb = required as f64 / (1024.0 * 1024.0 * 1024.0);
                 anyhow::bail!(
                     "❌ Insufficient disk space on output volume.\n\
-                     💾 Available: {:.2} GB\n\
-                     💾 Required:  {:.2} GB (input size + 1 GB headroom)\n\
-                     💡 Free up space or choose a different output location.",
-                    avail_gb,
-                    required_gb
+                     💾 Available: {avail_gb:.2} GB\n\
+                     💾 Required:  {required_gb:.2} GB (input size + 1 GB headroom)\n\
+                     💡 Free up space or choose a different output location."
                 );
             }
             info!(
@@ -348,7 +345,7 @@ where
                         config.base_dir.as_deref(),
                         true,
                     ) {
-                        error!("❌ Failed to copy original: {}", copy_err);
+                        error!("❌ Failed to copy original: {copy_err}");
                     } else {
                         info!(
                             "📋 Copied original (conversion failed): {}",
@@ -373,19 +370,16 @@ where
     if let Some(cp) = checkpoint {
         if batch_result.paused {
             if let Err(err) = cp.release_lock() {
-                warn!("⚠️ Failed to release checkpoint lock after pause: {}", err);
+                warn!("⚠️ Failed to release checkpoint lock after pause: {err}");
             }
         } else if batch_result.failed == 0 {
             if let Err(err) = cp.cleanup() {
-                warn!("⚠️ Failed to clean up checkpoint state: {}", err);
+                warn!("⚠️ Failed to clean up checkpoint state: {err}");
             }
-        } else {
-            if let Err(err) = cp.release_lock() {
-                warn!(
-                    "⚠️ Failed to release checkpoint lock after failure: {}",
-                    err
-                );
-            }
+        } else if let Err(err) = cp.release_lock() {
+            warn!(
+                "⚠️ Failed to release checkpoint lock after failure: {err}"
+            );
         }
     }
 
@@ -421,7 +415,7 @@ where
         if let Some(ref base_dir) = config.base_dir {
             info!("\n📁 Preserving directory metadata...");
             if let Err(e) = crate::metadata::preserve_directory_metadata(base_dir, output_dir) {
-                error!("⚠️ Failed to preserve directory metadata: {}", e);
+                error!("⚠️ Failed to preserve directory metadata: {e}");
             } else {
                 info!("✅ Directory metadata preserved");
             }
@@ -434,7 +428,7 @@ where
 fn extension_lower(path: &Path) -> Option<String> {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
 }
 
 fn select_hot_start_file_index(
@@ -455,10 +449,9 @@ fn select_hot_start_file_index(
             .and_then(|ext| extension_lower(path).map(|current| current == ext))
             .unwrap_or(false);
         let parent_match = recent_success_parent
-            .map(|parent| path.parent() == Some(parent))
-            .unwrap_or(false);
+            .is_some_and(|parent| path.parent() == Some(parent));
 
-        let hot_start_score = (ext_match as i32) * 4 + (parent_match as i32) * 2;
+        let hot_start_score = i32::from(ext_match) * 4 + i32::from(parent_match) * 2;
         let proximity_score = (window - index) as i32;
         let score = (hot_start_score, proximity_score);
 
@@ -478,7 +471,7 @@ where
 {
     // Check for Apple Photos library before processing
     if let Err(e) = crate::safety::check_apple_photos_library(&config.input) {
-        anyhow::bail!("{}", e);
+        anyhow::bail!("{e}");
     }
 
     // Fix extension by content first so all downstream checks see the real format (avoids disguised-extension panic).
@@ -497,7 +490,7 @@ where
                 config.base_dir.as_deref(),
                 true,
             ) {
-                error!("❌ Failed to copy to output: {}", copy_err);
+                error!("❌ Failed to copy to output: {copy_err}");
             } else {
                 info!(
                     "📋 Copied to output (not a video after content check): {}",
@@ -526,7 +519,7 @@ where
                     config.base_dir.as_deref(),
                     true,
                 ) {
-                    error!("❌ Failed to copy original to output dir: {}", copy_err);
+                    error!("❌ Failed to copy original to output dir: {copy_err}");
                 } else {
                     info!(
                         "📋 Copied original to output (conversion failed): {}",

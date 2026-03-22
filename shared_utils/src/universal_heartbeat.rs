@@ -1,83 +1,83 @@
-//! Universal Heartbeat System - 统一心跳检测模块
+//! Universal Heartbeat System
 //!
-//! 🔥 v7.7: 扩展心跳检测到所有耗时操作,完全替代超时机制
+//! 🔥 v7.7: Extended heartbeat detection to all time-consuming operations, completely replacing timeout mechanisms
 //!
-//! ## 核心功能
-//! - 智能静默: 有进度条时自动静默,无进度时显示
-//! - 分级间隔: 10s/30s/60s根据操作类型
-//! - 上下文感知: 显示操作名称和已耗时
-//! - RAII模式: 自动资源清理
-//! - 北京时间: 所有时间显示UTC+8
+//! ## Core Features
+//! - Smart Silence: Automatically silent when a progress bar is present, shows when no progress is shown
+//! - Graded Intervals: 10s/30s/60s depending on operation type
+//! - Context Awareness: Displays operation name and elapsed time
+//! - RAII Pattern: Automatic resource cleanup
+//! - Beijing Time: All times displayed in UTC+8
 //!
-//! ## 使用示例
+//! ## Usage Examples
 //!
-//! ### 基础用法 - RAII守卫模式（推荐）
+//! ### Basic Usage - RAII Guard Pattern (Recommended)
 //!
 //! ```rust
 //! use shared_utils::universal_heartbeat::{HeartbeatGuard, HeartbeatConfig};
 //!
 //! fn long_running_operation() {
-//!     // 创建心跳守卫，自动在作用域结束时清理
-//!     let _guard = HeartbeatGuard::new(HeartbeatConfig::fast("SSIM计算"));
+//!     // Create heartbeat guard, automatically cleaned up at end of scope
+//!     let _guard = HeartbeatGuard::new(HeartbeatConfig::fast("SSIM Calculation"));
 //!
-//!     // 执行耗时操作...
-//!     // 心跳会每10秒自动输出一次
-//! } // 守卫在此处自动停止心跳
+//!     // Executing time-consuming operation...
+//!     // Heartbeat will output automatically every 10 seconds
+//! } // Guard stops heartbeat automatically here
 //! ```
 //!
-//! ### 带额外信息的心跳
+//! ### Heartbeat with extra info
 //!
 //! ```rust
 //! use shared_utils::universal_heartbeat::{HeartbeatGuard, HeartbeatConfig};
 //!
 //! fn encode_video(filename: &str) {
-//!     let config = HeartbeatConfig::medium("视频编码")
-//!         .with_info(format!("文件: {}", filename));
+//!     let config = HeartbeatConfig::medium("Video Encoding")
+//!         .with_info(format!("File: {}", filename));
 //!     let _guard = HeartbeatGuard::new(config);
 //!
-//!     // 执行编码...
+//!     // Executing encoding...
 //! }
 //! ```
 //!
-//! ### 强制显示心跳（忽略进度条检测）
+//! ### Forced Heartbeat Display (Ignoring progress bar detection)
 //!
 //! ```rust
 //! use shared_utils::universal_heartbeat::{HeartbeatGuard, HeartbeatConfig};
 //!
 //! fn critical_operation() {
-//!     let config = HeartbeatConfig::slow("极限探索").force();
+//!     let config = HeartbeatConfig::slow("Extreme Exploration").force();
 //!     let _guard = HeartbeatGuard::new(config);
 //!
-//!     // 即使有进度条，也会显示心跳
+//!     // Heartbeat will be displayed even if a progress bar is present
 //! }
 //! ```
 //!
-//! ### 自定义间隔
+//! ### Custom interval
 //!
 //! ```rust
 //! use shared_utils::universal_heartbeat::{HeartbeatGuard, HeartbeatConfig};
 //!
 //! fn custom_operation() {
-//!     // 每45秒输出一次心跳
-//!     let config = HeartbeatConfig::custom("自定义操作", 45);
+//!     // Output heartbeat every 45 seconds
+//!     let config = HeartbeatConfig::custom("Custom Operation", 45);
 //!     let _guard = HeartbeatGuard::new(config);
 //!
-//!     // 执行操作...
+//!     // Executing operation...
 //! }
 //! ```
 //!
-//! ## 预设间隔说明
+//! ## Preset Interval Descriptions
 //!
-//! - **fast (10秒)**: 用于SSIM/PSNR等质量计算，需要频繁反馈
-//! - **medium (30秒)**: 用于视频编码等中等耗时操作
-//! - **slow (60秒)**: 用于极限探索等长时间操作
+//! - **fast (10s)**: Used for quality calculations like SSIM/PSNR, requiring frequent feedback
+//! - **medium (30s)**: Used for medium-duration operations like video encoding
+//! - **slow (60s)**: Used for long-duration operations like extreme exploration
 //!
-//! ## 智能静默机制
+//! ## Smart Silence Mechanism
 //!
-//! 心跳系统会自动检测是否有活跃的进度条：
-//! - 如果有进度条显示，心跳会自动静默（避免输出冲突）
-//! - 如果没有进度条，心跳会正常显示
-//! - 可以使用 `.force()` 强制显示，忽略进度条检测
+//! The heartbeat system automatically detects if there's an active progress bar:
+//! - If a progress bar is displayed, the heartbeat automatically silents (to avoid output conflicts)
+//! - If no progress bar is present, the heartbeat displays normally
+//! - Can use `.force()` to force display, ignoring progress bar detection
 
 use crate::progress_mode::format_duration_compact;
 use chrono::{DateTime, FixedOffset, Utc};
@@ -96,6 +96,7 @@ pub struct HeartbeatConfig {
 }
 
 impl HeartbeatConfig {
+    #[must_use] 
     pub fn fast(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -105,6 +106,7 @@ impl HeartbeatConfig {
         }
     }
 
+    #[must_use] 
     pub fn medium(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -114,6 +116,7 @@ impl HeartbeatConfig {
         }
     }
 
+    #[must_use] 
     pub fn slow(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -123,11 +126,11 @@ impl HeartbeatConfig {
         }
     }
 
+    #[must_use] 
     pub fn custom(operation: &str, interval_secs: u64) -> Self {
         let interval = if interval_secs < 5 {
             eprintln!(
-                "⚠️  Heartbeat interval too short ({} < 5s), using 5s",
-                interval_secs
+                "⚠️  Heartbeat interval too short ({interval_secs} < 5s), using 5s"
             );
             5
         } else {
@@ -142,11 +145,13 @@ impl HeartbeatConfig {
         }
     }
 
+    #[must_use] 
     pub fn with_info(mut self, info: String) -> Self {
         self.extra_info = Some(info);
         self
     }
 
+    #[must_use] 
     pub fn force(mut self) -> Self {
         self.force_display = true;
         self
@@ -160,6 +165,7 @@ pub struct UniversalHeartbeat {
 }
 
 impl UniversalHeartbeat {
+    #[must_use] 
     pub fn start(config: HeartbeatConfig) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
@@ -204,7 +210,7 @@ impl UniversalHeartbeat {
                     let extra = config
                         .extra_info
                         .as_ref()
-                        .map(|s| format!(" - {}", s))
+                        .map(|s| format!(" - {s}"))
                         .unwrap_or_default();
 
                     let mut stderr = std::io::stderr();
@@ -212,18 +218,18 @@ impl UniversalHeartbeat {
                         "💓 [{}] Active (elapsed: {}, Beijing Time: {}){}",
                         config.operation, elapsed_str, beijing_time, extra
                     )) {
-                        eprintln!("⚠️ Heartbeat write failed: {}", err);
+                        eprintln!("⚠️ Heartbeat write failed: {err}");
                     } else if let Err(err) = stderr.write_all(b"\n") {
-                        eprintln!("⚠️ Heartbeat newline write failed: {}", err);
+                        eprintln!("⚠️ Heartbeat newline write failed: {err}");
                     } else if let Err(err) = stderr.flush() {
-                        eprintln!("⚠️ Heartbeat flush failed: {}", err);
+                        eprintln!("⚠️ Heartbeat flush failed: {err}");
                     }
                 }
             }
         }));
 
         if let Err(e) = result {
-            eprintln!("❌ Heartbeat thread panicked: {:?}", e);
+            eprintln!("❌ Heartbeat thread panicked: {e:?}");
         }
     }
 
@@ -265,6 +271,7 @@ impl Drop for UniversalHeartbeat {
 pub struct HeartbeatGuard(Option<UniversalHeartbeat>);
 
 impl HeartbeatGuard {
+    #[must_use] 
     pub fn new(config: HeartbeatConfig) -> Self {
         Self(Some(UniversalHeartbeat::start(config)))
     }

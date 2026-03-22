@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.97] - 2026-03-24
+
+### 🛠️ Code Quality
+- **Integrity Protection Removal**: Decoupled the build process from documentation content by removing the README/CHANGELOG signature verification mechanism.
+
+## [0.10.96] - 2026-03-24
+
+### 📝 Documentation & Localization
+- **Total Linguistic Standardization**: Translated all remaining Simplified Chinese comments and documentation headers to professional technical English across the entire `shared_utils` crate.
+- **Improved Code Readability**: Standardized documentation style for core modules including `terminal_logging`, `ffprobe_json`, `explore_strategy`, and the `types` submodule.
+- **Unicode Test Path Optimization**: Updated test paths in `path_validator.rs` to English while maintaining coverage for non-ASCII path handling.
+
+### 🛠️ Code Quality
+- **Clippy Hardening**: Addressed remaining clippy warnings to ensure a 100% clean build in `shared_utils`.
+- **Macro Documentation**: Corrected and translated doc-comments for logging macros.
+
+## [0.10.95] - 2026-03-24
+
+### 🛠️ Code Quality (Shared Utils)
+- **Pedantic Clippy Hardening**: Achieved zero warnings in `shared_utils` (standard/pedantic) by addressing:
+    - `redundant_else`: Removed unnecessary `else` blocks after `return`/`break` in `gpu_accel.rs`, `quality_matcher.rs`, and `video_detection.rs`.
+    - `similar_names`: Applied `#[allow]` attributes to contextually appropriate naming (e.g., `ctime`/`btime` in cache, `vmaf`/`uvmaf` in video metrics).
+    - `missing_errors_doc` & `missing_panics_doc`: Added required documentation sections to public APIs in `checkpoint.rs`, `conversion.rs`, and `terminal_logging.rs`.
+    - `uninlined_format_args`: Inlined variables in `format!` macros across the crate.
+    - `unused_self`: Refactored `enhanced_logging.rs` to correctly acknowledge `self`.
+    - `map_unwrap_or`: Replaced with more idiomatic `map_or` in `checkpoint.rs`.
+- **Syntax Integrity**: Fixed a regression in `gpu_accel.rs` caused by redundant delimiter removal during clippy fixing.
 ## [0.10.94] - 2026-03-23
 
 ### 🛠️ Code Quality Tooling

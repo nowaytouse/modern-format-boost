@@ -10,8 +10,8 @@
 //! - NO hardcoded defaults - all from actual ffprobe analysis
 //! - Base decisions on actual content detection, not format names
 //!
-//! ## Integration with quality_matcher
-//! This module provides the detection layer, while quality_matcher
+//! ## Integration with `quality_matcher`
+//! This module provides the detection layer, while `quality_matcher`
 //! provides the CRF calculation layer.
 
 use crate::progress_mode::write_to_log_at_level;
@@ -47,7 +47,7 @@ pub struct VideoQualityAnalysis {
     pub pix_fmt: String,
     pub chroma: ChromaSubsampling,
     pub gop_size: Option<u32>,
-    /// Actual B-frame count (max_b_frames) from ffprobe.
+    /// Actual B-frame count (`max_b_frames`) from ffprobe.
     pub b_frame_count: u8,
     pub has_b_frames: bool,
 
@@ -74,6 +74,7 @@ pub enum VideoCodecType {
 }
 
 impl VideoCodecType {
+    #[must_use] 
     pub fn from_source_codec(codec: SourceCodec) -> Self {
         match codec {
             SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv => {
@@ -102,6 +103,7 @@ pub enum ChromaSubsampling {
 }
 
 impl ChromaSubsampling {
+    #[must_use] 
     pub fn from_pix_fmt(pix_fmt: &str) -> Self {
         let fmt = pix_fmt.to_lowercase();
         if fmt.contains("444") {
@@ -121,6 +123,7 @@ impl ChromaSubsampling {
         }
     }
 
+    #[must_use] 
     pub fn quality_factor(&self) -> f64 {
         match self {
             ChromaSubsampling::Yuv420 => 1.0,
@@ -143,6 +146,7 @@ pub enum VideoContentType {
 }
 
 impl VideoContentType {
+    #[must_use] 
     pub fn to_content_type(&self) -> ContentType {
         match self {
             VideoContentType::LiveAction => ContentType::LiveAction,
@@ -165,6 +169,7 @@ pub enum CompressionLevel {
 }
 
 impl CompressionLevel {
+    #[must_use] 
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
         if codec_type == VideoCodecType::Lossless {
             return CompressionLevel::Lossless;
@@ -195,7 +200,7 @@ impl CompressionLevel {
 }
 
 /// Analyze video quality (codec type, bpp, content type, compression level, etc.). Routing is
-/// handled by video_detection + quality_matcher in the main flow; this is for media info only. Consider using a struct (e.g. VideoQualityInput) when passing many arguments to avoid parameter order bugs.
+/// handled by `video_detection` + `quality_matcher` in the main flow; this is for media info only. Consider using a struct (e.g. `VideoQualityInput`) when passing many arguments to avoid parameter order bugs.
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
     codec: &str,
@@ -232,7 +237,7 @@ pub fn analyze_video_quality(
     let skip_decision = should_skip_video_codec(codec);
 
     let effective_bitrate = video_bitrate.unwrap_or(total_bitrate);
-    let pixels_per_second = (width as f64) * (height as f64) * fps;
+    let pixels_per_second = f64::from(width) * f64::from(height) * fps;
     let bpp = if pixels_per_second > 0.0 {
         effective_bitrate as f64 / pixels_per_second
     } else {
@@ -241,11 +246,10 @@ pub fn analyze_video_quality(
 
     let chroma = ChromaSubsampling::from_pix_fmt(pix_fmt);
     let is_hdr = color_space
-        .map(|cs| {
+        .is_some_and(|cs| {
             let cs_lower = cs.to_lowercase();
             cs_lower.contains("bt2020") || cs_lower.contains("2020")
-        })
-        .unwrap_or(false);
+        });
 
     let has_b_frames = max_b_frames > 0;
     let b_frame_count = max_b_frames;
@@ -295,7 +299,7 @@ pub fn analyze_video_quality(
         gop_size,
         b_frame_count,
         has_b_frames,
-        color_space: color_space.map(|s| s.to_string()),
+        color_space: color_space.map(std::string::ToString::to_string),
         is_hdr,
         content_type,
         compression_type,
@@ -305,7 +309,7 @@ pub fn analyze_video_quality(
     })
 }
 
-/// Build [VideoQualityAnalysis] from [VideoDetectionResult] for logging/display. Use when you
+/// Build [`VideoQualityAnalysis`] from [`VideoDetectionResult`] for logging/display. Use when you
 /// already have detection (e.g. before SSIM exploration) and want media info for log file only.
 pub fn analyze_video_quality_from_detection(
     detection: &VideoDetectionResult,
@@ -355,7 +359,7 @@ fn extract_crf_from_params(params: &str) -> Option<u8> {
     None
 }
 
-/// Format [VideoQualityAnalysis] as multi-line media info. **Log file only** — does not write to
+/// Format [`VideoQualityAnalysis`] as multi-line media info. **Log file only** — does not write to
 /// terminal. Call when a log file is configured (e.g. alongside SSIM/quality runs).
 pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &Path) {
     if !crate::progress_mode::has_log_file() {
@@ -413,6 +417,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
     write_to_log_at_level(Level::DEBUG, "");
 }
 
+#[must_use] 
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
     let gop_fallback = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
     let color_fallback = if analysis.height <= 576 {
@@ -722,8 +727,7 @@ mod tests {
             .unwrap();
             assert!(
                 result.should_skip,
-                "{} skipped in normal mode (modern format)",
-                codec
+                "{codec} skipped in normal mode (modern format)"
             );
         }
     }
@@ -1524,8 +1528,7 @@ mod tests {
             assert_eq!(
                 result.codec_type,
                 VideoCodecType::ModernEfficient,
-                "Codec {} should be ModernEfficient",
-                codec
+                "Codec {codec} should be ModernEfficient"
             );
         }
     }
@@ -1801,7 +1804,7 @@ mod tests {
             )
             .unwrap();
 
-            let expected = bitrate as f64 / (w as f64 * h as f64 * fps);
+            let expected = bitrate as f64 / (f64::from(w) * f64::from(h) * fps);
             assert!(
                 (result.bpp - expected).abs() < 0.0001,
                 "STRICT: BPP for {}x{}@{}fps@{}bps: expected {}, got {}",
@@ -1864,8 +1867,7 @@ mod tests {
             );
             assert!(
                 result.is_modern_codec,
-                "STRICT: {} must be detected as modern",
-                codec
+                "STRICT: {codec} must be detected as modern"
             );
         }
     }
@@ -1884,8 +1886,7 @@ mod tests {
 
             assert!(
                 !result.should_skip,
-                "Non-modern codec {} (Legacy or Inefficient) must NEVER skip",
-                codec
+                "Non-modern codec {codec} (Legacy or Inefficient) must NEVER skip"
             );
         }
     }

@@ -53,6 +53,7 @@ pub enum DetectedCodec {
 }
 
 impl DetectedCodec {
+    #[must_use] 
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
             "ffv1" => DetectedCodec::FFV1,
@@ -269,8 +270,7 @@ mod tests {
             assert_eq!(
                 DetectedCodec::from_ffprobe(input),
                 *expected,
-                "from_ffprobe({:?}) mismatch",
-                input
+                "from_ffprobe({input:?}) mismatch"
             );
         }
     }
@@ -304,13 +304,12 @@ mod tests {
         ];
 
         for (codec, modern, lossless, production) in cases {
-            assert_eq!(codec.is_modern(), *modern, "{:?}.is_modern()", codec);
-            assert_eq!(codec.is_lossless(), *lossless, "{:?}.is_lossless()", codec);
+            assert_eq!(codec.is_modern(), *modern, "{codec:?}.is_modern()");
+            assert_eq!(codec.is_lossless(), *lossless, "{codec:?}.is_lossless()");
             assert_eq!(
                 codec.is_production(),
                 *production,
-                "{:?}.is_production()",
-                codec
+                "{codec:?}.is_production()"
             );
         }
     }

@@ -4,12 +4,13 @@
 //! directly (`-c:a copy`, `-c:s copy`) or must be transcoded for the target
 //! container format (MP4/MOV vs MKV).
 
-/// Determine FFmpeg audio arguments for the target container.
+/// Determine `FFmpeg` audio arguments for the target container.
 ///
 /// - MKV: always `-c:a copy` (supports every codec).
 /// - MP4/MOV: `-c:a copy` unless the codec is incompatible (opus, vorbis).
 ///   Incompatible codecs are transcoded to AAC 256 kbps.
 /// - No audio (`None` codec): returns `-an`.
+#[must_use] 
 pub fn audio_args_for_container(audio_codec: Option<&str>, container: &str) -> Vec<String> {
     let codec = match audio_codec {
         Some(c) if !c.is_empty() => c.to_lowercase(),
@@ -36,12 +37,13 @@ pub fn audio_args_for_container(audio_codec: Option<&str>, container: &str) -> V
     }
 }
 
-/// Determine FFmpeg subtitle arguments for the target container.
+/// Determine `FFmpeg` subtitle arguments for the target container.
 ///
 /// - No subtitles: returns empty vec (nothing to map).
 /// - MKV: `-c:s copy` (supports all subtitle formats).
 /// - MP4/MOV: text-based subs → `-c:s mov_text`; image-based subs → skip
-///   (MP4 doesn't support bitmap subtitle tracks like dvd_subtitle / hdmv_pgs_subtitle).
+///   (MP4 doesn't support bitmap subtitle tracks like `dvd_subtitle` / `hdmv_pgs_subtitle`).
+#[must_use] 
 pub fn subtitle_args_for_container(
     has_subtitles: bool,
     subtitle_codec: Option<&str>,
@@ -57,7 +59,7 @@ pub fn subtitle_args_for_container(
     }
 
     // MP4/MOV: only text-based subtitles are supported (as mov_text).
-    let codec_lower = subtitle_codec.map(|s| s.to_lowercase()).unwrap_or_default();
+    let codec_lower = subtitle_codec.map(str::to_lowercase).unwrap_or_default();
     let is_text_based = matches!(
         codec_lower.as_str(),
         "srt" | "subrip" | "ass" | "ssa" | "mov_text" | "webvtt" | "text"

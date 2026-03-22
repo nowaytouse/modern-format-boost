@@ -1,6 +1,6 @@
 //! Shared Image Quality Error Types
 //!
-//! Migrated from img_hevc/img_av1 to eliminate duplication.
+//! Migrated from `img_hevc/img_av1` to eliminate duplication.
 
 use thiserror::Error;
 

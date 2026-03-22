@@ -1,10 +1,10 @@
-//! Logging Module - 统一的日志系统
+//! Logging Module - Unified logging system
 //!
-//! 本模块提供基于tracing框架的统一日志系统，支持：
-//! - 日志输出到系统临时目录
-//! - 日志文件大小限制和自动轮转
-//! - 结构化日志记录
-//! - 外部工具调用的详细日志
+//! This module provides a unified logging system based on the tracing framework, supporting:
+//! - Log output to the system temporary directory
+//! - Log file size limits and automatic rotation
+//! - Structured logging
+//! - Detailed logs for external tool invocations
 //!
 //! # Examples
 //!
@@ -12,11 +12,11 @@
 //! use shared_utils::logging::{LogConfig, init_logging};
 //! use tracing::{info, error};
 //!
-//! // 初始化日志系统
+//! // Initialize logging system
 //! let config = LogConfig::default();
 //! init_logging("my_program", config).expect("Failed to initialize logging");
 //!
-//! // 使用tracing宏记录日志
+//! // Use tracing macros for logging
 //! info!("Program started");
 //! error!(error = "something went wrong", "Operation failed");
 //! ```
@@ -98,13 +98,13 @@ where
         if level <= tracing::Level::INFO {
             let stats = crate::progress_mode::get_current_stats_string();
             // Align stats for tracing logs
-            write!(writer, "  {}", stats)?;
+            write!(writer, "  {stats}")?;
         }
 
         writeln!(writer)?;
 
         if let Some(progress_line) = progress_line {
-            write!(writer, "\r\x1b[K{}", progress_line)?;
+            write!(writer, "\r\x1b[K{progress_line}")?;
         }
 
         Ok(())
@@ -117,7 +117,7 @@ struct FieldVisitor<'a, 'b> {
     has_message: bool,
 }
 
-impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
+impl Visit for FieldVisitor<'_, '_> {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         // Filter out tracing internal metadata fields
         let field_name = field.name();
@@ -126,10 +126,10 @@ impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
         }
 
         if field_name == "message" {
-            let msg = format!("{:?}", value);
+            let msg = format!("{value:?}");
             // Strip quotes from Debug format of string
             let msg = msg.trim_start_matches('"').trim_end_matches('"');
-            let _ = write!(self.writer, "{}", msg);
+            let _ = write!(self.writer, "{msg}");
             self.has_message = true;
         } else {
             if !self.is_first || self.has_message {
@@ -151,7 +151,7 @@ impl<'a, 'b> Visit for FieldVisitor<'a, 'b> {
 }
 
 // ── Current log level: so progress_mode direct writes respect the same level as the tracing filter ──
-/// Cached level from init_logging; used by progress_mode::write_to_log_at_level so direct run-log writes respect the level.
+/// Cached level from `init_logging`; used by `progress_mode::write_to_log_at_level` so direct run-log writes respect the level.
 static CURRENT_LOG_LEVEL: OnceLock<Level> = OnceLock::new();
 
 /// Returns true if an event at this level should be logged. Uses tracing order: TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
@@ -165,7 +165,7 @@ pub fn should_log(level: Level) -> bool {
 
 // ── Run log forwarder: when progress_mode sets a run log file, tracing events are also written there ──
 
-/// Store the "Logging system initialized" line so progress_mode can write it to the run log when it opens (run log is set after init).
+/// Store the "Logging system initialized" line so `progress_mode` can write it to the run log when it opens (run log is set after init).
 fn store_init_message_for_run_log(msg: String) {
     let mut guard = INIT_MESSAGE_FOR_RUN_LOG.lock().unwrap_or_else(|err| {
         eprintln!("⚠️ [Logging] init-message mutex was poisoned; recovering state");
@@ -186,7 +186,7 @@ pub fn take_init_message_for_run_log() -> Option<String> {
 static INIT_MESSAGE_FOR_RUN_LOG: Mutex<Option<String>> = Mutex::new(None);
 
 /// Register a callback so that when tracing events are formatted, each line is also written to the run log.
-/// Called by progress_mode::set_log_file so the run log gets complete output (all tracing + progress).
+/// Called by `progress_mode::set_log_file` so the run log gets complete output (all tracing + progress).
 pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
     let mut guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
         eprintln!("⚠️ [Logging] run-log forwarder mutex was poisoned; recovering state");
@@ -259,6 +259,7 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
 /// Handles all CSI sequences (`ESC [ <params> <final>` where final is `0x40–0x7E`),
 /// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
 /// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
+#[must_use] 
 pub fn strip_ansi_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -369,9 +370,9 @@ unsafe impl<W: Write + Send> Send for StripAnsiWriter<W> {}
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     pub log_dir: PathBuf,
-    /// Max size per log file (bytes). Default u64::MAX = no limit.
+    /// Max size per log file (bytes). Default `u64::MAX` = no limit.
     pub max_file_size: u64,
-    /// Max number of log files to keep in log_dir; older ones are deleted. Default usize::MAX = no limit.
+    /// Max number of log files to keep in `log_dir`; older ones are deleted. Default `usize::MAX` = no limit.
     pub max_files: usize,
     /// Minimum level (TRACE = most comprehensive).
     pub level: Level,
@@ -389,6 +390,7 @@ impl Default for LogConfig {
 }
 
 impl LogConfig {
+    #[must_use] 
     pub fn new() -> Self {
         Self::default()
     }
@@ -398,16 +400,19 @@ impl LogConfig {
         self
     }
 
+    #[must_use] 
     pub fn with_max_file_size(mut self, size: u64) -> Self {
         self.max_file_size = size;
         self
     }
 
+    #[must_use] 
     pub fn with_max_files(mut self, count: usize) -> Self {
         self.max_files = count;
         self
     }
 
+    #[must_use] 
     pub fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self
@@ -428,7 +433,7 @@ pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
 
     // Timestamp in filename so each run gets a unique file in system/temp dir (no overwrite).
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let log_file_name = format!("{}_{}.log", program_name, timestamp);
+    let log_file_name = format!("{program_name}_{timestamp}.log");
 
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &config.log_dir, &log_file_name);
     let file_writer = Mutex::new(StripAnsiWriter::new(file_appender));
@@ -498,7 +503,7 @@ fn cleanup_old_logs(log_dir: &Path, program_name: &str, max_files: usize) -> Res
     use std::fs;
 
     let entries = fs::read_dir(log_dir)
-        .with_context(|| format!("Failed to read log directory: {:?}", log_dir))?;
+        .with_context(|| format!("Failed to read log directory: {log_dir:?}"))?;
 
     let mut log_files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
 
@@ -628,7 +633,7 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     let output = Command::new(tool_name)
         .args(args)
         .output()
-        .with_context(|| format!("Failed to execute command: {}", command_str))?;
+        .with_context(|| format!("Failed to execute command: {command_str}"))?;
 
     let duration = start_time.elapsed();
 
@@ -637,7 +642,7 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     let exit_code = output.status.code();
 
     let combined_output = if !stdout.is_empty() && !stderr.is_empty() {
-        format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
+        format!("STDOUT:\n{stdout}\n\nSTDERR:\n{stderr}")
     } else if !stdout.is_empty() {
         stdout.clone()
     } else {
@@ -744,8 +749,8 @@ mod tests {
         let program_name = "test_program";
 
         for i in 0..10 {
-            let file_path = temp_dir.path().join(format!("{}.{}.log", program_name, i));
-            fs::write(&file_path, format!("log content {}", i)).unwrap();
+            let file_path = temp_dir.path().join(format!("{program_name}.{i}.log"));
+            fs::write(&file_path, format!("log content {i}")).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -753,7 +758,7 @@ mod tests {
 
         let remaining_files: Vec<_> = fs::read_dir(temp_dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with(program_name))
             .collect();
 

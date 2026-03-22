@@ -1,6 +1,6 @@
-//! 🎨 v5.67: 终端颜色支持模块
+//! 🎨 v5.67: Terminal Color Support Module
 //!
-//! 提供统一的彩色输出，改善 UI/UX 体验
+//! Provides unified colored output to improve UI/UX experience.
 
 use console::{style, Style};
 

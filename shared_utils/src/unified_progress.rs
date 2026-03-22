@@ -21,6 +21,7 @@ pub struct UnifiedProgressBar {
 }
 
 impl UnifiedProgressBar {
+    #[must_use] 
     pub fn new(total: u64, message: &str) -> Arc<Self> {
         let bar = ProgressBar::new(total);
         if crate::progress_mode::is_quiet_mode() {
@@ -44,6 +45,7 @@ impl UnifiedProgressBar {
         })
     }
 
+    #[must_use] 
     pub fn new_iteration(message: &str, input_size: u64, total_iterations: u64) -> Arc<Self> {
         let bar = ProgressBar::new(total_iterations);
         if crate::progress_mode::is_quiet_mode() {
@@ -77,7 +79,7 @@ impl UnifiedProgressBar {
         self.bar.set_message(msg.into());
     }
     pub fn println(&self, msg: &str) {
-        self.bar.suspend(|| eprintln!("{}", msg));
+        self.bar.suspend(|| eprintln!("{msg}"));
     }
 
     pub fn inc_iteration(&self, crf: f32, size: u64, ssim: Option<f64>) {
@@ -88,11 +90,9 @@ impl UnifiedProgressBar {
         } else {
             0.0
         };
-        let ssim_str = ssim
-            .map(|s| format!("SSIM {:.4}", s))
-            .unwrap_or_else(|| "N/A".to_string());
+        let ssim_str = ssim.map_or_else(|| "N/A".to_string(), |s| format!("SSIM {s:.4}"));
         self.bar
-            .set_message(format!("CRF {:.1} | {:+.1}% | {}", crf, size_pct, ssim_str));
+            .set_message(format!("CRF {crf:.1} | {size_pct:+.1}% | {ssim_str}"));
     }
 
     pub fn finish_iteration(&self, final_crf: f32, final_size: u64, final_ssim: Option<f64>) {
@@ -105,11 +105,10 @@ impl UnifiedProgressBar {
             0.0
         };
         let ssim_str = final_ssim
-            .map(|s| format!("SSIM {:.4}", s))
+            .map(|s| format!("SSIM {s:.4}"))
             .unwrap_or_default();
         self.bar.finish_with_message(format!(
-            "✅ CRF {:.1} • {:+.1}% • {}",
-            final_crf, size_pct, ssim_str
+            "✅ CRF {final_crf:.1} • {size_pct:+.1}% • {ssim_str}"
         ));
     }
 

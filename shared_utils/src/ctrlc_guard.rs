@@ -28,7 +28,7 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Start-of-batch wall-clock epoch (seconds since boot, via Instant).
 /// We store the *value* of the Instant as elapsed nanos relative to an
-/// internal epoch — using a u64 allows Ordering::Relaxed atomic access.
+/// internal epoch — using a u64 allows `Ordering::Relaxed` atomic access.
 static START_EPOCH_NANOS: AtomicU64 = AtomicU64::new(0);
 
 // Thin wrapper so we can lazily encode a real Instant via OnceLock.
@@ -113,8 +113,7 @@ fn watcher_thread(signal_flag: Arc<AtomicBool>) {
 
         let elapsed_secs = START_INSTANT
             .get()
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
+            .map_or(0, |t| t.elapsed().as_secs());
 
         if elapsed_secs < 270 {
             // Under 4.5 minutes → exit immediately (user made a deliberate Ctrl+C).
@@ -173,7 +172,7 @@ fn show_confirmation_prompt(elapsed_secs: u64) {
             revents: 0,
         };
         // Wait up to 10,000 milliseconds for input
-        let res = unsafe { libc::poll(&mut pfd, 1, 10_000) };
+        let res = unsafe { libc::poll(&raw mut pfd, 1, 10_000) };
         if res > 0 && (pfd.revents & libc::POLLIN) != 0 {
             let mut line = String::new();
             if io::stdin().read_line(&mut line).is_ok() {

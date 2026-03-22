@@ -25,13 +25,13 @@ pub struct HeicAnalysis {
 /// Detect HEIC/HEIF lossless encoding — multi-dimension analysis.
 ///
 /// Dimensions checked (in priority order):
-/// 1. **hvcC profile_idc**: Main(1)/Main10(2)/MainStillPicture(3) → definitely lossy (4:2:0 only)
-/// 2. **hvcC RExt(4)/SCC(9)** → lossless capable; check chroma_format_idc
-/// 3. **hvcC chroma_format_idc**: < 3 (not 4:4:4) → lossy; == 3 → lossless
-/// 4. **hvcC general_profile_compatibility_flags**: bit 4 set → RExt compatible → lossless
+/// 1. **hvcC `profile_idc`**: Main(1)/Main10(2)/MainStillPicture(3) → definitely lossy (4:2:0 only)
+/// 2. **hvcC RExt(4)/SCC(9)** → lossless capable; check `chroma_format_idc`
+/// 3. **hvcC `chroma_format_idc`**: < 3 (not 4:4:4) → lossy; == 3 → lossless
+/// 4. **hvcC `general_profile_compatibility_flags`**: bit 4 set → `RExt` compatible → lossless
 /// 5. **pixi box**: high bit depth with compatible profile → lossless indicator
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
-/// 7. **SPS transquant_bypass_enabled_flag**: if 1 → mathematically lossless (100% certain)
+/// 7. **SPS `transquant_bypass_enabled_flag`**: if 1 → mathematically lossless (100% certain)
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
     // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
@@ -106,8 +106,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                             None
                         }
                     })
-                    .map(|matrix| matrix == 0)
-                    .unwrap_or(false);
+                    .is_some_and(|matrix| matrix == 0);
 
                 if has_rgb_identity_matrix {
                     return Ok(true);
@@ -117,19 +116,18 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
                 let has_high_bitdepth = find_box_payload_by_magic(data, b"pixi")
                     .or_else(|| find_box_data_recursive(data, b"pixi"))
                     .and_then(|pixi_data| {
-                        if !pixi_data.is_empty() {
+                        if pixi_data.is_empty() {
+                            None
+                        } else {
                             let num_ch = pixi_data[0] as usize;
                             if num_ch > 0 && pixi_data.len() > num_ch {
                                 Some(pixi_data[1..=num_ch].iter().copied().max().unwrap_or(0))
                             } else {
                                 None
                             }
-                        } else {
-                            None
                         }
                     })
-                    .map(|max_depth| max_depth >= 12)
-                    .unwrap_or(false);
+                    .is_some_and(|max_depth| max_depth >= 12);
 
                 if has_high_bitdepth {
                     return Ok(true);
@@ -175,8 +173,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             // Most are lossy variants; treat as lossy rather than Err (safe default)
             if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
                 eprintln!(
-                    "   📊 HEIC: unknown profile {} — treating as lossy",
-                    profile_idc
+                    "   📊 HEIC: unknown profile {profile_idc} — treating as lossy"
                 );
             }
             return Ok(false);
@@ -260,7 +257,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
                 let bit_offset = 7 - ((self.bit_pos + i) % 8);
                 if byte_pos < self.data.len() {
                     let bit = (self.data[byte_pos] >> bit_offset) & 1;
-                    value = (value << 1) | (bit as u32);
+                    value = (value << 1) | u32::from(bit);
                 }
             }
             self.bit_pos += n;
@@ -359,21 +356,21 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     // Create empty context first
     let mut ctx = HeifContext::new().map_err(|e| {
-        ImgQualityError::ImageReadError(format!("Failed to create HEIC context: {}", e))
+        ImgQualityError::ImageReadError(format!("Failed to create HEIC context: {e}"))
     })?;
 
     // Set security limits BEFORE reading data
     #[cfg(feature = "v1_21")]
     {
         ctx.set_security_limits(&limits).map_err(|e| {
-            ImgQualityError::ImageReadError(format!("Failed to set security limits: {}", e))
+            ImgQualityError::ImageReadError(format!("Failed to set security limits: {e}"))
         })?;
     }
 
     // Now read the data with security limits applied
     ctx.read_bytes(&data)
         .or_else(|e| {
-            let error_msg = format!("{}", e);
+            let error_msg = format!("{e}");
             // Fallback: Scan for 'ftyp' manually if NoFtypBox error
             if error_msg.contains("NoFtypBox") || error_msg.contains("No 'ftyp' box") {
                 // Fallback 1: Try to find ftyp box manually
@@ -408,19 +405,18 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
             Err(e)
         })
         .map_err(|e| {
-            let error_msg = format!("{}", e);
+            let error_msg = format!("{e}");
             if error_msg.contains("SecurityLimitExceeded") || error_msg.contains("ipco") {
                 ImgQualityError::ImageReadError(format!(
-                    "HEIC security limit exceeded (ipco box limit): {}",
-                    e
+                    "HEIC security limit exceeded (ipco box limit): {e}"
                 ))
             } else {
-                ImgQualityError::ImageReadError(format!("[CRITICAL-HEIC-V4-FAIL] {}", e))
+                ImgQualityError::ImageReadError(format!("[CRITICAL-HEIC-V4-FAIL] {e}"))
             }
         })?;
 
     let handle = ctx.primary_image_handle().map_err(|e| {
-        ImgQualityError::ImageReadError(format!("Failed to get primary image: {}", e))
+        ImgQualityError::ImageReadError(format!("Failed to get primary image: {e}"))
     })?;
 
     let width = handle.width();
@@ -431,8 +427,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     let is_lossless_result = detect_heic_is_lossless(&data, path);
     if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
         eprintln!(
-            "   📊 HEIC detect_heic_is_lossless result: {:?}",
-            is_lossless_result
+            "   📊 HEIC detect_heic_is_lossless result: {is_lossless_result:?}"
         );
     }
     let is_lossless = is_lossless_result.unwrap_or(false);
@@ -463,7 +458,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     let decoded_image = lib_heif
         .decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode HEIC: {}", e)))?;
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to decode HEIC: {e}")))?;
 
     let planes = decoded_image.planes();
     let plane = planes
@@ -490,6 +485,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     Ok((img, analysis))
 }
 
+#[must_use] 
 pub fn is_heic_file(path: &Path) -> bool {
     // Rely strictly on magic bytes, NOT extensions, to avoid deep analysis failures (e.g. NoFtypBox)
     // on files that just happen to have a .heic extension but contain different format data.
@@ -519,7 +515,7 @@ pub fn is_heic_file(path: &Path) -> bool {
 
 /// Fallback: find box payload by direct magic byte search.
 /// This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
-/// that find_box_data_recursive may not handle correctly.
+/// that `find_box_data_recursive` may not handle correctly.
 fn find_box_payload_by_magic<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     if let Some(pos) = data.windows(4).position(|w| w == box_type) {
         if pos >= 4 {

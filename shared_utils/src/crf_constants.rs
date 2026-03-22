@@ -1,7 +1,7 @@
 //! CRF Constants Module
 //!
 //! Unified CRF (Constant Rate Factor) range constants for all video encoders.
-//! 统一的 CRF 常量定义，避免在多个文件中重复定义。
+//! Unified CRF constants definition to avoid duplication across multiple files.
 
 pub const HEVC_CRF_MIN: f32 = 0.0;
 

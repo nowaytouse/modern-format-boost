@@ -1,8 +1,8 @@
-//! 🗄️ Image Analysis Cache - Persistent SQLite Backend
+//! 🗄️ Image Analysis Cache - Persistent `SQLite` Backend
 //!
 //! 🔥 v3.0: Enhanced cache with content fingerprint + integrity verification
 //!
-//! Provides a highly efficient, persistent cache for image analysis results using SQLite and `MessagePack`.
+//! Provides a highly efficient, persistent cache for image analysis results using `SQLite` and `MessagePack`.
 //! This ensures that expensive operations like pixel-based entropy calculation, deep HEIC/AVIF parsing,
 //! and quantization detection are only performed once per file content.
 //!
@@ -46,18 +46,24 @@ pub struct CacheStatistics {
 }
 
 impl CacheStatistics {
+    #[must_use]
     pub fn total_records(&self) -> usize {
         self.analysis_records + self.quality_records + self.video_records
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn db_size_mb(&self) -> f64 {
         self.db_size_bytes as f64 / 1024.0 / 1024.0
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn db_size_gb(&self) -> f64 {
         self.db_size_bytes as f64 / 1024.0 / 1024.0 / 1024.0
     }
 
+    #[must_use]
     pub fn stale_records(&self) -> i64 {
         self.algorithm_version_distribution
             .iter()
@@ -84,6 +90,8 @@ impl FileSignature {
     ///
     /// Returns `io::Error` if metadata cannot be read.
     pub fn from_path(path: &Path) -> Result<Self> {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
         let metadata = std::fs::metadata(path)?;
         let size = i64::try_from(metadata.len()).unwrap_or(i64::MAX);
 
@@ -95,8 +103,6 @@ impl FileSignature {
             .try_into()
             .unwrap_or(i64::MAX);
 
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
         #[cfg(unix)]
         let ctime = metadata.ctime_nsec(); // Unix ctime nanoseconds
         #[cfg(windows)]
@@ -494,7 +500,7 @@ impl AnalysisCache {
     ///
     /// ### Errors
     ///
-    /// Returns `anyhow::Error` if the SQLite database cannot be opened or schema migration fails.
+    /// Returns `anyhow::Error` if the `SQLite` database cannot be opened or schema migration fails.
     #[allow(clippy::too_many_lines)]
     pub fn new(cache_path: &Path) -> Result<Self> {
         let conn = Connection::open_with_flags(
@@ -588,10 +594,7 @@ impl AnalysisCache {
             if !existing_columns.contains(*col) {
                 info!("🛠️  [Cache] Migrating path_index: adding column '{}'", col);
                 conn.execute(
-                    &format!(
-                        "ALTER TABLE path_index ADD COLUMN {} INTEGER DEFAULT 0",
-                        col
-                    ),
+                    &format!("ALTER TABLE path_index ADD COLUMN {col} INTEGER DEFAULT 0"),
                     [],
                 )?;
             }
@@ -610,10 +613,7 @@ impl AnalysisCache {
                     table
                 );
                 conn.execute(
-                    &format!(
-                        "ALTER TABLE {} ADD COLUMN algorithm_version INTEGER DEFAULT 1",
-                        table
-                    ),
+                    &format!("ALTER TABLE {table} ADD COLUMN algorithm_version INTEGER DEFAULT 1"),
                     [],
                 )?;
             }
@@ -678,10 +678,7 @@ impl AnalysisCache {
                         ("video_records", "data_checksum", "INTEGER"),
                     ] {
                         if let Err(err) = conn.execute(
-                            &format!(
-                                "ALTER TABLE {} ADD COLUMN {} {}",
-                                table, column, column_type
-                            ),
+                            &format!("ALTER TABLE {table} ADD COLUMN {column} {column_type}"),
                             [],
                         ) {
                             warn!(
@@ -725,7 +722,7 @@ impl AnalysisCache {
 
         for table in &tables {
             let count: i32 = conn.query_row(
-                &format!("SELECT COUNT(*) FROM {} WHERE algorithm_version < ?", table),
+                &format!("SELECT COUNT(*) FROM {table} WHERE algorithm_version < ?"),
                 params![current_version],
                 |row| row.get(0),
             )?;
@@ -781,6 +778,7 @@ impl AnalysisCache {
     /// ### Errors
     ///
     /// Returns `anyhow::Error` if database read fails, mutex lock fails, or deserialization fails.
+    #[allow(clippy::similar_names)]
     pub fn get_analysis(&self, path: &Path) -> Result<Option<ImageAnalysis>> {
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
@@ -881,6 +879,7 @@ impl AnalysisCache {
     /// ### Errors
     ///
     /// Returns `anyhow::Error` if database read fails, mutex lock fails, or deserialization fails.
+    #[allow(clippy::similar_names)]
     pub fn get_quality_analysis(&self, path: &Path) -> Result<Option<ImageQualityAnalysis>> {
         let sig = FileSignature::from_path(path)?;
         let path_str = path.to_string_lossy();
@@ -968,6 +967,7 @@ impl AnalysisCache {
     ///
     /// Returns `anyhow::Error` if file metadata cannot be read, BLAKE3 hash calculation fails,
     /// `MessagePack` serialization fails, mutex lock fails, or database write fails.
+    #[allow(clippy::similar_names)]
     pub fn store_analysis(&self, path: &Path, analysis: &ImageAnalysis) -> Result<()> {
         // 🧠 Smart Cache: Never store results that failed analysis.
         // This prevents "ghost errors" from persisting after a code fix.
@@ -1167,6 +1167,7 @@ impl AnalysisCache {
         Self::get_video_analysis_hash_match(&conn, path, &path_str, &sig)
     }
 
+    #[allow(clippy::similar_names)]
     fn get_video_analysis_path_match(
         conn: &Connection,
         path: &Path,

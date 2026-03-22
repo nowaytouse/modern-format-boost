@@ -66,7 +66,7 @@ pub fn is_already_processed(path: &Path) -> bool {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.contains(&canonical)
 }
 
@@ -77,12 +77,12 @@ pub fn mark_as_processed(path: &Path) {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.insert(canonical);
 }
 
 pub fn clear_processed_list() {
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.clear();
 }
 
@@ -112,6 +112,11 @@ impl Drop for ProcessedListLockGuard {
     }
 }
 
+/// Load the processed files list.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be read or deserialized.
 pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if !list_path.exists() {
         return Ok(());
@@ -143,14 +148,19 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
         return Err(Box::new(err));
     }
 
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.extend(loaded);
 
     Ok(())
 }
 
+/// Save the processed files list.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be written or serialized.
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let processed = PROCESSED_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut file = fs::File::create(list_path)?;
     #[cfg(unix)]
     flock_exclusive(&file)?;
@@ -158,7 +168,7 @@ pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
     let _flock_guard = ProcessedListLockGuard(std::os::unix::io::AsRawFd::as_raw_fd(&file));
 
     for path in processed.iter() {
-        writeln!(file, "{}", path)?;
+        writeln!(file, "{path}")?;
     }
     file.flush()?;
 
@@ -179,10 +189,12 @@ pub struct ConversionResult {
 }
 
 impl ConversionResult {
+    #[must_use] 
     pub fn is_jpeg_transcode(&self) -> bool {
         self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
     }
 
+    #[must_use] 
     pub fn skipped_duplicate(input: &Path) -> Self {
         Self {
             success: true,
@@ -197,6 +209,7 @@ impl ConversionResult {
         }
     }
 
+    #[must_use] 
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         Self {
@@ -212,6 +225,7 @@ impl ConversionResult {
         }
     }
 
+    #[must_use] 
     pub fn skipped_custom(input: &Path, input_size: u64, reason: &str, skip_reason: &str) -> Self {
         Self {
             success: true,
@@ -226,6 +240,7 @@ impl ConversionResult {
         }
     }
 
+    #[must_use] 
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
@@ -236,13 +251,14 @@ impl ConversionResult {
             input_size,
             output_size: None,
             size_reduction: None,
-            message: format!("Skipped: Output would be larger ({})", size_diff),
+            message: format!("Skipped: Output would be larger ({size_diff})"),
             skipped: true,
             skip_reason: Some("size_increase".to_string()),
         }
     }
 
     /// Used when compress mode is on and output size equals input (goal: must be strictly smaller).
+    #[must_use] 
     pub fn skipped_size_unchanged(input: &Path, input_size: u64, format_label: &str) -> Self {
         Self {
             success: true,
@@ -252,14 +268,14 @@ impl ConversionResult {
             output_size: None,
             size_reduction: None,
             message: format!(
-                "Skipped: {} output size unchanged (compression goal not achieved)",
-                format_label
+                "Skipped: {format_label} output size unchanged (compression goal not achieved)"
             ),
             skipped: true,
             skip_reason: Some("size_unchanged".to_string()),
         }
     }
 
+    #[must_use] 
     pub fn success(
         input: &Path,
         output: &Path,
@@ -278,28 +294,28 @@ impl ConversionResult {
 
         // Build size-change suffix: "-14.5%" (saved) or "+2.1MB" (grew) with ANSI colors
         let size_tag = if reduction >= 0.0 {
-            format!("\x1b[1;32m-{:.1}%\x1b[0m", reduction_pct)
+            format!("\x1b[1;32m-{reduction_pct:.1}%\x1b[0m")
         } else {
             let diff_bytes = output_size as i64 - input_size as i64;
             let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
-            format!("\x1b[1;33m{}\x1b[0m", size_diff)
+            format!("\x1b[1;33m{size_diff}\x1b[0m")
         };
 
         // Message body (no \u2705 here — caller (log_eprintln!) already emits it).
         // Format: "「Quality」 ✅ <FormatName> transcoding: -14.5%"
         let core_msg = match extra_info {
-            Some(info) => format!("{} transcoding ({}): {}", format_name, info, size_tag),
-            None => format!("{} transcoding: {}", format_name, size_tag),
+            Some(info) => format!("{format_name} transcoding ({info}): {size_tag}"),
+            None => format!("{format_name} transcoding: {size_tag}"),
         };
 
         let message = if let Some(q) = quality_label {
             if q.is_empty() {
-                format!("✅ {}", core_msg)
+                format!("✅ {core_msg}")
             } else {
-                format!("✅ {} | {}", q, core_msg)
+                format!("✅ {q} | {core_msg}")
             }
         } else {
-            format!("✅ {}", core_msg)
+            format!("✅ {core_msg}")
         };
 
         Self {
@@ -360,6 +376,7 @@ impl Default for ConvertOptions {
 }
 
 impl ConvertOptions {
+    #[must_use] 
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
@@ -373,6 +390,7 @@ impl ConvertOptions {
         )
     }
 
+    #[must_use] 
     pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
         // flag_mode() result is irrelevant — always use PreciseQualityMatchWithCompression
         crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
@@ -395,7 +413,7 @@ pub fn determine_output_path(
             fs::create_dir_all(dir).map_err(|e| {
                 format!("Failed to create output directory {}: {}", dir.display(), e)
             })?;
-            dir.join(format!("{}.{}", stem, up_ext))
+            dir.join(format!("{stem}.{up_ext}"))
         }
         None => input.with_extension(up_ext),
     };
@@ -459,7 +477,7 @@ pub fn determine_output_path_with_base(
                 )
             })?;
 
-            out_subdir.join(format!("{}.{}", stem, up_ext))
+            out_subdir.join(format!("{stem}.{up_ext}"))
         }
         None => input.with_extension(up_ext),
     };
@@ -494,23 +512,28 @@ pub fn determine_output_path_with_base(
     Ok(output)
 }
 
+#[must_use] 
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
         0.0
     } else {
-        1.0 - (output_size as f64 / input_size as f64)
+        #[allow(clippy::cast_precision_loss)]
+        let red = 1.0 - (output_size as f64 / input_size as f64);
+        red
     };
     let reduction_pct = reduction * 100.0;
 
     if reduction >= 0.0 {
-        format!("size reduced {:.1}%", reduction_pct)
+        format!("size reduced {reduction_pct:.1}%")
     } else {
-        let diff_bytes = output_size as i64 - input_size as i64;
+        #[allow(clippy::cast_possible_wrap)]
+        let diff_bytes = (output_size as i64).saturating_sub(input_size as i64);
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
         format!("size increased {:.1}% ({})", -reduction_pct, size_diff)
     }
 }
 
+#[must_use] 
 pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     if input_size == 0 {
         return 0.0;
@@ -523,6 +546,7 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
 /// **TOCTOU note**: The `output.exists()` check here is advisory only.
 /// Callers MUST use `temp_path_for_output()` + `commit_temp_to_output()`
 /// to write atomically; do NOT rely on this check as a write guard.
+#[must_use] 
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
@@ -579,7 +603,7 @@ pub fn post_conversion_actions(
     options: &ConvertOptions,
 ) -> std::io::Result<()> {
     if let Err(e) = crate::preserve_metadata(input, output) {
-        eprintln!("⚠️ Failed to preserve metadata: {}", e);
+        eprintln!("⚠️ Failed to preserve metadata: {e}");
     }
 
     mark_as_processed(input);
@@ -598,6 +622,7 @@ pub fn post_conversion_actions(
 pub struct TempOutputGuard(PathBuf);
 
 impl TempOutputGuard {
+    #[must_use] 
     pub fn new(path: PathBuf) -> Self {
         Self(path)
     }
@@ -621,8 +646,9 @@ impl Drop for TempOutputGuard {
 
 /// Returns a path for temporary output in the same directory as `output`, so that
 /// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
-/// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so FFmpeg and other
+/// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
 /// tools that infer format from extension still see the correct extension (mov, mp4, mkv, etc.).
+#[must_use] 
 pub fn temp_path_for_output(output: &Path) -> PathBuf {
     let stem = output
         .file_stem()
@@ -637,7 +663,7 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
     // Use a timestamp/pid/counter suffix so temp naming stays branch-agnostic across rand APIs.
     let random_id = next_temp_output_suffix();
 
-    parent.join(format!("{}.tmp.{}.{}", stem, random_id, ext))
+    parent.join(format!("{stem}.tmp.{random_id}.{ext}"))
 }
 
 /// **DEPRECATED AND REMOVED**: This function has been removed.
@@ -695,7 +721,7 @@ pub fn commit_temp_to_output_with_metadata(
         // Step 1: Preserve metadata (EXIF, XMP, xattrs, permissions)
         // This may modify the file (e.g., ExifTool writes EXIF/XMP), which changes timestamps
         if let Err(e) = crate::metadata::preserve_metadata(src, output) {
-            eprintln!("⚠️ Failed to preserve metadata: {}", e);
+            eprintln!("⚠️ Failed to preserve metadata: {e}");
         }
         crate::metadata::merge_xmp_sidecar_into_dest(src, output);
 
@@ -705,7 +731,7 @@ pub fn commit_temp_to_output_with_metadata(
             let ext = output
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
+                .map(str::to_lowercase)
                 .unwrap_or_default();
             if ext == "jxl" || ext == "mov" || ext == "mp4" || ext == "heic" || ext == "avif" {
                 if let Err(e) = crate::metadata::append_mfb_branding(output) {
@@ -723,7 +749,7 @@ pub fn commit_temp_to_output_with_metadata(
     Ok(true)
 }
 
-/// Get image/video dimensions using ffprobe → image crate → ImageMagick fallback chain.
+/// Get image/video dimensions using ffprobe → image crate → `ImageMagick` fallback chain.
 ///
 /// Returns (width, height) or an error if all methods fail.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
@@ -780,19 +806,21 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 /// Check if output exceeds size tolerance and clean up if so.
 ///
 /// **Two independent but coordinated flags:**
-/// - `allow_size_tolerance`: when true, allows size increase < 1_048_576 bytes; when false, requires `output <= input`.
+/// - `allow_size_tolerance`: when true, allows size increase < `1_048_576` bytes; when false, requires `output <= input`.
 ///   This absolute byte tolerance is fairer to all file sizes than percentage-based.
 /// - `compress`: when true, **goal is to make output smaller than input**.
-///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < 1_048_576 bytes, still accepts.
-///   Only when increase ≥ 1_048_576 bytes (or tolerance disabled), compress mode rejects the output.
+///   **BUT: respects `allow_size_tolerance` when enabled** - if increase < `1_048_576` bytes, still accepts.
+///   Only when increase ≥ `1_048_576` bytes (or tolerance disabled), compress mode rejects the output.
 ///
 /// **Logic flow:**
-/// 1. Check oversized threshold (tolerance-based): if increase ≥ 1_048_576 bytes → reject
+/// 1. Check oversized threshold (tolerance-based): if increase ≥ `1_048_576` bytes → reject
 /// 2. Check compress goal: if compress=true AND increase ≥ tolerance → reject
 /// 3. Otherwise: accept
 ///
 /// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
+#[must_use] 
+#[allow(clippy::similar_names, clippy::too_many_lines, clippy::cast_precision_loss)]
 pub fn check_size_tolerance(
     input: &Path,
     output: &Path,
@@ -893,7 +921,7 @@ pub fn check_size_tolerance(
                 // No output_dir specified, nothing to copy
             }
             Err(e) => {
-                eprintln!("   ⚠️  Failed to copy original: {}", e);
+                eprintln!("   ⚠️  Failed to copy original: {e}");
             }
         }
 
@@ -1142,7 +1170,7 @@ fn ensure_no_symlink_components(path: &Path) -> Result<(), String> {
 /// AAE files store photo editing metadata from iPhone/Photos.app.
 /// When the source image is converted, the AAE becomes orphaned.
 ///
-/// - In apple_compat mode: migrate AAE to output directory
+/// - In `apple_compat` mode: migrate AAE to output directory
 /// - Otherwise: delete orphaned AAE file
 pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
     let aae_path = input.with_extension("AAE");
@@ -1163,14 +1191,14 @@ pub fn handle_aae_file(input: &Path, output: &Path, apple_compat: bool) {
                 if let Some(filename) = aae.file_name() {
                     let target_aae = output_dir.join(filename);
                     if let Err(e) = fs::copy(&aae, &target_aae) {
-                        eprintln!("⚠️  Failed to migrate AAE file: {}", e);
+                        eprintln!("⚠️  Failed to migrate AAE file: {e}");
                     }
                 }
             }
         } else {
             // Delete orphaned AAE file
             if let Err(e) = fs::remove_file(&aae) {
-                eprintln!("⚠️  Failed to delete orphaned AAE file: {}", e);
+                eprintln!("⚠️  Failed to delete orphaned AAE file: {e}");
             }
         }
     }
@@ -1198,17 +1226,11 @@ mod tests {
 
             assert!(
                 (result - expected).abs() < 0.001,
-                "STRICT: {}->{}  expected {}, got {}",
-                input,
-                output,
-                expected,
-                result
+                "STRICT: {input}->{output}  expected {expected}, got {result}"
             );
             assert!(
                 (result - expected_calc).abs() < 0.0001,
-                "STRICT: Formula mismatch for {}->{}",
-                input,
-                output
+                "STRICT: Formula mismatch for {input}->{output}"
             );
         }
     }
@@ -1218,15 +1240,13 @@ mod tests {
         let reduction = calculate_size_reduction(10_000_000_000, 5_000_000_000);
         assert!(
             (reduction - 50.0).abs() < 0.001,
-            "STRICT: 10GB->5GB should be exactly 50%, got {}",
-            reduction
+            "STRICT: 10GB->5GB should be exactly 50%, got {reduction}"
         );
 
         let reduction = calculate_size_reduction(100_000_000_000, 25_000_000_000);
         assert!(
             (reduction - 75.0).abs() < 0.001,
-            "STRICT: 100GB->25GB should be exactly 75%, got {}",
-            reduction
+            "STRICT: 100GB->25GB should be exactly 75%, got {reduction}"
         );
     }
 
@@ -1235,8 +1255,7 @@ mod tests {
         let reduction = calculate_size_reduction(100, 50);
         assert!(
             (reduction - 50.0).abs() < 0.001,
-            "STRICT: 100->50 bytes should be exactly 50%, got {}",
-            reduction
+            "STRICT: 100->50 bytes should be exactly 50%, got {reduction}"
         );
     }
 
@@ -1288,8 +1307,7 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("commit_temp_to_output has been removed"),
-            "unexpected error message: {}",
-            err
+            "unexpected error message: {err}"
         );
     }
 
@@ -1314,8 +1332,7 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("stream did not contain valid UTF-8"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 
@@ -1536,10 +1553,7 @@ mod tests {
             opts.compress = compress;
             assert!(
                 opts.flag_mode().is_err(),
-                "({}, {}, {}) should be invalid",
-                explore,
-                match_quality,
-                compress
+                "({explore}, {match_quality}, {compress}) should be invalid"
             );
         }
     }

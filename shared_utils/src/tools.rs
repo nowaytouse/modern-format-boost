@@ -13,6 +13,7 @@ pub struct ToolCheck {
     pub install_hint: &'static str,
 }
 
+#[must_use] 
 pub fn check_tool(name: &str) -> bool {
     Command::new(name)
         .arg("--version")
@@ -21,6 +22,7 @@ pub fn check_tool(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[must_use] 
 pub fn check_tool_alt(name: &str) -> bool {
     Command::new(name)
         .arg("-version")
@@ -29,6 +31,7 @@ pub fn check_tool_alt(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[must_use] 
 pub fn get_tool_version(name: &str) -> Option<String> {
     let output = Command::new(name)
         .arg("--version")
@@ -38,12 +41,13 @@ pub fn get_tool_version(name: &str) -> Option<String> {
 
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().next().map(|s| s.to_string())
+        stdout.lines().next().map(std::string::ToString::to_string)
     } else {
         None
     }
 }
 
+#[must_use] 
 pub fn check_image_tools() -> Vec<ToolCheck> {
     vec![
         ToolCheck {
@@ -79,6 +83,7 @@ pub fn check_image_tools() -> Vec<ToolCheck> {
     ]
 }
 
+#[must_use] 
 pub fn check_video_tools() -> Vec<ToolCheck> {
     vec![
         ToolCheck {

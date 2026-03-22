@@ -11,6 +11,7 @@ pub struct UpgradeRecommendation {
     pub command: String,
 }
 
+#[must_use] 
 pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
     let indicator = &analysis.jxl_indicator;
 
@@ -44,6 +45,7 @@ mod tests {
     use super::*;
     use crate::image_analyzer::{ImageFeatures, JxlIndicator};
     use crate::image_detection::PrecisionMetadata;
+    use crate::types::{ProcessHistory, VisualPerception};
     use std::collections::HashMap;
 
     #[test]
@@ -77,8 +79,8 @@ mod tests {
             metadata: HashMap::new(),
             hdr_info: None,
             precision: PrecisionMetadata::default(),
-            history: Default::default(),
-            perception: Default::default(),
+            history: ProcessHistory::default(),
+            perception: VisualPerception::default(),
             analysis_error: None,
             cache_version: 0,
         };

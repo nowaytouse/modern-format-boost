@@ -1,16 +1,16 @@
-//! 🔥 v7.3.2: Smart File Copier - 统一的文件复制模块
+//! 🔥 v7.3.2: Smart File Copier - Unified File Copy Module
 //!
-//! 功能：
-//! - ✅ 保留完整目录结构
-//! - ✅ 保留文件元数据（时间戳、权限）
-//! - ✅ 自动合并 XMP 边车文件
-//! - ✅ 响亮报错，完全透明
+//! Features:
+//! - ✅ Preserves full directory structure
+//! - ✅ Preserves file metadata (timestamps, permissions)
+//! - ✅ Automatically merges XMP sidecar files
+//! - ✅ Loud errors, fully transparent
 //!
-//! 这个模块统一了所有转换器中的文件复制逻辑，避免代码重复。
+//! This module unifies file copy logic across all converters, avoiding code duplication.
 //!
-//! ## 扩展名修正与校验顺序
-//! - `fix_extension_if_mismatch` 按文件头魔数修正扩展名（避免伪装扩展名导致误判/panic）。
-//! - 设计约定：**先修正、再按扩展名做分支**。视频/图片入口（cli_runner、img_*）均在处理前调用修正，后续所有「仅验证扩展名」的逻辑应基于修正后的路径。参见 CODE_AUDIT.md §36。
+//! ## Extension Correction & Validation Order
+//! - `fix_extension_if_mismatch` corrects extension based on file magic bytes (prevents panics/misjudgment due to faked extensions).
+//! - Design convention: **Fix first, then branch by extension**. All entry points (cli_runner, img_*) call fix_extension before processing. All subsequent "extension-only" logic should be based on the fixed path. See `CODE_AUDIT.md` §36.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -115,7 +115,7 @@ pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
     let current_ext = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
+        .map(str::to_lowercase)
         .unwrap_or_default();
 
     if let Some(content_format) = detect_content_format(path) {
@@ -241,7 +241,7 @@ pub fn copy_on_skip_or_fail(
         match smart_copy_with_structure(source, out_dir, base_dir, verbose) {
             Ok(dest) => Ok(Some(dest)),
             Err(e) => {
-                eprintln!("❌ COPY FAILED: {}", e);
+                eprintln!("❌ COPY FAILED: {e}");
                 eprintln!("   Source: {}", source.display());
                 eprintln!("   Output dir: {}", out_dir.display());
                 Err(e)

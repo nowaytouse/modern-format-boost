@@ -1,11 +1,11 @@
-//! 🔥 v6.7: 纯媒体压缩验证器
+//! 🔥 v6.7: Pure Media Compression Verifier
 //!
-//! 使用纯视频流大小进行压缩验证，
-//! 完全排除容器格式和元数据的影响。
+//! Verification of compression using pure video stream size,
+//! completely excluding the impact of container format and metadata.
 //!
-//! ## 核心逻辑
-//! - 主要标准: `output_video_stream_size < input_video_stream_size + 1_048_576`
-//! - 只要纯视频流变小或是稍大（增幅 < 1MB），就算成功，无论总文件大小如何
+//! ## Core Logic
+//! - Main Criterion: `output_video_stream_size < input_video_stream_size + 1_048_576`
+//! - As long as the pure video stream shrinks or increases slightly (less than 1MB), it's considered a success, regardless of total file size.
 
 use crate::stream_size::StreamSizeInfo;
 
@@ -22,18 +22,22 @@ pub struct PureMediaVerifyResult {
 }
 
 impl PureMediaVerifyResult {
+    #[must_use] 
     pub fn video_size_change_percent(&self) -> f64 {
         (self.video_compression_ratio - 1.0) * 100.0
     }
 
+    #[must_use] 
     pub fn total_size_change_percent(&self) -> f64 {
         (self.total_compression_ratio - 1.0) * 100.0
     }
 
+    #[must_use] 
     pub fn is_container_overhead_issue(&self) -> bool {
         self.video_compressed && self.total_compression_ratio >= 1.0
     }
 
+    #[must_use] 
     pub fn description(&self) -> String {
         if self.video_compressed {
             if self.is_container_overhead_issue() {
@@ -58,6 +62,7 @@ impl PureMediaVerifyResult {
     }
 }
 
+#[must_use] 
 pub fn verify_pure_media_compression(
     input_info: &StreamSizeInfo,
     output_info: &StreamSizeInfo,
@@ -100,6 +105,7 @@ pub fn verify_pure_media_compression(
 }
 
 #[inline]
+#[must_use] 
 pub fn is_video_compressed(
     input_video_size: u64,
     output_video_size: u64,
@@ -113,6 +119,7 @@ pub fn is_video_compressed(
 }
 
 #[inline]
+#[must_use] 
 pub fn video_compression_ratio(input_video_size: u64, output_video_size: u64) -> f64 {
     if input_video_size > 0 {
         output_video_size as f64 / input_video_size as f64

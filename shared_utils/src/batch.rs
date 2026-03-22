@@ -3,7 +3,7 @@
 //! Provides utilities for batch file processing with proper error handling
 //! Reference: media/CONTRIBUTING.md - Batch Processing Capability requirement
 //!
-//! 🔥 v7.5: 添加文件排序功能，优先处理小文件
+//! 🔥 v7.5: Added file sorting capability to prioritize smaller files
 
 use crate::file_sorter::{sort_by_size_ascending, SortStrategy};
 use serde::{Deserialize, Serialize};
@@ -73,7 +73,7 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
     };
 
     let mut files = Vec::new();
-    for entry in walker.into_iter() {
+    for entry in walker {
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_file()
@@ -94,6 +94,7 @@ pub fn collect_files(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<Pa
     files
 }
 
+#[must_use]
 pub fn collect_files_sorted(
     dir: &Path,
     extensions: &[&str],
@@ -109,10 +110,12 @@ pub fn collect_files_sorted(
     }
 }
 
+#[must_use]
 pub fn collect_files_small_first(dir: &Path, extensions: &[&str], recursive: bool) -> Vec<PathBuf> {
     collect_files_sorted(dir, extensions, recursive, SortStrategy::SizeAscending)
 }
 
+#[must_use]
 pub fn collect_image_files_for_perceived_speed(
     dir: &Path,
     extensions: &[&str],
@@ -135,6 +138,7 @@ pub fn collect_image_files_for_perceived_speed(
     snapshot.files.into_iter().map(|entry| entry.path).collect()
 }
 
+#[must_use]
 pub fn collect_video_files_for_perceived_speed(
     dir: &Path,
     extensions: &[&str],
@@ -169,7 +173,7 @@ pub fn calculate_directory_size_by_extensions(
     };
 
     let mut total = 0u64;
-    for entry in walker.into_iter() {
+    for entry in walker {
         match entry {
             Ok(entry) => {
                 if !entry.file_type().is_file()
@@ -220,6 +224,7 @@ pub struct BatchPauseController {
 }
 
 impl BatchPauseController {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -236,7 +241,7 @@ impl BatchPauseController {
             .is_ok();
 
         if newly_paused {
-            let mut info = self.info.lock().unwrap_or_else(|e| e.into_inner());
+            let mut info = self.info.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             *info = Some(BatchPauseInfo {
                 path: path.to_path_buf(),
                 reason,
@@ -247,10 +252,11 @@ impl BatchPauseController {
     }
 
     pub fn pause_info(&self) -> Option<BatchPauseInfo> {
-        self.info.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.info.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 }
 
+#[must_use]
 pub fn disk_full_pause_reason(message: &str) -> Option<String> {
     let lower = message.to_lowercase();
     let disk_full = [
@@ -289,6 +295,7 @@ pub struct BatchResult {
 }
 
 impl BatchResult {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             total: 0,
@@ -324,6 +331,8 @@ impl BatchResult {
         self.paused_remaining = remaining;
     }
 
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
     pub fn success_rate(&self) -> f64 {
         if self.total == 0 {
             100.0
@@ -354,16 +363,14 @@ fn path_modified_unix_secs(path: &Path) -> u64 {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn relative_depth_from_root(root: &Path, path: &Path) -> usize {
     path.strip_prefix(root)
         .ok()
         .and_then(Path::parent)
-        .map(|parent| parent.components().count())
-        .unwrap_or(0)
+        .map_or(0, |parent| parent.components().count())
 }
 
 fn format_priority_for_image(path: &Path) -> u8 {
@@ -381,9 +388,10 @@ fn format_priority_for_image(path: &Path) -> u8 {
 fn image_pixel_count(path: &Path) -> Option<u64> {
     image::image_dimensions(path)
         .ok()
-        .map(|(width, height)| (width as u64).saturating_mul(height as u64))
+        .map(|(width, height)| u64::from(width).saturating_mul(u64::from(height)))
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn float_ord_key(value: f64) -> u64 {
     if value.is_finite() && value >= 0.0 {
         (value * 1000.0).round() as u64
@@ -555,7 +563,7 @@ fn scan_image_tree_snapshot(
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    for entry in walker.into_iter() {
+    for entry in walker {
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_dir() {
@@ -605,14 +613,14 @@ fn scan_image_tree_snapshot(
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn video_probe_priority_data(path: &Path) -> (Option<u64>, Option<f64>, Option<f64>, Option<u64>) {
-    let probe = match crate::probe_video(path) {
-        Ok(probe) => probe,
-        Err(_) => return (None, None, None, None),
+    let Ok(probe) = crate::probe_video(path) else {
+        return (None, None, None, None);
     };
 
     let pixel_count = if probe.width > 0 && probe.height > 0 {
-        Some((probe.width as u64).saturating_mul(probe.height as u64))
+        Some(u64::from(probe.width).saturating_mul(u64::from(probe.height)))
     } else {
         None
     };
@@ -658,9 +666,8 @@ fn compare_video_sort_entries(
         })
         .then_with(|| {
             left.duration_secs
-                .map(float_ord_key)
-                .unwrap_or(u64::MAX)
-                .cmp(&right.duration_secs.map(float_ord_key).unwrap_or(u64::MAX))
+                .map_or(u64::MAX, float_ord_key)
+                .cmp(&right.duration_secs.map_or(u64::MAX, float_ord_key))
         })
         .then_with(|| left.size.cmp(&right.size))
         .then_with(|| {
@@ -670,9 +677,8 @@ fn compare_video_sort_entries(
         })
         .then_with(|| {
             left.frame_rate
-                .map(float_ord_key)
-                .unwrap_or(u64::MAX)
-                .cmp(&right.frame_rate.map(float_ord_key).unwrap_or(u64::MAX))
+                .map_or(u64::MAX, float_ord_key)
+                .cmp(&right.frame_rate.map_or(u64::MAX, float_ord_key))
         })
         .then_with(|| left.path.cmp(&right.path))
 }
@@ -710,7 +716,7 @@ fn scan_video_tree_snapshot(
     let mut directories = Vec::new();
     let mut files = Vec::new();
 
-    for entry in walker.into_iter() {
+    for entry in walker {
         match entry {
             Ok(entry) => {
                 if entry.file_type().is_dir() {
@@ -866,7 +872,7 @@ mod tests {
     fn test_success_rate_all_fail() {
         let mut result = BatchResult::new();
         for i in 0..10 {
-            result.fail(PathBuf::from(format!("file{}.png", i)), "Error".to_string());
+            result.fail(PathBuf::from(format!("file{i}.png")), "Error".to_string());
         }
         assert!(
             (result.success_rate() - 0.0).abs() < 0.01,
@@ -919,7 +925,7 @@ mod tests {
                 result.success();
             }
             for i in 0..fail {
-                result.fail(PathBuf::from(format!("f{}.png", i)), "E".to_string());
+                result.fail(PathBuf::from(format!("f{i}.png")), "E".to_string());
             }
             for _ in 0..skip {
                 result.skip();
@@ -934,12 +940,7 @@ mod tests {
 
             assert!(
                 (rate - expected).abs() < 0.001,
-                "STRICT: {}s/{}f/{}k expected {}%, got {}%",
-                success,
-                fail,
-                skip,
-                expected,
-                rate
+                "STRICT: {success}s/{fail}f/{skip}k expected {expected}%, got {rate}%"
             );
             assert!(
                 (rate - expected_calc).abs() < 0.0001,
@@ -956,7 +957,7 @@ mod tests {
             result.success();
         }
         for i in 0..500_000 {
-            result.fail(PathBuf::from(format!("f{}.png", i)), "E".to_string());
+            result.fail(PathBuf::from(format!("f{i}.png")), "E".to_string());
         }
 
         assert_eq!(result.total, 1_000_000);

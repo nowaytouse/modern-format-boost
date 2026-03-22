@@ -11,6 +11,7 @@ pub struct CalibrationPoint {
 }
 
 impl CalibrationPoint {
+    #[must_use] 
     pub fn from_gpu_result(
         gpu_crf: f32,
         gpu_size: u64,
@@ -61,7 +62,7 @@ impl CalibrationPoint {
             self.gpu_crf, size_pct
         );
         if let Some(ssim) = self.gpu_ssim {
-            eprintln!("│ GPU SSIM: {:.4}", ssim);
+            eprintln!("│ GPU SSIM: {ssim:.4}");
         }
         eprintln!("│ Predicted CPU Start: CRF {:.1}", self.predicted_cpu_crf);
         eprintln!("│ Confidence: {:.0}%", self.confidence * 100.0);

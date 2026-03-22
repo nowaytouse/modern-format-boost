@@ -1,12 +1,12 @@
-//! MS-SSIM 并行计算模块
+//! MS-SSIM Parallel Calculation Module
 //!
-//! 🔥 v7.6: Y/U/V三通道并行计算
+//! 🔥 v7.6: Parallel calculation of Y/U/V channels.
 //!
-//! ## 功能
-//! - 并行计算Y/U/V三通道MS-SSIM
-//! - 集成心跳检测和进度监控
-//! - 线程安全的错误处理
-//! - 降级策略支持
+//! ## Features
+//! - Parallel calculation of MS-SSIM for Y/U/V channels
+//! - Integrated heartbeat detection and progress monitoring
+//! - Thread-safe error handling
+//! - Fallback strategy support
 
 use crate::app_error::AppError;
 use crate::msssim_heartbeat::Heartbeat;
@@ -28,6 +28,7 @@ pub struct MsssimResult {
 }
 
 impl MsssimResult {
+    #[must_use] 
     pub fn skipped() -> Self {
         Self {
             y_score: 0.0,
@@ -40,6 +41,7 @@ impl MsssimResult {
         }
     }
 
+    #[must_use] 
     pub fn is_skipped(&self) -> bool {
         self.sampling_strategy == SamplingStrategy::Skip
     }
@@ -54,7 +56,7 @@ impl MsssimResult {
             "⏱️  MS-SSIM completed in {:.2}s (sampled {}/{} frames)",
             elapsed_secs, self.sampled_frames, self.total_frames
         );
-        eprintln!("   Parallel speedup: {:.1}x (theoretical: 3x)", speedup);
+        eprintln!("   Parallel speedup: {speedup:.1}x (theoretical: 3x)");
     }
 }
 
@@ -66,6 +68,7 @@ pub struct ParallelMsssimCalculator {
 }
 
 impl ParallelMsssimCalculator {
+    #[must_use] 
     pub fn new(
         original_path: PathBuf,
         converted_path: PathBuf,
@@ -153,8 +156,7 @@ impl ParallelMsssimCalculator {
 
         eprintln!("✅ MS-SSIM complete, heartbeat stopped");
         eprintln!(
-            "✅ MS-SSIM (parallel): Y={:.4} U={:.4} V={:.4}",
-            y_score, u_score, v_score
+            "✅ MS-SSIM (parallel): Y={y_score:.4} U={u_score:.4} V={v_score:.4}"
         );
 
         Ok(MsssimResult {
@@ -186,12 +188,12 @@ impl ParallelMsssimCalculator {
 
         let filter_str;
         if let Some(filter) = config.strategy.ffmpeg_filter() {
-            filter_str = format!("[0:v]{}[v0];[1:v]{}[v1]", filter, filter);
+            filter_str = format!("[0:v]{filter}[v0];[1:v]{filter}[v1]");
             args.push("-filter_complex");
             args.push(&filter_str);
         }
 
-        let lavfi_str = format!("libvmaf=feature=name=ms_ssim:channel={}", channel);
+        let lavfi_str = format!("libvmaf=feature=name=ms_ssim:channel={channel}");
         args.push("-lavfi");
         args.push(&lavfi_str);
         args.push("-f");
@@ -202,53 +204,48 @@ impl ParallelMsssimCalculator {
             .monitor_ffmpeg_process(&args, channel)
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
 
-        match ms_ssim_result {
-            Ok(_) => progress_monitor.get_channel_score(channel).ok_or_else(|| {
-                eprintln!("❌ Failed to get {} channel score", channel);
-                AppError::Other(anyhow::anyhow!("Failed to get {} channel score", channel))
-            }),
-            Err(_) => {
-                eprintln!(
-                    "⚠️  MS-SSIM failed for channel {}, falling back to SSIM",
-                    channel
-                );
+        if let Ok(()) = ms_ssim_result { progress_monitor.get_channel_score(channel).ok_or_else(|| {
+            eprintln!("❌ Failed to get {channel} channel score");
+            AppError::Other(anyhow::anyhow!("Failed to get {channel} channel score"))
+        }) } else {
+            eprintln!(
+                "⚠️  MS-SSIM failed for channel {channel}, falling back to SSIM"
+            );
 
-                let mut ssim_args = vec![
-                    "-i",
-                    original_path_str.as_ref(),
-                    "-i",
-                    converted_path_str.as_ref(),
-                ];
+            let mut ssim_args = vec![
+                "-i",
+                original_path_str.as_ref(),
+                "-i",
+                converted_path_str.as_ref(),
+            ];
 
-                let ssim_filter_str;
-                if let Some(filter) = config.strategy.ffmpeg_filter() {
-                    ssim_filter_str = format!("[0:v]{}[v0];[1:v]{}[v1]", filter, filter);
-                    ssim_args.push("-filter_complex");
-                    ssim_args.push(&ssim_filter_str);
-                }
-
-                let ssim_lavfi_str = format!("libvmaf=feature=name=ssim:channel={}", channel);
-                ssim_args.push("-lavfi");
-                ssim_args.push(&ssim_lavfi_str);
-                ssim_args.push("-f");
-                ssim_args.push("null");
-                ssim_args.push("-");
-
-                progress_monitor
-                    .monitor_ffmpeg_process(&ssim_args, channel)
-                    .map_err(|e| {
-                        eprintln!("❌ Both MS-SSIM and SSIM failed for channel {}", channel);
-                        AppError::Other(anyhow::anyhow!("Both MS-SSIM and SSIM failed: {}", e))
-                    })?;
-
-                progress_monitor.get_channel_score(channel).ok_or_else(|| {
-                    eprintln!("❌ Failed to get {} channel SSIM score", channel);
-                    AppError::Other(anyhow::anyhow!(
-                        "Failed to get {} channel SSIM score",
-                        channel
-                    ))
-                })
+            let ssim_filter_str;
+            if let Some(filter) = config.strategy.ffmpeg_filter() {
+                ssim_filter_str = format!("[0:v]{filter}[v0];[1:v]{filter}[v1]");
+                ssim_args.push("-filter_complex");
+                ssim_args.push(&ssim_filter_str);
             }
+
+            let ssim_lavfi_str = format!("libvmaf=feature=name=ssim:channel={channel}");
+            ssim_args.push("-lavfi");
+            ssim_args.push(&ssim_lavfi_str);
+            ssim_args.push("-f");
+            ssim_args.push("null");
+            ssim_args.push("-");
+
+            progress_monitor
+                .monitor_ffmpeg_process(&ssim_args, channel)
+                .map_err(|e| {
+                    eprintln!("❌ Both MS-SSIM and SSIM failed for channel {channel}");
+                    AppError::Other(anyhow::anyhow!("Both MS-SSIM and SSIM failed: {e}"))
+                })?;
+
+            progress_monitor.get_channel_score(channel).ok_or_else(|| {
+                eprintln!("❌ Failed to get {channel} channel SSIM score");
+                AppError::Other(anyhow::anyhow!(
+                    "Failed to get {channel} channel SSIM score"
+                ))
+            })
         }
     }
 }

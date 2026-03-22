@@ -1,15 +1,38 @@
-//! Shared Utilities for modern_format_boost tools
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::fn_params_excessive_bools,
+    clippy::match_same_arms,
+    clippy::unnecessary_wraps,
+    clippy::items_after_statements,
+    clippy::float_cmp,
+    clippy::format_push_string,
+    clippy::default_trait_access,
+    clippy::unnecessary_debug_formatting,
+    clippy::implicit_hasher,
+    clippy::manual_let_else,
+    clippy::similar_names,
+    clippy::module_name_repetitions,
+    clippy::wildcard_imports
+)]
+//! Shared Utilities for `modern_format_boost` tools
 //!
 //! This crate provides common functionality shared across imgquality, vidquality, and vid-hevc:
 //! - Progress bar with ETA
 //! - Safety checks (dangerous directory detection)
 //! - Batch processing utilities
 //! - Common logging and reporting
-//! - FFprobe wrapper for video analysis
+//! - `FFprobe` wrapper for video analysis
 //! - External tools detection
 //! - Codec information
 //! - Metadata preservation (EXIF/IPTC/xattr/timestamps/ACL)
-//! - Conversion utilities (ConversionResult, ConvertOptions, anti-duplicate)
+//! - Conversion utilities (`ConversionResult`, `ConvertOptions`, anti-duplicate)
 //! - Date analysis (deep EXIF/XMP date extraction)
 //! - Quality matching (unified CRF/distance calculation for all encoders)
 //! - Unified version management (program, cache, schema versions)

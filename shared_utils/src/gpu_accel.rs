@@ -1,18 +1,18 @@
-//! GPU 加速模块 - 统一的硬件编码器检测和选择
+//! GPU Acceleration Module - Unified hardware encoder detection and selection
 //!
-//! 🔥 v4.9: 为四个工具提供统一的 GPU 加速支持
+//! 🔥 v4.9: Providing unified GPU acceleration support for all four tools
 //!
-//! ## 支持的硬件编码器
+//! ## Supported Hardware Encoders
 //!
-//! | 平台 | HEVC 编码器 | AV1 编码器 | H.264 编码器 |
+//! | Platform | HEVC Encoder | AV1 Encoder | H.264 Encoder |
 //! |------|------------|-----------|--------------|
-//! | NVIDIA | hevc_nvenc | av1_nvenc | h264_nvenc |
-//! | Apple Silicon | hevc_videotoolbox | - | h264_videotoolbox |
-//! | Intel QSV | hevc_qsv | av1_qsv | h264_qsv |
-//! | AMD AMF | hevc_amf | av1_amf | h264_amf |
-//! | VAAPI (Linux) | hevc_vaapi | av1_vaapi | h264_vaapi |
+//! | NVIDIA | `hevc_nvenc` | `av1_nvenc` | `h264_nvenc` |
+//! | Apple Silicon | `hevc_videotoolbox` | - | `h264_videotoolbox` |
+//! | Intel QSV | `hevc_qsv` | `av1_qsv` | `h264_qsv` |
+//! | AMD AMF | `hevc_amf` | `av1_amf` | `h264_amf` |
+//! | VAAPI (Linux) | `hevc_vaapi` | `av1_vaapi` | `h264_vaapi` |
 //!
-//! ## 使用方式
+//! ## Usage
 //!
 //! ```rust
 //! use shared_utils::gpu_accel::{GpuAccel, GpuEncoder};
@@ -99,7 +99,7 @@ impl StderrCapture {
     fn get_lines(&self) -> Vec<String> {
         self.lines
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .cloned()
             .collect()
@@ -150,7 +150,7 @@ impl HeartbeatMonitor {
                 let elapsed = self
                     .last_activity
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .elapsed();
                 let elapsed_secs = elapsed.as_secs();
 
@@ -305,11 +305,12 @@ fn vaapi_device_path() -> &'static str {
 
 fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
     let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("MP4");
-    format!("{}.{}", suffix, ext)
+    format!("{suffix}.{ext}")
 }
 
-/// Returns a temp extension string (e.g. "gpu_temp.mp4") for the given output path.
-/// Used by callers and by warmup encoding internally via temp_extension_for(_, "warmup").
+/// Returns a temp extension string (e.g. "`gpu_temp.mp4`") for the given output path.
+/// Used by callers and by warmup encoding internally via `temp_extension_for`(_, "warmup").
+#[must_use] 
 pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
     temp_extension_for(output, "gpu_temp")
 }
@@ -349,16 +350,18 @@ pub struct GpuEncoder {
 }
 
 impl GpuEncoder {
+    #[must_use] 
     pub fn ffmpeg_name(&self) -> &'static str {
         self.name
     }
 
+    #[must_use] 
     pub fn get_crf_args(&self, crf: f32) -> Vec<String> {
         if self.supports_crf {
             let quality_value = if self.gpu_type == GpuType::Apple {
                 (100.0 - crf * 2.0).clamp(1.0, 100.0)
             } else {
-                crf.clamp(self.crf_range.0 as f32, self.crf_range.1 as f32)
+                crf.clamp(f32::from(self.crf_range.0), f32::from(self.crf_range.1))
             };
 
             vec![
@@ -371,6 +374,7 @@ impl GpuEncoder {
         }
     }
 
+    #[must_use] 
     pub fn extra_args(&self) -> &[&'static str] {
         &self.extra_args
     }
@@ -402,6 +406,7 @@ impl GpuAccel {
         GPU_ACCEL.get_or_init(Self::detect_internal)
     }
 
+    #[must_use] 
     pub fn detect_fresh() -> GpuAccel {
         Self::detect_internal()
     }
@@ -765,6 +770,7 @@ impl GpuAccel {
         })
     }
 
+    #[must_use] 
     pub fn get_hevc_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.hevc_encoder.as_ref()
@@ -773,6 +779,7 @@ impl GpuAccel {
         }
     }
 
+    #[must_use] 
     pub fn get_av1_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.av1_encoder.as_ref()
@@ -781,6 +788,7 @@ impl GpuAccel {
         }
     }
 
+    #[must_use] 
     pub fn get_h264_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.h264_encoder.as_ref()
@@ -789,10 +797,12 @@ impl GpuAccel {
         }
     }
 
+    #[must_use] 
     pub fn is_available(&self) -> bool {
         self.enabled
     }
 
+    #[must_use] 
     pub fn description(&self) -> String {
         if self.enabled {
             format!("{} (Hardware Accelerated)", self.gpu_type)
@@ -814,7 +824,7 @@ fn get_available_encoders() -> Vec<String> {
             stdout
                 .lines()
                 .filter(|line| line.starts_with(" V"))
-                .map(|line| line.to_string())
+                .map(std::string::ToString::to_string)
                 .collect()
         }
         Err(_) => Vec::new(),
@@ -880,8 +890,7 @@ pub fn calculate_smart_sample(
             sample_filter: String::new(),
             actual_duration: total_duration,
             strategy: format!(
-                "Full video ({:.1}s, close to target {:.1}s)",
-                total_duration, target_sample_duration
+                "Full video ({total_duration:.1}s, close to target {target_sample_duration:.1}s)"
             ),
         });
     }
@@ -900,8 +909,7 @@ pub fn calculate_smart_sample(
         )
     } else if sample_ratio > 0.2 {
         format!(
-            "gt(scene,{})+gt(entropy,{})",
-            scene_threshold, entropy_threshold
+            "gt(scene,{scene_threshold})+gt(entropy,{entropy_threshold})"
         )
     } else {
         format!(
@@ -918,7 +926,7 @@ pub fn calculate_smart_sample(
         .arg("-i")
         .arg(crate::safe_path_arg(input).as_ref())
         .arg("-vf")
-        .arg(format!("select='{}',showinfo", select_expr))
+        .arg(format!("select='{select_expr}',showinfo"))
         .arg("-f")
         .arg("null")
         .arg("-")
@@ -933,18 +941,16 @@ pub fn calculate_smart_sample(
             sample_filter: String::new(),
             actual_duration: target_sample_duration,
             strategy: format!(
-                "Uniform sampling ({:.1}s, {:.1}%)",
-                target_sample_duration, sample_percentage
+                "Uniform sampling ({target_sample_duration:.1}s, {sample_percentage:.1}%)"
             ),
         });
     }
 
     Ok(SmartSampleResult {
-        sample_filter: format!("select='{}',setpts=N/FRAME_RATE/TB", select_expr),
+        sample_filter: format!("select='{select_expr}',setpts=N/FRAME_RATE/TB"),
         actual_duration: target_sample_duration,
         strategy: format!(
-            "Smart sampling ({:.1}s, {:.1}%, scene+entropy)",
-            target_sample_duration, sample_percentage
+            "Smart sampling ({target_sample_duration:.1}s, {sample_percentage:.1}%, scene+entropy)"
         ),
     })
 }
@@ -958,11 +964,13 @@ pub struct QualityScore {
 
 impl QualityScore {
     #[inline]
+    #[must_use] 
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
     }
 
     #[inline]
+    #[must_use] 
     pub fn ssim_meets(&self, threshold: f64) -> bool {
         crate::float_compare::ssim_meets_threshold(self.ssim, threshold)
     }
@@ -974,6 +982,7 @@ pub enum SearchPhase {
     Cpu,
 }
 
+#[must_use] 
 pub fn calculate_quality_score(
     ssim: f64,
     output_size: u64,
@@ -1001,6 +1010,7 @@ pub fn calculate_quality_score(
     }
 }
 
+#[must_use] 
 pub fn is_quality_better(
     new_score: &QualityScore,
     old_score: &QualityScore,
@@ -1017,6 +1027,7 @@ pub fn is_quality_better(
     improvement > 0.005
 }
 
+#[must_use] 
 pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary: f32,
     gpu_type: GpuType,
@@ -1047,6 +1058,7 @@ pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary + base_offset + adjustment
 }
 
+#[must_use] 
 pub fn estimate_cpu_search_range(
     gpu_range: (f32, f32),
     gpu_type: GpuType,
@@ -1066,10 +1078,12 @@ pub fn estimate_cpu_search_range(
     }
 }
 
+#[must_use] 
 pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center_dynamic(gpu_boundary, gpu_type, codec, None)
 }
 
+#[must_use] 
 pub fn gpu_boundary_to_cpu_range(
     gpu_boundary: f32,
     gpu_type: GpuType,
@@ -1086,6 +1100,7 @@ pub fn gpu_boundary_to_cpu_range(
 }
 
 #[deprecated(since = "5.0.1", note = "use estimate_cpu_search_center instead")]
+#[must_use] 
 pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center(gpu_crf, gpu_type, codec)
 }
@@ -1108,12 +1123,14 @@ pub struct GpuCoarseResult {
 
 impl GpuCoarseResult {
     #[inline]
+    #[must_use] 
     pub fn best_ssim_typed(&self) -> Option<crate::types::Ssim> {
         self.gpu_best_ssim
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
     #[inline]
+    #[must_use] 
     pub fn ceiling_ssim_typed(&self) -> Option<crate::types::Ssim> {
         self.quality_ceiling_ssim
             .and_then(|v| crate::types::Ssim::new(v).ok())
@@ -1134,6 +1151,7 @@ pub struct CrfMapping {
 }
 
 impl CrfMapping {
+    #[must_use] 
     pub fn hevc(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (5.0, 0.5),
@@ -1151,6 +1169,7 @@ impl CrfMapping {
         }
     }
 
+    #[must_use] 
     pub fn av1(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (0.0, 0.0),
@@ -1168,6 +1187,7 @@ impl CrfMapping {
         }
     }
 
+    #[must_use] 
     pub fn gpu_to_cpu_range(&self, gpu_crf: f32, min_crf: f32, max_crf: f32) -> (f32, f32, f32) {
         let center = (gpu_crf + self.offset).min(max_crf);
         let low = gpu_crf.max(min_crf);
@@ -1175,6 +1195,7 @@ impl CrfMapping {
         (center, low, high)
     }
 
+    #[must_use] 
     pub fn cpu_to_gpu(&self, cpu_crf: f32) -> f32 {
         cpu_crf - self.offset
     }
@@ -1238,7 +1259,7 @@ fn calculate_psnr_fast(input: &str, output: &str) -> Result<f64, String> {
         .arg("null")
         .arg("-")
         .output()
-        .map_err(|e| format!("PSNR calculation failed: {}", e))?;
+        .map_err(|e| format!("PSNR calculation failed: {e}"))?;
 
     if !psnr_output.status.success() {
         let stderr = String::from_utf8_lossy(&psnr_output.stderr);
@@ -1375,7 +1396,7 @@ impl PsnrSsimMapper {
             if psnr >= psnr1 && psnr <= psnr2 {
                 let denom = psnr2 - psnr1;
                 if denom.abs() < f64::EPSILON {
-                    return Some((ssim1 + ssim2) / 2.0);
+                    return Some(f64::midpoint(ssim1, ssim2));
                 }
                 let ratio = (psnr - psnr1) / denom;
                 let predicted_ssim = ssim1 + ratio * (ssim2 - ssim1);
@@ -1554,32 +1575,29 @@ fn gpu_coarse_search_with_log_impl(
         _ => None,
     };
 
-    let gpu_encoder = match gpu_encoder {
-        Some(enc) => enc,
-        None => {
-            log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
-            log_msg!(
-                "   ║  ⚠️  FALLBACK: No GPU encoder for {}!              ║",
-                encoder.to_uppercase()
-            );
-            log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
-            log_msg!("   ║  This may take longer but results will be accurate        ║");
-            log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
-            return Ok(GpuCoarseResult {
-                gpu_boundary_crf: config.initial_crf,
-                gpu_best_size: None,
-                gpu_best_ssim: None,
-                gpu_type: gpu.gpu_type,
-                codec: encoder.to_string(),
-                iterations: 0,
-                found_boundary: false,
-                fine_tuned: false,
-                log,
-                sample_input_size: input_size,
-                quality_ceiling_crf: None,
-                quality_ceiling_ssim: None,
-            });
-        }
+    let gpu_encoder = if let Some(enc) = gpu_encoder { enc } else {
+        log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
+        log_msg!(
+            "   ║  ⚠️  FALLBACK: No GPU encoder for {}!              ║",
+            encoder.to_uppercase()
+        );
+        log_msg!("   ║  Skipping GPU coarse search, using CPU-only mode          ║");
+        log_msg!("   ║  This may take longer but results will be accurate        ║");
+        log_msg!("   ╚═══════════════════════════════════════════════════════════╝");
+        return Ok(GpuCoarseResult {
+            gpu_boundary_crf: config.initial_crf,
+            gpu_best_size: None,
+            gpu_best_ssim: None,
+            gpu_type: gpu.gpu_type,
+            codec: encoder.to_string(),
+            iterations: 0,
+            found_boundary: false,
+            fine_tuned: false,
+            log,
+            sample_input_size: input_size,
+            quality_ceiling_crf: None,
+            quality_ceiling_ssim: None,
+        });
     };
 
     let skip_gpu_size_threshold: u64 = if config.ultimate_mode {
@@ -1626,8 +1644,7 @@ fn gpu_coarse_search_with_log_impl(
             )
         } else {
             format!(
-                "duration too short ({:.1}s < {:.1}s)",
-                quick_duration, skip_gpu_duration_threshold
+                "duration too short ({quick_duration:.1}s < {skip_gpu_duration_threshold:.1}s)"
             )
         };
         log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
@@ -1716,7 +1733,7 @@ fn gpu_coarse_search_with_log_impl(
             GPU_SAMPLE_DURATION
         };
         let ratio = multi_segment_duration / duration;
-        (input_size as f64 * ratio as f64) as u64
+        (input_size as f64 * f64::from(ratio)) as u64
     };
 
     const WARMUP_DURATION: f32 = 5.0;
@@ -1730,7 +1747,7 @@ fn gpu_coarse_search_with_log_impl(
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-y")
             .arg("-t")
-            .arg(format!("{}", warmup_duration))
+            .arg(format!("{warmup_duration}"))
             .arg("-i")
             .arg(crate::safe_path_arg(input).as_ref())
             .arg("-c:v")
@@ -1769,7 +1786,7 @@ fn gpu_coarse_search_with_log_impl(
     let warmup_input_size = if duration <= WARMUP_DURATION || duration == 0.0 {
         input_size
     } else {
-        (input_size as f64 * warmup_duration as f64 / duration as f64) as u64
+        (input_size as f64 * f64::from(warmup_duration) / f64::from(duration)) as u64
     };
 
     let warmup_result = encode_warmup(config.max_crf);
@@ -1833,7 +1850,7 @@ fn gpu_coarse_search_with_log_impl(
         let use_multi_segment = duration >= 60.0;
 
         if !use_multi_segment {
-            cmd.arg("-t").arg(format!("{}", actual_sample_duration));
+            cmd.arg("-t").arg(format!("{actual_sample_duration}"));
         }
 
         cmd.arg("-i")
@@ -1930,7 +1947,7 @@ fn gpu_coarse_search_with_log_impl(
                             if let Ok(time_us) = val.parse::<u64>() {
                                 if last_progress_time.elapsed().as_secs_f64() >= 1.0 {
                                     let current_secs = time_us as f64 / 1_000_000.0;
-                                    let pct = (current_secs / actual_sample_duration as f64
+                                    let pct = (current_secs / f64::from(actual_sample_duration)
                                         * 100.0)
                                         .min(100.0);
                                     let elapsed_secs = start_time.elapsed().as_secs_f64();
@@ -1938,7 +1955,7 @@ fn gpu_coarse_search_with_log_impl(
                                         if pct > 0.1 && current_secs > 0.0 && elapsed_secs > 0.0 {
                                             let speed = current_secs / elapsed_secs;
                                             if speed > 0.0 {
-                                                ((actual_sample_duration as f64 - current_secs)
+                                                ((f64::from(actual_sample_duration) - current_secs)
                                                     / speed)
                                                     .max(0.0)
                                                     as u64
@@ -1954,23 +1971,20 @@ fn gpu_coarse_search_with_log_impl(
                                         0.0
                                     };
 
-                                    let estimated_final_size = match std::fs::metadata(output) {
-                                        Ok(metadata) => {
-                                            let current_size = metadata.len();
-                                            fallback_logged = false;
-                                            (current_size as f64 / pct.max(1.0) * 100.0) as u64
+                                    let estimated_final_size = if let Ok(metadata) = std::fs::metadata(output) {
+                                        let current_size = metadata.len();
+                                        fallback_logged = false;
+                                        (current_size as f64 / pct.max(1.0) * 100.0) as u64
+                                    } else {
+                                        if !fallback_logged {
+                                            crate::log_eprintln!(
+                                                "Using linear estimation (metadata unavailable)"
+                                            );
+                                            fallback_logged = true;
                                         }
-                                        Err(_) => {
-                                            if !fallback_logged {
-                                                crate::log_eprintln!(
-                                                    "Using linear estimation (metadata unavailable)"
-                                                );
-                                                fallback_logged = true;
-                                            }
-                                            (sample_input_size as f64 * (1.0 / pct.max(0.1)))
-                                                .min(sample_input_size as f64 * 10.0)
-                                                as u64
-                                        }
+                                        (sample_input_size as f64 * (1.0 / pct.max(0.1)))
+                                            .min(sample_input_size as f64 * 10.0)
+                                            as u64
                                     };
 
                                     crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
@@ -2041,10 +2055,10 @@ fn gpu_coarse_search_with_log_impl(
                 let extra_args: Vec<String> = gpu_encoder
                     .extra_args()
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
                 let input_path = input.to_path_buf();
-                let output_path = output.with_extension(format!("tmp{}.mp4", i));
+                let output_path = output.with_extension(format!("tmp{i}.mp4"));
                 let encoder_name = gpu_encoder.name.to_string();
                 let sample_dur = actual_sample_duration;
 
@@ -2054,7 +2068,7 @@ fn gpu_coarse_search_with_log_impl(
                     let mut cmd = Command::new("ffmpeg");
                     cmd.arg("-y")
                         .arg("-t")
-                        .arg(format!("{}", sample_dur))
+                        .arg(format!("{sample_dur}"))
                         .arg("-i")
                         .arg(crate::safe_path_arg(&input_path).as_ref())
                         .arg("-c:v")
@@ -2075,7 +2089,7 @@ fn gpu_coarse_search_with_log_impl(
                     let size = match result {
                         Ok(out) if out.status.success() => std::fs::metadata(&output_path)
                             .map(|m| m.len())
-                            .map_err(|e| anyhow::anyhow!("{}", e)),
+                            .map_err(|e| anyhow::anyhow!("{e}")),
                         Ok(out) => {
                             let stderr = String::from_utf8_lossy(&out.stderr);
                             Err(anyhow::anyhow!(
@@ -2083,7 +2097,7 @@ fn gpu_coarse_search_with_log_impl(
                                 stderr.lines().last().unwrap_or("unknown")
                             ))
                         }
-                        Err(e) => Err(anyhow::anyhow!("{}", e)),
+                        Err(e) => Err(anyhow::anyhow!("{e}")),
                     };
 
                     if let Err(err) = std::fs::remove_file(&output_path) {
@@ -2165,7 +2179,7 @@ fn gpu_coarse_search_with_log_impl(
         );
         vec![config.initial_crf, config.max_crf, config.min_crf]
     } else {
-        let mid_crf = (config.min_crf + config.max_crf) / 2.0;
+        let mid_crf = f32::midpoint(config.min_crf, config.max_crf);
         log_msg!(
             "   ⚠️ [GPU] initial_crf {:.0} out of range, using mid_crf {:.0}",
             config.initial_crf,
@@ -2364,7 +2378,7 @@ fn gpu_coarse_search_with_log_impl(
                             let phase_info = if new_step <= gpu_min_step + 0.01 {
                                 "→ FINE TUNING".to_string()
                             } else {
-                                format!("decay ×{:.1}^{}", gpu_decay_factor, wall_hits)
+                                format!("decay ×{gpu_decay_factor:.1}^{wall_hits}")
                             };
                             log_msg!(
                                 "   ↩️ Curve backtrack: step {:.1} → {:.1} ({})",
@@ -2430,40 +2444,39 @@ fn gpu_coarse_search_with_log_impl(
                                 current_step
                             );
                             break;
-                        } else {
-                            wall_hits += 1;
-                            log_msg!(
-                                "   ✗ CRF {:.1}: WALL HIT #{} (size +{:.1}%)",
-                                test_crf,
-                                wall_hits,
-                                (size as f64 / sample_input_size as f64 - 1.0) * 100.0
-                            );
-
-                            if wall_hits >= gpu_max_wall_hits {
-                                log_msg!(
-                                    "   🧱 MAX WALL HITS ({})! Cannot find compress point",
-                                    gpu_max_wall_hits
-                                );
-                                break;
-                            }
-
-                            let curve_step = initial_step * gpu_decay_factor.powi(wall_hits as i32);
-                            let new_step = if curve_step < 1.0 {
-                                gpu_min_step
-                            } else {
-                                curve_step
-                            };
-                            log_msg!(
-                                "   ↩️ Curve backtrack: step {:.1} → {:.1}",
-                                current_step,
-                                new_step
-                            );
-
-                            current_step = new_step;
-                            last_fail_crf = test_crf;
-                            prev_size = Some(size);
-                            test_crf -= current_step;
                         }
+                        wall_hits += 1;
+                        log_msg!(
+                            "   ✗ CRF {:.1}: WALL HIT #{} (size +{:.1}%)",
+                            test_crf,
+                            wall_hits,
+                            (size as f64 / sample_input_size as f64 - 1.0) * 100.0
+                        );
+
+                        if wall_hits >= gpu_max_wall_hits {
+                            log_msg!(
+                                "   🧱 MAX WALL HITS ({})! Cannot find compress point",
+                                gpu_max_wall_hits
+                            );
+                            break;
+                        }
+
+                        let curve_step = initial_step * gpu_decay_factor.powi(wall_hits as i32);
+                        let new_step = if curve_step < 1.0 {
+                            gpu_min_step
+                        } else {
+                            curve_step
+                        };
+                        log_msg!(
+                            "   ↩️ Curve backtrack: step {:.1} → {:.1}",
+                            current_step,
+                            new_step
+                        );
+
+                        current_step = new_step;
+                        last_fail_crf = test_crf;
+                        prev_size = Some(size);
+                        test_crf -= current_step;
                     }
                     Err(_) => break,
                 }
@@ -2569,84 +2582,80 @@ fn gpu_coarse_search_with_log_impl(
                     encode_cached(test_crf, &mut size_cache)
                 };
 
-                match result {
-                    Ok(size) => {
-                        if let Some(cb) = progress_cb {
-                            cb(test_crf, size);
-                        }
-
-                        if size < sample_input_size {
-                            let improvement = best_size
-                                .map(|b| (b as f64 - size as f64) / b as f64 * 100.0)
-                                .unwrap_or(0.0);
-                            log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement);
-
-                            best_crf = Some(test_crf);
-                            best_size = Some(size);
-                            current_best = test_crf;
-
-                            let input_str = input.to_string_lossy();
-                            let output_str = output.to_string_lossy();
-                            if let Ok(psnr) = calculate_psnr_fast(&input_str, &output_str) {
-                                log_msg!("      📊 PSNR: {:.2}dB", psnr);
-
-                                if ceiling_detector.add_sample(test_crf, psnr) {
-                                    if let Some((ceiling_crf, ceiling_psnr)) =
-                                        ceiling_detector.get_ceiling()
-                                    {
-                                        log_msg!("   🎯 GPU Quality Ceiling Detected!");
-                                        log_msg!(
-                                            "      └─ CRF {:.1}, PSNR {:.2}dB (PSNR plateau)",
-                                            ceiling_crf,
-                                            ceiling_psnr
-                                        );
-                                        log_msg!(
-                                            "      └─ Further CRF reduction won't improve quality"
-                                        );
-                                        log_msg!("   ⚡ Stop: GPU reached its quality limit");
-                                        break;
-                                    }
-                                }
-                            } else {
-                                log_msg!("      ⚠️ PSNR calc failed, fallback to size-only");
-                            }
-
-                            if improvement < 0.5 {
-                                consecutive_small_improvements += 1;
-                                log_msg!(
-                                    "      ⚠️ Small improvement ({}/2)",
-                                    consecutive_small_improvements
-                                );
-
-                                if consecutive_small_improvements >= 2 {
-                                    log_msg!("   ⚡ Stop: 2 consecutive improvements < 0.5%");
-                                    break;
-                                }
-                            } else if improvement < 1.0 {
-                                log_msg!("      ⚠️ Improvement < 1%, may stop soon");
-                                consecutive_small_improvements += 1;
-
-                                if consecutive_small_improvements >= 3 {
-                                    log_msg!("   ⚡ Stop: 3 consecutive improvements < 1%");
-                                    break;
-                                }
-                            } else {
-                                consecutive_small_improvements = 0;
-                            }
-
-                            offset += 0.5;
-                        } else {
-                            log_msg!(
-                                "   ✗ CRF {:.1} cannot compress → boundary reached",
-                                test_crf
-                            );
-                            break;
-                        }
+                if let Ok(size) = result {
+                    if let Some(cb) = progress_cb {
+                        cb(test_crf, size);
                     }
-                    Err(_) => {
-                        log_msg!("   ⚠️ Encoding failed at CRF {:.1}, stopping", test_crf);
+
+                    if size < sample_input_size {
+                        let improvement = best_size
+                            .map_or(0.0, |b| (b as f64 - size as f64) / b as f64 * 100.0);
+                        log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement);
+
+                        best_crf = Some(test_crf);
+                        best_size = Some(size);
+                        current_best = test_crf;
+
+                        let input_str = input.to_string_lossy();
+                        let output_str = output.to_string_lossy();
+                        if let Ok(psnr) = calculate_psnr_fast(&input_str, &output_str) {
+                            log_msg!("      📊 PSNR: {:.2}dB", psnr);
+
+                            if ceiling_detector.add_sample(test_crf, psnr) {
+                                if let Some((ceiling_crf, ceiling_psnr)) =
+                                    ceiling_detector.get_ceiling()
+                                {
+                                    log_msg!("   🎯 GPU Quality Ceiling Detected!");
+                                    log_msg!(
+                                        "      └─ CRF {:.1}, PSNR {:.2}dB (PSNR plateau)",
+                                        ceiling_crf,
+                                        ceiling_psnr
+                                    );
+                                    log_msg!(
+                                        "      └─ Further CRF reduction won't improve quality"
+                                    );
+                                    log_msg!("   ⚡ Stop: GPU reached its quality limit");
+                                    break;
+                                }
+                            }
+                        } else {
+                            log_msg!("      ⚠️ PSNR calc failed, fallback to size-only");
+                        }
+
+                        if improvement < 0.5 {
+                            consecutive_small_improvements += 1;
+                            log_msg!(
+                                "      ⚠️ Small improvement ({}/2)",
+                                consecutive_small_improvements
+                            );
+
+                            if consecutive_small_improvements >= 2 {
+                                log_msg!("   ⚡ Stop: 2 consecutive improvements < 0.5%");
+                                break;
+                            }
+                        } else if improvement < 1.0 {
+                            log_msg!("      ⚠️ Improvement < 1%, may stop soon");
+                            consecutive_small_improvements += 1;
+
+                            if consecutive_small_improvements >= 3 {
+                                log_msg!("   ⚡ Stop: 3 consecutive improvements < 1%");
+                                break;
+                            }
+                        } else {
+                            consecutive_small_improvements = 0;
+                        }
+
+                        offset += 0.5;
+                    } else {
+                        log_msg!(
+                            "   ✗ CRF {:.1} cannot compress → boundary reached",
+                            test_crf
+                        );
                         break;
                     }
+                } else {
+                    log_msg!("   ⚠️ Encoding failed at CRF {:.1}, stopping", test_crf);
+                    break;
                 }
             }
 
@@ -2683,8 +2692,7 @@ fn gpu_coarse_search_with_log_impl(
     };
 
     let (quality_ceiling_crf, _quality_ceiling_psnr) = quality_ceiling_info
-        .map(|(crf, psnr)| (Some(crf), if psnr > 0.0 { Some(psnr) } else { None }))
-        .unwrap_or((None, None));
+        .map_or((None, None), |(crf, psnr)| (Some(crf), if psnr > 0.0 { Some(psnr) } else { None }));
 
     let (gpu_ssim, gpu_psnr) = if found {
         log_msg!(
@@ -2854,13 +2862,14 @@ fn gpu_coarse_search_with_log_impl(
     })
 }
 
+#[must_use] 
 pub fn get_cpu_search_range_from_gpu(
     gpu_result: &GpuCoarseResult,
     original_min_crf: f32,
     original_max_crf: f32,
 ) -> (f32, f32, f32) {
     if !gpu_result.found_boundary {
-        let center = (original_min_crf + original_max_crf) / 2.0;
+        let center = f32::midpoint(original_min_crf, original_max_crf);
         return (original_min_crf, original_max_crf, center);
     }
 
@@ -2886,22 +2895,19 @@ mod tests {
         let cpu_center = estimate_cpu_search_center(10.0, GpuType::Apple, "hevc");
         assert!(
             (cpu_center - 15.0).abs() < 0.1,
-            "Expected ~15.0, got {}",
-            cpu_center
+            "Expected ~15.0, got {cpu_center}"
         );
 
         let cpu_center = estimate_cpu_search_center(10.0, GpuType::Nvidia, "hevc");
         assert!(
             (cpu_center - 14.0).abs() < 0.1,
-            "Expected ~14.0, got {}",
-            cpu_center
+            "Expected ~14.0, got {cpu_center}"
         );
 
         let cpu_center = estimate_cpu_search_center(10.0, GpuType::None, "hevc");
         assert!(
             (cpu_center - 10.0).abs() < 0.1,
-            "Expected ~10.0, got {}",
-            cpu_center
+            "Expected ~10.0, got {cpu_center}"
         );
     }
 
@@ -2910,13 +2916,11 @@ mod tests {
         let (low, high) = gpu_boundary_to_cpu_range(10.0, GpuType::Apple, "hevc", 8.0, 28.0);
         assert!(
             (low - 10.0).abs() < 0.1,
-            "low={} should be ~10.0 (GPU boundary)",
-            low
+            "low={low} should be ~10.0 (GPU boundary)"
         );
         assert!(
             (15.0..=22.0).contains(&high),
-            "high={} should be in [15, 22]",
-            high
+            "high={high} should be in [15, 22]"
         );
 
         let (low, _high) = gpu_boundary_to_cpu_range(12.0, GpuType::Nvidia, "hevc", 10.0, 28.0);
@@ -2998,12 +3002,10 @@ mod tests {
         ] {
             let args = encoder.get_crf_args(crf);
             let qv: f32 = args[1].parse().unwrap();
-            assert!(qv >= 1.0, "q:v should be >= 1, got {} for CRF {}", qv, crf);
+            assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");
             assert!(
                 qv <= 100.0,
-                "q:v should be <= 100, got {} for CRF {}",
-                qv,
-                crf
+                "q:v should be <= 100, got {qv} for CRF {crf}"
             );
         }
     }
@@ -3018,7 +3020,7 @@ mod prop_tests {
     proptest! {
         #[test]
         fn prop_gpu_temp_extension_matches_output(ext in "[a-z]{2,4}") {
-            let output = PathBuf::from(format!("/path/to/output.{}", ext));
+            let output = PathBuf::from(format!("/path/to/output.{ext}"));
             let temp_ext = derive_gpu_temp_extension(&output);
 
             prop_assert!(temp_ext.ends_with(&ext),
@@ -3033,7 +3035,7 @@ mod prop_tests {
         ) {
             let formats = ["mp4", "mkv", "webm", "mov", "avi"];
             let ext = formats[format_idx];
-            let output = PathBuf::from(format!("/video/output.{}", ext));
+            let output = PathBuf::from(format!("/video/output.{ext}"));
             let temp_ext = derive_gpu_temp_extension(&output);
 
             prop_assert_eq!(temp_ext, format!("gpu_temp.{}", ext),

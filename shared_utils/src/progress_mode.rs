@@ -1,7 +1,7 @@
 //! v7.3.2: Progress Mode - controls progress bar display
 //!
 //! Avoids progress output clutter when processing in parallel.
-//! Stderr output is routed through tracing when a subscriber is set (init_logging).
+//! Stderr output is routed through tracing when a subscriber is set (`init_logging`).
 
 use crate::modern_ui::{colors, symbols};
 use std::cell::RefCell;
@@ -32,12 +32,13 @@ fn report_run_log_io_failure(context: &str, detail: &str) {
     );
 
     if !RUN_LOG_IO_FAILURE_REPORTED.swap(true, Ordering::Relaxed) {
-        let _ = writeln!(std::io::stderr(), "⚠️ [Run Log] {}: {}", context, detail);
+        let _ = writeln!(std::io::stderr(), "⚠️ [Run Log] {context}: {detail}");
     }
 }
 
 /// Format duration as detailed string with progressive spacing strategy
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
+#[must_use] 
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
     let years = total_millis / (365 * 86400 * 1000);
@@ -52,29 +53,29 @@ pub fn format_duration_compact(duration: Duration) -> String {
     let mut parts = Vec::new();
 
     if years > 0 {
-        parts.push(format!("{:02}Y", years));
+        parts.push(format!("{years:02}Y"));
     }
     if months > 0 || years > 0 {
-        parts.push(format!("{:02}M", months));
+        parts.push(format!("{months:02}M"));
     }
     if weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}W", weeks));
+        parts.push(format!("{weeks:02}W"));
     }
     if days > 0 || weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}D", days));
+        parts.push(format!("{days:02}D"));
     }
     if hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}h", hours));
+        parts.push(format!("{hours:02}h"));
     }
     if minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0 {
-        parts.push(format!("{:02}m", minutes));
+        parts.push(format!("{minutes:02}m"));
     }
 
     // Seconds: only show when there are no hours-or-larger components
     // (avoids "1h01m40s" when "1h01m" is cleaner at hour-level precision)
     let has_hours_plus = hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
     if !has_hours_plus && (total_millis >= 1000 || seconds > 0) {
-        parts.push(format!("{:02}s", seconds));
+        parts.push(format!("{seconds:02}s"));
     }
 
     // Milliseconds: only show when there are no seconds-or-larger components
@@ -83,7 +84,7 @@ pub fn format_duration_compact(duration: Duration) -> String {
     let has_large_unit =
         minutes > 0 || hours > 0 || days > 0 || weeks > 0 || months > 0 || years > 0;
     if !has_large_unit && millis > 0 {
-        parts.push(format!("{:03}ms", millis));
+        parts.push(format!("{millis:03}ms"));
     } else if total_millis == 0 {
         // Zero duration: show "000ms"
         parts.push("000ms".to_string());
@@ -104,7 +105,7 @@ pub fn format_duration_compact(duration: Duration) -> String {
         let suffix = &first[suffix_start..];
         let trimmed = digits.trim_start_matches('0');
         let trimmed = if trimmed.is_empty() { "0" } else { trimmed };
-        *first = format!("{}{}", trimmed, suffix);
+        *first = format!("{trimmed}{suffix}");
     }
 
     // Progressive spacing for large compound durations
@@ -136,13 +137,13 @@ pub fn format_duration_compact(duration: Duration) -> String {
 const LOG_TAG_WIDTH: usize = 28;
 
 /// Max visible chars for the filename displayed inside [brackets].
-/// With LOG_TAG_WIDTH=28, tag=[prefix] uses prefix+2 bytes, max prefix = 25.
+/// With `LOG_TAG_WIDTH=28`, tag=[prefix] uses prefix+2 bytes, max prefix = 25.
 const LOG_PREFIX_MAX_DISPLAY: usize = 25;
 
 /// Prefix for periodic statistics lines — emoji instead of [Info] to avoid
 /// confusion with log severity levels. Followed by a fixed-width space pad so
 /// the message body aligns with regular file-tag lines.
-/// Display width: 1 emoji (2 cells on most terminals) + spaces to reach LOG_TAG_WIDTH.
+/// Display width: 1 emoji (2 cells on most terminals) + spaces to reach `LOG_TAG_WIDTH`.
 const STATS_PREFIX: &str = "📊 ";
 
 /// Truncate at a UTF-8 char boundary so we never split a multi-byte character.
@@ -157,11 +158,11 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Pad a file-context tag (e.g. `[file.jpeg]`) to LOG_TAG_WIDTH chars for aligned message body.
-/// Always produces exactly LOG_TAG_WIDTH chars, or tag + one space if tag is already wide.
+/// Pad a file-context tag (e.g. `[file.jpeg]`) to `LOG_TAG_WIDTH` chars for aligned message body.
+/// Always produces exactly `LOG_TAG_WIDTH` chars, or tag + one space if tag is already wide.
 fn pad_tag(tag: &str) -> String {
     if tag.len() >= LOG_TAG_WIDTH {
-        format!("{} ", tag)
+        format!("{tag} ")
     } else {
         format!("{}{}", tag, " ".repeat(LOG_TAG_WIDTH - tag.len()))
     }
@@ -172,10 +173,10 @@ fn fmt_stats_line_final(msg: &str) -> String {
     format!("    {} {}", STATS_PREFIX.trim(), msg)
 }
 
-/// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of LogContextGuard.
-/// Truncates long names to LOG_PREFIX_MAX_DISPLAY chars, preserving the file extension:
-///   "Image_103999006594198.jpeg" → "Image_103999006…jpeg"
-///   "Cache_4ac28036da7d11be.jpg" → "Cache_4ac28036da7…jpg"
+/// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of `LogContextGuard`.
+/// Truncates long names to `LOG_PREFIX_MAX_DISPLAY` chars, preserving the file extension:
+///   "`Image_103999006594198.jpeg`" → "`Image_103999006…jpeg`"
+///   "`Cache_4ac28036da7d11be.jpg`" → "`Cache_4ac28036da7…jpg`"
 pub fn set_log_context(prefix: &str) {
     let s = if prefix.chars().count() > LOG_PREFIX_MAX_DISPLAY {
         if let Some(dot_pos) = prefix.rfind('.') {
@@ -184,14 +185,14 @@ pub fn set_log_context(prefix: &str) {
             if ext_chars < LOG_PREFIX_MAX_DISPLAY - 2 {
                 let stem_max_chars = LOG_PREFIX_MAX_DISPLAY - ext_chars - 1;
                 let stem = truncate_to_char_boundary(prefix, stem_max_chars);
-                format!("{}…{}", stem, ext)
+                format!("{stem}…{ext}")
             } else {
                 let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
-                format!("{}…", head)
+                format!("{head}…")
             }
         } else {
             let head = truncate_to_char_boundary(prefix, LOG_PREFIX_MAX_DISPLAY - 1);
-            format!("{}…", head)
+            format!("{head}…")
         }
     } else {
         prefix.to_string()
@@ -228,6 +229,7 @@ fn file_type_emoji(filename: &str) -> &'static str {
 
 /// Format a log line with optional tag, emoji prefix, and padded indent so message bodies align.
 /// When a filename prefix is set, prepends a file-type emoji (🖼️ image / 🎞️ GIF / 🎬 video).
+#[must_use] 
 pub fn format_log_line(line: &str) -> String {
     LOG_PREFIX.with(|p| {
         let prefix = p.borrow();
@@ -235,7 +237,7 @@ pub fn format_log_line(line: &str) -> String {
             format!("{}{}", " ".repeat(LOG_TAG_WIDTH), line)
         } else {
             let emoji = file_type_emoji(&prefix);
-            format!("{}{}{}", emoji, pad_tag(&format!("[{}]", prefix)), line)
+            format!("{}{}{}", emoji, pad_tag(&format!("[{prefix}]")), line)
         }
     })
 }
@@ -293,6 +295,7 @@ pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Returns true if a log file has been configured.
+#[must_use] 
 pub fn has_log_file() -> bool {
     lock_log_writer().is_some()
 }
@@ -313,14 +316,14 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
         .join("logs");
     std::fs::create_dir_all(&dir)?;
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let path = dir.join(format!("{}_run_{}.log", binary_name, timestamp));
+    let path = dir.join(format!("{binary_name}_run_{timestamp}.log"));
     set_log_file(&path)?;
     write_run_log_session_header(binary_name, &path);
     Ok(())
 }
 
 /// Write a session header line to the run log so the file clearly records that full output is being captured.
-/// Call after set_log_file (or from set_default_run_log_file). If init_logging already emitted a line, it is written here so the run log has it too.
+/// Call after `set_log_file` (or from `set_default_run_log_file`). If `init_logging` already emitted a line, it is written here so the run log has it too.
 /// Respects log level (INFO): only written when level is INFO or more verbose.
 pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path::Path) {
     if !has_log_file() {
@@ -338,7 +341,7 @@ pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path
 }
 
 /// Write one progress line to the run log so the log has the same "Running: HH:MM:SS  N/total  message" as the terminal.
-/// Call whenever the progress bar is updated (e.g. after set_position/set_message) so the run log is complete.
+/// Call whenever the progress bar is updated (e.g. after `set_position/set_message`) so the run log is complete.
 /// Respects log level (DEBUG): only written when level is DEBUG or TRACE.
 pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u64, message: &str) {
     if !has_log_file() {
@@ -347,14 +350,13 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
     let duration = Duration::from_secs(elapsed_secs);
     let compact_time = format_duration_compact(duration);
     let line = format!(
-        "  Running: {}  {}/{}  {}",
-        compact_time, current, total, message
+        "  Running: {compact_time}  {current}/{total}  {message}"
     );
     write_to_log_at_level(Level::DEBUG, &line);
 }
 
 /// Write a line to the log file (no-op if no log file is configured).
-/// Does NOT write to stderr — use log_eprintln! or verbose_eprintln! for dual output.
+/// Does NOT write to stderr — use `log_eprintln`! or `verbose_eprintln`! for dual output.
 /// Strips ANSI escape codes so file logs are plain text.
 /// Flushes after each write so log output is immediate (no loss on crash/kill).
 pub fn write_to_log(line: &str) {
@@ -364,7 +366,7 @@ pub fn write_to_log(line: &str) {
     match LOG_FILE_WRITER.lock() {
         Ok(mut guard) => {
             if let Some(ref mut w) = *guard {
-                if let Err(err) = writeln!(w, "{}", plain) {
+                if let Err(err) = writeln!(w, "{plain}") {
                     report_run_log_io_failure("failed to write run log line", &err.to_string());
                     return;
                 }
@@ -380,7 +382,7 @@ pub fn write_to_log(line: &str) {
 }
 
 /// Write a line to the run log only when the configured log level allows this level (so level has real effect).
-/// Use for status/info (Level::Info), progress (Level::Debug), verbose (Level::Trace). Errors use write_to_log.
+/// Use for status/info (`Level::Info`), progress (`Level::Debug`), verbose (`Level::Trace`). Errors use `write_to_log`.
 pub fn write_to_log_at_level(level: Level, line: &str) {
     if crate::logging::should_log(level) {
         write_to_log(line);
@@ -389,7 +391,7 @@ pub fn write_to_log_at_level(level: Level, line: &str) {
 
 /// Write conversion failure to the run log file immediately (so failures are in the log, not only stderr).
 /// Call this whenever a single-file conversion returns Err, so the log file has the full error for later inspection.
-/// Uses Level::Error so it is always written when level is WARN or ERROR (and any level includes errors).
+/// Uses `Level::Error` so it is always written when level is WARN or ERROR (and any level includes errors).
 pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
     if has_log_file() {
         let line = format!("❌ Conversion failed {}: {}", path.display(), error);
@@ -400,7 +402,7 @@ pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
 /// Uniform indent for all stderr lines so logs are visually aligned (2 spaces).
 const STDERR_INDENT: &str = "  ";
 
-/// Returns true when stderr is connected to a real terminal (TTY) OR if FORCE_COLOR is set.
+/// Returns true when stderr is connected to a real terminal (TTY) OR if `FORCE_COLOR` is set.
 /// Cached after the first call — TTY state does not change during a run.
 #[inline]
 fn stderr_is_tty() -> bool {
@@ -475,7 +477,7 @@ pub fn emit_stderr(line: &str) {
         use std::io::Write;
         let out = if stderr_is_tty() {
             // TTY: keep colours.
-            format!("{}{}", STDERR_INDENT, line_with_stats)
+            format!("{STDERR_INDENT}{line_with_stats}")
         } else {
             // Non-TTY: strip ANSI so piped / redirected output is clean.
             format!(
@@ -487,9 +489,9 @@ pub fn emit_stderr(line: &str) {
         let wrapped = if stderr_is_tty() {
             crate::progress::wrap_output_for_active_progress(&out)
         } else {
-            format!("{}\n", out)
+            format!("{out}\n")
         };
-        if let Err(err) = write!(std::io::stderr(), "{}", wrapped) {
+        if let Err(err) = write!(std::io::stderr(), "{wrapped}") {
             tracing::warn!(
                 error = %err,
                 "Failed to write progress output to stderr"
@@ -565,6 +567,7 @@ pub fn set_verbose_mode(v: bool) {
     VERBOSE_MODE.store(v, Ordering::Relaxed);
 }
 
+#[must_use] 
 pub fn tracing_level_debug() -> Level {
     Level::DEBUG
 }
@@ -575,7 +578,7 @@ pub fn is_verbose_mode() -> bool {
 
 /// Print to stderr only when verbose mode is enabled.
 /// Run log gets the line only when level allows (DEBUG: written at DEBUG/TRACE).
-/// When set via set_log_context(), the line is prefixed with [prefix] for concurrent file processing.
+/// When set via `set_log_context()`, the line is prefixed with [prefix] for concurrent file processing.
 #[macro_export]
 macro_rules! verbose_eprintln {
     () => {{
@@ -601,7 +604,7 @@ macro_rules! verbose_eprintln {
 }
 
 /// Print to both stderr and the run log file (if configured). Run log gets full TRACE-level detail.
-/// When set via set_log_context(), the line is prefixed with [prefix] for concurrent file processing.
+/// When set via `set_log_context()`, the line is prefixed with [prefix] for concurrent file processing.
 #[macro_export]
 macro_rules! log_eprintln {
     () => {{
@@ -639,7 +642,7 @@ pub fn fallback_success() {
     FALLBACK_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Call when a JXL conversion completes successfully (e.g. from finalize_conversion).
+/// Call when a JXL conversion completes successfully (e.g. from `finalize_conversion`).
 pub fn jxl_success() {
     JXL_SUCCESS_COUNT.fetch_add(1, Ordering::Relaxed);
 }
@@ -702,6 +705,7 @@ pub fn video_skipped(reason: &str) {
 
 /// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
 /// Skips if the line already contains stats or is empty.
+#[must_use] 
 pub fn append_stats_to_line(line: &str) -> String {
     let mut trimmed = line.trim_end_matches(['\n', '\r']);
     if trimmed.is_empty() {
@@ -792,7 +796,7 @@ pub fn get_current_stats_string() -> String {
         format!("{}│{} {}", colors::DIM, colors::RESET, symbols::CHART)
     };
 
-    format!(" {} {}", separator, msg)
+    format!(" {separator} {msg}")
 }
 
 fn format_video_stats_line(
@@ -973,6 +977,7 @@ pub fn xmp_merge_success() {
 }
 
 /// Format a statistics status line with the 📊 emoji prefix (for run log alignment).
+#[must_use] 
 pub fn format_status_line(msg: &str) -> String {
     fmt_stats_line_final(msg)
 }
@@ -1005,27 +1010,27 @@ pub fn xmp_merge_finalize() {
                 let success = XMP_SUCCESS_COUNT.load(Ordering::Relaxed);
                 let failed = xmp_total.saturating_sub(success);
                 parts.push(if failed > 0 {
-                    format!("XMP: {} OK, {} failed", success, failed)
+                    format!("XMP: {success} OK, {failed} failed")
                 } else {
-                    format!("XMP: {} OK", success)
+                    format!("XMP: {success} OK")
                 });
             }
             if vid_ok > 0 || vid_fail > 0 || vid_skip > 0 {
                 let mut vid_part = if vid_fail > 0 {
-                    format!("Videos: {} OK, {} failed", vid_ok, vid_fail)
+                    format!("Videos: {vid_ok} OK, {vid_fail} failed")
                 } else {
-                    format!("Videos: {} OK", vid_ok)
+                    format!("Videos: {vid_ok} OK")
                 };
                 if vid_skip > 0 {
-                    vid_part.push_str(&format!(" ({} skipped)", vid_skip));
+                    vid_part.push_str(&format!(" ({vid_skip} skipped)"));
                 }
                 parts.push(vid_part);
             }
             if preprocess_ok > 0 {
-                parts.push(format!("Pre-processing: {} done", preprocess_ok));
+                parts.push(format!("Pre-processing: {preprocess_ok} done"));
             }
             if fallback_ok > 0 {
-                parts.push(format!("Fallback: {} done", fallback_ok));
+                parts.push(format!("Fallback: {fallback_ok} done"));
             }
             let line = fmt_stats_line_final(&parts.join("   "));
             emit_stderr(&line);
@@ -1049,35 +1054,33 @@ pub fn xmp_merge_finalize() {
         );
         let line = fmt_stats_line_final(&msg);
         emit_stderr(&line);
-    } else {
-        if jxl_ok > 0
-            || img_ok > 0
-            || img_fail > 0
-            || img_skip > 0
-            || preprocess_ok > 0
-            || fallback_ok > 0
-        {
-            let mut parts = Vec::new();
-            let images_ok = img_ok + jxl_ok;
-            if images_ok > 0 || img_fail > 0 || img_skip > 0 {
-                let mut img_part = if img_fail > 0 {
-                    format!("Images: {} OK, {} failed", images_ok, img_fail)
-                } else {
-                    format!("Images: {} OK", images_ok)
-                };
-                if img_skip > 0 {
-                    img_part.push_str(&format!(" ({} skipped)", img_skip));
-                }
-                parts.push(img_part);
+    } else if jxl_ok > 0
+        || img_ok > 0
+        || img_fail > 0
+        || img_skip > 0
+        || preprocess_ok > 0
+        || fallback_ok > 0
+    {
+        let mut parts = Vec::new();
+        let images_ok = img_ok + jxl_ok;
+        if images_ok > 0 || img_fail > 0 || img_skip > 0 {
+            let mut img_part = if img_fail > 0 {
+                format!("Images: {images_ok} OK, {img_fail} failed")
+            } else {
+                format!("Images: {images_ok} OK")
+            };
+            if img_skip > 0 {
+                img_part.push_str(&format!(" ({img_skip} skipped)"));
             }
-            if preprocess_ok > 0 {
-                parts.push(format!("Pre-processing: {} done", preprocess_ok));
-            }
-            if fallback_ok > 0 {
-                parts.push(format!("Fallback: {} done", fallback_ok));
-            }
-            let line = fmt_stats_line_final(&parts.join("   "));
-            emit_stderr(&line);
+            parts.push(img_part);
         }
+        if preprocess_ok > 0 {
+            parts.push(format!("Pre-processing: {preprocess_ok} done"));
+        }
+        if fallback_ok > 0 {
+            parts.push(format!("Fallback: {fallback_ok} done"));
+        }
+        let line = fmt_stats_line_final(&parts.join("   "));
+        emit_stderr(&line);
     }
 }

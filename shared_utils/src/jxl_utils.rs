@@ -1,15 +1,16 @@
 //! Shared JXL/image preprocessing utilities
 //!
-//! Common functions used by both img_av1 and img_hevc lossless converters:
+//! Common functions used by both `img_av1` and `img_hevc` lossless converters:
 //! - JXL file health verification
 //! - Image format preprocessing for cjxl compatibility
-//! - Fallback encoding pipelines (ImageMagick, FFmpeg)
+//! - Fallback encoding pipelines (`ImageMagick`, `FFmpeg`)
 //! - ICC Profile extraction and preservation
 
 use std::path::Path;
 use std::process::Command;
 
 /// Extract ICC Profile from source image and return temp file path
+#[must_use] 
 pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
     if which::which("exiftool").is_err() {
         return None;
@@ -70,7 +71,7 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
 }
 
 /// Run an external tool to convert input to a temp PNG.
-/// Returns (temp_path, temp_handle) on success, or (original_input, None) on failure (graceful fallback).
+/// Returns (`temp_path`, `temp_handle`) on success, or (`original_input`, None) on failure (graceful fallback).
 pub fn convert_to_temp_png(
     input: &Path,
     tool: &str,
@@ -157,11 +158,11 @@ fn get_png_bit_depth(path: &Path) -> Option<u8> {
     Some(buf[24])
 }
 
-/// One attempt of ImageMagick → cjxl pipeline.
+/// One attempt of `ImageMagick` → cjxl pipeline.
 /// - `strip`: adds -strip (drops ICC/EXIF)
 /// - `depth`: PNG bit depth to emit (8 or 16); use 8 only for confirmed 8-bit sources
 /// - `normalize_icc`: replaces embedded ICC with standard sRGB without truncating bit depth
-/// - `apple_compat`: adds --compress_boxes=0 to cjxl for Apple device compatibility
+/// - `apple_compat`: adds --`compress_boxes=0` to cjxl for Apple device compatibility
 fn run_imagemagick_cjxl_pipeline(
     input: &Path,
     output: &Path,
@@ -196,7 +197,7 @@ fn run_imagemagick_cjxl_pipeline(
         .stderr(Stdio::piped());
 
     let mut magick_proc = magick.spawn().map_err(|e| {
-        let line = format!("   ❌ ImageMagick not available or failed to start: {}", e);
+        let line = format!("   ❌ ImageMagick not available or failed to start: {e}");
         crate::progress_mode::emit_stderr(&line);
         (false, false, String::new())
     })?;
@@ -204,8 +205,7 @@ fn run_imagemagick_cjxl_pipeline(
     let magick_stdout = magick_proc.stdout.take().ok_or_else(|| {
         if let Err(err) = magick_proc.kill() {
             crate::progress_mode::emit_stderr(&format!(
-                "   ⚠️ Failed to stop ImageMagick after stdout capture failure: {}",
-                err
+                "   ⚠️ Failed to stop ImageMagick after stdout capture failure: {err}"
             ));
         }
         (false, false, String::new())
@@ -219,8 +219,7 @@ fn run_imagemagick_cjxl_pipeline(
             let mut s = String::new();
             if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
                 crate::progress_mode::emit_stderr(&format!(
-                    "   ⚠️ Failed to read ImageMagick stderr output: {}",
-                    err
+                    "   ⚠️ Failed to read ImageMagick stderr output: {err}"
                 ));
             }
             s
@@ -232,7 +231,7 @@ fn run_imagemagick_cjxl_pipeline(
         .arg("-")
         .arg(output)
         .arg("-d")
-        .arg(format!("{:.1}", distance))
+        .arg(format!("{distance:.1}"))
         .arg("-e")
         .arg("7")
         .arg("-j")
@@ -245,12 +244,11 @@ fn run_imagemagick_cjxl_pipeline(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            let line = format!("   ❌ Failed to start cjxl process: {}", e);
+            let line = format!("   ❌ Failed to start cjxl process: {e}");
             crate::progress_mode::emit_stderr(&line);
             if let Err(err) = magick_proc.kill() {
                 crate::progress_mode::emit_stderr(&format!(
-                    "   ⚠️ Failed to stop ImageMagick after cjxl startup failure: {}",
-                    err
+                    "   ⚠️ Failed to stop ImageMagick after cjxl startup failure: {err}"
                 ));
             }
             (false, false, String::new())
@@ -264,8 +262,7 @@ fn run_imagemagick_cjxl_pipeline(
             let mut s = String::new();
             if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
                 crate::progress_mode::emit_stderr(&format!(
-                    "   ⚠️ Failed to read cjxl stderr output: {}",
-                    err
+                    "   ⚠️ Failed to read cjxl stderr output: {err}"
                 ));
             }
             s.trim().to_string()
@@ -276,24 +273,18 @@ fn run_imagemagick_cjxl_pipeline(
     let cjxl_status = cjxl_proc.wait();
 
     let magick_stderr = match magick_stderr_thread {
-        Some(handle) => match handle.join() {
-            Ok(stderr) => stderr,
-            Err(_) => {
-                crate::progress_mode::emit_stderr(
-                    "   ⚠️ ImageMagick stderr capture thread panicked",
-                );
-                String::new()
-            }
+        Some(handle) => if let Ok(stderr) = handle.join() { stderr } else {
+            crate::progress_mode::emit_stderr(
+                "   ⚠️ ImageMagick stderr capture thread panicked",
+            );
+            String::new()
         },
         None => String::new(),
     };
     let cjxl_stderr = match cjxl_stderr_thread {
-        Some(handle) => match handle.join() {
-            Ok(stderr) => stderr,
-            Err(_) => {
-                crate::progress_mode::emit_stderr("   ⚠️ cjxl stderr capture thread panicked");
-                String::new()
-            }
+        Some(handle) => if let Ok(stderr) = handle.join() { stderr } else {
+            crate::progress_mode::emit_stderr("   ⚠️ cjxl stderr capture thread panicked");
+            String::new()
         },
         None => String::new(),
     };
@@ -316,7 +307,7 @@ fn run_imagemagick_cjxl_pipeline(
             false
         }
         Err(e) => {
-            let line = format!("   ❌ Failed to wait for ImageMagick: {}", e);
+            let line = format!("   ❌ Failed to wait for ImageMagick: {e}");
             crate::progress_mode::emit_stderr(&line);
             false
         }
@@ -334,16 +325,14 @@ fn run_imagemagick_cjxl_pipeline(
                 );
                 if !cjxl_stderr.is_empty() {
                     crate::progress_mode::emit_stderr(&format!(
-                        "   📋 cjxl stderr before termination: {}",
-                        cjxl_stderr
+                        "   📋 cjxl stderr before termination: {cjxl_stderr}"
                     ));
                 }
             } else {
                 crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
                 if !cjxl_stderr.is_empty() {
                     crate::progress_mode::emit_stderr(&format!(
-                        "   📋 cjxl stderr: {}",
-                        cjxl_stderr
+                        "   📋 cjxl stderr: {cjxl_stderr}"
                     ));
                 }
             }
@@ -362,7 +351,7 @@ fn run_imagemagick_cjxl_pipeline(
     }
 }
 
-/// ImageMagick → cjxl fallback pipeline for when direct cjxl encoding fails.
+/// `ImageMagick` → cjxl fallback pipeline for when direct cjxl encoding fails.
 ///
 /// Fallback priority:
 ///
@@ -499,7 +488,7 @@ pub fn try_imagemagick_fallback(
                                 crate::progress_mode::emit_stderr(
                                     "   🔄 Attempt 3: ICC normalization (sRGB, 16-bit source)",
                                 );
-                                match run_imagemagick_cjxl_pipeline(
+                                if let Ok(()) = run_imagemagick_cjxl_pipeline(
                                     input,
                                     output,
                                     distance,
@@ -509,24 +498,20 @@ pub fn try_imagemagick_fallback(
                                     true,
                                     apple_compat,
                                 ) {
-                                    Ok(()) => {
-                                        crate::progress_mode::emit_stderr(&format!(
-                                            "   {} Attempt 3 succeeded",
-                                            style("✅").green()
-                                        ));
-                                        crate::progress_mode::fallback_success();
-                                        return Ok(());
-                                    }
-                                    Err(_) => {
-                                        crate::progress_mode::emit_stderr(&format!(
-                                            "   {} Attempt 3 failed",
-                                            style("❌").red()
-                                        ));
-                                        crate::progress_mode::emit_stderr(
-                                            "   ⚠️  16-bit source: refusing to downgrade to 8-bit",
-                                        );
-                                    }
+                                    crate::progress_mode::emit_stderr(&format!(
+                                        "   {} Attempt 3 succeeded",
+                                        style("✅").green()
+                                    ));
+                                    crate::progress_mode::fallback_success();
+                                    return Ok(());
                                 }
+                                crate::progress_mode::emit_stderr(&format!(
+                                    "   {} Attempt 3 failed",
+                                    style("❌").red()
+                                ));
+                                crate::progress_mode::emit_stderr(
+                                    "   ⚠️  16-bit source: refusing to downgrade to 8-bit",
+                                );
                             }
                         }
                     }
@@ -568,7 +553,7 @@ pub fn try_imagemagick_fallback(
                     crate::progress_mode::emit_stderr(
                         "   🔄 Attempt 2: ICC normalization (sRGB, 16-bit source)",
                     );
-                    match run_imagemagick_cjxl_pipeline(
+                    if let Ok(()) = run_imagemagick_cjxl_pipeline(
                         input,
                         output,
                         distance,
@@ -578,24 +563,20 @@ pub fn try_imagemagick_fallback(
                         true,
                         apple_compat,
                     ) {
-                        Ok(()) => {
-                            crate::progress_mode::emit_stderr(&format!(
-                                "   {} Attempt 2 succeeded",
-                                style("✅").green()
-                            ));
-                            crate::progress_mode::fallback_success();
-                            return Ok(());
-                        }
-                        Err(_) => {
-                            crate::progress_mode::emit_stderr(&format!(
-                                "   {} Attempt 2 failed",
-                                style("❌").red()
-                            ));
-                            crate::progress_mode::emit_stderr(
-                                "   ⚠️  16-bit source: refusing to downgrade to 8-bit",
-                            );
-                        }
+                        crate::progress_mode::emit_stderr(&format!(
+                            "   {} Attempt 2 succeeded",
+                            style("✅").green()
+                        ));
+                        crate::progress_mode::fallback_success();
+                        return Ok(());
                     }
+                    crate::progress_mode::emit_stderr(&format!(
+                        "   {} Attempt 2 failed",
+                        style("❌").red()
+                    ));
+                    crate::progress_mode::emit_stderr(
+                        "   ⚠️  16-bit source: refusing to downgrade to 8-bit",
+                    );
                 }
             }
 
@@ -646,7 +627,7 @@ pub fn try_imagemagick_fallback(
 }
 
 /// Losslessly strip trailing data after JPEG EOI (0xFF 0xD9) so cjxl can use bitstream reconstruction.
-/// Returns (temp_path, guard) if tail was stripped, or None if no tail or strip failed.
+/// Returns (`temp_path`, guard) if tail was stripped, or None if no tail or strip failed.
 pub fn strip_jpeg_tail_to_temp(
     path: &Path,
 ) -> std::io::Result<Option<(std::path::PathBuf, tempfile::NamedTempFile)>> {

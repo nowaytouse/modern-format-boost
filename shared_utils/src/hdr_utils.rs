@@ -2,14 +2,14 @@
 //!
 //! Provides utilities for HDR metadata handling:
 //! - CICP (Coding-Independent Code Points) mapping for JXL encoding
-//! - FFmpeg HDR parameter generation for video encoding
+//! - `FFmpeg` HDR parameter generation for video encoding
 //! - Color space and transfer function conversions
 
 use crate::ffprobe_json::ColorInfo;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Convert ColorInfo to CICP string for JXL encoding.
+/// Convert `ColorInfo` to CICP string for JXL encoding.
 /// CICP format: --cicp=<primaries>-<transfer>-<matrix>
 ///
 /// # CICP Code Points
@@ -18,6 +18,7 @@ use std::process::Command;
 /// - Matrix: 1=BT.709, 9=BT.2020 non-constant, 0=RGB/Identity
 ///
 /// Returns None if no HDR metadata is present.
+#[must_use] 
 pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
     // Map color primaries to CICP code
     let primaries = match info.color_primaries.as_deref() {
@@ -69,11 +70,12 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
         }
     };
 
-    Some(format!("{}-{}-{}", primaries, transfer, matrix))
+    Some(format!("{primaries}-{transfer}-{matrix}"))
 }
 
-/// Convert ColorInfo to FFmpeg color parameters for video encoding.
-/// Returns a vector of FFmpeg arguments: ["-colorspace", "bt2020nc", "-color_trc", "smpte2084", ...]
+/// Convert `ColorInfo` to `FFmpeg` color parameters for video encoding.
+/// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-`color_trc`", "smpte2084", ...]
+#[must_use] 
 pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -97,6 +99,7 @@ pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
 
 /// Generate x265 HDR parameters for video encoding.
 /// Returns a string suitable for x265 --hdr or --hdr10 options.
+#[must_use] 
 pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
     if !info.is_hdr() {
         return None;
@@ -112,7 +115,7 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
             "smpte432" | "display-p3" => "12",
             _ => "9", // Default to BT.2020 for HDR
         };
-        params.push(format!("colorprim={}", code));
+        params.push(format!("colorprim={code}"));
     }
 
     // Transfer characteristics
@@ -123,7 +126,7 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
             "bt709" => "1",
             _ => "16", // Default to PQ for HDR
         };
-        params.push(format!("transfer={}", code));
+        params.push(format!("transfer={code}"));
     }
 
     // Color matrix
@@ -133,17 +136,17 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
             "bt709" => "1",
             _ => "9",
         };
-        params.push(format!("colormatrix={}", code));
+        params.push(format!("colormatrix={code}"));
     }
 
     // Mastering display metadata
     if let Some(ref master) = info.mastering_display {
-        params.push(format!("master-display={}", master));
+        params.push(format!("master-display={master}"));
     }
 
     // Content light level
     if let Some(ref cll) = info.max_cll {
-        params.push(format!("max-cll={}", cll));
+        params.push(format!("max-cll={cll}"));
     }
 
     if params.is_empty() {
@@ -154,12 +157,14 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
 }
 
 /// Check if an image should use HDR decoding path (10-bit or higher).
+#[must_use] 
 pub fn should_use_hdr_decode(info: &ColorInfo) -> bool {
     info.is_hdr() || info.bit_depth.is_some_and(|d| d > 8)
 }
 
 /// Get recommended pixel format for HDR content.
 /// Returns "rgb48le" for 10-bit+ HDR, "rgb24" for SDR.
+#[must_use] 
 pub fn get_hdr_pix_fmt(info: &ColorInfo) -> &'static str {
     if should_use_hdr_decode(info) {
         "rgb48le" // 16-bit RGB (3 channels × 16-bit)
@@ -169,6 +174,7 @@ pub fn get_hdr_pix_fmt(info: &ColorInfo) -> &'static str {
 }
 
 /// Check if `dovi_tool` binary is available on PATH.
+#[must_use] 
 pub fn is_dovi_tool_available() -> bool {
     Command::new("dovi_tool")
         .arg("--version")
@@ -178,6 +184,7 @@ pub fn is_dovi_tool_available() -> bool {
 }
 
 /// Check if `hdr10plus_tool` binary is available on PATH.
+#[must_use] 
 pub fn is_hdr10plus_tool_available() -> bool {
     Command::new("hdr10plus_tool")
         .arg("--help")
@@ -196,11 +203,11 @@ pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, 
         .args(["-c:v", "copy", "-bsf:v", "hevc_mp4toannexb", "-an", "-sn"])
         .arg(&raw_hevc)
         .output()
-        .map_err(|e| format!("failed to run ffmpeg for bitstream extraction: {}", e))?;
+        .map_err(|e| format!("failed to run ffmpeg for bitstream extraction: {e}"))?;
 
     if !status.status.success() {
         let stderr = String::from_utf8_lossy(&status.stderr);
-        return Err(format!("ffmpeg bitstream extraction failed: {}", stderr));
+        return Err(format!("ffmpeg bitstream extraction failed: {stderr}"));
     }
     Ok(raw_hevc)
 }
@@ -224,11 +231,11 @@ pub fn extract_dv_rpu(
 
     let output = cmd
         .output()
-        .map_err(|e| format!("failed to run dovi_tool extract-rpu: {}", e))?;
+        .map_err(|e| format!("failed to run dovi_tool extract-rpu: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("dovi_tool extract-rpu failed: {}", stderr));
+        return Err(format!("dovi_tool extract-rpu failed: {stderr}"));
     }
 
     // Profile 7 → convert to 8.1 for x265 cross-compatibility
@@ -242,13 +249,12 @@ pub fn extract_dv_rpu(
             .arg("-o")
             .arg(&converted_rpu)
             .output()
-            .map_err(|e| format!("failed to run dovi_tool convert: {}", e))?;
+            .map_err(|e| format!("failed to run dovi_tool convert: {e}"))?;
 
         if !conv_output.status.success() {
             let stderr = String::from_utf8_lossy(&conv_output.stderr);
             return Err(format!(
-                "dovi_tool convert (profile 7→8.1) failed: {}",
-                stderr
+                "dovi_tool convert (profile 7→8.1) failed: {stderr}"
             ));
         }
         return Ok(converted_rpu);
@@ -271,7 +277,7 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
 
     let output = cmd
         .output()
-        .map_err(|e| format!("failed to run hdr10plus_tool extract: {}", e))?;
+        .map_err(|e| format!("failed to run hdr10plus_tool extract: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -291,16 +297,15 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
 
             let fb_output = fb_cmd
                 .output()
-                .map_err(|e| format!("failed to run hdr10plus_tool extract (fallback): {}", e))?;
+                .map_err(|e| format!("failed to run hdr10plus_tool extract (fallback): {e}"))?;
             if !fb_output.status.success() {
                 let fb_stderr = String::from_utf8_lossy(&fb_output.stderr);
                 return Err(format!(
-                    "hdr10plus_tool extract fallback failed: {}",
-                    fb_stderr
+                    "hdr10plus_tool extract fallback failed: {fb_stderr}"
                 ));
             }
         } else {
-            return Err(format!("hdr10plus_tool extract failed: {}", stderr));
+            return Err(format!("hdr10plus_tool extract failed: {stderr}"));
         }
     }
 
@@ -309,6 +314,7 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
 
 /// Map DV profile + compatibility ID to the x265 `dolby-vision-profile` string.
 /// Returns the numeric profile string that x265 expects (e.g. "8.1", "5.0").
+#[must_use] 
 pub fn dv_x265_profile_string(dv_profile: Option<u8>, compat_id: Option<u8>) -> Option<String> {
     match dv_profile {
         Some(5) => Some("5.0".to_string()),
@@ -318,7 +324,7 @@ pub fn dv_x265_profile_string(dv_profile: Option<u8>, compat_id: Option<u8>) -> 
         }
         Some(8) => {
             let sub = compat_id.unwrap_or(1);
-            Some(format!("8.{}", sub))
+            Some(format!("8.{sub}"))
         }
         _ => None,
     }

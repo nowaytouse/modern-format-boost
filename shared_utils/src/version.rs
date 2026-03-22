@@ -1,7 +1,7 @@
 //! 🔢 Unified Version Management
 //!
 //! This module provides a single source of truth for all version numbers in the project.
-//! All versions are automatically derived from CARGO_PKG_VERSION at compile time.
+//! All versions are automatically derived from `CARGO_PKG_VERSION` at compile time.
 //!
 //! ## Version Binding Strategy
 //!
@@ -19,10 +19,7 @@
 //! println!("Cache Schema: {}", CACHE_SCHEMA_VERSION);
 //! ```
 //!
-//! ## Integrity Protection
-//!
-//! This module binds essential project documentation to the compilation process,
-//! ensuring that README.md and CHANGELOG.md must exist for a successful build.
+//! ensures that the project remains complete for all builds.
 
 use std::sync::LazyLock;
 use tracing::info;
@@ -33,29 +30,12 @@ use tracing::info;
 /// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.91")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// 🛡️ Integrity Protection: README.md must exist in the root directory for successful build.
-const _: &str = include_str!("../../README.md");
 
-/// 🛡️ Integrity Protection: CHANGELOG.md must exist in the root directory for successful build.
-const _: &str = include_str!("../../CHANGELOG.md");
-
-/// 🔏 Expected Integrity Signatures (Normalized)
-///
-/// These values are validated by unit tests and build.rs to ensure documentation integrity.
-/// Normalization: CRLF -> LF, Trim whitespace.
-pub const EXPECTED_README_SIGNATURE: (&str, usize) = (
-    "8f2e302d0ddde440ce5801666fe6872c362be0280771d5d53fa97ae01d027733",
-    498,
-);
-pub const EXPECTED_CHANGELOG_SIGNATURE: (&str, usize) = (
-    "8bc1bb5333e3d064ea54c25f6d07ce872bd82ddbbab4dd29a78d1ddf491e81ac",
-    3191,
-);
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
-/// This value is automatically calculated from CARGO_PKG_VERSION at program initialization.
-/// Version Format: Major.Minor.Patch → MajorMinorPatch (e.g., 0.10.85 → 1085)
+/// This value is automatically calculated from `CARGO_PKG_VERSION` at program initialization.
+/// Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g., 0.10.85 → 1085)
 ///
 /// **Purpose**: Automatic cache invalidation on ANY program update
 ///
@@ -80,13 +60,13 @@ pub const EXPECTED_CHANGELOG_SIGNATURE: (&str, usize) = (
 /// - v1085: GUI/script launch hardening and narrow-terminal progress adaptation
 /// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
 /// - v1090: Intelligent checkpoint reset on output directory deletion
-/// - v1091: Integrity binding for project documentation (README/CHANGELOG)
+/// - v1091: Documentation binding (removed in v1097)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
 /// 🔢 Cache Schema Version - Increment ONLY when database structure changes
 ///
-/// **Current**: v3 (added content_fingerprint_hash and data_checksum columns)
+/// **Current**: v3 (added `content_fingerprint_hash` and `data_checksum` columns)
 ///
 /// **Update Policy**: Increment manually ONLY when:
 /// - Adding/removing database columns
@@ -98,21 +78,22 @@ static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
 ///
 /// **History**:
 /// - v1: Initial schema
-/// - v2: Added algorithm_version column + enhanced file signature tracking
-/// - v3: Added content_fingerprint_hash (BLOB) and data_checksum (INTEGER) for integrity verification
+/// - v2: Added `algorithm_version` column + enhanced file signature tracking
+/// - v3: Added `content_fingerprint_hash` (BLOB) and `data_checksum` (INTEGER) for integrity verification
 pub const CACHE_SCHEMA_VERSION: i32 = 3;
 
 /// 📊 Get cache algorithm version
 ///
 /// Returns the auto-calculated cache algorithm version based on program version.
 /// This function is lazy-initialized and will panic if version parsing fails.
+#[must_use] 
 pub fn cache_algorithm_version() -> i32 {
     *CACHE_ALGORITHM_VERSION
 }
 
 /// 🔧 Parse semantic version string to integer code
 ///
-/// Converts "MAJOR.MINOR.PATCH" to MajorMinorPatch integer.
+/// Converts "MAJOR.MINOR.PATCH" to `MajorMinorPatch` integer.
 /// Example: "0.10.85" → 1085
 ///
 /// **Panics** if:
@@ -123,12 +104,9 @@ pub fn cache_algorithm_version() -> i32 {
 fn parse_version_to_code(version: &str, context: &str) -> i32 {
     let parts: Vec<&str> = version.split('.').collect();
 
-    if parts.len() != 3 {
-        panic!(
-            "FATAL [{}]: Invalid version format: '{}'. Expected format: 'major.minor.patch'",
-            context, version
-        );
-    }
+    assert!(parts.len() == 3, 
+        "FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'"
+    );
 
     let major = parts[0].parse::<i32>().unwrap_or_else(|e| {
         panic!(
@@ -176,6 +154,7 @@ pub struct VersionInfo {
 
 impl VersionInfo {
     /// Get current version information
+    #[must_use] 
     pub fn current() -> Self {
         Self {
             program_version: PROGRAM_VERSION.to_string(),
@@ -185,6 +164,7 @@ impl VersionInfo {
     }
 
     /// Display version information
+    #[must_use] 
     pub fn display(&self) -> String {
         format!(
             "Program: {} | Cache Algorithm: {} | Cache Schema: v{}",
@@ -224,42 +204,5 @@ mod tests {
         assert_eq!(info.cache_schema_version, CACHE_SCHEMA_VERSION);
     }
 
-    #[test]
-    fn test_documentation_integrity() {
-        let readme = include_str!("../../README.md");
-        let changelog = include_str!("../../CHANGELOG.md");
 
-        fn normalize_and_hash(content: &str) -> (String, usize) {
-            let normalized = content.replace("\r\n", "\n").trim().to_string();
-            let hash = blake3::hash(normalized.as_bytes()).to_hex().to_string();
-            let lines = if normalized.is_empty() {
-                0
-            } else {
-                normalized.lines().count()
-            };
-            (hash, lines)
-        }
-
-        let (r_hash, r_lines) = normalize_and_hash(readme);
-        let (c_hash, c_lines) = normalize_and_hash(changelog);
-
-        assert_eq!(
-            (r_hash.as_str(), r_lines),
-            EXPECTED_README_SIGNATURE,
-            "README.md integrity failure"
-        );
-        assert_eq!(
-            (c_hash.as_str(), c_lines),
-            EXPECTED_CHANGELOG_SIGNATURE,
-            "CHANGELOG.md integrity failure"
-        );
-    }
-
-    #[test]
-    fn test_normalization_edge_cases() {
-        let doc = "  \nLine 1\r\nLine 2  \n  ";
-        let normalized = doc.replace("\r\n", "\n").trim().to_string();
-        assert_eq!(normalized, "Line 1\nLine 2");
-        assert_eq!(normalized.lines().count(), 2);
-    }
 }
