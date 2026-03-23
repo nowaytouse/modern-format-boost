@@ -352,6 +352,7 @@ pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<Conv
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.
@@ -697,6 +698,7 @@ pub fn convert_to_av1_mp4_matched(
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL/WebP: pre-convert to APNG
     let (actual_input, temp_apng_file): (std::path::PathBuf, Option<tempfile::NamedTempFile>) =
@@ -1183,6 +1185,7 @@ pub fn convert_to_av1_mkv_lossless(
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     let (width, height) = get_input_dimensions(input)?;
     let vf_args = shared_utils::get_ffmpeg_dimension_args(width, height, false);
@@ -1375,6 +1378,7 @@ pub fn convert_to_gif_apple_compat(
     }
 
     let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+    let _temp_output_guard = shared_utils::conversion::TempOutputGuard::new(temp_output.clone());
 
     // Special handling for animated JXL: FFmpeg's jpegxl_anim decoder is incomplete
     // and cannot properly decode animated JXL files. We must use djxl to convert to APNG first.

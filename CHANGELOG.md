@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.98] - 2026-03-24
+
+### 🐛 Bug Fixes
+- **GPU SSIM Baseline Tolerance**: Refactored `gpu_coarse_search.rs` to treat missing GPU SSIM baseline as a non-fatal warning. The search now gracefully continues with CPU delta-only exploration instead of bailing, improving reliability on systems with transient GPU metric failures.
+- **Temp File Lifecycle Management**: Implemented `TempOutputGuard` across all animated image conversion paths in `vid_hevc` and `vid_av1`. Ensures automatic cleanup of `*.tmp.*` files even during early returns or error propagation (`?`), preventing disk clutter from abandoned temporary artifacts.
+
+### 🛠️ Code Quality
+- **Branch Synchronization**: Synchronized `main` and `nightly` branches with unified fix implementations while maintaining separate dependency philosophies (crates.io for main, GitHub/Git for nightly).
+
 ## [0.10.97] - 2026-03-24
 
 ### 🛠️ Code Quality
