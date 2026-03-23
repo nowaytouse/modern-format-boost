@@ -1006,6 +1006,30 @@ fn is_image_container(path: &Path) -> bool {
         "avif" | "heic" | "heif" | "gif" | "webp" | "png" | "jpg" | "jpeg" | "bmp" | "tiff"
     )
 }
+
+#[inline]
+fn is_animated_image_like_input(path: &Path, probe_info: Option<&crate::ffprobe::FFprobeResult>) -> bool {
+    if let Some(probe) = probe_info {
+        let fmt = probe.format_name.to_ascii_lowercase();
+        if fmt.contains("gif")
+            || fmt.contains("webp")
+            || fmt.contains("avif")
+            || fmt.contains("heic")
+            || fmt.contains("heif")
+            || fmt.contains("apng")
+        {
+            return true;
+        }
+    }
+
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            let ext = e.to_ascii_lowercase();
+            matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif" | "apng")
+        })
+}
+
 #[allow(clippy::too_many_arguments, clippy::similar_names)]
 fn cpu_fine_tune_from_gpu_boundary(
     input: &Path,
@@ -1037,6 +1061,7 @@ fn cpu_fine_tune_from_gpu_boundary(
     // Mapping all streams (-map 0) causes FFmpeg libx265 to fail with
     // "Not yet implemented in FFmpeg, patches welcome".
     let input_is_image = is_image_container(input);
+    let input_is_animated_image_like = is_animated_image_like_input(input, probe_info);
 
     let input_stream_info = crate::stream_size::extract_stream_sizes(input);
     let input_video_stream_size = input_stream_info.video_stream_size;
@@ -1408,7 +1433,14 @@ fn cpu_fine_tune_from_gpu_boundary(
     );
     crate::verbose_eprintln!();
 
-    let calculate_ssim_quick = || -> Option<f64> {
+    let mut prefer_compat_ssim_mode = false;
+    let mut calculate_ssim_quick = || -> Option<f64> {
+        // For GIF/WebP/AVIF/HEIC-like sources, once quick SSIM fails once,
+        // switch to robust SSIM-All path for stable baseline/iteration metrics.
+        if prefer_compat_ssim_mode {
+            return calculate_ssim_all(input, output).map(|(_, _, _, all)| all);
+        }
+
         let filters = [
             "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];[ref][1:v]ssim",
             "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[ref];[1:v]scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[cmp];[ref][cmp]ssim",
@@ -1448,6 +1480,14 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                 }
             }
+        }
+
+        if input_is_animated_image_like {
+            let compat_ssim = calculate_ssim_all(input, output).map(|(_, _, _, all)| all);
+            if compat_ssim.is_some() {
+                prefer_compat_ssim_mode = true;
+            }
+            return compat_ssim;
         }
 
         None
@@ -2790,14 +2830,9 @@ fn cpu_fine_tune_from_gpu_boundary(
         video_stream_pct
     );
 
-    // Detect animated image formats (GIF, WebP, AVIF) and use relaxed duration tolerance
-    let is_animated_image = input
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| {
-            let ext = e.to_lowercase();
-            matches!(ext.as_str(), "gif" | "webp" | "avif" | "heic" | "heif")
-        });
+    // Detect animated image formats (GIF/WebP/AVIF/HEIC/APNG) with probe-first strategy
+    // so paths like "*.gif.file" still get relaxed verification.
+    let is_animated_image = input_is_animated_image_like;
 
     let verify_options = if is_animated_image {
         crate::verbose_eprintln!(
