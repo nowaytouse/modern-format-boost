@@ -10,7 +10,7 @@
 /// - MP4/MOV: `-c:a copy` unless the codec is incompatible (opus, vorbis).
 ///   Incompatible codecs are transcoded to AAC 256 kbps.
 /// - No audio (`None` codec): returns `-an`.
-#[must_use] 
+#[must_use]
 pub fn audio_args_for_container(audio_codec: Option<&str>, container: &str) -> Vec<String> {
     let codec = match audio_codec {
         Some(c) if !c.is_empty() => c.to_lowercase(),
@@ -43,7 +43,7 @@ pub fn audio_args_for_container(audio_codec: Option<&str>, container: &str) -> V
 /// - MKV: `-c:s copy` (supports all subtitle formats).
 /// - MP4/MOV: text-based subs → `-c:s mov_text`; image-based subs → skip
 ///   (MP4 doesn't support bitmap subtitle tracks like `dvd_subtitle` / `hdmv_pgs_subtitle`).
-#[must_use] 
+#[must_use]
 pub fn subtitle_args_for_container(
     has_subtitles: bool,
     subtitle_codec: Option<&str>,

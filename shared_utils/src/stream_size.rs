@@ -22,7 +22,7 @@ pub enum ExtractionMethod {
 }
 
 impl ExtractionMethod {
-    #[must_use] 
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             ExtractionMethod::FfprobeDirect => "ffprobe direct",
@@ -31,7 +31,7 @@ impl ExtractionMethod {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn confidence(&self) -> f64 {
         match self {
             ExtractionMethod::FfprobeDirect => 0.99,
@@ -54,12 +54,12 @@ pub struct StreamSizeInfo {
 }
 
 impl StreamSizeInfo {
-    #[must_use] 
+    #[must_use]
     pub fn pure_media_size(&self) -> u64 {
         self.video_stream_size + self.audio_stream_size
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn container_overhead_percent(&self) -> f64 {
         if self.total_file_size == 0 {
             return 0.0;
@@ -67,7 +67,7 @@ impl StreamSizeInfo {
         self.container_overhead as f64 / self.total_file_size as f64 * 100.0
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_overhead_excessive(&self) -> bool {
         self.container_overhead_percent() > 10.0
     }
@@ -100,7 +100,7 @@ pub const MP4_OVERHEAD_PERCENT: f64 = 0.001;
 pub const MKV_OVERHEAD_PERCENT: f64 = 0.0005;
 pub const DEFAULT_OVERHEAD_PERCENT: f64 = 0.002;
 
-#[must_use] 
+#[must_use]
 pub fn get_container_overhead_percent(path: &Path) -> f64 {
     let ext = path
         .extension()
@@ -295,7 +295,7 @@ pub fn can_compress_pure_video(
     result
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_output_video_stream_size(output_path: &Path) -> u64 {
     extract_stream_sizes(output_path).video_stream_size
 }

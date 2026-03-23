@@ -22,7 +22,7 @@ pub enum SamplingStrategy {
 }
 
 impl SamplingStrategy {
-    #[must_use] 
+    #[must_use]
     pub fn from_duration(duration_secs: f64) -> Self {
         if duration_secs <= 60.0 {
             Self::Full
@@ -35,7 +35,7 @@ impl SamplingStrategy {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn sampling_rate(&self) -> Option<u32> {
         match self {
             Self::Full => Some(1),
@@ -45,7 +45,7 @@ impl SamplingStrategy {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn ffmpeg_filter(&self) -> Option<String> {
         match self {
             Self::Full => None,
@@ -55,7 +55,7 @@ impl SamplingStrategy {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn accuracy_description(&self) -> &'static str {
         match self {
             Self::Full => "100%",
@@ -77,7 +77,7 @@ pub struct SamplingConfig {
 }
 
 impl SamplingConfig {
-    #[must_use] 
+    #[must_use]
     pub fn new(duration_secs: f64, total_frames: u64, force_full: bool, force_skip: bool) -> Self {
         let strategy = if force_skip {
             SamplingStrategy::Skip

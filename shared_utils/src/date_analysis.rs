@@ -30,7 +30,7 @@ pub enum DateSource {
 }
 
 impl DateSource {
-    #[must_use] 
+    #[must_use]
     pub fn priority(&self) -> u8 {
         match self {
             DateSource::XmpPhotoshop => 6,
@@ -43,7 +43,7 @@ impl DateSource {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             DateSource::XmpPhotoshop => "XMP-Photoshop",
@@ -260,9 +260,10 @@ fn extract_best_date(item: &ExiftoolOutput, config: &DateAnalysisConfig) -> File
 
     let xmp_history_str = match &item.xmp_history {
         Some(serde_json::Value::String(s)) => Some(s.clone()),
-        Some(serde_json::Value::Array(arr)) => {
-            arr.first().and_then(|v| v.as_str()).map(std::string::ToString::to_string)
-        }
+        Some(serde_json::Value::Array(arr)) => arr
+            .first()
+            .and_then(|v| v.as_str())
+            .map(std::string::ToString::to_string),
         _ => None,
     };
     if let Some(d) = &xmp_history_str {

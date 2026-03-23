@@ -17,7 +17,7 @@ pub struct FileInfo {
 }
 
 impl FileInfo {
-    #[must_use] 
+    #[must_use]
     pub fn new(path: PathBuf) -> Option<Self> {
         fs::metadata(&path).ok().map(|meta| FileInfo {
             path,
@@ -39,12 +39,12 @@ pub struct FileSorter {
 }
 
 impl FileSorter {
-    #[must_use] 
+    #[must_use]
     pub fn new(strategy: SortStrategy) -> Self {
         Self { strategy }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn sort(&self, files: Vec<PathBuf>) -> Vec<PathBuf> {
         match self.strategy {
             SortStrategy::None => files,
@@ -74,17 +74,17 @@ impl FileSorter {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn sort_by_size_ascending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeAscending).sort(files)
 }
 
-#[must_use] 
+#[must_use]
 pub fn sort_by_size_descending(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::SizeDescending).sort(files)
 }
 
-#[must_use] 
+#[must_use]
 pub fn sort_by_name(files: Vec<PathBuf>) -> Vec<PathBuf> {
     FileSorter::new(SortStrategy::NameAscending).sort(files)
 }

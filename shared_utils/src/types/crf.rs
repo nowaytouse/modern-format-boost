@@ -136,7 +136,7 @@ impl<E: EncoderBounds> Crf<E> {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn default_value() -> Self {
         Self {
             value: E::DEFAULT,
@@ -144,7 +144,7 @@ impl<E: EncoderBounds> Crf<E> {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn visually_lossless() -> Self {
         Self {
             value: E::VISUALLY_LOSSLESS,
@@ -153,13 +153,13 @@ impl<E: EncoderBounds> Crf<E> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn value(&self) -> f32 {
         self.value
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn to_cache_key(&self) -> u32 {
         (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
     }
@@ -173,24 +173,24 @@ impl<E: EncoderBounds> Crf<E> {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn approx_eq(&self, other: &Self) -> bool {
         approx_eq_f32(self.value, other.value)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn encoder_name(&self) -> &'static str {
         E::NAME
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn valid_range() -> (f32, f32) {
         (E::MIN, E::MAX)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn clamped(value: f32) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
             E::DEFAULT

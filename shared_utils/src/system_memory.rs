@@ -18,7 +18,7 @@ pub enum MemoryPressure {
 }
 
 /// Returns (`available_mb`, `total_mb`) if detection succeeds.
-#[must_use] 
+#[must_use]
 pub fn get_memory_mb() -> Option<(u64, u64)> {
     let (available, total) = if cfg!(target_os = "macos") {
         get_memory_macos()
@@ -31,20 +31,20 @@ pub fn get_memory_mb() -> Option<(u64, u64)> {
 }
 
 /// Available memory in MB. None if detection fails or unsupported platform.
-#[must_use] 
+#[must_use]
 pub fn get_available_memory_mb() -> Option<u64> {
     get_memory_mb().map(|(avail, _)| avail)
 }
 
 /// Total physical memory in MB. None if detection fails.
-#[must_use] 
+#[must_use]
 pub fn get_total_memory_mb() -> Option<u64> {
     get_memory_mb().map(|(_, total)| total)
 }
 
 /// Classify current memory pressure from available/total. None if unknown.
 /// Enhanced thresholds to prevent OOM kills during heavy image processing.
-#[must_use] 
+#[must_use]
 pub fn memory_pressure_level() -> Option<MemoryPressure> {
     let (available_mb, total_mb) = get_memory_mb()?;
     if total_mb == 0 {
@@ -63,7 +63,7 @@ pub fn memory_pressure_level() -> Option<MemoryPressure> {
 }
 
 /// True if user requested low-memory mode via env (e.g. `MFB_LOW_MEMORY=1`).
-#[must_use] 
+#[must_use]
 pub fn is_low_memory_env() -> bool {
     std::env::var("MFB_LOW_MEMORY")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v == "yes")
@@ -98,10 +98,14 @@ fn get_memory_macos() -> (u64, u64) {
 
     let available = match Command::new("vm_stat").output() {
         Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
-            Ok(stdout) => if let Some(available) = parse_vm_stat_available(&stdout) { available } else {
-                warn!("Failed to parse macOS available memory from vm_stat");
-                0
-            },
+            Ok(stdout) => {
+                if let Some(available) = parse_vm_stat_available(&stdout) {
+                    available
+                } else {
+                    warn!("Failed to parse macOS available memory from vm_stat");
+                    0
+                }
+            }
             Err(err) => {
                 warn!(error = %err, "vm_stat returned non-UTF-8 output");
                 0
@@ -203,7 +207,9 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
             if p.exists() {
                 break p.to_path_buf();
             }
-            if let Some(parent) = p.parent() { p = parent } else {
+            if let Some(parent) = p.parent() {
+                p = parent
+            } else {
                 warn!(path = %path.display(), "No existing ancestor found for disk-space probe");
                 return None;
             }

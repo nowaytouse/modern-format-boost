@@ -11,7 +11,7 @@ pub struct UpgradeRecommendation {
     pub command: String,
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_recommendation(analysis: &ImageAnalysis) -> UpgradeRecommendation {
     let indicator = &analysis.jxl_indicator;
 

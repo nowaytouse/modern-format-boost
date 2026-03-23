@@ -228,8 +228,8 @@ fn main() -> anyhow::Result<()> {
                 ));
             }
             let config = AutoConvertConfig {
-                output_dir: output.clone(),
-                base_dir: base_dir.clone(),
+                output_dir: output,
+                base_dir,
                 force,
                 delete_original: should_delete,
                 in_place,
@@ -574,9 +574,7 @@ fn auto_convert_single_file(
             shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
         if skip.should_skip {
             let reason = if let Some(err) = &analysis.analysis_error {
-                format!(
-                    "Analysis failed ({err}) - skipping to avoid generational loss"
-                )
+                format!("Analysis failed ({err}) - skipping to avoid generational loss")
             } else {
                 skip.reason
             };

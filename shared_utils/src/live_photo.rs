@@ -12,7 +12,7 @@ use std::path::Path;
 ///
 /// This function checks if the given file has a companion file with the same
 /// stem but different extension (.mov/.MOV for images, .heic/.HEIC for videos)
-#[must_use] 
+#[must_use]
 pub fn is_live_photo(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;

@@ -41,7 +41,7 @@ pub struct IterationGuard {
 }
 
 impl IterationGuard {
-    #[must_use] 
+    #[must_use]
     pub fn new(max: u32, context: &str) -> Self {
         let safe_max = max.min(EMERGENCY_MAX_ITERATIONS);
         Self {
@@ -51,7 +51,7 @@ impl IterationGuard {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn for_duration(duration_secs: f32, ultimate_mode: bool, context: &str) -> Self {
         let max = calculate_max_iterations_for_duration(duration_secs, ultimate_mode);
         Self::new(max, context)
@@ -71,25 +71,25 @@ impl IterationGuard {
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn current(&self) -> u32 {
         self.current
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn max(&self) -> u32 {
         self.max
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn remaining(&self) -> u32 {
         self.max.saturating_sub(self.current)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn is_exhausted(&self) -> bool {
         self.current >= self.max
     }
@@ -98,7 +98,7 @@ impl IterationGuard {
         self.current = 0;
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn progress_percent(&self) -> f64 {
         if self.max == 0 {
             100.0
@@ -107,13 +107,13 @@ impl IterationGuard {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn context(&self) -> &str {
         &self.context
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
         VERY_LONG_VIDEO_FALLBACK_ITERATIONS

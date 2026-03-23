@@ -52,7 +52,7 @@ pub enum FpsCategory {
 }
 
 impl FpsCategory {
-    #[must_use] 
+    #[must_use]
     pub fn from_fps(fps: f64) -> Self {
         if fps <= 0.0 || fps > FPS_THRESHOLD_INVALID {
             FpsCategory::Invalid
@@ -67,7 +67,7 @@ impl FpsCategory {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             FpsCategory::Normal => "normal range (1–239 fps)",
@@ -77,7 +77,7 @@ impl FpsCategory {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         !matches!(self, FpsCategory::Invalid)
     }
@@ -441,13 +441,17 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
 
     let bitrate_kbps = stream["bit_rate"]
         .as_str()
-        .and_then(|s| s.parse::<f64>().ok()).map_or_else(|| {
-            if duration > 0.0 {
-                (file_size as f64 * 8.0) / (duration * 1000.0)
-            } else {
-                0.0
-            }
-        }, |bps| bps / 1000.0);
+        .and_then(|s| s.parse::<f64>().ok())
+        .map_or_else(
+            || {
+                if duration > 0.0 {
+                    (file_size as f64 * 8.0) / (duration * 1000.0)
+                } else {
+                    0.0
+                }
+            },
+            |bps| bps / 1000.0,
+        );
 
     let video_bytes = stream["bit_rate"]
         .as_str()
@@ -511,15 +515,13 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let is_hdr = color_space
         .as_ref()
         .is_some_and(|cs| cs.contains("bt2020") || cs.contains("2020"))
-        && color_transfer
-            .as_ref()
-            .is_some_and(|t| {
-                let lower = t.to_lowercase();
-                lower.contains("smpte2084")
-                    || lower.contains("arib-std-b67")
-                    || lower.contains("pq")
-                    || lower.contains("hlg")
-            });
+        && color_transfer.as_ref().is_some_and(|t| {
+            let lower = t.to_lowercase();
+            lower.contains("smpte2084")
+                || lower.contains("arib-std-b67")
+                || lower.contains("pq")
+                || lower.contains("hlg")
+        });
 
     Ok(VideoInfo {
         width,

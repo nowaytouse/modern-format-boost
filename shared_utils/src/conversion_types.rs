@@ -11,7 +11,7 @@ pub enum TargetVideoFormat {
 }
 
 impl TargetVideoFormat {
-    #[must_use] 
+    #[must_use]
     pub fn extension(&self) -> &str {
         match self {
             TargetVideoFormat::Ffv1Mkv | TargetVideoFormat::HevcLosslessMkv => "MKV",
@@ -20,7 +20,7 @@ impl TargetVideoFormat {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             TargetVideoFormat::Ffv1Mkv => "FFV1 MKV (Archival)",
@@ -91,7 +91,7 @@ impl Default for ConversionConfig {
 }
 
 impl ConversionConfig {
-    #[must_use] 
+    #[must_use]
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }

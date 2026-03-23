@@ -34,9 +34,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let temp_dir = tempfile::Builder::new()
         .prefix("webp_frames_")
         .tempdir()
-        .map_err(|e| {
-            VidQualityError::ConversionError(format!("Failed to create temp dir: {e}"))
-        })?;
+        .map_err(|e| VidQualityError::ConversionError(format!("Failed to create temp dir: {e}")))?;
     let temp_dir_path = temp_dir.path();
 
     // Get WebP info to determine frame count and duration
@@ -76,9 +74,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
     let fps = 1000.0 / f64::from(frame_duration_ms);
 
     if verbose {
-        eprintln!(
-            "   📊 WebP: {frame_count} frames, {frame_duration_ms}ms/frame, {fps:.2}fps"
-        );
+        eprintln!("   📊 WebP: {frame_count} frames, {frame_duration_ms}ms/frame, {fps:.2}fps");
     }
 
     // Extract each frame using webpmux and convert to PNG
@@ -113,9 +109,7 @@ fn extract_webp_to_apng(input: &Path, output_apng: &Path, verbose: bool) -> Resu
             .arg(&frame_png_path)
             .output()
             .map_err(|e| {
-                VidQualityError::ConversionError(format!(
-                    "FFmpeg WebP→PNG conversion failed: {e}"
-                ))
+                VidQualityError::ConversionError(format!("FFmpeg WebP→PNG conversion failed: {e}"))
             })?;
 
         if !convert_result.status.success() {
@@ -207,7 +201,7 @@ fn get_max_threads(options: &ConvertOptions) -> usize {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
     let total_pixels = u64::from(width) * u64::from(height);
     width >= 1280 || height >= 720 || total_pixels >= 921600
@@ -592,9 +586,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!(
-                    "HEVC conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m"
-                )
+                format!("HEVC conversion successful: size increased \x1b[1;33m{size_diff}\x1b[0m")
             };
 
             Ok(ConversionResult {
@@ -644,9 +636,7 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!(
-                    "HEVC encode failed (ffmpeg not found: {e}); original copied"
-                ),
+                message: format!("HEVC encode failed (ffmpeg not found: {e}); original copied"),
                 skipped: true,
                 skip_reason: Some("hevc_encode_failed".to_string()),
             })
@@ -1027,7 +1017,9 @@ pub fn convert_to_hevc_mp4_matched(
         || (options.apple_compat && explore_result.ssim.is_some_and(|s| s >= 0.90));
 
     if !quality_or_compat_ok {
-        let actual_ssim = if let Some(s) = explore_result.ssim { s } else {
+        let actual_ssim = if let Some(s) = explore_result.ssim {
+            s
+        } else {
             tracing::warn!(input = %input.display(), "SSIM calculation failed — cannot validate quality");
             if let Err(e) = shared_utils::copy_on_skip_or_fail(
                 input,
@@ -1080,7 +1072,8 @@ pub fn convert_to_hevc_mp4_matched(
             )
         } else if actual_ssim < threshold {
             let score_str = explore_result
-                .ms_ssim_score.map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
+                .ms_ssim_score
+                .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
             tracing::warn!(input = %input.display(), ssim = actual_ssim, threshold, score = score_str, "Quality validation failed");
             eprintln!(
                 "   ⚠️  Quality validation FAILED: SSIM {actual_ssim:.4} < {threshold:.4} (Score: {score_str})"
@@ -1131,9 +1124,7 @@ pub fn convert_to_hevc_mp4_matched(
             input_size,
             output_size: None,
             size_reduction: None,
-            message: format!(
-                "Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"
-            ),
+            message: format!("Skipped: SSIM {actual_ssim:.4} below threshold {threshold:.4}"),
             skipped: true,
             skip_reason: Some("quality_failed".to_string()),
         });
@@ -1278,15 +1269,11 @@ pub fn convert_to_hevc_mkv_lossless(
 
             let reduction_pct = reduction * 100.0;
             let message = if reduction >= 0.0 {
-                format!(
-                    "Lossless HEVC: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
-                )
+                format!("Lossless HEVC: size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m")
             } else {
                 let diff_bytes = output_size as i64 - input_size as i64;
                 let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-                format!(
-                    "Lossless HEVC: size increased \x1b[1;33m{size_diff}\x1b[0m"
-                )
+                format!("Lossless HEVC: size increased \x1b[1;33m{size_diff}\x1b[0m")
             };
 
             Ok(ConversionResult {
@@ -1336,9 +1323,7 @@ pub fn convert_to_hevc_mkv_lossless(
                 input_size: sz,
                 output_size: None,
                 size_reduction: None,
-                message: format!(
-                    "Lossless HEVC failed (ffmpeg not found: {e}); original copied"
-                ),
+                message: format!("Lossless HEVC failed (ffmpeg not found: {e}); original copied"),
                 skipped: true,
                 skip_reason: Some("hevc_lossless_failed".to_string()),
             })
@@ -1729,15 +1714,11 @@ pub fn convert_to_gif_apple_compat(
 
     let reduction_pct = reduction * 100.0;
     let message = if reduction >= 0.0 {
-        format!(
-            "GIF (Apple Compat): size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m"
-        )
+        format!("GIF (Apple Compat): size reduced \x1b[1;32m{reduction_pct:.1}%\x1b[0m")
     } else {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = shared_utils::modern_ui::format_size_diff(diff_bytes);
-        format!(
-            "GIF (Apple Compat): size increased \x1b[1;33m{size_diff}\x1b[0m"
-        )
+        format!("GIF (Apple Compat): size increased \x1b[1;33m{size_diff}\x1b[0m")
     };
 
     Ok(ConversionResult {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// Uncalibrated PSNR→SSIM estimate used when no mapping/calibration is available.
 /// Single formula shared by `explore_strategy` and other fallbacks so quality decisions are consistent.
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn psnr_to_ssim_estimate(psnr_db: f64) -> f64 {
     (1.0 - 10_f64.powf(-psnr_db / 20.0)).min(0.9999)
 }
@@ -20,7 +20,7 @@ pub struct MappingPoint {
 
 impl MappingPoint {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
     }
@@ -32,7 +32,7 @@ pub struct PsnrSsimMapping {
 }
 
 impl PsnrSsimMapping {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self { points: Vec::new() }
     }
@@ -66,28 +66,28 @@ impl PsnrSsimMapping {
         p1.ssim + ratio * (p2.ssim - p1.ssim)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn has_enough_points(&self) -> bool {
         self.points.len() >= 3
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.points.len()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn predict_ssim_typed(&self, psnr: f64) -> Option<crate::types::Ssim> {
         self.predict_ssim(psnr)
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn predict_ssim(&self, psnr: f64) -> Option<f64> {
         if self.points.len() < 2 {
             return None;
@@ -148,7 +148,7 @@ impl PsnrSsimMapping {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_points(&self) -> &[MappingPoint] {
         &self.points
     }

@@ -136,7 +136,7 @@ pub mod png {
     use std::io::Read;
     use std::path::Path;
 
-    #[must_use] 
+    #[must_use]
     pub fn is_optimally_compressed(path: &Path) -> bool {
         if let Ok(bytes) = fs::read(path) {
             let idat_count = bytes.windows(4).filter(|w| *w == b"IDAT").count();
@@ -146,7 +146,7 @@ pub mod png {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn estimate_compression_level(path: &Path) -> u8 {
         if let Ok(mut file) = fs::File::open(path) {
             let mut header = [0u8; 16];
@@ -163,7 +163,7 @@ pub mod jpeg {
     use std::io::Read;
     use std::path::Path;
 
-    #[must_use] 
+    #[must_use]
     pub fn estimate_quality(path: &Path) -> u8 {
         if let Ok(mut file) = fs::File::open(path) {
             let mut buffer = vec![0u8; 4096];
@@ -187,7 +187,7 @@ pub mod jpeg {
         85
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_progressive(path: &Path) -> bool {
         if let Ok(mut file) = fs::File::open(path) {
             let mut buffer = vec![0u8; 4096];
@@ -305,17 +305,17 @@ pub mod webp {
             .and_then(|b| estimate_quality_from_bytes(&b))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_lossless_from_bytes(data: &[u8]) -> bool {
         data.windows(4).any(|w| w == b"VP8L")
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_animated_from_bytes(data: &[u8]) -> bool {
         data.windows(4).any(|w| w == b"ANIM")
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
         let count = data.windows(4).filter(|w| *w == b"ANMF").count() as u32;
         count.max(1)
@@ -324,7 +324,7 @@ pub mod webp {
     /// Parse animated WebP RIFF/ANMF chunks and return total duration in seconds.
     /// ANMF payload: 24-byte header, bytes 16..20 = frame duration in ms (uint32 LE).
     /// Returns None if not animated WebP or no ANMF chunks.
-    #[must_use] 
+    #[must_use]
     pub fn duration_secs_from_bytes(data: &[u8]) -> Option<f32> {
         if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WEBP" {
             return None;
@@ -359,14 +359,14 @@ pub mod webp {
         Some((total_ms as f32) / 1000.0)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_lossless(path: &Path) -> bool {
         fs::read(path)
             .map(|b| is_lossless_from_bytes(&b))
             .unwrap_or(false)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_animated(path: &Path) -> bool {
         fs::read(path)
             .map(|b| is_animated_from_bytes(&b))
@@ -378,7 +378,7 @@ pub mod gif {
     use std::fs;
     use std::path::Path;
 
-    #[must_use] 
+    #[must_use]
     pub fn count_frames_from_bytes(data: &[u8]) -> u32 {
         if data.len() < 24 || &data[0..3] != b"GIF" {
             return 0;
@@ -478,19 +478,19 @@ pub mod gif {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_animated_from_bytes(data: &[u8]) -> bool {
         count_frames_from_bytes(data) > 1
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_animated(path: &Path) -> bool {
         fs::read(path)
             .map(|b| is_animated_from_bytes(&b))
             .unwrap_or(false)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_frame_count(path: &Path) -> usize {
         fs::read(path)
             .map(|b| count_frames_from_bytes(&b) as usize)
@@ -592,7 +592,7 @@ pub mod avif {
         )))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_lossless(path: &Path) -> bool {
         fs::read(path)
             .ok()
@@ -793,7 +793,7 @@ pub mod jxl {
         r.read_bool()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn verify_signature(path: &Path) -> bool {
         if let Ok(mut file) = fs::File::open(path) {
             use std::io::Read;
@@ -805,7 +805,7 @@ pub mod jxl {
         false
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_valid(path: &Path) -> bool {
         verify_signature(path)
     }

@@ -30,8 +30,6 @@ use tracing::info;
 /// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.91")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-
-
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
 /// This value is automatically calculated from `CARGO_PKG_VERSION` at program initialization.
@@ -86,7 +84,7 @@ pub const CACHE_SCHEMA_VERSION: i32 = 3;
 ///
 /// Returns the auto-calculated cache algorithm version based on program version.
 /// This function is lazy-initialized and will panic if version parsing fails.
-#[must_use] 
+#[must_use]
 pub fn cache_algorithm_version() -> i32 {
     *CACHE_ALGORITHM_VERSION
 }
@@ -104,8 +102,7 @@ pub fn cache_algorithm_version() -> i32 {
 fn parse_version_to_code(version: &str, context: &str) -> i32 {
     let parts: Vec<&str> = version.split('.').collect();
 
-    assert!(parts.len() == 3, 
-        "FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'"
+    assert!(parts.len() == 3,        "FATAL [{context}]: Invalid version format: '{version}'. Expected format: 'major.minor.patch'"
     );
 
     let major = parts[0].parse::<i32>().unwrap_or_else(|e| {
@@ -154,7 +151,7 @@ pub struct VersionInfo {
 
 impl VersionInfo {
     /// Get current version information
-    #[must_use] 
+    #[must_use]
     pub fn current() -> Self {
         Self {
             program_version: PROGRAM_VERSION.to_string(),
@@ -164,7 +161,7 @@ impl VersionInfo {
     }
 
     /// Display version information
-    #[must_use] 
+    #[must_use]
     pub fn display(&self) -> String {
         format!(
             "Program: {} | Cache Algorithm: {} | Cache Schema: v{}",
@@ -203,6 +200,4 @@ mod tests {
         assert!(info.cache_algorithm_version > 0);
         assert_eq!(info.cache_schema_version, CACHE_SCHEMA_VERSION);
     }
-
-
 }

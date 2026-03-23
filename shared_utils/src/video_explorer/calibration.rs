@@ -11,7 +11,7 @@ pub struct CalibrationPoint {
 }
 
 impl CalibrationPoint {
-    #[must_use] 
+    #[must_use]
     pub fn from_gpu_result(
         gpu_crf: f32,
         gpu_size: u64,

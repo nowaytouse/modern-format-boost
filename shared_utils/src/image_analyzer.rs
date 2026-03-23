@@ -405,7 +405,7 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
 impl ImageAnalysis {
     /// Returns a human-readable quality summary label (e.g. "Q=95 Excellence", "Lossless").
-    #[must_use] 
+    #[must_use]
     pub fn quality_summary(&self) -> String {
         if let Some(ref jpeg) = self.jpeg_analysis {
             format!("Q={} {}", jpeg.estimated_quality, jpeg.quality_description)
@@ -485,7 +485,11 @@ fn analyze_heic_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
             let is_lossless_fallback = crate::image_detection::detect_compression(
                 &crate::image_detection::DetectedFormat::HEIC,
                 path,
-            ).map_or_else(|_| pixel_fallback_lossless(path), |c| c == crate::image_detection::CompressionType::Lossless);
+            )
+            .map_or_else(
+                |_| pixel_fallback_lossless(path),
+                |c| c == crate::image_detection::CompressionType::Lossless,
+            );
 
             (
                 0,
@@ -653,9 +657,7 @@ fn generate_jxl_indicator(
         ImageFormat::Png | ImageFormat::Gif | ImageFormat::Tiff => JxlIndicator {
             should_convert: true,
             reason: "Lossless image; strongly recommend converting to JXL".to_string(),
-            command: format!(
-                "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"
-            ),
+            command: format!("cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
             benefit: "30-60% size reduction while preserving full quality".to_string(),
         },
         ImageFormat::Jpeg => {
@@ -683,9 +685,7 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: "Lossless WebP; recommend converting to JXL".to_string(),
-                    command: format!(
-                        "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"
-                    ),
+                    command: format!("cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
                     benefit: "JXL is typically more efficient than lossless WebP".to_string(),
                 }
             } else {
@@ -702,9 +702,7 @@ fn generate_jxl_indicator(
                 JxlIndicator {
                     should_convert: true,
                     reason: "Lossless AVIF; recommend converting to JXL".to_string(),
-                    command: format!(
-                        "cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"
-                    ),
+                    command: format!("cjxl '{file_path}' '{output_path}' -d 0.0 --modular=1 -e 9"),
                     benefit: "JXL modular mode is typically more efficient than AVIF lossless"
                         .to_string(),
                 }
@@ -1022,7 +1020,7 @@ fn deep_research_png_animation(bytes: &[u8]) -> bool {
 
 /// Public entry for retrying animation duration (e.g. from main when `analysis.duration_secs` is None).
 /// Tries ffprobe, `ImageMagick`, WebP native parse, and GIF frame-count estimate.
-#[must_use] 
+#[must_use]
 pub fn get_animation_duration_for_path(path: &Path) -> Option<f32> {
     get_animation_duration(path)
 }
@@ -1302,7 +1300,7 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
 /// Returns (`duration_secs`, `frame_count`) from `ImageMagick` `identify -format "%T"`.
 /// Works for any format `ImageMagick` can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
 /// Use as fallback when ffprobe has no stream/format duration. Emits a warning log when used.
-#[must_use] 
+#[must_use]
 pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64, u64)> {
     use std::process::Command;
 
@@ -1324,7 +1322,9 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
         })
         .ok();
 
-    let output = if let Some(output) = output { output } else {
+    let output = if let Some(output) = output {
+        output
+    } else {
         log_eprintln!(
             "⚠️  [Duration Fallback] Failed to spawn ImageMagick identify for {}",
             path.display()
@@ -1544,9 +1544,7 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     } else if let Ok(probe) = crate::probe_video(path) {
         (probe.width, probe.height, false, 8)
     } else {
-        log_eprintln!(
-            "⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable"
-        );
+        log_eprintln!("⚠️  Cannot get JXL file dimensions: both jxlinfo and ffprobe unavailable");
         log_eprintln!("   💡 Suggestion: install jxlinfo: brew install jpeg-xl");
         (0, 0, false, 8)
     };
@@ -1556,7 +1554,11 @@ fn analyze_jxl_image(path: &Path, file_size: u64) -> Result<ImageAnalysis> {
     let is_lossless = crate::image_detection::detect_compression(
         &crate::image_detection::DetectedFormat::JXL,
         path,
-    ).map_or_else(|_| pixel_fallback_lossless(path), |c| c == crate::image_detection::CompressionType::Lossless);
+    )
+    .map_or_else(
+        |_| pixel_fallback_lossless(path),
+        |c| c == crate::image_detection::CompressionType::Lossless,
+    );
 
     // Extract HDR metadata using ffprobe
     let hdr_info = extract_hdr_info(path);

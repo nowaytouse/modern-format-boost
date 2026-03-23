@@ -40,7 +40,7 @@ fn get_gaussian_window() -> [[f64; WINDOW_SIZE]; WINDOW_SIZE] {
     window
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -77,7 +77,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
     Some(psnr)
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let (w1, h1) = original.dimensions();
     let (w2, h2) = converted.dimensions();
@@ -205,7 +205,7 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     Some(numerator / denominator)
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> Option<f64> {
     let scales = 5;
     let weights = [0.0448, 0.2856, 0.3001, 0.2363, 0.1333];
@@ -249,7 +249,7 @@ pub fn calculate_ms_ssim(original: &DynamicImage, converted: &DynamicImage) -> O
     Some(ms_ssim.powf(1.0 / used_weight_sum))
 }
 
-#[must_use] 
+#[must_use]
 pub fn psnr_quality_description(psnr: f64) -> &'static str {
     if psnr.is_infinite() {
         "Identical (lossless)"
@@ -266,7 +266,7 @@ pub fn psnr_quality_description(psnr: f64) -> &'static str {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn ssim_quality_description(ssim: f64) -> &'static str {
     if ssim >= 0.999 {
         "Identical"

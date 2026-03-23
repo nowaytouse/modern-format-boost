@@ -18,7 +18,7 @@ use std::process::Command;
 /// - Matrix: 1=BT.709, 9=BT.2020 non-constant, 0=RGB/Identity
 ///
 /// Returns None if no HDR metadata is present.
-#[must_use] 
+#[must_use]
 pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
     // Map color primaries to CICP code
     let primaries = match info.color_primaries.as_deref() {
@@ -75,7 +75,7 @@ pub fn color_info_to_cicp(info: &ColorInfo) -> Option<String> {
 
 /// Convert `ColorInfo` to `FFmpeg` color parameters for video encoding.
 /// Returns a vector of `FFmpeg` arguments: ["-colorspace", "bt2020nc", "-`color_trc`", "smpte2084", ...]
-#[must_use] 
+#[must_use]
 pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -99,7 +99,7 @@ pub fn color_info_to_ffmpeg_args(info: &ColorInfo) -> Vec<String> {
 
 /// Generate x265 HDR parameters for video encoding.
 /// Returns a string suitable for x265 --hdr or --hdr10 options.
-#[must_use] 
+#[must_use]
 pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
     if !info.is_hdr() {
         return None;
@@ -157,14 +157,14 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
 }
 
 /// Check if an image should use HDR decoding path (10-bit or higher).
-#[must_use] 
+#[must_use]
 pub fn should_use_hdr_decode(info: &ColorInfo) -> bool {
     info.is_hdr() || info.bit_depth.is_some_and(|d| d > 8)
 }
 
 /// Get recommended pixel format for HDR content.
 /// Returns "rgb48le" for 10-bit+ HDR, "rgb24" for SDR.
-#[must_use] 
+#[must_use]
 pub fn get_hdr_pix_fmt(info: &ColorInfo) -> &'static str {
     if should_use_hdr_decode(info) {
         "rgb48le" // 16-bit RGB (3 channels × 16-bit)
@@ -174,7 +174,7 @@ pub fn get_hdr_pix_fmt(info: &ColorInfo) -> &'static str {
 }
 
 /// Check if `dovi_tool` binary is available on PATH.
-#[must_use] 
+#[must_use]
 pub fn is_dovi_tool_available() -> bool {
     Command::new("dovi_tool")
         .arg("--version")
@@ -184,7 +184,7 @@ pub fn is_dovi_tool_available() -> bool {
 }
 
 /// Check if `hdr10plus_tool` binary is available on PATH.
-#[must_use] 
+#[must_use]
 pub fn is_hdr10plus_tool_available() -> bool {
     Command::new("hdr10plus_tool")
         .arg("--help")
@@ -314,7 +314,7 @@ pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<Pa
 
 /// Map DV profile + compatibility ID to the x265 `dolby-vision-profile` string.
 /// Returns the numeric profile string that x265 expects (e.g. "8.1", "5.0").
-#[must_use] 
+#[must_use]
 pub fn dv_x265_profile_string(dv_profile: Option<u8>, compat_id: Option<u8>) -> Option<String> {
     match dv_profile {
         Some(5) => Some("5.0".to_string()),

@@ -96,7 +96,7 @@ pub struct HeartbeatConfig {
 }
 
 impl HeartbeatConfig {
-    #[must_use] 
+    #[must_use]
     pub fn fast(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -106,7 +106,7 @@ impl HeartbeatConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn medium(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -116,7 +116,7 @@ impl HeartbeatConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn slow(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -126,12 +126,10 @@ impl HeartbeatConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn custom(operation: &str, interval_secs: u64) -> Self {
         let interval = if interval_secs < 5 {
-            eprintln!(
-                "⚠️  Heartbeat interval too short ({interval_secs} < 5s), using 5s"
-            );
+            eprintln!("⚠️  Heartbeat interval too short ({interval_secs} < 5s), using 5s");
             5
         } else {
             interval_secs
@@ -145,13 +143,13 @@ impl HeartbeatConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_info(mut self, info: String) -> Self {
         self.extra_info = Some(info);
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn force(mut self) -> Self {
         self.force_display = true;
         self
@@ -165,7 +163,7 @@ pub struct UniversalHeartbeat {
 }
 
 impl UniversalHeartbeat {
-    #[must_use] 
+    #[must_use]
     pub fn start(config: HeartbeatConfig) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
@@ -271,7 +269,7 @@ impl Drop for UniversalHeartbeat {
 pub struct HeartbeatGuard(Option<UniversalHeartbeat>);
 
 impl HeartbeatGuard {
-    #[must_use] 
+    #[must_use]
     pub fn new(config: HeartbeatConfig) -> Self {
         Self(Some(UniversalHeartbeat::start(config)))
     }

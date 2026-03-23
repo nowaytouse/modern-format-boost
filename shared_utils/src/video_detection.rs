@@ -50,7 +50,7 @@ impl Default for DetectedCodec {
 }
 
 impl DetectedCodec {
-    #[must_use] 
+    #[must_use]
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
             "ffv1" => DetectedCodec::FFV1,
@@ -74,7 +74,7 @@ impl DetectedCodec {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_lossless(&self) -> bool {
         matches!(
             self,
@@ -85,7 +85,7 @@ impl DetectedCodec {
         )
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn can_be_lossless(&self) -> bool {
         matches!(
             self,
@@ -98,7 +98,7 @@ impl DetectedCodec {
         )
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             DetectedCodec::FFV1 => "FFV1",
@@ -130,7 +130,7 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             CompressionType::Lossless => "Lossless",
@@ -158,7 +158,7 @@ impl Default for ColorSpace {
 }
 
 impl ColorSpace {
-    #[must_use] 
+    #[must_use]
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "bt709" => ColorSpace::BT709,
@@ -169,7 +169,7 @@ impl ColorSpace {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             ColorSpace::BT709 => "bt709",
@@ -244,7 +244,7 @@ pub struct VideoDetectionResult {
 
 impl VideoDetectionResult {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
-    #[must_use] 
+    #[must_use]
     pub fn is_hdr(&self) -> bool {
         self.is_dolby_vision
             || self.is_hdr10_plus
@@ -257,7 +257,7 @@ impl VideoDetectionResult {
     }
 
     /// Returns true for high-bitrate archival-grade content
-    #[must_use] 
+    #[must_use]
     pub fn is_high_fidelity(&self) -> bool {
         self.bit_depth >= 10
             && matches!(
@@ -267,13 +267,13 @@ impl VideoDetectionResult {
     }
 
     /// High-precision VFR detection including slow-motion recording analysis
-    #[must_use] 
+    #[must_use]
     pub fn is_apple_slow_mo(&self) -> bool {
         self.tags.contains_key("com.apple.quicktime.fullframerate")
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn determine_compression_type(
     codec: &DetectedCodec,
     bitrate: u64,
@@ -324,7 +324,7 @@ pub fn determine_compression_type(
     CompressionType::LowQuality
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_quality_score(
     compression: &CompressionType,
     bit_depth: u8,
@@ -417,7 +417,9 @@ pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let color_space = probe
         .color_space
         .as_ref()
-        .map_or(ColorSpace::Unknown("unknown".to_string()), |s| ColorSpace::parse(s));
+        .map_or(ColorSpace::Unknown("unknown".to_string()), |s| {
+            ColorSpace::parse(s)
+        });
 
     let quality_score = calculate_quality_score(
         &compression,

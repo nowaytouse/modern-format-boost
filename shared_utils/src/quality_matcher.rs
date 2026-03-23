@@ -92,7 +92,7 @@ impl SourceCodec {
     /// Relative encoding efficiency vs. H.264 (1.0). Lower value = more efficient at same quality.
     /// H.265/HEVC ≈ 0.65 and AV1 ≈ 0.50 are empirical from bitrate comparison studies; no single
     /// canonical reference—values tuned for CRF mapping consistency across codecs.
-    #[must_use] 
+    #[must_use]
     pub fn efficiency_factor(&self) -> f64 {
         match self {
             SourceCodec::H264 => 1.0,
@@ -139,7 +139,7 @@ impl SourceCodec {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_lossless(&self) -> bool {
         matches!(
             self,
@@ -155,7 +155,7 @@ impl SourceCodec {
         )
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_modern(&self) -> bool {
         matches!(
             self,
@@ -170,7 +170,7 @@ impl SourceCodec {
         )
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_cutting_edge(&self) -> bool {
         matches!(self, SourceCodec::Vvc | SourceCodec::Av2)
     }
@@ -241,7 +241,7 @@ pub enum ContentType {
 }
 
 impl ContentType {
-    #[must_use] 
+    #[must_use]
     pub fn crf_adjustment(&self) -> i8 {
         match self {
             ContentType::Animation => 4,
@@ -293,13 +293,13 @@ pub struct MatchedQuality {
 
 impl MatchedQuality {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn crf_hevc_typed(&self) -> Option<crate::types::Crf<crate::types::HevcEncoder>> {
         crate::types::Crf::<crate::types::HevcEncoder>::new(self.crf).ok()
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn crf_av1_typed(&self) -> Option<crate::types::Crf<crate::types::Av1Encoder>> {
         crate::types::Crf::<crate::types::Av1Encoder>::new(self.crf).ok()
     }
@@ -985,7 +985,7 @@ fn calculate_confidence_v3(analysis: &QualityAnalysis) -> f64 {
     (score / max_score).clamp(0.0, 1.0)
 }
 
-#[must_use] 
+#[must_use]
 pub fn parse_source_codec(codec_str: &str) -> SourceCodec {
     let codec_lower = codec_str.to_lowercase();
 
@@ -1241,7 +1241,7 @@ pub fn log_quality_analysis(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn from_video_detection(
     file_path: &str,
     codec: &str,
@@ -1261,9 +1261,7 @@ pub fn from_video_detection(
         (bitrate as f64) / pixels_per_second
     } else {
         if pixels_per_second <= 0.0 {
-            eprintln!(
-                "   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}"
-            );
+            eprintln!("   ⚠️  Warning: pixels_per_second is {pixels_per_second} for {file_path}");
         }
         if bitrate == 0 {
             eprintln!("   ⚠️  Warning: bitrate is 0 for {file_path}");
@@ -1293,12 +1291,12 @@ pub struct VideoAnalysisBuilder {
 }
 
 impl VideoAnalysisBuilder {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn basic(
         mut self,
         codec: &str,
@@ -1315,13 +1313,13 @@ impl VideoAnalysisBuilder {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn file_size(mut self, size: u64) -> Self {
         self.analysis.file_size = size;
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn video_bitrate(mut self, bitrate: u64) -> Self {
         self.analysis.video_bitrate = Some(bitrate);
         if let (Some(fps), w, h) = (self.analysis.fps, self.analysis.width, self.analysis.height) {
@@ -1333,7 +1331,7 @@ impl VideoAnalysisBuilder {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn gop(mut self, gop_size: u32, b_frames: u8) -> Self {
         self.analysis.gop_size = Some(gop_size);
         self.analysis.b_frame_count = Some(b_frames);
@@ -1341,51 +1339,51 @@ impl VideoAnalysisBuilder {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn pix_fmt(mut self, fmt: &str) -> Self {
         self.analysis.pix_fmt = Some(fmt.to_string());
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn color(mut self, color_space: &str, is_hdr: bool) -> Self {
         self.analysis.color_space = Some(color_space.to_string());
         self.analysis.is_hdr = Some(is_hdr);
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn content_type(mut self, ct: ContentType) -> Self {
         self.analysis.content_type = Some(ct);
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn bit_depth(mut self, depth: u8) -> Self {
         self.analysis.bit_depth = depth;
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn complexity(mut self, spatial: f64, temporal: f64) -> Self {
         self.analysis.spatial_complexity = Some(spatial);
         self.analysis.temporal_complexity = Some(temporal);
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn film_grain(mut self, has_grain: bool) -> Self {
         self.analysis.has_film_grain = Some(has_grain);
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn preset(mut self, preset: &str) -> Self {
         self.analysis.encoder_preset = Some(preset.to_string());
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn build(self) -> QualityAnalysis {
         self.analysis
     }
@@ -1398,7 +1396,7 @@ pub struct SkipDecision {
     pub codec: SourceCodec,
 }
 
-#[must_use] 
+#[must_use]
 pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
@@ -1436,7 +1434,7 @@ pub fn should_skip_video_codec(codec_str: &str) -> SkipDecision {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
     let codec = parse_source_codec(codec_str);
 
@@ -1456,7 +1454,7 @@ pub fn should_skip_video_codec_apple_compat(codec_str: &str) -> SkipDecision {
 }
 
 /// True when the source codec is one that Apple devices do not support (or support poorly).
-#[must_use] 
+#[must_use]
 pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
     should_keep_best_effort_output_on_failure(codec_str)
 }
@@ -1465,7 +1463,7 @@ pub fn is_apple_incompatible_video_codec(codec_str: &str) -> bool {
 /// - Apple-incompatible (AV1, VP9, VVC, AV2): user still gets an importable file.
 /// - ProRes/DNxHD are NOT included: they must pass strict size-shrink + SSIM; failure must not
 ///   keep output when size got bigger — decision is strictly by SSIM and size balance, never allow larger output.
-#[must_use] 
+#[must_use]
 pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
     let codec = parse_source_codec(codec_str);
     matches!(
@@ -1478,7 +1476,7 @@ pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
 /// **User-facing behavior is based on total file size only** (video stream remains an internal metric).
 /// Returns true only when: Apple compat is on, source is not GIF, source codec is Apple-incompatible (AV1/VP9/VVC/AV2),
 /// and either total file got smaller or (`allow_size_tolerance` && `total_size_ratio` < 1.01).
-#[must_use] 
+#[must_use]
 pub fn should_keep_apple_fallback_hevc_output(
     codec_str: &str,
     total_file_compressed: bool,
@@ -1493,7 +1491,7 @@ pub fn should_keep_apple_fallback_hevc_output(
     total_file_compressed || (allow_size_tolerance && total_size_ratio < 1.01)
 }
 
-#[must_use] 
+#[must_use]
 pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDecision {
     let codec = parse_source_codec(format_str);
 
@@ -1523,9 +1521,7 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
             SourceCodec::JpegXl => "JPEG XL (already optimal)",
             _ => "modern lossy format",
         };
-        format!(
-            "Source is {codec_name} - skipping to avoid generational loss"
-        )
+        format!("Source is {codec_name} - skipping to avoid generational loss")
     } else if is_heic_lossless {
         // Lossless HEIC/HEIF is not skipped; it will be converted to JXL.
         String::new()
@@ -1540,7 +1536,7 @@ pub fn should_skip_image_format(format_str: &str, is_lossless: bool) -> SkipDeci
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn from_image_analysis(
     format: &str,
     width: u32,

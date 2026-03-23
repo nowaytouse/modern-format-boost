@@ -172,9 +172,7 @@ pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
             // Unknown profile but hvcC exists — profiles 5-8, 10+ are rare
             // Most are lossy variants; treat as lossy rather than Err (safe default)
             if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-                eprintln!(
-                    "   📊 HEIC: unknown profile {profile_idc} — treating as lossy"
-                );
+                eprintln!("   📊 HEIC: unknown profile {profile_idc} — treating as lossy");
             }
             return Ok(false);
         }
@@ -426,9 +424,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     let is_lossless_result = detect_heic_is_lossless(&data, path);
     if std::env::var("IMGQUALITY_VERBOSE").is_ok() {
-        eprintln!(
-            "   📊 HEIC detect_heic_is_lossless result: {is_lossless_result:?}"
-        );
+        eprintln!("   📊 HEIC detect_heic_is_lossless result: {is_lossless_result:?}");
     }
     let is_lossless = is_lossless_result.unwrap_or(false);
 
@@ -485,7 +481,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
     Ok((img, analysis))
 }
 
-#[must_use] 
+#[must_use]
 pub fn is_heic_file(path: &Path) -> bool {
     // Rely strictly on magic bytes, NOT extensions, to avoid deep analysis failures (e.g. NoFtypBox)
     // on files that just happen to have a .heic extension but contain different format data.

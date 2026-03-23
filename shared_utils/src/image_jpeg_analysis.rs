@@ -171,7 +171,7 @@ fn estimate_quality_precise(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn estimate_quality_from_table(
     extracted_qt: &[[u16; 8]; 8],
     is_luminance: bool,

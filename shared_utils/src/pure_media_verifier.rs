@@ -22,22 +22,22 @@ pub struct PureMediaVerifyResult {
 }
 
 impl PureMediaVerifyResult {
-    #[must_use] 
+    #[must_use]
     pub fn video_size_change_percent(&self) -> f64 {
         (self.video_compression_ratio - 1.0) * 100.0
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn total_size_change_percent(&self) -> f64 {
         (self.total_compression_ratio - 1.0) * 100.0
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_container_overhead_issue(&self) -> bool {
         self.video_compressed && self.total_compression_ratio >= 1.0
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn description(&self) -> String {
         if self.video_compressed {
             if self.is_container_overhead_issue() {
@@ -62,7 +62,7 @@ impl PureMediaVerifyResult {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn verify_pure_media_compression(
     input_info: &StreamSizeInfo,
     output_info: &StreamSizeInfo,
@@ -105,7 +105,7 @@ pub fn verify_pure_media_compression(
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn is_video_compressed(
     input_video_size: u64,
     output_video_size: u64,
@@ -119,7 +119,7 @@ pub fn is_video_compressed(
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn video_compression_ratio(input_video_size: u64, output_video_size: u64) -> f64 {
     if input_video_size > 0 {
         output_video_size as f64 / input_video_size as f64

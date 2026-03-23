@@ -33,7 +33,7 @@ fn describe_thread_panic(payload: Box<dyn Any + Send + 'static>) -> String {
 }
 
 impl Heartbeat {
-    #[must_use] 
+    #[must_use]
     pub fn start(interval_secs: u64) -> Self {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
@@ -74,7 +74,7 @@ impl Heartbeat {
         beijing_time.format("%Y-%m-%d %H:%M:%S").to_string()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn beijing_time_now() -> String {
         Self::get_beijing_time()
     }

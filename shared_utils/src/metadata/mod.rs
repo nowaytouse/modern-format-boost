@@ -155,9 +155,7 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt;
             let mode = meta.permissions().mode();
             if let Err(e) = std::fs::set_permissions(dst, std::fs::Permissions::from_mode(mode)) {
-                eprintln!(
-                    "⚠️ [metadata] Failed to preserve macOS permission bits: {e}"
-                );
+                eprintln!("⚠️ [metadata] Failed to preserve macOS permission bits: {e}");
             }
         }
         // Timestamps last (ExifTool rewrites file, so must come after)
@@ -412,9 +410,7 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
     const SOURCE_EXTENSIONS: &[&str] = &[
         "jpg", "jpeg", "png", "webp", "heic", "heif", "avif", "gif", "tiff", "tif", "bmp", "jxl",
     ];
-    for entry in walkdir::WalkDir::new(dst_root)
-        .follow_links(false)
-    {
+    for entry in walkdir::WalkDir::new(dst_root).follow_links(false) {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {

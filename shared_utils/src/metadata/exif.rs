@@ -111,9 +111,7 @@ fn preserve_internal_metadata_fallback(
         )));
     }
 
-    eprintln!(
-        "⚠️ Temporary rename to .{detected_ext} for metadata preservation..."
-    );
+    eprintln!("⚠️ Temporary rename to .{detected_ext} for metadata preservation...");
 
     let temp_path = dst.with_extension(&detected_ext);
     if temp_path.exists() {
@@ -334,7 +332,9 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     // Always sync all QuickTime date fields from source — don't skip if dst already has a date,
     // because the date may have been reset to encode time rather than original capture time.
-    let best_date = if let Some(date) = get_best_date_from_source(src) { date } else {
+    let best_date = if let Some(date) = get_best_date_from_source(src) {
+        date
+    } else {
         eprintln!("⚠️ [metadata] Cannot determine date for QuickTime metadata");
         return Ok(());
     };

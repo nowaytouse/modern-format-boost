@@ -72,7 +72,7 @@ pub struct ColorInfo {
 
 impl ColorInfo {
     /// Returns true when the content is any form of HDR (PQ, HLG, DV, HDR10, HDR10+)
-    #[must_use] 
+    #[must_use]
     pub fn is_hdr(&self) -> bool {
         self.is_dolby_vision
             || self.is_hdr10_plus
@@ -315,7 +315,9 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         }
     };
 
-    let stream = if let Some(s) = parsed.streams.first() { s } else {
+    let stream = if let Some(s) = parsed.streams.first() {
+        s
+    } else {
         warn!(input = %input_str, "FFPROBE JSON contained no video streams");
         return ColorInfo::default();
     };

@@ -52,7 +52,7 @@ pub struct LruCache<K, V> {
 }
 
 impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
-    #[must_use] 
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity: capacity.max(1),
@@ -92,22 +92,22 @@ impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
         self.entries.contains_key(key)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn eviction_count(&self) -> u64 {
         self.eviction_count
     }
@@ -185,7 +185,7 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
         std::fs::write(path, json)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn load_from_file(path: &std::path::Path, capacity: usize) -> Self {
         match std::fs::read_to_string(path) {
             Ok(json) => match Self::from_json(&json) {
@@ -198,9 +198,7 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
                     cache
                 }
                 Err(e) => {
-                    eprintln!(
-                        "⚠️ LRU Cache: failed to parse cache file, starting fresh: {e}"
-                    );
+                    eprintln!("⚠️ LRU Cache: failed to parse cache file, starting fresh: {e}");
                     Self::new(capacity)
                 }
             },

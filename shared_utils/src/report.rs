@@ -14,7 +14,9 @@ pub fn print_summary_report(
     output_bytes: u64,
     operation_name: &str,
 ) {
-    use crate::modern_ui::colors::{MFB_BLUE, RESET, BOLD, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, BRIGHT_CYAN, DIM};
+    use crate::modern_ui::colors::{
+        BOLD, BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_RED, BRIGHT_YELLOW, DIM, MFB_BLUE, RESET,
+    };
 
     let reduction = if input_bytes > 0 {
         (1.0 - output_bytes as f64 / input_bytes as f64) * 100.0
@@ -174,9 +176,7 @@ pub fn print_health_report(passed: usize, failed: usize, warnings: usize) {
     println!("║  ✅ Passed:                        {passed:>6}  ║");
     println!("║  ❌ Failed:                        {failed:>6}  ║");
     println!("║  ⚠️  Warnings:                     {warnings:>6}  ║");
-    println!(
-        "║  📊 Health Rate:                  {health_rate:>5.1}%  ║"
-    );
+    println!("║  📊 Health Rate:                  {health_rate:>5.1}%  ║");
     println!("╚══════════════════════════════════════════════╝");
 }
 

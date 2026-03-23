@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Extract ICC Profile from source image and return temp file path
-#[must_use] 
+#[must_use]
 pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
     if which::which("exiftool").is_err() {
         return None;
@@ -273,19 +273,27 @@ fn run_imagemagick_cjxl_pipeline(
     let cjxl_status = cjxl_proc.wait();
 
     let magick_stderr = match magick_stderr_thread {
-        Some(handle) => if let Ok(stderr) = handle.join() { stderr } else {
-            crate::progress_mode::emit_stderr(
-                "   ⚠️ ImageMagick stderr capture thread panicked",
-            );
-            String::new()
-        },
+        Some(handle) => {
+            if let Ok(stderr) = handle.join() {
+                stderr
+            } else {
+                crate::progress_mode::emit_stderr(
+                    "   ⚠️ ImageMagick stderr capture thread panicked",
+                );
+                String::new()
+            }
+        }
         None => String::new(),
     };
     let cjxl_stderr = match cjxl_stderr_thread {
-        Some(handle) => if let Ok(stderr) = handle.join() { stderr } else {
-            crate::progress_mode::emit_stderr("   ⚠️ cjxl stderr capture thread panicked");
-            String::new()
-        },
+        Some(handle) => {
+            if let Ok(stderr) = handle.join() {
+                stderr
+            } else {
+                crate::progress_mode::emit_stderr("   ⚠️ cjxl stderr capture thread panicked");
+                String::new()
+            }
+        }
         None => String::new(),
     };
 
@@ -331,9 +339,7 @@ fn run_imagemagick_cjxl_pipeline(
             } else {
                 crate::log_upstream_error!("cjxl", "Failed with exit code: {:?}", exit_code);
                 if !cjxl_stderr.is_empty() {
-                    crate::progress_mode::emit_stderr(&format!(
-                        "   📋 cjxl stderr: {cjxl_stderr}"
-                    ));
+                    crate::progress_mode::emit_stderr(&format!("   📋 cjxl stderr: {cjxl_stderr}"));
                 }
             }
             false

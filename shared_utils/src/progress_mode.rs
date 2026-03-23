@@ -38,7 +38,7 @@ fn report_run_log_io_failure(context: &str, detail: &str) {
 
 /// Format duration as detailed string with progressive spacing strategy
 /// Examples: "01Y   01M   01W   01D   01h 00m00s000ms" or "01M   01W   01D   01h 00m00s000ms" or "01W   01D   01h 00m00s000ms" or "01D   01h 00m00s000ms" or "01h 00m00s000ms" or "00m00s000ms" or "00s000ms"
-#[must_use] 
+#[must_use]
 pub fn format_duration_compact(duration: Duration) -> String {
     let total_millis = duration.as_millis();
     let years = total_millis / (365 * 86400 * 1000);
@@ -229,7 +229,7 @@ fn file_type_emoji(filename: &str) -> &'static str {
 
 /// Format a log line with optional tag, emoji prefix, and padded indent so message bodies align.
 /// When a filename prefix is set, prepends a file-type emoji (🖼️ image / 🎞️ GIF / 🎬 video).
-#[must_use] 
+#[must_use]
 pub fn format_log_line(line: &str) -> String {
     LOG_PREFIX.with(|p| {
         let prefix = p.borrow();
@@ -295,7 +295,7 @@ pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Returns true if a log file has been configured.
-#[must_use] 
+#[must_use]
 pub fn has_log_file() -> bool {
     lock_log_writer().is_some()
 }
@@ -349,9 +349,7 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
     }
     let duration = Duration::from_secs(elapsed_secs);
     let compact_time = format_duration_compact(duration);
-    let line = format!(
-        "  Running: {compact_time}  {current}/{total}  {message}"
-    );
+    let line = format!("  Running: {compact_time}  {current}/{total}  {message}");
     write_to_log_at_level(Level::DEBUG, &line);
 }
 
@@ -567,7 +565,7 @@ pub fn set_verbose_mode(v: bool) {
     VERBOSE_MODE.store(v, Ordering::Relaxed);
 }
 
-#[must_use] 
+#[must_use]
 pub fn tracing_level_debug() -> Level {
     Level::DEBUG
 }
@@ -705,7 +703,7 @@ pub fn video_skipped(reason: &str) {
 
 /// Helper that appends milestone stats (XMP, Img, etc.) to a log line with aligned padding.
 /// Skips if the line already contains stats or is empty.
-#[must_use] 
+#[must_use]
 pub fn append_stats_to_line(line: &str) -> String {
     let mut trimmed = line.trim_end_matches(['\n', '\r']);
     if trimmed.is_empty() {
@@ -977,7 +975,7 @@ pub fn xmp_merge_success() {
 }
 
 /// Format a statistics status line with the 📊 emoji prefix (for run log alignment).
-#[must_use] 
+#[must_use]
 pub fn format_status_line(msg: &str) -> String {
     fmt_stats_line_final(msg)
 }

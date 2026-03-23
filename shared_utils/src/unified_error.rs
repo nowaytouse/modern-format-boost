@@ -102,13 +102,13 @@ pub enum UnifiedError {
 
 impl UnifiedError {
     /// Check if error is recoverable
-    #[must_use] 
+    #[must_use]
     pub fn is_recoverable(&self) -> bool {
         true
     }
 
     /// Get error category
-    #[must_use] 
+    #[must_use]
     pub fn category(&self) -> ErrorCategory {
         match self {
             UnifiedError::FileNotFound { .. }
@@ -145,7 +145,7 @@ impl UnifiedError {
     }
 
     /// Get user-friendly error message with emoji indicators
-    #[must_use] 
+    #[must_use]
     pub fn user_message(&self) -> String {
         match self {
             UnifiedError::FileNotFound { path, operation } => {
@@ -307,7 +307,7 @@ impl UnifiedError {
     }
 
     /// Check if this error should skip the file
-    #[must_use] 
+    #[must_use]
     pub fn is_skip(&self) -> bool {
         matches!(
             self,

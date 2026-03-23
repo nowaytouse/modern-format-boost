@@ -49,33 +49,33 @@ pub const METADATA_MARGIN_MAX: u64 = 102_400;
 pub const METADATA_MARGIN_PERCENT: f64 = 0.005;
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn calculate_metadata_margin(input_size: u64) -> u64 {
     let percent_based = (input_size as f64 * METADATA_MARGIN_PERCENT) as u64;
     percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX)
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u64) -> u64 {
     post_metadata_size.saturating_sub(pre_metadata_size)
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
     total_size.saturating_sub(metadata_size)
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn compression_target_size(input_size: u64) -> u64 {
     let margin = calculate_metadata_margin(input_size);
     input_size.saturating_sub(margin)
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn can_compress_with_metadata(output_size: u64, input_size: u64) -> bool {
     output_size < compression_target_size(input_size)
 }
@@ -87,7 +87,7 @@ pub enum CompressionVerifyStrategy {
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn verify_compression_precise(
     output_size: u64,
     input_size: u64,
@@ -110,7 +110,7 @@ pub fn verify_compression_precise(
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn verify_compression_simple(
     output_size: u64,
     input_size: u64,
@@ -149,7 +149,7 @@ pub const LONG_VIDEO_REQUIRED_ZERO_GAINS: u32 = 3;
 /// When to skip MS-SSIM in ultimate mode (longer than this → skip). Normal mode uses `LONG_VIDEO_THRESHOLD_SECS` (5 min).
 pub const MS_SSIM_SKIP_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0; // 25 min
 
-#[must_use] 
+#[must_use]
 pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     if duration_secs >= VERY_LONG_VIDEO_THRESHOLD_SECS {
         VERY_LONG_VIDEO_FALLBACK_ITERATIONS
@@ -162,12 +162,12 @@ pub fn calculate_max_iterations_for_duration(duration_secs: f32, ultimate_mode: 
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_zero_gains_for_duration(duration_secs: f32, ultimate_mode: bool) -> u32 {
     calculate_zero_gains_for_duration_and_range(duration_secs, 41.0, ultimate_mode)
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_zero_gains_for_duration_and_range(
     duration_secs: f32,
     crf_range: f32,
@@ -194,7 +194,7 @@ pub fn calculate_zero_gains_for_duration_and_range(
 
 pub const ADAPTIVE_WALL_LOG_BASE: u32 = 8;
 
-#[must_use] 
+#[must_use]
 pub fn calculate_adaptive_max_walls(crf_range: f32) -> u32 {
     if crf_range.is_nan() || crf_range.is_infinite() || crf_range <= 1.0 {
         return ULTIMATE_MIN_WALL_HITS;
@@ -226,7 +226,7 @@ pub const EXPLORE_DEFAULT_MIN_PSNR: f64 = 35.0;
 
 pub const EXPLORE_DEFAULT_MIN_MS_SSIM: f64 = 0.90;
 
-#[must_use] 
+#[must_use]
 pub fn calculate_max_threads(cpu_count: usize, resolution_pixels: Option<u64>) -> usize {
     let half_cpus = cpu_count / 2;
 
@@ -272,7 +272,7 @@ pub const CONFIDENCE_WEIGHT_MARGIN: f64 = 0.2;
 pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
 
 impl ConfidenceBreakdown {
-    #[must_use] 
+    #[must_use]
     pub fn overall(&self) -> f64 {
         (self.sampling_coverage * CONFIDENCE_WEIGHT_SAMPLING
             + self.prediction_accuracy * CONFIDENCE_WEIGHT_PREDICTION
@@ -383,19 +383,19 @@ impl Default for ExploreResult {
 
 impl ExploreResult {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn ssim_typed(&self) -> Option<Ssim> {
         self.ssim.and_then(|v| Ssim::new(v).ok())
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn output_size_typed(&self) -> FileSize {
         FileSize::new(self.output_size)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn ssim_meets(&self, threshold: f64) -> bool {
         self.ssim
             .is_some_and(|s| crate::float_compare::ssim_meets_threshold(s, threshold))
@@ -457,7 +457,7 @@ impl Default for ExploreConfig {
 }
 
 impl ExploreConfig {
-    #[must_use] 
+    #[must_use]
     pub fn size_only(initial_crf: f32, max_crf: f32) -> Self {
         Self {
             mode: ExploreMode::SizeOnly,
@@ -472,7 +472,7 @@ impl ExploreConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn quality_match(predicted_crf: f32) -> Self {
         Self {
             mode: ExploreMode::QualityMatch,
@@ -487,7 +487,7 @@ impl ExploreConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn precise_quality_match(initial_crf: f32, max_crf: f32, min_ssim: f64) -> Self {
         Self {
             mode: ExploreMode::PreciseQualityMatch,
@@ -506,7 +506,7 @@ impl ExploreConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn precise_quality_match_with_compression(
         initial_crf: f32,
         max_crf: f32,
@@ -529,7 +529,7 @@ impl ExploreConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn compress_only(initial_crf: f32, max_crf: f32) -> Self {
         Self {
             mode: ExploreMode::CompressOnly,
@@ -546,7 +546,7 @@ impl ExploreConfig {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn compress_with_quality(initial_crf: f32, max_crf: f32) -> Self {
         Self {
             mode: ExploreMode::CompressWithQuality,
@@ -584,7 +584,7 @@ pub enum EncoderPreset {
 }
 
 impl EncoderPreset {
-    #[must_use] 
+    #[must_use]
     pub fn x26x_name(&self) -> &'static str {
         match self {
             EncoderPreset::Ultrafast => "ultrafast",
@@ -596,7 +596,7 @@ impl EncoderPreset {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn svtav1_preset(&self) -> u8 {
         match self {
             EncoderPreset::Ultrafast => 12,
@@ -610,7 +610,7 @@ impl EncoderPreset {
 }
 
 impl VideoEncoder {
-    #[must_use] 
+    #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
         match self {
             VideoEncoder::Hevc => {
@@ -661,7 +661,7 @@ impl VideoEncoder {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn container(&self) -> &'static str {
         match self {
             VideoEncoder::Hevc => "mp4",
@@ -670,12 +670,12 @@ impl VideoEncoder {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn extra_args(&self, max_threads: usize) -> Vec<String> {
         self.extra_args_with_preset(max_threads, EncoderPreset::default(), None)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn extra_args_with_preset(
         &self,
         max_threads: usize,
@@ -746,7 +746,8 @@ impl IterationMetrics {
             (None, _) => "----".to_string(),
         };
         let psnr_str = self
-            .psnr.map_or_else(|| "----".to_string(), |p| format!("{p:.1}"));
+            .psnr
+            .map_or_else(|| "----".to_string(), |p| format!("{p:.1}"));
         let compress_icon = if self.can_compress { "✅" } else { "❌" };
         let quality_icon = match self.quality_passed {
             Some(true) => "✅",
@@ -780,7 +781,7 @@ pub struct TransparencyReport {
 }
 
 impl TransparencyReport {
-    #[must_use] 
+    #[must_use]
     pub fn new(input_size: u64) -> Self {
         Self {
             iterations: Vec::new(),
@@ -808,9 +809,7 @@ impl TransparencyReport {
     pub fn print_summary(&self) {
         crate::log_eprintln!("└────┴──────────────┴───────────┴─────────────┴─────────────┴──────────┴────────────────────┘");
 
-        let elapsed = self
-            .start_time
-            .map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let elapsed = self.start_time.map_or(0.0, |t| t.elapsed().as_secs_f64());
         let total_iterations = self.iterations.len();
 
         crate::log_eprintln!();
@@ -863,7 +862,9 @@ impl VideoExplorer {
             .context("Failed to read input file metadata")?
             .len();
 
-        let use_gpu = if let Some(b) = use_gpu { b } else {
+        let use_gpu = if let Some(b) = use_gpu {
+            b
+        } else {
             let gpu = crate::gpu_accel::GpuAccel::detect();
             gpu.is_available()
                 && match encoder {
@@ -1986,8 +1987,7 @@ impl VideoExplorer {
             log_progress!("Binary search", mid, size, iterations);
 
             let variance = calc_window_variance(&size_history, self.input_size);
-            let change_rate = prev_size
-                .map_or(f64::MAX, |p| calc_change_rate(p, size));
+            let change_rate = prev_size.map_or(f64::MAX, |p| calc_change_rate(p, size));
 
             if size < target_size {
                 boundary_crf = mid;
@@ -3141,7 +3141,7 @@ pub fn explore_quality_match_gpu(
     .explore()
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f32, f64) {
     let (crf_scale, max_crf_cap) = match encoder {
         VideoEncoder::Hevc => (51.0_f32, 40.0_f32),

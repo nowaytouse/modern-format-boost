@@ -19,7 +19,7 @@ pub struct DynamicCrfMapper {
 }
 
 impl DynamicCrfMapper {
-    #[must_use] 
+    #[must_use]
     pub fn new(input_size: u64) -> Self {
         Self {
             anchors: Vec::new(),
@@ -58,7 +58,7 @@ impl DynamicCrfMapper {
     }
 
     /// Maps GPU CRF to CPU CRF. `max_crf`: HEVC/H264 use 51.0, AV1 use 63.0.
-    #[must_use] 
+    #[must_use]
     pub fn gpu_to_cpu(&self, gpu_crf: f32, base_offset: f32, max_crf: f32) -> (f32, f64) {
         if self.anchors.is_empty() {
             return ((gpu_crf + base_offset).clamp(10.0, max_crf), 0.5);
@@ -233,9 +233,7 @@ pub fn quick_calibrate(
                 }
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!(
-                        "   ❌ CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}"
-                    );
+                    eprintln!("   ❌ CPU calibration (GIF/libx265) failed for CRF {anchor_crf:.1}");
                     let error_lines: Vec<&str> = stderr
                         .lines()
                         .filter(|l| {
@@ -295,9 +293,7 @@ pub fn quick_calibrate(
                 Ok(out) if out.status.success() => {}
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    eprintln!(
-                        "   ❌ Failed to extract input sample for CRF {anchor_crf:.1}"
-                    );
+                    eprintln!("   ❌ Failed to extract input sample for CRF {anchor_crf:.1}");
                     let error_lines: Vec<&str> = stderr
                         .lines()
                         .filter(|l| {
@@ -338,9 +334,7 @@ pub fn quick_calibrate(
             match encode_with_x265(&temp_input, &cpu_path, &config, vf_args) {
                 Ok(_) => fs::metadata(&cpu_path).map(|m| m.len()).unwrap_or(0),
                 Err(e) => {
-                    eprintln!(
-                        "   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}"
-                    );
+                    eprintln!("   ❌ CPU x265 encoding failed for CRF {anchor_crf:.1}: {e}");
                     continue;
                 }
             }

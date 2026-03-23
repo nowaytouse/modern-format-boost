@@ -87,7 +87,7 @@ pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), St
     Ok(())
 }
 
-#[must_use] 
+#[must_use]
 pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())

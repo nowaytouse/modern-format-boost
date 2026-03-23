@@ -26,7 +26,7 @@ impl fmt::Display for FlagMode {
 }
 
 impl FlagMode {
-    #[must_use] 
+    #[must_use]
     pub fn description_en(&self) -> &'static str {
         match self {
             Self::PreciseQualityWithCompress => "Precise quality match + must compress",
@@ -34,7 +34,7 @@ impl FlagMode {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_ultimate(&self) -> bool {
         matches!(self, Self::UltimateExplore)
     }
@@ -46,12 +46,12 @@ pub enum FlagValidation {
     Invalid(String),
 }
 
-#[must_use] 
+#[must_use]
 pub fn validate_flags(explore: bool, match_quality: bool, compress: bool) -> FlagValidation {
     validate_flags_with_ultimate(explore, match_quality, compress, false)
 }
 
-#[must_use] 
+#[must_use]
 pub fn validate_flags_with_ultimate(
     explore: bool,
     match_quality: bool,
