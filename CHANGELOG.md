@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.99] - 2026-03-24
+
+### ✨ Features
+- **Robust Quality Metrics for Animated Sources**: Implemented "Compatible Quality Measurement Mode" for GIF, WebP, AVIF, HEIC, and APNG. The system now automatically switches to a more robust `SSIM-All` calculation (with format normalization and alpha flattening) if the fast SSIM path fails, ensuring consistent metrics across iterations.
+- **Probe-First Format Identification**: Upgraded animated image detection to prioritize `ffprobe format_name` over simple file extensions. This ensures files with non-standard extensions (e.g., `2.gif.file`) are correctly routed to the relaxed animation processing pipeline instead of strict video paths.
+
+### 🐛 Bug Fixes
+- **GPU SSIM Resilience**: Refined GPU SSIM baseline handling to prevent interruptions when metrics measurements are unavailable, allowing the search to proceed seamlessly using CPU-based diagnostics.
+
 ## [0.10.98] - 2026-03-24
 
 ### 🐛 Bug Fixes
