@@ -1607,21 +1607,23 @@ fn cpu_fine_tune_from_gpu_boundary(
         let mut last_good_size = gpu_size;
         let mut last_good_ssim = gpu_ssim;
 
-        let gpu_ssim_baseline = if let Some(s) = gpu_ssim { s } else {
+        let gpu_ssim_baseline = if let Some(s) = gpu_ssim {
+            crate::verbose_eprintln!(
+                "   {}GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
+                DIM,
+                BRIGHT_YELLOW,
+                s,
+                RESET
+            );
+            Some(s)
+        } else {
             crate::log_eprintln!(
-                "   {}⚠️  GPU SSIM not measured, cannot establish baseline{}",
+                "   {}⚠️  GPU SSIM not measured; continue with CPU delta-only search{}",
                 BRIGHT_YELLOW,
                 RESET
             );
-            bail!("GPU SSIM baseline not available");
+            None
         };
-        crate::verbose_eprintln!(
-            "   {}GPU SSIM baseline: {}{:.4}{} (CPU target: break through 0.97+)",
-            DIM,
-            BRIGHT_YELLOW,
-            gpu_ssim_baseline,
-            RESET
-        );
 
         const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 
@@ -1693,14 +1695,16 @@ fn cpu_fine_tune_from_gpu_boundary(
                 let should_stop = if let (Some(current_ssim), Some(prev_ssim)) = (current_ssim_opt, prev_ssim_opt) {
                     let ssim_gain = current_ssim - prev_ssim;
 
-                    let ssim_vs_gpu = current_ssim / gpu_ssim_baseline;
-                    let _gpu_comparison = if ssim_vs_gpu > 1.01 {
-                        format!("{BRIGHT_GREEN}×{ssim_vs_gpu:.3} GPU{RESET}")
-                    } else if ssim_vs_gpu > 1.001 {
-                        format!("{GREEN}×{ssim_vs_gpu:.4} GPU{RESET}")
-                    } else {
-                        format!("{DIM}≈GPU{RESET}")
-                    };
+                    if let Some(gpu_baseline) = gpu_ssim_baseline.filter(|v| *v > 0.0) {
+                        let ssim_vs_gpu = current_ssim / gpu_baseline;
+                        let _gpu_comparison = if ssim_vs_gpu > 1.01 {
+                            format!("{BRIGHT_GREEN}×{ssim_vs_gpu:.3} GPU{RESET}")
+                        } else if ssim_vs_gpu > 1.001 {
+                            format!("{GREEN}×{ssim_vs_gpu:.4} GPU{RESET}")
+                        } else {
+                            format!("{DIM}≈GPU{RESET}")
+                        };
+                    }
 
                     let is_zero_gain = ssim_gain.abs() < ZERO_GAIN_THRESHOLD;
 
