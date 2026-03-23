@@ -52,7 +52,7 @@ pub struct ConversionOutput {
 }
 
 impl ConversionOutput {
-    #[must_use] 
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
         self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
     }
@@ -336,9 +336,7 @@ pub fn execute_conversion(
 
     let reduction = size_reduction.unwrap_or(0.0);
     let message = if reduction >= 0.0 {
-        format!(
-            "Conversion successful: size reduced \x1b[1;32m{reduction:.1}%\x1b[0m"
-        )
+        format!("Conversion successful: size reduced \x1b[1;32m{reduction:.1}%\x1b[0m")
     } else {
         format!(
             "Conversion successful: size increased \x1b[1;33m{:.1}%\x1b[0m",
@@ -482,9 +480,7 @@ fn convert_to_avif(
     }
 
     let output_size = std::fs::metadata(output)
-        .map_err(|e| {
-            ImgQualityError::ConversionError(format!("Failed to read AVIF output: {e}"))
-        })?
+        .map_err(|e| ImgQualityError::ConversionError(format!("Failed to read AVIF output: {e}")))?
         .len();
     if output_size == 0 {
         cleanup_output_file(output, "empty AVIF output");
@@ -596,6 +592,7 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
 }
 
 /// Simplified wrapper: builds a default `ConversionConfig` and delegates to `smart_convert`.
+///
 /// Use `smart_convert` when you need compress, `preserve_metadata`, `preserve_timestamps`, `delete_original`, or `apple_compat`.
 pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     let config = ConversionConfig {
@@ -718,7 +715,7 @@ mod tests {
         };
         let strategy = determine_strategy(&detection).unwrap();
         let config = ConversionConfig {
-            output_dir: Some(temp.clone()),
+            output_dir: Some(temp),
             ..Default::default()
         };
         let out = execute_conversion(&detection, &strategy, &config).unwrap();

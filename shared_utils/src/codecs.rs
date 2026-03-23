@@ -53,7 +53,7 @@ pub enum DetectedCodec {
 }
 
 impl DetectedCodec {
-    #[must_use] 
+    #[must_use]
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
             "ffv1" => DetectedCodec::FFV1,

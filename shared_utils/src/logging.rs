@@ -259,7 +259,7 @@ impl<'a> MakeWriter<'a> for RunLogMaker {
 /// Handles all CSI sequences (`ESC [ <params> <final>` where final is `0x40–0x7E`),
 /// including SGR colour codes (`ESC[…m`), cursor-movement codes, and others.
 /// Non-escape characters (including multi-byte UTF-8) are passed through unchanged.
-#[must_use] 
+#[must_use]
 pub fn strip_ansi_str(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());
@@ -390,7 +390,7 @@ impl Default for LogConfig {
 }
 
 impl LogConfig {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -400,19 +400,19 @@ impl LogConfig {
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_max_file_size(mut self, size: u64) -> Self {
         self.max_file_size = size;
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_max_files(mut self, count: usize) -> Self {
         self.max_files = count;
         self
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self

@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, error, info};
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn get_extension_lowercase(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
@@ -31,7 +31,7 @@ pub fn get_extension_lowercase(path: &Path) -> String {
 }
 
 /// Returns the current processing history (version and timestamp)
-#[must_use] 
+#[must_use]
 pub fn get_current_history() -> ProcessHistory {
     ProcessHistory {
         software_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -43,7 +43,7 @@ pub fn get_current_history() -> ProcessHistory {
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -51,14 +51,14 @@ pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn is_hidden_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.starts_with('.'))
 }
 
-#[must_use] 
+#[must_use]
 pub fn extract_suggested_extension(error_msg: &str) -> Option<String> {
     if let Some(start) = error_msg.find("looks more like a ") {
         let rest = &error_msg[start + "looks more like a ".len()..];
@@ -81,9 +81,10 @@ pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[must_use] 
+#[must_use]
 pub fn compute_relative_path(path: &Path, base: &Path) -> PathBuf {
-    path.strip_prefix(base).map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
+    path.strip_prefix(base)
+        .map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
 }
 
 pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
@@ -96,7 +97,7 @@ pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
@@ -181,7 +182,7 @@ pub fn detect_real_extension(path: &Path) -> Option<&'static str> {
     None
 }
 
-#[must_use] 
+#[must_use]
 pub fn normalize_path_string(path_str: &str) -> String {
     let mut result = path_str.replace('\\', "/");
     while result.contains("//") {
@@ -190,7 +191,7 @@ pub fn normalize_path_string(path_str: &str) -> String {
     result
 }
 
-#[must_use] 
+#[must_use]
 pub fn truncate_string(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
@@ -201,12 +202,12 @@ pub fn truncate_string(s: &str, max_len: usize) -> String {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn extract_digits(s: &str) -> String {
     s.chars().filter(char::is_ascii_digit).collect()
 }
 
-#[must_use] 
+#[must_use]
 pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     s.parse::<f64>().unwrap_or(default)
 }
@@ -257,7 +258,7 @@ pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
 /// - Standard boxes (size + type + payload)
 /// - Extended size boxes (size=1, followed by 64-bit size)
 /// - Full boxes (with version + flags after type)
-#[must_use] 
+#[must_use]
 pub fn find_box_data_recursive<'a>(data: &'a [u8], box_type: &[u8; 4]) -> Option<&'a [u8]> {
     find_box_data_recursive_impl(data, box_type, 0, 32)
 }
@@ -360,7 +361,7 @@ fn find_box_data_recursive_impl<'a>(
 }
 
 /// Recursively search for a box type in ISO BMFF data (e.g. "jbrd" inside "JXL " container).
-#[must_use] 
+#[must_use]
 pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     let mut pos = 0;
     while pos + 8 <= data.len() {
@@ -404,7 +405,7 @@ pub fn find_any_box_recursive(data: &[u8], box_type: &[u8; 4]) -> bool {
     false
 }
 
-#[must_use] 
+#[must_use]
 pub fn is_command_available(command_name: &str) -> bool {
     Command::new(command_name)
         .arg("--version")
@@ -414,7 +415,7 @@ pub fn is_command_available(command_name: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_command_version(command_name: &str) -> Option<String> {
     let output = Command::new(command_name)
         .arg("--version")
@@ -430,7 +431,7 @@ pub fn get_command_version(command_name: &str) -> Option<String> {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn format_command_string(command: &str, args: &[&str]) -> String {
     if args.is_empty() {
         command.to_string()
@@ -459,9 +460,7 @@ pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyho
     let size = metadata.len();
 
     if size > max_bytes {
-        anyhow::bail!(
-            "File is too large ({size} bytes > {max_bytes} max allowed)"
-        );
+        anyhow::bail!("File is too large ({size} bytes > {max_bytes} max allowed)");
     }
 
     Ok(())
@@ -469,7 +468,7 @@ pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyho
 
 /// Escape a path for safe display in error messages.
 /// Prevents ANSI escape code injection by escaping control characters.
-#[must_use] 
+#[must_use]
 pub fn escape_path_for_display(path: &std::path::Path) -> String {
     path.display().to_string().escape_default().to_string()
 }

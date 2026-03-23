@@ -107,7 +107,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
 /// - If source is 10-bit (yuv420p10le, yuv422p10le, etc.) use yuv420p10le so that
 ///   the HDR signal range / precision is preserved in the output stream.
 /// - Otherwise default to yuv420p (8-bit SDR).
-fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
+const fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     if detection.bit_depth >= 10 {
         "yuv420p10le"
     } else {
@@ -176,7 +176,9 @@ fn prepare_dv_rpu(detection: &VideoDetectionResult) -> Option<DvRpuResult> {
     let profile_str = if let Some(s) = shared_utils::dv_x265_profile_string(
         detection.dv_profile,
         detection.dv_bl_signal_compatibility_id,
-    ) { s } else {
+    ) {
+        s
+    } else {
         warn!(
             "Unsupported DV profile {:?} for x265 — falling back to HDR10",
             detection.dv_profile
@@ -256,12 +258,12 @@ fn prepare_hdr10plus_metadata(detection: &VideoDetectionResult) -> Option<Hdr10P
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, false, false)
 }
 
-#[must_use] 
+#[must_use]
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     apple_compat: bool,
@@ -351,7 +353,10 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
-    let output_dir = output_dir.map_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf(), std::path::Path::to_path_buf);
+    let output_dir = output_dir.map_or_else(
+        || input.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        std::path::Path::to_path_buf,
+    );
 
     std::fs::create_dir_all(&output_dir)?;
 
@@ -739,7 +744,9 @@ pub fn auto_convert_with_cache(
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = if let Some(s) = explore_result.ssim { s } else {
+                    let actual_ssim = if let Some(s) = explore_result.ssim {
+                        s
+                    } else {
                         warn!("   ⚠️  SSIM not measured, cannot verify quality");
                         cleanup_output_file(
                             &temp_path,
@@ -811,9 +818,7 @@ pub fn auto_convert_with_cache(
                                 format!(
                                     "Video stream compression failed: {stream_change_pct:+.1}%"
                                 ),
-                                format!(
-                                    "Skipped: video stream larger ({stream_change_pct:+.1}%)"
-                                ),
+                                format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
                                 "Original file PROTECTED (output did not compress)".to_string(),
                                 "Output discarded (video stream larger than original)".to_string(),
                             )
@@ -1019,9 +1024,10 @@ pub fn auto_convert_with_cache(
     }
 
     if let Some(ref result) = explore_result_opt {
-        if let Some(false) = result.ms_ssim_passed {
+        if result.ms_ssim_passed == Some(false) {
             let score_str = result
-                .ms_ssim_score.map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
+                .ms_ssim_score
+                .map_or_else(|| "Unknown".to_string(), |s| format!("{s:.4}"));
             // Note: In Ultimate Mode, ms_ssim_score stores VMAF-Y (0-1 scale).
             // The quality gate can fail even with high VMAF if CAMBI or PSNR-UV fail.
             // In Normal Mode, ms_ssim_score stores actual MS-SSIM or SSIM-All score.
@@ -1322,9 +1328,7 @@ fn success_status_for_cache(
     explore_result: &Option<shared_utils::ExploreResult>,
 ) -> bool {
     matches!(target, TargetVideoFormat::HevcMp4)
-        && explore_result
-            .as_ref()
-            .is_some_and(|r| r.quality_passed)
+        && explore_result.as_ref().is_some_and(|r| r.quality_passed)
 }
 
 fn best_effort_status_for_cache(
@@ -1334,9 +1338,7 @@ fn best_effort_status_for_cache(
 ) -> bool {
     matches!(target, TargetVideoFormat::HevcMp4)
         && final_crf > 0.0
-        && explore_result
-            .as_ref()
-            .is_some_and(|r| !r.quality_passed)
+        && explore_result.as_ref().is_some_and(|r| !r.quality_passed)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<f32> {
@@ -1414,9 +1416,7 @@ fn execute_hevc_conversion(
         );
 
     let mut x265_params = if is_hdr_content {
-        format!(
-            "log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1"
-        )
+        format!("log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1")
     } else {
         format!("log-level=error:pools={max_threads}")
     };
@@ -1532,9 +1532,7 @@ fn execute_hevc_lossless(
 
     // hdr-opt=1 + repeat-headers=1 ensure HDR SEI metadata is written into the bitstream.
     let mut x265_params = if is_hdr_content {
-        format!(
-            "lossless=1:log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1"
-        )
+        format!("lossless=1:log-level=error:pools={max_threads}:hdr-opt=1:repeat-headers=1")
     } else {
         format!("lossless=1:log-level=error:pools={max_threads}")
     };

@@ -29,10 +29,7 @@ impl fmt::Display for PathValidationError {
                 write!(f, "❌ PATH SECURITY ERROR: Empty path provided")
             }
             PathValidationError::NullByte(path) => {
-                write!(
-                    f,
-                    "❌ PATH SECURITY ERROR: Null byte found in path: {path}"
-                )
+                write!(f, "❌ PATH SECURITY ERROR: Null byte found in path: {path}")
             }
             PathValidationError::InputOutputConflict { path } => {
                 write!(
@@ -75,7 +72,7 @@ pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn path_to_string_lossy(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
@@ -99,9 +96,7 @@ pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
 
     for &c in DANGEROUS_CHARS {
         if path_str.contains(c) {
-            eprintln!(
-                "⚠️ PATH VALIDATION FAILED: Dangerous character '{c}' in: {path_str}"
-            );
+            eprintln!("⚠️ PATH VALIDATION FAILED: Dangerous character '{c}' in: {path_str}");
             return Err(PathValidationError::DangerousCharacter {
                 character: c,
                 path: path_str.to_string(),

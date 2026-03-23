@@ -28,7 +28,7 @@ pub struct MsssimResult {
 }
 
 impl MsssimResult {
-    #[must_use] 
+    #[must_use]
     pub fn skipped() -> Self {
         Self {
             y_score: 0.0,
@@ -41,7 +41,7 @@ impl MsssimResult {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_skipped(&self) -> bool {
         self.sampling_strategy == SamplingStrategy::Skip
     }
@@ -68,7 +68,7 @@ pub struct ParallelMsssimCalculator {
 }
 
 impl ParallelMsssimCalculator {
-    #[must_use] 
+    #[must_use]
     pub fn new(
         original_path: PathBuf,
         converted_path: PathBuf,
@@ -155,9 +155,7 @@ impl ParallelMsssimCalculator {
         let v_score = v_result?;
 
         eprintln!("✅ MS-SSIM complete, heartbeat stopped");
-        eprintln!(
-            "✅ MS-SSIM (parallel): Y={y_score:.4} U={u_score:.4} V={v_score:.4}"
-        );
+        eprintln!("✅ MS-SSIM (parallel): Y={y_score:.4} U={u_score:.4} V={v_score:.4}");
 
         Ok(MsssimResult {
             y_score,
@@ -204,13 +202,13 @@ impl ParallelMsssimCalculator {
             .monitor_ffmpeg_process(&args, channel)
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
 
-        if let Ok(()) = ms_ssim_result { progress_monitor.get_channel_score(channel).ok_or_else(|| {
-            eprintln!("❌ Failed to get {channel} channel score");
-            AppError::Other(anyhow::anyhow!("Failed to get {channel} channel score"))
-        }) } else {
-            eprintln!(
-                "⚠️  MS-SSIM failed for channel {channel}, falling back to SSIM"
-            );
+        if let Ok(()) = ms_ssim_result {
+            progress_monitor.get_channel_score(channel).ok_or_else(|| {
+                eprintln!("❌ Failed to get {channel} channel score");
+                AppError::Other(anyhow::anyhow!("Failed to get {channel} channel score"))
+            })
+        } else {
+            eprintln!("⚠️  MS-SSIM failed for channel {channel}, falling back to SSIM");
 
             let mut ssim_args = vec![
                 "-i",

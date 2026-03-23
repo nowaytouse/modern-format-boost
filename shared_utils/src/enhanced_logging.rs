@@ -202,13 +202,13 @@ impl From<Level> for LogLevel {
 
 impl LogLevel {
     /// Checks if this level should be logged
-    #[must_use] 
+    #[must_use]
     pub fn should_log(self, max_level: LogLevel) -> bool {
         self <= max_level
     }
 
     /// Converts to tracing Level
-    #[must_use] 
+    #[must_use]
     pub fn to_tracing_level(self) -> Level {
         match self {
             LogLevel::Critical | LogLevel::Error => Level::ERROR,
@@ -245,7 +245,7 @@ pub struct LogRouter {
 
 impl LogRouter {
     /// Creates a new log router
-    #[must_use] 
+    #[must_use]
     pub fn new(max_level: LogLevel) -> Self {
         Self {
             max_level,
@@ -457,9 +457,7 @@ pub fn init_enhanced_logging(
             .init();
     }
 
-    eprintln!(
-        "🚀 {program_name} logging initialized at level {log_level:?}"
-    );
+    eprintln!("🚀 {program_name} logging initialized at level {log_level:?}");
     tracing::info!(
         "{} logging initialized at level {:?}",
         program_name,

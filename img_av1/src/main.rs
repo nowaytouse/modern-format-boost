@@ -266,7 +266,7 @@ fn main() -> anyhow::Result<()> {
             let thread_config = shared_utils::thread_manager::get_balanced_thread_config(workload);
 
             let config = AutoConvertConfig {
-                output_dir: output.clone(),
+                output_dir: output,
                 force,
                 recursive,
                 delete_original: should_delete,
@@ -278,7 +278,7 @@ fn main() -> anyhow::Result<()> {
                 use_gpu: !cpu,
                 ultimate,
                 verbose,
-                base_dir: base_dir.clone(),
+                base_dir,
                 child_threads: if child_threads > 0 {
                     child_threads
                 } else {

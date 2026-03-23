@@ -15,19 +15,19 @@ pub struct ColorGuard {
 
 impl ColorGuard {
     /// Enables colors
-    #[must_use] 
+    #[must_use]
     pub fn enable() -> Self {
         Self { enabled: true }
     }
 
     /// Disables colors
-    #[must_use] 
+    #[must_use]
     pub fn disable() -> Self {
         Self { enabled: false }
     }
 
     /// Applies color to text
-    #[must_use] 
+    #[must_use]
     pub fn colorize(&self, text: &str, ansi_code: &str) -> String {
         if self.enabled {
             format!("\x1b[{ansi_code}m{text}\x1b[0m")
@@ -84,7 +84,7 @@ pub struct TerminalLogger {
 
 impl TerminalLogger {
     /// Creates a new terminal logger
-    #[must_use] 
+    #[must_use]
     pub fn new(use_colors: bool, debug_mode: bool) -> Self {
         Self {
             use_colors,
@@ -102,43 +102,43 @@ impl TerminalLogger {
     }
 
     /// Success message (Green)
-    #[must_use] 
+    #[must_use]
     pub fn success(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_GREEN)
     }
 
     /// Error message (Red)
-    #[must_use] 
+    #[must_use]
     pub fn error(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_RED)
     }
 
     /// Warning message (Yellow)
-    #[must_use] 
+    #[must_use]
     pub fn warning(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_YELLOW)
     }
 
     /// Info message (Blue)
-    #[must_use] 
+    #[must_use]
     pub fn info(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_BLUE)
     }
 
     /// Debug message (Cyan)
-    #[must_use] 
+    #[must_use]
     pub fn debug(&self, text: &str) -> String {
         self.color(text, ansi::FG_CYAN)
     }
 
     /// Critical message (Magenta)
-    #[must_use] 
+    #[must_use]
     pub fn critical(&self, text: &str) -> String {
         self.color(text, ansi::FG_BRIGHT_MAGENTA)
     }
 
     /// Value highlight (Bold White)
-    #[must_use] 
+    #[must_use]
     pub fn value(&self, text: &str) -> String {
         if self.use_colors {
             format!("\x1b[1;97m{text}\x1b[0m")
@@ -195,7 +195,7 @@ impl TerminalLogger {
     }
 
     /// Prints formatted size
-    #[must_use] 
+    #[must_use]
     pub fn format_size(&self, bytes: u64) -> String {
         const KB: u64 = 1024;
         const MB: u64 = KB * 1024;

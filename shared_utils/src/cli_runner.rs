@@ -131,9 +131,7 @@ where
                 // Detect when user deleted the output directory to start fresh:
                 // clear old checkpoint state so all files get reprocessed.
                 if let Err(e) = cp.reset_if_output_root_missing(config.output.as_deref()) {
-                    warn!(
-                        "⚠️  Failed to check output root for checkpoint reset: {e}"
-                    );
+                    warn!("⚠️  Failed to check output root for checkpoint reset: {e}");
                 }
 
                 if cp.is_resume_mode() {
@@ -377,9 +375,7 @@ where
                 warn!("⚠️ Failed to clean up checkpoint state: {err}");
             }
         } else if let Err(err) = cp.release_lock() {
-            warn!(
-                "⚠️ Failed to release checkpoint lock after failure: {err}"
-            );
+            warn!("⚠️ Failed to release checkpoint lock after failure: {err}");
         }
     }
 
@@ -448,8 +444,8 @@ fn select_hot_start_file_index(
         let ext_match = recent_success_ext
             .and_then(|ext| extension_lower(path).map(|current| current == ext))
             .unwrap_or(false);
-        let parent_match = recent_success_parent
-            .is_some_and(|parent| path.parent() == Some(parent));
+        let parent_match =
+            recent_success_parent.is_some_and(|parent| path.parent() == Some(parent));
 
         let hot_start_score = i32::from(ext_match) * 4 + i32::from(parent_match) * 2;
         let proximity_score = (window - index) as i32;

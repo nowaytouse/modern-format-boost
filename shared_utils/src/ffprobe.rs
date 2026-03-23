@@ -342,7 +342,9 @@ pub fn probe_video(path: &Path) -> Result<FFprobeResult, FFprobeError> {
 
     let bit_depth = detect_bit_depth(&pix_fmt);
 
-    let profile = video_stream["profile"].as_str().map(std::string::ToString::to_string);
+    let profile = video_stream["profile"]
+        .as_str()
+        .map(std::string::ToString::to_string);
     let level = video_stream["level"]
         .as_u64()
         .map(|l| format!("{:.1}", l as f64 / 10.0));

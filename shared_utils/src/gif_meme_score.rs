@@ -438,7 +438,7 @@ fn apply_veto(meta: &GifMeta, bytes_per_pixel: f64) -> VetoVerdict {
 ///   MachineGenerated → 0.95   (almost zero contribution at 1080p)
 ///   Ambiguous        → 1.00
 /// ```
-#[must_use] 
+#[must_use]
 pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1);
     let total_frames = meta.frame_count.max(1);
@@ -556,7 +556,7 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
 /// 1. **Veto** (app-extension CDN marker → `KeepGif`; extreme physical → convert/keep)
 /// 2. **Weighted score** with complexity-hedged filename signal
 /// 3. **Confidence interval**: ≥0.60 keep · ≤0.40 convert · middle → keep
-#[must_use] 
+#[must_use]
 pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
     let pixels = (u64::from(meta.width) * u64::from(meta.height)).max(1) as f64;
     let bpp = meta.file_size_bytes as f64 / (pixels * meta.frame_count.max(1) as f64);
@@ -612,7 +612,7 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
 /// Returns `None` if the probe has no usable video dimensions.
 /// `palette_size` and `app_extensions` are left `None`; populate them via
 /// [`scan_gif_headers`] if a cheap header-scan is acceptable.
-#[must_use] 
+#[must_use]
 pub fn gif_meta_from_probe(
     probe: &crate::ffprobe::FFprobeResult,
     file_size_bytes: u64,
@@ -636,7 +636,7 @@ pub fn gif_meta_from_probe(
 /// Build a [`GifMeta`] from probe result + file path.
 /// Does NOT perform a GIF header scan; call [`scan_gif_headers`] separately
 /// if palette / app-extension data is needed.
-#[must_use] 
+#[must_use]
 pub fn gif_meta_from_probe_with_path(
     probe: &crate::ffprobe::FFprobeResult,
     file_size_bytes: u64,

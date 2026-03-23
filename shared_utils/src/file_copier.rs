@@ -54,7 +54,7 @@ pub struct CopyResult {
 }
 
 impl CopyResult {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             total_files: 0,
@@ -158,7 +158,8 @@ pub fn copy_unsupported_files(input_dir: &Path, output_dir: &Path, recursive: bo
             Ok(entry) => entry,
             Err(err) => {
                 let path = err
-                    .path().map_or_else(|| input_dir.to_path_buf(), Path::to_path_buf);
+                    .path()
+                    .map_or_else(|| input_dir.to_path_buf(), Path::to_path_buf);
                 let error_msg = format!("Directory traversal failed: {err}");
                 warn!(
                     path = %path.display(),
@@ -364,7 +365,7 @@ pub struct FileStats {
 }
 
 impl FileStats {
-    #[must_use] 
+    #[must_use]
     pub fn expected_output(&self) -> usize {
         self.total - self.sidecars
     }
@@ -443,7 +444,7 @@ pub struct VerifyResult {
     pub message: String,
 }
 
-#[must_use] 
+#[must_use]
 pub fn verify_output_completeness(
     input_dir: &Path,
     output_dir: &Path,

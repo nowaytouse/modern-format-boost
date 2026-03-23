@@ -80,12 +80,12 @@ pub struct EnhancedVerifyResult {
 impl EnhancedVerifyResult {
     /// True only when file is OK and no required check explicitly failed.
     /// None = check was not required (treat as pass); Some(false) = required check failed (do not fake success).
-    #[must_use] 
+    #[must_use]
     pub fn passed(&self) -> bool {
         self.file_ok && self.duration_match != Some(false) && self.has_video_stream != Some(false)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn summary(&self) -> String {
         if self.passed() {
             "✅ Enhanced verification passed".to_string()

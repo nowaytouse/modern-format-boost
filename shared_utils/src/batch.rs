@@ -241,7 +241,10 @@ impl BatchPauseController {
             .is_ok();
 
         if newly_paused {
-            let mut info = self.info.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut info = self
+                .info
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             *info = Some(BatchPauseInfo {
                 path: path.to_path_buf(),
                 reason,
@@ -252,7 +255,10 @@ impl BatchPauseController {
     }
 
     pub fn pause_info(&self) -> Option<BatchPauseInfo> {
-        self.info.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 

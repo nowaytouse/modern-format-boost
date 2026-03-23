@@ -80,12 +80,12 @@ pub enum AppError {
 }
 
 impl AppError {
-    #[must_use] 
+    #[must_use]
     pub fn is_recoverable(&self) -> bool {
         true
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn category(&self) -> ErrorCategory {
         match self {
             AppError::FileNotFound { .. } | AppError::DirectoryNotFound { .. } => {
@@ -114,7 +114,7 @@ impl AppError {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn user_message(&self) -> String {
         match self {
             AppError::FileNotFound { path, operation } => {
@@ -257,7 +257,7 @@ impl AppError {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_skip(&self) -> bool {
         matches!(self, AppError::OutputExists { .. })
     }

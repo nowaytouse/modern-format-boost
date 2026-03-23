@@ -23,7 +23,7 @@ pub struct MsssimProgressMonitor {
 }
 
 impl MsssimProgressMonitor {
-    #[must_use] 
+    #[must_use]
     pub fn new(duration_secs: f64, _total_frames: u64) -> Self {
         Self {
             duration_secs,

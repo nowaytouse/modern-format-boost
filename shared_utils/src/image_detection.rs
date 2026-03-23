@@ -167,7 +167,7 @@ pub enum DetectedFormat {
 }
 
 impl DetectedFormat {
-    #[must_use] 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             DetectedFormat::PNG => "PNG",
@@ -193,7 +193,7 @@ impl DetectedFormat {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_modern_format(&self) -> bool {
         matches!(
             self,
@@ -592,7 +592,7 @@ pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
 
 /// Returns true if the ISOBMFF file (AVIF/HEIC/HEIF) is an image sequence (animated).
 /// Checks `major_brand` and `compatible_brands` for known sequence brand codes.
-#[must_use] 
+#[must_use]
 pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
     const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
@@ -1769,13 +1769,15 @@ fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
     };
 
     // bit_depth applies per sample; for sub-byte depths (1, 2, 4) pixels are packed
-    let total_bits =
-        u64::from(info.width) * u64::from(info.height) * bits_per_sample * u64::from(info.bit_depth);
+    let total_bits = u64::from(info.width)
+        * u64::from(info.height)
+        * bits_per_sample
+        * u64::from(info.bit_depth);
     // Round up to bytes
     total_bits.div_ceil(8)
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_entropy(img: &DynamicImage) -> f64 {
     let gray = img.to_luma8();
     let mut histogram = [0u64; 256];
@@ -2196,8 +2198,12 @@ fn detect_ico_compression(path: &Path) -> Result<CompressionType> {
         }
 
         // Bytes 8-11: size of image data, bytes 12-15: offset of image data
-        let img_size = u64::from(u32::from_le_bytes([entry[8], entry[9], entry[10], entry[11]]));
-        let img_offset = u64::from(u32::from_le_bytes([entry[12], entry[13], entry[14], entry[15]]));
+        let img_size = u64::from(u32::from_le_bytes([
+            entry[8], entry[9], entry[10], entry[11],
+        ]));
+        let img_offset = u64::from(u32::from_le_bytes([
+            entry[12], entry[13], entry[14], entry[15],
+        ]));
 
         // Peak into image data for PNG magic
         file.seek(SeekFrom::Start(img_offset))

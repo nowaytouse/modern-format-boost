@@ -66,7 +66,9 @@ pub fn is_already_processed(path: &Path) -> bool {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.contains(&canonical)
 }
 
@@ -77,12 +79,16 @@ pub fn mark_as_processed(path: &Path) {
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| path.display().to_string());
 
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.insert(canonical);
 }
 
 pub fn clear_processed_list() {
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.clear();
 }
 
@@ -148,7 +154,9 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
         return Err(Box::new(err));
     }
 
-    let mut processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     processed.extend(loaded);
 
     Ok(())
@@ -160,7 +168,9 @@ pub fn load_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::E
 ///
 /// Returns an error if the file cannot be written or serialized.
 pub fn save_processed_list(list_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let processed = PROCESSED_FILES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let processed = PROCESSED_FILES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut file = fs::File::create(list_path)?;
     #[cfg(unix)]
     flock_exclusive(&file)?;
@@ -189,12 +199,12 @@ pub struct ConversionResult {
 }
 
 impl ConversionResult {
-    #[must_use] 
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
         self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn skipped_duplicate(input: &Path) -> Self {
         Self {
             success: true,
@@ -209,7 +219,7 @@ impl ConversionResult {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn skipped_exists(input: &Path, output: &Path) -> Self {
         let input_size = fs::metadata(input).map(|m| m.len()).unwrap_or(0);
         Self {
@@ -225,7 +235,7 @@ impl ConversionResult {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn skipped_custom(input: &Path, input_size: u64, reason: &str, skip_reason: &str) -> Self {
         Self {
             success: true,
@@ -240,7 +250,7 @@ impl ConversionResult {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn skipped_size_increase(input: &Path, input_size: u64, output_size: u64) -> Self {
         let diff_bytes = output_size as i64 - input_size as i64;
         let size_diff = crate::modern_ui::format_size_diff(diff_bytes);
@@ -258,7 +268,7 @@ impl ConversionResult {
     }
 
     /// Used when compress mode is on and output size equals input (goal: must be strictly smaller).
-    #[must_use] 
+    #[must_use]
     pub fn skipped_size_unchanged(input: &Path, input_size: u64, format_label: &str) -> Self {
         Self {
             success: true,
@@ -275,7 +285,7 @@ impl ConversionResult {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn success(
         input: &Path,
         output: &Path,
@@ -376,7 +386,7 @@ impl Default for ConvertOptions {
 }
 
 impl ConvertOptions {
-    #[must_use] 
+    #[must_use]
     pub fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
@@ -390,7 +400,7 @@ impl ConvertOptions {
         )
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
         // flag_mode() result is irrelevant — always use PreciseQualityMatchWithCompression
         crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
@@ -512,7 +522,7 @@ pub fn determine_output_path_with_base(
     Ok(output)
 }
 
-#[must_use] 
+#[must_use]
 pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     let reduction = if input_size == 0 {
         0.0
@@ -533,7 +543,7 @@ pub fn format_size_change(input_size: u64, output_size: u64) -> String {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
     if input_size == 0 {
         return 0.0;
@@ -546,7 +556,7 @@ pub fn calculate_size_reduction(input_size: u64, output_size: u64) -> f64 {
 /// **TOCTOU note**: The `output.exists()` check here is advisory only.
 /// Callers MUST use `temp_path_for_output()` + `commit_temp_to_output()`
 /// to write atomically; do NOT rely on this check as a write guard.
-#[must_use] 
+#[must_use]
 pub fn pre_conversion_check(
     input: &Path,
     output: &Path,
@@ -622,7 +632,7 @@ pub fn post_conversion_actions(
 pub struct TempOutputGuard(PathBuf);
 
 impl TempOutputGuard {
-    #[must_use] 
+    #[must_use]
     pub fn new(path: PathBuf) -> Self {
         Self(path)
     }
@@ -648,7 +658,7 @@ impl Drop for TempOutputGuard {
 /// `fs::rename(temp, output)` is atomic on the same filesystem. Use with `commit_temp_to_output`.
 /// Uses stem + ".tmp." + extension (e.g. file.mov → file.tmp.mov) so `FFmpeg` and other
 /// tools that infer format from extension still see the correct extension (mov, mp4, mkv, etc.).
-#[must_use] 
+#[must_use]
 pub fn temp_path_for_output(output: &Path) -> PathBuf {
     let stem = output
         .file_stem()
@@ -819,8 +829,12 @@ pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
 ///
 /// Returns `Some(ConversionResult)` if the output should be rejected (caller should return it),
 /// or `None` if the output passes the size check.
-#[must_use] 
-#[allow(clippy::similar_names, clippy::too_many_lines, clippy::cast_precision_loss)]
+#[must_use]
+#[allow(
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::cast_precision_loss
+)]
 pub fn check_size_tolerance(
     input: &Path,
     output: &Path,

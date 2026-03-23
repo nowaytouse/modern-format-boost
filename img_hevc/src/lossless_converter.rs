@@ -338,21 +338,29 @@ pub fn convert_to_jxl(
                                     let cjxl_status = cjxl_proc.wait();
 
                                     let ffmpeg_stderr_str = match ffmpeg_stderr_thread {
-                                        Some(handle) => if let Ok(s) = handle.join() { s } else {
-                                            shared_utils::progress_mode::emit_stderr(
-                                                "   ⚠️ FFmpeg stderr thread panicked",
-                                            );
-                                            String::new()
-                                        },
+                                        Some(handle) => {
+                                            if let Ok(s) = handle.join() {
+                                                s
+                                            } else {
+                                                shared_utils::progress_mode::emit_stderr(
+                                                    "   ⚠️ FFmpeg stderr thread panicked",
+                                                );
+                                                String::new()
+                                            }
+                                        }
                                         None => String::new(),
                                     };
                                     let cjxl_stderr_str = match cjxl_stderr_thread {
-                                        Some(handle) => if let Ok(s) = handle.join() { s } else {
-                                            shared_utils::progress_mode::emit_stderr(
-                                                "   ⚠️ cjxl stderr thread panicked",
-                                            );
-                                            String::new()
-                                        },
+                                        Some(handle) => {
+                                            if let Ok(s) = handle.join() {
+                                                s
+                                            } else {
+                                                shared_utils::progress_mode::emit_stderr(
+                                                    "   ⚠️ cjxl stderr thread panicked",
+                                                );
+                                                String::new()
+                                            }
+                                        }
                                         None => String::new(),
                                     };
 
@@ -1505,7 +1513,7 @@ pub fn convert_to_gif_apple_compat(
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
-#[must_use] 
+#[must_use]
 pub fn is_high_quality_animated(width: u32, height: u32) -> bool {
     vid_hevc::animated_image::is_high_quality_animated(width, height)
 }

@@ -302,10 +302,13 @@ fn get_hostname() -> String {
     {
         use std::process::Command;
         match Command::new("hostname").output() {
-            Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(|err| {
+            Ok(output) if output.status.success() => String::from_utf8(output.stdout).map_or_else(
+                |err| {
                     eprintln!("⚠️ [checkpoint] Non-UTF-8 hostname output: {err}");
                     "unknown".to_string()
-                }, |s| s.trim().to_string()),
+                },
+                |s| s.trim().to_string(),
+            ),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 eprintln!(
@@ -387,9 +390,7 @@ impl CheckpointManager {
 
         if manager.resume_mode.load(Ordering::Relaxed) {
             if let Err(err) = manager.rewrite_progress_file() {
-                eprintln!(
-                    "⚠️ [checkpoint] Failed to compact validated checkpoint state: {err}"
-                );
+                eprintln!("⚠️ [checkpoint] Failed to compact validated checkpoint state: {err}");
             }
         }
 
@@ -484,9 +485,7 @@ impl CheckpointManager {
                     if let Ok(elapsed) = modified.elapsed() {
                         if elapsed.as_secs() > LOCK_STALE_TIMEOUT_SECS {
                             if let Err(e) = fs::remove_file(&self.lock_file) {
-                                eprintln!(
-                                    "⚠️ [checkpoint] Failed to remove stale lock file: {e}"
-                                );
+                                eprintln!("⚠️ [checkpoint] Failed to remove stale lock file: {e}");
                             }
                             return Ok(None);
                         }
@@ -549,14 +548,20 @@ impl CheckpointManager {
     }
 
     pub fn completed_count(&self) -> usize {
-        let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let completed = self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         completed.len()
     }
 
     pub fn is_completed(&self, path: &Path) -> bool {
         let key = Self::normalize_path(path);
         let maybe_entry = {
-            let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let completed = self
+                .completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             completed.get(&key).cloned()
         };
 
@@ -592,7 +597,10 @@ impl CheckpointManager {
         let entry = CheckpointEntry::from_path(path)?;
         let key = entry.path.clone();
         {
-            let mut completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut completed = self
+                .completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if completed.contains_key(&key) {
                 return Ok(());
             }
@@ -617,7 +625,10 @@ impl CheckpointManager {
     }
 
     pub fn sync_to_processed_list(&self) {
-        let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let completed = self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for path_str in completed.keys() {
             crate::conversion::mark_as_processed(Path::new(path_str));
         }
@@ -627,7 +638,10 @@ impl CheckpointManager {
     ///
     /// Returns an error if the progress file cannot be removed.
     pub fn clear_progress(&self) -> io::Result<()> {
-        let mut completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut completed = self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         completed.clear();
         self.resume_mode.store(false, Ordering::Relaxed);
         if self.progress_file.exists() {
@@ -864,7 +878,10 @@ impl CheckpointManager {
 
     fn rewrite_progress_file(&self) -> io::Result<()> {
         let temp_path = self.progress_file.with_extension("txt.tmp");
-        let completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let completed = self
+            .completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut file = File::create(&temp_path)?;
         let header = serde_json::to_string(&CheckpointRecord::Header(self.header.clone()))
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
@@ -882,7 +899,10 @@ impl CheckpointManager {
 
     fn drop_completed_entry(&self, key: &str) {
         let became_empty = {
-            let mut completed = self.completed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut completed = self
+                .completed
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             completed.remove(key);
             completed.is_empty()
         };
@@ -916,8 +936,7 @@ pub fn verify_output_integrity(output: &Path, min_size: u64) -> Result<(), Strin
         return Err("Output file does not exist".to_string());
     }
 
-    let metadata =
-        fs::metadata(output).map_err(|e| format!("Cannot read output metadata: {e}"))?;
+    let metadata = fs::metadata(output).map_err(|e| format!("Cannot read output metadata: {e}"))?;
 
     if metadata.len() == 0 {
         return Err("Output file is empty (0 bytes)".to_string());
@@ -967,7 +986,9 @@ mod tests {
     static TEST_LOCK: std_mutex<()> = std_mutex::new(());
 
     fn setup_test_env() -> (TempDir, TempDir, std::sync::MutexGuard<'static, ()>) {
-        let guard = TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let guard = TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp_target = TempDir::new().unwrap();
         let temp_progress = TempDir::new().unwrap();
         std::env::set_var("MFB_PROGRESS_DIR", temp_progress.path());

@@ -152,7 +152,7 @@ fn run_ssim_all_filter(input: &Path, output: &Path, lavfi: &str) -> Option<(f64,
 /// 2. Format normalization (GIF palette / odd-size → yuv420p even).
 /// 3. Alpha flatten: composite input on black (same as encoder) then compare,
 ///    so transparent GIF/WebP/PNG matches HEVC output that has no alpha.
-#[must_use] 
+#[must_use]
 pub fn calculate_ssim_all(input: &Path, output: &Path) -> Option<(f64, f64, f64, f64)> {
     const DIRECT: &str = "[0:v][1:v]ssim";
     const FORMAT_NORM: &str = "[0:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[ref];[1:v]format=yuv420p,scale='iw-mod(iw,2)':'ih-mod(ih,2)'[cmp];[ref][cmp]ssim";

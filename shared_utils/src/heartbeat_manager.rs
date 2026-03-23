@@ -101,7 +101,7 @@ impl HeartbeatManager {
         ACTIVE_HEARTBEATS.load(Ordering::Relaxed)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_active_heartbeats() -> Vec<(String, usize)> {
         let registry = lock_registry();
         if let Some(map) = registry.as_ref() {
@@ -121,7 +121,7 @@ impl HeartbeatManager {
 pub struct ProgressBarGuard;
 
 impl ProgressBarGuard {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         HeartbeatManager::register_progress_bar();
         Self

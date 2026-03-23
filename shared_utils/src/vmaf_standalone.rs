@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
-#[must_use] 
+#[must_use]
 pub fn is_vmaf_available() -> bool {
     Command::new("vmaf")
         .arg("--version")

@@ -89,7 +89,7 @@ pub struct XmpMerger {
 }
 
 impl XmpMerger {
-    #[must_use] 
+    #[must_use]
     pub fn new(config: XmpMergerConfig) -> Self {
         Self { config }
     }
@@ -740,7 +740,8 @@ impl XmpMerger {
         let detected_ext = if let Some(hint) = hint_ext {
             Some(hint.to_string())
         } else {
-            crate::common_utils::detect_real_extension(media_path).map(std::string::ToString::to_string)
+            crate::common_utils::detect_real_extension(media_path)
+                .map(std::string::ToString::to_string)
         };
 
         let implied_ext = if xmp_filename.to_lowercase().ends_with(".xmp") {
@@ -845,7 +846,7 @@ impl XmpMerger {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn process_xmp(&self, xmp_path: &Path) -> MergeResult {
         let (media_path, strategy) = match self.find_media_file(xmp_path) {
             Ok((path, strat)) => (path, strat),
@@ -934,7 +935,7 @@ pub struct MergeSummary {
 }
 
 impl MergeSummary {
-    #[must_use] 
+    #[must_use]
     pub fn from_results(results: &[MergeResult]) -> Self {
         let mut summary = Self {
             total: results.len(),
@@ -1110,7 +1111,7 @@ mod tests {
             XmpMerger::normalize_filename("IMG_2024-01-01"),
             "img20240101"
         );
-        assert_eq!(XmpMerger::normalize_filename("test_file"), "test_file");
+        assert_eq!(XmpMerger::normalize_filename("test_file"), "testfile");
         assert_eq!(XmpMerger::normalize_filename("photo.test"), "phototest");
     }
 

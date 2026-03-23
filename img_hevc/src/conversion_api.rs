@@ -51,7 +51,7 @@ pub struct ConversionOutput {
 }
 
 impl ConversionOutput {
-    #[must_use] 
+    #[must_use]
     pub fn is_jpeg_transcode(&self) -> bool {
         self.message.contains("JPEG transcoding") || self.message.contains("JPEG lossless")
     }
@@ -617,6 +617,7 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
 }
 
 /// Simplified wrapper: builds a default `ConversionConfig` and delegates to `smart_convert`.
+///
 /// Use `smart_convert` when you need compress, `preserve_metadata`, `preserve_timestamps`, `delete_original`, or `apple_compat`.
 pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     let config = ConversionConfig {

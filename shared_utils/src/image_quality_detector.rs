@@ -360,14 +360,17 @@ fn calculate_noise_level(rgba: &[u8], width: u32, height: u32) -> f64 {
             let idx_down = idx + (width as usize * 4);
 
             if idx_down + 2 < rgba.len() {
-                let curr = (i32::from(rgba[idx]) + i32::from(rgba[idx + 1]) + i32::from(rgba[idx + 2])) / 3;
+                let curr =
+                    (i32::from(rgba[idx]) + i32::from(rgba[idx + 1]) + i32::from(rgba[idx + 2]))
+                        / 3;
                 let right = (i32::from(rgba[idx_right])
                     + i32::from(rgba[idx_right + 1])
                     + i32::from(rgba[idx_right + 2]))
                     / 3;
-                let down =
-                    (i32::from(rgba[idx_down]) + i32::from(rgba[idx_down + 1]) + i32::from(rgba[idx_down + 2]))
-                        / 3;
+                let down = (i32::from(rgba[idx_down])
+                    + i32::from(rgba[idx_down + 1])
+                    + i32::from(rgba[idx_down + 2]))
+                    / 3;
 
                 diff_sum += f64::from((curr - right).abs());
                 diff_sum += f64::from((curr - down).abs());
@@ -403,7 +406,10 @@ fn calculate_sharpness(rgba: &[u8], width: u32, height: u32) -> f64 {
 
     let get_gray = |x: usize, y: usize| -> i32 {
         let idx = (y * width as usize + x) * 4;
-        (i32::from(rgba[idx]) * 299 + i32::from(rgba[idx + 1]) * 587 + i32::from(rgba[idx + 2]) * 114) / 1000
+        (i32::from(rgba[idx]) * 299
+            + i32::from(rgba[idx + 1]) * 587
+            + i32::from(rgba[idx + 2]) * 114)
+            / 1000
     };
 
     for y in (1..(height - 1) as usize).step_by(step) {
@@ -445,9 +451,10 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     for i in (0..pixels).step_by(step) {
         let idx = i * 4;
         if idx + 2 < rgba.len() {
-            let gray =
-                (u64::from(rgba[idx]) * 299 + u64::from(rgba[idx + 1]) * 587 + u64::from(rgba[idx + 2]) * 114)
-                    / 1000;
+            let gray = (u64::from(rgba[idx]) * 299
+                + u64::from(rgba[idx + 1]) * 587
+                + u64::from(rgba[idx + 2]) * 114)
+                / 1000;
             sum += gray;
             sq_sum += gray * gray;
             sample_count += 1;
@@ -611,7 +618,7 @@ fn calculate_analysis_confidence(
     confidence.clamp(0.0, 1.0)
 }
 
-#[must_use] 
+#[must_use]
 pub fn analyze_image_quality_from_path(path: &Path) -> Option<ImageQualityAnalysis> {
     analyze_image_quality_with_cache(path, None)
 }
@@ -661,8 +668,10 @@ fn analyze_image_quality_from_path_internal(path: &Path) -> Option<ImageQualityA
     let (width, height) = img.dimensions();
     let rgba = img.to_rgba8();
     let file_size = std::fs::metadata(path).ok()?.len();
-    let format = path
-        .extension().map_or_else(|| "unknown".to_string(), |e| e.to_string_lossy().to_uppercase());
+    let format = path.extension().map_or_else(
+        || "unknown".to_string(),
+        |e| e.to_string_lossy().to_uppercase(),
+    );
     analyze_image_quality(
         width,
         height,

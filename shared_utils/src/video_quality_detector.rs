@@ -74,7 +74,7 @@ pub enum VideoCodecType {
 }
 
 impl VideoCodecType {
-    #[must_use] 
+    #[must_use]
     pub fn from_source_codec(codec: SourceCodec) -> Self {
         match codec {
             SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv => {
@@ -103,7 +103,7 @@ pub enum ChromaSubsampling {
 }
 
 impl ChromaSubsampling {
-    #[must_use] 
+    #[must_use]
     pub fn from_pix_fmt(pix_fmt: &str) -> Self {
         let fmt = pix_fmt.to_lowercase();
         if fmt.contains("444") {
@@ -123,7 +123,7 @@ impl ChromaSubsampling {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn quality_factor(&self) -> f64 {
         match self {
             ChromaSubsampling::Yuv420 => 1.0,
@@ -146,7 +146,7 @@ pub enum VideoContentType {
 }
 
 impl VideoContentType {
-    #[must_use] 
+    #[must_use]
     pub fn to_content_type(&self) -> ContentType {
         match self {
             VideoContentType::LiveAction => ContentType::LiveAction,
@@ -169,7 +169,7 @@ pub enum CompressionLevel {
 }
 
 impl CompressionLevel {
-    #[must_use] 
+    #[must_use]
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
         if codec_type == VideoCodecType::Lossless {
             return CompressionLevel::Lossless;
@@ -245,11 +245,10 @@ pub fn analyze_video_quality(
     };
 
     let chroma = ChromaSubsampling::from_pix_fmt(pix_fmt);
-    let is_hdr = color_space
-        .is_some_and(|cs| {
-            let cs_lower = cs.to_lowercase();
-            cs_lower.contains("bt2020") || cs_lower.contains("2020")
-        });
+    let is_hdr = color_space.is_some_and(|cs| {
+        let cs_lower = cs.to_lowercase();
+        cs_lower.contains("bt2020") || cs_lower.contains("2020")
+    });
 
     let has_b_frames = max_b_frames > 0;
     let b_frame_count = max_b_frames;
@@ -417,7 +416,7 @@ pub fn log_media_info_for_quality(analysis: &VideoQualityAnalysis, input_path: &
     write_to_log_at_level(Level::DEBUG, "");
 }
 
-#[must_use] 
+#[must_use]
 pub fn to_quality_analysis(analysis: &VideoQualityAnalysis) -> QualityAnalysis {
     let gop_fallback = (analysis.fps * 2.5).round().clamp(12.0, 250.0) as u32;
     let color_fallback = if analysis.height <= 576 {

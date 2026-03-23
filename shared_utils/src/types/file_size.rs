@@ -21,42 +21,42 @@ impl FileSize {
     pub const GB: u64 = 1_048_576 * 1024;
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn new(bytes: u64) -> Self {
         Self(bytes)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn from_kb(kb: u64) -> Self {
         Self(kb * Self::KB)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn from_mb(mb: u64) -> Self {
         Self(mb * Self::MB)
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub const fn bytes(&self) -> u64 {
         self.0
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn saturating_sub(&self, other: FileSize) -> FileSize {
         FileSize(self.0.saturating_sub(other.0))
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn saturating_add(&self, other: FileSize) -> FileSize {
         FileSize(self.0.saturating_add(other.0))
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn compression_ratio(&self, original: FileSize) -> Option<f64> {
         if original.0 == 0 {
             None
@@ -65,7 +65,7 @@ impl FileSize {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn size_change_percent(&self, original: FileSize) -> Option<f64> {
         if original.0 == 0 {
             None
@@ -74,7 +74,7 @@ impl FileSize {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn display(&self) -> String {
         if self.0 >= Self::GB {
             format!("{:.2} GB", self.0 as f64 / Self::GB as f64)
@@ -87,25 +87,25 @@ impl FileSize {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn metadata_margin(&self) -> FileSize {
         let percent_based = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
         let margin = percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX);
         FileSize(margin)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn compression_target(&self) -> FileSize {
         self.saturating_sub(self.metadata_margin())
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn can_compress_to(&self, target: FileSize) -> bool {
         self.0 > target.0
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn is_zero(&self) -> bool {
         self.0 == 0
     }

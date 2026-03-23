@@ -111,9 +111,7 @@ fn watcher_thread(signal_flag: Arc<AtomicBool>) {
             continue; // No signal yet.
         }
 
-        let elapsed_secs = START_INSTANT
-            .get()
-            .map_or(0, |t| t.elapsed().as_secs());
+        let elapsed_secs = START_INSTANT.get().map_or(0, |t| t.elapsed().as_secs());
 
         if elapsed_secs < 270 {
             // Under 4.5 minutes → exit immediately (user made a deliberate Ctrl+C).

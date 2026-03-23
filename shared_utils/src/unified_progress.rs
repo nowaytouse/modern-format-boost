@@ -21,7 +21,7 @@ pub struct UnifiedProgressBar {
 }
 
 impl UnifiedProgressBar {
-    #[must_use] 
+    #[must_use]
     pub fn new(total: u64, message: &str) -> Arc<Self> {
         let bar = ProgressBar::new(total);
         if crate::progress_mode::is_quiet_mode() {
@@ -45,7 +45,7 @@ impl UnifiedProgressBar {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn new_iteration(message: &str, input_size: u64, total_iterations: u64) -> Arc<Self> {
         let bar = ProgressBar::new(total_iterations);
         if crate::progress_mode::is_quiet_mode() {

@@ -310,7 +310,7 @@ fn temp_extension_for(output: &std::path::Path, suffix: &str) -> String {
 
 /// Returns a temp extension string (e.g. "`gpu_temp.mp4`") for the given output path.
 /// Used by callers and by warmup encoding internally via `temp_extension_for`(_, "warmup").
-#[must_use] 
+#[must_use]
 pub fn derive_gpu_temp_extension(output: &std::path::Path) -> String {
     temp_extension_for(output, "gpu_temp")
 }
@@ -350,12 +350,12 @@ pub struct GpuEncoder {
 }
 
 impl GpuEncoder {
-    #[must_use] 
+    #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
         self.name
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_crf_args(&self, crf: f32) -> Vec<String> {
         if self.supports_crf {
             let quality_value = if self.gpu_type == GpuType::Apple {
@@ -374,7 +374,7 @@ impl GpuEncoder {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn extra_args(&self) -> &[&'static str] {
         &self.extra_args
     }
@@ -406,7 +406,7 @@ impl GpuAccel {
         GPU_ACCEL.get_or_init(Self::detect_internal)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn detect_fresh() -> GpuAccel {
         Self::detect_internal()
     }
@@ -770,7 +770,7 @@ impl GpuAccel {
         })
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_hevc_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.hevc_encoder.as_ref()
@@ -779,7 +779,7 @@ impl GpuAccel {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_av1_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.av1_encoder.as_ref()
@@ -788,7 +788,7 @@ impl GpuAccel {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn get_h264_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.h264_encoder.as_ref()
@@ -797,12 +797,12 @@ impl GpuAccel {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn is_available(&self) -> bool {
         self.enabled
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn description(&self) -> String {
         if self.enabled {
             format!("{} (Hardware Accelerated)", self.gpu_type)
@@ -908,9 +908,7 @@ pub fn calculate_smart_sample(
             entropy_threshold * 0.8
         )
     } else if sample_ratio > 0.2 {
-        format!(
-            "gt(scene,{scene_threshold})+gt(entropy,{entropy_threshold})"
-        )
+        format!("gt(scene,{scene_threshold})+gt(entropy,{entropy_threshold})")
     } else {
         format!(
             "gt(scene,{})*gt(entropy,{})",
@@ -964,13 +962,13 @@ pub struct QualityScore {
 
 impl QualityScore {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn ssim_typed(&self) -> Option<crate::types::Ssim> {
         crate::types::Ssim::new(self.ssim).ok()
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn ssim_meets(&self, threshold: f64) -> bool {
         crate::float_compare::ssim_meets_threshold(self.ssim, threshold)
     }
@@ -982,7 +980,7 @@ pub enum SearchPhase {
     Cpu,
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_quality_score(
     ssim: f64,
     output_size: u64,
@@ -1010,7 +1008,7 @@ pub fn calculate_quality_score(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn is_quality_better(
     new_score: &QualityScore,
     old_score: &QualityScore,
@@ -1027,7 +1025,7 @@ pub fn is_quality_better(
     improvement > 0.005
 }
 
-#[must_use] 
+#[must_use]
 pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary: f32,
     gpu_type: GpuType,
@@ -1058,7 +1056,7 @@ pub fn estimate_cpu_search_center_dynamic(
     gpu_boundary + base_offset + adjustment
 }
 
-#[must_use] 
+#[must_use]
 pub fn estimate_cpu_search_range(
     gpu_range: (f32, f32),
     gpu_type: GpuType,
@@ -1078,12 +1076,12 @@ pub fn estimate_cpu_search_range(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn estimate_cpu_search_center(gpu_boundary: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center_dynamic(gpu_boundary, gpu_type, codec, None)
 }
 
-#[must_use] 
+#[must_use]
 pub fn gpu_boundary_to_cpu_range(
     gpu_boundary: f32,
     gpu_type: GpuType,
@@ -1100,7 +1098,7 @@ pub fn gpu_boundary_to_cpu_range(
 }
 
 #[deprecated(since = "5.0.1", note = "use estimate_cpu_search_center instead")]
-#[must_use] 
+#[must_use]
 pub fn gpu_to_cpu_crf(gpu_crf: f32, gpu_type: GpuType, codec: &str) -> f32 {
     estimate_cpu_search_center(gpu_crf, gpu_type, codec)
 }
@@ -1123,14 +1121,14 @@ pub struct GpuCoarseResult {
 
 impl GpuCoarseResult {
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn best_ssim_typed(&self) -> Option<crate::types::Ssim> {
         self.gpu_best_ssim
             .and_then(|v| crate::types::Ssim::new(v).ok())
     }
 
     #[inline]
-    #[must_use] 
+    #[must_use]
     pub fn ceiling_ssim_typed(&self) -> Option<crate::types::Ssim> {
         self.quality_ceiling_ssim
             .and_then(|v| crate::types::Ssim::new(v).ok())
@@ -1151,7 +1149,7 @@ pub struct CrfMapping {
 }
 
 impl CrfMapping {
-    #[must_use] 
+    #[must_use]
     pub fn hevc(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (5.0, 0.5),
@@ -1169,7 +1167,7 @@ impl CrfMapping {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn av1(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (0.0, 0.0),
@@ -1187,7 +1185,7 @@ impl CrfMapping {
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn gpu_to_cpu_range(&self, gpu_crf: f32, min_crf: f32, max_crf: f32) -> (f32, f32, f32) {
         let center = (gpu_crf + self.offset).min(max_crf);
         let low = gpu_crf.max(min_crf);
@@ -1195,7 +1193,7 @@ impl CrfMapping {
         (center, low, high)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn cpu_to_gpu(&self, cpu_crf: f32) -> f32 {
         cpu_crf - self.offset
     }
@@ -1575,7 +1573,9 @@ fn gpu_coarse_search_with_log_impl(
         _ => None,
     };
 
-    let gpu_encoder = if let Some(enc) = gpu_encoder { enc } else {
+    let gpu_encoder = if let Some(enc) = gpu_encoder {
+        enc
+    } else {
         log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
         log_msg!(
             "   ║  ⚠️  FALLBACK: No GPU encoder for {}!              ║",
@@ -1643,9 +1643,7 @@ fn gpu_coarse_search_with_log_impl(
                 skip_gpu_size_threshold / 1024
             )
         } else {
-            format!(
-                "duration too short ({quick_duration:.1}s < {skip_gpu_duration_threshold:.1}s)"
-            )
+            format!("duration too short ({quick_duration:.1}s < {skip_gpu_duration_threshold:.1}s)")
         };
         log_msg!("   ⚡ Skip GPU: {} → CPU-only mode", reason);
         return Ok(GpuCoarseResult {
@@ -1971,21 +1969,22 @@ fn gpu_coarse_search_with_log_impl(
                                         0.0
                                     };
 
-                                    let estimated_final_size = if let Ok(metadata) = std::fs::metadata(output) {
-                                        let current_size = metadata.len();
-                                        fallback_logged = false;
-                                        (current_size as f64 / pct.max(1.0) * 100.0) as u64
-                                    } else {
-                                        if !fallback_logged {
-                                            crate::log_eprintln!(
+                                    let estimated_final_size =
+                                        if let Ok(metadata) = std::fs::metadata(output) {
+                                            let current_size = metadata.len();
+                                            fallback_logged = false;
+                                            (current_size as f64 / pct.max(1.0) * 100.0) as u64
+                                        } else {
+                                            if !fallback_logged {
+                                                crate::log_eprintln!(
                                                 "Using linear estimation (metadata unavailable)"
                                             );
-                                            fallback_logged = true;
-                                        }
-                                        (sample_input_size as f64 * (1.0 / pct.max(0.1)))
-                                            .min(sample_input_size as f64 * 10.0)
-                                            as u64
-                                    };
+                                                fallback_logged = true;
+                                            }
+                                            (sample_input_size as f64 * (1.0 / pct.max(0.1)))
+                                                .min(sample_input_size as f64 * 10.0)
+                                                as u64
+                                        };
 
                                     crate::log_eprintln!("⏳ Progress: {:.1}% ({:.1}s / {:.1}s) - ETA: {}s - Speed: {:.2}x",
                                         pct, current_secs, actual_sample_duration, eta, speed);
@@ -2588,8 +2587,8 @@ fn gpu_coarse_search_with_log_impl(
                     }
 
                     if size < sample_input_size {
-                        let improvement = best_size
-                            .map_or(0.0, |b| (b as f64 - size as f64) / b as f64 * 100.0);
+                        let improvement =
+                            best_size.map_or(0.0, |b| (b as f64 - size as f64) / b as f64 * 100.0);
                         log_msg!("   ✓ CRF {:.1}: {:.1}% improvement", test_crf, improvement);
 
                         best_crf = Some(test_crf);
@@ -2692,7 +2691,9 @@ fn gpu_coarse_search_with_log_impl(
     };
 
     let (quality_ceiling_crf, _quality_ceiling_psnr) = quality_ceiling_info
-        .map_or((None, None), |(crf, psnr)| (Some(crf), if psnr > 0.0 { Some(psnr) } else { None }));
+        .map_or((None, None), |(crf, psnr)| {
+            (Some(crf), if psnr > 0.0 { Some(psnr) } else { None })
+        });
 
     let (gpu_ssim, gpu_psnr) = if found {
         log_msg!(
@@ -2862,7 +2863,7 @@ fn gpu_coarse_search_with_log_impl(
     })
 }
 
-#[must_use] 
+#[must_use]
 pub fn get_cpu_search_range_from_gpu(
     gpu_result: &GpuCoarseResult,
     original_min_crf: f32,
@@ -3003,10 +3004,7 @@ mod tests {
             let args = encoder.get_crf_args(crf);
             let qv: f32 = args[1].parse().unwrap();
             assert!(qv >= 1.0, "q:v should be >= 1, got {qv} for CRF {crf}");
-            assert!(
-                qv <= 100.0,
-                "q:v should be <= 100, got {qv} for CRF {crf}"
-            );
+            assert!(qv <= 100.0, "q:v should be <= 100, got {qv} for CRF {crf}");
         }
     }
 }

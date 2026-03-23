@@ -99,7 +99,7 @@ fn build_hdr_ffmpeg_args(detection: &VideoDetectionResult) -> Vec<String> {
 /// - If source is 10-bit (yuv420p10le, yuv422p10le, etc.) use yuv420p10le so that
 ///   the HDR signal range / precision is preserved in the output stream.
 /// - Otherwise default to yuv420p (8-bit SDR).
-fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
+const fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     if detection.bit_depth >= 10 {
         "yuv420p10le"
     } else {
@@ -107,12 +107,12 @@ fn hdr_pix_fmt(detection: &VideoDetectionResult) -> &'static str {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn determine_strategy(result: &VideoDetectionResult) -> ConversionStrategy {
     determine_strategy_with_apple_compat(result, false)
 }
 
-#[must_use] 
+#[must_use]
 pub fn determine_strategy_with_apple_compat(
     result: &VideoDetectionResult,
     apple_compat: bool,
@@ -196,7 +196,10 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
 
     let detection = crate::detection_api::detect_video_with_cache(input, None)?;
 
-    let output_dir = output_dir.map_or_else(|| input.parent().unwrap_or(Path::new(".")).to_path_buf(), std::path::Path::to_path_buf);
+    let output_dir = output_dir.map_or_else(
+        || input.parent().unwrap_or(Path::new(".")).to_path_buf(),
+        std::path::Path::to_path_buf,
+    );
 
     std::fs::create_dir_all(&output_dir)?;
 
@@ -521,7 +524,9 @@ pub fn auto_convert_with_cache(
                 if !explore_result.quality_passed
                     && (config.match_quality || config.explore_smaller)
                 {
-                    let actual_ssim = if let Some(s) = explore_result.ssim { s } else {
+                    let actual_ssim = if let Some(s) = explore_result.ssim {
+                        s
+                    } else {
                         warn!("   ⚠️  SSIM not measured, cannot verify quality");
                         return Err(VidQualityError::GeneralError(
                             "Quality verification failed: SSIM not measured".to_string(),
@@ -558,7 +563,7 @@ pub fn auto_convert_with_cache(
                                 0.0
                             };
 
-                            use shared_utils::modern_ui::colors::{BRIGHT_YELLOW, RESET, DIM};
+                            use shared_utils::modern_ui::colors::{BRIGHT_YELLOW, DIM, RESET};
 
                             // Use KB + 1 decimal for streams < 1 MB so displayed sizes match the percentage (0.07→0.08 MB rounded looked like +14%).
                             let base_msg = if input_b < 1024.0 * 1024.0 {
@@ -583,9 +588,7 @@ pub fn auto_convert_with_cache(
 
                             // Create beautiful single-line format with visual separators
                             let additional_info = if total_file_compressed {
-                                format!(
-                                    "{DIM}│{RESET} Total file smaller but video stream larger"
-                                )
+                                format!("{DIM}│{RESET} Total file smaller but video stream larger")
                             } else {
                                 format!("{DIM}│{RESET} Total file and video stream both larger")
                             };
@@ -598,9 +601,7 @@ pub fn auto_convert_with_cache(
                                 format!(
                                     "Video stream compression failed: {stream_change_pct:+.1}%"
                                 ),
-                                format!(
-                                    "Skipped: video stream larger ({stream_change_pct:+.1}%)"
-                                ),
+                                format!("Skipped: video stream larger ({stream_change_pct:+.1}%)"),
                                 "Original file PROTECTED (output did not compress)".to_string(),
                                 "Output discarded (video stream larger than original)".to_string(),
                             )
@@ -730,8 +731,10 @@ pub fn auto_convert_with_cache(
                     });
                 }
 
-                if let Some(false) = explore_result.ms_ssim_passed {
-                    let ms_ssim_score = if let Some(score) = explore_result.ms_ssim_score { score } else {
+                if explore_result.ms_ssim_passed == Some(false) {
+                    let ms_ssim_score = if let Some(score) = explore_result.ms_ssim_score {
+                        score
+                    } else {
                         warn!("   ⚠️  MS-SSIM marked as failed but score not available");
                         return Err(VidQualityError::GeneralError(
                             "MS-SSIM verification failed: score not measured".to_string(),
@@ -1084,9 +1087,7 @@ fn success_status_for_cache(
     explore_result: &Option<shared_utils::ExploreResult>,
 ) -> bool {
     matches!(target, TargetVideoFormat::Av1Mp4)
-        && explore_result
-            .as_ref()
-            .is_some_and(|r| r.quality_passed)
+        && explore_result.as_ref().is_some_and(|r| r.quality_passed)
 }
 
 fn best_effort_status_for_cache(
@@ -1096,9 +1097,7 @@ fn best_effort_status_for_cache(
 ) -> bool {
     matches!(target, TargetVideoFormat::Av1Mp4)
         && final_crf > 0.0
-        && explore_result
-            .as_ref()
-            .is_some_and(|r| !r.quality_passed)
+        && explore_result.as_ref().is_some_and(|r| !r.quality_passed)
 }
 
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
@@ -1264,9 +1263,8 @@ fn execute_av1_lossless(
         });
     }
 
-    let size = std::fs::metadata(output).map_err(|e| {
-        VidQualityError::ConversionError(format!("Failed to read AV1 output: {e}"))
-    })?;
+    let size = std::fs::metadata(output)
+        .map_err(|e| VidQualityError::ConversionError(format!("Failed to read AV1 output: {e}")))?;
     let size = size.len();
     if size == 0 {
         cleanup_output_file(output, "empty AV1 output");

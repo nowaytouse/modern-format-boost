@@ -8,37 +8,37 @@ pub const F64_EPSILON: f64 = 1e-6;
 pub const F32_EPSILON: f32 = 1e-4;
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_eq_f64(a: f64, b: f64) -> bool {
     (a - b).abs() < F64_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_eq_f32(a: f32, b: f32) -> bool {
     (a - b).abs() < F32_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_zero_f64(a: f64) -> bool {
     a.abs() < F64_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_zero_f32(a: f32) -> bool {
     a.abs() < F32_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_le_f64(a: f64, b: f64) -> bool {
     a < b + F64_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_ge_f64(a: f64, b: f64) -> bool {
     a > b - F64_EPSILON
 }
@@ -50,37 +50,37 @@ pub const CRF_EPSILON: f32 = 0.01;
 pub const PSNR_EPSILON: f64 = 0.1;
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_eq_ssim(a: f64, b: f64) -> bool {
     (a - b).abs() < SSIM_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_eq_crf(a: f32, b: f32) -> bool {
     (a - b).abs() < CRF_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn approx_eq_psnr(a: f64, b: f64) -> bool {
     (a - b).abs() < PSNR_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn ssim_meets_threshold(ssim: f64, threshold: f64) -> bool {
     ssim >= threshold - SSIM_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn ssim_below_threshold(ssim: f64, threshold: f64) -> bool {
     ssim < threshold - SSIM_EPSILON
 }
 
 #[inline]
-#[must_use] 
+#[must_use]
 pub fn crf_in_range(crf: f32, min: f32, max: f32) -> bool {
     crf >= min - CRF_EPSILON && crf <= max + CRF_EPSILON
 }

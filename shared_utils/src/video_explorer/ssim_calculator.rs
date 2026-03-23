@@ -27,16 +27,12 @@ fn common_even_metric_dimensions(
 fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> Option<(u32, u32)> {
     let (input_width, input_height) = crate::conversion::get_input_dimensions(input)
         .map_err(|err| {
-            eprintln!(
-                "      ❌ Failed to read reference dimensions for quality metric: {err}"
-            );
+            eprintln!("      ❌ Failed to read reference dimensions for quality metric: {err}");
         })
         .ok()?;
     let (output_width, output_height) = crate::conversion::get_input_dimensions(output)
         .map_err(|err| {
-            eprintln!(
-                "      ❌ Failed to read distorted dimensions for quality metric: {err}"
-            );
+            eprintln!("      ❌ Failed to read distorted dimensions for quality metric: {err}");
         })
         .ok()?;
 
@@ -47,7 +43,7 @@ fn resolve_common_metric_dimensions(input: &Path, output: &Path) -> Option<(u32,
 }
 
 /// `max_duration_min`: skip MS-SSIM when video longer than this (e.g. 5.0 normal, 25.0 ultimate).
-#[must_use] 
+#[must_use]
 pub fn calculate_ms_ssim_yuv(
     input: &Path,
     output: &Path,
@@ -65,7 +61,9 @@ pub fn calculate_ms_ssim_yuv(
         }
     }
 
-    let duration = if let Some(d) = super::stream_analysis::get_video_duration(input) { d } else {
+    let duration = if let Some(d) = super::stream_analysis::get_video_duration(input) {
+        d
+    } else {
         eprintln!("   ⚠️  Cannot determine video duration, using full calculation");
         60.0
     };
@@ -95,9 +93,7 @@ pub fn calculate_ms_ssim_yuv(
 
     if sample_rate > 1 {
         let estimated_time = (duration / sample_rate as f64 * 3.0) as u64;
-        eprintln!(
-            "   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)"
-        );
+        eprintln!("   ⚡ Sampling: 1/{sample_rate} frames (est. {estimated_time}s)");
     } else {
         let estimated_time = (duration * 3.0) as u64;
         eprintln!("   🎯 Full calculation (est. {estimated_time}s)");
@@ -146,7 +142,9 @@ pub fn calculate_ms_ssim_yuv(
         )
     });
 
-    let y_ms_ssim = if let Ok(Some(v)) = y_handle.join() { v } else {
+    let y_ms_ssim = if let Ok(Some(v)) = y_handle.join() {
+        v
+    } else {
         eprintln!("   ❌ Y channel calculation failed");
         return None;
     };
@@ -223,9 +221,7 @@ fn calculate_ms_ssim_channel_sampled(
     }
 
     let sample_filter = if sample_rate > 1 {
-        format!(
-            "select='not(mod(n\\,{sample_rate}))',setpts=N/FRAME_RATE/TB,"
-        )
+        format!("select='not(mod(n\\,{sample_rate}))',setpts=N/FRAME_RATE/TB,")
     } else {
         String::new()
     };
@@ -304,7 +300,7 @@ fn calculate_ms_ssim_channel_sampled(
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn calculate_ms_ssim(input: &Path, output: &Path) -> Option<f64> {
     if let Ok(info) = crate::ffprobe::probe_video(input) {
         if info.width < 64 || info.height < 64 {
@@ -439,12 +435,10 @@ fn parse_ms_ssim_from_legacy(stderr: &str) -> Option<f64> {
 /// Calculate VMAF Y-channel score (perceptual quality, 0–100 scale).
 /// `sample_rate`: 1 = every frame, 3 = every 3rd frame, etc.
 /// Returns None on failure (ffmpeg/libvmaf unavailable or other error).
-#[must_use] 
+#[must_use]
 pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Option<f64> {
     let sample_filter = if sample_rate > 1 {
-        format!(
-            "select='not(mod(n\\,{sample_rate}))',setpts=N/FRAME_RATE/TB,"
-        )
+        format!("select='not(mod(n\\,{sample_rate}))',setpts=N/FRAME_RATE/TB,")
     } else {
         String::new()
     };
@@ -513,7 +507,7 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 /// Calculate CAMBI (Contrast Aware Multiscale Banding Index) for the output video.
 /// CAMBI is a single-video metric (no reference needed) — lower is better (0 = no banding).
 /// Returns None on failure or if libvmaf doesn't support the cambi feature.
-#[must_use] 
+#[must_use]
 pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
     let n_threads = num_cpus_capped();
 
@@ -583,7 +577,7 @@ pub fn calculate_cambi(output: &Path, sample_rate: usize) -> Option<f64> {
 /// Calculate PSNR for the U and V chroma channels independently.
 /// Returns `(psnr_u, psnr_v)` in dB, or None on failure.
 /// Uses `extractplanes` + ffmpeg's `psnr` filter (no libvmaf dependency).
-#[must_use] 
+#[must_use]
 pub fn calculate_psnr_uv(input: &Path, output: &Path, sample_rate: usize) -> Option<(f64, f64)> {
     use std::thread;
 
@@ -615,11 +609,15 @@ pub fn calculate_psnr_uv(input: &Path, output: &Path, sample_rate: usize) -> Opt
         )
     });
 
-    let psnr_u = if let Ok(Some(v)) = u_handle.join() { v } else {
+    let psnr_u = if let Ok(Some(v)) = u_handle.join() {
+        v
+    } else {
         eprintln!("   ❌ PSNR-U channel calculation failed");
         return None;
     };
-    let psnr_v = if let Ok(Some(v)) = v_handle.join() { v } else {
+    let psnr_v = if let Ok(Some(v)) = v_handle.join() {
+        v
+    } else {
         eprintln!("   ❌ PSNR-V channel calculation failed");
         return None;
     };
@@ -636,9 +634,7 @@ fn psnr_single_channel(
     target_height: u32,
 ) -> Option<f64> {
     let sample_filter = if sample_rate > 1 {
-        format!(
-            "select='not(mod(n\\,{sample_rate}))',setpts=N/FRAME_RATE/TB,"
-        )
+        format!("select='not(mod(n\\,{sample_rate}))',setpts=N/FRAME_RATE/TB,")
     } else {
         String::new()
     };

@@ -351,9 +351,7 @@ fn encode_to_hevc(
             if is_broken_pipe {
                 warn!("Pipe broken: reader (x265) likely closed stdin first; x265 may have exited or rejected the stream");
                 if !x265_stderr.is_empty() {
-                    eprintln!(
-                        "x265 stderr (often shows why pipe closed):\n{x265_stderr}"
-                    );
+                    eprintln!("x265 stderr (often shows why pipe closed):\n{x265_stderr}");
                 }
             }
             if !ffmpeg_stderr.is_empty() {

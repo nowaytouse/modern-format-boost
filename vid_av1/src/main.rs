@@ -214,11 +214,7 @@ fn main() -> anyhow::Result<()> {
                     output: output.clone(),
                     recursive,
                     label: "AV1 Video".to_string(),
-                    base_dir: if output.is_some() {
-                        Some(input.clone())
-                    } else {
-                        None
-                    },
+                    base_dir: if output.is_some() { Some(input) } else { None },
                     resume,
                 },
                 |file| {
