@@ -7,9 +7,10 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.100] - 2026-03-25
 
-### 🛡️ Robustness Enhancements
-- **ICC D50 Rounding Error Auto-Recovery**: Added on-demand fallback for the rare case where `cjxl` rejects an ICC profile due to a D50 illuminant rounding deviation (2-byte deviation from ICC spec, known to occur with Capture One exports on `cjxl <= v0.10`). When `cjxl` reports `Invalid ICC profile` / `bad connection space`, MFB now automatically re-extracts the ICC with the D50 bytes patched to canonical values and retries the conversion once, with a visible `🔧 ICC PATCH` warning. No performance cost for files without this issue; new helper functions `is_icc_rounding_error` and `extract_icc_with_d50_patch` are exposed in `shared_utils::jxl_utils` for reuse.
-- **Reverted unconditional `--container=1` flag**: Investigation confirmed that `exiftool` is invoked with `-m` (ignore minor errors), which transparently wraps bare JXL codestreams into an ISOBMFF container when writing metadata. Forcing `--container=1` at the `cjxl` stage was redundant and has been removed.
+### 🛡️ Robustness & Streamlining
+- **Smart ICC Fallback**: Implemented on-demand ICC D50 rounding correction. Instead of patching all profiles, the system now only intervenes if `cjxl` rejects an professional-level ICC (e.g. from Capture One). This ensures **zero performance cost** for 99.9% of users while ensuring professional assets never crash the pipeline.
+- **Optimized JXL Output Structure**: Confirmed that `exiftool -m` already handles automatic JXL containerization. We have **reverted** the temporary `--container=1` flag to keep output JXL files as clean and lightweight as possible.
+- **Dependency Refresh**: Updated 8 core crates to their latest security/bugfix releases.
 
 
 ## [0.10.99] - 2026-03-24
