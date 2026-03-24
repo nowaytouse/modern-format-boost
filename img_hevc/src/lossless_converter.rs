@@ -215,7 +215,7 @@ pub fn convert_to_jxl(
         .arg(max_threads.to_string());
 
     if distance > 0.0 {
-        cmd.arg("--container=1");
+        // Removed forced container=1
     }
 
     // Add HDR metadata via CICP if available
@@ -1176,7 +1176,6 @@ pub fn convert_to_jxl_matched(
         if is_jpeg {
             cmd.arg("--lossless_jpeg=0");
         }
-        cmd.arg("--container=1");
     }
 
     cmd.arg("--")
