@@ -144,6 +144,10 @@ pub fn convert_to_jxl(
         .arg("-j")
         .arg(max_threads.to_string());
 
+    if distance > 0.0 {
+        cmd.arg("--container=1");
+    }
+
     if options.apple_compat {
         cmd.arg("--compress_boxes=0");
     }
@@ -752,6 +756,7 @@ pub fn convert_to_jxl_matched(
         if is_jpeg {
             cmd.arg("--lossless_jpeg=0");
         }
+        cmd.arg("--container=1");
     }
 
     cmd.arg("--")

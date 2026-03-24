@@ -25,7 +25,15 @@ pub fn extract_icc_profile(src: &Path) -> Option<tempfile::NamedTempFile> {
         .ok()?;
 
     if output.status.success() && !output.stdout.is_empty() {
-        std::fs::write(temp_icc.path(), &output.stdout).ok()?;
+        let mut icc_data = output.stdout;
+        if icc_data.len() >= 80 {
+            // Fix D50 illuminant rounding error sometimes emitted by Capture One (Bug 2)
+            let d50_standard = [
+                0x00, 0x00, 0xf6, 0xd6, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xd3, 0x2d,
+            ];
+            icc_data[68..80].copy_from_slice(&d50_standard);
+        }
+        std::fs::write(temp_icc.path(), &icc_data).ok()?;
         Some(temp_icc)
     } else {
         None

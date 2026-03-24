@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.100] - 2026-03-24
+
+### 🐛 Bug Fixes
+- **JXL Color Profile Reliability**: Fixed an issue where `cjxl` would fail and drop color profiles when processing Capture One images due to a 2-byte standard illuminant rounding error in the ICC D50 tag. `modern_format_boost` now automatically patches these strictly locally malformed ICC profiles prior to transcoding, avoiding ImageMagick color loss fallbacks.
+- **Lossy JXL EXIF Preservation & Container Output**: Enforced ISOBMFF container generation for lossy JXL outputs (`distance > 0.0`) by appending the `--container=1` flag. This safely encapsulates the codestream, preventing `exiftool` from silently corrupting the file or generating invalid box structures during Exif injection.
+
+
 ## [0.10.99] - 2026-03-24
 
 ### ✨ Features
