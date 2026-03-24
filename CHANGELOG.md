@@ -5,11 +5,13 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [0.10.100] - 2026-03-24
+## [0.10.100] - 2026-03-25
 
 ### 🐛 Bug Fixes
-- **JXL Color Profile Reliability**: Fixed an issue where `cjxl` would fail and drop color profiles when processing Capture One images due to a 2-byte standard illuminant rounding error in the ICC D50 tag. `modern_format_boost` now automatically patches these strictly locally malformed ICC profiles prior to transcoding, avoiding ImageMagick color loss fallbacks.
-- **Lossy JXL EXIF Preservation & Container Output**: Enforced ISOBMFF container generation for lossy JXL outputs (`distance > 0.0`) by appending the `--container=1` flag. This safely encapsulates the codestream, preventing `exiftool` from silently corrupting the file or generating invalid box structures during Exif injection.
+- **JXL Color Profile Reliability (ICC D50 Rounding Patch)**: Fixed `cjxl` rejection of Capture One / certain professional-camera images caused by a 2-byte D50 illuminant rounding error in the ICC header. `modern_format_boost` now patches bytes `[68..80]` of extracted ICC profiles to the canonical D50 values before passing to `cjxl`, avoiding silent fallback to the lossy ImageMagick pipeline.
+
+### 🛠️ Code Quality
+- **Reverted unnecessary `--container=1` flag**: Investigation confirmed that `exiftool` is invoked with `-m` (ignore minor errors), which causes it to automatically wrap bare JXL codestreams into an ISOBMFF container when writing metadata — without error and without data loss. Forcing `--container=1` at the `cjxl` stage was redundant and could slightly inflate file size on some paths. The flag has been removed.
 
 
 ## [0.10.99] - 2026-03-24

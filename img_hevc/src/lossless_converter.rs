@@ -214,10 +214,6 @@ pub fn convert_to_jxl(
         .arg("-j")
         .arg(max_threads.to_string());
 
-    if distance > 0.0 {
-        // Removed forced container=1
-    }
-
     // Add HDR metadata via CICP if available
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {

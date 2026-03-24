@@ -266,7 +266,7 @@ dependencies = [
 [[package]]
 name = "blake3"
 version = "1.8.3"
-source = "git+https://github.com/BLAKE3-team/BLAKE3#6eebbbd67935cc6b8fe24da164ae968a2e3973cb"
+source = "git+https://github.com/BLAKE3-team/BLAKE3#d4b005a9f51ac5290bc96a5706e1cf897f602567"
 dependencies = [
  "arrayref",
  "arrayvec",
@@ -768,7 +768,7 @@ dependencies = [
 [[package]]
 name = "getrandom"
 version = "0.4.2"
-source = "git+https://github.com/rust-random/getrandom#eadb879f8e178ca85f4746a01251f6e7432b338b"
+source = "git+https://github.com/rust-random/getrandom#f87bf394f7ca5ea9f4c55b83c67cb7fc6613efbf"
 dependencies = [
  "cfg-if",
  "libc",
@@ -873,7 +873,7 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 [[package]]
 name = "image"
 version = "0.25.9"
-source = "git+https://github.com/image-rs/image#c79d6091050646349ba062950f76472be48dbee0"
+source = "git+https://github.com/image-rs/image#21a3d0970b606acd7c2f0a4c20f4cbe78faa6a3b"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -1090,9 +1090,9 @@ dependencies = [
 
 [[package]]
 name = "libredox"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1744e39d1d6a9948f4f388969627434e31128196de472883b39f148769bfe30a"
+checksum = "7ddbf48fd451246b1f8c2610bd3b4ac0cc6e149d89832867093ab69a17194f08"
 dependencies = [
  "bitflags",
  "libc",
@@ -1427,9 +1427,9 @@ dependencies = [
 
 [[package]]
 name = "proptest"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37566cb3fdacef14c0737f9546df7cfeadbfbc9fef10991038bf5015d0c80532"
+checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
 dependencies = [
  "bit-set",
  "bit-vec",
@@ -1766,9 +1766,9 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "1.0.4"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8bbf91e5a4d6315eee45e704372590b30e260ee83af6639d64557f51b067776"
+checksum = "876ac351060d4f882bb1032b6369eb0aef79ad9df1ea8bc404874d8cc3d0cd98"
 dependencies = [
  "serde_core",
 ]
@@ -2015,18 +2015,18 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.0.10+spec-1.1.0"
+version = "1.1.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df25b4befd31c4816df190124375d5a20c6b6921e2cad937316de3fccd63420"
+checksum = "2334f11ee363607eb04df9b8fc8a13ca1715a72ba8662a26ac285c98aabb4011"
 dependencies = [
  "winnow 1.0.0",
 ]
 
 [[package]]
 name = "toml_writer"
-version = "1.0.7+spec-1.1.0"
+version = "1.1.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f17aaa1c6e3dc22b1da4b6bba97d066e354c7945cac2f7852d4e4e7ca7a6b56d"
+checksum = "d282ade6016312faf3e41e57ebbba0c073e4056dab1232ab1cb624199648f8ed"
 
 [[package]]
 name = "tracing"
