@@ -7,11 +7,9 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.100] - 2026-03-25
 
-### 🐛 Bug Fixes
-- **JXL Color Profile Reliability (ICC D50 Rounding Patch)**: Fixed `cjxl` rejection of Capture One / certain professional-camera images caused by a 2-byte D50 illuminant rounding error in the ICC header. `modern_format_boost` now patches bytes `[68..80]` of extracted ICC profiles to the canonical D50 values before passing to `cjxl`, avoiding silent fallback to the lossy ImageMagick pipeline.
-
-### 🛠️ Code Quality
-- **Reverted unnecessary `--container=1` flag**: Investigation confirmed that `exiftool` is invoked with `-m` (ignore minor errors), which causes it to automatically wrap bare JXL codestreams into an ISOBMFF container when writing metadata — without error and without data loss. Forcing `--container=1` at the `cjxl` stage was redundant and could slightly inflate file size on some paths. The flag has been removed.
+### 🛡️ Robustness Enhancements
+- **ICC D50 Rounding Error Auto-Recovery**: Added on-demand fallback for the rare case where `cjxl` rejects an ICC profile due to a D50 illuminant rounding deviation (2-byte deviation from ICC spec, known to occur with Capture One exports on `cjxl <= v0.10`). When `cjxl` reports `Invalid ICC profile` / `bad connection space`, MFB now automatically re-extracts the ICC with the D50 bytes patched to canonical values and retries the conversion once, with a visible `🔧 ICC PATCH` warning. No performance cost for files without this issue; new helper functions `is_icc_rounding_error` and `extract_icc_with_d50_patch` are exposed in `shared_utils::jxl_utils` for reuse.
+- **Reverted unconditional `--container=1` flag**: Investigation confirmed that `exiftool` is invoked with `-m` (ignore minor errors), which transparently wraps bare JXL codestreams into an ISOBMFF container when writing metadata. Forcing `--container=1` at the `cjxl` stage was redundant and has been removed.
 
 
 ## [0.10.99] - 2026-03-24

@@ -249,7 +249,59 @@ pub fn convert_to_jxl(
     let result = match &result {
         Ok(output_cmd) if !output_cmd.status.success() => {
             let stderr = String::from_utf8_lossy(&output_cmd.stderr);
-            if stderr.contains("Getting pixel data failed")
+            if shared_utils::jxl_utils::is_icc_rounding_error(&stderr) {
+                // Robustness: cjxl rejected the ICC profile (likely Capture One D50 rounding
+                // deviation). Re-extract with D50 patch applied and retry once.
+                use console::style;
+                shared_utils::progress_mode::emit_stderr(&format!(
+                    "   {} {}",
+                    "🔧 ICC PATCH:",
+                    "ICC D50 rounding error detected, retrying with patched profile"
+                ));
+                let _patched_icc = shared_utils::jxl_utils::extract_icc_with_d50_patch(input);
+                let patched_icc_path = _patched_icc.as_ref().map(tempfile::NamedTempFile::path);
+                let mut retry_cmd = Command::new("cjxl");
+                retry_cmd
+                    .arg("-d")
+                    .arg(format!("{distance:.2}"))
+                    .arg("-e")
+                    .arg("7")
+                    .arg("-j")
+                    .arg(max_threads.to_string());
+                if let Some(hdr) = hdr_info {
+                    if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
+                        retry_cmd.arg(format!("--cicp={cicp}"));
+                    }
+                }
+                if options.apple_compat {
+                    retry_cmd.arg("--compress_boxes=0");
+                }
+                shared_utils::jxl_utils::add_icc_to_cjxl(&mut retry_cmd, patched_icc_path);
+                retry_cmd
+                    .arg("--")
+                    .arg(shared_utils::safe_path_arg(&actual_input).as_ref())
+                    .arg(shared_utils::safe_path_arg(&temp_output).as_ref());
+                let retry_out = retry_cmd.output();
+                if let Ok(ref o) = retry_out {
+                    if o.status.success() {
+                        shared_utils::progress_mode::emit_stderr(
+                            "   ✅ ICC patch retry succeeded",
+                        );
+                    } else {
+                        let line = format!(
+                            "   ⚠️ ICC patch retry also failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                                .lines()
+                                .next()
+                                .unwrap_or("unknown")
+                        );
+                        shared_utils::progress_mode::emit_stderr(&line);
+                    }
+                }
+                // drop style to satisfy unused import lint when feature is off
+                let _ = style("");
+                retry_out.or(result)
+            } else if stderr.contains("Getting pixel data failed")
                 || stderr.contains("Failed to decode")
                 || stderr.contains("Decoding failed")
                 || stderr.contains("pixel data")
