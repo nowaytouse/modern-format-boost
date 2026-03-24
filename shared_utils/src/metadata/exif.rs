@@ -240,7 +240,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 
             if is_corrupt {
                 eprintln!(
-                    "⚠️  [Structural Repair] {}: Detected potential corruption or metadata injection failure: {}",
+                    "⚠️  [Structural Repair] {} detected metadata corruption：{}",
                     dst.display(),
                     stderr.lines().next().unwrap_or("unknown error")
                 );
@@ -249,56 +249,6 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
             is_corrupt
         }
     };
-
-    // 🚀 [JXL Bare Codestream Repair]
-    // If ExifTool failed (likely on a lossy JXL bare codestream), check if we need to wrap it in a container.
-    if !output.status.success() && ext == "jxl" {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let combined = format!("{stderr}\n{stdout}");
-
-        if combined.contains("Will wrap JXL codestream") || combined.contains("updated 0 image files") || combined.contains("0 image files updated") {
-             eprintln!("   🔧 [JXL Container Fix] Detected raw JXL codestream; upgrading to ISO BMFF container to satisfy metadata injector...");
-             
-             // We use cjxl itself to "re-wrap" the existing file. 
-             // cjxl input.jxl --container=1 output.jxl (lossless re-wrap)
-             let temp_wrapped = dst.with_extension("wrapped.JXL");
-             let wrap_result = Command::new("cjxl")
-                 .arg(crate::safe_path_arg(dst).as_ref())
-                 .arg("--container=1")
-                 .arg(crate::safe_path_arg(&temp_wrapped).as_ref())
-                 .output();
-
-             match wrap_result {
-                 Ok(res) if res.status.success() && temp_wrapped.exists() => {
-                     // Successfully wrapped. Replace original with wrapped and retry exiftool.
-                     if let Ok(()) = std::fs::rename(&temp_wrapped, dst) {
-                         eprintln!("   ✅ [JXL Container Fix] Wrap successful, retrying metadata merge...");
-                         output = Command::new("exiftool")
-                            .arg("-tagsfromfile")
-                            .arg(crate::safe_path_arg(src).as_ref())
-                            .arg("-all:all")
-                            .arg("-unsafe")
-                            .arg("-ICC_Profile<ICC_Profile")
-                            .arg("-use")
-                            .arg("MWG")
-                            .arg("-api")
-                            .arg("LargeFileSupport=1")
-                            .arg("-q")
-                            .arg("-m")
-                            .arg(crate::safe_path_arg(dst).as_ref())
-                            .output()?;
-                     }
-                 }
-                 _ => {
-                     eprintln!("   ⚠️  [JXL Container Fix] cjxl wrap-around failed, ensuring standard fallback path...");
-                 }
-             }
-             if temp_wrapped.exists() {
-                 let _ = std::fs::remove_file(&temp_wrapped);
-             }
-        }
-    }
 
     if needs_repair {
         eprintln!("🔧  [Structural Repair] executing ImageMagick rebuild...");
