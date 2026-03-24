@@ -214,6 +214,10 @@ pub fn convert_to_jxl(
         .arg("-j")
         .arg(max_threads.to_string());
 
+    if distance > 0.0 {
+        cmd.arg("--container=1");
+    }
+
     // Add HDR metadata via CICP if available
     if let Some(hdr) = hdr_info {
         if let Some(cicp) = shared_utils::color_info_to_cicp(hdr) {
@@ -1172,6 +1176,7 @@ pub fn convert_to_jxl_matched(
         if is_jpeg {
             cmd.arg("--lossless_jpeg=0");
         }
+        cmd.arg("--container=1");
     }
 
     cmd.arg("--")
