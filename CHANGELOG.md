@@ -7,9 +7,9 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.100] - 2026-03-25
 
-### 🛡️ Robustness & Streamlining
-- **Smart ICC Fallback**: Implemented on-demand ICC D50 rounding correction. Instead of patching all profiles, the system now only intervenes if `cjxl` rejects an professional-level ICC (e.g. from Capture One). This ensures **zero performance cost** for 99.9% of users while ensuring professional assets never crash the pipeline.
-- **Optimized JXL Output Structure**: Confirmed that `exiftool -m` already handles automatic JXL containerization. We have **reverted** the temporary `--container=1` flag to keep output JXL files as clean and lightweight as possible.
+### 🧪 Compatibility & Maintenance
+- **Legacy ICC Rounding Logic**: Added an on-demand retry path for an edge-case where very old `cjxl` versions (<= v0.10) might reject ICC profiles due to D50 rounding issues. **Note:** Verified as non-triggering/inactive on modern `cjxl v0.11.2` due to improved upstream tolerance. The logic remains purely as a non-intrusive safety net for legacy toolchains.
+- **JXL Container Handling**: Confirmed that `exiftool` (with `-m`) automatically handles containerization requirements for JXL codestreams. Reverted the unnecessary `--container=1` flag to maintain output purity.
 - **Dependency Refresh**: Updated 8 core crates to their latest security/bugfix releases.
 
 
