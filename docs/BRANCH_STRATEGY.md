@@ -52,7 +52,7 @@ This project uses a dual-branch strategy to balance production stability with bl
 
 ## Version Synchronization
 
-Both branches maintain the same version number (e.g., 0.10.85) but differ in:
+Both branches maintain the same version number (e.g., 0.10.102) but differ in:
 - Dependency sources (crates.io vs GitHub)
 - API compatibility (stable vs nightly)
 - Feature availability (stable vs experimental)
@@ -94,6 +94,6 @@ Both branches pass the same test suite, ensuring feature parity while using diff
 ## Cache Version Binding
 
 Both branches use the same cache versioning strategy:
-- Cache version = Program version (e.g., 0.10.85 → 1085)
+- Cache version = Program version (e.g., 0.10.102 → 1102)
 - Automatic invalidation on version updates
 - Ensures consistency between code and cached data
