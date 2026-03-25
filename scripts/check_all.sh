@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Comprehensive code quality scanner for Modern Format Boost.
+# shellcheck disable=SC2016
 
 set -Eeuo pipefail
 
@@ -248,13 +249,13 @@ if [[ ${RUN_OPTIONAL} -eq 1 ]]; then
 		if [[ ${#shell_files[@]} -gt 0 ]]; then
 			# Only count error-level issues that would cause runtime failures.
 			# Exclude SC1071 (zsh shebang warnings) as this project uses zsh scripts.
-			run_optional “shellcheck *.sh errors only, zsh ignored” \
-				shellcheck --severity=error --exclude=SC1071 “${shell_files[@]}”
+			run_optional "shellcheck *.sh errors only, zsh ignored" \
+				shellcheck --severity=error --exclude=SC1071 -- "${shell_files[@]}"
 		else
-			skip_optional “shellcheck *.sh” “no .sh files found under repo”
+			skip_optional "shellcheck *.sh" "no .sh files found under repo"
 		fi
 	else
-		skip_optional “shellcheck *.sh” “shellcheck not installed”
+		skip_optional "shellcheck *.sh" "shellcheck not installed"
 	fi
 
 	if has_command shfmt; then

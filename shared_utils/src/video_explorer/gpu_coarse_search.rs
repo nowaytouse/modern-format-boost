@@ -2411,12 +2411,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     prev_size = size;
 
                     // Sprint: double the step for faster iteration (after 2 consecutive successes)
-                    if current_step <= PHASE3_DOWNWARD_STEP + 0.01 || consecutive_01_successes >= 2
-                    {
-                        consecutive_01_successes += 1;
-                    } else {
-                        consecutive_01_successes = 0;
-                    }
+                    consecutive_01_successes += 1;
 
                     if consecutive_01_successes >= 2 && current_step < 1.6 {
                         let old_step = current_step;

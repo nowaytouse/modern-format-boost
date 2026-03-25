@@ -8,9 +8,11 @@ export LANG=en_US.UTF-8
 if [[ -z "${SCRIPT_DIR:-}" ]]; then
 	if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
 		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	elif [[ -n "${ZSH_VERSION:-}" ]]; then
+		# zsh: use prompt expansion to get the sourced file path reliably
+		SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
 	else
-		# zsh: use $0 to derive the scripts directory.
-		# (All scripts that source this file live in the same `scripts/` folder.)
+		# Fallback for other shells
 		SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 	fi
 fi

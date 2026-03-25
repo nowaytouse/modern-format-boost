@@ -17,10 +17,11 @@ All notable changes to this project will be documented in this file.
 - **Core Refactoring**:
   - **img_hevc**: Major structural refactoring to align with `img_av1` architecture. Modularized the monolithic conversion logic into specialized dispatch functions, significantly reducing complexity while preserving the advanced video/static logic.
   - **img_av1**: Hardened the conversion pipeline with improved error mapping and consistent result reporting.
-- **Shell Script Fortification**: Systematic resolution of all `shellcheck` warnings across the script suite.
-  - Fixed `SC2155` (variable assignment masking) in `drag_and_drop_processor.sh`.
-  - Resolved `SC2086` (missing quotes) and improved path handling resilience.
-  - Added script-level hints for shell compatibility.
+- **Shell Script Fortification**: Systematic resolution of all `shellcheck` warnings (SC2155, SC2086, etc.) across the script suite for enhanced reliability.
+- **Bug Fixes**:
+  - **GPU Coarse Search**: Fixed Sprint acceleration logic that was incorrectly resetting after first trigger, now allows continuous step doubling throughout the search phase for improved efficiency.
+  - **Shell Path Detection**: Fixed `common.sh` to use `${(%):-%x}` for zsh when sourced, preventing incorrect path resolution in multi-script workflows.
+
 
 ## [0.10.101] - 2026-03-26
 
