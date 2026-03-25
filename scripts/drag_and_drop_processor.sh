@@ -147,8 +147,11 @@ merge_run_logs() {
 		local merged_log="$LOG_DIR/merged_${SESSION_START_TIME}.log"
 
 		# Find the most recent img and vid logs (they may have slightly different timestamps)
-		local img_log=$(ls -t "$LOG_DIR"/img_hevc_run_*.log 2>/dev/null | head -1)
-		local vid_log=$(ls -t "$LOG_DIR"/vid_hevc_run_*.log 2>/dev/null | head -1)
+		local img_log
+		# shellcheck disable=SC2012
+		img_log=$(ls -t "$LOG_DIR"/img_hevc_run_*.log 2>/dev/null | head -1)
+		# shellcheck disable=SC2012
+		vid_log=$(ls -t "$LOG_DIR"/vid_hevc_run_*.log 2>/dev/null | head -1)
 
 		{
 			echo "========================================"
@@ -238,8 +241,10 @@ save_log() {
 
 draw_header() {
 	local width=70
-	local tag=$(GET_BRANCH_TAG)
-	local raw_tag=$(echo -e "$tag" | sed 's/\x1b\[[0-9;]*m//g') # Remove ANSI for length calc
+	local tag
+	tag=$(GET_BRANCH_TAG)
+	local raw_tag
+	raw_tag=$(echo -e "$tag" | sed 's/\x1b\[[0-9;]*m//g') # Remove ANSI for length calc
 	local title="🚀 MODERN FORMAT BOOST v0.10.87$raw_tag"
 	local padding=$(((width - ${#title}) / 2))
 
@@ -355,7 +360,8 @@ select_mode() {
 
 	if [[ $SELECTED -eq 0 ]]; then
 		OUTPUT_MODE="adjacent"
-		local base_name=$(basename "$TARGET_DIR")
+		local base_name
+		base_name=$(basename "$TARGET_DIR")
 		OUTPUT_DIR="$(dirname "$TARGET_DIR")/${base_name}_optimized"
 
 		echo -e "\n${GREEN}✅ ADJACENT MODE SELECTED${RESET}"
@@ -391,7 +397,8 @@ create_directory_structure() {
 	touch -r "$src" "$dest"
 
 	find "$src" -type d -print0 | while IFS= read -r -d '' dir; do
-		local rel="${dir#$src}"
+		local rel
+		rel="${dir#"$src"}"
 		rel="${rel#/}"
 		if [[ -n "$rel" ]]; then
 			mkdir -p "$dest/$rel"
@@ -402,7 +409,7 @@ create_directory_structure() {
 
 count_files() {
 	draw_separator "Scanning Content"
-	printf "${DIM}   Analyzing directory structure...${RESET}\n"
+	printf "%s   Analyzing directory structure...%s\n" "${DIM}" "${RESET}"
 
 	TOTAL_FILES=$(find "$TARGET_DIR" -type f ! -name ".*" | wc -l | tr -d ' ')
 	IMG_COUNT=$(find "$TARGET_DIR" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.jpe" -o -iname "*.jfif" -o -iname "*.png" -o -iname "*.webp" -o -iname "*.heic" -o -iname "*.heif" -o -iname "*.avif" -o -iname "*.gif" -o -iname "*.tiff" -o -iname "*.tif" -o -iname "*.bmp" \) | wc -l | tr -d ' ')
@@ -548,9 +555,12 @@ VID_FAILED=0
 parse_tool_stats() {
 	local output="$1"
 	local tool_type="$2"
-	local succeeded=$(echo "$output" | grep -oE 'Succeeded:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
-	local skipped=$(echo "$output" | grep -oE 'Skipped:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
-	local failed=$(echo "$output" | grep -oE 'Failed:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+	local succeeded
+	succeeded=$(echo "$output" | grep -oE 'Succeeded:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+	local skipped
+	skipped=$(echo "$output" | grep -oE 'Skipped:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
+	local failed
+	failed=$(echo "$output" | grep -oE 'Failed:\s*[0-9]+' | grep -oE '[0-9]+' | tail -1)
 
 	if [[ "$tool_type" == "img" ]]; then
 		IMG_SUCCEEDED=${succeeded:-0}
@@ -725,7 +735,7 @@ main() {
 	if [[ $exit_status -eq 130 ]]; then
 		exit 130
 	fi
-	exit $exit_status
+	exit "$exit_status"
 }
 
 main "$@"

@@ -224,8 +224,8 @@ verify_binary_timestamp() {
 	# 二进制文件的修改时间应该 >= 编译开始时间
 	if [[ $binary_mtime -lt $compile_start_time ]]; then
 		echo -e "${RED}⚠️  TIMESTAMP VERIFICATION FAILED${NC}"
-		echo -e "${DIM}   Binary mtime: $(date -r $binary_mtime '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @$binary_mtime '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
-		echo -e "${DIM}   Compile start: $(date -r $compile_start_time '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @$compile_start_time '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
+		echo -e "${DIM}   Binary mtime: $(date -r "$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$binary_mtime" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
+                echo -e "${DIM}   Compile start: $(date -r "$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -d @"$compile_start_time" '+%Y-%m-%d %H:%M:%S' 2>/dev/null)${NC}"
 		echo -e "${YELLOW}   ⚠️  Binary timestamp is older than compile time!${NC}"
 		return 1
 	fi
@@ -461,8 +461,7 @@ main() {
 			local binary_path
 			binary_path=$(get_binary_path "$proj_dir" "$binary_name")
 			if [[ -n "$binary_path" ]] && [[ -f "$binary_path" ]]; then
-				local size mtime
-				size=$(ls -lh "$binary_path" | awk '{print $5}')
+				size=$(du -h "$binary_path" | awk '{print $1}')
 				mtime=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$binary_path" 2>/dev/null || stat -c "%y" "$binary_path" 2>/dev/null | cut -d. -f1)
 				echo -e "  ${BOLD}$binary_name${NC}: $size, $mtime"
 			fi
