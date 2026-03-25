@@ -9,7 +9,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.10.100"
+version = "0.10.102"
 edition = "2021"
 license = "MIT"
 authors = ["Modern Format Boost Contributors"]
@@ -73,7 +73,6 @@ blake3   = "1.6.0"
 rmp-serde = "1.3.0"
 
 shared_utils = { path = "shared_utils" }
-
 
 [profile.release]
 lto            = true

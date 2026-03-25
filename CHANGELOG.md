@@ -8,15 +8,19 @@ All notable changes to this project will be documented in this file.
 ## [0.10.102] - 2026-03-26
 
 ### 🛠️ Hardening & Technical Debt Cleanup
+- **Quality & Performance**:
+  - **Zero-Warning Workspace**: Achieved a clean, warning-free build across all crates (`img_hevc`, `img_av1`, `shared_utils`) and shell scripts.
+  - **Dependency Update**: Full workspace-wide dependency synchronization via `cargo update` to the latest stable and nightly-compatible versions.
+- **Image Intelligence**:
+  - **EXR Detection**: Advanced attribute parsing for `OpenEXR` compression types (NONE/RLE/ZIPS/ZIP/PIZ for lossless; DWAA/DWAB etc. for lossy).
+  - **JP2 Improvements**: Robust wavelet transform analysis (9/7 irreversible vs 5/3 reversible) via COD/COC marker scanning for precise lossy/lossless detection.
+- **Core Refactoring**:
+  - **img_hevc**: Major structural refactoring to align with `img_av1` architecture. Modularized the monolithic conversion logic into specialized dispatch functions, significantly reducing complexity while preserving the advanced video/static logic.
+  - **img_av1**: Hardened the conversion pipeline with improved error mapping and consistent result reporting.
 - **Shell Script Fortification**: Systematic resolution of all `shellcheck` warnings across the script suite.
-  - Fixed `SC2155` (masking return codes in local assignments) in `drag_and_drop_processor.sh`.
+  - Fixed `SC2155` (variable assignment masking) in `drag_and_drop_processor.sh`.
   - Resolved `SC2086` (missing quotes) and improved path handling resilience.
   - Added script-level hints for shell compatibility.
-- **Crate Quality Improvements**:
-  - **img_av1**: Major structural refactoring of the main dispatch logic, significantly improving readability and maintainability.
-  - **img_hevc**: Targeted Clippy fixes for `cast_precision_loss` and `cast_possible_truncation` without altering its advanced architecture.
-  - **shared_utils**: Unified `ConversionResult` skipping logic using `skipped_custom` to ensure consistent metadata reporting.
-- **Zero-Warning Workspace**: Achieved a clean, warning-free build across all crates and scripts.
 
 ## [0.10.101] - 2026-03-26
 
