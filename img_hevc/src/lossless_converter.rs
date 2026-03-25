@@ -316,7 +316,7 @@ pub fn convert_to_jxl(
                         input = %input.display(),
                         "Grayscale ICC profile mismatch detected — using ImageMagick fallback"
                     );
-                    
+
                     if shared_utils::jxl_utils::try_imagemagick_fallback(
                         input,
                         &temp_output,
