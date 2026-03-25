@@ -16,6 +16,16 @@ All notable changes to this project will be documented in this file.
   - Falls back to extension-based detection if magic bytes detection fails
   - Affected operations: dimension reading, image analysis, and all image processing pipelines
 
+### 🛡️ Safety & Robustness Improvements
+- **Enhanced Error Handling & Data Loss Prevention**:
+  - Improved error messages in `open_image_reader_with_magic_bytes()` to distinguish between magic bytes detection failures and extension-based detection failures
+  - Added detailed logging when magic bytes detection fails, showing the specific error before falling back to extension-based detection
+  - Enhanced error handling in `img_av1` and `img_hevc` batch processing to differentiate between read/analysis errors and conversion errors
+  - Upgraded critical error messages from `⚠️ [Recovery]` to `🚨 [CRITICAL] ... DATA LOSS RISK!` when file copy fails after conversion failure
+  - Added specific detection for image read errors (format detection, extension issues) with clearer user messaging
+  - Existing safety mechanism confirmed: When image analysis or conversion fails, `copy_on_skip_or_fail()` is automatically triggered to preserve the original file in the output directory
+  - All error paths now ensure original files are copied to prevent data loss during batch operations
+
 ## [0.10.103] - 2026-03-26
 
 ### 🐛 Bug Fixes

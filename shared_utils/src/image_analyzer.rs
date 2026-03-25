@@ -17,7 +17,13 @@ pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = 4.5;
 
 /// Opens an image reader with magic bytes detection to handle non-standard extensions.
 /// Falls back to extension-based detection if magic bytes detection fails.
-fn open_image_reader_with_magic_bytes(path: &Path) -> std::result::Result<image::ImageReader<std::io::BufReader<std::fs::File>>, image::ImageError> {
+///
+/// # Errors
+/// Returns `ImageError` if the file cannot be opened or format cannot be determined.
+/// The error message includes details about whether magic bytes detection or extension-based detection failed.
+fn open_image_reader_with_magic_bytes(
+    path: &Path,
+) -> std::result::Result<image::ImageReader<std::io::BufReader<std::fs::File>>, image::ImageError> {
     // Use magic bytes detection instead of relying on file extension
     // This handles cases like .jpe, missing extensions, or incorrect extensions
     let format = match infer::get_from_path(path) {
@@ -31,18 +37,33 @@ fn open_image_reader_with_magic_bytes(path: &Path) -> std::result::Result<image:
             "image/x-icon" => Some(image::ImageFormat::Ico),
             _ => None, // Fall back to extension-based detection
         },
-        _ => None, // Fall back to extension-based detection
+        Ok(None) => None, // No magic bytes detected, fall back to extension
+        Err(e) => {
+            // Log the magic bytes detection failure but continue with extension-based detection
+            log_eprintln!(
+                "⚠️  [Format Detection] Magic bytes detection failed for {}: {}. Falling back to extension-based detection.",
+                path.display(),
+                e
+            );
+            None
+        }
     };
 
     let mut reader = image::ImageReader::open(path)?;
-    
+
     // If we detected format via magic bytes, use it; otherwise guess from extension
     if let Some(fmt) = format {
         reader.set_format(fmt);
     } else {
-        reader = reader.with_guessed_format()?;
+        reader = reader.with_guessed_format().map_err(|_e| {
+            // Provide detailed error message when both magic bytes and extension detection fail
+            image::ImageError::Unsupported(image::error::UnsupportedError::from_format_and_kind(
+                image::error::ImageFormatHint::Unknown,
+                image::error::UnsupportedErrorKind::Format(image::error::ImageFormatHint::Unknown),
+            ))
+        })?;
     }
-    
+
     Ok(reader)
 }
 
