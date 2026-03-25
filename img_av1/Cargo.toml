@@ -12,6 +12,7 @@ image = { workspace = true }
 serde = { workspace = true }
 rayon = { workspace = true }
 anyhow = { workspace = true }
+tracing = { workspace = true }
 shared_utils = { workspace = true }
 vid-av1 = { path = "../vid_av1" }
 tempfile = { workspace = true }

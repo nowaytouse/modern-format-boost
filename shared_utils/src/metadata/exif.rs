@@ -227,6 +227,29 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
         .arg(crate::safe_path_arg(dst).as_ref())
         .output()?;
 
+    // Log exiftool stderr to file (debug/warn level only — never reaches terminal).
+    // This surfaces warnings like "[minor] Will wrap JXL codestream" and any exiftool
+    // quirks that are silenced by the -m flag.
+    {
+        let stderr_str = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() {
+            tracing::warn!(
+                src = %src.display(),
+                dst = %dst.display(),
+                exit_code = ?output.status.code(),
+                stderr = %stderr_str.trim(),
+                "exiftool metadata copy failed"
+            );
+        } else if !stderr_str.trim().is_empty() {
+            tracing::debug!(
+                src = %src.display(),
+                dst = %dst.display(),
+                stderr = %stderr_str.trim(),
+                "exiftool completed with warnings (suppressed by -m)"
+            );
+        }
+    }
+
     let needs_repair = apple_compat && is_nuclear_format && {
         if output.status.success() {
             false
