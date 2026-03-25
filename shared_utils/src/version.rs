@@ -27,13 +27,13 @@ use tracing::info;
 /// 📦 Program Version (from Cargo.toml)
 ///
 /// This is the single source of truth for the program version.
-/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.91")
+/// Format: "MAJOR.MINOR.PATCH" (e.g., "0.10.102")
 pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 🧬 Cache Algorithm Version - Automatically bound to program version
 ///
 /// This value is automatically calculated from `CARGO_PKG_VERSION` at program initialization.
-/// Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g., 0.10.85 → 1085)
+/// Version Format: Major.Minor.Patch → `MajorMinorPatch` (e.g., 0.10.102 → 1102)
 ///
 /// **Purpose**: Automatic cache invalidation on ANY program update
 ///
@@ -59,6 +59,8 @@ pub const PROGRAM_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// - v1089: HDR10+ metadata retention and MS-SSIM chroma channel resolution guard
 /// - v1090: Intelligent checkpoint reset on output directory deletion
 /// - v1091: Documentation binding (removed in v1097)
+/// - v1100: Intelligence & refactor hardening (v0.10.100)
+/// - v1102: Zero-warning state & EXR/JP2 detection (v0.10.102)
 static CACHE_ALGORITHM_VERSION: LazyLock<i32> =
     LazyLock::new(|| parse_version_to_code(PROGRAM_VERSION, "Cache Algorithm"));
 
@@ -92,7 +94,7 @@ pub fn cache_algorithm_version() -> i32 {
 /// 🔧 Parse semantic version string to integer code
 ///
 /// Converts "MAJOR.MINOR.PATCH" to `MajorMinorPatch` integer.
-/// Example: "0.10.85" → 1085
+/// Example: "0.10.102" → 1102
 ///
 /// **Panics** if:
 /// - Version format is not "MAJOR.MINOR.PATCH"
@@ -139,10 +141,10 @@ fn parse_version_to_code(version: &str, context: &str) -> i32 {
 /// 📋 Version Information - For display and debugging
 #[derive(Debug, Clone)]
 pub struct VersionInfo {
-    /// Program version string (e.g., "0.10.85")
+    /// Program version string (e.g., "0.10.102")
     pub program_version: String,
 
-    /// Cache algorithm version code (e.g., 1085)
+    /// Cache algorithm version code (e.g., 1102)
     pub cache_algorithm_version: i32,
 
     /// Cache schema version (e.g., 3)
@@ -176,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_version_parsing() {
-        assert_eq!(parse_version_to_code("0.10.85", "Test"), 1085);
+        assert_eq!(parse_version_to_code("0.10.102", "Test"), 1102);
         assert_eq!(parse_version_to_code("1.2.3", "Test"), 10203);
         assert_eq!(parse_version_to_code("10.20.30", "Test"), 102_030);
     }

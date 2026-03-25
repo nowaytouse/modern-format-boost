@@ -8,7 +8,7 @@ This project uses a **unified version management system** where all version numb
 
 ### Primary Version Source
 - **Location**: `Cargo.toml` → `[workspace.package]` → `version`
-- **Format**: `MAJOR.MINOR.PATCH` (e.g., `0.10.85`)
+- **Format**: `MAJOR.MINOR.PATCH` (e.g., `0.10.102`)
 - **Scope**: Applies to ALL workspace crates
 
 ### Centralized Version Management
@@ -19,10 +19,10 @@ All version numbers are managed through the `shared_utils::version` module:
 use shared_utils::version::{PROGRAM_VERSION, cache_algorithm_version, CACHE_SCHEMA_VERSION, VersionInfo};
 
 // Program version (from Cargo.toml)
-println!("Program: {}", PROGRAM_VERSION);  // "0.10.85"
+println!("Program: {}", PROGRAM_VERSION);  // "0.10.102"
 
 // Cache algorithm version (auto-calculated)
-println!("Cache Algorithm: {}", cache_algorithm_version());  // 1085
+println!("Cache Algorithm: {}", cache_algorithm_version());  // 1102
 
 // Cache schema version (manual)
 println!("Cache Schema: {}", CACHE_SCHEMA_VERSION);  // 3
@@ -38,13 +38,13 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 
 1. **Program Version** (`PROGRAM_VERSION`)
    - **Location**: `shared_utils/src/version.rs`
-   - **Format**: String (e.g., `"0.10.85"`)
+   - **Format**: String (e.g., `"0.10.102"`)
    - **Source**: `env!("CARGO_PKG_VERSION")`
    - **Purpose**: Single source of truth for program version
 
 2. **Cache Algorithm Version** (`cache_algorithm_version()`)
    - **Location**: `shared_utils/src/version.rs`
-   - **Format**: `MajorMinorPatch` (e.g., `0.10.85` → `1085`)
+   - **Format**: `MajorMinorPatch` (e.g., `0.10.102` → `1102`)
    - **Calculation**: `Major * 10000 + Minor * 100 + Patch`
    - **Purpose**: Automatic cache invalidation on ANY program update
    - **Implementation**: Uses `LazyLock` to parse version at runtime
@@ -91,12 +91,12 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
 1. **Update ONLY ONE place**: `Cargo.toml` → `[workspace.package]` → `version`
    ```toml
    [workspace.package]
-   version = "0.10.85"  # ← Change this ONLY
+   version = "0.10.102"  # ← Change this ONLY
    ```
 
 2. **All other versions auto-sync**:
-   - Cache algorithm version: `1085` (automatic)
-   - All workspace crates: `0.10.85` (via `version.workspace = true`)
+   - Cache algorithm version: `1102` (automatic)
+   - All workspace crates: `0.10.102` (via `version.workspace = true`)
 
 3. **Update CHANGELOG.md** with changes
 
@@ -104,7 +104,7 @@ The following version numbers are **automatically derived** from `CARGO_PKG_VERS
    ```bash
    git checkout nightly
    git add Cargo.toml CHANGELOG.md
-   git commit -m "chore: bump version to 0.10.85"
+   git commit -m "chore: bump version to 0.10.102"
    git push origin nightly
    
    git checkout main

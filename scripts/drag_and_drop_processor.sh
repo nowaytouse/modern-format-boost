@@ -245,13 +245,14 @@ draw_header() {
 	local tag
 	tag=$(GET_BRANCH_TAG)
 	local raw_tag
-	raw_tag=$(echo -e "$tag" | sed 's/\x1b\[[0-9;]*m//g') # Remove ANSI for length calc
-	local title="🚀 MODERN FORMAT BOOST v0.10.87$raw_tag"
+	local version
+	version=$(grep -m1 '^version =' "$PROJECT_ROOT/Cargo.toml" | cut -d '"' -f2)
+	local title="🚀 MODERN FORMAT BOOST v${version}${raw_tag}"
 	local padding=$(((width - ${#title}) / 2))
 
 	echo ""
 	echo -e "${BLUE}╭$(printf '─%.0s' {1..70})╮${RESET}"
-	printf "${BLUE}│${RESET}${BG_HEADER}%*s${BOLD}${WHITE}🚀 MODERN FORMAT BOOST v0.10.87${RESET}${BG_HEADER}%s${RESET}${BG_HEADER}%*s${RESET}${BLUE}│${RESET}\n" $padding "" "$tag" $padding ""
+	printf "${BLUE}│${RESET}${BG_HEADER}%*s${BOLD}${WHITE}🚀 MODERN FORMAT BOOST v${version}${RESET}${BG_HEADER}%s${RESET}${BG_HEADER}%*s${RESET}${BLUE}│${RESET}\n" $padding "" "$tag" $padding ""
 	echo -e "${BLUE}│$(printf '─%.0s' {1..70})│${RESET}"
 	echo -e "${BLUE}│${RESET}  ${DIM}PREMIUM MEDIA OPTIMIZER${RESET}               ${BLUE}│${RESET}"
 	echo -e "${BLUE}│${RESET}  ${GREEN}●${RESET} ${DIM}No Data Loss${RESET}   ${GREEN}●${RESET} ${DIM}Smart Conversion${RESET}   ${GREEN}●${RESET} ${DIM}Auto-Repair${RESET}               ${BLUE}│${RESET}"
