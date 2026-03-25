@@ -9,34 +9,42 @@ use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum AppError {
+    /// Input file was not found.
     FileNotFound {
         path: PathBuf,
         operation: Option<String>,
     },
 
+    /// Failed to read an existing file.
     FileReadError {
         path: PathBuf,
         source: std::io::Error,
         operation: Option<String>,
     },
 
+    /// Failed to write to a file.
     FileWriteError {
         path: PathBuf,
         source: std::io::Error,
         operation: Option<String>,
     },
 
+    /// Directory was not found.
     DirectoryNotFound {
         path: PathBuf,
         operation: Option<String>,
     },
 
+    /// The provided CRF (Constant Rate Factor) value is invalid.
     InvalidCrf(CrfError),
 
+    /// The provided SSIM threshold is invalid or out of range.
     InvalidSsim(SsimError),
 
+    /// The search algorithm exceeded the maximum number of iterations.
     IterationLimitExceeded(IterationError),
 
+    /// An error occurred during `FFmpeg` execution.
     FfmpegError {
         message: String,
         stderr: String,
@@ -45,6 +53,7 @@ pub enum AppError {
         file_path: Option<PathBuf>,
     },
 
+    /// An error occurred during `FFprobe` execution.
     FfprobeError {
         message: String,
         stderr: String,
@@ -52,30 +61,36 @@ pub enum AppError {
         file_path: Option<PathBuf>,
     },
 
+    /// An external tool (e.g. `ffmpeg`, `ffprobe`) was not found in PATH.
     ToolNotFound {
         tool_name: String,
         operation: Option<String>,
     },
 
+    /// The conversion failed because the output size was not smaller than the input size.
     CompressionFailed {
         input_size: u64,
         output_size: u64,
         file_path: Option<PathBuf>,
     },
 
+    /// The output quality did not meet the required threshold.
     QualityValidationFailed {
         expected_ssim: f64,
         actual_ssim: f64,
         file_path: Option<PathBuf>,
     },
 
+    /// The output file already exists and will not be overwritten.
     OutputExists {
         path: PathBuf,
         operation: Option<String>,
     },
 
+    /// Generic I/O error.
     Io(std::io::Error),
 
+    /// Catch-all for other errors.
     Other(anyhow::Error),
 }
 
@@ -88,29 +103,23 @@ impl AppError {
     #[must_use]
     pub const fn category(&self) -> ErrorCategory {
         match self {
-            Self::FileNotFound { .. } | Self::DirectoryNotFound { .. } => {
-                ErrorCategory::Fatal
-            }
-
-            Self::FileReadError { .. } | Self::FileWriteError { .. } | Self::Io(_) => {
-                ErrorCategory::Fatal
-            }
-
-            Self::InvalidCrf(_) | Self::InvalidSsim(_) => ErrorCategory::Recoverable,
-
-            Self::FfmpegError { .. }
+            Self::FileNotFound { .. }
+            | Self::DirectoryNotFound { .. }
+            | Self::FileReadError { .. }
+            | Self::FileWriteError { .. }
+            | Self::Io(_)
+            | Self::FfmpegError { .. }
             | Self::FfprobeError { .. }
-            | Self::ToolNotFound { .. } => ErrorCategory::Fatal,
+            | Self::ToolNotFound { .. }
+            | Self::Other(_) => ErrorCategory::Fatal,
 
-            Self::CompressionFailed { .. } | Self::QualityValidationFailed { .. } => {
-                ErrorCategory::Recoverable
-            }
+            Self::InvalidCrf(_)
+            | Self::InvalidSsim(_)
+            | Self::CompressionFailed { .. }
+            | Self::QualityValidationFailed { .. }
+            | Self::IterationLimitExceeded(_) => ErrorCategory::Recoverable,
 
             Self::OutputExists { .. } => ErrorCategory::Optional,
-
-            Self::IterationLimitExceeded(_) => ErrorCategory::Recoverable,
-
-            Self::Other(_) => ErrorCategory::Fatal,
         }
     }
 
@@ -262,6 +271,7 @@ impl AppError {
         matches!(self, Self::OutputExists { .. })
     }
 
+    #[must_use]
     pub fn with_file_path(self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         match self {
@@ -330,6 +340,7 @@ impl AppError {
         }
     }
 
+    #[must_use]
     pub fn with_operation(self, operation: impl Into<String>) -> Self {
         let operation = Some(operation.into());
         match self {
@@ -344,9 +355,7 @@ impl AppError {
                 source,
                 operation,
             },
-            Self::DirectoryNotFound { path, .. } => {
-                Self::DirectoryNotFound { path, operation }
-            }
+            Self::DirectoryNotFound { path, .. } => Self::DirectoryNotFound { path, operation },
             Self::ToolNotFound { tool_name, .. } => Self::ToolNotFound {
                 tool_name,
                 operation,
@@ -356,6 +365,7 @@ impl AppError {
         }
     }
 
+    #[must_use]
     pub fn with_command(self, command: impl Into<String>) -> Self {
         let command = Some(command.into());
         match self {
@@ -524,9 +534,9 @@ impl fmt::Display for AppError {
 impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::FileReadError { source, .. } => Some(source),
-            Self::FileWriteError { source, .. } => Some(source),
-            Self::Io(e) => Some(e),
+            Self::FileReadError { source, .. }
+            | Self::FileWriteError { source, .. }
+            | Self::Io(source) => Some(source),
             _ => None,
         }
     }

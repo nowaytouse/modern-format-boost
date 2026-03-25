@@ -14,6 +14,32 @@ use super::{
     CrfCache, ExploreResult, VideoEncoder, ABSOLUTE_MIN_CRF, LONG_VIDEO_THRESHOLD_SECS,
     NORMAL_MAX_WALL_HITS, VERY_LONG_VIDEO_THRESHOLD_SECS,
 };
+use crate::modern_ui::colors::{
+    BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, GREEN,
+    MFB_BLUE, RESET, YELLOW,
+};
+
+const VMAF_Y_MIN: f64 = 93.0;
+const PSNR_UV_MIN: f64 = 35.0;
+const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
+const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+const VMAF_DURATION_THRESHOLD_SECS: f64 = 300.0;
+const VMAF_DURATION_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0;
+const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
+const DECAY_FACTOR: f32 = 0.4;
+const MIN_STEP: f32 = 0.1;
+const CAMBI_MAX: f64 = 5.0;
+const MS_SSIM_WEIGHT: f64 = 0.6;
+const SSIM_ALL_WEIGHT: f64 = 0.4;
+const PHASE3_DOWNWARD_STEP: f32 = 0.1;
+
+#[derive(Debug, Clone)]
+enum AudioTranscodeStrategy {
+    Copy,
+    Alac,
+    AacHigh,
+    AacMedium,
+}
 
 /// Build the colour/HDR `FFmpeg` arguments from an `FFprobeResult`.
 /// These arguments must be appended to every final HEVC/AV1/H.264 encode so that
@@ -106,6 +132,10 @@ pub(crate) fn format_quality_check_line(
     }
 }
 
+/// Explore video quality using GPU coarse search.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 #[allow(clippy::too_many_arguments, clippy::similar_names)]
 pub fn explore_with_gpu_coarse_search(
     input: &Path,
@@ -122,7 +152,6 @@ pub fn explore_with_gpu_coarse_search(
     hdr_x265_params: Option<String>,
 ) -> Result<ExploreResult> {
     use crate::gpu_accel::{CrfMapping, GpuAccel, GpuCoarseConfig};
-
     let precheck_info = precheck::run_precheck(input)?;
     let _compressibility = precheck_info.compressibility;
     crate::log_eprintln!();
@@ -283,10 +312,9 @@ pub fn explore_with_gpu_coarse_search(
                     .unwrap_or_else(|_| dynamic_mapping::DynamicCrfMapper::new(input_size));
 
                     let mapping = match encoder {
-                        VideoEncoder::Hevc => CrfMapping::hevc(gpu.gpu_type),
                         VideoEncoder::Av1 => CrfMapping::av1(gpu.gpu_type),
                         // H.264 CRF range matches HEVC (0–51); reuse HEVC mapping for CPU search range.
-                        VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type),
+                        VideoEncoder::Hevc | VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type),
                     };
 
                     let max_crf = match encoder {
@@ -549,11 +577,6 @@ pub fn explore_with_gpu_coarse_search(
             duration / 60.0
         );
 
-        /// Normal mode: skip MS-SSIM for videos longer than 5 min (cost/quality tradeoff).
-        const VMAF_DURATION_THRESHOLD_SECS: f64 = 300.0;
-        /// Ultimate mode: allow MS-SSIM up to 25 min for stricter quality verification.
-        const VMAF_DURATION_THRESHOLD_ULTIMATE_SECS: f64 = 1500.0;
-
         let ms_ssim_duration_threshold_secs = if ultimate_mode {
             VMAF_DURATION_THRESHOLD_ULTIMATE_SECS
         } else {
@@ -634,12 +657,7 @@ pub fn explore_with_gpu_coarse_search(
                 crate::log_eprintln!("   Running final CAMBI banding check...");
                 let cambi = super::ssim_calculator::calculate_cambi(output, sample_rate);
 
-                // Thresholds
-                const VMAF_Y_THRESHOLD: f64 = 93.0;
-                const CAMBI_MAX: f64 = 5.0;
-                const PSNR_UV_MIN: f64 = 35.0;
-
-                let vmaf_ok = vmaf_y.is_some_and(|v| v >= VMAF_Y_THRESHOLD);
+                let vmaf_ok = vmaf_y.is_some_and(|v| v >= VMAF_Y_MIN);
                 let cambi_ok = cambi.is_some_and(|c| c <= CAMBI_MAX);
                 let chroma_ok = psnr_uv.is_some_and(|(u, v): (f64, f64)| u.min(v) >= PSNR_UV_MIN);
 
@@ -650,7 +668,7 @@ pub fn explore_with_gpu_coarse_search(
                     crate::log_eprintln!(
                         "      VMAF-Y: {:6.2} ≥ {:.1} {}",
                         v,
-                        VMAF_Y_THRESHOLD,
+                        VMAF_Y_MIN,
                         if vmaf_ok { "✅" } else { "❌" }
                     );
                 } else {
@@ -702,7 +720,7 @@ pub fn explore_with_gpu_coarse_search(
                         crate::log_eprintln!(
                             "      FAILED VMAF-Y {} < {:.1} (perceptual quality too low)",
                             v_str,
-                            VMAF_Y_THRESHOLD
+                            VMAF_Y_MIN
                         );
                     }
                     if !cambi_ok {
@@ -757,9 +775,6 @@ pub fn explore_with_gpu_coarse_search(
                 crate::log_eprintln!("      SSIM (explore): {}", ssim_str);
 
                 let quality_target = result.actual_min_ssim.max(0.90);
-
-                const MS_SSIM_WEIGHT: f64 = 0.6;
-                const SSIM_ALL_WEIGHT: f64 = 0.4;
 
                 let mut final_score: Option<f64> = None;
                 let mut ms_ssim_avg: Option<f64> = None;
@@ -1000,9 +1015,8 @@ pub fn explore_with_gpu_coarse_search(
 
     if gpu.is_available() && has_gpu_encoder {
         let mapping = match encoder {
-            VideoEncoder::Hevc => CrfMapping::hevc(gpu.gpu_type),
             VideoEncoder::Av1 => CrfMapping::av1(gpu.gpu_type),
-            VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type), // same as above: H.264 reuses HEVC mapping
+            VideoEncoder::Hevc | VideoEncoder::H264 => CrfMapping::hevc(gpu.gpu_type), // H.264 reuses HEVC mapping
         };
         let equivalent_gpu_crf = mapping.cpu_to_gpu(result.optimal_crf);
         crate::verbose_eprintln!("   ═══════════════════════════════════════════════════");
@@ -1110,14 +1124,6 @@ fn cpu_fine_tune_from_gpu_boundary(
         input_size,
         estimated_iterations,
     );
-
-    #[derive(Debug, Clone)]
-    enum AudioTranscodeStrategy {
-        Copy,
-        Alac,
-        AacHigh,
-        AacMedium,
-    }
 
     let audio_strategy = {
         let output_ext = output
@@ -1396,10 +1402,6 @@ fn cpu_fine_tune_from_gpu_boundary(
         Ok(fs::metadata(output)?.len())
     };
 
-    use crate::modern_ui::colors::{
-        BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_YELLOW, CYAN, DIM, RESET, YELLOW,
-    };
-
     crate::verbose_eprintln!(
         "{}CPU Fine-Tune ({:?}) - Maximum SSIM Search{}",
         BRIGHT_CYAN,
@@ -1424,9 +1426,6 @@ fn cpu_fine_tune_from_gpu_boundary(
         RESET
     );
     let step_size_upward = 0.25_f32;
-    const PHASE3_DOWNWARD_STEP: f32 = 0.1;
-
-    const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
     let mut iterations = 0u32;
     let mut size_cache: CrfCache<u64> = CrfCache::new();
@@ -1571,9 +1570,6 @@ fn cpu_fine_tune_from_gpu_boundary(
             " │ SSIM N/A".to_string()
         };
 
-        use crate::modern_ui::colors::{
-            BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, RESET,
-        };
         let source_label = if gpu_executed { "[GPU]" } else { "[Initial]" };
         crate::log_eprintln!(
             "{}{}   {}✓{} {} {}CRF {:<4.1}{} {}{:6.1}%{}{} ✅",
@@ -1606,9 +1602,6 @@ fn cpu_fine_tune_from_gpu_boundary(
         let crf_range = gpu_boundary_crf - search_floor;
 
         let initial_step = (crf_range / 1.5).clamp(8.0, 25.0);
-        const DECAY_FACTOR: f32 = 0.4;
-        const MIN_STEP: f32 = 0.1;
-
         let max_wall_hits = if duration >= VERY_LONG_VIDEO_THRESHOLD_SECS {
             6
         } else if duration >= LONG_VIDEO_THRESHOLD_SECS {
@@ -1693,8 +1686,6 @@ fn cpu_fine_tune_from_gpu_boundary(
             );
             None
         };
-
-        const ZERO_GAIN_THRESHOLD: f64 = 0.00005;
 
         let mut consecutive_zero_gains: u32 = 0;
         let mut failure_credibility: f64 = 0.0;
@@ -1809,8 +1800,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                             }
 
                             // Early insight: only trigger if quality fails threshold AND no improvement
-                            const VMAF_Y_MIN: f64 = 93.0;
-                            const PSNR_UV_MIN: f64 = 35.0;
+                            // VMAF and PSNR thresholds defined at module level
                             let any_metric_fails = v < VMAF_Y_MIN || u.min(v_score) < PSNR_UV_MIN;
 
                             if !vmaf_improved && !psnr_improved && any_metric_fails {
@@ -1852,12 +1842,10 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // HIGH CONFIDENCE GATE: If we hit the wall but quality is still garbage,
                     // this encode is not credible. Abort immediately.
                     if ultimate_mode && quality_wall_triggered {
-                        const VMAF_Y_MIN: f64 = 93.0;
+                        // VMAF and PSNR thresholds defined at module level
                         const PSNR_UV_MIN: f64 = 35.0;
 
-                        let vmaf_metric = if let Some(v) = best_vmaf_tracked {
-                            v
-                        } else {
+                        let Some(vmaf_metric) = best_vmaf_tracked else {
                             crate::log_eprintln!(
                                 "   {}⚠️  VMAF not measured at quality wall{}",
                                 BRIGHT_YELLOW,
@@ -1905,10 +1893,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                         format!(" │ SSIM:{current_ssim:.4} Δ{ssim_gain:+.4}")
                     };
 
-                    use crate::modern_ui::colors::{
-                        BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, GREEN,
-                        MFB_BLUE, RESET,
-                    };
                     crate::log_eprintln!(
                         "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} {}{}",
                         RESET,
@@ -1930,7 +1914,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
                     quality_wall_triggered
                 } else {
-                    use crate::modern_ui::colors::{BRIGHT_GREEN, CYAN, MFB_BLUE, RESET};
                     crate::log_eprintln!(
                         "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ SSIM N/A",
                         RESET,
@@ -2001,7 +1984,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     format!("decay {DIM}×{DECAY_FACTOR:.1}^{wall_hits}")
                 };
 
-                use crate::modern_ui::colors::{BRIGHT_RED, BRIGHT_YELLOW, CYAN, DIM, RESET};
                 crate::log_eprintln!(
                     "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ ❌ WALL HIT #{} (Backtrack: {:.2} → {:.2} {})",
                     RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
@@ -2156,7 +2138,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     } else {
                         "→"
                     };
-                    use crate::modern_ui::colors::{BRIGHT_RED, CYAN, DIM, RESET};
                     crate::log_eprintln!(
                         "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}% {} │ VMAF:{:.2} UV:{:.2} ({:.1}/3.0 {})",
                         RESET, RESET, BRIGHT_RED, RESET, CYAN, test_crf, RESET,
@@ -2172,8 +2153,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     }
 
                     // Early insight: only trigger if BOTH quality metrics fail threshold AND no improvement
-                    const VMAF_Y_MIN: f64 = 93.0;
-                    const PSNR_UV_MIN: f64 = 35.0;
                     let both_metrics_fail = v < VMAF_Y_MIN && u.min(v_score) < PSNR_UV_MIN;
 
                     if !vmaf_improved && !psnr_improved && both_metrics_fail {
@@ -2203,7 +2182,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                     best_size = Some(size);
                 }
                 found_compress_point = true;
-                use crate::modern_ui::colors::{BRIGHT_GREEN, CYAN, RESET};
                 crate::log_eprintln!(
                     "{}{}   {}✓{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} │ FOUND! ✅",
                     RESET,
@@ -2219,7 +2197,6 @@ fn cpu_fine_tune_from_gpu_boundary(
                 );
                 break; // Stop Phase 2 after finding first compression point
             } else if !ultimate_mode {
-                use crate::modern_ui::colors::{BRIGHT_RED, CYAN, RESET};
                 crate::log_eprintln!(
                     "{}{}   {}✗{} [CPU] {}CRF {:<4.1}{} {}{:6.1}%{} ❌",
                     RESET,
@@ -2256,7 +2233,6 @@ fn cpu_fine_tune_from_gpu_boundary(
             let mut prev_size = best_size.unwrap_or(0);
             let search_floor = if ultimate_mode { 0.0 } else { min_crf };
             let mut test_crf = compress_point - current_step;
-            const MAX_CONSECUTIVE_COMPRESSIONS: u32 = 3;
 
             while test_crf >= search_floor && iterations < max_iterations_for_video {
                 if size_cache.contains_key(test_crf) {
@@ -2395,7 +2371,7 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // Early termination logic: based on insight evaluation
                     if ultimate_mode {
                         // Only trigger if quality already meets final settlement thresholds
-                        const VMAF_Y_MIN: f64 = 93.0;
+                        // VMAF and PSNR thresholds defined at module level
                         const PSNR_UV_MIN: f64 = 35.0;
 
                         let any_metric_fails =
@@ -2435,10 +2411,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     prev_size = size;
 
                     // Sprint: double the step for faster iteration (after 2 consecutive successes)
-                    #[allow(clippy::if_same_then_else)]
-                    if current_step <= PHASE3_DOWNWARD_STEP + 0.01 {
-                        consecutive_01_successes += 1;
-                    } else if consecutive_01_successes >= 2 {
+                    if current_step <= PHASE3_DOWNWARD_STEP + 0.01 || consecutive_01_successes >= 2
+                    {
                         consecutive_01_successes += 1;
                     } else {
                         consecutive_01_successes = 0;
@@ -2527,8 +2501,8 @@ fn cpu_fine_tune_from_gpu_boundary(
                     // Insight mechanism: only count as credible failure if quality actually degraded
                     if ultimate_mode {
                         // Check if quality metrics are actually failing (not just size wall)
-                        const VMAF_Y_MIN: f64 = 93.0;
-                        const PSNR_UV_MIN: f64 = 35.0;
+                        // VMAF and PSNR thresholds defined at module level
+                        // VMAF and PSNR thresholds defined at module level
                         let quality_degraded = if let (Some(v), Some((u, v_score))) =
                             (current_vmaf_val, current_psnr_val)
                         {
@@ -2579,10 +2553,6 @@ fn cpu_fine_tune_from_gpu_boundary(
         if let Some(best) = best_crf {
             if best < max_crf {
                 crate::log_eprintln!();
-                use crate::modern_ui::colors::{
-                    BRIGHT_CYAN, BRIGHT_GREEN, BRIGHT_MAGENTA, BRIGHT_RED, BRIGHT_YELLOW, CYAN,
-                    DIM, RESET,
-                };
                 crate::log_eprintln!(
                     "{}Phase 4: [CPU] Extreme Mode 0.01-Granularity Fine-Tune (Sprint & Backtrack){}",
                     BRIGHT_MAGENTA, RESET
@@ -2950,6 +2920,10 @@ fn cpu_fine_tune_from_gpu_boundary(
     })
 }
 
+/// Explore HEVC quality with GPU coarse search.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_with_gpu_coarse(
     input: &Path,
     output: &Path,
@@ -2974,6 +2948,10 @@ pub fn explore_hevc_with_gpu_coarse(
     )
 }
 
+/// Explore HEVC quality with GPU coarse search and ultimate warm start.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
     input: &Path,
     output: &Path,
@@ -3001,6 +2979,10 @@ pub fn explore_hevc_with_gpu_coarse_ultimate_warm_start(
     )
 }
 
+/// Explore HEVC quality with GPU coarse search and ultimate mode.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_with_gpu_coarse_ultimate(
     input: &Path,
     output: &Path,
@@ -3027,6 +3009,10 @@ pub fn explore_hevc_with_gpu_coarse_ultimate(
     )
 }
 
+/// Explore HEVC quality with GPU coarse search and warm start.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 #[allow(clippy::too_many_arguments)]
 pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     input: &Path,
@@ -3061,6 +3047,10 @@ pub fn explore_hevc_with_gpu_coarse_full_warm_start(
     )
 }
 
+/// Explore HEVC quality with GPU coarse search (full).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_with_gpu_coarse_full(
     input: &Path,
     output: &Path,
@@ -3088,6 +3078,10 @@ pub fn explore_hevc_with_gpu_coarse_full(
     )
 }
 
+/// Explore AV1 quality with GPU coarse search and ultimate warm start.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_with_gpu_coarse_ultimate_warm_start(
     input: &Path,
     output: &Path,
@@ -3113,6 +3107,10 @@ pub fn explore_av1_with_gpu_coarse_ultimate_warm_start(
     )
 }
 
+/// Explore AV1 quality with GPU coarse search.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_with_gpu_coarse(
     input: &Path,
     output: &Path,
@@ -3138,6 +3136,10 @@ pub fn explore_av1_with_gpu_coarse(
     )
 }
 
+/// Explore AV1 quality with GPU coarse search and ultimate mode.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_with_gpu_coarse_ultimate(
     input: &Path,
     output: &Path,
@@ -3162,6 +3164,10 @@ pub fn explore_av1_with_gpu_coarse_ultimate(
     )
 }
 
+/// Explore AV1 quality with GPU coarse search and warm start.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_with_gpu_coarse_full_warm_start(
     input: &Path,
     output: &Path,
@@ -3194,6 +3200,10 @@ pub fn explore_av1_with_gpu_coarse_full_warm_start(
     )
 }
 
+/// Explore AV1 quality with GPU coarse search (full).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_with_gpu_coarse_full(
     input: &Path,
     output: &Path,

@@ -203,7 +203,9 @@ fn calculate_confidence(
 
     if let Some(chroma) = chroma_estimate {
         let chroma_confidence = 1.0 / chroma.weighted_sse.mul_add(0.01, 1.0);
-        0.7f64.mul_add(luma_confidence, 0.3 * chroma_confidence).clamp(0.0, 1.0)
+        0.7f64
+            .mul_add(luma_confidence, 0.3 * chroma_confidence)
+            .clamp(0.0, 1.0)
     } else {
         luma_confidence.clamp(0.0, 1.0)
     }
@@ -268,6 +270,10 @@ const MARKER_DQT: u8 = 0xDB;
 const MARKER_SOS: u8 = 0xDA;
 const MARKER_EOI: u8 = 0xD9;
 
+/// Extract quantization tables from JPEG raw bytes.
+///
+/// # Errors
+/// Returns an error if the JPEG data is corrupted or missing DQT markers.
 pub fn extract_quantization_tables(data: &[u8]) -> Result<Vec<[[u16; 8]; 8]>, String> {
     let mut tables = Vec::new();
 
@@ -364,6 +370,10 @@ const ZIGZAG_ORDER: [usize; 64] = [
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
+/// Analyze JPEG quality by inspecting DQT (Define Quantization Table) markers.
+///
+/// # Errors
+/// Returns an error if the JPEG data is invalid or DQT markers are missing.
 pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> {
     let tables = extract_quantization_tables(data)?;
 
@@ -385,8 +395,9 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
         if luma_estimate.is_exact_match && chroma.is_exact_match {
             luma_estimate.quality
         } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
-            let weighted =
-                luma_estimate.interpolated_quality.mul_add(0.7, chroma.interpolated_quality * 0.3);
+            let weighted = luma_estimate
+                .interpolated_quality
+                .mul_add(0.7, chroma.interpolated_quality * 0.3);
             weighted.round() as u8
         } else {
             luma_estimate.quality
@@ -431,6 +442,10 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
     })
 }
 
+/// Analyze JPEG quality from a file path.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or is not a valid JPEG.
 pub fn analyze_jpeg_file(path: &std::path::Path) -> Result<JpegQualityAnalysis, String> {
     let data = std::fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
     analyze_jpeg_quality(&data)

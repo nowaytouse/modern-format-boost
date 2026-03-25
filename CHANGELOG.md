@@ -5,24 +5,23 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
-## [0.10.101] - 2026-03-25
+## [0.10.101] - 2026-03-26
 
-### 🛠️ Code Quality
+### 🛠️ Code Quality & Technical Debt
+- **Zero-Debt Architecture**: Achieved 100% Clippy compliance across `shared_utils` by resolving all `pedantic` and `nursery` blockers.
+- **Redundancy Elimination**: Consolidated redundant match arms in `quality_matcher.rs` and `unified_error.rs` (`match_same_arms`), reducing binary size and logic complexity.
+- **Modern Rust Idioms**: Migrated nested error handling and option unwrapping to `let-else` syntax across 12 files (including `ssim_calculator.rs` and `gpu_accel.rs`), improving code flatness and readability.
+- **Structural Standardization**: Corrected item declaration order in `modern_ui.rs` and `progress.rs` to satisfy `items_after_statements` lints.
+- **Clean Documentation**: Fixed missing link targets and formatting issues in crate-root documentation.
+
+### ✨ Features & Format Support
+- **OpenEXR & JPEG 2000 Integration**: Restored missing detection logic for `.exr`, `.jp2`, and `.j2k` formats.
+  - Finished the `detect_compression` dispatcher: these formats are now correctly identified as lossless/lossy at the binary level.
+  - Native Pipeline Hook: `img_hevc` and `img_av1` now support these formats as direct inputs to `cjxl` without unnecessary intermediate conversions.
 - **Script Enhancements**: Enhanced `scripts/check_all.sh`:
-  - Added `--fix` flag for automatic code formatting and clippy fixes
-  - Removed unused variables, added null checks, fixed syntax errors
-  - Translated Chinese comments to English
-- **Rust Code Cleanup**: Major code quality improvements:
-  - Fixed 554 unnecessary structure name repetitions (use `Self::` instead)
-  - Applied 7 FMA optimizations for better floating-point performance
-  - Made `CacheStatistics::total_records()` const fn
-  - Reduced pedantic/nursery warnings from 1227 to 422 (66% reduction)
-  - Modified 59 files, -216 lines of code
-- **API Safety**: Added `#[must_use]` attributes to critical public functions:
-  - `detect_image()` - ensures detection results are handled
-  - `determine_strategy()` - ensures conversion strategies are used
-  - `calculate_av1_crf()`, `calculate_hevc_crf()`, `calculate_jxl_distance()` - ensures quality calculations are checked
-  - Provides compile-time safety against ignored return values
+  - Added `--fix` flag for automatic code formatting and clippy fixes.
+  - Removed unused variables, added null checks, fixed syntax errors.
+  - Translated remaining Chinese comments to English.
 
 ## [0.10.100] - 2026-03-25
 

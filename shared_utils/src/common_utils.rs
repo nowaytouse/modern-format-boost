@@ -69,11 +69,19 @@ pub fn extract_suggested_extension(error_msg: &str) -> Option<String> {
     None
 }
 
+/// Ensure that a directory exists, creating it if necessary.
+///
+/// # Errors
+/// Returns an I/O error if the directory cannot be created.
 pub fn ensure_dir_exists(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Failed to create directory: {}", dir.display()))
 }
 
+/// Ensure that the parent directory of a file exists.
+///
+/// # Errors
+/// Returns an I/O error if the parent directory cannot be created.
 pub fn ensure_parent_dir_exists(file_path: &Path) -> Result<()> {
     if let Some(parent) = file_path.parent() {
         ensure_dir_exists(parent)?;
@@ -87,6 +95,10 @@ pub fn compute_relative_path(path: &Path, base: &Path) -> PathBuf {
         .map_or_else(|_| path.to_path_buf(), std::path::Path::to_path_buf)
 }
 
+/// Copy a file and preserve its metadata context if possible.
+///
+/// # Errors
+/// Returns an I/O error if the copy fails.
 pub fn copy_file_with_context(source: &Path, dest: &Path) -> Result<u64> {
     std::fs::copy(source, dest).with_context(|| {
         format!(
@@ -212,6 +224,10 @@ pub fn parse_float_or_default(s: &str, default: f64) -> f64 {
     s.parse::<f64>().unwrap_or(default)
 }
 
+/// Execute a command and log its output.
+///
+/// # Errors
+/// Returns an error if the command fails to execute.
 pub fn execute_command_with_logging(cmd: &mut Command) -> Result<Output> {
     let command_str = format!("{cmd:?}");
 
@@ -440,6 +456,10 @@ pub fn format_command_string(command: &str, args: &[&str]) -> String {
     }
 }
 
+/// Validate that a file is not empty and is readable.
+///
+/// # Errors
+/// Returns an error if the file is missing, empty, or unreadable.
 pub fn validate_file_integrity(path: &std::path::Path) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;
     let size = metadata.len();
@@ -455,6 +475,10 @@ pub fn validate_file_integrity(path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Validate that a file does not exceed a specific size limit.
+///
+/// # Errors
+/// Returns an error if the file size cannot be determined or exceeds the limit.
 pub fn validate_file_size_limit(path: &std::path::Path, max_bytes: u64) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;
     let size = metadata.len();

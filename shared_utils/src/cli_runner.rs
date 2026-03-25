@@ -74,6 +74,10 @@ pub fn resolve_video_run_base_dir(
     }
 }
 
+/// Run a command-line tool with automatic processing features.
+///
+/// # Errors
+/// Returns an error if command execution or file processing fails.
 pub fn run_auto_command<F, R>(config: CliRunnerConfig, converter: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<R>,

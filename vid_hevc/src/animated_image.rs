@@ -185,6 +185,10 @@ fn copy_original_on_skip(input: &Path, options: &ConvertOptions) -> Option<std::
     }
 }
 
+/// Get the dimensions of an input video file.
+///
+/// # Errors
+/// Returns an error if ffprobe fails.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32)> {
     shared_utils::conversion::get_input_dimensions(input).map_err(VidQualityError::ConversionError)
 }
@@ -300,6 +304,10 @@ fn skipped_static_animated(input: &Path, input_size: u64) -> ConversionResult {
     }
 }
 
+/// Convert video to HEVC MP4.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     if !options.force && is_already_processed(input) {
         return Ok(skipped_already_processed(input));
@@ -644,6 +652,10 @@ pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<Con
     }
 }
 
+/// Convert video to HEVC MP4 with matched quality.
+///
+/// # Errors
+/// Returns an error if matching or encoding fails.
 pub fn convert_to_hevc_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -1190,6 +1202,10 @@ pub fn convert_to_hevc_mp4_matched(
     })
 }
 
+/// Convert to HEVC MKV losslessly.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_hevc_mkv_lossless(
     input: &Path,
     options: &ConvertOptions,
@@ -1331,6 +1347,10 @@ pub fn convert_to_hevc_mkv_lossless(
     }
 }
 
+/// Convert to GIF with Apple compatibility.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,

@@ -94,6 +94,10 @@ impl XmpMerger {
         Self { config }
     }
 
+    /// Check if exiftool is available on the system.
+    ///
+    /// # Errors
+    /// Returns an error if exiftool is not found.
     pub fn check_exiftool() -> Result<()> {
         let output = Command::new("exiftool")
             .arg("-ver")
@@ -106,6 +110,10 @@ impl XmpMerger {
         Ok(())
     }
 
+    /// Find all XMP files in a directory.
+    ///
+    /// # Errors
+    /// Returns an error if directory traversal fails.
     pub fn find_xmp_files(&self, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut xmp_files = Vec::new();
 
@@ -568,6 +576,10 @@ impl XmpMerger {
         None
     }
 
+    /// Find the media file corresponding to an XMP file.
+    ///
+    /// # Errors
+    /// Returns an error if searching fails.
     pub fn find_media_file(&self, xmp_path: &Path) -> Result<(Option<PathBuf>, String)> {
         if self.config.verbose {
             eprintln!("🔍 Finding match for: {}", xmp_path.display());
@@ -644,6 +656,10 @@ impl XmpMerger {
         Ok((None, "no_match".to_string()))
     }
 
+    /// Merge XMP metadata into a media file.
+    ///
+    /// # Errors
+    /// Returns an error if merging fails.
     pub fn merge_xmp(&self, xmp_path: &Path, media_path: &Path) -> Result<()> {
         match self.merge_xmp_core(xmp_path, media_path) {
             Ok(()) => Ok(()),
@@ -901,6 +917,10 @@ impl XmpMerger {
         }
     }
 
+    /// Process a directory for XMP merging.
+    ///
+    /// # Errors
+    /// Returns an error if processing fails.
     pub fn process_directory(&self, dir: &Path) -> Result<Vec<MergeResult>> {
         Self::check_exiftool()?;
 
@@ -960,6 +980,10 @@ impl MergeSummary {
     }
 }
 
+/// Merge XMP for a copied file (input relative).
+///
+/// # Errors
+/// Returns an error if merging fails.
 pub fn merge_xmp_for_copied_file(input: &Path, dest: &Path) -> Result<bool> {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let ext = input.extension().and_then(|e| e.to_str()).unwrap_or("");

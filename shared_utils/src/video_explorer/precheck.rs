@@ -1,5 +1,6 @@
 //! Video precheck and processing recommendation
 
+use crate::quality_matcher::parse_source_codec;
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
@@ -303,6 +304,10 @@ fn bpp_from_precheck_json(json: &serde_json::Value, file_size: u64, input: &Path
     }
 }
 
+/// Detect video duration comprehensively using multiple methods.
+///
+/// # Errors
+/// Returns an error if duration detection fails.
 pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'static str)> {
     let output = Command::new("ffprobe")
         .args([
@@ -387,6 +392,10 @@ pub fn detect_duration_comprehensive(input: &Path) -> Result<(f64, f64, u64, &'s
     bail!("Failed to detect video duration - all methods failed")
 }
 
+/// Get comprehensive video information for a file.
+///
+/// # Errors
+/// Returns an error if information gathering fails.
 pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
     let file_size = std::fs::metadata(input)
         .context("Failed to read file metadata")?
@@ -470,7 +479,6 @@ pub fn get_video_info(input: &Path) -> Result<VideoInfo> {
         bail!("Total pixels is 0, cannot calculate BPP");
     };
 
-    use crate::quality_matcher::parse_source_codec;
     let source_codec_enum = parse_source_codec(&codec);
 
     let compressibility = if source_codec_enum.is_modern() {
@@ -627,7 +635,6 @@ fn evaluate_processing_recommendation(
         };
     }
 
-    use crate::quality_matcher::parse_source_codec;
     let source_codec = parse_source_codec(codec);
     let codec_efficiency = source_codec.efficiency_factor();
 
@@ -673,6 +680,10 @@ fn evaluate_processing_recommendation(
 }
 
 /// Returns bits-per-pixel from video stream (one ffprobe, minimal parse; P3 lightweight path).
+/// Calculate the bits per pixel (BPP) for a video file.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_bpp(input: &Path) -> Result<f64> {
     let file_size = std::fs::metadata(input)
         .context("Failed to read file metadata")?
@@ -779,6 +790,10 @@ pub fn print_precheck_report(info: &VideoInfo) {
     }
 }
 
+/// Run pre-exploration checks on a video file.
+///
+/// # Errors
+/// Returns an error if precheck fails.
 pub fn run_precheck(input: &Path) -> Result<VideoInfo> {
     let info = get_video_info(input)?;
     print_precheck_report(&info);

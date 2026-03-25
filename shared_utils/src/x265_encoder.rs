@@ -68,18 +68,22 @@ impl Default for X265Config {
     }
 }
 
+/// Encode an image to HEVC using x265.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn encode_with_x265(
     input: &Path,
     output: &Path,
     config: &X265Config,
     vf_args: &[String],
 ) -> Result<u64> {
+    use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
     debug!(
         "🖥️ CPU encoding started: CRF {:.1}, preset={}",
         config.crf, config.preset
     );
 
-    use crate::universal_heartbeat::{HeartbeatConfig, HeartbeatGuard};
     let _heartbeat = HeartbeatGuard::new(
         HeartbeatConfig::medium("x265 CLI Encoding").with_info(format!("CRF {:.1}", config.crf)),
     );

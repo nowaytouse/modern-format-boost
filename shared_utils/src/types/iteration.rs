@@ -57,6 +57,10 @@ impl IterationGuard {
         Self::new(max, context)
     }
 
+    /// Increment the iteration count.
+    ///
+    /// # Errors
+    /// Returns an error if the count exceeds the maximum allowed iterations.
     pub fn increment(&mut self) -> Result<u32, IterationError> {
         self.current += 1;
         if self.current > self.max {

@@ -61,6 +61,10 @@ impl fmt::Display for PathConversionError {
 
 impl std::error::Error for PathConversionError {}
 
+/// Convert a path to a string slice safely.
+///
+/// # Errors
+/// Returns a `PathConversionError` if the path contains invalid UTF-8.
 pub fn path_to_str_safe(path: &Path) -> Result<&str, PathConversionError> {
     path.to_str().ok_or_else(|| {
         let err = PathConversionError {
@@ -77,10 +81,18 @@ pub fn path_to_string_lossy(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+/// Convert a path upward to a String safely.
+///
+/// # Errors
+/// Returns a `PathConversionError` if conversion fails.
 pub fn path_to_string_safe(path: &Path) -> Result<String, PathConversionError> {
     path_to_str_safe(path).map(std::string::ToString::to_string)
 }
 
+/// Validate a path for correctness.
+///
+/// # Errors
+/// Returns a `PathValidationError` if validation fails.
 pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     let path_str = path.to_string_lossy();
 
@@ -107,6 +119,10 @@ pub fn validate_path(path: &Path) -> Result<(), PathValidationError> {
     Ok(())
 }
 
+/// Validate multiple paths for correctness.
+///
+/// # Errors
+/// Returns a `PathValidationError` if any validation fails.
 pub fn validate_paths(paths: &[&Path]) -> Result<(), PathValidationError> {
     for path in paths {
         validate_path(path)?;
@@ -114,6 +130,10 @@ pub fn validate_paths(paths: &[&Path]) -> Result<(), PathValidationError> {
     Ok(())
 }
 
+/// Check for input/output conflicts.
+///
+/// # Errors
+/// Returns a `PathValidationError` if conflict is found.
 pub fn check_input_output_conflict(input: &Path, output: &Path) -> Result<(), PathValidationError> {
     let input_canonical = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
 

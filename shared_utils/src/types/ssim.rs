@@ -41,6 +41,10 @@ impl Ssim {
 
     pub const ZERO: Self = Self(0.0);
 
+    /// Create a new SSIM value.
+    ///
+    /// # Errors
+    /// Returns an error if the value is out of range.
     pub fn new(value: f64) -> Result<Self, SsimError> {
         if value.is_nan() || value.is_infinite() {
             return Err(SsimError::InvalidFloat);

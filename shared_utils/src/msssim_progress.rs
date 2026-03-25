@@ -95,6 +95,10 @@ impl MsssimProgressMonitor {
         self.start_time.elapsed().as_secs_f64()
     }
 
+    /// Monitor an ffmpeg process and report progress.
+    ///
+    /// # Errors
+    /// Returns an error message if the process fails or the channel is invalid.
     pub fn monitor_ffmpeg_process(
         &self,
         ffmpeg_args: &[&str],

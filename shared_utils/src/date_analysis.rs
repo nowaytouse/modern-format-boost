@@ -129,6 +129,10 @@ struct ExiftoolOutput {
     exif_created: Option<String>,
 }
 
+/// Analyze a directory for potential date-based improvements.
+///
+/// # Errors
+/// Returns an error message if analysis fails.
 pub fn analyze_directory(
     dir: &Path,
     config: &DateAnalysisConfig,

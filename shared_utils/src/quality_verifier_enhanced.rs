@@ -21,7 +21,7 @@ pub struct VerifyOptions {
     pub min_file_size: u64,
     /// If true, require input and output duration to match within tolerance.
     pub require_duration_match: bool,
-    /// Duration tolerance in seconds (input vs output). Used when [`require_duration_match`] is true.
+    /// Duration tolerance in seconds (input vs output). Used when [`Self::require_duration_match`] is true.
     pub duration_tolerance_secs: f64,
     /// If true, require output to have a video stream (ffprobe).
     pub require_video_stream: bool,
@@ -97,6 +97,9 @@ impl EnhancedVerifyResult {
 
 /// Run basic output file health check (exists, size, readable).
 /// Does not require ffprobe.
+///
+/// # Errors
+/// Returns an error if the output file is missing, empty, too small, or unreadable.
 pub fn verify_output_file(output: &Path, min_size: u64) -> Result<(), String> {
     let size = if min_size == 0 {
         DEFAULT_MIN_FILE_SIZE

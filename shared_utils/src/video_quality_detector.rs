@@ -77,9 +77,7 @@ impl VideoCodecType {
     #[must_use]
     pub const fn from_source_codec(codec: SourceCodec) -> Self {
         match codec {
-            SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv => {
-                Self::Lossless
-            }
+            SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv => Self::Lossless,
             SourceCodec::Av1
             | SourceCodec::H265
             | SourceCodec::Vp9
@@ -126,11 +124,10 @@ impl ChromaSubsampling {
     #[must_use]
     pub const fn quality_factor(&self) -> f64 {
         match self {
-            Self::Yuv420 => 1.0,
+            Self::Yuv420 | Self::Unknown => 1.0,
             Self::Yuv422 => 1.05,
             Self::Yuv444 => 1.15,
             Self::Rgb => 1.20,
-            Self::Unknown => 1.0,
         }
     }
 }
@@ -180,7 +177,6 @@ impl CompressionLevel {
 
         let efficiency = match codec_type {
             VideoCodecType::ModernEfficient => 0.6,
-            VideoCodecType::Legacy => 1.0,
             VideoCodecType::Inefficient => 2.0,
             _ => 1.0,
         };
@@ -201,6 +197,9 @@ impl CompressionLevel {
 
 /// Analyze video quality (codec type, bpp, content type, compression level, etc.). Routing is
 /// handled by `video_detection` + `quality_matcher` in the main flow; this is for media info only. Consider using a struct (e.g. `VideoQualityInput`) when passing many arguments to avoid parameter order bugs.
+///
+/// # Errors
+/// Returns an error message if analysis fails.
 #[allow(clippy::too_many_arguments)]
 pub fn analyze_video_quality(
     codec: &str,
@@ -310,6 +309,10 @@ pub fn analyze_video_quality(
 
 /// Build [`VideoQualityAnalysis`] from [`VideoDetectionResult`] for logging/display. Use when you
 /// already have detection (e.g. before SSIM exploration) and want media info for log file only.
+/// Analyze video quality based on a previous detection result.
+///
+/// # Errors
+/// Returns an error message if analysis fails.
 pub fn analyze_video_quality_from_detection(
     detection: &VideoDetectionResult,
 ) -> Result<VideoQualityAnalysis, String> {
@@ -526,7 +529,6 @@ fn estimate_crf_from_bpp(bpp: f64, codec_type: VideoCodecType) -> u8 {
 
     let efficiency = match codec_type {
         VideoCodecType::ModernEfficient => 0.5,
-        VideoCodecType::Legacy => 1.0,
         VideoCodecType::Intermediate => 0.7,
         VideoCodecType::Inefficient => 2.0,
         _ => 1.0,

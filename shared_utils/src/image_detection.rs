@@ -75,6 +75,10 @@ use std::path::Path;
 ///
 /// Increases `max_alloc` from default ~512MB to 2GB for legitimate large images.
 /// Still protects against malicious images (2GB is reasonable for 100MP+ images).
+/// Open image with security limits (max dimensions).
+///
+/// # Errors
+/// Returns an error if the image exceeds limits or is corrupted.
 pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, image::ImageError> {
     use image::Limits;
     let mut limits = Limits::default();
@@ -196,13 +200,7 @@ impl DetectedFormat {
 
     #[must_use]
     pub const fn is_modern_format(&self) -> bool {
-        matches!(
-            self,
-            Self::HEIC
-                | Self::HEIF
-                | Self::AVIF
-                | Self::JXL
-        )
+        matches!(self, Self::HEIC | Self::HEIF | Self::AVIF | Self::JXL)
     }
 }
 
@@ -238,6 +236,10 @@ pub struct DetectionResult {
     pub precision: PrecisionMetadata,
 }
 
+/// Detect image format by inspecting magic bytes.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or the format is unknown.
 pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
     let mut file = File::open(path)?;
     let mut header = [0u8; 32];
@@ -364,12 +366,9 @@ pub fn detect_format_from_bytes(path: &Path) -> Result<DetectedFormat> {
 /// `detect_heic_compression` (hvcC lookup) which always fails → Err.
 fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> DetectedFormat {
     // Read enough for ftyp box (typically < 64 bytes, but can be larger)
-    let data = match std::fs::read(path) {
-        Ok(d) => d,
-        Err(_) => {
-            // Fallback: mif1 without readable file → HEIC (legacy behavior)
-            return DetectedFormat::HEIC;
-        }
+    let Ok(data) = std::fs::read(path) else {
+        // Fallback: mif1 without readable file → HEIC (legacy behavior)
+        return DetectedFormat::HEIC;
     };
 
     if data.len() < 16 || &data[4..8] != b"ftyp" {
@@ -415,6 +414,10 @@ fn resolve_mif1_from_compatible_brands(path: &Path, major_brand: &[u8]) -> Detec
     }
 }
 
+/// Detect if an image is animated (GIF, APNG, WebP, etc.).
+///
+/// # Errors
+/// Returns an error if the file cannot be read or parsed.
 pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u32, Option<f32>)> {
     // 🚀 Stage 1: Native Fast-Path for Simple Formats
     // GIF, WebP, and PNG have simple, deterministic byte-level frame structures.
@@ -507,6 +510,10 @@ pub fn detect_animation(path: &Path, format: &DetectedFormat) -> Result<(bool, u
 }
 
 /// Parse GIF palette size from Global Color Table (GCT) and Local Color Table (LCT)
+/// Parse GIF application extension blocks for precision metadata.
+///
+/// # Errors
+/// Returns an error if the GIF file is invalid or cannot be read.
 pub fn parse_gif_precision_metadata(path: &Path) -> Result<PrecisionMetadata> {
     let mut file = File::open(path)?;
     let mut header = [0u8; 13];
@@ -598,9 +605,8 @@ pub fn is_isobmff_animated_sequence(path: &Path) -> bool {
     // Sequence brands: avis=AVIF sequence, msf1=multi-sample ftyp (used by animated HEIC/AVIF)
     const SEQUENCE_BRANDS: &[&[u8]] = &[b"avis", b"msf1"];
 
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return false,
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
     };
 
     let mut header = [0u8; 32];
@@ -670,9 +676,8 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     }
 
     // Create temporary APNG file
-    let temp_apng = match tempfile::Builder::new().suffix(".apng").tempfile() {
-        Ok(f) => f,
-        Err(_) => return false,
+    let Ok(temp_apng) = tempfile::Builder::new().suffix(".apng").tempfile() else {
+        return false;
     };
     let temp_apng_path = temp_apng.path();
 
@@ -721,19 +726,24 @@ fn is_jxl_animated_via_ffprobe(path: &Path) -> bool {
     false
 }
 
+/// Detect if an image is lossy or lossless based on its format and internal structure.
+///
+/// # Errors
+/// Returns an error if file access fails or format-specific analysis fails.
 pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<CompressionType> {
     match format {
         DetectedFormat::PNG => detect_png_compression(path),
 
-        DetectedFormat::BMP => Ok(CompressionType::Lossless),
+        DetectedFormat::BMP
+        | DetectedFormat::GIF
+        | DetectedFormat::QOI
+        | DetectedFormat::FLIF
+        | DetectedFormat::PNM
+        | DetectedFormat::TGA
+        | DetectedFormat::PSD
+        | DetectedFormat::DDS => Ok(CompressionType::Lossless),
 
         DetectedFormat::TIFF => detect_tiff_compression(path),
-
-        // JPEG is always lossy. For JXL transcoding, quality judgment is optional (lossless re-encode);
-        // we keep detection available so callers can use it if needed ("can add, can not use, but can't not have").
-        DetectedFormat::JPEG => Ok(CompressionType::Lossy),
-
-        DetectedFormat::GIF => Ok(CompressionType::Lossless),
 
         DetectedFormat::WebP => {
             crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
@@ -758,16 +768,9 @@ pub fn detect_compression(format: &DetectedFormat, path: &Path) -> Result<Compre
 
         DetectedFormat::JXL => detect_jxl_compression(path),
 
-        // Additional formats — "can not use, but can't not have"
-        DetectedFormat::QOI | DetectedFormat::FLIF | DetectedFormat::PNM => {
-            Ok(CompressionType::Lossless)
-        }
+        DetectedFormat::ICO => detect_ico_compression(path),
         DetectedFormat::EXR => detect_exr_compression(path),
         DetectedFormat::JP2 => detect_jp2_compression(path),
-        DetectedFormat::ICO => detect_ico_compression(path),
-        DetectedFormat::TGA | DetectedFormat::PSD | DetectedFormat::DDS => {
-            Ok(CompressionType::Lossless)
-        }
 
         _ => Ok(CompressionType::Lossy),
     }
@@ -796,21 +799,36 @@ fn detect_png_compression(path: &Path) -> Result<CompressionType> {
     })
 }
 
+/// Analyze PNG file for quantization artifacts and determine if it's lossy.
+///
+/// # Errors
+/// Returns an error if the file is not a valid PNG or cannot be read.
 pub fn analyze_png_quantization(path: &Path) -> Result<PngQuantizationAnalysis> {
     let file = std::fs::File::open(path).map_err(ImgQualityError::IoError)?;
     let mut reader = std::io::BufReader::new(file);
     analyze_png_quantization_from_reader(&mut reader, Some(path))
 }
 
+/// Analyze PNG quantization from raw bytes.
+///
+/// # Errors
+/// Returns an error if the data is not a valid PNG.
 pub fn analyze_png_quantization_from_bytes(data: &[u8]) -> Result<PngQuantizationAnalysis> {
     let mut cursor = std::io::Cursor::new(data);
     analyze_png_quantization_from_reader(&mut cursor, None)
 }
 
+/// Analyze PNG quantization from a reader.
+///
+/// # Errors
+/// Returns an error if reading fails or the PNG structure is invalid.
 pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     mut reader: R,
     path: Option<&Path>,
 ) -> Result<PngQuantizationAnalysis> {
+    const LOSSY_THRESHOLD: f64 = 0.58;
+    const GRAY_ZONE_LOW: f64 = 0.40;
+
     let png_info = parse_png_structure(&mut reader)?;
 
     let mut factors = PngQuantizationFactors::default();
@@ -1030,9 +1048,11 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
 
     let heuristic_score = f64::midpoint(factors.size_efficiency_anomaly, factors.entropy_anomaly);
 
-    let final_score = heuristic_score.mul_add(weights.heuristic, structural_score.mul_add(weights.structural, metadata_score * weights.metadata) + statistical_score * weights.statistical);
-
-    const LOSSY_THRESHOLD: f64 = 0.58;
+    let final_score = heuristic_score.mul_add(
+        weights.heuristic,
+        structural_score.mul_add(weights.structural, metadata_score * weights.metadata)
+            + statistical_score * weights.statistical,
+    );
 
     if std::env::var("IMGQUALITY_DEBUG").is_ok() {
         eprintln!("      📈 Score breakdown:");
@@ -1162,7 +1182,6 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     // Conservative strategy: only mark as lossy when confidence is high.
     // Gray zone [0.40, 0.58] without tool signature → treat as lossless to avoid
     // false positives (e.g. natural palette art misclassified as quantized).
-    const GRAY_ZONE_LOW: f64 = 0.40;
     let (is_quantized, confidence) = if final_score >= 0.70 {
         (true, (final_score - 0.70).mul_add(0.33, 0.9))
     } else if final_score >= LOSSY_THRESHOLD {
@@ -1213,6 +1232,10 @@ struct PngQuantizationWeights {
     heuristic: f64,
 }
 
+/// Parse PNG structure (IHDR, PLTE) to extract metadata.
+///
+/// # Errors
+/// Returns an error if the PNG stream is invalid or corrupted.
 pub fn parse_png_structure<R: std::io::Read + std::io::Seek>(
     mut reader: R,
 ) -> Result<PngStructureInfo> {
@@ -1472,7 +1495,9 @@ fn color_difference(a: &Rgba<u8>, b: &Rgba<u8>) -> f64 {
     let wr = 2.0 + rmean / 256.0;
     let wg = 4.0;
     let wb = 2.0 + (255.0 - rmean) / 256.0;
-    (wb * db).mul_add(db, (wr * dr).mul_add(dr, wg * dg * dg)).sqrt()
+    (wb * db)
+        .mul_add(db, (wr * dr).mul_add(dr, wg * dg * dg))
+        .sqrt()
 }
 
 /// Block-based random sampling — divides image into grid cells and randomly samples from each,
@@ -1758,12 +1783,10 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
 
 fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
     let bits_per_sample: u64 = match info.color_type {
-        0 => 1, // grayscale: 1 channel
-        2 => 3, // RGB: 3 channels
-        3 => 1, // indexed: 1 index per pixel
-        4 => 2, // grayscale + alpha: 2 channels
-        6 => 4, // RGBA: 4 channels
-        _ => 4,
+        0 | 3 => 1, // grayscale (0) or indexed (3): 1 channel/index
+        2 => 3,     // RGB: 3 channels
+        4 => 2,     // grayscale + alpha: 2 channels
+        _ => 4,     // RGBA (6) or unknown: 4 channels
     };
 
     // bit_depth applies per sample; for sub-byte depths (1, 2, 4) pixels are packed
@@ -1844,6 +1867,16 @@ fn calculate_palette_index_entropy(img: &DynamicImage, palette_size: usize) -> (
 }
 
 fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
+    fn channel_entropy(hist: &[u64; 256], total: f64) -> f64 {
+        let mut h = 0.0;
+        for &count in hist {
+            if count > 0 {
+                let p = count as f64 / total;
+                h -= p * p.log2();
+            }
+        }
+        h
+    }
     let rgba = img.to_rgba8();
     let mut hist_r = [0u64; 256];
     let mut hist_g = [0u64; 256];
@@ -1857,17 +1890,6 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
 
     let total = rgba.pixels().count() as f64;
 
-    fn channel_entropy(hist: &[u64; 256], total: f64) -> f64 {
-        let mut h = 0.0;
-        for &count in hist {
-            if count > 0 {
-                let p = count as f64 / total;
-                h -= p * p.log2();
-            }
-        }
-        h
-    }
-
     let er = channel_entropy(&hist_r, total);
     let eg = channel_entropy(&hist_g, total);
     let eb = channel_entropy(&hist_b, total);
@@ -1875,7 +1897,10 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     (er + eg + eb) / 3.0
 }
 
-#[must_use]
+/// Perform comprehensive image detection — format, compression, animation, and quality.
+///
+/// # Errors
+/// Returns an error if the file cannot be read, the format is unrecognized, or analysis fails.
 pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     let file_size = std::fs::metadata(path)?.len();
 
@@ -1890,10 +1915,6 @@ pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     let (width, height) = img.dimensions();
     let has_alpha = img.color().has_alpha();
     let bit_depth = match img.color() {
-        image::ColorType::L8
-        | image::ColorType::La8
-        | image::ColorType::Rgb8
-        | image::ColorType::Rgba8 => 8,
         image::ColorType::L16
         | image::ColorType::La16
         | image::ColorType::Rgb16
@@ -2049,8 +2070,9 @@ fn estimate_lossy_quality_fallback(
     let entropy_adj = (7.5 / entropy.max(1.0)).sqrt().clamp(0.7, 1.3);
 
     let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
-    let bpp_quality =
-        15.0f64.mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0).clamp(10.0, 100.0) as u8;
+    let bpp_quality = 15.0f64
+        .mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0)
+        .clamp(10.0, 100.0) as u8;
 
     crate::progress_mode::emit_stderr(&format!(
         "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\
@@ -2068,8 +2090,8 @@ fn estimate_lossy_quality_fallback(
 }
 
 fn estimate_jpeg_quality(path: &Path) -> Result<u8> {
-    let data = std::fs::read(path)?;
     use crate::image_jpeg_analysis::analyze_jpeg_quality;
+    let data = std::fs::read(path)?;
     let analysis = analyze_jpeg_quality(&data).map_err(ImgQualityError::AnalysisError)?;
     Ok(analysis.estimated_quality as u8)
 }

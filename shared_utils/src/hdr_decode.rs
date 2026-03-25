@@ -38,6 +38,10 @@ use std::process::Command;
 /// // _guard will clean up the temp file when dropped
 /// # Ok::<(), shared_utils::img_errors::ImgQualityError>(())
 /// ```
+/// Decode an HDR image to a temporary 16-bit PNG.
+///
+/// # Errors
+/// Returns an error if decoding fails.
 pub fn decode_hdr_image_to_png16(
     input: &Path,
     hdr_info: &ColorInfo,

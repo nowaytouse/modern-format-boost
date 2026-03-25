@@ -95,47 +95,35 @@ impl SourceCodec {
     #[must_use]
     pub const fn efficiency_factor(&self) -> f64 {
         match self {
-            Self::H264 => 1.0,
-            Self::H265 => 0.65,
-            Self::Vp8 => 0.85,
-            Self::Vp9 => 0.70,
             Self::Av1 => 0.50,
-            Self::Vvc => 0.35,
-            Self::Av2 => 0.35,
+            Self::Vp9 => 0.70,
+            Self::Vp8 => 0.85,
+            Self::Vvc | Self::Av2 => 0.35,
+            Self::H265 | Self::Heic => 0.65,
 
             Self::Mpeg4 => 1.3,
-            Self::Mpeg2 => 1.8,
-            Self::Mpeg1 => 2.5,
+            Self::Mpeg1 | Self::Mjpeg => 2.5,
             Self::Wmv => 1.1,
-            Self::Theora => 1.2,
+            Self::Theora | Self::Tiff => 1.2,
             Self::RealVideo => 2.0,
-            Self::FlashVideo => 1.5,
+            Self::FlashVideo | Self::Png => 1.5,
+            Self::Mpeg2 | Self::ProRes | Self::DnxHD | Self::Apng => 1.8,
 
-            Self::ProRes => 1.8,
-            Self::DnxHD => 1.8,
-            Self::Mjpeg => 2.5,
-
-            Self::Ffv1 => 1.0,
-            Self::UtVideo => 1.0,
-            Self::HuffYuv => 1.0,
-            Self::RawVideo => 1.0,
-            Self::Lagarith => 1.0,
-            Self::MagicYuv => 1.0,
-
-            Self::Gif => 3.0,
-            Self::Apng => 1.8,
+            Self::Gif | Self::Bmp => 3.0,
             Self::WebpAnimated => 0.9,
-
-            Self::Jpeg => 1.0,
             Self::JpegXl => 0.6,
-            Self::Png => 1.5,
             Self::WebpStatic => 0.75,
             Self::Avif => 0.55,
-            Self::Heic => 0.65,
-            Self::Bmp => 3.0,
-            Self::Tiff => 1.2,
 
-            Self::Unknown => 1.0,
+            Self::H264
+            | Self::Ffv1
+            | Self::UtVideo
+            | Self::HuffYuv
+            | Self::RawVideo
+            | Self::Lagarith
+            | Self::MagicYuv
+            | Self::Jpeg
+            | Self::Unknown => 1.0,
         }
     }
 
@@ -246,10 +234,9 @@ impl ContentType {
         match self {
             Self::Animation => 4,
             Self::ScreenRecording => 5,
-            Self::LiveAction => 0,
+            Self::LiveAction | Self::Unknown => 0,
             Self::Gaming => -1,
             Self::FilmGrain => -3,
-            Self::Unknown => 0,
         }
     }
 }
@@ -375,11 +362,18 @@ const AV1_CRF_CLAMP_MAX: f32 = 51.0;
 const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
 const HEVC_CRF_CLAMP_MAX: f32 = 51.0;
 
-#[must_use]
+/// Calculate AV1 CRF.
+///
+/// # Errors
+/// Returns an error message if calculation fails.
 pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_av1_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
 
+/// Calculate AV1 CRF with options.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_av1_crf_with_options(
     analysis: &QualityAnalysis,
     mode: MatchMode,
@@ -439,11 +433,18 @@ pub fn calculate_av1_crf_with_options(
     })
 }
 
-#[must_use]
+/// Calculate HEVC CRF.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_hevc_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_hevc_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
 
+/// Calculate HEVC CRF with options.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_hevc_crf_with_options(
     analysis: &QualityAnalysis,
     mode: MatchMode,
@@ -501,11 +502,18 @@ pub fn calculate_hevc_crf_with_options(
     })
 }
 
-#[must_use]
+/// Calculate JXL distance.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_jxl_distance(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_jxl_distance_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
 
+/// Calculate JXL distance with options.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_jxl_distance_with_options(
     analysis: &QualityAnalysis,
     mode: MatchMode,
@@ -718,11 +726,10 @@ fn calculate_gop_factor(gop_size: Option<u32>, b_frames: u8) -> f64 {
     let gop_base = match gop_size {
         Some(1) => 0.70,
         Some(2..=10) => 0.85,
-        Some(11..=50) => 1.0,
+        Some(11..=50) | None => 1.0,
         Some(51..=150) => 1.15,
         Some(151..=300) => 1.20,
         Some(_) => 1.25,
-        None => 1.0,
     };
 
     let b_pyramid_bonus = match b_frames {

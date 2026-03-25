@@ -65,10 +65,7 @@ impl SearchPhase {
     pub const fn is_gpu(&self) -> bool {
         matches!(
             self,
-            Self::GpuCoarse
-                | Self::GpuMedium
-                | Self::GpuFine
-                | Self::GpuUltraFine
+            Self::GpuCoarse | Self::GpuMedium | Self::GpuFine | Self::GpuUltraFine
         )
     }
 

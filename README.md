@@ -62,9 +62,9 @@ Think of it as a "smart compressor" that **never degrades your media**:
 
 ### Image Pipeline Logic
 Every file goes through a multi-stage decision pipeline:
-- **Stage 1 — Smart Detection**: Analyzes JPEG DQT tables, WebP VP8L chunks, and AVIF `av1C` boxes at binary level.
-- **Stage 2 — Route & Encode**: JXL VarDCT for JPEG (bit-exact); Modular mode for lossless sources.
-- **Stage 3 — Detour Pathway**: Formats like TIFF/WebP/BMP/HEIC are pre-processed into temporary 16-bit PNGs to ensure `cjxl` compatibility without quality loss.
+- **Stage 1 — Smart Detection**: Analyzes JPEG DQT tables, WebP VP8L chunks, and AVIF `av1C` boxes at binary level. Now features **Zero-Debt Architecture** with 100% Clippy compliance and robust `OpenEXR`/`JPEG 2000` header parsing.
+- **Stage 2 — Route & Encode**: JXL VarDCT for JPEG (bit-exact); Modular mode for lossless sources (PNG, lossless WebP/AVIF/HEIC/EXR/JP2).
+- **Stage 3 — Detour Pathway**: Formats like TIFF/WebP/BMP/HEIC are pre-processed into temporary 16-bit PNGs to ensure `cjxl` compatibility without quality loss. EXR and JP2 are supported directly via native tool inputs.
 - **Stage 4 — Meme Score v3**: Evaluates animated GIFs (Sharpness 40%, Resolution 18%, Duration 20%) to decide between video conversion or keeping as GIF.
 
 ### Video Pipeline: Three-Phase Saturation Search
@@ -313,9 +313,9 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 <summary><b>🛠️ 技术深探：工作原理与核心算法</b></summary>
 
 ### 图片处理管线细节
-- **第一阶段 — 智能检测**：在二进制层面分析 JPEG DQT 量化表、WebP VP8L 数据块及 AVIF `av1C` box。
-- **第二阶段 — 路由决策**：JPEG 使用 JXL VarDCT 模式（位一致重建）；无损源使用 Modular 模式。
-- **第三阶段 — "绕路"兼容性**：TIFF/WebP/BMP/HEIC 会先转为临时 **16-bit PNG**，确保护航 `cjxl` 的同时不发生 8-bit 精度降级。
+- **第一阶段 — 智能检测**：在二进制层面分析 JPEG DQT 量化表、WebP VP8L 数据块及 AVIF `av1C` box。采用 **零技术债架构 (Zero-Debt)**，全面支持 `OpenEXR` 和 `JPEG 2000` 损耗判定。
+- **第二阶段 — 路由决策**：JPEG 使用 JXL VarDCT 模式（位一致重建）；无损源使用 Modular 模式（PNG, lossless WebP/AVIF/HEIC/EXR/JP2）。
+- **第三阶段 — "绕路"兼容性**：TIFF/WebP/BMP/HEIC 会先转为临时 **16-bit PNG**，确保护航 `cjxl` 的同时不发生 8-bit 精度降级。EXR 和 JP2 已原生接入编码管线。
 - **第四阶段 — Meme Score v3**：多维度评估动图（清晰度 40%、分辨率 18%、时长 20%），聪明地决定是转为视频还是保留 GIF。
 
 ### 视频处理：三阶段饱和搜索

@@ -145,6 +145,10 @@ pub struct SerializableCache<K, V> {
 }
 
 impl<K: Hash + Eq + Clone + Serialize, V: Clone + Serialize> LruCache<K, V> {
+    /// Convert the cache to JSON.
+    ///
+    /// # Errors
+    /// Returns a `serde_json::Error` if serialization fails.
     pub fn to_json(&self) -> Result<String, serde_json::Error>
     where
         K: Serialize,
@@ -165,6 +169,10 @@ impl<K: Hash + Eq + Clone + Serialize, V: Clone + Serialize> LruCache<K, V> {
 impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deserialize<'de>>
     LruCache<K, V>
 {
+    /// Restore the cache from JSON.
+    ///
+    /// # Errors
+    /// Returns a `serde_json::Error` if deserialization fails.
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         let data: SerializableCache<K, V> = serde_json::from_str(json)?;
         let mut cache = Self::new(data.capacity);
@@ -174,6 +182,10 @@ impl<K: Hash + Eq + Clone + for<'de> Deserialize<'de>, V: Clone + for<'de> Deser
         Ok(cache)
     }
 
+    /// Save the cache to a file.
+    ///
+    /// # Errors
+    /// Returns an `io::Result` if saving fails.
     pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()>
     where
         K: Serialize,

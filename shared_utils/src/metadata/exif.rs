@@ -59,6 +59,10 @@ fn get_best_date_from_source(src: &Path) -> Option<String> {
     None
 }
 
+/// Preserve internal metadata from source to destination.
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
 pub fn preserve_internal_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     match preserve_internal_metadata_core(src, dst) {
         Ok(()) => Ok(()),
@@ -355,9 +359,7 @@ fn preserve_internal_metadata_core(src: &Path, dst: &Path) -> io::Result<()> {
 fn fix_quicktime_dates(src: &Path, dst: &Path) -> io::Result<()> {
     // Always sync all QuickTime date fields from source — don't skip if dst already has a date,
     // because the date may have been reset to encode time rather than original capture time.
-    let best_date = if let Some(date) = get_best_date_from_source(src) {
-        date
-    } else {
+    let Some(best_date) = get_best_date_from_source(src) else {
         eprintln!("⚠️ [metadata] Cannot determine date for QuickTime metadata");
         return Ok(());
     };

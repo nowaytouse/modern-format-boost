@@ -1,5 +1,4 @@
 #![allow(
-    clippy::missing_errors_doc,
     clippy::missing_panics_doc,
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
@@ -8,18 +7,16 @@
     clippy::too_many_lines,
     clippy::struct_excessive_bools,
     clippy::fn_params_excessive_bools,
-    clippy::match_same_arms,
     clippy::unnecessary_wraps,
-    clippy::items_after_statements,
-    clippy::float_cmp,
-    clippy::format_push_string,
     clippy::default_trait_access,
-    clippy::unnecessary_debug_formatting,
-    clippy::implicit_hasher,
-    clippy::manual_let_else,
-    clippy::similar_names,
+    clippy::float_cmp,
     clippy::module_name_repetitions,
     clippy::wildcard_imports
+)]
+#![warn(
+    clippy::match_same_arms,
+    clippy::manual_let_else,
+    clippy::items_after_statements
 )]
 //! Shared Utilities for `modern_format_boost` tools
 //!

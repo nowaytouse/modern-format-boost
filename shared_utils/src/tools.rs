@@ -138,6 +138,10 @@ pub fn print_tool_report(tools: &[ToolCheck]) {
     }
 }
 
+/// Require specific tools to be present in the system.
+///
+/// # Errors
+/// Returns an error if any required tool is missing.
 pub fn require_tools(tool_names: &[&str]) -> Result<(), String> {
     let mut missing = Vec::new();
 

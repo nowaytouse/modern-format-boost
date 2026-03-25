@@ -119,11 +119,19 @@ impl Default for ImageAnalysis {
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
 ///
 /// Quality is then derived via `detect_lossless` / `detect_compression` per format; no conversion is done here.
+/// Comprehensive image analysis: format, dimensions, quality, and compression.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or analysis fails.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     analyze_image_with_cache(path, None)
 }
 
 /// Analyzes an image file with optional `SQLite` caching.
+/// Image analysis with optional cache lookup.
+///
+/// # Errors
+/// Returns an error if analysis fails and no cached result is available.
 pub fn analyze_image_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
@@ -347,14 +355,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
 
     if extension_mismatch {
         metadata.insert("extension_mismatch".to_string(), "true".to_string());
-        metadata.insert(
-            "real_extension".to_string(),
-            real_extension_suggestion,
-        );
-        metadata.insert(
-            "apple_compatibility_warning".to_string(),
-            apple_warning,
-        );
+        metadata.insert("real_extension".to_string(), real_extension_suggestion);
+        metadata.insert("apple_compatibility_warning".to_string(), apple_warning);
         metadata.insert(
             "format_warning".to_string(),
             format!("Content is actually {format_str}"),
@@ -735,10 +737,6 @@ fn calculate_image_features(img: &DynamicImage, file_size: u64) -> ImageFeatures
         _ => 4,
     };
     let bits_per_channel = match img.color() {
-        image::ColorType::L8
-        | image::ColorType::La8
-        | image::ColorType::Rgb8
-        | image::ColorType::Rgba8 => 8,
         image::ColorType::L16
         | image::ColorType::La16
         | image::ColorType::Rgb16
@@ -838,10 +836,6 @@ fn has_alpha_channel(img: &DynamicImage) -> bool {
 
 fn detect_color_depth(img: &DynamicImage) -> u8 {
     match img.color() {
-        image::ColorType::L8
-        | image::ColorType::La8
-        | image::ColorType::Rgb8
-        | image::ColorType::Rgba8 => 8,
         image::ColorType::L16
         | image::ColorType::La16
         | image::ColorType::Rgb16
@@ -1324,9 +1318,7 @@ pub fn get_animation_duration_and_frames_imagemagick(path: &Path) -> Option<(f64
         })
         .ok();
 
-    let output = if let Some(output) = output {
-        output
-    } else {
+    let Some(output) = output else {
         log_eprintln!(
             "⚠️  [Duration Fallback] Failed to spawn ImageMagick identify for {}",
             path.display()
@@ -1452,20 +1444,10 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
         }
         // GIF uses palette quantization — inherently lossless for its own 256-color space.
         // Returning true preserves the palette exactly in JXL/AVIF lossless modes.
-        ImageFormat::Gif => Ok(true),
-        ImageFormat::Tiff => {
-            let compression = detect_compression(&DetectedFormat::TIFF, path)?;
-            Ok(compression == CompressionType::Lossless)
-        }
-        ImageFormat::Jpeg => Ok(false),
-        ImageFormat::WebP => check_webp_lossless(path),
-        ImageFormat::Avif => {
-            let compression = detect_compression(&DetectedFormat::AVIF, path)?;
-            Ok(compression == CompressionType::Lossless)
-        }
         // BMP, ICO, Pnm, Tga, Hdr, Farbfeld, OpenExr are all uncompressed/lossless pixel formats.
         // DDS/Qoi can be either; treat conservatively as lossless to avoid lossy re-encoding.
-        ImageFormat::Bmp
+        ImageFormat::Gif
+        | ImageFormat::Bmp
         | ImageFormat::Ico
         | ImageFormat::Pnm
         | ImageFormat::Tga
@@ -1473,6 +1455,15 @@ fn detect_lossless(format: &ImageFormat, path: &Path) -> Result<bool> {
         | ImageFormat::Farbfeld
         | ImageFormat::OpenExr
         | ImageFormat::Qoi => Ok(true),
+        ImageFormat::Tiff => {
+            let compression = detect_compression(&DetectedFormat::TIFF, path)?;
+            Ok(compression == CompressionType::Lossless)
+        }
+        ImageFormat::WebP => check_webp_lossless(path),
+        ImageFormat::Avif => {
+            let compression = detect_compression(&DetectedFormat::AVIF, path)?;
+            Ok(compression == CompressionType::Lossless)
+        }
         // Any unknown future format: be conservative — don't assume lossless.
         _ => Ok(false),
     }

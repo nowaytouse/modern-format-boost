@@ -772,14 +772,12 @@ impl ExploreStrategy for PreciseQualityMatchWithCompressionStrategy {
         ));
         ctx.progress_start("🎯💾 Quality+Compress");
 
-        let (compress_boundary, boundary_size, boundary_iter) = if let Some((crf, size, iter)) = ctx
-            .binary_search_compress(
-                ctx.config.min_crf,
-                ctx.config.max_crf,
-                ctx.config.max_iterations / 2,
-            )? {
-            (crf, size, iter)
-        } else {
+        let Some((compress_boundary, boundary_size, boundary_iter)) = ctx.binary_search_compress(
+            ctx.config.min_crf,
+            ctx.config.max_crf,
+            ctx.config.max_iterations / 2,
+        )?
+        else {
             ctx.progress_done();
             let size = ctx.encode(ctx.config.max_crf)?;
             return Ok(ctx.build_result(

@@ -111,6 +111,9 @@ fn get_classifier_rules() -> &'static [ClassifierRule] {
 }
 
 /// Pixel-based quality analysis.
+///
+/// # Errors
+/// Returns an error if analysis fails.
 pub fn analyze_image_quality(
     width: u32,
     height: u32,
@@ -489,7 +492,11 @@ fn calculate_overall_complexity(
     texture_variance: f64,
     noise_level: f64,
 ) -> f64 {
-    noise_level.mul_add(0.15, texture_variance.mul_add(0.25, edge_density.mul_add(0.35, color_diversity * 0.25)))
+    noise_level
+        .mul_add(
+            0.15,
+            texture_variance.mul_add(0.25, edge_density.mul_add(0.35, color_diversity * 0.25)),
+        )
         .clamp(0.0, 1.0)
 }
 

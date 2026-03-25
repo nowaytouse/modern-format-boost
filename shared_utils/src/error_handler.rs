@@ -153,6 +153,10 @@ pub fn report_error<E: std::error::Error + ?Sized>(error: &E) {
     }
 }
 
+/// Add context to a Result.
+///
+/// # Errors
+/// Returns an `anyhow::Result` with the added context.
 pub fn add_context<T, E>(result: Result<T, E>, context: &str) -> anyhow::Result<T>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -194,6 +198,10 @@ pub fn install_panic_handler() {
 }
 
 pub trait ResultExt<T, E> {
+    /// Add context to a Result.
+    ///
+    /// # Errors
+    /// Returns an `anyhow::Result` with the added context.
     fn context_err(self, context: &str) -> anyhow::Result<T>
     where
         E: std::error::Error + Send + Sync + 'static;

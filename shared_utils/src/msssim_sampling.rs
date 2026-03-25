@@ -48,10 +48,9 @@ impl SamplingStrategy {
     #[must_use]
     pub fn ffmpeg_filter(&self) -> Option<String> {
         match self {
-            Self::Full => None,
             Self::OneThird => Some("select='not(mod(n\\,3))'".to_string()),
             Self::OneTenth => Some("select='not(mod(n\\,10))'".to_string()),
-            Self::Skip => None,
+            _ => None,
         }
     }
 

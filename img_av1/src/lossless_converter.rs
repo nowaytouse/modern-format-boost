@@ -84,6 +84,10 @@ fn finalize_with_size_check(
     .map_err(ImgQualityError::IoError)
 }
 
+/// Convert to JXL using specific distance.
+///
+/// # Errors
+/// Returns an error if cjxl execution fails.
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -353,6 +357,10 @@ fn run_cjxl_jpeg_transcode(
     cmd.output()
 }
 
+/// Transcode JPEG to JXL losslessly (reconstructible).
+///
+/// # Errors
+/// Returns an error if transcoding fails.
 pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -479,6 +487,10 @@ pub fn convert_jpeg_to_jxl(
     )))
 }
 
+/// Convert to AVIF using specific quality.
+///
+/// # Errors
+/// Returns an error if avifenc execution fails.
 pub fn convert_to_avif(
     input: &Path,
     quality: Option<u8>,
@@ -565,11 +577,19 @@ pub fn convert_to_avif(
     }
 }
 
+/// Convert to AV1 MP4 (lossy).
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_av1_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     vid_av1::animated_image::convert_to_av1_mp4(input, options)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
+/// Convert to AVIF losslessly.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_avif_lossless(
     input: &Path,
     options: &ConvertOptions,
@@ -653,6 +673,10 @@ pub fn convert_to_avif_lossless(
     }
 }
 
+/// Convert to AV1 MP4 with matched quality based on local analysis.
+///
+/// # Errors
+/// Returns an error if matching or encoding fails.
 pub fn convert_to_av1_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -707,6 +731,10 @@ fn calculate_matched_crf_for_animation(
     }
 }
 
+/// Calculate matched JXL distance based on image complexity and file size.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_matched_distance_for_static(
     analysis: &crate::ImageAnalysis,
     file_size: u64,
@@ -740,6 +768,10 @@ pub fn calculate_matched_distance_for_static(
     }
 }
 
+/// Convert to JXL with matched distance.
+///
+/// # Errors
+/// Returns an error if matching or encoding fails.
 pub fn convert_to_jxl_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -854,6 +886,10 @@ pub fn convert_to_jxl_matched(
     }
 }
 
+/// Convert to AV1 MP4 losslessly.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_av1_mp4_lossless(
     input: &Path,
     options: &ConvertOptions,

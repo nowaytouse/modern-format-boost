@@ -132,6 +132,10 @@ pub fn apply_file_timestamps(src: &Path, dst: &Path) {
     }
 }
 
+/// Preserve "Pro" metadata (XMP, ICC, etc.).
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
 pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -202,6 +206,10 @@ pub fn preserve_pro(src: &Path, dst: &Path) -> io::Result<()> {
     }
 }
 
+/// Preserve all metadata from source to destination.
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
 pub fn preserve_metadata(src: &Path, dst: &Path) -> io::Result<()> {
     preserve_pro(src, dst)
 }
@@ -219,6 +227,10 @@ pub fn copy_metadata(src: &Path, dst: &Path) {
     apply_file_timestamps(src, dst);
 }
 
+/// Preserve directory metadata (timestamps, etc.).
+///
+/// # Errors
+/// Returns an `io::Result` if preservation fails.
 pub fn preserve_directory_metadata(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
     use std::collections::HashMap;
 
@@ -325,6 +337,10 @@ pub fn preserve_directory_metadata_with_log(base_dir: &Path, output_dir: &Path) 
     }
 }
 
+/// Save directory timestamps to a map.
+///
+/// # Errors
+/// Returns an `io::Result` if saving fails.
 pub fn save_directory_timestamps(
     dir: &Path,
 ) -> io::Result<
@@ -426,9 +442,8 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
         if !dst_path.is_file() {
             continue;
         }
-        let rel = match dst_path.strip_prefix(dst_root) {
-            Ok(r) => r,
-            Err(_) => continue,
+        let Ok(rel) = dst_path.strip_prefix(dst_root) else {
+            continue;
         };
         let parent = rel.parent().unwrap_or(rel);
         let stem = dst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -446,6 +461,10 @@ fn copy_file_timestamps_from_source_tree(src_root: &Path, dst_root: &Path) {
     }
 }
 
+/// Restore timestamps from source directory to output directory.
+///
+/// # Errors
+/// Returns an `io::Result` if restoration fails.
 pub fn restore_timestamps_from_source_to_output(src_dir: &Path, dst_dir: &Path) -> io::Result<()> {
     let saved = save_directory_timestamps(src_dir)?;
     apply_saved_timestamps_to_dst(&saved, src_dir, dst_dir);

@@ -27,6 +27,10 @@ const DANGEROUS_DIRS: &[&str] = &[
     "/opt",
 ];
 
+/// Check if a directory is dangerous to perform operations in.
+///
+/// # Errors
+/// Returns an error if the directory is considered dangerous.
 pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     let path_str = path.to_string_lossy();
 
@@ -68,6 +72,10 @@ pub fn check_dangerous_directory(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Check if a path is safe for destructive operations.
+///
+/// # Errors
+/// Returns an error if the operation is considered unsafe.
 pub fn check_safe_for_destructive(path: &Path, operation: &str) -> Result<(), String> {
     check_dangerous_directory(path)?;
 
@@ -105,6 +113,10 @@ pub fn check_extension_whitelist(path: &Path, whitelist: &[&str]) -> bool {
 /// 2. Inside a directory ending with .photolibrary (older format)
 ///
 /// Returns an error if the path is inside a Photos library.
+/// Check if a path is an Apple Photos library.
+///
+/// # Errors
+/// Returns an error if the path is an Apple Photos library.
 pub fn check_apple_photos_library(path: &Path) -> Result<(), String> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 

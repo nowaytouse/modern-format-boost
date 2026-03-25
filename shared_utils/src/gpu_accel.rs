@@ -855,7 +855,6 @@ fn test_encoder(encoder: &str) -> bool {
 
 fn crf_to_estimated_bitrate(crf: f32, codec: &str) -> u32 {
     let base_bitrate = match codec {
-        "hevc" => 5000,
         "av1" => 4000,
         "h264" => 8000,
         _ => 5000,
@@ -877,6 +876,10 @@ pub struct SmartSampleResult {
     pub strategy: String,
 }
 
+/// Calculate a smart sample range for a video file.
+///
+/// # Errors
+/// Returns an `anyhow::Result` if calculation fails.
 pub fn calculate_smart_sample(
     input: &std::path::Path,
     total_duration: f32,
@@ -1033,11 +1036,9 @@ pub fn estimate_cpu_search_center_dynamic(
     compression_potential: Option<f64>,
 ) -> f32 {
     let base_offset = match gpu_type {
-        GpuType::Apple => 5.0,
-        GpuType::Nvidia => 4.0,
+        GpuType::Apple | GpuType::AmdAmf => 5.0,
+        GpuType::Nvidia | GpuType::Vaapi => 4.0,
         GpuType::IntelQsv => 3.5,
-        GpuType::AmdAmf => 5.0,
-        GpuType::Vaapi => 4.0,
         GpuType::None => 0.0,
     };
 
@@ -1170,12 +1171,10 @@ impl CrfMapping {
     #[must_use]
     pub const fn av1(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
-            GpuType::Apple => (0.0, 0.0),
-            GpuType::Nvidia => (3.8, 0.4),
+            GpuType::Apple | GpuType::None => (0.0, 0.0),
+            GpuType::Nvidia | GpuType::Vaapi => (3.8, 0.4),
             GpuType::IntelQsv => (3.5, 0.3),
             GpuType::AmdAmf => (4.5, 0.5),
-            GpuType::Vaapi => (3.8, 0.4),
-            GpuType::None => (0.0, 0.0),
         };
         Self {
             gpu_type,
@@ -1461,6 +1460,10 @@ impl PsnrSsimMapper {
     }
 }
 
+/// Perform a GPU-based coarse search for optimal CRF.
+///
+/// # Errors
+/// Returns an `anyhow::Result` if search fails.
 pub fn gpu_coarse_search(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -1480,6 +1483,10 @@ pub fn gpu_coarse_search(
     )
 }
 
+/// Perform a GPU-based coarse search with custom logging.
+///
+/// # Errors
+/// Returns an `anyhow::Result` if search fails.
 pub fn gpu_coarse_search_with_log(
     input: &std::path::Path,
     output: &std::path::Path,
@@ -1522,6 +1529,14 @@ fn gpu_coarse_search_with_log_impl(
 ) -> anyhow::Result<GpuCoarseResult> {
     use anyhow::{bail, Context};
     use std::process::Command;
+
+    const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
+    const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
+    const LONG_DURATION_THRESHOLD: f32 = 600.0;
+    const VERY_LONG_DURATION_THRESHOLD: f32 = 3600.0;
+    const WARMUP_DURATION: f32 = 5.0;
+    const WINDOW_SIZE: usize = 3;
+    const CHANGE_RATE_THRESHOLD: f64 = 0.02;
 
     let mut log = Vec::new();
 
@@ -1573,9 +1588,7 @@ fn gpu_coarse_search_with_log_impl(
         _ => None,
     };
 
-    let gpu_encoder = if let Some(enc) = gpu_encoder {
-        enc
-    } else {
+    let Some(gpu_encoder) = gpu_encoder else {
         log_msg!("   ╔═══════════════════════════════════════════════════════════╗");
         log_msg!(
             "   ║  ⚠️  FALLBACK: No GPU encoder for {}!              ║",
@@ -1606,11 +1619,6 @@ fn gpu_coarse_search_with_log_impl(
         500 * 1024
     };
     let skip_gpu_duration_threshold: f32 = if config.ultimate_mode { 1.0 } else { 3.0 };
-
-    const LARGE_FILE_THRESHOLD: u64 = 500 * 1024 * 1024;
-    const VERY_LARGE_FILE_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024;
-    const LONG_DURATION_THRESHOLD: f32 = 600.0;
-    const VERY_LONG_DURATION_THRESHOLD: f32 = 3600.0;
 
     let quick_duration: f32 = {
         let duration_output = Command::new("ffprobe")
@@ -1734,7 +1742,6 @@ fn gpu_coarse_search_with_log_impl(
         (input_size as f64 * f64::from(ratio)) as u64
     };
 
-    const WARMUP_DURATION: f32 = 5.0;
     let warmup_duration = duration.min(WARMUP_DURATION);
 
     let encode_warmup = |crf: f32| -> anyhow::Result<u64> {
@@ -2135,9 +2142,6 @@ fn gpu_coarse_search_with_log_impl(
         cache.insert(crf, size);
         Ok(size)
     };
-
-    const WINDOW_SIZE: usize = 3;
-    const CHANGE_RATE_THRESHOLD: f64 = 0.02;
 
     let mut size_history: Vec<(f32, u64)> = Vec::new();
 
@@ -2816,7 +2820,6 @@ fn gpu_coarse_search_with_log_impl(
         }
 
         let mapping = match encoder {
-            "hevc" => CrfMapping::hevc(gpu.gpu_type),
             "av1" => CrfMapping::av1(gpu.gpu_type),
             _ => CrfMapping::hevc(gpu.gpu_type),
         };
@@ -2875,7 +2878,6 @@ pub fn get_cpu_search_range_from_gpu(
     }
 
     let mapping = match gpu_result.codec.as_str() {
-        "hevc" => CrfMapping::hevc(gpu_result.gpu_type),
         "av1" => CrfMapping::av1(gpu_result.gpu_type),
         _ => CrfMapping::hevc(gpu_result.gpu_type),
     };

@@ -147,6 +147,10 @@ fn finalize_fallback_jxl(
 /// let result = convert_to_jxl(input, &options, 0.1, None)?;
 /// # Ok::<(), img_hevc::ImgQualityError>(())
 /// ```
+/// Convert to JXL using specific distance.
+///
+/// # Errors
+/// Returns an error if cjxl execution fails.
 pub fn convert_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -755,6 +759,11 @@ fn commit_jpeg_to_jxl_success(
 /// 2. Strip JPEG tail → retry
 /// 3. Use --`allow_jpeg_reconstruction=0`
 /// 4. `ImageMagick` sanitization (for corrupt JPEGs)
+///
+/// Transcode JPEG to JXL losslessly (reconstructible).
+///
+/// # Errors
+/// Returns an error if transcoding fails.
 pub fn convert_jpeg_to_jxl(
     input: &Path,
     options: &ConvertOptions,
@@ -936,6 +945,11 @@ pub fn convert_jpeg_to_jxl(
 /// - Uses avifenc with speed 4 and all threads
 /// - Verifies AVIF health after encoding
 /// - Checks size tolerance and compress mode
+///
+/// Convert to AVIF using specific quality.
+///
+/// # Errors
+/// Returns an error if avifenc execution fails.
 pub fn convert_to_avif(
     input: &Path,
     quality: Option<u8>,
@@ -1008,11 +1022,19 @@ pub fn convert_to_avif(
     }
 }
 
+/// Convert to HEVC MP4 (lossy).
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_hevc_mp4(input: &Path, options: &ConvertOptions) -> Result<ConversionResult> {
     vid_hevc::animated_image::convert_to_hevc_mp4(input, options)
         .map_err(|e| ImgQualityError::ConversionError(e.to_string()))
 }
 
+/// Convert to AVIF losslessly.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_avif_lossless(
     input: &Path,
     options: &ConvertOptions,
@@ -1086,6 +1108,10 @@ pub fn convert_to_avif_lossless(
     }
 }
 
+/// Convert to HEVC MP4 with matched quality.
+///
+/// # Errors
+/// Returns an error if matching or encoding fails.
 pub fn convert_to_hevc_mp4_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -1138,6 +1164,10 @@ fn calculate_matched_crf_for_animation_hevc(
     }
 }
 
+/// Calculate matched JXL distance based on image complexity and file size.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_matched_distance_for_static(
     analysis: &crate::ImageAnalysis,
     file_size: u64,
@@ -1171,6 +1201,10 @@ pub fn calculate_matched_distance_for_static(
     }
 }
 
+/// Convert to JXL with matched distance.
+///
+/// # Errors
+/// Returns an error if matching or encoding fails.
 pub fn convert_to_jxl_matched(
     input: &Path,
     options: &ConvertOptions,
@@ -1270,6 +1304,10 @@ pub fn convert_to_jxl_matched(
     }
 }
 
+/// Convert to HEVC MKV losslessly.
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_hevc_mkv_lossless(
     input: &Path,
     options: &ConvertOptions,
@@ -1561,6 +1599,10 @@ fn get_output_path(
     Ok(output)
 }
 
+/// Convert to GIF with Apple compatibility (using ffmpeg palettegen).
+///
+/// # Errors
+/// Returns an error if encoding fails.
 pub fn convert_to_gif_apple_compat(
     input: &Path,
     options: &ConvertOptions,

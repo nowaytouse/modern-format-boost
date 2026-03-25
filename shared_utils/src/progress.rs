@@ -91,17 +91,17 @@ fn build_coarse_progress_line(
     stats: &str,
     terminal_width: usize,
 ) -> String {
-    let color = "\x1b[32m";
-    let percent_str = format!("{percent:>5.1}%");
-    let counts_str = format!("{current}/{total}");
-    let elapsed_str = format_duration_compact(elapsed);
-
     struct Variant {
         show_bar: bool,
         show_elapsed: bool,
         show_eta: bool,
         show_message: bool,
     }
+
+    let color = "\x1b[32m";
+    let percent_str = format!("{percent:>5.1}%");
+    let counts_str = format!("{current}/{total}");
+    let elapsed_str = format_duration_compact(elapsed);
 
     let variants = [
         Variant {

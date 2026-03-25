@@ -189,6 +189,10 @@ pub fn determine_strategy_with_apple_compat(
     }
 }
 
+/// Simple conversion with default settings.
+///
+/// # Errors
+/// Returns an error if conversion fails.
 pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     if let Err(e) = shared_utils::conversion::validate_input_file(input) {
         return Err(VidQualityError::ConversionError(e));
@@ -266,10 +270,18 @@ pub fn simple_convert(input: &Path, output_dir: Option<&Path>) -> Result<Convers
     })
 }
 
+/// Automatically convert video based on analysis.
+///
+/// # Errors
+/// Returns an error if analysis or conversion fails.
 pub fn auto_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     auto_convert_with_cache(input, config, None)
 }
 
+/// Automatically convert video with caching.
+///
+/// # Errors
+/// Returns an error if analysis or conversion fails.
 pub fn auto_convert_with_cache(
     input: &Path,
     config: &ConversionConfig,
@@ -1100,6 +1112,10 @@ fn best_effort_status_for_cache(
         && explore_result.as_ref().is_some_and(|r| !r.quality_passed)
 }
 
+/// Calculate matched AV1 CRF based on detection results.
+///
+/// # Errors
+/// Returns an error if calculation fails.
 pub fn calculate_matched_crf(detection: &VideoDetectionResult) -> Result<u8> {
     let analysis = shared_utils::from_video_detection(
         &detection.file_path,
@@ -1282,6 +1298,10 @@ fn execute_av1_lossless(
     Ok(size)
 }
 
+/// Smart conversion with comprehensive analysis.
+///
+/// # Errors
+/// Returns an error if analysis or conversion fails.
 pub fn smart_convert(input: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     auto_convert(input, config)
 }

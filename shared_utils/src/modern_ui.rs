@@ -504,11 +504,11 @@ pub fn format_size_change(pct: f64) -> String {
 
 #[must_use]
 pub fn format_size_diff(diff_bytes: i64) -> String {
-    let abs_diff = diff_bytes.unsigned_abs();
-    let sign = if diff_bytes >= 0 { "+" } else { "-" };
-
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
+
+    let abs_diff = diff_bytes.unsigned_abs();
+    let sign = if diff_bytes >= 0 { "+" } else { "-" };
 
     if abs_diff >= MB {
         format!("{}{:.1} MB", sign, abs_diff as f64 / MB as f64)

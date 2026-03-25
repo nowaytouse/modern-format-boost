@@ -15,6 +15,17 @@ pub fn is_vmaf_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Calculate MS-SSIM using the standalone `vmaf` tool.
+///
+/// This function converts both input files to Y4M format in temporary storage,
+/// runs the `vmaf` command, and parses the resulting JSON.
+///
+/// # Errors
+/// Returns an error if:
+/// - Temporary files cannot be created.
+/// - Y4M conversion fails.
+/// - The `vmaf` command fails to run or returns a non-zero exit code.
+/// - The resulting JSON is invalid or missing the MS-SSIM metric.
 pub fn calculate_ms_ssim_standalone(reference: &Path, distorted: &Path) -> Result<f64> {
     let ref_y4m_file = tempfile::Builder::new()
         .prefix("vmaf_ref_")

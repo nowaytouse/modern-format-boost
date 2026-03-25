@@ -119,6 +119,10 @@ impl DynamicCrfMapper {
     }
 }
 
+/// Quickly calibrate the CRF mapper for a video.
+///
+/// # Errors
+/// Returns an error if calibration fails.
 pub fn quick_calibrate(
     input: &Path,
     input_size: u64,

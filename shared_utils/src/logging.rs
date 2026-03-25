@@ -289,9 +289,8 @@ pub fn strip_ansi_str(s: &str) -> String {
 
 /// Strip ANSI escape sequences (e.g. `\x1b[92m`) so log files are plain text, not raw codes.
 fn strip_ansi_bytes(buf: &[u8]) -> Vec<u8> {
-    let s = match std::str::from_utf8(buf) {
-        Ok(s) => s,
-        Err(_) => return buf.to_vec(),
+    let Ok(s) = std::str::from_utf8(buf) else {
+        return buf.to_vec();
     };
     let mut result = String::new();
     let mut in_escape = false;
@@ -397,6 +396,7 @@ impl LogConfig {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_log_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
         self.log_dir = dir.as_ref().to_path_buf();
         self
@@ -421,6 +421,10 @@ impl LogConfig {
     }
 }
 
+/// Initialize the logging system.
+///
+/// # Errors
+/// Returns an error if initialization fails.
 pub fn init_logging(program_name: &str, config: LogConfig) -> Result<()> {
     if std::env::var("FORCE_COLOR").is_ok() {
         console::set_colors_enabled(true);
@@ -619,6 +623,10 @@ pub struct ExternalCommandResult {
     pub duration: std::time::Duration,
 }
 
+/// Execute an external tool and return its result.
+///
+/// # Errors
+/// Returns an error if the tool fails to start.
 pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<ExternalCommandResult> {
     use std::process::Command;
 
@@ -661,6 +669,10 @@ pub fn execute_external_command(tool_name: &str, args: &[&str]) -> Result<Extern
     })
 }
 
+/// Execute an external command and ensure it succeeds.
+///
+/// # Errors
+/// Returns an error if the command fails to start or exits with a non-zero status.
 pub fn execute_external_command_checked(
     tool_name: &str,
     args: &[&str],

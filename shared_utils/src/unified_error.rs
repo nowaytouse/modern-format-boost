@@ -118,29 +118,12 @@ impl UnifiedError {
             | Self::Io(_)
             | Self::FFprobeError { .. }
             | Self::FFmpegError { .. }
-            | Self::ToolNotFound { .. } => ErrorCategory::Fatal,
-
-            Self::InvalidCrf(_)
-            | Self::InvalidSsim(_)
-            | Self::CompressionFailed { .. }
-            | Self::QualityValidationFailed { .. }
-            | Self::IterationLimitExceeded(_) => ErrorCategory::Recoverable,
+            | Self::ToolNotFound { .. }
+            | Self::Other(_) => ErrorCategory::Fatal,
 
             Self::OutputExists { .. } => ErrorCategory::Optional,
 
-            Self::Other(_) => ErrorCategory::Fatal,
-
-            Self::VideoFormatNotSupported(_)
-            | Self::VideoReadError(_)
-            | Self::ImageFormatNotSupported(_)
-            | Self::ImageReadError(_)
-            | Self::ImageAnalysisError(_)
-            | Self::ImageProcessingError(_)
-            | Self::NotImplemented(_)
-            | Self::SkipFile(_)
-            | Self::ConversionError(_)
-            | Self::AnalysisError(_)
-            | Self::GeneralError(_) => ErrorCategory::Recoverable,
+            _ => ErrorCategory::Recoverable,
         }
     }
 
@@ -309,19 +292,15 @@ impl UnifiedError {
     /// Check if this error should skip the file
     #[must_use]
     pub const fn is_skip(&self) -> bool {
-        matches!(
-            self,
-            Self::OutputExists { .. } | Self::SkipFile(_)
-        )
+        matches!(self, Self::OutputExists { .. } | Self::SkipFile(_))
     }
 
     /// Add file path to error
+    #[must_use]
     pub fn with_file_path(self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         match self {
-            Self::FileNotFound { operation, .. } => {
-                Self::FileNotFound { path, operation }
-            }
+            Self::FileNotFound { operation, .. } => Self::FileNotFound { path, operation },
             Self::FileReadError {
                 source, operation, ..
             } => Self::FileReadError {
@@ -370,20 +349,17 @@ impl UnifiedError {
                 actual_ssim,
                 file_path: Some(path),
             },
-            Self::OutputExists { operation, .. } => {
-                Self::OutputExists { path, operation }
-            }
+            Self::OutputExists { operation, .. } => Self::OutputExists { path, operation },
             other => other,
         }
     }
 
     /// Add operation context to error
+    #[must_use]
     pub fn with_operation(self, operation: impl Into<String>) -> Self {
         let operation = Some(operation.into());
         match self {
-            Self::FileNotFound { path, .. } => {
-                Self::FileNotFound { path, operation }
-            }
+            Self::FileNotFound { path, .. } => Self::FileNotFound { path, operation },
             Self::FileReadError { path, source, .. } => Self::FileReadError {
                 path,
                 source,
@@ -394,21 +370,18 @@ impl UnifiedError {
                 source,
                 operation,
             },
-            Self::DirectoryNotFound { path, .. } => {
-                Self::DirectoryNotFound { path, operation }
-            }
+            Self::DirectoryNotFound { path, .. } => Self::DirectoryNotFound { path, operation },
             Self::ToolNotFound { tool_name, .. } => Self::ToolNotFound {
                 tool_name,
                 operation,
             },
-            Self::OutputExists { path, .. } => {
-                Self::OutputExists { path, operation }
-            }
+            Self::OutputExists { path, .. } => Self::OutputExists { path, operation },
             other => other,
         }
     }
 
     /// Add command to error
+    #[must_use]
     pub fn with_command(self, command: impl Into<String>) -> Self {
         let command = Some(command.into());
         match self {
@@ -566,8 +539,9 @@ impl fmt::Display for UnifiedError {
 impl std::error::Error for UnifiedError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::FileReadError { source, .. } => Some(source),
-            Self::FileWriteError { source, .. } => Some(source),
+            Self::FileReadError { source, .. } | Self::FileWriteError { source, .. } => {
+                Some(source)
+            }
             Self::Io(e) => Some(e),
             Self::ImageProcessingError(e) => Some(e),
             _ => None,

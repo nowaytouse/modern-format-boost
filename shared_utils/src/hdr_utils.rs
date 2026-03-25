@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Convert `ColorInfo` to CICP string for JXL encoding.
-/// CICP format: --cicp=<primaries>-<transfer>-<matrix>
+/// CICP format: --cicp=`<primaries>`-`<transfer>`-`<matrix>`
 ///
 /// # CICP Code Points
 /// - Primaries: 1=BT.709, 9=BT.2020, 12=P3-D65
@@ -111,7 +111,6 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
     if let Some(ref primaries) = info.color_primaries {
         let code = match primaries.as_str() {
             "bt709" => "1",
-            "bt2020" => "9",
             "smpte432" | "display-p3" => "12",
             _ => "9", // Default to BT.2020 for HDR
         };
@@ -121,7 +120,6 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
     // Transfer characteristics
     if let Some(ref trc) = info.color_transfer {
         let code = match trc.as_str() {
-            "smpte2084" => "16",
             "arib-std-b67" => "18",
             "bt709" => "1",
             _ => "16", // Default to PQ for HDR
@@ -132,7 +130,6 @@ pub fn color_info_to_x265_hdr_params(info: &ColorInfo) -> Option<String> {
     // Color matrix
     if let Some(ref colorspace) = info.color_space {
         let code = match colorspace.as_str() {
-            "bt2020nc" | "bt2020-ncl" => "9",
             "bt709" => "1",
             _ => "9",
         };
@@ -195,6 +192,9 @@ pub fn is_hdr10plus_tool_available() -> bool {
 
 /// Extract raw HEVC Annex-B bitstream from a container using ffmpeg.
 /// Returns the path to the raw `.hevc` file inside `temp_dir`.
+///
+/// # Errors
+/// Returns an error if `ffmpeg` fails or the bitstream extraction fails.
 pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
     let raw_hevc = temp_dir.join("raw.hevc");
     let status = Command::new("ffmpeg")
@@ -215,6 +215,9 @@ pub fn extract_hevc_bitstream(input: &Path, temp_dir: &Path) -> Result<PathBuf, 
 /// Extract Dolby Vision RPU from a raw HEVC Annex-B bitstream using `dovi_tool`.
 /// For Profile 7 sources, converts to Profile 8.1 (cross-compatible) automatically.
 /// Returns the path to the `.bin` RPU file.
+///
+/// # Errors
+/// Returns an error if `dovi_tool` fails or RPU extraction fails.
 pub fn extract_dv_rpu(
     raw_hevc: &Path,
     temp_dir: &Path,
@@ -265,6 +268,9 @@ pub fn extract_dv_rpu(
 
 /// Extract HDR10+ dynamic metadata from a raw HEVC Annex-B bitstream using `hdr10plus_tool`.
 /// Returns the path to the `.json` metadata file.
+///
+/// # Errors
+/// Returns an error if `hdr10plus_tool` fails or metadata extraction fails.
 pub fn extract_hdr10plus_metadata(raw_hevc: &Path, temp_dir: &Path) -> Result<PathBuf, String> {
     let json_path = temp_dir.join("hdr10plus.json");
 

@@ -391,6 +391,10 @@ impl ConvertOptions {
         self.delete_original || self.in_place
     }
 
+    /// Determine the flag mode from options.
+    ///
+    /// # Errors
+    /// Returns an error message if flag combination is invalid.
     pub fn flag_mode(&self) -> Result<crate::flag_validator::FlagMode, String> {
         crate::flag_validator::validate_flags_result_with_ultimate(
             self.explore,
@@ -407,6 +411,10 @@ impl ConvertOptions {
     }
 }
 
+/// Determine the output path for a file.
+///
+/// # Errors
+/// Returns an error message if determination fails.
 pub fn determine_output_path(
     input: &Path,
     extension: &str,
@@ -458,6 +466,10 @@ pub fn determine_output_path(
     Ok(output)
 }
 
+/// Determine the output path with a base directory.
+///
+/// # Errors
+/// Returns an error message if determination fails.
 pub fn determine_output_path_with_base(
     input: &Path,
     base_dir: &Path,
@@ -573,6 +585,10 @@ pub fn pre_conversion_check(
     None
 }
 
+/// Finalize the conversion process.
+///
+/// # Errors
+/// Returns an `io::Result` if finalization fails.
 pub fn finalize_conversion(
     input: &Path,
     output: &Path,
@@ -607,6 +623,10 @@ pub fn finalize_conversion(
     ))
 }
 
+/// Perform post-conversion actions.
+///
+/// # Errors
+/// Returns an `io::Result` if actions fail.
 pub fn post_conversion_actions(
     input: &Path,
     output: &Path,
@@ -687,6 +707,10 @@ pub fn temp_path_for_output(output: &Path) -> PathBuf {
     since = "0.10.71",
     note = "Removed. Use commit_temp_to_output_with_metadata instead."
 )]
+/// Commit a temporary file to the final output location.
+///
+/// # Errors
+/// Returns an `io::Result` if commit fails.
 pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std::io::Result<bool> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
@@ -696,6 +720,10 @@ pub fn commit_temp_to_output(_temp: &Path, _output: &Path, _force: bool) -> std:
 
 /// Commits a temp file with complete metadata preservation from the original file.
 /// Preserves: timestamps (atime, mtime, btime), xattrs, permissions, EXIF data, XMP sidecars.
+/// Commit a temporary file to the final output location with metadata preservation.
+///
+/// # Errors
+/// Returns an `io::Result` if commit fails.
 pub fn commit_temp_to_output_with_metadata(
     temp: &Path,
     output: &Path,
@@ -763,6 +791,10 @@ pub fn commit_temp_to_output_with_metadata(
 /// Get image/video dimensions using ffprobe → image crate → `ImageMagick` fallback chain.
 ///
 /// Returns (width, height) or an error if all methods fail.
+/// Get dimensions of an input video file using ffprobe.
+///
+/// # Errors
+/// Returns an error message if ffprobe fails.
 pub fn get_input_dimensions(input: &Path) -> Result<(u32, u32), String> {
     // Method 1: ffprobe
     if let Ok(probe) = crate::probe_video(input) {
@@ -1066,6 +1098,10 @@ pub fn check_size_tolerance(
 /// - File is readable
 ///
 /// Returns Ok(()) if valid, Err with descriptive message otherwise.
+/// Validate an input file before conversion.
+///
+/// # Errors
+/// Returns an error message if validation fails.
 pub fn validate_input_file(input: &Path) -> Result<(), String> {
     crate::path_validator::validate_path(input).map_err(|e| e.to_string())?;
 
@@ -1113,6 +1149,10 @@ pub fn validate_input_file(input: &Path) -> Result<(), String> {
 ///
 /// Note: Path traversal check removed - output paths are generated programmatically
 /// and may intentionally be in adjacent directories (e.g., _optimized suffix mode).
+/// Validate an output path before conversion.
+///
+/// # Errors
+/// Returns an error message if validation fails.
 pub fn validate_output_path(output: &Path, _base_dir: Option<&Path>) -> Result<(), String> {
     crate::path_validator::validate_path(output).map_err(|e| e.to_string())?;
 

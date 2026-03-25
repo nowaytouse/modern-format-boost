@@ -286,6 +286,10 @@ fn lock_log_writer() -> std::sync::MutexGuard<'static, Option<BufWriter<File>>> 
 
 /// Open (or create) the log file and take an advisory exclusive lock so it is not truncated by others.
 /// Call once at startup. Registers a forwarder so tracing events are also written to this run log.
+/// Set the log file for the current process.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be created.
 pub fn set_log_file(path: &std::path::Path) -> std::io::Result<()> {
     let file = OpenOptions::new().create(true).append(true).open(path)?;
     #[cfg(unix)]
@@ -305,6 +309,10 @@ pub fn has_log_file() -> bool {
 /// with a timestamp in the filename so each run gets a unique file
 /// (e.g. `./logs/img_hevc_run_2026-02-28_14-30-00.log`). That directory is gitignored.
 /// Call at Run startup so quality and progress are always written without requiring `--log-file`.
+/// Set the default log file for the current process.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be created.
 pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
     if binary_name.contains("vid") {
         IS_VIDEO_MODE.store(true, Ordering::Relaxed);
@@ -431,6 +439,7 @@ fn stderr_is_tty() -> bool {
 /// * The run-log always receives the plain (stripped) version.
 #[inline]
 pub fn emit_stderr(line: &str) {
+    use std::io::Write;
     // Pause output if the Ctrl+C confirmation prompt is currently waiting for input
     crate::ctrlc_guard::wait_if_prompt_active();
 
@@ -478,7 +487,6 @@ pub fn emit_stderr(line: &str) {
             write_to_log(&line_with_stats);
         }
 
-        use std::io::Write;
         let out = if stderr_is_tty() {
             // TTY: keep colours.
             format!("{STDERR_INDENT}{line_with_stats}")
@@ -583,7 +591,7 @@ pub fn is_verbose_mode() -> bool {
 /// Print to stderr only when verbose mode is enabled.
 ///
 /// Run log gets the line only when level allows (DEBUG: written at DEBUG/TRACE).
-/// When set via `set_log_context()`, the line is prefixed with [prefix] for concurrent file processing.
+/// When set via `set_log_context()`, the line is prefixed with `[prefix]` for concurrent file processing.
 #[macro_export]
 macro_rules! verbose_eprintln {
     () => {{
@@ -609,7 +617,7 @@ macro_rules! verbose_eprintln {
 }
 
 /// Print to both stderr and the run log file (if configured). Run log gets full TRACE-level detail.
-/// When set via `set_log_context()`, the line is prefixed with [prefix] for concurrent file processing.
+/// When set via `set_log_context()`, the line is prefixed with `[prefix]` for concurrent file processing.
 #[macro_export]
 macro_rules! log_eprintln {
     () => {{

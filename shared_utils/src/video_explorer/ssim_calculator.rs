@@ -142,9 +142,7 @@ pub fn calculate_ms_ssim_yuv(
         )
     });
 
-    let y_ms_ssim = if let Ok(Some(v)) = y_handle.join() {
-        v
-    } else {
+    let Ok(Some(y_ms_ssim)) = y_handle.join() else {
         eprintln!("   ❌ Y channel calculation failed");
         return None;
     };
@@ -610,15 +608,11 @@ pub fn calculate_psnr_uv(input: &Path, output: &Path, sample_rate: usize) -> Opt
         )
     });
 
-    let psnr_u = if let Ok(Some(v)) = u_handle.join() {
-        v
-    } else {
+    let Ok(Some(psnr_u)) = u_handle.join() else {
         eprintln!("   ❌ PSNR-U channel calculation failed");
         return None;
     };
-    let psnr_v = if let Ok(Some(v)) = v_handle.join() {
-        v
-    } else {
+    let Ok(Some(psnr_v)) = v_handle.join() else {
         eprintln!("   ❌ PSNR-V channel calculation failed");
         return None;
     };

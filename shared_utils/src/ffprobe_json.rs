@@ -315,9 +315,7 @@ pub fn extract_color_info(input: &Path) -> ColorInfo {
         }
     };
 
-    let stream = if let Some(s) = parsed.streams.first() {
-        s
-    } else {
+    let Some(stream) = parsed.streams.first() else {
         warn!(input = %input_str, "FFPROBE JSON contained no video streams");
         return ColorInfo::default();
     };

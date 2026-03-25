@@ -10,9 +10,16 @@
 
 use anyhow::{bail, Context, Result};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
+const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
+const PHI: f32 = 0.618;
+const WINDOW_SIZE: usize = 3;
+const VARIANCE_THRESHOLD: f64 = 1e-6;
+const CHANGE_RATE_THRESHOLD: f64 = 0.005;
+const MIN_ITERATIONS_BEFORE_VARIANCE_EXIT: u32 = 6;
 use crate::explore_strategy::CrfCache;
 
 use crate::crf_constants::EMERGENCY_MAX_ITERATIONS;
@@ -274,7 +281,17 @@ pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
 impl ConfidenceBreakdown {
     #[must_use]
     pub fn overall(&self) -> f64 {
-        self.ssim_confidence.mul_add(CONFIDENCE_WEIGHT_SSIM, self.margin_safety.mul_add(CONFIDENCE_WEIGHT_MARGIN, self.sampling_coverage.mul_add(CONFIDENCE_WEIGHT_SAMPLING, self.prediction_accuracy * CONFIDENCE_WEIGHT_PREDICTION)))
+        self.ssim_confidence
+            .mul_add(
+                CONFIDENCE_WEIGHT_SSIM,
+                self.margin_safety.mul_add(
+                    CONFIDENCE_WEIGHT_MARGIN,
+                    self.sampling_coverage.mul_add(
+                        CONFIDENCE_WEIGHT_SAMPLING,
+                        self.prediction_accuracy * CONFIDENCE_WEIGHT_PREDICTION,
+                    ),
+                ),
+            )
             .min(1.0)
     }
 
@@ -661,9 +678,7 @@ impl VideoEncoder {
     #[must_use]
     pub const fn container(&self) -> &'static str {
         match self {
-            Self::Hevc => "mp4",
-            Self::Av1 => "mp4",
-            Self::H264 => "mp4",
+            Self::Hevc | Self::Av1 | Self::H264 => "mp4",
         }
     }
 
@@ -893,6 +908,10 @@ impl VideoExplorer {
         })
     }
 
+    /// Create a new VideoExplorer.
+    ///
+    /// # Errors
+    /// Returns an error if initialization fails.
     pub fn new(
         input: &Path,
         output: &Path,
@@ -915,6 +934,10 @@ impl VideoExplorer {
         )
     }
 
+    /// Create a new VideoExplorer with GPU support.
+    ///
+    /// # Errors
+    /// Returns an error if initialization fails.
     pub fn new_with_gpu(
         input: &Path,
         output: &Path,
@@ -938,6 +961,10 @@ impl VideoExplorer {
         )
     }
 
+    /// Create a new VideoExplorer with a specific preset.
+    ///
+    /// # Errors
+    /// Returns an error if initialization fails.
     pub fn new_with_preset(
         input: &Path,
         output: &Path,
@@ -961,6 +988,10 @@ impl VideoExplorer {
         )
     }
 
+    /// Run the quality exploration.
+    ///
+    /// # Errors
+    /// Returns an error if exploration fails.
     pub fn explore(&self) -> Result<ExploreResult> {
         match self.config.mode {
             ExploreMode::SizeOnly => self.explore_size_only(),
@@ -974,6 +1005,10 @@ impl VideoExplorer {
         }
     }
 
+    /// Run the quality exploration with a specific strategy.
+    ///
+    /// # Errors
+    /// Returns an error if exploration fails.
     pub fn explore_with_strategy(&self) -> Result<ExploreResult> {
         use crate::explore_strategy::{create_strategy, ExploreContext};
 
@@ -1138,15 +1173,14 @@ impl VideoExplorer {
         let start_time = std::time::Instant::now();
         let mut best_crf_so_far: f32 = 0.0;
 
-        let encode_cached =
-            |crf: f32, cache: &mut CrfCache<u64>, explorer: &Self| -> Result<u64> {
-                if let Some(&size) = cache.get(crf) {
-                    return Ok(size);
-                }
-                let size = explorer.encode(crf)?;
-                cache.insert(crf, size);
-                Ok(size)
-            };
+        let encode_cached = |crf: f32, cache: &mut CrfCache<u64>, explorer: &Self| -> Result<u64> {
+            if let Some(&size) = cache.get(crf) {
+                return Ok(size);
+            }
+            let size = explorer.encode(crf)?;
+            cache.insert(crf, size);
+            Ok(size)
+        };
 
         let pb = crate::progress::create_professional_spinner("📦 Compress Only");
 
@@ -1447,7 +1481,6 @@ impl VideoExplorer {
             .saturating_add(4)
             .clamp(10, GLOBAL_MAX_ITERATIONS);
         let max_iterations = dynamic_max_iterations;
-        const SSIM_PLATEAU_THRESHOLD: f64 = 0.0002;
 
         let mut best_crf: f32;
         let mut best_size: u64;
@@ -1523,7 +1556,7 @@ impl VideoExplorer {
             // encode per iteration. We may do 1–2 extra encodes over the whole Phase 2 vs.
             // full GSS; the tradeoff is lower code complexity and easier maintenance.
             log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
-            const PHI: f32 = 0.618;
+            log_realtime!("   📍 Phase 2: Phi-based single-point search (one eval per iteration; not full golden-section)");
 
             let mut low = self.config.min_crf;
             let mut high = self.config.max_crf;
@@ -1942,10 +1975,6 @@ impl VideoExplorer {
         // Heuristic early exit: only after enough iterations to avoid premature stop on flat
         // bitrate curves (e.g. static/scene-heavy content). Variance threshold is strict so
         // we only exit when size ratio over the window is effectively constant.
-        const WINDOW_SIZE: usize = 3;
-        const VARIANCE_THRESHOLD: f64 = 1e-6;
-        const CHANGE_RATE_THRESHOLD: f64 = 0.005;
-        const MIN_ITERATIONS_BEFORE_VARIANCE_EXIT: u32 = 6;
         let mut size_history: Vec<(f32, u64)> = Vec::new();
 
         let calc_window_variance = |history: &[(f32, u64)], input_size: u64| -> f64 {
@@ -2567,9 +2596,12 @@ impl VideoExplorer {
         Ok((ssim, psnr, ms_ssim))
     }
 
+    /// Calculate SSIM and PSNR for the video.
+    ///
+    /// # Errors
+    /// Returns an error if calculation fails.
     pub fn calculate_ssim_and_psnr(&self) -> Result<(Option<f64>, Option<f64>)> {
         eprint!("      📊 Calculating SSIM+PSNR...");
-        use std::io::Write;
         let _ = std::io::stderr().flush();
 
         let filter = "[0:v]scale='iw-mod(iw,2)':'ih-mod(ih,2)':flags=bicubic[ref];\
@@ -2648,7 +2680,6 @@ impl VideoExplorer {
         let _heartbeat = HeartbeatGuard::new(HeartbeatConfig::fast("SSIM Calculation"));
 
         eprint!("      📊 Calculating SSIM...");
-        use std::io::Write;
         let _ = std::io::stderr().flush();
 
         let filters = [
@@ -2912,6 +2943,10 @@ impl VideoExplorer {
     }
 }
 
+/// Explore size only.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_size_only(
     input: &Path,
     output: &Path,
@@ -2925,6 +2960,10 @@ pub fn explore_size_only(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
+/// Explore quality match.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_quality_match(
     input: &Path,
     output: &Path,
@@ -2937,6 +2976,10 @@ pub fn explore_quality_match(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
+/// Explore precise quality match.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_precise_quality_match(
     input: &Path,
     output: &Path,
@@ -2951,6 +2994,10 @@ pub fn explore_precise_quality_match(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
+/// Explore precise quality match with compression.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_precise_quality_match_with_compression(
     input: &Path,
     output: &Path,
@@ -2966,6 +3013,10 @@ pub fn explore_precise_quality_match_with_compression(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
+/// Explore compression only.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_compress_only(
     input: &Path,
     output: &Path,
@@ -2979,6 +3030,10 @@ pub fn explore_compress_only(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
+/// Explore compression with quality.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_compress_with_quality(
     input: &Path,
     output: &Path,
@@ -2992,6 +3047,10 @@ pub fn explore_compress_with_quality(
     VideoExplorer::new(input, output, encoder, vf_args, config, max_threads, None)?.explore()
 }
 
+/// Explore precise quality match with compression (GPU).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_precise_quality_match_with_compression_gpu(
     input: &Path,
     output: &Path,
@@ -3018,6 +3077,10 @@ pub fn explore_precise_quality_match_with_compression_gpu(
     .explore()
 }
 
+/// Explore precise quality match (GPU).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_precise_quality_match_gpu(
     input: &Path,
     output: &Path,
@@ -3043,6 +3106,10 @@ pub fn explore_precise_quality_match_gpu(
     .explore()
 }
 
+/// Explore compression only (GPU).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_compress_only_gpu(
     input: &Path,
     output: &Path,
@@ -3067,6 +3134,10 @@ pub fn explore_compress_only_gpu(
     .explore()
 }
 
+/// Explore compression with quality (GPU).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_compress_with_quality_gpu(
     input: &Path,
     output: &Path,
@@ -3091,6 +3162,10 @@ pub fn explore_compress_with_quality_gpu(
     .explore()
 }
 
+/// Explore size only (GPU).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_size_only_gpu(
     input: &Path,
     output: &Path,
@@ -3115,6 +3190,10 @@ pub fn explore_size_only_gpu(
     .explore()
 }
 
+/// Explore quality match (GPU).
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_quality_match_gpu(
     input: &Path,
     output: &Path,
@@ -3165,6 +3244,10 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
     (max_crf, min_ssim.clamp(0.85, 0.98))
 }
 
+/// Explore HEVC quality.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc(
     input: &Path,
     output: &Path,
@@ -3185,6 +3268,10 @@ pub fn explore_hevc(
     )
 }
 
+/// Explore HEVC size only.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_size_only(
     input: &Path,
     output: &Path,
@@ -3204,6 +3291,10 @@ pub fn explore_hevc_size_only(
     )
 }
 
+/// Explore HEVC quality match.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_quality_match(
     input: &Path,
     output: &Path,
@@ -3221,6 +3312,10 @@ pub fn explore_hevc_quality_match(
     )
 }
 
+/// Explore HEVC compression only.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_compress_only(
     input: &Path,
     output: &Path,
@@ -3240,6 +3335,10 @@ pub fn explore_hevc_compress_only(
     )
 }
 
+/// Explore HEVC compression with quality.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_hevc_compress_with_quality(
     input: &Path,
     output: &Path,
@@ -3259,6 +3358,10 @@ pub fn explore_hevc_compress_with_quality(
     )
 }
 
+/// Explore AV1 quality.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1(
     input: &Path,
     output: &Path,
@@ -3279,6 +3382,10 @@ pub fn explore_av1(
     )
 }
 
+/// Explore AV1 size only.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_size_only(
     input: &Path,
     output: &Path,
@@ -3298,6 +3405,10 @@ pub fn explore_av1_size_only(
     )
 }
 
+/// Explore AV1 quality match.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_quality_match(
     input: &Path,
     output: &Path,
@@ -3315,6 +3426,10 @@ pub fn explore_av1_quality_match(
     )
 }
 
+/// Explore AV1 compression only.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_compress_only(
     input: &Path,
     output: &Path,
@@ -3334,6 +3449,10 @@ pub fn explore_av1_compress_only(
     )
 }
 
+/// Explore AV1 compression with quality.
+///
+/// # Errors
+/// Returns an error if exploration fails.
 pub fn explore_av1_compress_with_quality(
     input: &Path,
     output: &Path,

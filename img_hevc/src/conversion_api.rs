@@ -70,6 +70,10 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
+/// Determine the best conversion strategy based on image detection results.
+///
+/// # Errors
+/// Returns an error if the detection results are invalid or no strategy can be determined.
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     if detection.format.is_modern_format() {
         return Ok(ConversionStrategy {
@@ -172,6 +176,10 @@ pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrat
     }
 }
 
+/// Execute the selected conversion strategy.
+///
+/// # Errors
+/// Returns an error if the conversion process fails (e.g., tool execution error).
 pub fn execute_conversion(
     detection: &DetectionResult,
     strategy: &ConversionStrategy,
@@ -606,6 +614,10 @@ fn preserve_metadata(source: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Deep-analysis based conversion with intelligent parameter matching.
+///
+/// # Errors
+/// Returns an error if analysis or conversion fails.
 pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<ConversionOutput> {
     use crate::detection_api::detect_image;
 
@@ -619,6 +631,10 @@ pub fn smart_convert(path: &Path, config: &ConversionConfig) -> Result<Conversio
 /// Simplified wrapper: builds a default `ConversionConfig` and delegates to `smart_convert`.
 ///
 /// Use `smart_convert` when you need compress, `preserve_metadata`, `preserve_timestamps`, `delete_original`, or `apple_compat`.
+/// Simple conversion using default settings.
+///
+/// # Errors
+/// Returns an error if conversion fails.
 pub fn simple_convert(path: &Path, output_dir: Option<&Path>) -> Result<ConversionOutput> {
     let config = ConversionConfig {
         output_dir: output_dir.map(PathBuf::from),

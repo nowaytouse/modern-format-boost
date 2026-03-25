@@ -32,6 +32,11 @@ pub struct HeicAnalysis {
 /// 5. **pixi box**: high bit depth with compatible profile → lossless indicator
 /// 6. **colr box**: Identity matrix (MC=0) → lossless
 /// 7. **SPS `transquant_bypass_enabled_flag`**: if 1 → mathematically lossless (100% certain)
+///
+/// Detect if an HEIC file is lossless (using libheif).
+///
+/// # Errors
+/// Returns an error if the file cannot be read or libheif fails.
 pub fn detect_heic_is_lossless(data: &[u8], path: &Path) -> Result<bool> {
     // Try find_box_data_recursive first, then fallback to direct magic byte search
     // This handles cases where boxes are inside full boxes (e.g. meta box with version/flags)
@@ -233,10 +238,6 @@ fn parse_sps_for_transquant_bypass_flag(hvcc_data: &[u8]) -> Option<bool> {
 }
 
 fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
-    if sps_payload.len() < 3 {
-        return None;
-    }
-    let rbsp = &sps_payload[2..];
     struct BitReader<'a> {
         data: &'a [u8],
         bit_pos: usize,
@@ -278,6 +279,11 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
             Some((1 << leading_zeros) - 1 + info)
         }
     }
+
+    if sps_payload.len() < 3 {
+        return None;
+    }
+    let rbsp = &sps_payload[2..];
     let mut reader = BitReader::new(rbsp);
     reader.read_bits(4)?; // sps_video_parameter_set_id
     let max_sub_layers = reader.read_bits(3)?;
@@ -328,6 +334,10 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
     Some(transquant_bypass == 1)
 }
 
+/// Multi-dimensional HEIC analysis (using both libheif and metadata inspection).
+///
+/// # Errors
+/// Returns an error if the file is corrupted or analysis fails.
 pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)> {
     let lib_heif = LibHeif::new();
 

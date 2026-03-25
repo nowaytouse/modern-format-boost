@@ -70,6 +70,10 @@ pub fn validate_flags_with_ultimate(
     FlagValidation::Valid(FlagMode::PreciseQualityWithCompress)
 }
 
+/// Validate flags and determine the final operation mode.
+///
+/// # Errors
+/// Returns an error message if flag combination is invalid.
 pub fn validate_flags_result(
     explore: bool,
     match_quality: bool,
@@ -81,6 +85,10 @@ pub fn validate_flags_result(
     }
 }
 
+/// Validate flags with ultimate mode considered.
+///
+/// # Errors
+/// Returns an error message if flag combination is invalid.
 pub fn validate_flags_result_with_ultimate(
     explore: bool,
     match_quality: bool,

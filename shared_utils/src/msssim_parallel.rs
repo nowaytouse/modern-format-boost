@@ -87,6 +87,10 @@ impl ParallelMsssimCalculator {
         }
     }
 
+    /// Calculate MS-SSIM score in parallel.
+    ///
+    /// # Errors
+    /// Returns an error if the calculation fail.
     pub fn calculate(&self) -> Result<MsssimResult, AppError> {
         if self.sampling_config.strategy == SamplingStrategy::Skip {
             return Ok(MsssimResult::skipped());

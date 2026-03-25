@@ -174,6 +174,17 @@ fn normalize(value: f64, low: f64, high: f64) -> f64 {
 /// the kind determines how aggressively the score is attenuated by physical
 /// features in `score_gif`.
 fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
+    const MACHINE_PREFIXES: &[&str] = &[
+        "mmexport",
+        "wx_camera",
+        "wx_image",
+        "IMG_",
+        "VID_",
+        "Screenshot_",
+        "signal-",
+        "telegram-",
+    ];
+
     let neutral = FilenameAnalysis {
         raw: 0.5,
         kind: FilenameKind::Ambiguous,
@@ -198,16 +209,6 @@ fn analyze_filename(name: Option<&str>) -> FilenameAnalysis {
     }
 
     // WeChat / common social-app export prefixes
-    const MACHINE_PREFIXES: &[&str] = &[
-        "mmexport",
-        "wx_camera",
-        "wx_image",
-        "IMG_",
-        "VID_",
-        "Screenshot_",
-        "signal-",
-        "telegram-",
-    ];
     if MACHINE_PREFIXES.iter().any(|p| stem.starts_with(p)) {
         return FilenameAnalysis {
             raw: 0.60,
@@ -525,12 +526,15 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
         w_palette / w_sum,
     );
 
-    let total = loop_frequency_score.mul_add(w_loop_freq, sharpness_score * w_sharpness
-        + resolution_score * w_resolution
-        + duration_score * w_duration
-        + aspect_score * w_aspect
-        + fps_score * w_fps + effective_filename_score * w_filename)
-        + palette_score * w_palette;
+    let total = loop_frequency_score.mul_add(
+        w_loop_freq,
+        sharpness_score * w_sharpness
+            + resolution_score * w_resolution
+            + duration_score * w_duration
+            + aspect_score * w_aspect
+            + fps_score * w_fps
+            + effective_filename_score * w_filename,
+    ) + palette_score * w_palette;
 
     MemeScore {
         total,
@@ -685,6 +689,10 @@ pub fn gif_meta_from_probe_with_path(
 /// meta.palette_size   = pal;
 /// meta.app_extensions = exts;
 /// ```
+/// Perform a cheap byte-scan of a GIF file to extract palette size and app extensions.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be opened or read.
 pub fn scan_gif_headers(
     path: &std::path::Path,
 ) -> std::io::Result<(Option<u32>, Option<Vec<String>>)> {

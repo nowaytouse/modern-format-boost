@@ -6,6 +6,10 @@ pub mod tiff {
     use std::path::Path;
 
     /// Detect TIFF compression type — traverses ALL IFDs. Supports both standard TIFF and `BigTIFF`.
+    /// Check if the image at `path` is lossless.
+    ///
+    /// # Errors
+    /// Returns an error if the file is missing or the format is unsupported.
     pub fn is_lossless(path: &Path) -> Result<bool> {
         crate::common_utils::validate_file_size_limit(path, 512 * 1024 * 1024)
             .map_err(|e| ImgQualityError::AnalysisError(e.to_string()))?;
@@ -213,6 +217,10 @@ pub mod webp {
     /// WebP animation: RIFF header → VP8X → ANIM → ANMF* frames.
     /// Each ANMF payload contains frame data starting with VP8/VP8L sub-chunk.
     /// Any VP8 (lossy) frame → Lossy. All VP8L → Lossless.
+    /// Detect if a WebP animation is lossless.
+    ///
+    /// # Errors
+    /// Returns an error if the WebP stream is invalid.
     pub fn detect_webp_animation_is_lossless(data: &[u8]) -> Result<bool> {
         // WebP structure: RIFF[size]WEBP[chunks...]
         // Walk top-level chunks to find ANMF frames
@@ -273,6 +281,10 @@ pub mod webp {
     }
 
     /// Estimate WebP VP8 quality by parsing the bitstream quantization index.
+    /// Estimate quality from raw image bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the format is unsupported or data is corrupted.
     pub fn estimate_quality_from_bytes(data: &[u8]) -> Result<u8> {
         let mut pos = 12; // skip RIFF + size + WEBP
         while pos + 8 <= data.len() {
@@ -299,6 +311,10 @@ pub mod webp {
         ))
     }
 
+    /// Estimate image quality for lossy formats.
+    ///
+    /// # Errors
+    /// Returns an error if detection is not possible for the format.
     pub fn estimate_quality(path: &Path) -> Result<u8> {
         fs::read(path)
             .map_err(ImgQualityError::IoError)
@@ -513,6 +529,11 @@ pub mod avif {
     /// 3. **av1C 4:4:4 + `high_bitdepth` / `twelve_bit`** → lossless
     /// 4. **av1C `seq_profile`**: Profile 0 + 4:4:4 → treat as lossless
     /// 5. **pixi box**: bit depth ≥ 12 with 4:4:4 → lossless indicator
+    ///
+    /// Check if the image bytes represent a lossless encoding.
+    ///
+    /// # Errors
+    /// Returns an error if the format cannot be identified or parsed.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
         if let Some(av1c_data) = find_box_data_recursive(data, b"av1C") {
             if av1c_data.len() >= 4 {
@@ -609,6 +630,10 @@ pub mod jxl {
     use std::path::Path;
 
     /// Detect JXL (JPEG XL) lossless encoding — multi-dimension analysis.
+    /// Check if the image bytes represent a lossless encoding.
+    ///
+    /// # Errors
+    /// Returns an error if the format cannot be identified or parsed.
     pub fn is_lossless_from_bytes(data: &[u8], path: &Path) -> Result<bool> {
         if data.len() < 4 {
             return Err(ImgQualityError::AnalysisError(format!(

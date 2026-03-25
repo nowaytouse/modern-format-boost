@@ -78,10 +78,7 @@ impl DetectedCodec {
     pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            Self::FFV1
-                | Self::Uncompressed
-                | Self::HuffYUV
-                | Self::UTVideo
+            Self::FFV1 | Self::Uncompressed | Self::HuffYUV | Self::UTVideo
         )
     }
 
@@ -349,6 +346,9 @@ pub fn calculate_quality_score(
 }
 
 /// Analyzes a video file with optional `SQLite` caching.
+///
+/// # Errors
+/// Returns an error if the file cannot be read, ffprobe fails, or cache access errors.
 pub fn detect_video_with_cache(
     path: &Path,
     cache: Option<&crate::analysis_cache::AnalysisCache>,
@@ -387,6 +387,10 @@ pub fn detect_video_with_cache(
     Ok(result)
 }
 
+/// Detect video properties using ffprobe.
+///
+/// # Errors
+/// Returns `FFprobeError` if the file is invalid or ffprobe fails.
 pub fn detect_video(path: &Path) -> Result<VideoDetectionResult, FFprobeError> {
     let probe = probe_video(path)?;
 

@@ -111,6 +111,10 @@ fn detect_content_format(path: &Path) -> Option<String> {
     None
 }
 
+/// Fix the extension of a file if it doesn't match its content.
+///
+/// # Errors
+/// Returns an error if content analysis fails.
 pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
     let current_ext = path
         .extension()
@@ -185,6 +189,10 @@ pub fn fix_extension_if_mismatch(path: &Path) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
+/// Copy a file to the output directory while preserving structure.
+///
+/// # Errors
+/// Returns an error if copying fails.
 pub fn smart_copy_with_structure(
     source: &Path,
     output_dir: &Path,
@@ -231,6 +239,10 @@ pub fn smart_copy_with_structure(
     Ok(dest)
 }
 
+/// Copy the source file if conversion was skipped or failed.
+///
+/// # Errors
+/// Returns an error if copying fails.
 pub fn copy_on_skip_or_fail(
     source: &Path,
     output_dir: Option<&Path>,

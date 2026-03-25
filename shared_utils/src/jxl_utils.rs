@@ -88,10 +88,14 @@ pub fn add_icc_to_cjxl(cmd: &mut Command, icc_file: Option<&Path>) {
 }
 
 /// Verify that a JXL file is valid by checking its signature and optionally running jxlinfo.
+/// Verify the health of a JXL file.
+///
+/// # Errors
+/// Returns an error message if the file is corrupt.
 pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
+    use std::io::Read;
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut sig = [0u8; 2];
-    use std::io::Read;
     file.read_exact(&mut sig).map_err(|e| e.to_string())?;
 
     if sig != [0xFF, 0x0A] && sig != [0x00, 0x00] {
@@ -119,6 +123,10 @@ pub fn verify_jxl_health(path: &Path) -> Result<(), String> {
 
 /// Run an external tool to convert input to a temp PNG.
 /// Returns (`temp_path`, `temp_handle`) on success, or (`original_input`, None) on failure (graceful fallback).
+/// Decode a file to a temporary PNG for analysis.
+///
+/// # Errors
+/// Returns an I/O error if decoding fails.
 pub fn convert_to_temp_png(
     input: &Path,
     tool: &str,
@@ -416,6 +424,11 @@ fn run_imagemagick_cjxl_pipeline(
 /// - decode/pixel error + 8-bit source → -strip, depth 8 (no quality loss)
 /// - decode/pixel error + 16-bit source → normalize ICC to sRGB, keep depth 16
 ///   - still fails → error, refuse to silently downgrade
+///
+/// Fallback to ImageMagick for conversion if native tools fail.
+///
+/// # Errors
+/// Returns an I/O error if conversion fails.
 pub fn try_imagemagick_fallback(
     input: &Path,
     output: &Path,
@@ -550,7 +563,8 @@ pub fn try_imagemagick_fallback(
                                     16,
                                     true,
                                     apple_compat,
-                                ) == Ok(()) {
+                                ) == Ok(())
+                                {
                                     crate::progress_mode::emit_stderr(&format!(
                                         "   {} Attempt 3 succeeded",
                                         style("✅").green()
@@ -615,7 +629,8 @@ pub fn try_imagemagick_fallback(
                         16,
                         true,
                         apple_compat,
-                    ) == Ok(()) {
+                    ) == Ok(())
+                    {
                         crate::progress_mode::emit_stderr(&format!(
                             "   {} Attempt 2 succeeded",
                             style("✅").green()
@@ -681,6 +696,10 @@ pub fn try_imagemagick_fallback(
 
 /// Losslessly strip trailing data after JPEG EOI (0xFF 0xD9) so cjxl can use bitstream reconstruction.
 /// Returns (`temp_path`, guard) if tail was stripped, or None if no tail or strip failed.
+/// Strip JPEG extra data (trailing bytes) to a temporary file.
+///
+/// # Errors
+/// Returns an I/O error if the file cannot be processed.
 pub fn strip_jpeg_tail_to_temp(
     path: &Path,
 ) -> std::io::Result<Option<(std::path::PathBuf, tempfile::NamedTempFile)>> {

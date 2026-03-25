@@ -116,6 +116,10 @@ pub struct Crf<E: EncoderBounds> {
 }
 
 impl<E: EncoderBounds> Crf<E> {
+    /// Create a new CRF value.
+    ///
+    /// # Errors
+    /// Returns an error if the value is out of range.
     pub fn new(value: f32) -> Result<Self, CrfError> {
         if value.is_nan() || value.is_infinite() {
             return Err(CrfError::InvalidFloat { encoder: E::NAME });
@@ -164,6 +168,10 @@ impl<E: EncoderBounds> Crf<E> {
         (self.value * CRF_CACHE_KEY_MULTIPLIER).round() as u32
     }
 
+    /// Create a CRF value from a cache key.
+    ///
+    /// # Errors
+    /// Returns an error if the key is invalid.
     pub fn from_cache_key(key: u32) -> Result<Self, CrfError> {
         let value = key as f32 / CRF_CACHE_KEY_MULTIPLIER;
         Self::new(value).map_err(|_| CrfError::InvalidCacheKey {
