@@ -8,9 +8,10 @@ All notable changes to this project will be documented in this file.
 ## [0.10.104] - 2026-03-26
 
 ### 🐛 Bug Fixes
-- **JPEG Extension Recognition & Universal Format Detection**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. The implementation now supports **all image formats** that both `infer` and `image` crate can handle:
+- **JPEG Extension Recognition & Universal Format Detection**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. The implementation now supports **all convertible image formats**:
   - **Supported formats via magic bytes**: JPEG (including `.jpe`, `.jpg`, `.jpeg`), PNG, GIF, WebP, TIFF, BMP, ICO, AVIF
-  - **Special handling formats**: HEIC/HEIF (via libheif-rs), JXL (via djxl/cjxl), OpenEXR, JPEG 2000, PSD (handled separately)
+  - **Special handling formats**: HEIC/HEIF (via libheif-rs), JXL (via djxl/cjxl)
+  - **Detection-only formats**: OpenEXR, JPEG 2000, PSD, QOI, FLIF, PNM, DDS, TGA (detected but not converted - used for format identification and skipping)
   - Added `infer` crate for content-based format detection independent of file extensions
   - Updated `open_image_with_limits()` in `image_detection.rs` to use magic bytes detection
   - Created `open_image_reader_with_magic_bytes()` helper in `image_analyzer.rs` for consistent format detection
