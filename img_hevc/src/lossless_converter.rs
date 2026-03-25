@@ -309,6 +309,12 @@ pub fn convert_to_jxl(
             {
                 use std::process::Stdio;
 
+                tracing::warn!(
+                    input = %input.display(),
+                    cjxl_stderr = %stderr.trim(),
+                    "cjxl decode failed — falling back to FFmpeg+cjxl pipeline"
+                );
+
                 let ffmpeg_result = Command::new("ffmpeg")
                     .arg("-threads")
                     .arg(max_threads.to_string())

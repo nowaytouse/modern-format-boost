@@ -919,6 +919,7 @@ dependencies = [
  "serde",
  "shared_utils",
  "tempfile",
+ "tracing",
  "vid-av1",
 ]
 

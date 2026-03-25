@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 - **JXL Container Handling**: Confirmed that `exiftool` (with `-m`) automatically handles containerization requirements for JXL codestreams. Reverted the unnecessary `--container=1` flag to maintain output purity.
 - **Dependency Refresh**: Updated 8 core crates to their latest security/bugfix releases.
 
+### 🔍 Diagnostics
+- **Silent Fallback Logging**: All previously invisible fallback events now emit to log files (`DEBUG`/`WARN` level). Specifically: `exiftool` stderr (including `-m`-suppressed warnings) is now captured via `tracing::debug!`; `cjxl` decode failures that trigger the ImageMagick or FFmpeg fallback pipelines now emit `tracing::warn!` with the full upstream error before the retry begins. Terminal output is unchanged — all new entries are file-only.
+
 
 ## [0.10.99] - 2026-03-24
 

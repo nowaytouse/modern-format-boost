@@ -222,6 +222,11 @@ pub fn convert_to_jxl(
             } else if stderr.contains("Getting pixel data failed")
                 || stderr.contains("Failed to decode")
             {
+                tracing::warn!(
+                    input = %input.display(),
+                    cjxl_stderr = %stderr.trim(),
+                    "cjxl decode failed — falling back to ImageMagick pipeline"
+                );
                 if shared_utils::jxl_utils::try_imagemagick_fallback(
                     input,
                     &temp_output,
