@@ -1006,8 +1006,8 @@ mod tests {
 
     #[test]
     fn test_checkpoint_new_creates_progress_dir() {
-        let (_target, progress, guard) = setup_test_env();
-        let checkpoint = CheckpointManager::new(_target.path()).unwrap();
+        let (target, progress, guard) = setup_test_env();
+        let checkpoint = CheckpointManager::new(target.path()).unwrap();
         assert!(checkpoint.progress_dir().exists());
         assert!(progress.path().exists());
         teardown_test_env(guard);

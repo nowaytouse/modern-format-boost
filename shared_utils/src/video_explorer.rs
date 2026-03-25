@@ -3790,7 +3790,6 @@ mod tests {
     #[ignore = "Integration test requiring specific media"]
     fn test_three_phase_iteration_estimate() {
         let initial = 20.0_f32;
-        let _min_crf = 15.0_f32;
         let max_crf = 30.0_f32;
 
         let coarse_up = ((max_crf - initial) / COARSE_STEP).ceil() as u32;
@@ -4139,7 +4138,6 @@ mod tests {
     #[test]
     #[ignore = "Integration test requiring specific media"]
     fn test_v4_low_quality_source_ceiling() {
-        let _source_crf = 35.0_f32;
         let source_ssim = 0.9200_f64;
         let target_ssim = 0.9999_f64;
 

@@ -37,7 +37,7 @@ warn_shell_once() {
 		return 0
 	fi
 	eval "$var_name=1"
-	export "$var_name"
+	export "${var_name?}"
 	warn_shell "$*"
 }
 
@@ -148,15 +148,25 @@ RESET='\033[0m'
 NC='\033[0m'
 BOLD='\033[1m'
 DIM='\033[2m'
+# shellcheck disable=SC2034
 RED='\033[38;5;196m'
+# shellcheck disable=SC2034
 GREEN='\033[38;5;46m'
+# shellcheck disable=SC2034
 YELLOW='\033[38;5;226m'
+# shellcheck disable=SC2034
 BLUE='\033[38;5;39m'
+# shellcheck disable=SC2034
+MAGENTA='\033[38;5;162m'
+# shellcheck disable=SC2034
 CYAN='\033[38;5;51m'
-MAGENTA='\033[38;5;213m'
+# shellcheck disable=SC2034
 ORANGE='\033[38;5;208m'
+# shellcheck disable=SC2034
 WHITE='\033[38;5;255m'
+# shellcheck disable=SC2034
 GRAY='\033[38;5;240m'
+# shellcheck disable=SC2034
 BG_HEADER='\033[48;5;236m'
 
 # 3. Versioning & Branch Awareness

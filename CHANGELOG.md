@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.102] - 2026-03-26
+
+### 🛠️ Hardening & Technical Debt Cleanup
+- **Shell Script Fortification**: Systematic resolution of all `shellcheck` warnings across the script suite.
+  - Fixed `SC2155` (masking return codes in local assignments) in `drag_and_drop_processor.sh`.
+  - Resolved `SC2086` (missing quotes) and improved path handling resilience.
+  - Added script-level hints for shell compatibility.
+- **Crate Quality Improvements**:
+  - **img_av1**: Major structural refactoring of the main dispatch logic, significantly improving readability and maintainability.
+  - **img_hevc**: Targeted Clippy fixes for `cast_precision_loss` and `cast_possible_truncation` without altering its advanced architecture.
+  - **shared_utils**: Unified `ConversionResult` skipping logic using `skipped_custom` to ensure consistent metadata reporting.
+- **Zero-Warning Workspace**: Achieved a clean, warning-free build across all crates and scripts.
+
 ## [0.10.101] - 2026-03-26
 
 ### 🛠️ Code Quality & Technical Debt

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use img_hevc::lossless_converter::convert_to_gif_apple_compat;
+
 use img_hevc::{
     calculate_psnr, calculate_ssim, psnr_quality_description, ssim_quality_description,
 };
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::debug;
+
 
 #[derive(Parser)]
 #[command(name = "imgquality")]
@@ -489,6 +489,7 @@ fn convert_result_to_output(result: shared_utils::ConversionResult) -> Conversio
         message: result.message,
         original_size: result.input_size,
         output_size: result.output_size,
+        #[allow(clippy::cast_possible_truncation)]
         size_reduction: result.size_reduction.map(|r| r as f32),
     }
 }
@@ -541,16 +542,6 @@ fn auto_convert_single_file(
     let analysis =
         shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
 
-    debug!(
-        "analysis.format={}, analysis.is_lossless={}, analysis.heic_analysis.is_lossless={:?}",
-        analysis.format,
-        analysis.is_lossless,
-        analysis.heic_analysis.as_ref().map(|h| h.is_lossless)
-    );
-
-    // HEIC/HEIF: Skip lossy (avoid generational loss), but allow lossless → JXL.
-    // This is handled by should_skip_image_format below based on analysis.is_lossless.
-
     // Single source of truth for static skip: JXL + modern lossy (avoid generational loss).
     if !analysis.is_animated {
         // Always skip static JXL (already optimal format)
@@ -592,10 +583,6 @@ fn auto_convert_single_file(
         }
     }
 
-    // Full integration of image quality analysis: static images always undergo pixel-level analysis
-    // for routing and quality output (auto-written to run log).
-    // Specifically: JPEG files that clearly follow the lossless transcode path to JXL
-    // do not require expensive pixel-level analysis.
     let pixel_analysis = if !analysis.is_animated && analysis.format != "JPEG" {
         shared_utils::image_quality_detector::analyze_image_quality_with_cache(
             input,
@@ -662,24 +649,6 @@ fn auto_convert_single_file(
         }
     };
 
-    // Dispatch order: (1) format filter already applied above (HEIC/HEIF Apple skip, JXL skip).
-    // (2) Then by (format, is_lossless, is_animated): modern static → JXL or skip; JPEG → JXL; legacy lossless → JXL; animated → HEVC/GIF/skip; legacy lossy → JXL.
-
-    // Log HDR detection if present
-    if let Some(ref hdr) = analysis.hdr_info {
-        if hdr.is_hdr() {
-            let transfer = hdr.color_transfer.as_deref().unwrap_or("unknown");
-            let primaries = hdr.color_primaries.as_deref().unwrap_or("unknown");
-            let bit_depth = hdr.bit_depth.unwrap_or(8);
-            verbose_log!(
-                "🌈 HDR detected: {} {} {}-bit",
-                primaries,
-                transfer,
-                bit_depth
-            );
-        }
-    }
-
     let result = match (
         analysis.format.as_str(),
         analysis.is_lossless,
@@ -687,16 +656,15 @@ fn auto_convert_single_file(
     ) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true, false) => {
             verbose_log!("🔄 Modern Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
+            convert_to_jxl(input, &options, 0.0_f32, analysis.hdr_info.as_ref())?
         }
-        // Static modern lossy / JXL already handled by should_skip_image_format above.
         ("JPEG", _, false) => {
             verbose_log!("🔄 JPEG→JXL lossless transcode: {}", input.display());
             convert_jpeg_to_jxl(input, &options, analysis.hdr_info.as_ref())?
         }
         (_, true, false) => {
             verbose_log!("🔄 Legacy Lossless→JXL: {}", input.display());
-            convert_to_jxl(input, &options, 0.0, analysis.hdr_info.as_ref())?
+            convert_to_jxl(input, &options, 0.0_f32, analysis.hdr_info.as_ref())?
         }
         (format, is_lossless, true) => {
             let is_modern_animated = matches!(format, "WebP" | "AVIF" | "HEIC" | "HEIF" | "JXL");
@@ -717,13 +685,6 @@ fn auto_convert_single_file(
                     "⏭️ Skipping modern lossy animated format (avoid generational loss): {}",
                     input.display()
                 );
-                if is_apple_native && config.apple_compat {
-                    verbose_log!("   💡 Reason: {} is already a native Apple format", format);
-                } else {
-                    verbose_log!(
-                        "   💡 Use --apple-compat to convert to HEVC for Apple device compatibility"
-                    );
-                }
                 copy_original_if_adjacent_mode(input, config)?;
                 return Ok(make_skipped("Skipping modern lossy animated format"));
             }
@@ -745,7 +706,7 @@ fn auto_convert_single_file(
                         ));
                     }
 
-                    let distance = if use_lossless { 0.0 } else { 0.1 };
+                    let distance = if use_lossless { 0.0_f32 } else { 0.1_f32 };
                     verbose_log!(
                         "🔄 Static GIF/Modern→JXL ({}): {}",
                         if distance == 0.0 {
@@ -770,19 +731,12 @@ fn auto_convert_single_file(
                             "\x1b[33mCannot get animation duration, skipping conversion\x1b[0m",
                             input.display()
                         );
-                        shared_utils::log_eprintln!("   💡 Possible cause: ffprobe not installed or file format doesn't support duration detection");
-                        shared_utils::log_eprintln!(
-                            "   💡 Suggestion: install ffprobe: brew install ffmpeg"
-                        );
                         copy_original_if_adjacent_mode(input, config)?;
                         return Ok(make_skipped("Cannot get animation duration"));
                     }
                 }
             };
 
-            // Use meme-score to decide HEVC vs GIF for all animated routes
-            // (apple_compat and non-compat unified under the same strategy).
-            // Can be overridden with --force-video flag
             let force_video = std::env::var("MODERN_FORMAT_BOOST_FORCE_VIDEO").is_ok();
             let probe = match shared_utils::probe_video(input) {
                 Ok(probe) => Some(probe),
@@ -796,21 +750,17 @@ fn auto_convert_single_file(
                 }
             };
             let meme_keep = if force_video {
-                // Force video mode: always convert to video, skip meme-score
                 false
             } else if let Some(ref p) = probe {
                 if let Some(mut meta) =
                     shared_utils::gif_meta_from_probe_with_path(p, analysis.file_size, input)
                 {
-                    // ── NEW: Perform cheap GIF header scan for palette/CDN markers ──
                     if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
                         meta.palette_size = pal;
                         meta.app_extensions = exts;
                     }
-
                     shared_utils::should_keep_as_gif(&meta)
                 } else {
-                    // Cannot build GifMeta (no dimensions) → keep as GIF
                     shared_utils::progress_mode::emit_stderr(&format!(
                         "🎞️  GIF [{}] probe failed → KEEP GIF",
                         input.file_name().unwrap_or_default().to_string_lossy()
@@ -818,7 +768,6 @@ fn auto_convert_single_file(
                     true
                 }
             } else {
-                // ffprobe failed → keep as GIF
                 shared_utils::progress_mode::emit_stderr(&format!(
                     "🎞️  GIF [{}] probe failed → KEEP GIF",
                     input.file_name().unwrap_or_default().to_string_lossy()
@@ -828,15 +777,13 @@ fn auto_convert_single_file(
 
             if config.apple_compat && is_modern_animated && !is_apple_native {
                 if meme_keep {
-                    // meme-score says keep: GIF is the correct Apple-compat output
                     shared_utils::progress_mode::emit_stderr(&format!(
                         "🍎 Animated {}→GIF (Apple Compat, meme-score: keep): {}",
                         format,
                         input.display()
                     ));
-                    convert_to_gif_apple_compat(input, &options)?
+                    img_hevc::lossless_converter::convert_to_gif_apple_compat(input, &options)?
                 } else {
-                    // meme-score says convert: HEVC MP4 is the correct Apple-compat output
                     shared_utils::progress_mode::emit_stderr(&format!(
                         "🍎 Animated {}→HEVC MP4 (Apple Compat, {:.1}s): {}",
                         format,
@@ -859,9 +806,6 @@ fn auto_convert_single_file(
             }
         }
         (_, false, false) => {
-            // Modern lossy static already skipped above; only legacy lossy reach here.
-            // All lossy sources (including palette-quantized PNG/GIF) use d=0.1 (Quality 100).
-            // Size protection will skip automatically if output is larger.
             verbose_log!(
                 "🔄 {} Lossy→JXL (Quality 100): {}",
                 match analysis.format.to_uppercase().as_str() {
@@ -871,7 +815,7 @@ fn auto_convert_single_file(
                 },
                 input.display()
             );
-            convert_to_jxl(input, &options, 0.1, analysis.hdr_info.as_ref())?
+            convert_to_jxl(input, &options, 0.1_f32, analysis.hdr_info.as_ref())?
         }
     };
 
@@ -1013,7 +957,9 @@ fn auto_convert_directory(
             // Reserve 1 GB headroom on top of total input size (temp files, partial encodes, etc.)
             let required = total_input_size.saturating_add(1024 * 1024 * 1024);
             if avail < required {
+                #[allow(clippy::cast_precision_loss)]
                 let avail_gb = avail as f64 / (1024.0 * 1024.0 * 1024.0);
+                #[allow(clippy::cast_precision_loss)]
                 let required_gb = required as f64 / (1024.0 * 1024.0 * 1024.0);
                 eprintln!(
                     "❌ Insufficient disk space on output volume.\n\

@@ -1,4 +1,5 @@
 #!/bin/zsh
+# shellcheck shell=bash
 # Apple Photos Compatibility & Repair Tool (Unified)
 # In-place repair + Hidden backup mode
 #
@@ -55,7 +56,7 @@ while IFS= read -r file; do
 	# Calculate relative directory path from TARGET_DIR
 	abs_file=$(realpath "$file")
 	abs_target=$(realpath "$TARGET_DIR")
-	rel_path="${abs_file#$abs_target/}"
+	rel_path="${abs_file#"$abs_target"/}"
 	rel_dir=$(dirname "$rel_path")
 
 	# 1. Identification
