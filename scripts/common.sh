@@ -10,6 +10,7 @@ if [[ -z "${SCRIPT_DIR:-}" ]]; then
 		SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	elif [[ -n "${ZSH_VERSION:-}" ]]; then
 		# zsh: use prompt expansion to get the sourced file path reliably
+		# shellcheck disable=SC2296
 		SCRIPT_DIR="$(cd "$(dirname "${(%):-%x}")" && pwd)"
 	else
 		# Fallback for other shells
