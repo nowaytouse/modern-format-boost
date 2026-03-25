@@ -101,14 +101,14 @@ pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, 
     };
 
     let mut reader = ImageReader::open(path)?;
-    
+
     // If we detected format via magic bytes, use it; otherwise guess from extension
     if let Some(fmt) = format {
         reader.set_format(fmt);
     } else {
         reader = reader.with_guessed_format()?;
     }
-    
+
     reader.limits(limits);
     reader.decode()
 }

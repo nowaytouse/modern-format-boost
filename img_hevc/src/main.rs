@@ -1150,11 +1150,34 @@ fn auto_convert_directory(
                                 continue;
                             } else {
                                 let err_str = e.to_string();
-                                shared_utils::log_auto_error!("Image conversion", "Failed {}: {}", path.display(), e);
+
+                                // Determine if this is a critical data loss risk
+                                let is_read_error = err_str.contains("Failed to open file")
+                                    || err_str.contains("ImageReadError")
+                                    || err_str.contains("format")
+                                    || err_str.contains("extension");
+
+                                if is_read_error {
+                                    shared_utils::log_auto_error!(
+                                        "Image analysis",
+                                        "⚠️  Failed to read/analyze {}: {}. Original file will be preserved.",
+                                        path.display(),
+                                        e
+                                    );
+                                } else {
+                                    shared_utils::log_auto_error!(
+                                        "Image conversion",
+                                        "Failed {}: {}",
+                                        path.display(),
+                                        e
+                                    );
+                                }
+
                                 shared_utils::progress_mode::log_conversion_failure(path, &err_str);
                                 failed.fetch_add(1, Ordering::Relaxed);
                                 shared_utils::progress_mode::image_processed_failure();
 
+                                // Copy original file to output directory to prevent data loss
                                 if let Some(ref output_dir) = config.output_dir {
                                     if let Err(copy_err) = shared_utils::copy_on_skip_or_fail(
                                         path,
@@ -1163,7 +1186,7 @@ fn auto_convert_directory(
                                         config.verbose,
                                     ) {
                                         shared_utils::log_eprintln!(
-                                            "⚠️ [Recovery] Failed to copy original after image conversion failure ({}): {}",
+                                            "🚨 [CRITICAL] Failed to copy original after conversion failure ({}): {}. DATA LOSS RISK!",
                                             path.display(),
                                             copy_err
                                         );
