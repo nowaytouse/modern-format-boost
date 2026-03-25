@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.104] - 2026-03-26
+
+### 🐛 Bug Fixes
+- **JPEG Extension Recognition**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. Previously, files with `.jpe` extension (a valid JPEG extension) would fail with "The file extension `.\"jpe\"` was not recognized as an image format" errors and would not be copied to the output directory. The fix:
+  - Added `infer` crate for content-based format detection independent of file extensions
+  - Updated `open_image_with_limits()` in `image_detection.rs` to use magic bytes detection
+  - Created `open_image_reader_with_magic_bytes()` helper in `image_analyzer.rs` for consistent format detection
+  - Now handles `.jpe`, missing extensions, and incorrect extensions gracefully
+  - Falls back to extension-based detection if magic bytes detection fails
+  - Affected operations: dimension reading, image analysis, and all image processing pipelines
+
 ## [0.10.103] - 2026-03-26
 
 ### 🐛 Bug Fixes
