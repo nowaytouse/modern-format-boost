@@ -84,8 +84,31 @@ pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, 
     let mut limits = Limits::default();
     limits.max_alloc = Some(2 * 1024 * 1024 * 1024); // 2GB (reasonable for 100MP images)
 
+    // Use magic bytes detection instead of relying on file extension
+    // This handles cases like .jpe, missing extensions, or incorrect extensions
+    let format = match infer::get_from_path(path) {
+        Ok(Some(kind)) => match kind.mime_type() {
+            "image/jpeg" => Some(image::ImageFormat::Jpeg),
+            "image/png" => Some(image::ImageFormat::Png),
+            "image/webp" => Some(image::ImageFormat::WebP),
+            "image/tiff" => Some(image::ImageFormat::Tiff),
+            "image/gif" => Some(image::ImageFormat::Gif),
+            "image/bmp" => Some(image::ImageFormat::Bmp),
+            "image/x-icon" => Some(image::ImageFormat::Ico),
+            _ => None, // Fall back to extension-based detection
+        },
+        _ => None, // Fall back to extension-based detection
+    };
+
     let mut reader = ImageReader::open(path)?;
-    reader = reader.with_guessed_format()?;
+    
+    // If we detected format via magic bytes, use it; otherwise guess from extension
+    if let Some(fmt) = format {
+        reader.set_format(fmt);
+    } else {
+        reader = reader.with_guessed_format()?;
+    }
+    
     reader.limits(limits);
     reader.decode()
 }

@@ -15,6 +15,37 @@ use tracing::debug;
 /// Shorter animations are skipped (no conversion to video).
 pub const ANIMATED_MIN_DURATION_FOR_VIDEO_SECS: f32 = 4.5;
 
+/// Opens an image reader with magic bytes detection to handle non-standard extensions.
+/// Falls back to extension-based detection if magic bytes detection fails.
+fn open_image_reader_with_magic_bytes(path: &Path) -> std::result::Result<image::ImageReader<std::io::BufReader<std::fs::File>>, image::ImageError> {
+    // Use magic bytes detection instead of relying on file extension
+    // This handles cases like .jpe, missing extensions, or incorrect extensions
+    let format = match infer::get_from_path(path) {
+        Ok(Some(kind)) => match kind.mime_type() {
+            "image/jpeg" => Some(image::ImageFormat::Jpeg),
+            "image/png" => Some(image::ImageFormat::Png),
+            "image/webp" => Some(image::ImageFormat::WebP),
+            "image/tiff" => Some(image::ImageFormat::Tiff),
+            "image/gif" => Some(image::ImageFormat::Gif),
+            "image/bmp" => Some(image::ImageFormat::Bmp),
+            "image/x-icon" => Some(image::ImageFormat::Ico),
+            _ => None, // Fall back to extension-based detection
+        },
+        _ => None, // Fall back to extension-based detection
+    };
+
+    let mut reader = image::ImageReader::open(path)?;
+    
+    // If we detected format via magic bytes, use it; otherwise guess from extension
+    if let Some(fmt) = format {
+        reader.set_format(fmt);
+    } else {
+        reader = reader.with_guessed_format()?;
+    }
+    
+    Ok(reader)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JxlIndicator {
     pub should_convert: bool,
@@ -251,10 +282,8 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         return analyze_avif_image(path, file_size);
     }
 
-    let mut reader = image::ImageReader::open(path)
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {e}")))?
-        .with_guessed_format()
-        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to guess format: {e}")))?;
+    let mut reader = open_image_reader_with_magic_bytes(path)
+        .map_err(|e| ImgQualityError::ImageReadError(format!("Failed to open file: {e}")))?;
     {
         use image::Limits;
         let mut limits = Limits::default();
@@ -578,7 +607,7 @@ fn analyze_jpeg_fast_path(path: &Path, file_size: u64) -> Result<ImageAnalysis> 
     };
 
     // Use fast metadata parsing to get dimensions without decoding pixels
-    let (width, height) = match image::ImageReader::open(path) {
+    let (width, height) = match open_image_reader_with_magic_bytes(path) {
         Ok(reader) => match reader.into_dimensions() {
             Ok(dimensions) => dimensions,
             Err(e) => {
