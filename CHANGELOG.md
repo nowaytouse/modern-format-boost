@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 - **Quality & Performance**:
   - **Zero-Warning Workspace**: Achieved a clean, warning-free build across all crates (`img_hevc`, `img_av1`, `shared_utils`) and shell scripts.
   - **Dependency Update**: Full workspace-wide dependency synchronization via `cargo update` to the latest stable and nightly-compatible versions.
+- **Diagnostics & Visibility**:
+  - **Emoji Hardening**: Upgraded error logging emojis to prevent visual confusion:
+    - `☢️  RARE ERROR`: For unexpected internal bugs (assertion failures, crashes).
+    - `⛔️ UPSTREAM ERROR`: For external tool failures (cjxl/ffmpeg exit codes).
 - **Image Intelligence**:
   - **EXR Detection**: Advanced attribute parsing for `OpenEXR` compression types (NONE/RLE/ZIPS/ZIP/PIZ for lossless; DWAA/DWAB etc. for lossy).
   - **JP2 Improvements**: Robust wavelet transform analysis (9/7 irreversible vs 5/3 reversible) via COD/COC marker scanning for precise lossy/lossless detection.
