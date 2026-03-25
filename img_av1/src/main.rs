@@ -708,7 +708,11 @@ fn dispatch_animated_conversion(
     let is_apple_native = matches!(format, "HEIC" | "HEIF");
 
     if is_modern_animated && !is_lossless {
-        let skip = if config.apple_compat { is_apple_native } else { true };
+        let skip = if config.apple_compat {
+            is_apple_native
+        } else {
+            true
+        };
         if skip {
             copy_original_if_adjacent_mode(input, config)?;
             return Ok(shared_utils::ConversionResult::skipped_custom(
@@ -730,13 +734,15 @@ fn dispatch_animated_conversion(
         false
     } else {
         shared_utils::probe_video(input).map_or(true, |p| {
-            shared_utils::gif_meta_from_probe_with_path(&p, analysis.file_size, input).is_none_or(|mut meta| {
-                if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
-                    meta.palette_size = pal;
-                    meta.app_extensions = exts;
-                }
-                shared_utils::should_keep_as_gif(&meta)
-            })
+            shared_utils::gif_meta_from_probe_with_path(&p, analysis.file_size, input).is_none_or(
+                |mut meta| {
+                    if let Ok((pal, exts)) = shared_utils::scan_gif_headers(input) {
+                        meta.palette_size = pal;
+                        meta.app_extensions = exts;
+                    }
+                    shared_utils::should_keep_as_gif(&meta)
+                },
+            )
         })
     };
 
@@ -749,10 +755,16 @@ fn dispatch_animated_conversion(
             "meme_score_keep",
         ))
     } else if is_lossless {
-        shared_utils::progress_mode::emit_stderr(&format!("🔄 Animated {format}→AV1 MP4 (Lossless, {duration:.1}s): {}", input.display()));
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "🔄 Animated {format}→AV1 MP4 (Lossless, {duration:.1}s): {}",
+            input.display()
+        ));
         Ok(convert_to_av1_mp4(input, options)?)
     } else {
-        shared_utils::progress_mode::emit_stderr(&format!("🔄 Animated {format}→AV1 MP4 (SMART QUALITY, {duration:.1}s): {}", input.display()));
+        shared_utils::progress_mode::emit_stderr(&format!(
+            "🔄 Animated {format}→AV1 MP4 (SMART QUALITY, {duration:.1}s): {}",
+            input.display()
+        ));
         Ok(convert_to_av1_mp4_matched(input, options, analysis)?)
     }
 }
@@ -765,7 +777,10 @@ fn dispatch_static_disguised_animated(
 ) -> anyhow::Result<shared_utils::ConversionResult> {
     use img_av1::lossless_converter::{convert_to_jxl, convert_to_jxl_matched};
 
-    let is_modern = matches!(analysis.format.as_str(), "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF");
+    let is_modern = matches!(
+        analysis.format.as_str(),
+        "WebP" | "AVIF" | "JXL" | "HEIC" | "HEIF"
+    );
     if is_modern && !analysis.is_lossless {
         copy_original_if_adjacent_mode(input, config)?;
         return Ok(shared_utils::ConversionResult::skipped_custom(

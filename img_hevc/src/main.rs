@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-
 #[derive(Parser)]
 #[command(name = "imgquality")]
 #[command(version, about = "Image quality analyzer and format upgrade tool", long_about = None)]
@@ -626,10 +625,6 @@ fn auto_convert_single_file(
         quality_label: Some(quality_label),
     };
 
-
-
-
-
     let result = if analysis.is_animated {
         dispatch_animated_conversion(input, &analysis, &options, config)?
     } else {
@@ -880,7 +875,6 @@ fn dispatch_static_disguised_animated(
         analysis.hdr_info.as_ref(),
     )?)
 }
-
 
 fn auto_convert_directory(
     input: &Path,
