@@ -13,8 +13,8 @@ echo "=========================================================="
 echo "🎬 1. Generating synthetic HDR10+ video (test_hdr10plus_input.mkv)..."
 echo "=========================================================="
 ffmpeg -y -hide_banner -loglevel warning -f lavfi -i color=c=blue:s=320x240:r=24:d=2 \
-  -c:v libx265 -x265-params "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:dhdr10-info=$JSON_TEMPLATE" \
-  -pix_fmt yuv420p10le "$INPUT_MKV"
+	-c:v libx265 -x265-params "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:dhdr10-info=$JSON_TEMPLATE" \
+	-pix_fmt yuv420p10le "$INPUT_MKV"
 
 echo ""
 echo "=========================================================="
@@ -32,8 +32,8 @@ echo "=========================================================="
 # The output should be test_hdr10plus_input.MOV in the output dir because of --apple-compat
 OUTPUT_MKV="$OUTPUT_DIR/test_hdr10plus_input.MOV"
 if [ ! -f "$OUTPUT_MKV" ]; then
-    echo "❌ modern_format_boost output file not found: $OUTPUT_MKV"
-    exit 1
+	echo "❌ modern_format_boost output file not found: $OUTPUT_MKV"
+	exit 1
 fi
 
 EXTRACTED_HEVC="$DIR/extracted_output.hevc"
@@ -46,12 +46,12 @@ echo "Running hdr10plus_tool extract on raw HEVC..."
 hdr10plus_tool extract -i "$EXTRACTED_HEVC" -o "$EXTRACTED_JSON"
 
 if [ -s "$EXTRACTED_JSON" ]; then
-    echo "✅ SUCCESS: HDR10+ dynamic metadata was successfully accessed by hdr10plus_tool in the final output!"
-    echo "Snippet of extracted JSON:"
-    head -n 10 "$EXTRACTED_JSON"
-    echo "Test successfully validated HDR10+ retention!"
-    exit 0
+	echo "✅ SUCCESS: HDR10+ dynamic metadata was successfully accessed by hdr10plus_tool in the final output!"
+	echo "Snippet of extracted JSON:"
+	head -n 10 "$EXTRACTED_JSON"
+	echo "Test successfully validated HDR10+ retention!"
+	exit 0
 else
-    echo "❌ FAILURE: hdr10plus_tool could not find HDR10+ metadata in the output."
-    exit 1
+	echo "❌ FAILURE: hdr10plus_tool could not find HDR10+ metadata in the output."
+	exit 1
 fi

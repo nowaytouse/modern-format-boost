@@ -16,9 +16,9 @@ TARGET_DIR="${1:-.}"
 BACKUP_DIR="$TARGET_DIR/.apple_photos_repair_backups"
 
 # Ensure required tools are installed
-if ! command -v exiftool &> /dev/null; then
-    echo "❌ Error: exiftool is required. Please install it (brew install exiftool)."
-    exit 1
+if ! command -v exiftool &>/dev/null; then
+	echo "❌ Error: exiftool is required. Please install it (brew install exiftool)."
+	exit 1
 fi
 
 echo "╔════════════════════════════════════════════════════════════════╗"
@@ -44,149 +44,149 @@ echo ""
 
 # Find all files, excluding backup dir and hidden files
 while IFS= read -r file; do
-    # Skip if file is in backup dir
-    if [[ "$file" == *"$BACKUP_DIR"* ]]; then continue; fi
-    # Skip hidden files
-    if [[ "$(basename "$file")" == .* ]]; then continue; fi
+	# Skip if file is in backup dir
+	if [[ "$file" == *"$BACKUP_DIR"* ]]; then continue; fi
+	# Skip hidden files
+	if [[ "$(basename "$file")" == .* ]]; then continue; fi
 
-    # Basic info
-    filename=$(basename "$file")
-    
-    # Calculate relative directory path from TARGET_DIR
-    abs_file=$(realpath "$file")
-    abs_target=$(realpath "$TARGET_DIR")
-    rel_path="${abs_file#$abs_target/}"
-    rel_dir=$(dirname "$rel_path")
-    
-    # 1. Identification
-    # Get current extension
-    ext="${filename##*.}"
-    ext=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
-    
-    # Get real format via magic bytes
-    real_ext=$(exiftool -s -S -FileTypeExtension "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
-    
-    if [[ -z "$real_ext" ]]; then continue; fi
-    
-    total=$((total + 1))
-    needs_repair=0
-    reason=""
-    is_mismatch=0
-    check_meta=0
+	# Basic info
+	filename=$(basename "$file")
 
-    # Check 1: Extension Mismatch
-    if [[ "$ext" != "$real_ext" ]]; then
-        # Allow jpg <-> jpeg
-        if [[ ("$ext" == "jpg" && "$real_ext" == "jpeg") || ("$ext" == "jpeg" && "$real_ext" == "jpg") ]]; then
-            is_mismatch=0
-        else
-            is_mismatch=1
-            needs_repair=1
-            reason+="[Bad Extension: .$ext -> .$real_ext] "
-        fi
-    fi
+	# Calculate relative directory path from TARGET_DIR
+	abs_file=$(realpath "$file")
+	abs_target=$(realpath "$TARGET_DIR")
+	rel_path="${abs_file#$abs_target/}"
+	rel_dir=$(dirname "$rel_path")
 
-    # Check 2: Metadata Corruption / "Nuclear Rebuild" Candidates
-    if [[ "$real_ext" == "jxl" || "$real_ext" == "webp" || "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]]; then
-        # v8.2: Always enable metadata rebuild for these formats to ensure compatibility.
-        check_meta=1
-        needs_repair=1
-        
-        # Check for specific structural issues
-        warnings=$(exiftool -validate -warning "$file" 2>&1 || true)
-        if echo "$warnings" | grep -q -E "JPEG EOI marker not found|JPEG format error|Corrupted Brotli"; then
-             reason+="[Structure/Format Error] "
-        else
-             reason+="[Deep Clean] "
-        fi
-        
-        if [[ "$is_mismatch" -eq 1 ]]; then
-             reason+="[Extension Mismatch] "
-        fi
-    fi
+	# 1. Identification
+	# Get current extension
+	ext="${filename##*.}"
+	ext=$(echo "$ext" | tr '[:upper:]' '[:lower:]')
 
-    if [[ $needs_repair -eq 1 ]]; then
-        echo "🔧 Fixing: $filename"
-        echo "   Reason: $reason"
-        
-        # Prepare Backup Path
-        if [[ "$rel_dir" == "." ]]; then
-            backup_subdir="$BACKUP_DIR"
-        else
-            backup_subdir="$BACKUP_DIR/$rel_dir"
-        fi
-        
-        mkdir -p "$backup_subdir"
-        backup_file="$backup_subdir/$filename"
-        
-        # Copy to backup (preserving attributes)
-        cp -p "$file" "$backup_file"
-        
-        # Save original timestamps
-        mtime=$(stat -f%m "$file")
-        btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
+	# Get real format via magic bytes
+	real_ext=$(exiftool -s -S -FileTypeExtension "$file" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")
 
-        current_file="$file"
+	if [[ -z "$real_ext" ]]; then continue; fi
 
-        # Step A: Fix Extension (Renaming)
-        if [[ $is_mismatch -eq 1 ]]; then
-            new_filename="${filename%.*}.$real_ext"
-            new_file_path="$(dirname "$file")/$new_filename"
-            
-            mv "$file" "$new_file_path"
-            current_file="$new_file_path"
-            
-            echo "   📝 Renamed to: $new_filename"
-            fixed_ext=$((fixed_ext + 1))
-        fi
+	total=$((total + 1))
+	needs_repair=0
+	reason=""
+	is_mismatch=0
+	check_meta=0
 
-        # Step B: Nuclear Metadata Rebuild
-        if [[ $check_meta -eq 1 ]]; then
-             if [[ "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]]; then
-                 if echo "$warnings" | grep -q -E "JPEG EOI marker not found|JPEG format error"; then
-                     if command -v magick &> /dev/null; then
-                         echo "   🧱 Structure broken, rebuilding with ImageMagick..."
-                         magick "$current_file" "$current_file" 2>/dev/null || true
-                     fi
-                 fi
-             fi
-             
-             # ExifTool Rebuild
-             if exiftool -quiet -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$current_file" 2>/dev/null; then
-                 echo "   ✨ Metadata Rebuilt"
-                 fixed_meta=$((fixed_meta + 1))
-             else
-                 # Fallback
-                 if [[ "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]] && command -v magick &> /dev/null; then
-                      echo "   ⚠️ ExifTool failed. Attempting forced structural repair with ImageMagick..."
-                      magick "$current_file" "$current_file" 2>/dev/null || true
-                      
-                      if exiftool -quiet -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$current_file" 2>/dev/null; then
-                          echo "   ✨ Metadata Rebuilt (after structural repair)"
-                          fixed_meta=$((fixed_meta + 1))
-                      else
-                          echo "   ❌ Failed to rebuild metadata (check backup)"
-                          failed=$((failed + 1))
-                      fi
-                 else
-                      echo "   ❌ ExifTool failed (check backup)"
-                      failed=$((failed + 1))
-                 fi
-             fi
-        fi
-        
-        # Step C: Restore Timestamps & Attributes
-        for attr in com.apple.metadata:kMDItemWhereFroms com.apple.metadata:_kMDItemUserTags com.apple.FinderInfo com.apple.metadata:kMDItemDateAdded; do
-            val=$(xattr -px "$attr" "$backup_file" 2>/dev/null || echo "")
-            [[ -n "$val" ]] && xattr -wx "$attr" "$val" "$current_file" 2>/dev/null || true
-        done
-        
-        touch -mt "$(date -r "$mtime" +%Y%m%d%H%M.%S)" "$current_file" 2>/dev/null || true
-        [[ "$btime" != "0" ]] && SetFile -d "$(date -r "$btime" +%m/%d/%Y\ %H:%M:%S)" "$current_file" 2>/dev/null || true
-        
-        echo "   ✅ Done"
-        echo ""
-    fi
+	# Check 1: Extension Mismatch
+	if [[ "$ext" != "$real_ext" ]]; then
+		# Allow jpg <-> jpeg
+		if [[ ("$ext" == "jpg" && "$real_ext" == "jpeg") || ("$ext" == "jpeg" && "$real_ext" == "jpg") ]]; then
+			is_mismatch=0
+		else
+			is_mismatch=1
+			needs_repair=1
+			reason+="[Bad Extension: .$ext -> .$real_ext] "
+		fi
+	fi
+
+	# Check 2: Metadata Corruption / "Nuclear Rebuild" Candidates
+	if [[ "$real_ext" == "jxl" || "$real_ext" == "webp" || "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]]; then
+		# v8.2: Always enable metadata rebuild for these formats to ensure compatibility.
+		check_meta=1
+		needs_repair=1
+
+		# Check for specific structural issues
+		warnings=$(exiftool -validate -warning "$file" 2>&1 || true)
+		if echo "$warnings" | grep -q -E "JPEG EOI marker not found|JPEG format error|Corrupted Brotli"; then
+			reason+="[Structure/Format Error] "
+		else
+			reason+="[Deep Clean] "
+		fi
+
+		if [[ "$is_mismatch" -eq 1 ]]; then
+			reason+="[Extension Mismatch] "
+		fi
+	fi
+
+	if [[ $needs_repair -eq 1 ]]; then
+		echo "🔧 Fixing: $filename"
+		echo "   Reason: $reason"
+
+		# Prepare Backup Path
+		if [[ "$rel_dir" == "." ]]; then
+			backup_subdir="$BACKUP_DIR"
+		else
+			backup_subdir="$BACKUP_DIR/$rel_dir"
+		fi
+
+		mkdir -p "$backup_subdir"
+		backup_file="$backup_subdir/$filename"
+
+		# Copy to backup (preserving attributes)
+		cp -p "$file" "$backup_file"
+
+		# Save original timestamps
+		mtime=$(stat -f%m "$file")
+		btime=$(stat -f%B "$file" 2>/dev/null || echo "0")
+
+		current_file="$file"
+
+		# Step A: Fix Extension (Renaming)
+		if [[ $is_mismatch -eq 1 ]]; then
+			new_filename="${filename%.*}.$real_ext"
+			new_file_path="$(dirname "$file")/$new_filename"
+
+			mv "$file" "$new_file_path"
+			current_file="$new_file_path"
+
+			echo "   📝 Renamed to: $new_filename"
+			fixed_ext=$((fixed_ext + 1))
+		fi
+
+		# Step B: Nuclear Metadata Rebuild
+		if [[ $check_meta -eq 1 ]]; then
+			if [[ "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]]; then
+				if echo "$warnings" | grep -q -E "JPEG EOI marker not found|JPEG format error"; then
+					if command -v magick &>/dev/null; then
+						echo "   🧱 Structure broken, rebuilding with ImageMagick..."
+						magick "$current_file" "$current_file" 2>/dev/null || true
+					fi
+				fi
+			fi
+
+			# ExifTool Rebuild
+			if exiftool -quiet -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$current_file" 2>/dev/null; then
+				echo "   ✨ Metadata Rebuilt"
+				fixed_meta=$((fixed_meta + 1))
+			else
+				# Fallback
+				if [[ "$real_ext" == "jpg" || "$real_ext" == "jpeg" ]] && command -v magick &>/dev/null; then
+					echo "   ⚠️ ExifTool failed. Attempting forced structural repair with ImageMagick..."
+					magick "$current_file" "$current_file" 2>/dev/null || true
+
+					if exiftool -quiet -all= -tagsfromfile @ -all:all -unsafe -icc_profile -overwrite_original "$current_file" 2>/dev/null; then
+						echo "   ✨ Metadata Rebuilt (after structural repair)"
+						fixed_meta=$((fixed_meta + 1))
+					else
+						echo "   ❌ Failed to rebuild metadata (check backup)"
+						failed=$((failed + 1))
+					fi
+				else
+					echo "   ❌ ExifTool failed (check backup)"
+					failed=$((failed + 1))
+				fi
+			fi
+		fi
+
+		# Step C: Restore Timestamps & Attributes
+		for attr in com.apple.metadata:kMDItemWhereFroms com.apple.metadata:_kMDItemUserTags com.apple.FinderInfo com.apple.metadata:kMDItemDateAdded; do
+			val=$(xattr -px "$attr" "$backup_file" 2>/dev/null || echo "")
+			[[ -n "$val" ]] && xattr -wx "$attr" "$val" "$current_file" 2>/dev/null || true
+		done
+
+		touch -mt "$(date -r "$mtime" +%Y%m%d%H%M.%S)" "$current_file" 2>/dev/null || true
+		[[ "$btime" != "0" ]] && SetFile -d "$(date -r "$btime" +%m/%d/%Y\ %H:%M:%S)" "$current_file" 2>/dev/null || true
+
+		echo "   ✅ Done"
+		echo ""
+	fi
 
 done < <(find "$TARGET_DIR" -type f 2>/dev/null)
 

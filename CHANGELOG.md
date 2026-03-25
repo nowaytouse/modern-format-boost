@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.101] - 2026-03-25
+
+### 🛠️ Code Quality
+- **Script Enhancements**: Enhanced `scripts/check_all.sh`:
+  - Added `--fix` flag for automatic code formatting and clippy fixes
+  - Removed unused variables in `advisory_db_writable()`
+  - Added null check in shell file iteration
+  - Translated Chinese comments to English
+  - Fixed parentheses in test names
+  - Improved regex escaping
+- **Rust Performance**: Applied 7 FMA optimizations in `gpu_accel.rs` and `image_quality_detector.rs`
+- **Code Cleanup**: Made `CacheStatistics::total_records()` const fn
+
 ## [0.10.100] - 2026-03-25
 
 ### 🧪 Compatibility & Maintenance
