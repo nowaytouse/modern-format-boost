@@ -10,7 +10,19 @@ ignore = [
 
 [licenses]
 # MIT, Apache-2.0, and Zlib are standard and allowed for this project
-allow = ["MIT", "Apache-2.0", "Zlib"]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Zlib",
+    # Common media/image dependency licenses
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    "NCSA",
+    "IJG",
+    "Unicode-3.0",
+]
 confidence-threshold = 0.8
 
 [bans]

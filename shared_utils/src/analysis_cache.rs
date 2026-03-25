@@ -47,7 +47,7 @@ pub struct CacheStatistics {
 
 impl CacheStatistics {
     #[must_use]
-    pub fn total_records(&self) -> usize {
+    pub const fn total_records(&self) -> usize {
         self.analysis_records + self.quality_records + self.video_records
     }
 
@@ -1509,6 +1509,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_cache_metadata_rigor() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let db_path = temp_dir.path().join("test_cache.db");

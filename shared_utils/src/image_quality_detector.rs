@@ -466,7 +466,8 @@ fn calculate_contrast(rgba: &[u8], width: u32, height: u32) -> f64 {
     }
 
     let mean = sum as f64 / sample_count as f64;
-    let variance = (sq_sum as f64 / sample_count as f64) - (mean * mean);
+    let mean_sq = sq_sum as f64 / sample_count as f64;
+    let variance = mean.mul_add(-mean, mean_sq);
     let std_dev = variance.sqrt();
 
     (std_dev / 80.0).min(1.0)

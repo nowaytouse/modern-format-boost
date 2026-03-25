@@ -359,7 +359,7 @@ impl GpuEncoder {
     pub fn get_crf_args(&self, crf: f32) -> Vec<String> {
         if self.supports_crf {
             let quality_value = if self.gpu_type == GpuType::Apple {
-                (100.0 - crf * 2.0).clamp(1.0, 100.0)
+                crf.mul_add(-2.0, 100.0).clamp(1.0, 100.0)
             } else {
                 crf.clamp(f32::from(self.crf_range.0), f32::from(self.crf_range.1))
             };
@@ -993,13 +993,13 @@ pub fn calculate_quality_score(
         output_size as f64 / input_size as f64
     };
 
-    let (ssim_weight, size_weight) = match phase {
+    let (ssim_weight, size_weight): (f64, f64) = match phase {
         SearchPhase::Gpu => (0.4, 0.6),
         SearchPhase::Cpu => (0.7, 0.3),
     };
 
     let size_score = (1.0 - compression_ratio).max(0.0);
-    let combined_score = ssim_weight * ssim + size_weight * size_score;
+    let combined_score = ssim_weight.mul_add(ssim, size_weight * size_score);
 
     QualityScore {
         ssim,
@@ -1397,7 +1397,7 @@ impl PsnrSsimMapper {
                     return Some(f64::midpoint(ssim1, ssim2));
                 }
                 let ratio = (psnr - psnr1) / denom;
-                let predicted_ssim = ssim1 + ratio * (ssim2 - ssim1);
+                let predicted_ssim = ratio.mul_add(ssim2 - ssim1, ssim1);
                 return Some(predicted_ssim);
             }
         }
@@ -1410,7 +1410,7 @@ impl PsnrSsimMapper {
                 return Some(ssim1);
             }
             let slope = (ssim2 - ssim1) / denom;
-            Some(ssim1 + slope * (psnr - psnr1))
+            Some(slope.mul_add(psnr - psnr1, ssim1))
         } else {
             let n = points.len();
             let (psnr1, ssim1) = points[n - 2];
@@ -1420,7 +1420,7 @@ impl PsnrSsimMapper {
                 return Some(ssim2);
             }
             let slope = (ssim2 - ssim1) / denom;
-            Some(ssim2 + slope * (psnr - psnr2))
+            Some(slope.mul_add(psnr - psnr2, ssim2))
         }
     }
 

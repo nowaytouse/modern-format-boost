@@ -8,11 +8,11 @@ echo "🔍 Starting HDR10+ Metadata Injection Logic Verification..."
 cargo test -p vid-hevc --lib tests::test_hdr10plus_injection_logic -- --nocapture
 
 if [ $? -eq 0 ]; then
-    echo ""
-    echo "🎉 SUCCESS: HDR10+ metadata injection logic is confirmed and reliable."
-    echo "The x265-params are correctly constructed with :dhdr10-info=<path> when HDR10+ is detected."
+	echo ""
+	echo "🎉 SUCCESS: HDR10+ metadata injection logic is confirmed and reliable."
+	echo "The x265-params are correctly constructed with :dhdr10-info=<path> when HDR10+ is detected."
 else
-    echo ""
-    echo "❌ FAILURE: Logic verification failed. Please check the test output above."
-    exit 1
+	echo ""
+	echo "❌ FAILURE: Logic verification failed. Please check the test output above."
+	exit 1
 fi

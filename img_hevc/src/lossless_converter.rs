@@ -284,9 +284,7 @@ pub fn convert_to_jxl(
                 let retry_out = retry_cmd.output();
                 if let Ok(ref o) = retry_out {
                     if o.status.success() {
-                        shared_utils::progress_mode::emit_stderr(
-                            "   ✅ ICC patch retry succeeded",
-                        );
+                        shared_utils::progress_mode::emit_stderr("   ✅ ICC patch retry succeeded");
                     } else {
                         let line = format!(
                             "   ⚠️ ICC patch retry also failed: {}",
