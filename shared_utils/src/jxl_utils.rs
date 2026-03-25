@@ -173,7 +173,8 @@ pub fn convert_to_temp_png(
 /// True when cjxl failed due to grayscale PNG + ICC profile (libpng: "RGB color space not permitted on grayscale").
 /// Only then do we retry with -strip to avoid metadata loss in the general case.
 /// Enhanced to catch more variants of the error message.
-fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
+#[must_use]
+pub fn is_grayscale_icc_cjxl_error(stderr: &str) -> bool {
     let s = stderr.to_lowercase();
     // Match the specific pattern: ICC profile color space mismatch on grayscale PNG
     // Example: "libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG"

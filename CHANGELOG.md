@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 **Version scheme:** As of this release, the project uses **0.8.x** versioning (replacing the previous 8.x scheme).
 
 
+## [0.10.103] - 2026-03-26
+
+### 🐛 Bug Fixes
+- **Grayscale ICC Early Detection**: Optimized error handling for JPEG files with mismatched ICC profiles (RGB profile on grayscale image). Previously, these files would fail on the first `cjxl` attempt and only succeed after entering the ImageMagick fallback pipeline. Now, the system immediately detects the grayscale ICC mismatch error and routes directly to the ImageMagick fallback with `-strip` retry logic, eliminating the unnecessary FFmpeg pipeline attempt. This reduces processing time and log noise for these edge cases.
+  - Affected files: 2 occurrences in 12k image batch (IMG_8321.JPG and similar)
+  - Error pattern: `libpng warning: iCCP: profile 'icc': 'RGB ': RGB color space not permitted on grayscale PNG` + `Getting pixel data failed`
+  - Made `is_grayscale_icc_cjxl_error()` public in `shared_utils::jxl_utils` for reuse across crates
+
 ## [0.10.102] - 2026-03-26
 
 ### 🛠️ Hardening & Technical Debt Cleanup
