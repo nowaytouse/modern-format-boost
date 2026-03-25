@@ -62,7 +62,7 @@ pub fn calculate_psnr(original: &DynamicImage, converted: &DynamicImage) -> Opti
             let r_diff = f64::from(p1[0]) - f64::from(p2[0]);
             let g_diff = f64::from(p1[1]) - f64::from(p2[1]);
             let b_diff = f64::from(p1[2]) - f64::from(p2[2]);
-            r_diff * r_diff + g_diff * g_diff + b_diff * b_diff
+            b_diff.mul_add(b_diff, r_diff.mul_add(r_diff, g_diff * g_diff))
         })
         .sum();
 
@@ -158,7 +158,7 @@ fn calculate_window_ssim(
         }
     }
 
-    let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
+    let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
     let denominator = (mean_x * mean_x + mean_y * mean_y + C1) * (var_x + var_y + C2);
 
     numerator / denominator
@@ -193,12 +193,12 @@ fn calculate_ssim_simple(original: &DynamicImage, converted: &DynamicImage) -> O
     let mean_y = total_sum_y / n;
     // Unbiased variance/covariance (Wang et al. sample estimator; consistent with windowed path).
     let n1 = n - 1.0;
-    let var_x = (sum_xx - n * mean_x * mean_x) / n1;
-    let var_y = (sum_yy - n * mean_y * mean_y) / n1;
-    let cov_xy = (products_sum_xy - n * mean_x * mean_y) / n1;
+    let var_x = (n * mean_x).mul_add(-mean_x, sum_xx) / n1;
+    let var_y = (n * mean_y).mul_add(-mean_y, sum_yy) / n1;
+    let cov_xy = (n * mean_x).mul_add(-mean_y, products_sum_xy) / n1;
 
-    let numerator = (2.0 * mean_x * mean_y + C1) * (2.0 * cov_xy + C2);
-    let denominator = (mean_x.powi(2) + mean_y.powi(2) + C1) * (var_x + var_y + C2);
+    let numerator = (2.0 * mean_x).mul_add(mean_y, C1) * 2.0f64.mul_add(cov_xy, C2);
+    let denominator = (mean_y.mul_add(mean_y, mean_x.powi(2)) + C1) * (var_x + var_y + C2);
     if denominator < 1e-10 {
         return Some(1.0);
     }

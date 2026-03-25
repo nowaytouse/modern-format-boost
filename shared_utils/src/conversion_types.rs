@@ -12,22 +12,22 @@ pub enum TargetVideoFormat {
 
 impl TargetVideoFormat {
     #[must_use]
-    pub fn extension(&self) -> &str {
+    pub const fn extension(&self) -> &str {
         match self {
-            TargetVideoFormat::Ffv1Mkv | TargetVideoFormat::HevcLosslessMkv => "MKV",
-            TargetVideoFormat::Av1Mp4 | TargetVideoFormat::HevcMp4 => "MP4",
-            TargetVideoFormat::Skip => "",
+            Self::Ffv1Mkv | Self::HevcLosslessMkv => "MKV",
+            Self::Av1Mp4 | Self::HevcMp4 => "MP4",
+            Self::Skip => "",
         }
     }
 
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
-            TargetVideoFormat::Ffv1Mkv => "FFV1 MKV (Archival)",
-            TargetVideoFormat::Av1Mp4 => "AV1 MP4 (High Quality)",
-            TargetVideoFormat::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
-            TargetVideoFormat::HevcMp4 => "HEVC MP4 (High Quality)",
-            TargetVideoFormat::Skip => "Skip",
+            Self::Ffv1Mkv => "FFV1 MKV (Archival)",
+            Self::Av1Mp4 => "AV1 MP4 (High Quality)",
+            Self::HevcLosslessMkv => "HEVC Lossless MKV (Archival)",
+            Self::HevcMp4 => "HEVC MP4 (High Quality)",
+            Self::Skip => "Skip",
         }
     }
 }
@@ -92,7 +92,7 @@ impl Default for ConversionConfig {
 
 impl ConversionConfig {
     #[must_use]
-    pub fn should_delete_original(&self) -> bool {
+    pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
 }

@@ -51,35 +51,35 @@ pub enum SearchPhase {
 
 impl SearchPhase {
     #[must_use]
-    pub fn step_size(&self) -> f32 {
+    pub const fn step_size(&self) -> f32 {
         match self {
-            SearchPhase::GpuCoarse => 4.0,
-            SearchPhase::GpuMedium => 1.0,
-            SearchPhase::GpuFine => FINE_STEP,
-            SearchPhase::GpuUltraFine => ULTRA_FINE_STEP,
-            SearchPhase::CpuFinest => CPU_FINEST_STEP,
+            Self::GpuCoarse => 4.0,
+            Self::GpuMedium => 1.0,
+            Self::GpuFine => FINE_STEP,
+            Self::GpuUltraFine => ULTRA_FINE_STEP,
+            Self::CpuFinest => CPU_FINEST_STEP,
         }
     }
 
     #[must_use]
-    pub fn is_gpu(&self) -> bool {
+    pub const fn is_gpu(&self) -> bool {
         matches!(
             self,
-            SearchPhase::GpuCoarse
-                | SearchPhase::GpuMedium
-                | SearchPhase::GpuFine
-                | SearchPhase::GpuUltraFine
+            Self::GpuCoarse
+                | Self::GpuMedium
+                | Self::GpuFine
+                | Self::GpuUltraFine
         )
     }
 
     #[must_use]
-    pub fn next(&self) -> Option<SearchPhase> {
+    pub const fn next(&self) -> Option<Self> {
         match self {
-            SearchPhase::GpuCoarse => Some(SearchPhase::GpuMedium),
-            SearchPhase::GpuMedium => Some(SearchPhase::GpuFine),
-            SearchPhase::GpuFine => Some(SearchPhase::GpuUltraFine),
-            SearchPhase::GpuUltraFine => Some(SearchPhase::CpuFinest),
-            SearchPhase::CpuFinest => None,
+            Self::GpuCoarse => Some(Self::GpuMedium),
+            Self::GpuMedium => Some(Self::GpuFine),
+            Self::GpuFine => Some(Self::GpuUltraFine),
+            Self::GpuUltraFine => Some(Self::CpuFinest),
+            Self::CpuFinest => None,
         }
     }
 }
@@ -108,7 +108,7 @@ impl Default for ThreePhaseSearch {
 
 impl ThreePhaseSearch {
     #[must_use]
-    pub fn step_for_phase(&self, phase: SearchPhase) -> f32 {
+    pub const fn step_for_phase(&self, phase: SearchPhase) -> f32 {
         match phase {
             SearchPhase::GpuCoarse => self.gpu_coarse_step,
             SearchPhase::GpuMedium => self.gpu_medium_step,

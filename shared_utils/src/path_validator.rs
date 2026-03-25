@@ -19,19 +19,19 @@ pub enum PathValidationError {
 impl fmt::Display for PathValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PathValidationError::DangerousCharacter { character, path } => {
+            Self::DangerousCharacter { character, path } => {
                 write!(
                     f,
                     "❌ PATH SECURITY ERROR: Dangerous character '{character}' found in path: {path}"
                 )
             }
-            PathValidationError::EmptyPath => {
+            Self::EmptyPath => {
                 write!(f, "❌ PATH SECURITY ERROR: Empty path provided")
             }
-            PathValidationError::NullByte(path) => {
+            Self::NullByte(path) => {
                 write!(f, "❌ PATH SECURITY ERROR: Null byte found in path: {path}")
             }
-            PathValidationError::InputOutputConflict { path } => {
+            Self::InputOutputConflict { path } => {
                 write!(
                     f,
                     "❌ PATH CONFLICT ERROR: Input and output paths are identical: {path}"

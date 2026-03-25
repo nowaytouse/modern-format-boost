@@ -387,7 +387,7 @@ impl Default for ConvertOptions {
 
 impl ConvertOptions {
     #[must_use]
-    pub fn should_delete_original(&self) -> bool {
+    pub const fn should_delete_original(&self) -> bool {
         self.delete_original || self.in_place
     }
 
@@ -401,7 +401,7 @@ impl ConvertOptions {
     }
 
     #[must_use]
-    pub fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
+    pub const fn explore_mode(&self) -> crate::video_explorer::ExploreMode {
         // flag_mode() result is irrelevant — always use PreciseQualityMatchWithCompression
         crate::video_explorer::ExploreMode::PreciseQualityMatchWithCompression
     }
@@ -628,12 +628,13 @@ pub fn post_conversion_actions(
 // --- Atomic output (TOCTOU mitigation) ---
 
 /// Guard that removes the temp file on drop if it still exists (e.g. conversion failed before commit).
+///
 /// Hold this for the lifetime of conversion; after successful `commit_temp_to_output` the file is gone so drop is a no-op.
 pub struct TempOutputGuard(PathBuf);
 
 impl TempOutputGuard {
     #[must_use]
-    pub fn new(path: PathBuf) -> Self {
+    pub const fn new(path: PathBuf) -> Self {
         Self(path)
     }
 }

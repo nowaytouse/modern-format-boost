@@ -26,9 +26,9 @@ pub enum ErrorCategory {
 impl fmt::Display for ErrorCategory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ErrorCategory::Recoverable => write!(f, "RECOVERABLE"),
-            ErrorCategory::Fatal => write!(f, "FATAL"),
-            ErrorCategory::Optional => write!(f, "OPTIONAL"),
+            Self::Recoverable => write!(f, "RECOVERABLE"),
+            Self::Fatal => write!(f, "FATAL"),
+            Self::Optional => write!(f, "OPTIONAL"),
         }
     }
 }

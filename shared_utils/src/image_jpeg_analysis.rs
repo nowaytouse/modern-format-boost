@@ -51,7 +51,7 @@ fn generate_standard_qt(quality: u8, base_table: &[[u16; 8]; 8]) -> [[u16; 8]; 8
     let scale = if q < 50.0 {
         5000.0 / q
     } else {
-        200.0 - 2.0 * q
+        2.0f64.mul_add(-q, 200.0)
     };
 
     let mut result = [[0u16; 8]; 8];
@@ -157,7 +157,7 @@ fn estimate_quality_precise(
         } else {
             -1.0
         };
-        f64::from(best_quality) + direction * ratio * 0.5
+        (direction * ratio).mul_add(0.5, f64::from(best_quality))
     } else {
         f64::from(best_quality)
     };
@@ -199,11 +199,11 @@ fn calculate_confidence(
         return 0.98;
     }
 
-    let luma_confidence = 1.0 / (1.0 + luma_estimate.weighted_sse * 0.01);
+    let luma_confidence = 1.0 / luma_estimate.weighted_sse.mul_add(0.01, 1.0);
 
     if let Some(chroma) = chroma_estimate {
-        let chroma_confidence = 1.0 / (1.0 + chroma.weighted_sse * 0.01);
-        (0.7 * luma_confidence + 0.3 * chroma_confidence).clamp(0.0, 1.0)
+        let chroma_confidence = 1.0 / chroma.weighted_sse.mul_add(0.01, 1.0);
+        0.7f64.mul_add(luma_confidence, 0.3 * chroma_confidence).clamp(0.0, 1.0)
     } else {
         luma_confidence.clamp(0.0, 1.0)
     }
@@ -386,7 +386,7 @@ pub fn analyze_jpeg_quality(data: &[u8]) -> Result<JpegQualityAnalysis, String> 
             luma_estimate.quality
         } else if (i16::from(luma_estimate.quality) - i16::from(chroma.quality)).abs() <= 2 {
             let weighted =
-                luma_estimate.interpolated_quality * 0.7 + chroma.interpolated_quality * 0.3;
+                luma_estimate.interpolated_quality.mul_add(0.7, chroma.interpolated_quality * 0.3);
             weighted.round() as u8
         } else {
             luma_estimate.quality

@@ -174,6 +174,7 @@ fn fmt_stats_line_final(msg: &str) -> String {
 }
 
 /// Set the current thread's log prefix (e.g. file name or short ID). Cleared on drop of `LogContextGuard`.
+///
 /// Truncates long names to `LOG_PREFIX_MAX_DISPLAY` chars, preserving the file extension:
 ///   "`Image_103999006594198.jpeg`" → "`Image_103999006…jpeg`"
 ///   "`Cache_4ac28036da7d11be.jpg`" → "`Cache_4ac28036da7…jpg`"
@@ -323,6 +324,7 @@ pub fn set_default_run_log_file(binary_name: &str) -> std::io::Result<()> {
 }
 
 /// Write a session header line to the run log so the file clearly records that full output is being captured.
+///
 /// Call after `set_log_file` (or from `set_default_run_log_file`). If `init_logging` already emitted a line, it is written here so the run log has it too.
 /// Respects log level (INFO): only written when level is INFO or more verbose.
 pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path::Path) {
@@ -341,6 +343,7 @@ pub fn write_run_log_session_header(program_name: &str, run_log_path: &std::path
 }
 
 /// Write one progress line to the run log so the log has the same "Running: HH:MM:SS  N/total  message" as the terminal.
+///
 /// Call whenever the progress bar is updated (e.g. after `set_position/set_message`) so the run log is complete.
 /// Respects log level (DEBUG): only written when level is DEBUG or TRACE.
 pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u64, message: &str) {
@@ -354,6 +357,7 @@ pub fn write_progress_line_to_run_log(elapsed_secs: u64, current: u64, total: u6
 }
 
 /// Write a line to the log file (no-op if no log file is configured).
+///
 /// Does NOT write to stderr — use `log_eprintln`! or `verbose_eprintln`! for dual output.
 /// Strips ANSI escape codes so file logs are plain text.
 /// Flushes after each write so log output is immediate (no loss on crash/kill).
@@ -380,6 +384,7 @@ pub fn write_to_log(line: &str) {
 }
 
 /// Write a line to the run log only when the configured log level allows this level (so level has real effect).
+///
 /// Use for status/info (`Level::Info`), progress (`Level::Debug`), verbose (`Level::Trace`). Errors use `write_to_log`.
 pub fn write_to_log_at_level(level: Level, line: &str) {
     if crate::logging::should_log(level) {
@@ -388,6 +393,7 @@ pub fn write_to_log_at_level(level: Level, line: &str) {
 }
 
 /// Write conversion failure to the run log file immediately (so failures are in the log, not only stderr).
+///
 /// Call this whenever a single-file conversion returns Err, so the log file has the full error for later inspection.
 /// Uses `Level::Error` so it is always written when level is WARN or ERROR (and any level includes errors).
 pub fn log_conversion_failure(path: &std::path::Path, error: &str) {
@@ -566,7 +572,7 @@ pub fn set_verbose_mode(v: bool) {
 }
 
 #[must_use]
-pub fn tracing_level_debug() -> Level {
+pub const fn tracing_level_debug() -> Level {
     Level::DEBUG
 }
 
@@ -575,6 +581,7 @@ pub fn is_verbose_mode() -> bool {
 }
 
 /// Print to stderr only when verbose mode is enabled.
+///
 /// Run log gets the line only when level allows (DEBUG: written at DEBUG/TRACE).
 /// When set via `set_log_context()`, the line is prefixed with [prefix] for concurrent file processing.
 #[macro_export]
@@ -874,7 +881,7 @@ fn format_video_stats_line(
     parts.join(&format!("{} ", colors::DIM))
 }
 
-fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
+const fn emit_combined_status_line(_img_ok: u64, _img_fail: u64) {
     // Deprecated: UI now relies on inline stats via get_current_stats_string() in ConversionResult
 }
 

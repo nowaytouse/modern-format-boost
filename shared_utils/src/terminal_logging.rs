@@ -16,13 +16,13 @@ pub struct ColorGuard {
 impl ColorGuard {
     /// Enables colors
     #[must_use]
-    pub fn enable() -> Self {
+    pub const fn enable() -> Self {
         Self { enabled: true }
     }
 
     /// Disables colors
     #[must_use]
-    pub fn disable() -> Self {
+    pub const fn disable() -> Self {
         Self { enabled: false }
     }
 
@@ -85,7 +85,7 @@ pub struct TerminalLogger {
 impl TerminalLogger {
     /// Creates a new terminal logger
     #[must_use]
-    pub fn new(use_colors: bool, debug_mode: bool) -> Self {
+    pub const fn new(use_colors: bool, debug_mode: bool) -> Self {
         Self {
             use_colors,
             debug_mode,

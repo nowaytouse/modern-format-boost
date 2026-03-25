@@ -167,6 +167,7 @@ fn set_time_attr(path: &Path, time: std::time::SystemTime, attr: u32) -> io::Res
 }
 
 /// Appends MFB branding to the macOS Finder comment (kMDItemFinderComment).
+///
 /// This uses `AppleScript` to ensure we interact properly with the Finder's database,
 /// as raw xattr writes for 'com.apple.metadata:kMDItemFinderComment' require
 /// complex binary plist encoding and may not trigger Spotlight index updates correctly.

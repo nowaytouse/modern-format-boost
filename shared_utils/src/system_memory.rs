@@ -208,7 +208,7 @@ pub fn get_available_disk_bytes(path: &std::path::Path) -> Option<u64> {
                 break p.to_path_buf();
             }
             if let Some(parent) = p.parent() {
-                p = parent
+                p = parent;
             } else {
                 warn!(path = %path.display(), "No existing ancestor found for disk-space probe");
                 return None;

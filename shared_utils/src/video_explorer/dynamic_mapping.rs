@@ -20,7 +20,7 @@ pub struct DynamicCrfMapper {
 
 impl DynamicCrfMapper {
     #[must_use]
-    pub fn new(input_size: u64) -> Self {
+    pub const fn new(input_size: u64) -> Self {
         Self {
             anchors: Vec::new(),
             input_size,

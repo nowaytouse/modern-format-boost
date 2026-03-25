@@ -6,7 +6,7 @@
 //! - Video format detection
 
 #[must_use]
-pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
+pub const fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
     let corrected_width = if width.is_multiple_of(2) {
         width
     } else {
@@ -24,7 +24,7 @@ pub fn ensure_even_dimensions(width: u32, height: u32) -> (u32, u32, bool) {
 
 /// Even dimensions by padding (no pixel loss). For odd width/height, pad to next even.
 #[must_use]
-pub fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
+pub const fn ensure_even_dimensions_pad(width: u32, height: u32) -> (u32, u32, bool) {
     let w = width + (width % 2);
     let h = height + (height % 2);
     let needs = w != width || h != height;
@@ -83,7 +83,7 @@ pub fn build_video_filter_chain(width: u32, height: u32, has_alpha: bool) -> Str
 }
 
 #[must_use]
-pub fn is_yuv420_compatible(width: u32, height: u32) -> bool {
+pub const fn is_yuv420_compatible(width: u32, height: u32) -> bool {
     width.is_multiple_of(2) && height.is_multiple_of(2)
 }
 

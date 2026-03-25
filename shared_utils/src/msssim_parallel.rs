@@ -29,7 +29,7 @@ pub struct MsssimResult {
 
 impl MsssimResult {
     #[must_use]
-    pub fn skipped() -> Self {
+    pub const fn skipped() -> Self {
         Self {
             y_score: 0.0,
             u_score: 0.0,
@@ -202,7 +202,7 @@ impl ParallelMsssimCalculator {
             .monitor_ffmpeg_process(&args, channel)
             .map_err(|e| AppError::Other(anyhow::anyhow!(e)));
 
-        if let Ok(()) = ms_ssim_result {
+        if matches!(ms_ssim_result, Ok(())) {
             progress_monitor.get_channel_score(channel).ok_or_else(|| {
                 eprintln!("❌ Failed to get {channel} channel score");
                 AppError::Other(anyhow::anyhow!("Failed to get {channel} channel score"))

@@ -46,7 +46,7 @@ pub struct ImageQualityAnalysis {
     pub perception: crate::types::VisualPerception,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ImageContentType {
     pub name: String,
 }
@@ -489,7 +489,7 @@ fn calculate_overall_complexity(
     texture_variance: f64,
     noise_level: f64,
 ) -> f64 {
-    (edge_density * 0.35 + color_diversity * 0.25 + texture_variance * 0.25 + noise_level * 0.15)
+    noise_level.mul_add(0.15, texture_variance.mul_add(0.25, edge_density.mul_add(0.35, color_diversity * 0.25)))
         .clamp(0.0, 1.0)
 }
 

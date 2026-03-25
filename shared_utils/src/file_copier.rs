@@ -55,7 +55,7 @@ pub struct CopyResult {
 
 impl CopyResult {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             total_files: 0,
             copied: 0,
@@ -366,7 +366,7 @@ pub struct FileStats {
 
 impl FileStats {
     #[must_use]
-    pub fn expected_output(&self) -> usize {
+    pub const fn expected_output(&self) -> usize {
         self.total - self.sidecars
     }
 }

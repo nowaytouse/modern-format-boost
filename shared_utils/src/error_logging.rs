@@ -23,7 +23,7 @@ pub enum ErrorSeverity {
 impl ErrorSeverity {
     /// Short label used in log lines (no color — for file logs)
     #[must_use]
-    pub fn label(&self) -> &'static str {
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::Critical => "[CRITICAL]",
             Self::Rare => "[RARE ERROR]",

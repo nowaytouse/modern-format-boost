@@ -90,7 +90,7 @@ pub struct XmpMerger {
 
 impl XmpMerger {
     #[must_use]
-    pub fn new(config: XmpMergerConfig) -> Self {
+    pub const fn new(config: XmpMergerConfig) -> Self {
         Self { config }
     }
 

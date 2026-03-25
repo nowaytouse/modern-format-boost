@@ -155,6 +155,7 @@ impl Visit for FieldVisitor<'_, '_> {
 static CURRENT_LOG_LEVEL: OnceLock<Level> = OnceLock::new();
 
 /// Returns true if an event at this level should be logged. Uses tracing order: TRACE > DEBUG > INFO > WARN > ERROR (more verbose = greater).
+///
 /// So config INFO passes INFO, WARN, ERROR; config TRACE passes all.
 pub fn should_log(level: Level) -> bool {
     match CURRENT_LOG_LEVEL.get() {
@@ -186,6 +187,7 @@ pub fn take_init_message_for_run_log() -> Option<String> {
 static INIT_MESSAGE_FOR_RUN_LOG: Mutex<Option<String>> = Mutex::new(None);
 
 /// Register a callback so that when tracing events are formatted, each line is also written to the run log.
+///
 /// Called by `progress_mode::set_log_file` so the run log gets complete output (all tracing + progress).
 pub fn register_run_log_forwarder(f: Box<dyn Fn(&str) + Send>) {
     let mut guard = RUN_LOG_FORWARDER.lock().unwrap_or_else(|err| {
@@ -314,7 +316,7 @@ struct StripAnsiWriter<W: Write + Send> {
 }
 
 impl<W: Write + Send> StripAnsiWriter<W> {
-    fn new(inner: W) -> Self {
+    const fn new(inner: W) -> Self {
         Self {
             buffer: Vec::new(),
             inner: Mutex::new(inner),
@@ -401,19 +403,19 @@ impl LogConfig {
     }
 
     #[must_use]
-    pub fn with_max_file_size(mut self, size: u64) -> Self {
+    pub const fn with_max_file_size(mut self, size: u64) -> Self {
         self.max_file_size = size;
         self
     }
 
     #[must_use]
-    pub fn with_max_files(mut self, count: usize) -> Self {
+    pub const fn with_max_files(mut self, count: usize) -> Self {
         self.max_files = count;
         self
     }
 
     #[must_use]
-    pub fn with_level(mut self, level: Level) -> Self {
+    pub const fn with_level(mut self, level: Level) -> Self {
         self.level = level;
         self
     }

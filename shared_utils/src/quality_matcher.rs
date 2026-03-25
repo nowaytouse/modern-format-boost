@@ -93,86 +93,86 @@ impl SourceCodec {
     /// H.265/HEVC ≈ 0.65 and AV1 ≈ 0.50 are empirical from bitrate comparison studies; no single
     /// canonical reference—values tuned for CRF mapping consistency across codecs.
     #[must_use]
-    pub fn efficiency_factor(&self) -> f64 {
+    pub const fn efficiency_factor(&self) -> f64 {
         match self {
-            SourceCodec::H264 => 1.0,
-            SourceCodec::H265 => 0.65,
-            SourceCodec::Vp8 => 0.85,
-            SourceCodec::Vp9 => 0.70,
-            SourceCodec::Av1 => 0.50,
-            SourceCodec::Vvc => 0.35,
-            SourceCodec::Av2 => 0.35,
+            Self::H264 => 1.0,
+            Self::H265 => 0.65,
+            Self::Vp8 => 0.85,
+            Self::Vp9 => 0.70,
+            Self::Av1 => 0.50,
+            Self::Vvc => 0.35,
+            Self::Av2 => 0.35,
 
-            SourceCodec::Mpeg4 => 1.3,
-            SourceCodec::Mpeg2 => 1.8,
-            SourceCodec::Mpeg1 => 2.5,
-            SourceCodec::Wmv => 1.1,
-            SourceCodec::Theora => 1.2,
-            SourceCodec::RealVideo => 2.0,
-            SourceCodec::FlashVideo => 1.5,
+            Self::Mpeg4 => 1.3,
+            Self::Mpeg2 => 1.8,
+            Self::Mpeg1 => 2.5,
+            Self::Wmv => 1.1,
+            Self::Theora => 1.2,
+            Self::RealVideo => 2.0,
+            Self::FlashVideo => 1.5,
 
-            SourceCodec::ProRes => 1.8,
-            SourceCodec::DnxHD => 1.8,
-            SourceCodec::Mjpeg => 2.5,
+            Self::ProRes => 1.8,
+            Self::DnxHD => 1.8,
+            Self::Mjpeg => 2.5,
 
-            SourceCodec::Ffv1 => 1.0,
-            SourceCodec::UtVideo => 1.0,
-            SourceCodec::HuffYuv => 1.0,
-            SourceCodec::RawVideo => 1.0,
-            SourceCodec::Lagarith => 1.0,
-            SourceCodec::MagicYuv => 1.0,
+            Self::Ffv1 => 1.0,
+            Self::UtVideo => 1.0,
+            Self::HuffYuv => 1.0,
+            Self::RawVideo => 1.0,
+            Self::Lagarith => 1.0,
+            Self::MagicYuv => 1.0,
 
-            SourceCodec::Gif => 3.0,
-            SourceCodec::Apng => 1.8,
-            SourceCodec::WebpAnimated => 0.9,
+            Self::Gif => 3.0,
+            Self::Apng => 1.8,
+            Self::WebpAnimated => 0.9,
 
-            SourceCodec::Jpeg => 1.0,
-            SourceCodec::JpegXl => 0.6,
-            SourceCodec::Png => 1.5,
-            SourceCodec::WebpStatic => 0.75,
-            SourceCodec::Avif => 0.55,
-            SourceCodec::Heic => 0.65,
-            SourceCodec::Bmp => 3.0,
-            SourceCodec::Tiff => 1.2,
+            Self::Jpeg => 1.0,
+            Self::JpegXl => 0.6,
+            Self::Png => 1.5,
+            Self::WebpStatic => 0.75,
+            Self::Avif => 0.55,
+            Self::Heic => 0.65,
+            Self::Bmp => 3.0,
+            Self::Tiff => 1.2,
 
-            SourceCodec::Unknown => 1.0,
+            Self::Unknown => 1.0,
         }
     }
 
     #[must_use]
-    pub fn is_lossless(&self) -> bool {
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            SourceCodec::Ffv1
-                | SourceCodec::UtVideo
-                | SourceCodec::HuffYuv
-                | SourceCodec::RawVideo
-                | SourceCodec::Lagarith
-                | SourceCodec::MagicYuv
-                | SourceCodec::Png
-                | SourceCodec::Apng
-                | SourceCodec::Bmp
+            Self::Ffv1
+                | Self::UtVideo
+                | Self::HuffYuv
+                | Self::RawVideo
+                | Self::Lagarith
+                | Self::MagicYuv
+                | Self::Png
+                | Self::Apng
+                | Self::Bmp
         )
     }
 
     #[must_use]
-    pub fn is_modern(&self) -> bool {
+    pub const fn is_modern(&self) -> bool {
         matches!(
             self,
-            SourceCodec::H265
-                | SourceCodec::Av1
-                | SourceCodec::Vp9
-                | SourceCodec::Vvc
-                | SourceCodec::Av2
-                | SourceCodec::JpegXl
-                | SourceCodec::Avif
-                | SourceCodec::Heic
+            Self::H265
+                | Self::Av1
+                | Self::Vp9
+                | Self::Vvc
+                | Self::Av2
+                | Self::JpegXl
+                | Self::Avif
+                | Self::Heic
         )
     }
 
     #[must_use]
-    pub fn is_cutting_edge(&self) -> bool {
-        matches!(self, SourceCodec::Vvc | SourceCodec::Av2)
+    pub const fn is_cutting_edge(&self) -> bool {
+        matches!(self, Self::Vvc | Self::Av2)
     }
 }
 
@@ -242,14 +242,14 @@ pub enum ContentType {
 
 impl ContentType {
     #[must_use]
-    pub fn crf_adjustment(&self) -> i8 {
+    pub const fn crf_adjustment(&self) -> i8 {
         match self {
-            ContentType::Animation => 4,
-            ContentType::ScreenRecording => 5,
-            ContentType::LiveAction => 0,
-            ContentType::Gaming => -1,
-            ContentType::FilmGrain => -3,
-            ContentType::Unknown => 0,
+            Self::Animation => 4,
+            Self::ScreenRecording => 5,
+            Self::LiveAction => 0,
+            Self::Gaming => -1,
+            Self::FilmGrain => -3,
+            Self::Unknown => 0,
         }
     }
 }
@@ -334,7 +334,7 @@ pub struct AnalysisDetails {
     pub quality_bias: QualityBias,
 }
 
-fn default_one() -> f64 {
+const fn default_one() -> f64 {
     1.0
 }
 
@@ -411,11 +411,11 @@ pub fn calculate_av1_crf_with_options(
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < 0.03 {
-        35.0_f64.min(50.0 - 6.0 * (effective_bpp * 100.0).max(0.001).log2())
+        35.0_f64.min(6.0f64.mul_add(-(effective_bpp * 100.0).max(0.001).log2(), 50.0))
     } else if effective_bpp > 2.0 {
-        18.0_f64.max(50.0 - 6.0 * (effective_bpp * 100.0).log2())
+        18.0_f64.max(6.0f64.mul_add(-(effective_bpp * 100.0).log2(), 50.0))
     } else {
-        50.0 - 6.0 * (effective_bpp * 100.0).log2()
+        6.0f64.mul_add(-(effective_bpp * 100.0).log2(), 50.0)
     };
 
     let crf_with_content = crf_float + f64::from(details.content_type_adjustment);
@@ -473,11 +473,11 @@ pub fn calculate_hevc_crf_with_options(
     effective_bpp = effective_bpp.clamp(SAFE_BPP_MIN, SAFE_BPP_MAX);
 
     let crf_float = if effective_bpp < 0.02 {
-        35.0_f64.min(46.0 - 5.0 * (effective_bpp * 100.0).max(0.001).log2())
+        35.0_f64.min(5.0f64.mul_add(-(effective_bpp * 100.0).max(0.001).log2(), 46.0))
     } else if effective_bpp > 2.0 {
-        15.0_f64.max(46.0 - 5.0 * (effective_bpp * 100.0).log2())
+        15.0_f64.max(5.0f64.mul_add(-(effective_bpp * 100.0).log2(), 46.0))
     } else {
-        46.0 - 5.0 * (effective_bpp * 100.0).log2()
+        5.0f64.mul_add(-(effective_bpp * 100.0).log2(), 46.0)
     };
 
     let crf_with_content = crf_float + f64::from(details.content_type_adjustment);
@@ -548,7 +548,7 @@ pub fn calculate_jxl_distance_with_options(
         ));
     }
 
-    let estimated_quality = 70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2();
+    let estimated_quality = 15.0f64.mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0);
 
     let clamped_quality = estimated_quality.clamp(50.0, 100.0);
     let base_distance = ((100.0 - clamped_quality) / 10.0) as f32;
@@ -799,13 +799,13 @@ fn calculate_codec_efficiency(codec: SourceCodec, preset: Option<&str>) -> f64 {
 fn calculate_resolution_factor(pixels: u64) -> f64 {
     let megapixels = pixels as f64 / 1_000_000.0;
     if megapixels > 8.0 {
-        0.80 + 0.05 * (8.0 / megapixels).min(1.0)
+        0.05f64.mul_add((8.0 / megapixels).min(1.0), 0.80)
     } else if megapixels > 2.0 {
-        0.85 + 0.05 * ((8.0 - megapixels) / 6.0)
+        0.05f64.mul_add((8.0 - megapixels) / 6.0, 0.85)
     } else if megapixels > 0.5 {
-        0.90 + 0.05 * ((2.0 - megapixels) / 1.5)
+        0.05f64.mul_add((2.0 - megapixels) / 1.5, 0.90)
     } else {
-        0.95 + 0.05 * ((0.5 - megapixels) / 0.5).min(1.0)
+        0.05f64.mul_add(((0.5 - megapixels) / 0.5).min(1.0), 0.95)
     }
 }
 
@@ -876,7 +876,7 @@ fn calculate_complexity_factor(si: Option<f64>, ti: Option<f64>, raw_bpp: f64, p
     if ratio > 2.0 {
         1.15
     } else if ratio > 1.0 {
-        1.0 + 0.15 * ((ratio - 1.0) / 1.0)
+        0.15f64.mul_add((ratio - 1.0) / 1.0, 1.0)
     } else if ratio > 0.5 {
         1.0
     } else {
@@ -1314,7 +1314,7 @@ impl VideoAnalysisBuilder {
     }
 
     #[must_use]
-    pub fn file_size(mut self, size: u64) -> Self {
+    pub const fn file_size(mut self, size: u64) -> Self {
         self.analysis.file_size = size;
         self
     }
@@ -1332,7 +1332,7 @@ impl VideoAnalysisBuilder {
     }
 
     #[must_use]
-    pub fn gop(mut self, gop_size: u32, b_frames: u8) -> Self {
+    pub const fn gop(mut self, gop_size: u32, b_frames: u8) -> Self {
         self.analysis.gop_size = Some(gop_size);
         self.analysis.b_frame_count = Some(b_frames);
         self.analysis.has_b_frames = b_frames > 0;
@@ -1353,26 +1353,26 @@ impl VideoAnalysisBuilder {
     }
 
     #[must_use]
-    pub fn content_type(mut self, ct: ContentType) -> Self {
+    pub const fn content_type(mut self, ct: ContentType) -> Self {
         self.analysis.content_type = Some(ct);
         self
     }
 
     #[must_use]
-    pub fn bit_depth(mut self, depth: u8) -> Self {
+    pub const fn bit_depth(mut self, depth: u8) -> Self {
         self.analysis.bit_depth = depth;
         self
     }
 
     #[must_use]
-    pub fn complexity(mut self, spatial: f64, temporal: f64) -> Self {
+    pub const fn complexity(mut self, spatial: f64, temporal: f64) -> Self {
         self.analysis.spatial_complexity = Some(spatial);
         self.analysis.temporal_complexity = Some(temporal);
         self
     }
 
     #[must_use]
-    pub fn film_grain(mut self, has_grain: bool) -> Self {
+    pub const fn film_grain(mut self, has_grain: bool) -> Self {
         self.analysis.has_film_grain = Some(has_grain);
         self
     }
@@ -1473,6 +1473,7 @@ pub fn should_keep_best_effort_output_on_failure(codec_str: &str) -> bool {
 }
 
 /// Single predicate for keeping Apple-compat fallback HEVC output (explore failure or `require_compression` path).
+///
 /// **User-facing behavior is based on total file size only** (video stream remains an internal metric).
 /// Returns true only when: Apple compat is on, source is not GIF, source codec is Apple-incompatible (AV1/VP9/VVC/AV2),
 /// and either total file got smaller or (`allow_size_tolerance` && `total_size_ratio` < 1.01).

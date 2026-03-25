@@ -75,20 +75,20 @@ pub enum VideoCodecType {
 
 impl VideoCodecType {
     #[must_use]
-    pub fn from_source_codec(codec: SourceCodec) -> Self {
+    pub const fn from_source_codec(codec: SourceCodec) -> Self {
         match codec {
             SourceCodec::Ffv1 | SourceCodec::UtVideo | SourceCodec::HuffYuv => {
-                VideoCodecType::Lossless
+                Self::Lossless
             }
             SourceCodec::Av1
             | SourceCodec::H265
             | SourceCodec::Vp9
             | SourceCodec::Vvc
-            | SourceCodec::Av2 => VideoCodecType::ModernEfficient,
-            SourceCodec::H264 => VideoCodecType::Legacy,
-            SourceCodec::ProRes | SourceCodec::DnxHD => VideoCodecType::Intermediate,
-            SourceCodec::Mjpeg | SourceCodec::Gif => VideoCodecType::Inefficient,
-            _ => VideoCodecType::Unknown,
+            | SourceCodec::Av2 => Self::ModernEfficient,
+            SourceCodec::H264 => Self::Legacy,
+            SourceCodec::ProRes | SourceCodec::DnxHD => Self::Intermediate,
+            SourceCodec::Mjpeg | SourceCodec::Gif => Self::Inefficient,
+            _ => Self::Unknown,
         }
     }
 }
@@ -107,30 +107,30 @@ impl ChromaSubsampling {
     pub fn from_pix_fmt(pix_fmt: &str) -> Self {
         let fmt = pix_fmt.to_lowercase();
         if fmt.contains("444") {
-            ChromaSubsampling::Yuv444
+            Self::Yuv444
         } else if fmt.contains("422") || fmt.contains("411") {
-            ChromaSubsampling::Yuv422
+            Self::Yuv422
         } else if fmt.contains("420")
             || fmt.contains("nv12")
             || fmt.starts_with("yuv")
             || fmt.contains("410")
         {
-            ChromaSubsampling::Yuv420
+            Self::Yuv420
         } else if fmt.contains("rgb") || fmt.contains("gbr") || fmt.contains("bgr") {
-            ChromaSubsampling::Rgb
+            Self::Rgb
         } else {
-            ChromaSubsampling::Unknown
+            Self::Unknown
         }
     }
 
     #[must_use]
-    pub fn quality_factor(&self) -> f64 {
+    pub const fn quality_factor(&self) -> f64 {
         match self {
-            ChromaSubsampling::Yuv420 => 1.0,
-            ChromaSubsampling::Yuv422 => 1.05,
-            ChromaSubsampling::Yuv444 => 1.15,
-            ChromaSubsampling::Rgb => 1.20,
-            ChromaSubsampling::Unknown => 1.0,
+            Self::Yuv420 => 1.0,
+            Self::Yuv422 => 1.05,
+            Self::Yuv444 => 1.15,
+            Self::Rgb => 1.20,
+            Self::Unknown => 1.0,
         }
     }
 }
@@ -147,14 +147,14 @@ pub enum VideoContentType {
 
 impl VideoContentType {
     #[must_use]
-    pub fn to_content_type(&self) -> ContentType {
+    pub const fn to_content_type(&self) -> ContentType {
         match self {
-            VideoContentType::LiveAction => ContentType::LiveAction,
-            VideoContentType::Animation => ContentType::Animation,
-            VideoContentType::ScreenRecording => ContentType::ScreenRecording,
-            VideoContentType::Gaming => ContentType::Gaming,
-            VideoContentType::FilmGrain => ContentType::FilmGrain,
-            VideoContentType::Unknown => ContentType::Unknown,
+            Self::LiveAction => ContentType::LiveAction,
+            Self::Animation => ContentType::Animation,
+            Self::ScreenRecording => ContentType::ScreenRecording,
+            Self::Gaming => ContentType::Gaming,
+            Self::FilmGrain => ContentType::FilmGrain,
+            Self::Unknown => ContentType::Unknown,
         }
     }
 }
@@ -172,10 +172,10 @@ impl CompressionLevel {
     #[must_use]
     pub fn from_bpp(bpp: f64, codec_type: VideoCodecType) -> Self {
         if codec_type == VideoCodecType::Lossless {
-            return CompressionLevel::Lossless;
+            return Self::Lossless;
         }
         if codec_type == VideoCodecType::Intermediate {
-            return CompressionLevel::VisuallyLossless;
+            return Self::VisuallyLossless;
         }
 
         let efficiency = match codec_type {
@@ -188,13 +188,13 @@ impl CompressionLevel {
         let adjusted_bpp = bpp / efficiency;
 
         if adjusted_bpp > 1.0 {
-            CompressionLevel::VisuallyLossless
+            Self::VisuallyLossless
         } else if adjusted_bpp > 0.3 {
-            CompressionLevel::HighQuality
+            Self::HighQuality
         } else if adjusted_bpp > 0.1 {
-            CompressionLevel::Standard
+            Self::Standard
         } else {
-            CompressionLevel::LowQuality
+            Self::LowQuality
         }
     }
 }

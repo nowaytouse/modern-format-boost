@@ -45,7 +45,7 @@ pub enum DetectedCodec {
 
 impl Default for DetectedCodec {
     fn default() -> Self {
-        DetectedCodec::Unknown(String::new())
+        Self::Unknown(String::new())
     }
 }
 
@@ -53,68 +53,68 @@ impl DetectedCodec {
     #[must_use]
     pub fn from_ffprobe(codec_name: &str) -> Self {
         match codec_name.to_lowercase().as_str() {
-            "ffv1" => DetectedCodec::FFV1,
-            "h264" | "avc" | "libx264" => DetectedCodec::H264,
-            "hevc" | "h265" | "libx265" => DetectedCodec::H265,
-            "vp9" | "libvpx-vp9" => DetectedCodec::VP9,
-            "av1" | "libaom-av1" | "libsvtav1" => DetectedCodec::AV1,
-            "av2" => DetectedCodec::AV2,
-            "vvc" | "h266" => DetectedCodec::VVC,
-            "prores" | "prores_ks" => DetectedCodec::ProRes,
-            "dnxhd" | "dnxhr" => DetectedCodec::DNxHD,
-            "mjpeg" | "mjpegb" => DetectedCodec::MJPEG,
-            "rawvideo" => DetectedCodec::Uncompressed,
-            "huffyuv" | "ffvhuff" => DetectedCodec::HuffYUV,
-            "utvideo" => DetectedCodec::UTVideo,
-            "vc1" | "wmv3" => DetectedCodec::Unknown("VC-1".to_string()),
-            "dirac" => DetectedCodec::Unknown("Dirac".to_string()),
-            "theora" => DetectedCodec::Unknown("Theora".to_string()),
-            "vp8" | "libvpx" => DetectedCodec::Unknown("VP8".to_string()),
-            _ => DetectedCodec::Unknown(codec_name.to_string()),
+            "ffv1" => Self::FFV1,
+            "h264" | "avc" | "libx264" => Self::H264,
+            "hevc" | "h265" | "libx265" => Self::H265,
+            "vp9" | "libvpx-vp9" => Self::VP9,
+            "av1" | "libaom-av1" | "libsvtav1" => Self::AV1,
+            "av2" => Self::AV2,
+            "vvc" | "h266" => Self::VVC,
+            "prores" | "prores_ks" => Self::ProRes,
+            "dnxhd" | "dnxhr" => Self::DNxHD,
+            "mjpeg" | "mjpegb" => Self::MJPEG,
+            "rawvideo" => Self::Uncompressed,
+            "huffyuv" | "ffvhuff" => Self::HuffYUV,
+            "utvideo" => Self::UTVideo,
+            "vc1" | "wmv3" => Self::Unknown("VC-1".to_string()),
+            "dirac" => Self::Unknown("Dirac".to_string()),
+            "theora" => Self::Unknown("Theora".to_string()),
+            "vp8" | "libvpx" => Self::Unknown("VP8".to_string()),
+            _ => Self::Unknown(codec_name.to_string()),
         }
     }
 
     #[must_use]
-    pub fn is_lossless(&self) -> bool {
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::FFV1
-                | DetectedCodec::Uncompressed
-                | DetectedCodec::HuffYUV
-                | DetectedCodec::UTVideo
+            Self::FFV1
+                | Self::Uncompressed
+                | Self::HuffYUV
+                | Self::UTVideo
         )
     }
 
     #[must_use]
-    pub fn can_be_lossless(&self) -> bool {
+    pub const fn can_be_lossless(&self) -> bool {
         matches!(
             self,
-            DetectedCodec::FFV1
-                | DetectedCodec::Uncompressed
-                | DetectedCodec::HuffYUV
-                | DetectedCodec::UTVideo
-                | DetectedCodec::ProRes
-                | DetectedCodec::DNxHD
+            Self::FFV1
+                | Self::Uncompressed
+                | Self::HuffYUV
+                | Self::UTVideo
+                | Self::ProRes
+                | Self::DNxHD
         )
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            DetectedCodec::FFV1 => "FFV1",
-            DetectedCodec::H264 => "H.264",
-            DetectedCodec::H265 => "H.265",
-            DetectedCodec::VP9 => "VP9",
-            DetectedCodec::AV1 => "AV1",
-            DetectedCodec::AV2 => "AV2",
-            DetectedCodec::VVC => "H.266/VVC",
-            DetectedCodec::ProRes => "ProRes",
-            DetectedCodec::DNxHD => "DNxHD/DNxHR",
-            DetectedCodec::MJPEG => "MJPEG",
-            DetectedCodec::Uncompressed => "Uncompressed",
-            DetectedCodec::HuffYUV => "HuffYUV",
-            DetectedCodec::UTVideo => "UTVideo",
-            DetectedCodec::Unknown(s) => s,
+            Self::FFV1 => "FFV1",
+            Self::H264 => "H.264",
+            Self::H265 => "H.265",
+            Self::VP9 => "VP9",
+            Self::AV1 => "AV1",
+            Self::AV2 => "AV2",
+            Self::VVC => "H.266/VVC",
+            Self::ProRes => "ProRes",
+            Self::DNxHD => "DNxHD/DNxHR",
+            Self::MJPEG => "MJPEG",
+            Self::Uncompressed => "Uncompressed",
+            Self::HuffYUV => "HuffYUV",
+            Self::UTVideo => "UTVideo",
+            Self::Unknown(s) => s,
         }
     }
 }
@@ -131,13 +131,13 @@ pub enum CompressionType {
 
 impl CompressionType {
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
-            CompressionType::Lossless => "Lossless",
-            CompressionType::VisuallyLossless => "Visually Lossless",
-            CompressionType::HighQuality => "High Quality",
-            CompressionType::Standard => "Standard Quality",
-            CompressionType::LowQuality => "Low Quality",
+            Self::Lossless => "Lossless",
+            Self::VisuallyLossless => "Visually Lossless",
+            Self::HighQuality => "High Quality",
+            Self::Standard => "Standard Quality",
+            Self::LowQuality => "Low Quality",
         }
     }
 }
@@ -153,7 +153,7 @@ pub enum ColorSpace {
 
 impl Default for ColorSpace {
     fn default() -> Self {
-        ColorSpace::Unknown(String::new())
+        Self::Unknown(String::new())
     }
 }
 
@@ -161,22 +161,22 @@ impl ColorSpace {
     #[must_use]
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "bt709" => ColorSpace::BT709,
-            "bt2020" | "bt2020nc" | "bt2020ncl" => ColorSpace::BT2020,
-            "srgb" | "iec61966-2-1" => ColorSpace::SRGB,
-            "adobergb" => ColorSpace::AdobeRGB,
-            _ => ColorSpace::Unknown(s.to_string()),
+            "bt709" => Self::BT709,
+            "bt2020" | "bt2020nc" | "bt2020ncl" => Self::BT2020,
+            "srgb" | "iec61966-2-1" => Self::SRGB,
+            "adobergb" => Self::AdobeRGB,
+            _ => Self::Unknown(s.to_string()),
         }
     }
 
     #[must_use]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         match self {
-            ColorSpace::BT709 => "bt709",
-            ColorSpace::BT2020 => "bt2020",
-            ColorSpace::SRGB => "srgb",
-            ColorSpace::AdobeRGB => "adobergb",
-            ColorSpace::Unknown(s) => s.as_str(),
+            Self::BT709 => "bt709",
+            Self::BT2020 => "bt2020",
+            Self::SRGB => "srgb",
+            Self::AdobeRGB => "adobergb",
+            Self::Unknown(s) => s.as_str(),
         }
     }
 }
@@ -258,7 +258,7 @@ impl VideoDetectionResult {
 
     /// Returns true for high-bitrate archival-grade content
     #[must_use]
-    pub fn is_high_fidelity(&self) -> bool {
+    pub const fn is_high_fidelity(&self) -> bool {
         self.bit_depth >= 10
             && matches!(
                 self.compression,

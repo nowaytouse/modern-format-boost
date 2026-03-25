@@ -31,28 +31,28 @@ pub enum DateSource {
 
 impl DateSource {
     #[must_use]
-    pub fn priority(&self) -> u8 {
+    pub const fn priority(&self) -> u8 {
         match self {
-            DateSource::XmpPhotoshop => 6,
-            DateSource::XmpCreateDate => 5,
-            DateSource::XmpHistory => 4,
-            DateSource::ExifOriginal => 3,
-            DateSource::ExifCreateDate => 2,
-            DateSource::XmpMetadata => 1,
-            DateSource::None => 0,
+            Self::XmpPhotoshop => 6,
+            Self::XmpCreateDate => 5,
+            Self::XmpHistory => 4,
+            Self::ExifOriginal => 3,
+            Self::ExifCreateDate => 2,
+            Self::XmpMetadata => 1,
+            Self::None => 0,
         }
     }
 
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
-            DateSource::XmpPhotoshop => "XMP-Photoshop",
-            DateSource::XmpCreateDate => "XMP-CreateDate",
-            DateSource::XmpHistory => "XMP-History",
-            DateSource::ExifOriginal => "EXIF-Original",
-            DateSource::ExifCreateDate => "EXIF-CreateDate",
-            DateSource::XmpMetadata => "XMP-Metadata",
-            DateSource::None => "None",
+            Self::XmpPhotoshop => "XMP-Photoshop",
+            Self::XmpCreateDate => "XMP-CreateDate",
+            Self::XmpHistory => "XMP-History",
+            Self::ExifOriginal => "EXIF-Original",
+            Self::ExifCreateDate => "EXIF-CreateDate",
+            Self::XmpMetadata => "XMP-Metadata",
+            Self::None => "None",
         }
     }
 }

@@ -23,20 +23,20 @@ pub enum ExtractionMethod {
 
 impl ExtractionMethod {
     #[must_use]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
-            ExtractionMethod::FfprobeDirect => "ffprobe direct",
-            ExtractionMethod::BitrateCalculation => "bitrate × duration",
-            ExtractionMethod::Estimated => "estimated (file size − container overhead)",
+            Self::FfprobeDirect => "ffprobe direct",
+            Self::BitrateCalculation => "bitrate × duration",
+            Self::Estimated => "estimated (file size − container overhead)",
         }
     }
 
     #[must_use]
-    pub fn confidence(&self) -> f64 {
+    pub const fn confidence(&self) -> f64 {
         match self {
-            ExtractionMethod::FfprobeDirect => 0.99,
-            ExtractionMethod::BitrateCalculation => 0.90,
-            ExtractionMethod::Estimated => 0.70,
+            Self::FfprobeDirect => 0.99,
+            Self::BitrateCalculation => 0.90,
+            Self::Estimated => 0.70,
         }
     }
 }
@@ -55,7 +55,7 @@ pub struct StreamSizeInfo {
 
 impl StreamSizeInfo {
     #[must_use]
-    pub fn pure_media_size(&self) -> u64 {
+    pub const fn pure_media_size(&self) -> u64 {
         self.video_stream_size + self.audio_stream_size
     }
 

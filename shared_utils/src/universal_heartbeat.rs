@@ -150,7 +150,7 @@ impl HeartbeatConfig {
     }
 
     #[must_use]
-    pub fn force(mut self) -> Self {
+    pub const fn force(mut self) -> Self {
         self.force_display = true;
         self
     }

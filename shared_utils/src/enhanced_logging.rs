@@ -191,11 +191,11 @@ pub enum LogLevel {
 impl From<Level> for LogLevel {
     fn from(level: Level) -> Self {
         match level {
-            Level::ERROR => LogLevel::Error,
-            Level::WARN => LogLevel::Warn,
-            Level::INFO => LogLevel::Info,
-            Level::DEBUG => LogLevel::Debug,
-            Level::TRACE => LogLevel::Trace,
+            Level::ERROR => Self::Error,
+            Level::WARN => Self::Warn,
+            Level::INFO => Self::Info,
+            Level::DEBUG => Self::Debug,
+            Level::TRACE => Self::Trace,
         }
     }
 }
@@ -203,19 +203,19 @@ impl From<Level> for LogLevel {
 impl LogLevel {
     /// Checks if this level should be logged
     #[must_use]
-    pub fn should_log(self, max_level: LogLevel) -> bool {
+    pub fn should_log(self, max_level: Self) -> bool {
         self <= max_level
     }
 
     /// Converts to tracing Level
     #[must_use]
-    pub fn to_tracing_level(self) -> Level {
+    pub const fn to_tracing_level(self) -> Level {
         match self {
-            LogLevel::Critical | LogLevel::Error => Level::ERROR,
-            LogLevel::Warn => Level::WARN,
-            LogLevel::Info => Level::INFO,
-            LogLevel::Debug => Level::DEBUG,
-            LogLevel::Trace => Level::TRACE,
+            Self::Critical | Self::Error => Level::ERROR,
+            Self::Warn => Level::WARN,
+            Self::Info => Level::INFO,
+            Self::Debug => Level::DEBUG,
+            Self::Trace => Level::TRACE,
         }
     }
 }

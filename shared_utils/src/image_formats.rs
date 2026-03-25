@@ -322,6 +322,7 @@ pub mod webp {
     }
 
     /// Parse animated WebP RIFF/ANMF chunks and return total duration in seconds.
+    ///
     /// ANMF payload: 24-byte header, bytes 16..20 = frame duration in ms (uint32 LE).
     /// Returns None if not animated WebP or no ANMF chunks.
     #[must_use]
@@ -653,7 +654,7 @@ pub mod jxl {
     }
 
     impl<'a> JxlBitReader<'a> {
-        fn new(data: &'a [u8]) -> Self {
+        const fn new(data: &'a [u8]) -> Self {
             Self {
                 data,
                 byte_pos: 0,

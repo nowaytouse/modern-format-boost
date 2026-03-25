@@ -21,10 +21,10 @@ pub enum SsimError {
 impl fmt::Display for SsimError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SsimError::OutOfRange { value } => {
+            Self::OutOfRange { value } => {
                 write!(f, "SSIM {value:.6} out of range [0.0, 1.0]")
             }
-            SsimError::InvalidFloat => {
+            Self::InvalidFloat => {
                 write!(f, "Invalid SSIM: NaN or Infinity")
             }
         }
@@ -37,9 +37,9 @@ impl std::error::Error for SsimError {}
 pub struct Ssim(f64);
 
 impl Ssim {
-    pub const PERFECT: Ssim = Ssim(1.0);
+    pub const PERFECT: Self = Self(1.0);
 
-    pub const ZERO: Ssim = Ssim(0.0);
+    pub const ZERO: Self = Self(0.0);
 
     pub fn new(value: f64) -> Result<Self, SsimError> {
         if value.is_nan() || value.is_infinite() {
@@ -55,7 +55,7 @@ impl Ssim {
 
     #[inline]
     #[must_use]
-    pub fn value(&self) -> f64 {
+    pub const fn value(&self) -> f64 {
         self.0
     }
 
@@ -77,7 +77,7 @@ impl Ssim {
     }
 
     #[must_use]
-    pub fn clamped(value: f64) -> Self {
+    pub const fn clamped(value: f64) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
             0.0
         } else {

@@ -117,6 +117,7 @@ impl Default for ImageAnalysis {
 }
 
 /// Analyzes an image file. Format detection order (by path/content): HEIC → JXL → AVIF → image crate (PNG/JPEG/WebP/GIF/TIFF).
+///
 /// Quality is then derived via `detect_lossless` / `detect_compression` per format; no conversion is done here.
 pub fn analyze_image(path: &Path) -> Result<ImageAnalysis> {
     analyze_image_with_cache(path, None)
@@ -348,11 +349,11 @@ fn analyze_image_internal(path: &Path) -> Result<ImageAnalysis> {
         metadata.insert("extension_mismatch".to_string(), "true".to_string());
         metadata.insert(
             "real_extension".to_string(),
-            real_extension_suggestion.clone(),
+            real_extension_suggestion,
         );
         metadata.insert(
             "apple_compatibility_warning".to_string(),
-            apple_warning.clone(),
+            apple_warning,
         );
         metadata.insert(
             "format_warning".to_string(),
@@ -787,21 +788,21 @@ fn calculate_entropy(img: &DynamicImage) -> f64 {
 
 fn estimate_psnr_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => 45.0 + (f64::from(quality) - 95.0) * 0.5,
-        85..=94 => 38.0 + (f64::from(quality) - 85.0) * 0.7,
-        75..=84 => 32.0 + (f64::from(quality) - 75.0) * 0.6,
-        60..=74 => 28.0 + (f64::from(quality) - 60.0) * 0.27,
-        _ => 20.0 + f64::from(quality) * 0.13,
+        95..=100 => (f64::from(quality) - 95.0).mul_add(0.5, 45.0),
+        85..=94 => (f64::from(quality) - 85.0).mul_add(0.7, 38.0),
+        75..=84 => (f64::from(quality) - 75.0).mul_add(0.6, 32.0),
+        60..=74 => (f64::from(quality) - 60.0).mul_add(0.27, 28.0),
+        _ => f64::from(quality).mul_add(0.13, 20.0),
     }
 }
 
 fn estimate_ssim_from_quality(quality: u8) -> f64 {
     match quality {
-        95..=100 => 0.98 + (f64::from(quality) - 95.0) * 0.004,
-        85..=94 => 0.95 + (f64::from(quality) - 85.0) * 0.003,
-        75..=84 => 0.90 + (f64::from(quality) - 75.0) * 0.005,
-        60..=74 => 0.80 + (f64::from(quality) - 60.0) * 0.0067,
-        _ => 0.60 + f64::from(quality) * 0.003,
+        95..=100 => (f64::from(quality) - 95.0).mul_add(0.004, 0.98),
+        85..=94 => (f64::from(quality) - 85.0).mul_add(0.003, 0.95),
+        75..=84 => (f64::from(quality) - 75.0).mul_add(0.005, 0.90),
+        60..=74 => (f64::from(quality) - 60.0).mul_add(0.0067, 0.80),
+        _ => f64::from(quality).mul_add(0.003, 0.60),
     }
 }
 
@@ -1298,6 +1299,7 @@ fn try_ffprobe_default(path: &Path) -> Option<f32> {
 }
 
 /// Returns (`duration_secs`, `frame_count`) from `ImageMagick` `identify -format "%T"`.
+///
 /// Works for any format `ImageMagick` can read and that has per-frame delay (e.g. GIF, WebP, AVIF, JXL, APNG).
 /// Use as fallback when ffprobe has no stream/format duration. Emits a warning log when used.
 #[must_use]

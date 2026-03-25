@@ -57,13 +57,13 @@ pub fn calculate_metadata_margin(input_size: u64) -> u64 {
 
 #[inline]
 #[must_use]
-pub fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u64) -> u64 {
+pub const fn detect_metadata_size(pre_metadata_size: u64, post_metadata_size: u64) -> u64 {
     post_metadata_size.saturating_sub(pre_metadata_size)
 }
 
 #[inline]
 #[must_use]
-pub fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
+pub const fn pure_video_size(total_size: u64, metadata_size: u64) -> u64 {
     total_size.saturating_sub(metadata_size)
 }
 
@@ -88,7 +88,7 @@ pub enum CompressionVerifyStrategy {
 
 #[inline]
 #[must_use]
-pub fn verify_compression_precise(
+pub const fn verify_compression_precise(
     output_size: u64,
     input_size: u64,
     actual_metadata_size: u64,
@@ -111,7 +111,7 @@ pub fn verify_compression_precise(
 
 #[inline]
 #[must_use]
-pub fn verify_compression_simple(
+pub const fn verify_compression_simple(
     output_size: u64,
     input_size: u64,
     actual_metadata_size: u64,
@@ -274,10 +274,7 @@ pub const CONFIDENCE_WEIGHT_SSIM: f64 = 0.2;
 impl ConfidenceBreakdown {
     #[must_use]
     pub fn overall(&self) -> f64 {
-        (self.sampling_coverage * CONFIDENCE_WEIGHT_SAMPLING
-            + self.prediction_accuracy * CONFIDENCE_WEIGHT_PREDICTION
-            + self.margin_safety * CONFIDENCE_WEIGHT_MARGIN
-            + self.ssim_confidence * CONFIDENCE_WEIGHT_SSIM)
+        self.ssim_confidence.mul_add(CONFIDENCE_WEIGHT_SSIM, self.margin_safety.mul_add(CONFIDENCE_WEIGHT_MARGIN, self.sampling_coverage.mul_add(CONFIDENCE_WEIGHT_SAMPLING, self.prediction_accuracy * CONFIDENCE_WEIGHT_PREDICTION)))
             .min(1.0)
     }
 
@@ -390,7 +387,7 @@ impl ExploreResult {
 
     #[inline]
     #[must_use]
-    pub fn output_size_typed(&self) -> FileSize {
+    pub const fn output_size_typed(&self) -> FileSize {
         FileSize::new(self.output_size)
     }
 
@@ -565,7 +562,7 @@ impl ExploreConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VideoEncoder {
     Hevc,
     Av1,
@@ -585,26 +582,26 @@ pub enum EncoderPreset {
 
 impl EncoderPreset {
     #[must_use]
-    pub fn x26x_name(&self) -> &'static str {
+    pub const fn x26x_name(&self) -> &'static str {
         match self {
-            EncoderPreset::Ultrafast => "ultrafast",
-            EncoderPreset::Fast => "fast",
-            EncoderPreset::Medium => "medium",
-            EncoderPreset::Slow => "slow",
-            EncoderPreset::Slower => "slower",
-            EncoderPreset::Veryslow => "veryslow",
+            Self::Ultrafast => "ultrafast",
+            Self::Fast => "fast",
+            Self::Medium => "medium",
+            Self::Slow => "slow",
+            Self::Slower => "slower",
+            Self::Veryslow => "veryslow",
         }
     }
 
     #[must_use]
-    pub fn svtav1_preset(&self) -> u8 {
+    pub const fn svtav1_preset(&self) -> u8 {
         match self {
-            EncoderPreset::Ultrafast => 12,
-            EncoderPreset::Fast => 8,
-            EncoderPreset::Medium => 6,
-            EncoderPreset::Slow => 4,
-            EncoderPreset::Slower => 2,
-            EncoderPreset::Veryslow => 0,
+            Self::Ultrafast => 12,
+            Self::Fast => 8,
+            Self::Medium => 6,
+            Self::Slow => 4,
+            Self::Slower => 2,
+            Self::Veryslow => 0,
         }
     }
 }
@@ -613,7 +610,7 @@ impl VideoEncoder {
     #[must_use]
     pub fn ffmpeg_name(&self) -> &'static str {
         match self {
-            VideoEncoder::Hevc => {
+            Self::Hevc => {
                 if Self::is_encoder_available("libx265") {
                     "libx265"
                 } else {
@@ -623,8 +620,8 @@ impl VideoEncoder {
                     "hevc_videotoolbox"
                 }
             }
-            VideoEncoder::Av1 => "libsvtav1",
-            VideoEncoder::H264 => {
+            Self::Av1 => "libsvtav1",
+            Self::H264 => {
                 if Self::is_encoder_available("libx264") {
                     "libx264"
                 } else {
@@ -662,11 +659,11 @@ impl VideoEncoder {
     }
 
     #[must_use]
-    pub fn container(&self) -> &'static str {
+    pub const fn container(&self) -> &'static str {
         match self {
-            VideoEncoder::Hevc => "mp4",
-            VideoEncoder::Av1 => "mp4",
-            VideoEncoder::H264 => "mp4",
+            Self::Hevc => "mp4",
+            Self::Av1 => "mp4",
+            Self::H264 => "mp4",
         }
     }
 
@@ -683,7 +680,7 @@ impl VideoEncoder {
         hdr_x265_params: Option<String>,
     ) -> Vec<String> {
         match self {
-            VideoEncoder::Hevc => {
+            Self::Hevc => {
                 let mut x265_params = format!("log-level=error:pools={max_threads}");
                 if let Some(params) = hdr_x265_params {
                     x265_params.push(':');
@@ -698,7 +695,7 @@ impl VideoEncoder {
                     x265_params,
                 ]
             }
-            VideoEncoder::Av1 => vec![
+            Self::Av1 => vec![
                 "-svtav1-params".to_string(),
                 format!(
                     "tune=0:film-grain=0:preset={}:lp={}",
@@ -706,7 +703,7 @@ impl VideoEncoder {
                     max_threads
                 ),
             ],
-            VideoEncoder::H264 => vec![
+            Self::H264 => vec![
                 "-preset".to_string(),
                 preset.x26x_name().to_string(),
                 "-profile:v".to_string(),
@@ -1142,7 +1139,7 @@ impl VideoExplorer {
         let mut best_crf_so_far: f32 = 0.0;
 
         let encode_cached =
-            |crf: f32, cache: &mut CrfCache<u64>, explorer: &VideoExplorer| -> Result<u64> {
+            |crf: f32, cache: &mut CrfCache<u64>, explorer: &Self| -> Result<u64> {
                 if let Some(&size) = cache.get(crf) {
                     return Ok(size);
                 }
@@ -1461,7 +1458,7 @@ impl VideoExplorer {
             |crf: f32,
              cache: &mut CrfCache<(u64, (Option<f64>, Option<f64>, Option<f64>))>,
              last_crf: &mut Option<f32>,
-             explorer: &VideoExplorer|
+             explorer: &Self|
              -> Result<(u64, (Option<f64>, Option<f64>, Option<f64>))> {
                 if let Some(&cached) = cache.get(crf) {
                     return Ok(cached);
@@ -1545,7 +1542,7 @@ impl VideoExplorer {
                     break;
                 }
 
-                let mid = low + (high - low) * PHI;
+                let mid = (high - low).mul_add(PHI, low);
                 let mid_rounded = (mid * 2.0).round() / 2.0;
 
                 log_realtime!("   🔄 Testing CRF {:.1}...", mid_rounded);
@@ -1751,7 +1748,7 @@ impl VideoExplorer {
         let encode_size_only = |crf: f32,
                                 size_cache: &mut CrfCache<u64>,
                                 last_crf: &mut Option<f32>,
-                                explorer: &VideoExplorer|
+                                explorer: &Self|
          -> Result<u64> {
             if let Some(&size) = size_cache.get(crf) {
                 return Ok(size);
@@ -1765,7 +1762,7 @@ impl VideoExplorer {
         let validate_ssim =
             |crf: f32,
              quality_cache: &mut CrfCache<(Option<f64>, Option<f64>, Option<f64>)>,
-             explorer: &VideoExplorer|
+             explorer: &Self|
              -> Result<(Option<f64>, Option<f64>, Option<f64>)> {
                 if let Some(&quality) = quality_cache.get(crf) {
                     return Ok(quality);
@@ -3152,7 +3149,7 @@ pub fn calculate_smart_thresholds(initial_crf: f32, encoder: VideoEncoder) -> (f
     let normalized_crf = initial_crf / crf_scale;
     let quality_level = f64::from((normalized_crf * normalized_crf).clamp(0.0, 1.0));
 
-    let headroom = 8.0 + quality_level as f32 * 7.0;
+    let headroom = (quality_level as f32).mul_add(7.0, 8.0);
     let max_crf = (initial_crf + headroom).min(max_crf_cap);
 
     let min_ssim = if initial_crf < 20.0 {

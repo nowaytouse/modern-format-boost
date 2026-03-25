@@ -14,7 +14,7 @@ pub const LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 150;
 
 pub const VERY_LONG_VIDEO_FALLBACK_ITERATIONS: u32 = 130;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IterationError {
     pub current: u32,
     pub max: u32,
@@ -72,29 +72,29 @@ impl IterationGuard {
 
     #[inline]
     #[must_use]
-    pub fn current(&self) -> u32 {
+    pub const fn current(&self) -> u32 {
         self.current
     }
 
     #[inline]
     #[must_use]
-    pub fn max(&self) -> u32 {
+    pub const fn max(&self) -> u32 {
         self.max
     }
 
     #[inline]
     #[must_use]
-    pub fn remaining(&self) -> u32 {
+    pub const fn remaining(&self) -> u32 {
         self.max.saturating_sub(self.current)
     }
 
     #[inline]
     #[must_use]
-    pub fn is_exhausted(&self) -> bool {
+    pub const fn is_exhausted(&self) -> bool {
         self.current >= self.max
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.current = 0;
     }
 

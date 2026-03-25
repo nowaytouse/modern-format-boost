@@ -36,7 +36,7 @@ impl SamplingStrategy {
     }
 
     #[must_use]
-    pub fn sampling_rate(&self) -> Option<u32> {
+    pub const fn sampling_rate(&self) -> Option<u32> {
         match self {
             Self::Full => Some(1),
             Self::OneThird => Some(3),
@@ -56,7 +56,7 @@ impl SamplingStrategy {
     }
 
     #[must_use]
-    pub fn accuracy_description(&self) -> &'static str {
+    pub const fn accuracy_description(&self) -> &'static str {
         match self {
             Self::Full => "100%",
             Self::OneThird => "~99%",

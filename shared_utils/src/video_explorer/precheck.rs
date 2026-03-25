@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{error, info, warn};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compressibility {
     VeryHigh,
     High,
@@ -14,7 +14,7 @@ pub enum Compressibility {
     VeryLow,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessingRecommendation {
     StronglyRecommended { codec: String, reason: String },
     Recommended { reason: String },
@@ -43,7 +43,7 @@ pub struct VideoInfo {
     pub is_hdr: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FpsCategory {
     Normal,
     Extended,
@@ -55,31 +55,31 @@ impl FpsCategory {
     #[must_use]
     pub fn from_fps(fps: f64) -> Self {
         if fps <= 0.0 || fps > FPS_THRESHOLD_INVALID {
-            FpsCategory::Invalid
+            Self::Invalid
         } else if fps < FPS_RANGE_NORMAL.1 {
-            FpsCategory::Normal
+            Self::Normal
         } else if fps <= FPS_RANGE_EXTENDED.1 {
-            FpsCategory::Extended
+            Self::Extended
         } else if fps <= FPS_RANGE_EXTREME.1 {
-            FpsCategory::Extreme
+            Self::Extreme
         } else {
-            FpsCategory::Invalid
+            Self::Invalid
         }
     }
 
     #[must_use]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
-            FpsCategory::Normal => "normal range (1–239 fps)",
-            FpsCategory::Extended => "extended range (240–2000 fps)",
-            FpsCategory::Extreme => "extreme range (2000-10000 fps)",
-            FpsCategory::Invalid => "invalid (>10000 fps, possible metadata error)",
+            Self::Normal => "normal range (1–239 fps)",
+            Self::Extended => "extended range (240–2000 fps)",
+            Self::Extreme => "extreme range (2000-10000 fps)",
+            Self::Invalid => "invalid (>10000 fps, possible metadata error)",
         }
     }
 
     #[must_use]
-    pub fn is_valid(&self) -> bool {
-        !matches!(self, FpsCategory::Invalid)
+    pub const fn is_valid(&self) -> bool {
+        !matches!(self, Self::Invalid)
     }
 }
 

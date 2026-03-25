@@ -34,7 +34,7 @@ impl Default for ThreadConfig {
 
 impl ThreadConfig {
     #[must_use]
-    pub fn conservative() -> Self {
+    pub const fn conservative() -> Self {
         Self {
             core_percentage: 50,
             min_threads: 1,
@@ -44,7 +44,7 @@ impl ThreadConfig {
     }
 
     #[must_use]
-    pub fn aggressive() -> Self {
+    pub const fn aggressive() -> Self {
         Self {
             core_percentage: 90,
             min_threads: 4,
@@ -54,7 +54,7 @@ impl ThreadConfig {
     }
 
     #[must_use]
-    pub fn video_processing() -> Self {
+    pub const fn video_processing() -> Self {
         Self {
             core_percentage: 60,
             min_threads: 2,

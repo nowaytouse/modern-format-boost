@@ -64,7 +64,7 @@ fn build_color_args_from_probe(probe: &crate::ffprobe::FFprobeResult) -> Vec<Str
 
 /// Return the correct pixel format for encoding: yuv420p10le for 10-bit HDR content,
 /// yuv420p for 8-bit SDR. Preserving the bit depth is essential for HDR accuracy.
-fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
+const fn pick_pix_fmt(probe: &crate::ffprobe::FFprobeResult) -> &'static str {
     if probe.bit_depth >= 10 {
         "yuv420p10le"
     } else {
@@ -654,7 +654,7 @@ pub fn explore_with_gpu_coarse_search(
                         if vmaf_ok { "✅" } else { "❌" }
                     );
                 } else {
-                    crate::log_eprintln!("      VMAF-Y: N/A (calculation failed) ❌")
+                    crate::log_eprintln!("      VMAF-Y: N/A (calculation failed) ❌");
                 }
 
                 if let Some(c) = cambi {
@@ -665,7 +665,7 @@ pub fn explore_with_gpu_coarse_search(
                         if cambi_ok { "✅" } else { "❌" }
                     );
                 } else {
-                    crate::log_eprintln!("      CAMBI: N/A (calculation failed) ❌")
+                    crate::log_eprintln!("      CAMBI: N/A (calculation failed) ❌");
                 }
 
                 if let Some((pu, pv)) = psnr_uv {
@@ -680,7 +680,7 @@ pub fn explore_with_gpu_coarse_search(
                         PSNR_UV_MIN
                     );
                 } else {
-                    crate::log_eprintln!("      PSNR-UV: N/A (calculation failed) ❌")
+                    crate::log_eprintln!("      PSNR-UV: N/A (calculation failed) ❌");
                 }
 
                 crate::log_eprintln!("   ───────────────────────────────────────────────────");
@@ -807,7 +807,7 @@ pub fn explore_with_gpu_coarse_search(
 
                 crate::log_eprintln!("   ───────────────────────────────────────────────────");
                 if let (Some(ms), Some(ss)) = (ms_ssim_avg, ssim_all_val) {
-                    let fusion = MS_SSIM_WEIGHT * ms + SSIM_ALL_WEIGHT * ss;
+                    let fusion = MS_SSIM_WEIGHT.mul_add(ms, SSIM_ALL_WEIGHT * ss);
                     final_score = Some(fusion);
                     crate::log_eprintln!("   FUSION SCORE: {:.4}", fusion);
                     crate::log_eprintln!(

@@ -14,7 +14,7 @@ pub const METADATA_MARGIN_MAX: u64 = 102_400;
 pub struct FileSize(u64);
 
 impl FileSize {
-    pub const ZERO: FileSize = FileSize(0);
+    pub const ZERO: Self = Self(0);
 
     pub const KB: u64 = 1024;
     pub const MB: u64 = 1_048_576;
@@ -46,18 +46,18 @@ impl FileSize {
 
     #[inline]
     #[must_use]
-    pub fn saturating_sub(&self, other: FileSize) -> FileSize {
-        FileSize(self.0.saturating_sub(other.0))
+    pub const fn saturating_sub(&self, other: Self) -> Self {
+        Self(self.0.saturating_sub(other.0))
     }
 
     #[inline]
     #[must_use]
-    pub fn saturating_add(&self, other: FileSize) -> FileSize {
-        FileSize(self.0.saturating_add(other.0))
+    pub const fn saturating_add(&self, other: Self) -> Self {
+        Self(self.0.saturating_add(other.0))
     }
 
     #[must_use]
-    pub fn compression_ratio(&self, original: FileSize) -> Option<f64> {
+    pub fn compression_ratio(&self, original: Self) -> Option<f64> {
         if original.0 == 0 {
             None
         } else {
@@ -66,7 +66,7 @@ impl FileSize {
     }
 
     #[must_use]
-    pub fn size_change_percent(&self, original: FileSize) -> Option<f64> {
+    pub fn size_change_percent(&self, original: Self) -> Option<f64> {
         if original.0 == 0 {
             None
         } else {
@@ -88,25 +88,25 @@ impl FileSize {
     }
 
     #[must_use]
-    pub fn metadata_margin(&self) -> FileSize {
+    pub fn metadata_margin(&self) -> Self {
         let percent_based = (self.0 as f64 * METADATA_MARGIN_PERCENT) as u64;
         let margin = percent_based.clamp(METADATA_MARGIN_MIN, METADATA_MARGIN_MAX);
-        FileSize(margin)
+        Self(margin)
     }
 
     #[must_use]
-    pub fn compression_target(&self) -> FileSize {
+    pub fn compression_target(&self) -> Self {
         self.saturating_sub(self.metadata_margin())
     }
 
     #[must_use]
-    pub fn can_compress_to(&self, target: FileSize) -> bool {
+    pub const fn can_compress_to(&self, target: Self) -> bool {
         self.0 > target.0
     }
 
     #[inline]
     #[must_use]
-    pub fn is_zero(&self) -> bool {
+    pub const fn is_zero(&self) -> bool {
         self.0 == 0
     }
 }

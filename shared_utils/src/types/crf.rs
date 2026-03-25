@@ -86,7 +86,7 @@ pub enum CrfError {
 impl fmt::Display for CrfError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CrfError::OutOfRange {
+            Self::OutOfRange {
                 value,
                 min,
                 max,
@@ -97,10 +97,10 @@ impl fmt::Display for CrfError {
                     "{encoder} CRF {value:.2} out of range [{min:.1}, {max:.1}]"
                 )
             }
-            CrfError::InvalidCacheKey { key, encoder } => {
+            Self::InvalidCacheKey { key, encoder } => {
                 write!(f, "Invalid {encoder} CRF cache key: {key}")
             }
-            CrfError::InvalidFloat { encoder } => {
+            Self::InvalidFloat { encoder } => {
                 write!(f, "Invalid {encoder} CRF: NaN or Infinity")
             }
         }
@@ -137,7 +137,7 @@ impl<E: EncoderBounds> Crf<E> {
     }
 
     #[must_use]
-    pub fn default_value() -> Self {
+    pub const fn default_value() -> Self {
         Self {
             value: E::DEFAULT,
             _marker: PhantomData,
@@ -145,7 +145,7 @@ impl<E: EncoderBounds> Crf<E> {
     }
 
     #[must_use]
-    pub fn visually_lossless() -> Self {
+    pub const fn visually_lossless() -> Self {
         Self {
             value: E::VISUALLY_LOSSLESS,
             _marker: PhantomData,
@@ -154,7 +154,7 @@ impl<E: EncoderBounds> Crf<E> {
 
     #[inline]
     #[must_use]
-    pub fn value(&self) -> f32 {
+    pub const fn value(&self) -> f32 {
         self.value
     }
 
@@ -180,18 +180,18 @@ impl<E: EncoderBounds> Crf<E> {
 
     #[inline]
     #[must_use]
-    pub fn encoder_name(&self) -> &'static str {
+    pub const fn encoder_name(&self) -> &'static str {
         E::NAME
     }
 
     #[inline]
     #[must_use]
-    pub fn valid_range() -> (f32, f32) {
+    pub const fn valid_range() -> (f32, f32) {
         (E::MIN, E::MAX)
     }
 
     #[must_use]
-    pub fn clamped(value: f32) -> Self {
+    pub const fn clamped(value: f32) -> Self {
         let clamped = if value.is_nan() || value.is_infinite() {
             E::DEFAULT
         } else {

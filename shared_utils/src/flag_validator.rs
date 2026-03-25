@@ -27,7 +27,7 @@ impl fmt::Display for FlagMode {
 
 impl FlagMode {
     #[must_use]
-    pub fn description_en(&self) -> &'static str {
+    pub const fn description_en(&self) -> &'static str {
         match self {
             Self::PreciseQualityWithCompress => "Precise quality match + must compress",
             Self::UltimateExplore => "🔥 Ultimate explore (SSIM saturation) [GPU+CPU]",
@@ -35,7 +35,7 @@ impl FlagMode {
     }
 
     #[must_use]
-    pub fn is_ultimate(&self) -> bool {
+    pub const fn is_ultimate(&self) -> bool {
         matches!(self, Self::UltimateExplore)
     }
 }

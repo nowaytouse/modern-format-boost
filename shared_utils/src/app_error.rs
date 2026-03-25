@@ -81,57 +81,57 @@ pub enum AppError {
 
 impl AppError {
     #[must_use]
-    pub fn is_recoverable(&self) -> bool {
+    pub const fn is_recoverable(&self) -> bool {
         true
     }
 
     #[must_use]
-    pub fn category(&self) -> ErrorCategory {
+    pub const fn category(&self) -> ErrorCategory {
         match self {
-            AppError::FileNotFound { .. } | AppError::DirectoryNotFound { .. } => {
+            Self::FileNotFound { .. } | Self::DirectoryNotFound { .. } => {
                 ErrorCategory::Fatal
             }
 
-            AppError::FileReadError { .. } | AppError::FileWriteError { .. } | AppError::Io(_) => {
+            Self::FileReadError { .. } | Self::FileWriteError { .. } | Self::Io(_) => {
                 ErrorCategory::Fatal
             }
 
-            AppError::InvalidCrf(_) | AppError::InvalidSsim(_) => ErrorCategory::Recoverable,
+            Self::InvalidCrf(_) | Self::InvalidSsim(_) => ErrorCategory::Recoverable,
 
-            AppError::FfmpegError { .. }
-            | AppError::FfprobeError { .. }
-            | AppError::ToolNotFound { .. } => ErrorCategory::Fatal,
+            Self::FfmpegError { .. }
+            | Self::FfprobeError { .. }
+            | Self::ToolNotFound { .. } => ErrorCategory::Fatal,
 
-            AppError::CompressionFailed { .. } | AppError::QualityValidationFailed { .. } => {
+            Self::CompressionFailed { .. } | Self::QualityValidationFailed { .. } => {
                 ErrorCategory::Recoverable
             }
 
-            AppError::OutputExists { .. } => ErrorCategory::Optional,
+            Self::OutputExists { .. } => ErrorCategory::Optional,
 
-            AppError::IterationLimitExceeded(_) => ErrorCategory::Recoverable,
+            Self::IterationLimitExceeded(_) => ErrorCategory::Recoverable,
 
-            AppError::Other(_) => ErrorCategory::Fatal,
+            Self::Other(_) => ErrorCategory::Fatal,
         }
     }
 
     #[must_use]
     pub fn user_message(&self) -> String {
         match self {
-            AppError::FileNotFound { path, operation } => {
+            Self::FileNotFound { path, operation } => {
                 let mut msg = format!("❌ File not found: {}", path.display());
                 if let Some(op) = operation {
                     msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
-            AppError::DirectoryNotFound { path, operation } => {
+            Self::DirectoryNotFound { path, operation } => {
                 let mut msg = format!("❌ Directory not found: {}", path.display());
                 if let Some(op) = operation {
                     msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
-            AppError::FileReadError {
+            Self::FileReadError {
                 path,
                 source,
                 operation,
@@ -142,7 +142,7 @@ impl AppError {
                 }
                 msg
             }
-            AppError::FileWriteError {
+            Self::FileWriteError {
                 path,
                 source,
                 operation,
@@ -153,16 +153,16 @@ impl AppError {
                 }
                 msg
             }
-            AppError::InvalidCrf(e) => {
+            Self::InvalidCrf(e) => {
                 format!("❌ Invalid CRF value: {e}")
             }
-            AppError::InvalidSsim(e) => {
+            Self::InvalidSsim(e) => {
                 format!("❌ Invalid SSIM value: {e}")
             }
-            AppError::IterationLimitExceeded(e) => {
+            Self::IterationLimitExceeded(e) => {
                 format!("⚠️ Iteration limit exceeded: {e}")
             }
-            AppError::FfmpegError {
+            Self::FfmpegError {
                 message,
                 stderr,
                 exit_code,
@@ -184,7 +184,7 @@ impl AppError {
                 }
                 msg
             }
-            AppError::FfprobeError {
+            Self::FfprobeError {
                 message,
                 stderr,
                 command,
@@ -202,7 +202,7 @@ impl AppError {
                 }
                 msg
             }
-            AppError::ToolNotFound {
+            Self::ToolNotFound {
                 tool_name,
                 operation,
             } => {
@@ -214,7 +214,7 @@ impl AppError {
                 }
                 msg
             }
-            AppError::CompressionFailed {
+            Self::CompressionFailed {
                 input_size,
                 output_size,
                 file_path,
@@ -228,7 +228,7 @@ impl AppError {
                 }
                 msg
             }
-            AppError::QualityValidationFailed {
+            Self::QualityValidationFailed {
                 expected_ssim,
                 actual_ssim,
                 file_path,
@@ -241,91 +241,91 @@ impl AppError {
                 }
                 msg
             }
-            AppError::OutputExists { path, operation } => {
+            Self::OutputExists { path, operation } => {
                 let mut msg = format!("⏭️ Output file exists: {}", path.display());
                 if let Some(op) = operation {
                     msg.push_str(&format!("\n   Operation: {op}"));
                 }
                 msg
             }
-            AppError::Io(e) => {
+            Self::Io(e) => {
                 format!("❌ IO error: {e}")
             }
-            AppError::Other(e) => {
+            Self::Other(e) => {
                 format!("❌ Error: {e}")
             }
         }
     }
 
     #[must_use]
-    pub fn is_skip(&self) -> bool {
-        matches!(self, AppError::OutputExists { .. })
+    pub const fn is_skip(&self) -> bool {
+        matches!(self, Self::OutputExists { .. })
     }
 
     pub fn with_file_path(self, path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         match self {
-            AppError::FileNotFound { operation, .. } => AppError::FileNotFound { path, operation },
-            AppError::FileReadError {
+            Self::FileNotFound { operation, .. } => Self::FileNotFound { path, operation },
+            Self::FileReadError {
                 source, operation, ..
-            } => AppError::FileReadError {
+            } => Self::FileReadError {
                 path,
                 source,
                 operation,
             },
-            AppError::FileWriteError {
+            Self::FileWriteError {
                 source, operation, ..
-            } => AppError::FileWriteError {
+            } => Self::FileWriteError {
                 path,
                 source,
                 operation,
             },
-            AppError::DirectoryNotFound { operation, .. } => {
-                AppError::DirectoryNotFound { path, operation }
+            Self::DirectoryNotFound { operation, .. } => {
+                Self::DirectoryNotFound { path, operation }
             }
-            AppError::FfmpegError {
+            Self::FfmpegError {
                 message,
                 stderr,
                 exit_code,
                 command,
                 ..
-            } => AppError::FfmpegError {
+            } => Self::FfmpegError {
                 message,
                 stderr,
                 exit_code,
                 command,
                 file_path: Some(path),
             },
-            AppError::FfprobeError {
+            Self::FfprobeError {
                 message,
                 stderr,
                 command,
                 ..
-            } => AppError::FfprobeError {
+            } => Self::FfprobeError {
                 message,
                 stderr,
                 command,
                 file_path: Some(path),
             },
-            AppError::CompressionFailed {
+            Self::CompressionFailed {
                 input_size,
                 output_size,
                 ..
-            } => AppError::CompressionFailed {
+            } => Self::CompressionFailed {
                 input_size,
                 output_size,
                 file_path: Some(path),
             },
-            AppError::QualityValidationFailed {
+            Self::QualityValidationFailed {
                 expected_ssim,
                 actual_ssim,
                 ..
-            } => AppError::QualityValidationFailed {
+            } => Self::QualityValidationFailed {
                 expected_ssim,
                 actual_ssim,
                 file_path: Some(path),
             },
-            AppError::OutputExists { operation, .. } => AppError::OutputExists { path, operation },
+            Self::OutputExists { operation, .. } => Self::OutputExists { path, operation },
             other => other,
         }
     }
@@ -333,25 +333,25 @@ impl AppError {
     pub fn with_operation(self, operation: impl Into<String>) -> Self {
         let operation = Some(operation.into());
         match self {
-            AppError::FileNotFound { path, .. } => AppError::FileNotFound { path, operation },
-            AppError::FileReadError { path, source, .. } => AppError::FileReadError {
+            Self::FileNotFound { path, .. } => Self::FileNotFound { path, operation },
+            Self::FileReadError { path, source, .. } => Self::FileReadError {
                 path,
                 source,
                 operation,
             },
-            AppError::FileWriteError { path, source, .. } => AppError::FileWriteError {
+            Self::FileWriteError { path, source, .. } => Self::FileWriteError {
                 path,
                 source,
                 operation,
             },
-            AppError::DirectoryNotFound { path, .. } => {
-                AppError::DirectoryNotFound { path, operation }
+            Self::DirectoryNotFound { path, .. } => {
+                Self::DirectoryNotFound { path, operation }
             }
-            AppError::ToolNotFound { tool_name, .. } => AppError::ToolNotFound {
+            Self::ToolNotFound { tool_name, .. } => Self::ToolNotFound {
                 tool_name,
                 operation,
             },
-            AppError::OutputExists { path, .. } => AppError::OutputExists { path, operation },
+            Self::OutputExists { path, .. } => Self::OutputExists { path, operation },
             other => other,
         }
     }
@@ -359,25 +359,25 @@ impl AppError {
     pub fn with_command(self, command: impl Into<String>) -> Self {
         let command = Some(command.into());
         match self {
-            AppError::FfmpegError {
+            Self::FfmpegError {
                 message,
                 stderr,
                 exit_code,
                 file_path,
                 ..
-            } => AppError::FfmpegError {
+            } => Self::FfmpegError {
                 message,
                 stderr,
                 exit_code,
                 command,
                 file_path,
             },
-            AppError::FfprobeError {
+            Self::FfprobeError {
                 message,
                 stderr,
                 file_path,
                 ..
-            } => AppError::FfprobeError {
+            } => Self::FfprobeError {
                 message,
                 stderr,
                 command,
@@ -391,21 +391,21 @@ impl AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::FileNotFound { path, operation } => {
+            Self::FileNotFound { path, operation } => {
                 write!(f, "File not found: {}", path.display())?;
                 if let Some(op) = operation {
                     write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
-            AppError::DirectoryNotFound { path, operation } => {
+            Self::DirectoryNotFound { path, operation } => {
                 write!(f, "Directory not found: {}", path.display())?;
                 if let Some(op) = operation {
                     write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
-            AppError::FileReadError {
+            Self::FileReadError {
                 path,
                 source,
                 operation,
@@ -416,7 +416,7 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::FileWriteError {
+            Self::FileWriteError {
                 path,
                 source,
                 operation,
@@ -427,10 +427,10 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::InvalidCrf(e) => write!(f, "Invalid CRF: {e}"),
-            AppError::InvalidSsim(e) => write!(f, "Invalid SSIM: {e}"),
-            AppError::IterationLimitExceeded(e) => write!(f, "{e}"),
-            AppError::FfmpegError {
+            Self::InvalidCrf(e) => write!(f, "Invalid CRF: {e}"),
+            Self::InvalidSsim(e) => write!(f, "Invalid SSIM: {e}"),
+            Self::IterationLimitExceeded(e) => write!(f, "{e}"),
+            Self::FfmpegError {
                 message,
                 stderr,
                 exit_code,
@@ -452,7 +452,7 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::FfprobeError {
+            Self::FfprobeError {
                 message,
                 stderr,
                 command,
@@ -470,7 +470,7 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::ToolNotFound {
+            Self::ToolNotFound {
                 tool_name,
                 operation,
             } => {
@@ -480,7 +480,7 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::CompressionFailed {
+            Self::CompressionFailed {
                 input_size,
                 output_size,
                 file_path,
@@ -494,7 +494,7 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::QualityValidationFailed {
+            Self::QualityValidationFailed {
                 expected_ssim,
                 actual_ssim,
                 file_path,
@@ -508,15 +508,15 @@ impl fmt::Display for AppError {
                 }
                 Ok(())
             }
-            AppError::OutputExists { path, operation } => {
+            Self::OutputExists { path, operation } => {
                 write!(f, "Output exists: {}", path.display())?;
                 if let Some(op) = operation {
                     write!(f, " (during: {op})")?;
                 }
                 Ok(())
             }
-            AppError::Io(e) => write!(f, "IO error: {e}"),
-            AppError::Other(e) => write!(f, "{e}"),
+            Self::Io(e) => write!(f, "IO error: {e}"),
+            Self::Other(e) => write!(f, "{e}"),
         }
     }
 }
@@ -524,9 +524,9 @@ impl fmt::Display for AppError {
 impl std::error::Error for AppError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            AppError::FileReadError { source, .. } => Some(source),
-            AppError::FileWriteError { source, .. } => Some(source),
-            AppError::Io(e) => Some(e),
+            Self::FileReadError { source, .. } => Some(source),
+            Self::FileWriteError { source, .. } => Some(source),
+            Self::Io(e) => Some(e),
             _ => None,
         }
     }
@@ -534,31 +534,31 @@ impl std::error::Error for AppError {
 
 impl From<std::io::Error> for AppError {
     fn from(e: std::io::Error) -> Self {
-        AppError::Io(e)
+        Self::Io(e)
     }
 }
 
 impl From<CrfError> for AppError {
     fn from(e: CrfError) -> Self {
-        AppError::InvalidCrf(e)
+        Self::InvalidCrf(e)
     }
 }
 
 impl From<SsimError> for AppError {
     fn from(e: SsimError) -> Self {
-        AppError::InvalidSsim(e)
+        Self::InvalidSsim(e)
     }
 }
 
 impl From<IterationError> for AppError {
     fn from(e: IterationError) -> Self {
-        AppError::IterationLimitExceeded(e)
+        Self::IterationLimitExceeded(e)
     }
 }
 
 impl From<anyhow::Error> for AppError {
     fn from(e: anyhow::Error) -> Self {
-        AppError::Other(e)
+        Self::Other(e)
     }
 }
 

@@ -19,7 +19,7 @@ pub struct FileInfo {
 impl FileInfo {
     #[must_use]
     pub fn new(path: PathBuf) -> Option<Self> {
-        fs::metadata(&path).ok().map(|meta| FileInfo {
+        fs::metadata(&path).ok().map(|meta| Self {
             path,
             size: meta.len(),
         })
@@ -40,7 +40,7 @@ pub struct FileSorter {
 
 impl FileSorter {
     #[must_use]
-    pub fn new(strategy: SortStrategy) -> Self {
+    pub const fn new(strategy: SortStrategy) -> Self {
         Self { strategy }
     }
 
@@ -180,7 +180,7 @@ mod tests {
         let f2 = create_test_file(temp_dir.path(), "a.txt", 100);
         let f3 = create_test_file(temp_dir.path(), "m.txt", 500);
 
-        let files = vec![f1.clone(), f2.clone(), f3.clone()];
+        let files = vec![f1, f2, f3];
         let file_sorter = FileSorter::new(SortStrategy::None);
         let sorted_results = file_sorter.sort(files.clone());
 
@@ -214,7 +214,7 @@ mod tests {
         let f2 = create_test_file(temp_dir.path(), "file2.txt", 100);
         let f3 = create_test_file(temp_dir.path(), "file3.txt", 100);
 
-        let files = vec![f1.clone(), f2.clone(), f3.clone()];
+        let files = vec![f1, f2, f3];
         let sorted = sort_by_size_ascending(files);
 
         assert_eq!(sorted.len(), 3);

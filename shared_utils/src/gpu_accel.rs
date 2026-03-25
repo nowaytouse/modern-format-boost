@@ -118,7 +118,7 @@ struct HeartbeatMonitor {
 }
 
 impl HeartbeatMonitor {
-    fn new(
+    const fn new(
         last_activity: Arc<Mutex<std::time::Instant>>,
         stop_signal: Arc<AtomicBool>,
         first_output: Arc<AtomicBool>,
@@ -328,12 +328,12 @@ pub enum GpuType {
 impl std::fmt::Display for GpuType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GpuType::Nvidia => write!(f, "NVIDIA NVENC"),
-            GpuType::Apple => write!(f, "Apple VideoToolbox"),
-            GpuType::IntelQsv => write!(f, "Intel QSV"),
-            GpuType::AmdAmf => write!(f, "AMD AMF"),
-            GpuType::Vaapi => write!(f, "VA-API"),
-            GpuType::None => write!(f, "None (CPU)"),
+            Self::Nvidia => write!(f, "NVIDIA NVENC"),
+            Self::Apple => write!(f, "Apple VideoToolbox"),
+            Self::IntelQsv => write!(f, "Intel QSV"),
+            Self::AmdAmf => write!(f, "AMD AMF"),
+            Self::Vaapi => write!(f, "VA-API"),
+            Self::None => write!(f, "None (CPU)"),
         }
     }
 }
@@ -351,7 +351,7 @@ pub struct GpuEncoder {
 
 impl GpuEncoder {
     #[must_use]
-    pub fn ffmpeg_name(&self) -> &'static str {
+    pub const fn ffmpeg_name(&self) -> &'static str {
         self.name
     }
 
@@ -402,12 +402,12 @@ impl Default for GpuAccel {
 }
 
 impl GpuAccel {
-    pub fn detect() -> &'static GpuAccel {
+    pub fn detect() -> &'static Self {
         GPU_ACCEL.get_or_init(Self::detect_internal)
     }
 
     #[must_use]
-    pub fn detect_fresh() -> GpuAccel {
+    pub fn detect_fresh() -> Self {
         Self::detect_internal()
     }
 
@@ -438,7 +438,7 @@ impl GpuAccel {
         }
     }
 
-    fn detect_internal() -> GpuAccel {
+    fn detect_internal() -> Self {
         let encoders = get_available_encoders();
 
         #[cfg(target_os = "macos")]
@@ -468,10 +468,10 @@ impl GpuAccel {
             return accel;
         }
 
-        GpuAccel::default()
+        Self::default()
     }
 
-    fn try_videotoolbox(encoders: &[String]) -> Option<GpuAccel> {
+    fn try_videotoolbox(encoders: &[String]) -> Option<Self> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_videotoolbox"));
         let has_h264 = encoders.iter().any(|e| e.contains("h264_videotoolbox"));
 
@@ -483,7 +483,7 @@ impl GpuAccel {
             return None;
         }
 
-        Some(GpuAccel {
+        Some(Self {
             gpu_type: GpuType::Apple,
             hevc_encoder: if has_hevc {
                 Some(GpuEncoder {
@@ -517,7 +517,7 @@ impl GpuAccel {
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    fn try_nvenc(encoders: &[String]) -> Option<GpuAccel> {
+    fn try_nvenc(encoders: &[String]) -> Option<Self> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_nvenc"));
         let has_av1 = encoders.iter().any(|e| e.contains("av1_nvenc"));
         let has_h264 = encoders.iter().any(|e| e.contains("h264_nvenc"));
@@ -530,7 +530,7 @@ impl GpuAccel {
             return None;
         }
 
-        Some(GpuAccel {
+        Some(Self {
             gpu_type: GpuType::Nvidia,
             hevc_encoder: if has_hevc {
                 Some(GpuEncoder {
@@ -594,7 +594,7 @@ impl GpuAccel {
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    fn try_qsv(encoders: &[String]) -> Option<GpuAccel> {
+    fn try_qsv(encoders: &[String]) -> Option<Self> {
         let has_hevc = encoders.iter().any(|e| e.contains("hevc_qsv"));
         let has_av1 = encoders.iter().any(|e| e.contains("av1_qsv"));
         let has_h264 = encoders.iter().any(|e| e.contains("h264_qsv"));
@@ -607,7 +607,7 @@ impl GpuAccel {
             return None;
         }
 
-        Some(GpuAccel {
+        Some(Self {
             gpu_type: GpuType::IntelQsv,
             hevc_encoder: if has_hevc {
                 Some(GpuEncoder {
@@ -771,7 +771,7 @@ impl GpuAccel {
     }
 
     #[must_use]
-    pub fn get_hevc_encoder(&self) -> Option<&GpuEncoder> {
+    pub const fn get_hevc_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.hevc_encoder.as_ref()
         } else {
@@ -780,7 +780,7 @@ impl GpuAccel {
     }
 
     #[must_use]
-    pub fn get_av1_encoder(&self) -> Option<&GpuEncoder> {
+    pub const fn get_av1_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.av1_encoder.as_ref()
         } else {
@@ -789,7 +789,7 @@ impl GpuAccel {
     }
 
     #[must_use]
-    pub fn get_h264_encoder(&self) -> Option<&GpuEncoder> {
+    pub const fn get_h264_encoder(&self) -> Option<&GpuEncoder> {
         if self.enabled {
             self.h264_encoder.as_ref()
         } else {
@@ -798,7 +798,7 @@ impl GpuAccel {
     }
 
     #[must_use]
-    pub fn is_available(&self) -> bool {
+    pub const fn is_available(&self) -> bool {
         self.enabled
     }
 
@@ -1150,7 +1150,7 @@ pub struct CrfMapping {
 
 impl CrfMapping {
     #[must_use]
-    pub fn hevc(gpu_type: GpuType) -> Self {
+    pub const fn hevc(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (5.0, 0.5),
             GpuType::Nvidia => (3.8, 0.3),
@@ -1168,7 +1168,7 @@ impl CrfMapping {
     }
 
     #[must_use]
-    pub fn av1(gpu_type: GpuType) -> Self {
+    pub const fn av1(gpu_type: GpuType) -> Self {
         let (offset, uncertainty) = match gpu_type {
             GpuType::Apple => (0.0, 0.0),
             GpuType::Nvidia => (3.8, 0.4),
@@ -1314,7 +1314,7 @@ struct QualityCeilingDetector {
 }
 
 impl QualityCeilingDetector {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             samples: Vec::new(),
             plateau_threshold: 0.1,
@@ -1365,7 +1365,7 @@ struct PsnrSsimMapper {
 }
 
 impl PsnrSsimMapper {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             calibration_points: Vec::new(),
             calibrated: false,

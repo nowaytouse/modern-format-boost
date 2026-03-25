@@ -103,12 +103,12 @@ impl<K: Hash + Eq + Clone, V: Clone> LruCache<K, V> {
     }
 
     #[must_use]
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.capacity
     }
 
     #[must_use]
-    pub fn eviction_count(&self) -> u64 {
+    pub const fn eviction_count(&self) -> u64 {
         self.eviction_count
     }
 

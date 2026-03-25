@@ -33,7 +33,7 @@ pub struct PsnrSsimMapping {
 
 impl PsnrSsimMapping {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { points: Vec::new() }
     }
 
@@ -63,21 +63,21 @@ impl PsnrSsimMapping {
             return p2.ssim;
         }
         let ratio = (psnr - p1.psnr) / delta;
-        p1.ssim + ratio * (p2.ssim - p1.ssim)
+        ratio.mul_add(p2.ssim - p1.ssim, p1.ssim)
     }
 
     #[must_use]
-    pub fn has_enough_points(&self) -> bool {
+    pub const fn has_enough_points(&self) -> bool {
         self.points.len() >= 3
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.points.len()
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
 
@@ -247,10 +247,10 @@ mod prop_tests {
             mapping.insert(p2_psnr, p2_ssim);
             mapping.insert(p3_psnr, p3_ssim);
 
-            let query_psnr = p1_psnr + query_ratio * (p2_psnr - p1_psnr);
+            let query_psnr = query_ratio.mul_add(p2_psnr - p1_psnr, p1_psnr);
             let predicted = mapping.predict_ssim(query_psnr).unwrap();
 
-            let expected = p1_ssim + query_ratio * (p2_ssim - p1_ssim);
+            let expected = query_ratio.mul_add(p2_ssim - p1_ssim, p1_ssim);
             prop_assert!((predicted - expected).abs() < 0.0001,
                 "Interpolation error: predicted={}, expected={}", predicted, expected);
         }

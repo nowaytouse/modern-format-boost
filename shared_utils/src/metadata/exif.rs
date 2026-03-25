@@ -134,7 +134,7 @@ fn preserve_internal_metadata_fallback(
         );
         if temp_path.exists() && !dst.exists() {
             eprintln!("   🔧 Attempting emergency recovery via copy...");
-            if let Ok(()) = std::fs::copy(&temp_path, dst).map(|_| ()) {
+            if matches!(std::fs::copy(&temp_path, dst).map(|_| ()), Ok(())) {
                 if let Err(cleanup_err) = std::fs::remove_file(&temp_path) {
                     eprintln!(
                         "   ⚠️ Emergency recovery succeeded but cleanup failed for {}: {}",

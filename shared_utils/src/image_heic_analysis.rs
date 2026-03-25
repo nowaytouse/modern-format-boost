@@ -242,7 +242,7 @@ fn parse_sps_rbsp_for_transquant_bypass(sps_payload: &[u8]) -> Option<bool> {
         bit_pos: usize,
     }
     impl<'a> BitReader<'a> {
-        fn new(data: &'a [u8]) -> Self {
+        const fn new(data: &'a [u8]) -> Self {
             BitReader { data, bit_pos: 0 }
         }
         fn read_bits(&mut self, n: usize) -> Option<u32> {
@@ -375,7 +375,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                 if let Some(pos) = data.windows(4).position(|w| w == b"ftyp") {
                     if pos >= 4 {
                         let sliced_data = &data[pos - 4..];
-                        if let Ok(()) = ctx.read_bytes(sliced_data) {
+                        if matches!(ctx.read_bytes(sliced_data), Ok(())) {
                             return Ok(());
                         }
                     }
@@ -392,7 +392,7 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
                         }
 
                         // Try to read from file path
-                        if let Ok(()) = file_ctx.read_file(path_str) {
+                        if matches!(file_ctx.read_file(path_str), Ok(())) {
                             // Replace ctx with the successfully loaded file_ctx
                             ctx = file_ctx;
                             return Ok(());

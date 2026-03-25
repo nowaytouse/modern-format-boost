@@ -106,7 +106,7 @@ pub fn verify_pure_media_compression(
 
 #[inline]
 #[must_use]
-pub fn is_video_compressed(
+pub const fn is_video_compressed(
     input_video_size: u64,
     output_video_size: u64,
     allow_size_tolerance: bool,

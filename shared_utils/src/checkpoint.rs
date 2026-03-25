@@ -38,6 +38,7 @@
 pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_IMAGE: u64 = 100;
 
 /// Minimum output size (bytes) to allow deleting the original for **video** conversions.
+///
 /// Video containers typically need at least ~1KB to be valid; use this to avoid deleting original on corrupt/tiny output.
 pub const MIN_OUTPUT_SIZE_BEFORE_DELETE_VIDEO: u64 = 1000;
 
@@ -604,7 +605,7 @@ impl CheckpointManager {
             if completed.contains_key(&key) {
                 return Ok(());
             }
-            completed.insert(key.clone(), entry.clone());
+            completed.insert(key, entry.clone());
         }
         self.resume_mode.store(true, Ordering::Relaxed);
         self.ensure_progress_header_exists()?;

@@ -488,9 +488,9 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
     let complexity = normalize(bytes_per_pixel, BPP_LOW, BPP_HIGH);
 
     let w_sharpness = 0.38;
-    let w_resolution = 0.18 + 0.10 * complexity;
-    let w_duration = 0.20 + 0.08 * complexity;
-    let w_aspect = 0.09 * (1.0 - 0.3 * complexity);
+    let w_resolution = 0.10f64.mul_add(complexity, 0.18);
+    let w_duration = 0.08f64.mul_add(complexity, 0.20);
+    let w_aspect = 0.09 * 0.3f64.mul_add(-complexity, 1.0);
     let w_fps = 0.00;
     let w_filename = 0.08;
     let w_loop_freq = 0.04;
@@ -525,13 +525,11 @@ pub fn score_gif(meta: &GifMeta) -> MemeScore {
         w_palette / w_sum,
     );
 
-    let total = sharpness_score * w_sharpness
+    let total = loop_frequency_score.mul_add(w_loop_freq, sharpness_score * w_sharpness
         + resolution_score * w_resolution
         + duration_score * w_duration
         + aspect_score * w_aspect
-        + fps_score * w_fps
-        + effective_filename_score * w_filename
-        + loop_frequency_score * w_loop_freq
+        + fps_score * w_fps + effective_filename_score * w_filename)
         + palette_score * w_palette;
 
     MemeScore {
@@ -609,6 +607,7 @@ pub fn should_keep_as_gif(meta: &GifMeta) -> bool {
 // ── Builder helpers ───────────────────────────────────────────────────────────
 
 /// Build a [`GifMeta`] from an [`crate::ffprobe::FFprobeResult`] and file size.
+///
 /// Returns `None` if the probe has no usable video dimensions.
 /// `palette_size` and `app_extensions` are left `None`; populate them via
 /// [`scan_gif_headers`] if a cheap header-scan is acceptable.

@@ -302,7 +302,7 @@ pub struct BatchResult {
 
 impl BatchResult {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             total: 0,
             succeeded: 0,
@@ -315,7 +315,7 @@ impl BatchResult {
         }
     }
 
-    pub fn success(&mut self) {
+    pub const fn success(&mut self) {
         self.total += 1;
         self.succeeded += 1;
     }
@@ -326,7 +326,7 @@ impl BatchResult {
         self.errors.push((path, error));
     }
 
-    pub fn skip(&mut self) {
+    pub const fn skip(&mut self) {
         self.total += 1;
         self.skipped += 1;
     }

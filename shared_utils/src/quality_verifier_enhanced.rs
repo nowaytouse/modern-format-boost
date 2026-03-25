@@ -28,7 +28,7 @@ pub struct VerifyOptions {
 }
 
 impl VerifyOptions {
-    pub fn strict_video() -> Self {
+    pub const fn strict_video() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
@@ -39,7 +39,7 @@ impl VerifyOptions {
 
     /// Relaxed verification for animated images (GIF, WebP, AVIF) with variable frame delays.
     /// Uses a larger duration tolerance to accommodate frame timing variations during conversion.
-    pub fn relaxed_animated_image() -> Self {
+    pub const fn relaxed_animated_image() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: true,
@@ -48,7 +48,7 @@ impl VerifyOptions {
         }
     }
 
-    pub fn minimal() -> Self {
+    pub const fn minimal() -> Self {
         Self {
             min_file_size: DEFAULT_MIN_FILE_SIZE,
             require_duration_match: false,
@@ -57,7 +57,7 @@ impl VerifyOptions {
         }
     }
 
-    fn effective_min_size(&self) -> u64 {
+    const fn effective_min_size(&self) -> u64 {
         if self.min_file_size > 0 {
             self.min_file_size
         } else {

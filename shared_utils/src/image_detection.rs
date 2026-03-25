@@ -72,6 +72,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// Open an image with relaxed memory limits to handle very large JPEGs.
+///
 /// Increases `max_alloc` from default ~512MB to 2GB for legitimate large images.
 /// Still protects against malicious images (2GB is reasonable for 100MP+ images).
 pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, image::ImageError> {
@@ -170,37 +171,37 @@ impl DetectedFormat {
     #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
-            DetectedFormat::PNG => "PNG",
-            DetectedFormat::JPEG => "JPEG",
-            DetectedFormat::GIF => "GIF",
-            DetectedFormat::WebP => "WebP",
-            DetectedFormat::HEIC => "HEIC",
-            DetectedFormat::HEIF => "HEIF",
-            DetectedFormat::AVIF => "AVIF",
-            DetectedFormat::JXL => "JXL",
-            DetectedFormat::TIFF => "TIFF",
-            DetectedFormat::BMP => "BMP",
-            DetectedFormat::QOI => "QOI",
-            DetectedFormat::JP2 => "JP2",
-            DetectedFormat::ICO => "ICO",
-            DetectedFormat::TGA => "TGA",
-            DetectedFormat::EXR => "EXR",
-            DetectedFormat::FLIF => "FLIF",
-            DetectedFormat::PSD => "PSD",
-            DetectedFormat::PNM => "PNM",
-            DetectedFormat::DDS => "DDS",
-            DetectedFormat::Unknown(s) => s,
+            Self::PNG => "PNG",
+            Self::JPEG => "JPEG",
+            Self::GIF => "GIF",
+            Self::WebP => "WebP",
+            Self::HEIC => "HEIC",
+            Self::HEIF => "HEIF",
+            Self::AVIF => "AVIF",
+            Self::JXL => "JXL",
+            Self::TIFF => "TIFF",
+            Self::BMP => "BMP",
+            Self::QOI => "QOI",
+            Self::JP2 => "JP2",
+            Self::ICO => "ICO",
+            Self::TGA => "TGA",
+            Self::EXR => "EXR",
+            Self::FLIF => "FLIF",
+            Self::PSD => "PSD",
+            Self::PNM => "PNM",
+            Self::DDS => "DDS",
+            Self::Unknown(s) => s,
         }
     }
 
     #[must_use]
-    pub fn is_modern_format(&self) -> bool {
+    pub const fn is_modern_format(&self) -> bool {
         matches!(
             self,
-            DetectedFormat::HEIC
-                | DetectedFormat::HEIF
-                | DetectedFormat::AVIF
-                | DetectedFormat::JXL
+            Self::HEIC
+                | Self::HEIF
+                | Self::AVIF
+                | Self::JXL
         )
     }
 }
@@ -968,7 +969,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                     };
                 let palette_size = png_info.palette_size.unwrap_or(256) as f64;
                 if palette_size >= 64.0 && entropy_ratio < 0.6 && pixel_count > 10_000 {
-                    factors.entropy_anomaly = 0.5 + (0.6 - entropy_ratio) * 0.5;
+                    factors.entropy_anomaly = (0.6 - entropy_ratio).mul_add(0.5, 0.5);
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.75);
                     if factors.entropy_anomaly > 0.4 {
                         explanations.push(format!(
@@ -977,7 +978,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
                         ));
                     }
                 } else if palette_size >= 128.0 && entropy < 5.0 && pixel_count > 10_000 {
-                    factors.entropy_anomaly = 0.5 + (5.0 - entropy) * 0.08;
+                    factors.entropy_anomaly = (5.0 - entropy).mul_add(0.08, 0.5);
                     factors.entropy_anomaly = factors.entropy_anomaly.clamp(0.0, 0.7);
                     if factors.entropy_anomaly > 0.4 {
                         explanations.push(format!(
@@ -1029,10 +1030,7 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
 
     let heuristic_score = f64::midpoint(factors.size_efficiency_anomaly, factors.entropy_anomaly);
 
-    let final_score = structural_score * weights.structural
-        + metadata_score * weights.metadata
-        + statistical_score * weights.statistical
-        + heuristic_score * weights.heuristic;
+    let final_score = heuristic_score.mul_add(weights.heuristic, structural_score.mul_add(weights.structural, metadata_score * weights.metadata) + statistical_score * weights.statistical);
 
     const LOSSY_THRESHOLD: f64 = 0.58;
 
@@ -1166,16 +1164,16 @@ pub fn analyze_png_quantization_from_reader<R: std::io::Read + std::io::Seek>(
     // false positives (e.g. natural palette art misclassified as quantized).
     const GRAY_ZONE_LOW: f64 = 0.40;
     let (is_quantized, confidence) = if final_score >= 0.70 {
-        (true, 0.9 + (final_score - 0.70) * 0.33)
+        (true, (final_score - 0.70).mul_add(0.33, 0.9))
     } else if final_score >= LOSSY_THRESHOLD {
-        (true, 0.7 + (final_score - LOSSY_THRESHOLD) * 1.0)
+        (true, (final_score - LOSSY_THRESHOLD).mul_add(1.0, 0.7))
     } else if final_score >= GRAY_ZONE_LOW {
         // Gray zone: no tool signature → lossless (conservative)
-        (false, 0.5 + (LOSSY_THRESHOLD - final_score) * 1.0)
+        (false, (LOSSY_THRESHOLD - final_score).mul_add(1.0, 0.5))
     } else if final_score >= 0.30 {
-        (false, 0.5 + (LOSSY_THRESHOLD - final_score) * 1.0)
+        (false, (LOSSY_THRESHOLD - final_score).mul_add(1.0, 0.5))
     } else {
-        (false, 0.8 + (0.30 - final_score) * 0.67)
+        (false, (0.30 - final_score).mul_add(0.67, 0.8))
     };
 
     let explanation = if explanations.is_empty() {
@@ -1474,7 +1472,7 @@ fn color_difference(a: &Rgba<u8>, b: &Rgba<u8>) -> f64 {
     let wr = 2.0 + rmean / 256.0;
     let wg = 4.0;
     let wb = 2.0 + (255.0 - rmean) / 256.0;
-    (wr * dr * dr + wg * dg * dg + wb * db * db).sqrt()
+    (wb * db).mul_add(db, (wr * dr).mul_add(dr, wg * dg * dg)).sqrt()
 }
 
 /// Block-based random sampling — divides image into grid cells and randomly samples from each,
@@ -1755,7 +1753,7 @@ fn detect_gradient_banding(img: &DynamicImage) -> f64 {
     };
 
     // Combine: per-channel horizontal (70%) + diagonal luma (30%)
-    (total_score * 0.70 + diag_score * 0.30).min(1.0)
+    total_score.mul_add(0.70, diag_score * 0.30).min(1.0)
 }
 
 fn estimate_uncompressed_size(info: &PngStructureInfo) -> u64 {
@@ -2051,7 +2049,7 @@ fn estimate_lossy_quality_fallback(
 
     let effective_bpp = raw_bpp * efficiency_factor * entropy_adj;
     let bpp_quality =
-        (70.0 + 15.0 * (effective_bpp * 5.0).max(0.001).log2()).clamp(10.0, 100.0) as u8;
+        15.0f64.mul_add((effective_bpp * 5.0).max(0.001).log2(), 70.0).clamp(10.0, 100.0) as u8;
 
     crate::progress_mode::emit_stderr(&format!(
         "   \x1b[1;33m⚠️  [QUALITY FALLBACK]\x1b[0m \x1b[33mExact detection unavailable for {} codec.\x1b[0m\n\

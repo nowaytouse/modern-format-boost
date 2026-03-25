@@ -176,7 +176,7 @@ pub fn calculate_ms_ssim_yuv(
     // If chroma channels are available, use BT.601 weighted average
     // If not, use Y-only (still perceptually dominant and meaningful)
     let (u_val, v_val, weighted_avg) = if let (Some(u), Some(v)) = (u_ms_ssim, v_ms_ssim) {
-        let avg = (y_ms_ssim * 6.0 + u + v) / 8.0;
+        let avg = (y_ms_ssim.mul_add(6.0, u) + v) / 8.0;
         (u, v, avg)
     } else {
         eprintln!("      ℹ️  Using Y-only MS-SSIM (chroma channels unavailable)");
@@ -505,6 +505,7 @@ pub fn calculate_vmaf_y(input: &Path, output: &Path, sample_rate: usize) -> Opti
 }
 
 /// Calculate CAMBI (Contrast Aware Multiscale Banding Index) for the output video.
+///
 /// CAMBI is a single-video metric (no reference needed) — lower is better (0 = no banding).
 /// Returns None on failure or if libvmaf doesn't support the cambi feature.
 #[must_use]

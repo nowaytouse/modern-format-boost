@@ -90,11 +90,11 @@ impl FfmpegProcess {
         })
     }
 
-    pub fn stdout(&mut self) -> Option<&mut ChildStdout> {
+    pub const fn stdout(&mut self) -> Option<&mut ChildStdout> {
         self.child.stdout.as_mut()
     }
 
-    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+    pub const fn take_stdout(&mut self) -> Option<ChildStdout> {
         self.child.stdout.take()
     }
 
@@ -548,7 +548,7 @@ mod prop_tests {
             let line = format!("time={hours:02}:{minutes:02}:{seconds:02}.00");
             let progress = parser.parse_line(&line);
 
-            let current_seconds = f64::from(hours) * 3600.0 + f64::from(minutes) * 60.0 + f64::from(seconds);
+            let current_seconds = f64::from(hours).mul_add(3600.0, f64::from(minutes) * 60.0) + f64::from(seconds);
             if current_seconds > 0.0 {
                 let expected = (current_seconds / total_duration).min(1.0);
                 prop_assert!(progress.is_some());

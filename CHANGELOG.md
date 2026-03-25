@@ -10,13 +10,14 @@ All notable changes to this project will be documented in this file.
 ### 🛠️ Code Quality
 - **Script Enhancements**: Enhanced `scripts/check_all.sh`:
   - Added `--fix` flag for automatic code formatting and clippy fixes
-  - Removed unused variables in `advisory_db_writable()`
-  - Added null check in shell file iteration
+  - Removed unused variables, added null checks, fixed syntax errors
   - Translated Chinese comments to English
-  - Fixed parentheses in test names
-  - Improved regex escaping
-- **Rust Performance**: Applied 7 FMA optimizations in `gpu_accel.rs` and `image_quality_detector.rs`
-- **Code Cleanup**: Made `CacheStatistics::total_records()` const fn
+- **Rust Code Cleanup**: Major code quality improvements:
+  - Fixed 554 unnecessary structure name repetitions (use `Self::` instead)
+  - Applied 7 FMA optimizations for better floating-point performance
+  - Made `CacheStatistics::total_records()` const fn
+  - Reduced pedantic/nursery warnings from 1227 to 422 (66% reduction)
+  - Modified 59 files, -216 lines of code
 
 ## [0.10.100] - 2026-03-25
 

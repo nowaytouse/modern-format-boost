@@ -831,7 +831,7 @@ impl FixedBottomProgress {
         ));
     }
 
-    pub fn bar(&self) -> &ProgressBar {
+    pub const fn bar(&self) -> &ProgressBar {
         &self.bar
     }
 }
@@ -1214,7 +1214,7 @@ impl SmartProgressBar {
     }
 
     #[must_use]
-    pub fn bar(&self) -> &ProgressBar {
+    pub const fn bar(&self) -> &ProgressBar {
         &self.bar
     }
 }
@@ -1314,7 +1314,7 @@ impl BatchProgress {
     }
 
     #[must_use]
-    pub fn bar(&self) -> &ProgressBar {
+    pub const fn bar(&self) -> &ProgressBar {
         &self.bar
     }
 }
