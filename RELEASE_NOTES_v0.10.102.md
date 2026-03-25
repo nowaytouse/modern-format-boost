@@ -3,9 +3,6 @@
 ### 🛠️ Hardening & Technical Debt Cleanup
 - **Quality & Performance**:
   - **Zero-Warning Workspace**: Achieved a clean, warning-free build across all crates (`img_hevc`, `img_av1`, `shared_utils`) and shell scripts.
-  - **Emoji Hardening**: Upgraded error logging emojis to prevent visual confusion:
-    - `☢️  RARE ERROR`: For unexpected internal bugs (assertion failures, crashes).
-    - `⛔️ UPSTREAM ERROR`: For external tool failures (cjxl/ffmpeg exit codes).
   - **Dependency Update**: Full workspace-wide dependency synchronization via `cargo update` to the latest stable and nightly-compatible versions.
 - **Image Intelligence**:
   - **EXR Detection**: Advanced attribute parsing for `OpenEXR` compression types (NONE/RLE/ZIPS/ZIP/PIZ for lossless; DWAA/DWAB etc. for lossy).

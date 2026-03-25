@@ -39,10 +39,10 @@ impl ErrorSeverity {
     pub fn label_colored(&self) -> String {
         match self {
             Self::Critical => "\x1b[1;31m🚨 CRITICAL\x1b[0m".to_string(),
-            Self::Rare => "\x1b[1;33m☢️  RARE ERROR\x1b[0m".to_string(),
+            Self::Rare => "\x1b[1;33m⚠️  RARE ERROR\x1b[0m".to_string(),
             Self::MetadataLoss => "\x1b[1;35m📋 METADATA LOSS\x1b[0m".to_string(),
             Self::PipelineBroken => "\x1b[1;36m🔧 PIPELINE BROKEN\x1b[0m".to_string(),
-            Self::UpstreamError => "\x1b[33m⛔️ UPSTREAM ERROR\x1b[0m".to_string(),
+            Self::UpstreamError => "\x1b[33m🔺 UPSTREAM ERROR\x1b[0m".to_string(),
             Self::Standard => "\x1b[31m❌ ERROR\x1b[0m".to_string(),
         }
     }
