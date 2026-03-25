@@ -71,6 +71,7 @@ fn cleanup_output_file(path: &Path, context: &str) {
     }
 }
 
+#[must_use]
 pub fn determine_strategy(detection: &DetectionResult) -> Result<ConversionStrategy> {
     match (
         &detection.image_type,

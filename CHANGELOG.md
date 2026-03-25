@@ -18,6 +18,11 @@ All notable changes to this project will be documented in this file.
   - Made `CacheStatistics::total_records()` const fn
   - Reduced pedantic/nursery warnings from 1227 to 422 (66% reduction)
   - Modified 59 files, -216 lines of code
+- **API Safety**: Added `#[must_use]` attributes to critical public functions:
+  - `detect_image()` - ensures detection results are handled
+  - `determine_strategy()` - ensures conversion strategies are used
+  - `calculate_av1_crf()`, `calculate_hevc_crf()`, `calculate_jxl_distance()` - ensures quality calculations are checked
+  - Provides compile-time safety against ignored return values
 
 ## [0.10.100] - 2026-03-25
 

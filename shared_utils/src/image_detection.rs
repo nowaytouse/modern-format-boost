@@ -1875,6 +1875,7 @@ fn calculate_rgb_entropy(img: &DynamicImage) -> f64 {
     (er + eg + eb) / 3.0
 }
 
+#[must_use]
 pub fn detect_image(path: &Path) -> Result<DetectionResult> {
     let file_size = std::fs::metadata(path)?.len();
 

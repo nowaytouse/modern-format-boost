@@ -375,6 +375,7 @@ const AV1_CRF_CLAMP_MAX: f32 = 51.0;
 const HEVC_CRF_CLAMP_MIN: f32 = 0.0;
 const HEVC_CRF_CLAMP_MAX: f32 = 51.0;
 
+#[must_use]
 pub fn calculate_av1_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_av1_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
@@ -438,6 +439,7 @@ pub fn calculate_av1_crf_with_options(
     })
 }
 
+#[must_use]
 pub fn calculate_hevc_crf(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_hevc_crf_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
@@ -499,6 +501,7 @@ pub fn calculate_hevc_crf_with_options(
     })
 }
 
+#[must_use]
 pub fn calculate_jxl_distance(analysis: &QualityAnalysis) -> Result<MatchedQuality, String> {
     calculate_jxl_distance_with_options(analysis, MatchMode::Quality, QualityBias::Balanced)
 }
