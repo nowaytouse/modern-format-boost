@@ -28,14 +28,28 @@ fn open_image_reader_with_magic_bytes(
     // This handles cases like .jpe, missing extensions, or incorrect extensions
     let format = match infer::get_from_path(path) {
         Ok(Some(kind)) => match kind.mime_type() {
+            // Standard formats supported by image crate
             "image/jpeg" => Some(image::ImageFormat::Jpeg),
             "image/png" => Some(image::ImageFormat::Png),
+            "image/gif" => Some(image::ImageFormat::Gif),
             "image/webp" => Some(image::ImageFormat::WebP),
             "image/tiff" => Some(image::ImageFormat::Tiff),
-            "image/gif" => Some(image::ImageFormat::Gif),
             "image/bmp" => Some(image::ImageFormat::Bmp),
             "image/x-icon" => Some(image::ImageFormat::Ico),
-            _ => None, // Fall back to extension-based detection
+            // Modern formats (if image crate supports them)
+            "image/avif" => Some(image::ImageFormat::Avif),
+            // Note: HEIC/HEIF are handled separately via libheif-rs, not through image crate
+            // Note: JXL is handled separately via djxl/cjxl, not through image crate
+            // Note: OpenEXR, JPEG 2000, PSD, etc. may need special handling
+            _ => {
+                // Log unsupported MIME type for debugging
+                log_eprintln!(
+                    "⚠️  [Format Detection] Magic bytes detected unsupported MIME type '{}' for {}. Falling back to extension-based detection.",
+                    kind.mime_type(),
+                    path.display()
+                );
+                None
+            }
         },
         Ok(None) => None, // No magic bytes detected, fall back to extension
         Err(e) => {

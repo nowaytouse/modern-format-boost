@@ -88,14 +88,18 @@ pub fn open_image_with_limits(path: &Path) -> std::result::Result<DynamicImage, 
     // This handles cases like .jpe, missing extensions, or incorrect extensions
     let format = match infer::get_from_path(path) {
         Ok(Some(kind)) => match kind.mime_type() {
+            // Standard formats supported by image crate
             "image/jpeg" => Some(image::ImageFormat::Jpeg),
             "image/png" => Some(image::ImageFormat::Png),
+            "image/gif" => Some(image::ImageFormat::Gif),
             "image/webp" => Some(image::ImageFormat::WebP),
             "image/tiff" => Some(image::ImageFormat::Tiff),
-            "image/gif" => Some(image::ImageFormat::Gif),
             "image/bmp" => Some(image::ImageFormat::Bmp),
             "image/x-icon" => Some(image::ImageFormat::Ico),
-            _ => None, // Fall back to extension-based detection
+            // Modern formats (if image crate supports them)
+            "image/avif" => Some(image::ImageFormat::Avif),
+            // Note: HEIC/HEIF, JXL, OpenEXR, JPEG 2000, PSD, etc. are handled separately
+            _ => None, // Fall back to extension-based detection for unsupported formats
         },
         _ => None, // Fall back to extension-based detection
     };

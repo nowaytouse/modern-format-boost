@@ -8,12 +8,15 @@ All notable changes to this project will be documented in this file.
 ## [0.10.104] - 2026-03-26
 
 ### 🐛 Bug Fixes
-- **JPEG Extension Recognition**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. Previously, files with `.jpe` extension (a valid JPEG extension) would fail with "The file extension `.\"jpe\"` was not recognized as an image format" errors and would not be copied to the output directory. The fix:
+- **JPEG Extension Recognition & Universal Format Detection**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. The implementation now supports **all image formats** that both `infer` and `image` crate can handle:
+  - **Supported formats via magic bytes**: JPEG (including `.jpe`, `.jpg`, `.jpeg`), PNG, GIF, WebP, TIFF, BMP, ICO, AVIF
+  - **Special handling formats**: HEIC/HEIF (via libheif-rs), JXL (via djxl/cjxl), OpenEXR, JPEG 2000, PSD (handled separately)
   - Added `infer` crate for content-based format detection independent of file extensions
   - Updated `open_image_with_limits()` in `image_detection.rs` to use magic bytes detection
   - Created `open_image_reader_with_magic_bytes()` helper in `image_analyzer.rs` for consistent format detection
-  - Now handles `.jpe`, missing extensions, and incorrect extensions gracefully
-  - Falls back to extension-based detection if magic bytes detection fails
+  - Now handles missing extensions, incorrect extensions, and non-standard extensions gracefully
+  - Falls back to extension-based detection if magic bytes detection fails or format is unsupported
+  - Added detailed logging for unsupported MIME types detected by `infer`
   - Affected operations: dimension reading, image analysis, and all image processing pipelines
 
 ### 🛡️ Safety & Robustness Improvements
