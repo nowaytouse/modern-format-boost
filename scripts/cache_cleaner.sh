@@ -4,7 +4,7 @@
 # Cleans analysis and quality caches to free up space.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
+# shellcheck disable=SC1091
 source "$SCRIPT_DIR/common.sh"
 
 CACHE_DIR="$PROJECT_ROOT/.cache"

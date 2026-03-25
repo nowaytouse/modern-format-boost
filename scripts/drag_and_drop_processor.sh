@@ -4,7 +4,8 @@
 # Usage: Drag folder onto this script or double-click to select
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
+# shellcheck disable=SC1091
+# shellcheck source=./common.sh
 source "$SCRIPT_DIR/common.sh"
 
 # Tool Paths
