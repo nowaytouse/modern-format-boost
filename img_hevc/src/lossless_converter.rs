@@ -309,6 +309,51 @@ pub fn convert_to_jxl(
                 || stderr.contains("pixel data")
                 || stderr.contains("Error while decoding")
             {
+                // Check if this is a grayscale ICC profile mismatch error
+                // If so, use ImageMagick fallback which has proper retry logic with -strip
+                if shared_utils::jxl_utils::is_grayscale_icc_cjxl_error(&stderr) {
+                    tracing::warn!(
+                        input = %input.display(),
+                        "Grayscale ICC profile mismatch detected — using ImageMagick fallback"
+                    );
+                    
+                    if shared_utils::jxl_utils::try_imagemagick_fallback(
+                        input,
+                        &temp_output,
+                        distance,
+                        max_threads,
+                        options.apple_compat,
+                    )
+                    .is_ok()
+                    {
+                        // ImageMagick fallback succeeded — finalize directly
+                        let _output_size = fs::metadata(&temp_output)?.len();
+                        if let Err(e) = verify_jxl_health(&temp_output) {
+                            cleanup_temp_output(&temp_output, input);
+                            return Err(e);
+                        }
+                        if !shared_utils::conversion::commit_temp_to_output_with_metadata(
+                            &temp_output,
+                            &output,
+                            options.force,
+                            Some(input),
+                        )? {
+                            return Ok(ConversionResult::skipped_exists(input, &output));
+                        }
+                        return finalize_conversion(
+                            input,
+                            &output,
+                            input_size,
+                            "JXL",
+                            Some("(grayscale ICC fix)"),
+                            options,
+                        )
+                        .map_err(ImgQualityError::IoError);
+                    }
+                }
+
+                // Not a grayscale ICC error, or ImageMagick fallback failed
+                // Try FFmpeg pipeline as before
                 use std::process::Stdio;
 
                 tracing::warn!(
