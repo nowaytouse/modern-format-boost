@@ -468,11 +468,13 @@ pub fn analyze_heic_file_v4(path: &Path) -> Result<(DynamicImage, HeicAnalysis)>
 
     // Detect gainmap and vendor-specific metadata from XMP in raw HEIC data
     let xmp_str = extract_xmp_from_heic_data(&data);
-    let has_gainmap = xmp_str.as_deref().map_or(false, |xmp: &str| {
-        xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap")
+    let has_gainmap = xmp_str.as_deref().is_some_and(|xmp: &str| {
+        xmp.contains("hdrgm:")
+            || xmp.contains("GainMap")
+            || xmp.contains("gainmap")
             || (xmp.contains("GCamera:") && xmp.contains("HDR"))
     });
-    let has_vendor_metadata = xmp_str.as_deref().map_or(false, |xmp: &str| {
+    let has_vendor_metadata = xmp_str.as_deref().is_some_and(|xmp: &str| {
         xmp.contains("urn:samsung:image:")
             || xmp.contains("GCamera:")
             || xmp.contains("com.google.android.camera")

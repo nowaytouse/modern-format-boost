@@ -75,6 +75,70 @@ fn finalize_with_size_check(
     .map_err(ImgQualityError::IoError)
 }
 
+/// Convert HEIC with Gainmap to HDR JXL.
+pub fn convert_heic_gainmap_to_jxl(
+    input: &Path,
+    options: &ConvertOptions,
+) -> Result<ConversionResult> {
+    if let Err(e) = shared_utils::conversion::validate_input_file(input) {
+        return Err(ImgQualityError::ConversionError(e));
+    }
+
+    if !options.force && is_already_processed(input) {
+        return Ok(ConversionResult::skipped_duplicate(input));
+    }
+
+    let input_size = fs::metadata(input)?.len();
+    let output = get_output_path(input, "jxl", options)?;
+
+    if output.exists() && !options.force {
+        return Ok(ConversionResult::skipped_exists(input, &output));
+    }
+
+    let temp_output = shared_utils::conversion::temp_path_for_output(&output);
+
+    // Call synthesis logic from shared_utils
+    shared_utils::hdr_synthesis::convert_heic_with_gainmap_to_jxl_hdr(
+        input,
+        &temp_output,
+        options.apple_compat,
+    )
+    .map_err(|e| {
+        let msg = format!("☢️ HDR Synthesis Failure: {e}");
+        ImgQualityError::ConversionError(msg)
+    })?;
+
+    let output_size = fs::metadata(&temp_output)
+        .map_err(|e| {
+            ImgQualityError::ConversionError(format!(
+                "☢️ Failed to retrieve HDR synthesis output metadata: {e}"
+            ))
+        })?
+        .len();
+
+    // Verify health
+    if let Err(e) = shared_utils::jxl_utils::verify_jxl_health(&temp_output) {
+        cleanup_temp_output(&temp_output, input);
+        return Err(ImgQualityError::ConversionError(format!(
+            "⛔️ Synthetic HDR JXL health check failed: {e}"
+        )));
+    }
+
+    finalize_with_size_check(
+        input,
+        &temp_output,
+        &output,
+        input_size,
+        output_size,
+        options,
+        "JXL (HDR Synthesis 🌈)",
+        None,
+    )
+    .map_err(|e| {
+        ImgQualityError::ConversionError(format!("☢️ HDR Synthesis Finalization Error: {e}"))
+    })
+}
+
 /// Convert to JXL using specific distance.
 ///
 /// # Errors

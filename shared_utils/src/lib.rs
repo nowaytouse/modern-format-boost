@@ -122,12 +122,12 @@ pub mod cli_runner;
 
 pub mod conversion_types;
 
-pub mod video_detection;
-
 pub mod media_passthrough;
+pub mod video_detection;
 pub use media_passthrough::{audio_args_for_container, subtitle_args_for_container};
 
 pub mod gif_meme_score;
+pub mod hdr_synthesis;
 pub mod image_analyzer;
 pub mod image_detection;
 pub mod image_formats;
@@ -141,6 +141,7 @@ pub use gif_meme_score::{
     gif_meta_from_probe, gif_meta_from_probe_with_path, scan_gif_headers, should_keep_as_gif,
     GifMeta, MemeScore,
 };
+pub use hdr_synthesis::{convert_heic_with_gainmap_to_jxl_hdr, GainMapParams};
 
 pub use batch::*;
 pub use codecs::*;

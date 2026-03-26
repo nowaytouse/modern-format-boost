@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.11.0-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
+  <img src="https://img.shields.io/badge/version-0.11.2-0969DA?style=for-the-badge&logo=rust&logoColor=white" alt="Version">
   <img src="https://img.shields.io/badge/rust-2021_edition-E57324?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/platform-macOS_%7C_Linux_%7C_Windows-8257E5?style=for-the-badge&logo=apple&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/license-MIT-00B265?style=for-the-badge" alt="License">
@@ -28,9 +28,8 @@ Think of it as a "smart compressor" that **never degrades your media**:
 - 📸 **Images**: JPEG → JXL lossless reconstruction (bit-exact, ~20% smaller); PNG/WebP/TIFF/HEIC → JXL
 - 🎬 **Videos**: H.264/VP9/AV1 → HEVC with GPU-accelerated quality search
 - 🍎 **Apple ecosystem first**: Full Apple compatibility mode, Live Photo detection, AAE sidecar handling
-- 🔒 **Metadata guardian**: Preserves EXIF, XMP, ICC profiles, creation timestamps, macOS xattrs, Finder tags
-- ⚡ **Perceived Speed Optimization**: "Deep-First" sorting strategy—prioritizes deeper directory levels first, then sorts by file size and format, to ensure efficient batching and maximum throughput.
-- 🎞️ **HDR10+ Dynamic Metadata**: Full retention of SMPTE 2094-40 metadata via extraction sidecars and x265 SEI injection.
+- 🌅 **HDR Gainmap Synthesis**: Automatically synthesizes high-fidelity 32-bit linear HDR buffers from Apple/Samsung/ISO HEIC Gainmaps, ensuring maximum dynamic range is preserved when converting to JXL.
+- **🔍 Vendor Metadata Awareness**: Intelligent scanning for Samsung/Google specific XMP namespaces in HEIC files to ensure maximum context preservation.
 
 ## ⚠️ Disclaimer & Important Notes
 
@@ -62,10 +61,11 @@ Think of it as a "smart compressor" that **never degrades your media**:
 
 ### Image Pipeline Logic
 Every file goes through a multi-stage decision pipeline:
-- **Stage 1 — Smart Detection**: Analyzes JPEG DQT tables, WebP VP8L chunks, and AVIF `av1C` boxes at binary level. Now features **Zero-Debt Architecture** with 100% Clippy compliance and robust `OpenEXR`/`JPEG 2000` header parsing.
+- **Stage 1 — Smart Detection**: Analyzes JPEG DQT tables (UltraHDR gainmap detection), WebP VP8L chunks, and AVIF `av1C` boxes at binary level. Now features **Zero-Debt Architecture** with 100% Clippy compliance and robust `OpenEXR`/`JPEG 2000` header parsing.
 - **Stage 2 — Route & Encode**: JXL VarDCT for JPEG (bit-exact); Modular mode for lossless sources (PNG, lossless WebP/AVIF/HEIC/EXR/JP2).
 - **Stage 3 — Detour Pathway**: Formats like TIFF/WebP/BMP/HEIC are pre-processed into temporary 16-bit PNGs or **32-bit OpenEXR** to ensure `cjxl` compatibility without quality loss (8/16/32-bit matched pipeline).
-- **Stage 4 — Meme Score v3**: Evaluates animated GIFs (Sharpness 40%, Resolution 18%, Duration 20%) to decide between video conversion or keeping as GIF.
+- **Stage 4 — HEIC HDR Synthesis**: Intercepts HEIC files with Gainmaps (Apple/Google) and synthesizes 32-bit linear-light HDR buffers via an intermediate **OpenEXR** escort pipeline, delivering true HDR JXL output.
+- **Stage 5 — Meme Score v3**: Evaluates animated GIFs (Sharpness 40%, Resolution 18%, Duration 20%) to decide between video conversion or keeping as GIF.
 
 ### Video Pipeline: Three-Phase Saturation Search
 1. **Phase 1: GPU Coarse Search**: Binary search on hardware encoders (VideoToolbox/NVENC) to find the "quality knee".
@@ -122,7 +122,8 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | AVIF | ✅ | No | **Lossless convert** | `.jxl` | d=0.0 |
 | AVIF | ❌ | No | **Skip** | (keep) | Avoid generational loss |
 | HEIC/HEIF | ✅ | No | **Detour → lossless** | `.jxl` | `sips`/`magick` → PNG → d=0.0 |
-| HEIC/HEIF | ❌ | No | **Skip** | (keep) | Avoid generational loss |
+| HEIC/HEIF | ❌ | No | **HDR Synthesis** | `.jxl` | If Gainmap exists -> 32-bit EXR -> JXL |
+| HEIC/HEIF | ❌ | No | **Skip** | (keep) | Standard HEIC: avoid generational loss |
 | TIFF | ✅ | No | **Detour → lossless** | `.jxl` | `magick -depth 16` → PNG → d=0.0 |
 | TIFF | ❌ | No | **Quality-matched** | `.jxl` | magick → JXL d=0.1 |
 | BMP | ✅ | No | **Detour → lossless** | `.jxl` | `magick` → PNG → d=0.0 |
@@ -146,6 +147,8 @@ Plus a **double-click macOS app** (`Modern Format Boost.app`) for drag-and-drop 
 | HDR Type | Detection | Preservation Strategy |
 |:---------|:----------|:---------------------|
 | **HDR10** | mastering_display + max_cll in side_data | Static metadata fully preserved via FFmpeg args |
+| **HEIC Gainmap** | HEIC auxiliary image (Apple/Samsung/ISO) | Synthesized to 32-bit linear HDR -> JXL (True HDR) |
+| **UltraHDR JPEG** | JPEG APP1/APP2 + XMP (hdrgm:) | Metadata preserved; gainmap loss warning emitted |
 | **HLG** | color_trc = arib-std-b67 | Color primaries + TRC preserved |
 | **Dolby Vision** | DOVI side_data in streams/frames | RPU extraction via `dovi_tool` → x265 injection; Profile 7 → 8.1 auto-convert |
 | **HDR10+** | ST2094-40 dynamic metadata | Supported via `hdr10plus_tool` sidecar extraction and x265 injection (Profile A/B metadata retention) |
@@ -280,9 +283,10 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 - 📸 **图片**：JPEG → JXL 无损重建（位一致，体积减少约 20%）；PNG/WebP/TIFF/HEIC → JXL
 - 🎬 **视频**：H.264/VP9/AV1 → HEVC，配合 GPU 加速质量搜索
 - 🍎 **苹果生态优先**：完整的 Apple 兼容模式、Live Photo 检测、AAE 编辑指令保留
-- 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签
+- 🔒 **元数据守护**：保留 EXIF、XMP、ICC 色彩配置文件、创建时间、macOS 扩展属性、Finder 标签。新增 **UltraHDR (Google)** 与 **HEIC Gainmap (Apple/Samsung)** 检测及损耗预警。
 - ⚡ **感官速度优化**："深层优先"排序策略——按目录深度从深到浅、同深度内按文件大小和格式排序，确保高效批处理并最大化吞吐量。
 - 🎞️ **HDR10+ 动态元数据**：通过侧信道提取与 x265 SEI 注入，完整保留 SMPTE 2094-40 动态元数据。
+- 🌅 **厂商元数据感应**：智能扫描 HEIC 文件中的三星/谷歌特定 XMP 命名空间工作流，确保上下文信息最大化保留。
 
 ## ⚠️ 免责声明与重要提示
 
@@ -313,10 +317,11 @@ All Rust dependencies are managed via `Cargo.toml` and fall under their respecti
 <summary><b>🛠️ 技术深探：工作原理与核心算法</b></summary>
 
 ### 图片处理管线细节
-- **第一阶段 — 智能检测**：在二进制层面分析 JPEG DQT 量化表、WebP VP8L 数据块及 AVIF `av1C` box。采用 **零技术债架构 (Zero-Debt)**，全面支持 `OpenEXR` 和 `JPEG 2000` 损耗判定。
+- **第一阶段 — 智能检测**：在二进制层面分析 JPEG DQT 量化表（识别 UltraHDR 增益图）、WebP VP8L 数据块及 AVIF `av1C` box。采用 **零技术债架构 (Zero-Debt)**，全面支持 `OpenEXR` 和 `JPEG 2000` 损耗判定。
 - **第二阶段 — 路由决策**：JPEG 使用 JXL VarDCT 模式（位一致重建）；无损源使用 Modular 模式（PNG, lossless WebP/AVIF/HEIC/EXR/JP2）。
 - **第三阶段 — "绕路"兼容性**：TIFF/WebP/BMP/HEIC 会根据位深自动转为 **16-bit PNG** 或 **32-bit OpenEXR**，确保护航 `cjxl` 的同时不发生精度降级。EXR 和 JP2 已原生接入编码管线。
-- **第四阶段 — Meme Score v3**：多维度评估动图（清晰度 40%、分辨率 18%、时长 20%），聪明地决定是转为视频还是保留 GIF。
+- **第四阶段 — HEIC 深度分析**：扫描辅助深度图、苹果/谷歌/三星增益图及厂商特定 XMP，并在转为 JXL 时针对可能丢失的高级视觉组件提供预警。
+- **第五阶段 — Meme Score v3**：多维度评估动图（清晰度 40%、分辨率 18%、时长 20%），聪明地决定是转为视频还是保留 GIF。
 
 ### 视频处理：三阶段饱和搜索
 1. **第一阶段：GPU 粗搜索**：利用硬件编码器进行快速二分搜索，定位“画质拐点”。

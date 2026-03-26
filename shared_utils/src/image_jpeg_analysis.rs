@@ -507,12 +507,10 @@ pub fn is_ultra_hdr_jpeg(data: &[u8]) -> bool {
             }
         }
         // APP1 (0xE1): extended XMP or standard XMP
-        if marker == 0xE1 {
-            if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
-                let xmp = String::from_utf8_lossy(&payload[29..]);
-                if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
-                    has_gainmap_xmp = true;
-                }
+        if marker == 0xE1 && payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") {
+            let xmp = String::from_utf8_lossy(&payload[29..]);
+            if xmp.contains("hdrgm:") || xmp.contains("GainMap") || xmp.contains("gainmap") {
+                has_gainmap_xmp = true;
             }
         }
 

@@ -521,26 +521,25 @@ fn auto_convert_single_file(
     let fixed_input = shared_utils::fix_extension_if_mismatch(input)?;
     let input = fixed_input.as_path();
 
-    // Always skip HEIC/HEIF: Lossless is extremely rare, and re-encoding lossy HEIC causes generational loss.
-    if shared_utils::image_heic_analysis::is_heic_file(input) {
-        let file_size = std::fs::metadata(input).map(|m| m.len()).unwrap_or(0);
-        copy_original_if_adjacent_mode(input, config)?;
-        return Ok(ConversionOutput {
-            original_path: input.display().to_string(),
-            output_path: input.display().to_string(),
-            skipped: true,
-            message: "HEIC/HEIF detected; skipping to avoid generational loss".to_string(),
-            original_size: file_size,
-            output_size: None,
-            size_reduction: None,
-        });
-    }
-
     let analysis =
         shared_utils::image_analyzer::analyze_image_with_cache(input, config.cache.as_deref())?;
 
     // Static skip check
     if !analysis.is_animated {
+        // Blanket skip for HEIC/HEIF without Gainmap to avoid generational loss (standard img_av1 policy)
+        if analysis.format == "HEIC" || analysis.format == "HEIF" {
+            let has_gainmap = analysis
+                .heic_analysis
+                .as_ref()
+                .is_some_and(|h| h.has_gainmap);
+            if !has_gainmap {
+                let reason = "HEIC/HEIF detected; skipping to avoid generational loss";
+                shared_utils::progress_mode::image_skipped(reason);
+                copy_original_if_adjacent_mode(input, config)?;
+                return Ok(make_skipped_output(input, &analysis, reason));
+            }
+        }
+
         let skip =
             shared_utils::should_skip_image_format(analysis.format.as_str(), analysis.is_lossless);
         if skip.should_skip {
@@ -652,8 +651,19 @@ fn dispatch_static_conversion(
         convert_jpeg_to_jxl, convert_to_jxl, convert_to_jxl_matched,
     };
 
-    Ok(match (analysis.format.as_str(), analysis.is_lossless) {
+    let format = analysis.format.as_str();
+    Ok(match (format, analysis.is_lossless) {
         ("WebP" | "AVIF" | "TIFF" | "HEIC" | "HEIF", true) => {
+            if format == "HEIC" || format == "HEIF" {
+                if let Some(h) = &analysis.heic_analysis {
+                    if h.has_gainmap {
+                        println!("🌈 HDR Synthesis: {} (Gainmap detected)", input.display());
+                        return Ok(img_av1::lossless_converter::convert_heic_gainmap_to_jxl(
+                            input, options,
+                        )?);
+                    }
+                }
+            }
             if config.verbose {
                 println!("🔄 Modern Lossless→JXL: {}", input.display());
             }

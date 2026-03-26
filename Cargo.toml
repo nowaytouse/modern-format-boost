@@ -75,6 +75,8 @@ rmp-serde = { git = "https://github.com/3Hren/msgpack-rust" }
 # File type detection - NIGHTLY: Using GitHub sources
 infer = { git = "https://github.com/bojand/infer" }
 crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
+quick-xml = { git = "https://github.com/tafia/quick-xml" }
+exr = { git = "https://github.com/johannesvollmer/exrs" }
 
 shared_utils = { path = "shared_utils" }
 
@@ -111,6 +113,8 @@ infer = { git = "https://github.com/bojand/infer" }
 xattr = { git = "https://github.com/Stebalien/xattr" }
 libheif-rs = { git = "https://github.com/Cykooz/libheif-rs" }
 crc32fast = { git = "https://github.com/srijs/rust-crc32fast" }
+quick-xml = { git = "https://github.com/tafia/quick-xml" }
+exr = { git = "https://github.com/johannesvollmer/exrs" }
 rayon-core = { git = "https://github.com/rayon-rs/rayon" }
 tracing-core = { git = "https://github.com/tokio-rs/tracing" }
 serde_core = { git = "https://github.com/serde-rs/serde" }
