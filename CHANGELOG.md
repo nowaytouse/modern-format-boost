@@ -22,6 +22,13 @@ Adds depth map preservation for HEIC files with auxiliary depth images.
   - Added `jpegxl-rs` crate (v0.12) with vendored libjxl
   - Infrastructure prepared for future JXL Extra Channel embedding via FFI
   - Current implementation uses sidecar approach (high-level API limitation)
+- **Bug Fixes**:
+  - Fixed WebP quality estimation integer overflow (`image_formats.rs`)
+  - Fixed quick-xml API compatibility for official crates.io version
+- **Code Quality**:
+  - All `cargo clippy -D warnings` checks passing
+  - All `cargo fmt` checks passing
+  - 4 new unit tests for depth_channel module
 
 ### 📦 Dependency Updates
 - **New**: `jpegxl-rs = "0.12"` with `vendored` feature
