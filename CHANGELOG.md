@@ -23,6 +23,11 @@ This release marks a major milestone in the Modern Format Boost project, consoli
 - **⚡ Search Performance Optimization**: Smart Sprint deceleration halves search steps near boundaries to discover optimal CRF values.
 - **🧹 Proactive Housekeeping**: Integrated `kondo` into build and quality script pipelines for surgical repository cleanup.
 - **📦 CI/CD Pipeline Modernization**: Migrated GitHub Actions to `dtolnay/rust-toolchain@stable` to resolve build failures.
+- **🔧 Code Quality Hardening**: Applied `cargo fmt`, `cargo fix`, and `cargo clippy --fix` across the workspace:
+  - Modernized `Option::map_or(false, …)` → `Option::is_some_and(…)` in `conversion.rs` and `jxl_utils.rs`.
+  - Replaced `char`-literal `contains` with `str`-literal in `progress_mode.rs` (emoji multi-byte chars).
+  - Cleaned up trailing whitespace and indentation in `lossless_converter.rs` (img_av1, img_hevc), `io_utils.rs`, and `universal_heartbeat.rs`.
+  - Fixed test `test_conversion_result_success`: corrected assertion from `"transcoding"` → `"encoding"` for PNG→AVIF (pixel-based) conversion.
 
 ---
 

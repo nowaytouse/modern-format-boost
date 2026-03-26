@@ -275,10 +275,7 @@ fn run_imagemagick_cjxl_pipeline(
             use std::io::Read;
             let mut s = String::new();
             if let Err(err) = stderr.take(1024 * 1024).read_to_string(&mut s) {
-                crate::log_rare_error!(
-                    "Stderr Pipe",
-                    "Failed to read ImageMagick stderr: {err}"
-                );
+                crate::log_rare_error!("Stderr Pipe", "Failed to read ImageMagick stderr: {err}");
             }
             s
         })
@@ -347,10 +344,7 @@ fn run_imagemagick_cjxl_pipeline(
             if let Ok(stderr) = handle.join() {
                 stderr
             } else {
-                crate::log_rare_error!(
-                    "Background Thread",
-                    "cjxl stderr capture thread panicked"
-                );
+                crate::log_rare_error!("Background Thread", "cjxl stderr capture thread panicked");
                 String::new()
             }
         }

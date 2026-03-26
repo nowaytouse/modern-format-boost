@@ -332,7 +332,7 @@ pub fn execute_conversion(
         }
     }
 
-    let action = if detection.format == shared_utils::image_analyzer::DetectedFormat::JPEG {
+    let action = if detection.format == DetectedFormat::JPEG {
         "transcoding"
     } else {
         "encoding"
