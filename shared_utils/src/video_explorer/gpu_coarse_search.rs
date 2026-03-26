@@ -2425,6 +2425,25 @@ fn cpu_fine_tune_from_gpu_boundary(
                         );
                     }
 
+                    // Smart deceleration: reduce step size when approaching floor
+                    // to avoid wasting iterations with oversized steps
+                    let distance_to_floor = test_crf - search_floor;
+                    if distance_to_floor < current_step * 2.0
+                        && current_step > PHASE3_DOWNWARD_STEP + 0.001
+                    {
+                        let old_step = current_step;
+                        // Reduce step to half, but not below PHASE3_DOWNWARD_STEP
+                        current_step = (current_step / 2.0).max(PHASE3_DOWNWARD_STEP);
+                        crate::verbose_eprintln!(
+                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
+                            BRIGHT_YELLOW,
+                            old_step,
+                            current_step,
+                            search_floor,
+                            RESET
+                        );
+                    }
+
                     test_crf -= current_step;
                 } else {
                     consecutive_failures += 1;
@@ -2684,6 +2703,24 @@ fn cpu_fine_tune_from_gpu_boundary(
                             break;
                         }
                     }
+
+                    // Smart deceleration: reduce step size when approaching floor
+                    // to avoid wasting iterations with oversized steps
+                    let distance_to_floor = test_crf - search_floor;
+                    if distance_to_floor < current_step * 2.0 && current_step > base_step + 0.001 {
+                        let old_step = current_step;
+                        // Reduce step to half, but not below base_step
+                        current_step = (current_step / 2.0).max(base_step);
+                        crate::log_eprintln!(
+                            "   {}🎯 Smart deceleration: step {:.2} → {:.2} (approaching floor {:.2}){}",
+                            BRIGHT_YELLOW,
+                            old_step,
+                            current_step,
+                            search_floor,
+                            RESET
+                        );
+                    }
+
                     test_crf -= current_step;
                 }
 

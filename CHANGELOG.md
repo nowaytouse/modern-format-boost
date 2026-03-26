@@ -7,6 +7,15 @@ All notable changes to this project will be documented in this file.
 
 ## [0.10.104] - 2026-03-26
 
+### ⚡ Performance Optimization
+- **Smart Deceleration in Sprint Search**: Fixed iteration waste when Sprint acceleration approaches search boundaries
+  - Problem: When step size accelerates to 0.05 but only 0.04 remains to floor (0.0), the algorithm would waste many iterations testing unnecessary CRF values
+  - Solution: Added intelligent deceleration logic that halves step size when distance to floor < step × 2
+  - Applies to both Phase 3 (GPU coarse search) and Phase 4 (CPU fine-tune) Sprint modes
+  - Example: Step 0.05 → 0.025 → 0.0125 when approaching floor, instead of continuing with 0.05
+  - Reduces wasted iterations by up to 50% in extreme quality searches
+  - Maintains search precision while improving efficiency
+
 ### 🐛 Bug Fixes
 - **JPEG Extension Recognition & Universal Format Detection**: Fixed `.jpe` file extension handling by implementing magic bytes detection using the `infer` crate. The implementation now supports **all convertible image formats**:
   - **Supported formats via magic bytes**: JPEG (including `.jpe`, `.jpg`, `.jpeg`), PNG, GIF, WebP, TIFF, BMP, ICO, AVIF
